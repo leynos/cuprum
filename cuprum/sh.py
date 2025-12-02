@@ -11,6 +11,7 @@ from __future__ import annotations
 import collections.abc as cabc
 import dataclasses as dc
 import typing as typ
+from pathlib import Path
 
 from cuprum.catalogue import (
     DEFAULT_CATALOGUE,
@@ -22,8 +23,8 @@ from cuprum.catalogue import UnknownProgramError as UnknownProgramError
 if typ.TYPE_CHECKING:
     from cuprum.program import Program
 
-type _ArgValue = object
-type SafeCmdBuilder = cabc.Callable[..., SafeCmd[str]]
+type _ArgValue = str | int | float | bool | Path
+type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 
 
 def _stringify_arg(value: _ArgValue) -> str:
@@ -59,7 +60,7 @@ def _coerce_argv(
 
 
 @dc.dataclass(frozen=True, slots=True)
-class SafeCmd[Out_co]:
+class SafeCmd:
     """Typed representation of a curated command ready for execution."""
 
     program: Program
@@ -69,7 +70,7 @@ class SafeCmd[Out_co]:
     @property
     def argv_with_program(self) -> tuple[str, ...]:
         """Return argv prefixed with the program name."""
-        return (self.program, *self.argv)
+        return (str(self.program), *self.argv)
 
 
 def make(
@@ -84,7 +85,7 @@ def make(
     """
     entry = catalogue.lookup(program)
 
-    def builder(*args: _ArgValue, **kwargs: _ArgValue) -> SafeCmd[str]:
+    def builder(*args: _ArgValue, **kwargs: _ArgValue) -> SafeCmd:
         argv = _coerce_argv(args, kwargs)
         return SafeCmd(program=entry.program, argv=argv, project=entry.project)
 

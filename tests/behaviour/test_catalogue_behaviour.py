@@ -134,7 +134,7 @@ def when_build_safe_command(
     curated_program: Program,
     first: str,
     second: str,
-) -> SafeCmd[str]:
+) -> SafeCmd:
     """Construct a safe command using the sh.make facade."""
     builder = sh.make(curated_program)
     return builder(first, second)
@@ -187,11 +187,11 @@ def then_allowlist_accepts_string_name(
 
 @then("the safe command argv includes the program name and arguments")
 def then_safe_command_includes_program(
-    safe_command: SafeCmd[str],
+    safe_command: SafeCmd,
 ) -> None:
     """Verify sh.make prepends the program name and stringifies args."""
     assert safe_command.argv_with_program == (
-        safe_command.program,
+        str(safe_command.program),
         "-n",
         "hello world",
     ), "Full argv should include program name and provided arguments"
@@ -199,7 +199,7 @@ def then_safe_command_includes_program(
 
 @then("the safe command exposes project metadata for downstream services")
 def then_safe_command_exposes_metadata(
-    safe_command: SafeCmd[str],
+    safe_command: SafeCmd,
 ) -> None:
     """Ensure downstream services can see project metadata via the command."""
     project = safe_command.project

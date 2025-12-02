@@ -449,6 +449,7 @@ grep = sh.make(GREP)
 
 pipeline = ls("-l", "/var/log") | grep("ERROR")
 text = pipeline.run_sync(echo=True)
+```
 
 Implementation notes for the first iteration:
 
@@ -462,6 +463,63 @@ Implementation notes for the first iteration:
 - `SafeCmd` instances carry the owning `ProjectSettings`, making catalogue
   noise rules and documentation links visible to downstream hooks without an
   extra lookup.
+
+The following diagram summarises the relationships in the typed command core:
+
+```mermaid
+classDiagram
+    class Program {
+    }
+
+    class ProjectSettings {
+    }
+
+    class ProgramCatalogue {
+        +lookup(program: Program) ProgramEntry
+    }
+
+    class ProgramEntry {
+        +program: Program
+        +project: ProjectSettings
+    }
+
+    class SafeCmd~Out_co~ {
+        +program: Program
+        +argv: tuple~str,...~
+        +project: ProjectSettings
+        +argv_with_program() tuple~str,...~
+    }
+
+    class SafeCmd_str {
+    }
+
+    class SafeCmdBuilder {
+        <<callable>>
+        +__call__(*args: object, **kwargs: object) SafeCmd~str~
+    }
+
+    class sh_module {
+        +_stringify_arg(value: object) str
+        +_serialize_kwargs(kwargs: dict~str,object~) tuple~str,...~
+        +_coerce_argv(args: tuple~object,...~, kwargs: dict~str,object~) tuple~str,...~
+        +make(program: Program, catalogue: ProgramCatalogue) SafeCmdBuilder
+    }
+
+    ProgramCatalogue --> ProgramEntry : returns
+    ProgramEntry --> Program : has
+    ProgramEntry --> ProjectSettings : has
+
+    SafeCmd~Out_co~ --> Program : uses
+    SafeCmd~Out_co~ --> ProjectSettings : uses
+
+    SafeCmd_str --> SafeCmd~Out_co~ : specializes
+
+    SafeCmdBuilder --> SafeCmd_str : builds
+
+    sh_module --> ProgramCatalogue : uses
+    sh_module --> SafeCmdBuilder : returns
+    sh_module --> SafeCmd_str : constructs
+    sh_module --> SafeCmd~Out_co~ : constructs
 ```
 
 Under the hood, this produces a `Pipeline[str]` instance, starts all component
@@ -482,7 +540,7 @@ from cmds import GIT, LS
 # Extend current context’s allowlist
 reg = sh.allow(GIT, LS)
 
-# ... commands here can run GIT and LS ...
+# … commands here can run GIT and LS …
 
 reg.detach()  # remove these from the allowlist again
 ```
@@ -509,8 +567,7 @@ and async tasks.
 hooks:
 
 ```python
-from cuprum import sh
-from cmds import GIT
+from cuprum import sh from cmds import GIT
 
 async def deploy():
     async with sh.scoped(allow={GIT}, before=[audit_hook], after=[metrics_hook]):
@@ -544,14 +601,12 @@ def log_after(cmd, result):
     logger.info("Done %s: exit=%s", cmd, result.exit_code)
 
 # Register context-wide hooks
-before_reg = sh.before(log_before)
-after_reg = sh.after(log_after)
+before_reg = sh.before(log_before) after_reg = sh.after(log_after)
 
 # Hooks apply to all commands in this context
 await do_some_work()
 
-before_reg.detach()
-after_reg.detach()
+before_reg.detach() after_reg.detach()
 ```
 
 As with allowlists, hooks can be registered for a limited scope:
@@ -565,9 +620,8 @@ with sh.before(log_before):
 Per‑command hooks are attached directly to `SafeCmd` instances:
 
 ```python
-cmd = make_deploy_cmd()
-cmd.before(per_call_before).after(per_call_after)
-await cmd.run()
+cmd = make_deploy_cmd() cmd.before(per_call_before).after(per_call_after) await
+cmd.run()
 ```
 
 Hook call order is deterministic. A reasonable order is:
@@ -588,8 +642,8 @@ Examples (conceptual):
 from cuprum import unsafe
 
 # Construct from raw argv (no Program NewType, no builder)
-cmd = unsafe.command_from_argv(["bash", "-lc", user_supplied_script])
-await cmd.run()
+cmd = unsafe.command_from_argv(["bash", "-lc", user_supplied_script]) await
+cmd.run()
 ```
 
 or
@@ -597,8 +651,8 @@ or
 ```python
 from cuprum import sh, unsafe
 
-cmd = unsafe.dynamic("/usr/local/bin/custom-tool", "--flag", user_input)
-await cmd.run()
+cmd = unsafe.dynamic("/usr/local/bin/custom-tool", "--flag", user_input) await
+cmd.run()
 ```
 
 These commands **still** pass through the runtime allowlist (if enabled) and
@@ -626,11 +680,10 @@ These events are surfaced to user code via hooks. A typical hook signature
 might be:
 
 ```python
-@dataclass
-class ExecEvent:
+@dataclass class ExecEvent:
     phase: Literal["plan", "start", "stdout", "stderr", "exit"]
     program: Program | None
-    argv: tuple[str, ...]
+    argv: tuple[str, …]
     cwd: Path | None
     env: Mapping[str, str] | None
     pid: int | None
@@ -809,13 +862,12 @@ Key recommendations that the design encourages:
   For example:
 
   ```python
-  actions: dict[str, Callable[..., SafeCmd[str]]] = {
+  actions: dict[str, Callable[…, SafeCmd[str]]] = {
       "status": git_status,
       "deploy": git_deploy,
   }
 
-  cmd = actions[user_choice](...)
-  await cmd.run()
+  cmd = actions[user_choice](…) await cmd.run()
   ```
 
   Here, the user controls *which builder* is called, but not the argv contents
