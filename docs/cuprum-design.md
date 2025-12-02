@@ -449,6 +449,19 @@ grep = sh.make(GREP)
 
 pipeline = ls("-l", "/var/log") | grep("ERROR")
 text = pipeline.run_sync(echo=True)
+
+Implementation notes for the first iteration:
+
+- `sh.make` validates the program against the active catalogue when the builder
+  is created, surfacing `UnknownProgramError` immediately.
+- Positional arguments are stringified with `str()`. Keyword arguments are
+  serialised as `--flag=value`, replacing underscores with hyphens in flag
+  names to align with common CLI conventions.
+- `None` is rejected as an argument value to catch accidental omissions early;
+  builders should decide whether to omit the flag or substitute a value.
+- `SafeCmd` instances carry the owning `ProjectSettings`, making catalogue
+  noise rules and documentation links visible to downstream hooks without an
+  extra lookup.
 ```
 
 Under the hood, this produces a `Pipeline[str]` instance, starts all component

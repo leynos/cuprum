@@ -7,6 +7,7 @@ import typing as typ
 from pytest_bdd import given, parsers, scenario, then, when
 
 import cuprum as c
+from cuprum import sh
 from cuprum.catalogue import (
     DEFAULT_CATALOGUE,
     ProgramCatalogue,
@@ -14,9 +15,12 @@ from cuprum.catalogue import (
     ProjectSettings,
     UnknownProgramError,
 )
+from cuprum.program import Program
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
+
+    from cuprum.sh import SafeCmd
 
 
 @scenario("../features/catalogue.feature", "Unknown program is blocked by default")
@@ -38,6 +42,14 @@ def test_project_metadata_visible() -> None:
 )
 def test_curated_program_accepted() -> None:
     """Behavioural coverage for the public API surface."""
+
+
+@scenario(
+    "../features/catalogue.feature",
+    "Safe command builder constructs typed argv",
+)
+def test_safe_command_builder() -> None:
+    """Behavioural coverage for the sh.make safe command factory."""
 
 
 @given("the default catalogue", target_fixture="catalogue")
@@ -87,6 +99,15 @@ def when_lookup_curated_program(
     return result
 
 
+@given(
+    parsers.parse('the curated program "{program_name}" is present in the catalogue'),
+    target_fixture="curated_program",
+)
+def given_curated_program(program_name: str) -> Program:
+    """Provide a curated Program value for sh.make scenarios."""
+    return Program(program_name)
+
+
 @then("the catalogue rejects it with an unknown program error")
 def then_catalogue_rejects(catalogue_result: dict[str, object]) -> None:
     """Assert that an unknown program was rejected."""
@@ -103,6 +124,20 @@ def when_request_visible_settings(
 ) -> typ.Mapping[str, ProjectSettings]:
     """Expose project metadata to the scenario."""
     return catalogue.visible_settings()
+
+
+@when(
+    parsers.parse('I build a safe command with "{first}" and "{second}"'),
+    target_fixture="safe_command",
+)
+def when_build_safe_command(
+    curated_program: Program,
+    first: str,
+    second: str,
+) -> SafeCmd[str]:
+    """Construct a safe command using the sh.make facade."""
+    builder = sh.make(curated_program)
+    return builder(first, second)
 
 
 @then(parsers.parse('project "{project_name}" advertises noise rules and docs'))
@@ -147,4 +182,28 @@ def then_allowlist_accepts_string_name(
     """Confirm allowlist permits string inputs for curated programs."""
     assert public_api.DEFAULT_CATALOGUE.is_allowed(program_name), (
         "Allowlist must accept the curated program's string name"
+    )
+
+
+@then("the safe command argv includes the program name and arguments")
+def then_safe_command_includes_program(
+    safe_command: SafeCmd[str],
+) -> None:
+    """Verify sh.make prepends the program name and stringifies args."""
+    assert safe_command.argv_with_program == (
+        safe_command.program,
+        "-n",
+        "hello world",
+    ), "Full argv should include program name and provided arguments"
+
+
+@then("the safe command exposes project metadata for downstream services")
+def then_safe_command_exposes_metadata(
+    safe_command: SafeCmd[str],
+) -> None:
+    """Ensure downstream services can see project metadata via the command."""
+    project = safe_command.project
+    assert project.noise_rules, "Noise rules should be exposed to consumers"
+    assert project.documentation_locations, (
+        "Documentation links should be exposed to consumers"
     )

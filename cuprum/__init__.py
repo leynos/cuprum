@@ -27,6 +27,9 @@ from cuprum.catalogue import (
     UnknownProgramError,
 )
 from cuprum.program import Program
+from cuprum.sh import SafeCmd, SafeCmdBuilder
+
+from . import sh
 
 PACKAGE_NAME = "cuprum"
 
@@ -43,5 +46,8 @@ __all__ = [
     "ProgramCatalogue",
     "ProgramEntry",
     "ProjectSettings",
+    "SafeCmd",
+    "SafeCmdBuilder",
     "UnknownProgramError",
+    "sh",
 ]
