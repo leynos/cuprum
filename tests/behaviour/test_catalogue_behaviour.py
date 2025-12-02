@@ -6,12 +6,17 @@ import typing as typ
 
 from pytest_bdd import given, parsers, scenario, then, when
 
+import cuprum as c
 from cuprum.catalogue import (
     DEFAULT_CATALOGUE,
     ProgramCatalogue,
+    ProgramEntry,
     ProjectSettings,
     UnknownProgramError,
 )
+
+if typ.TYPE_CHECKING:
+    from types import ModuleType
 
 
 @scenario("../features/catalogue.feature", "Unknown program is blocked by default")
@@ -27,10 +32,24 @@ def test_project_metadata_visible() -> None:
     """Behavioural contract for exposing catalogue metadata."""
 
 
+@scenario(
+    "../features/catalogue.feature",
+    "Curated program is accepted via the public API",
+)
+def test_curated_program_accepted() -> None:
+    """Behavioural coverage for the public API surface."""
+
+
 @given("the default catalogue", target_fixture="catalogue")
 def given_default_catalogue() -> ProgramCatalogue:
     """Provide the default catalogue fixture."""
     return DEFAULT_CATALOGUE
+
+
+@given("the cuprum public API surface", target_fixture="public_api")
+def given_public_api() -> ModuleType:
+    """Expose the top-level cuprum re-exports to scenarios."""
+    return c
 
 
 @when(
@@ -45,6 +64,24 @@ def when_request_program(
     result: dict[str, object] = {}
     try:
         result["entry"] = catalogue.lookup(program_name)
+    except UnknownProgramError as exc:  # pragma: no cover - behaviour assertion step
+        result["error"] = exc
+    return result
+
+
+@when(
+    parsers.parse('I look up the curated program "{program_name}"'),
+    target_fixture="public_lookup",
+)
+def when_lookup_curated_program(
+    public_api: ModuleType,
+    program_name: str,
+) -> dict[str, ProgramEntry | UnknownProgramError]:
+    """Lookup a curated program through the public API."""
+    result: dict[str, ProgramEntry | UnknownProgramError] = {}
+    try:
+        program = public_api.Program(program_name)
+        result["entry"] = public_api.DEFAULT_CATALOGUE.lookup(program)
     except UnknownProgramError as exc:  # pragma: no cover - behaviour assertion step
         result["error"] = exc
     return result
@@ -75,3 +112,29 @@ def then_project_metadata_present(
     project = visible_settings[project_name]
     assert project.noise_rules, "Noise rules should be visible to callers"
     assert project.documentation_locations, "Docs should be visible to callers"
+
+
+@then(
+    parsers.parse(
+        'the lookup succeeds for project "{project_name}" with a typed program',
+    ),
+)
+def then_lookup_succeeds(
+    public_lookup: dict[str, object],
+    project_name: str,
+) -> None:
+    """Validate successful lookups via the public API."""
+    assert "entry" in public_lookup
+    entry = typ.cast("ProgramEntry", public_lookup["entry"])
+    assert entry.project_name == project_name
+    assert isinstance(entry.program, str)
+    assert entry.program == c.Program("echo")
+
+
+@then(parsers.parse('the allowlist accepts the string name "{program_name}"'))
+def then_allowlist_accepts_string_name(
+    public_api: ModuleType,
+    program_name: str,
+) -> None:
+    """Confirm allowlist permits string inputs for curated programs."""
+    assert public_api.DEFAULT_CATALOGUE.is_allowed(program_name)

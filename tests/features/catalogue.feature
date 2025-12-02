@@ -9,3 +9,9 @@ Feature: Catalogue defaults
     Given the default catalogue
     When downstream services request visible settings
     Then project "core-ops" advertises noise rules and docs
+
+  Scenario: Curated program is accepted via the public API
+    Given the cuprum public API surface
+    When I look up the curated program "echo"
+    Then the lookup succeeds for project "core-ops" with a typed program
+    And the allowlist accepts the string name "ls"

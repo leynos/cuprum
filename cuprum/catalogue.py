@@ -1,4 +1,12 @@
-"""Curated catalogue of allowed executables and their metadata."""
+"""Curated catalogue of allowed executables and their metadata.
+
+Example:
+>>> from cuprum.catalogue import DEFAULT_CATALOGUE, ECHO
+>>> entry = DEFAULT_CATALOGUE.lookup(ECHO)
+>>> (entry.project_name, entry.program)
+('core-ops', 'echo')
+
+"""
 
 from __future__ import annotations
 
@@ -7,6 +15,11 @@ import typing as typ
 from types import MappingProxyType
 
 from cuprum.program import Program
+
+
+def _coerce_program(raw: Program | str) -> Program:
+    """Return input as Program for type narrowing; no transformation performed."""
+    return Program(raw)
 
 
 class UnknownProgramError(LookupError):
@@ -48,15 +61,17 @@ class ProgramCatalogue:
         self._projects = self._index_projects(projects)
         self._program_to_project = self._index_programs(self._projects)
         self._allowlist = frozenset(self._program_to_project)
+        self._visible_settings_cache = MappingProxyType(self._projects)
 
     @property
     def allowlist(self) -> frozenset[Program]:
         """Return the curated allowlist of programs."""
         return self._allowlist
 
-    def is_allowed(self, program: Program) -> bool:
+    def is_allowed(self, program: Program | str) -> bool:
         """Return True when the program is part of the default allowlist."""
-        return program in self._allowlist
+        program_value = _coerce_program(program)
+        return program_value in self._allowlist
 
     def lookup(self, program: Program | str) -> ProgramEntry:
         """Resolve a program into its entry, blocking unknown executables."""
@@ -73,7 +88,7 @@ class ProgramCatalogue:
 
     def visible_settings(self) -> typ.Mapping[str, ProjectSettings]:
         """Expose project metadata to downstream services."""
-        return MappingProxyType(dict(self._projects))
+        return self._visible_settings_cache
 
     @staticmethod
     def _index_projects(
@@ -132,6 +147,7 @@ __all__ = [
     "CORE_OPS_PROJECT",
     "DEFAULT_CATALOGUE",
     "DEFAULT_PROJECTS",
+    "DOCUMENTATION_PROJECT",
     "DOC_TOOL",
     "ECHO",
     "LS",
@@ -140,8 +156,3 @@ __all__ = [
     "ProjectSettings",
     "UnknownProgramError",
 ]
-
-
-def _coerce_program(raw: Program | str) -> Program:
-    """Normalise raw program inputs into the Program NewType."""
-    return Program(raw)

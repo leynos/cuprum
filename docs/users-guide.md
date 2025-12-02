@@ -13,7 +13,7 @@ of programs and project metadata. Requests for unknown executables raise
   operators and reviewers).
 
 ```python
-from cuprum.catalogue import DEFAULT_CATALOGUE, ECHO
+from cuprum import DEFAULT_CATALOGUE, ECHO
 
 entry = DEFAULT_CATALOGUE.lookup(ECHO)
 print(entry.project.noise_rules)
@@ -25,8 +25,7 @@ Use `ProjectSettings` and `ProgramCatalogue` to extend or replace the default
 catalogue:
 
 ```python
-from cuprum.catalogue import ProgramCatalogue, ProjectSettings
-from cuprum.program import Program
+from cuprum import Program, ProgramCatalogue, ProjectSettings
 
 project = ProjectSettings(
     name="data-pipeline",

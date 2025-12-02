@@ -1,4 +1,12 @@
-"""Program NewType representing curated executables."""
+"""Represent curated executables with a nominal ``Program`` type.
+
+Examples:
+>>> from cuprum.program import Program
+>>> ECHO = Program("echo")
+>>> ECHO == "echo"
+True
+
+"""
 
 from __future__ import annotations
 
