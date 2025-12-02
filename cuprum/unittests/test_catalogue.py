@@ -82,7 +82,7 @@ def test_duplicate_project_names_are_rejected() -> None:
     )
     with pytest.raises(ValueError, match="duplicate") as exc:
         ProgramCatalogue(projects=(dup, dup))
-    assert "duplicate" in str(exc.value)
+    assert "duplicate" in str(exc.value), "Error message must mention duplicate name"
 
 
 def test_duplicate_programs_across_projects_are_rejected() -> None:
@@ -102,13 +102,17 @@ def test_duplicate_programs_across_projects_are_rejected() -> None:
     )
     with pytest.raises(ValueError, match="shared") as exc:
         ProgramCatalogue(projects=(first, second))
-    assert "shared" in str(exc.value)
-    assert "first" in str(exc.value)
+    assert "shared" in str(exc.value), "Error must mention the shared program name"
+    assert "first" in str(exc.value), (
+        "Error must include the original owning project name"
+    )
 
 
 def test_coercion_accepts_program_and_string() -> None:
     """Allowlist checks accept both Program and raw strings."""
-    assert DEFAULT_CATALOGUE.is_allowed(Program("echo"))
+    assert DEFAULT_CATALOGUE.is_allowed(Program("echo")), (
+        "Program instance must be accepted by is_allowed"
+    )
     assert DEFAULT_CATALOGUE.is_allowed("echo"), "Raw strings should also be accepted"
 
 

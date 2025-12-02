@@ -91,7 +91,10 @@ def when_lookup_curated_program(
 def then_catalogue_rejects(catalogue_result: dict[str, object]) -> None:
     """Assert that an unknown program was rejected."""
     assert "error" in catalogue_result, "Expected an UnknownProgramError"
-    assert isinstance(catalogue_result["error"], UnknownProgramError)
+    assert isinstance(
+        catalogue_result["error"],
+        UnknownProgramError,
+    ), "Error must be an UnknownProgramError instance"
 
 
 @when("downstream services request visible settings", target_fixture="visible_settings")
@@ -108,7 +111,7 @@ def then_project_metadata_present(
     project_name: str,
 ) -> None:
     """Ensure downstream services can see project metadata."""
-    assert project_name in visible_settings
+    assert project_name in visible_settings, "Project must be present in settings"
     project = visible_settings[project_name]
     assert project.noise_rules, "Noise rules should be visible to callers"
     assert project.documentation_locations, "Docs should be visible to callers"
@@ -124,11 +127,16 @@ def then_lookup_succeeds(
     project_name: str,
 ) -> None:
     """Validate successful lookups via the public API."""
-    assert "entry" in public_lookup
+    assert "entry" in public_lookup, "Expected a successful lookup entry"
     entry = typ.cast("ProgramEntry", public_lookup["entry"])
-    assert entry.project_name == project_name
-    assert isinstance(entry.program, str)
-    assert entry.program == c.Program("echo")
+    assert entry.project_name == project_name, "Project name must match expectation"
+    assert isinstance(
+        entry.program,
+        str,
+    ), "Program should behave as str at runtime"
+    assert entry.program == c.Program("echo"), (
+        "Entry must carry the curated Program value"
+    )
 
 
 @then(parsers.parse('the allowlist accepts the string name "{program_name}"'))
@@ -137,4 +145,6 @@ def then_allowlist_accepts_string_name(
     program_name: str,
 ) -> None:
     """Confirm allowlist permits string inputs for curated programs."""
-    assert public_api.DEFAULT_CATALOGUE.is_allowed(program_name)
+    assert public_api.DEFAULT_CATALOGUE.is_allowed(program_name), (
+        "Allowlist must accept the curated program's string name"
+    )

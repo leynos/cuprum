@@ -7,7 +7,7 @@ ships with a curated catalogue (`DEFAULT_CATALOGUE`) that defines an allowlist
 of programs and project metadata. Requests for unknown executables raise
 `UnknownProgramError` so accidental shell access is blocked by default.
 
-- Import curated programs from `cuprum.catalogue` (for example `ECHO`, `LS`).
+- Import curated programs from `cuprum` (for example `ECHO`, `LS`).
 - Each project in the catalogue includes `noise_rules` (output lines that
   downstream loggers can safely drop) and `documentation_locations` (links for
   operators and reviewers).
