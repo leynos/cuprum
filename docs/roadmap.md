@@ -12,7 +12,7 @@ command execution.
 
 ### Step: typed command core
 
-- [ ] Introduce the `Program` NewType and a curated catalogue module with a
+- [x] Introduce the `Program` NewType and a curated catalogue module with a
       default allowlist; block unknown executables by default and cover with
       unit tests.
 - [ ] Add `sh.make` to construct `SafeCmd` instances with typed argv handling

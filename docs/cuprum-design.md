@@ -228,6 +228,22 @@ Higher‑level code imports these names instead of sprinkling raw strings
 throughout the codebase. This is both a readability and safety device:
 grep‑and‑replace, review, and static analysis become easier.
 
+#### 5.1.1 Catalogue metadata
+
+A `ProgramCatalogue` defines the curated allowlist that guards the safe command
+surface. Each entry belongs to a `ProjectSettings` record that holds:
+
+- `programs`: curated `Program` values owned by the project;
+- `documentation_locations`: runbooks or background docs for reviewers and
+  operators;
+- `noise_rules`: output patterns downstream loggers may drop to cut chatter.
+
+Cuprum ships with `DEFAULT_CATALOGUE`, anchored by the `core-ops` project and
+extended with project-specific metadata. The catalogue rejects unknown
+executables via `UnknownProgramError`, making the allowlist the default gate.
+Downstream services (for example, logging hooks) can call `visible_settings()`
+to read noise rules and documentation links without mutating the catalogue.
+
 ### 5.2 Safe vs Dynamic Commands
 
 Cuprum distinguishes between:
