@@ -71,7 +71,7 @@ API for callers:
 ```python
 from pathlib import Path
 
-from cuprum import Program, sh
+from cuprum import Program, SafeCmd, sh
 
 SAFE_CAT = Program("cat")
 
@@ -84,7 +84,7 @@ def _safe_path(path: Path) -> str:
     return path.as_posix()
 
 
-def cat_file(path: Path, numbered: bool = False) -> sh.SafeCmd[str]:
+def cat_file(path: Path, numbered: bool = False) -> SafeCmd:
     args: list[str] = []
     if numbered:
         args.append("-n")

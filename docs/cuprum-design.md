@@ -483,14 +483,11 @@ classDiagram
         +project: ProjectSettings
     }
 
-    class SafeCmd~Out_co~ {
+    class SafeCmd {
         +program: Program
         +argv: tuple~str,...~
         +project: ProjectSettings
         +argv_with_program() tuple~str,...~
-    }
-
-    class SafeCmd_str {
     }
 
     class SafeCmdBuilder {
@@ -509,12 +506,10 @@ classDiagram
     ProgramEntry --> Program : has
     ProgramEntry --> ProjectSettings : has
 
-    SafeCmd~Out_co~ --> Program : uses
-    SafeCmd~Out_co~ --> ProjectSettings : uses
+    SafeCmd --> Program : uses
+    SafeCmd --> ProjectSettings : uses
 
-    SafeCmd_str --> SafeCmd~Out_co~ : specializes
-
-    SafeCmdBuilder --> SafeCmd_str : builds
+    SafeCmdBuilder --> SafeCmd : builds
 
     sh_module --> ProgramCatalogue : uses
     sh_module --> SafeCmdBuilder : returns
