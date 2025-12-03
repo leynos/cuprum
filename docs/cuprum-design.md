@@ -456,7 +456,7 @@ Implementation notes for the first iteration:
 - `sh.make` validates the program against the active catalogue when the builder
   is created, surfacing `UnknownProgramError` immediately.
 - Positional arguments are stringified with `str()`. Keyword arguments are
-  serialised as `--flag=value`, replacing underscores with hyphens in flag
+  serialized as `--flag=value`, replacing underscores with hyphens in flag
   names to align with common CLI conventions.
 - `None` is rejected as an argument value to catch accidental omissions early;
   builders should decide whether to omit the flag or substitute a value.
@@ -464,7 +464,7 @@ Implementation notes for the first iteration:
   noise rules and documentation links visible to downstream hooks without an
   extra lookup.
 
-The following diagram summarises the relationships in the typed command core:
+The following diagram summarizes the relationships in the typed command core:
 
 ```mermaid
 classDiagram

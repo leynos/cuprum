@@ -65,7 +65,7 @@ print(cmd.project.noise_rules)  # metadata for downstream loggers
 
 ### Writing project-specific builders
 
-Wrap `sh.make` in project modules to centralise validation and expose a clear
+Wrap `sh.make` in project modules to centralize validation and expose a clear
 API for callers:
 
 ```python
