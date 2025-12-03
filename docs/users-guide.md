@@ -43,8 +43,8 @@ propagate noise filters and documentation links alongside the allowlist.
 
 Cuprum provides `sh.make` to build typed `SafeCmd` instances from curated
 programs. Builders enforce the catalogue allowlist up front and carry project
-metadata alongside argv so downstream services can apply noise rules or link to
-documentation without a second lookup.
+metadata alongside argv, so downstream services can apply noise rules or link
+to documentation without a second lookup.
 
 - `sh.make` raises `UnknownProgramError` when the program is not in the current
   catalogue.

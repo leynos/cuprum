@@ -451,7 +451,7 @@ pipeline = ls("-l", "/var/log") | grep("ERROR")
 text = pipeline.run_sync(echo=True)
 ```
 
-Implementation notes for the first iteration:
+##### Implementation notes for the first iteration
 
 - `sh.make` validates the program against the active catalogue when the builder
   is created, surfacing `UnknownProgramError` immediately.
@@ -540,7 +540,7 @@ from cmds import GIT, LS
 # Extend current context’s allowlist
 reg = sh.allow(GIT, LS)
 
-# … commands here can run GIT and LS …
+# ... commands here can run GIT and LS ...
 
 reg.detach()  # remove these from the allowlist again
 ```
@@ -567,7 +567,8 @@ and async tasks.
 hooks:
 
 ```python
-from cuprum import sh from cmds import GIT
+from cuprum import sh
+from cmds import GIT
 
 async def deploy():
     async with sh.scoped(allow={GIT}, before=[audit_hook], after=[metrics_hook]):
@@ -601,12 +602,14 @@ def log_after(cmd, result):
     logger.info("Done %s: exit=%s", cmd, result.exit_code)
 
 # Register context-wide hooks
-before_reg = sh.before(log_before) after_reg = sh.after(log_after)
+before_reg = sh.before(log_before)
+after_reg = sh.after(log_after)
 
 # Hooks apply to all commands in this context
 await do_some_work()
 
-before_reg.detach() after_reg.detach()
+before_reg.detach()
+after_reg.detach()
 ```
 
 As with allowlists, hooks can be registered for a limited scope:
@@ -620,8 +623,9 @@ with sh.before(log_before):
 Per‑command hooks are attached directly to `SafeCmd` instances:
 
 ```python
-cmd = make_deploy_cmd() cmd.before(per_call_before).after(per_call_after) await
-cmd.run()
+cmd = make_deploy_cmd()
+cmd.before(per_call_before).after(per_call_after)
+await cmd.run()
 ```
 
 Hook call order is deterministic. A reasonable order is:
@@ -642,8 +646,8 @@ Examples (conceptual):
 from cuprum import unsafe
 
 # Construct from raw argv (no Program NewType, no builder)
-cmd = unsafe.command_from_argv(["bash", "-lc", user_supplied_script]) await
-cmd.run()
+cmd = unsafe.command_from_argv(["bash", "-lc", user_supplied_script])
+await cmd.run()
 ```
 
 or
@@ -651,8 +655,8 @@ or
 ```python
 from cuprum import sh, unsafe
 
-cmd = unsafe.dynamic("/usr/local/bin/custom-tool", "--flag", user_input) await
-cmd.run()
+cmd = unsafe.dynamic("/usr/local/bin/custom-tool", "--flag", user_input)
+await cmd.run()
 ```
 
 These commands **still** pass through the runtime allowlist (if enabled) and
@@ -683,7 +687,7 @@ might be:
 @dataclass class ExecEvent:
     phase: Literal["plan", "start", "stdout", "stderr", "exit"]
     program: Program | None
-    argv: tuple[str, …]
+    argv: tuple[str, ...]
     cwd: Path | None
     env: Mapping[str, str] | None
     pid: int | None
@@ -862,12 +866,13 @@ Key recommendations that the design encourages:
   For example:
 
   ```python
-  actions: dict[str, Callable[…, SafeCmd[str]]] = {
+  actions: dict[str, Callable[..., SafeCmd[str]]] = {
       "status": git_status,
       "deploy": git_deploy,
   }
 
-  cmd = actions[user_choice](…) await cmd.run()
+  cmd = actions[user_choice](...)
+  await cmd.run()
   ```
 
   Here, the user controls *which builder* is called, but not the argv contents
