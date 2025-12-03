@@ -492,7 +492,7 @@ classDiagram
 
     class SafeCmdBuilder {
         <<callable>>
-        +__call__(*args: object, **kwargs: object) SafeCmd~str~
+        +__call__(*args: object, **kwargs: object) SafeCmd
     }
 
     class sh_module {
@@ -513,8 +513,7 @@ classDiagram
 
     sh_module --> ProgramCatalogue : uses
     sh_module --> SafeCmdBuilder : returns
-    sh_module --> SafeCmd_str : constructs
-    sh_module --> SafeCmd~Out_co~ : constructs
+    sh_module --> SafeCmd : constructs
 ```
 
 Under the hood, this produces a `Pipeline[str]` instance, starts all component
