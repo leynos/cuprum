@@ -148,7 +148,7 @@ class SafeCmd:
                 program=self.program,
                 argv=self.argv,
                 exit_code=exit_code,
-                pid=process.pid or -1,
+                pid=process.pid if process.pid is not None else -1,
                 stdout=None,
                 stderr=None,
             )
@@ -186,7 +186,7 @@ class SafeCmd:
             program=self.program,
             argv=self.argv,
             exit_code=exit_code,
-            pid=process.pid or -1,
+            pid=process.pid if process.pid is not None else -1,
             stdout=stdout_text,
             stderr=stderr_text,
         )

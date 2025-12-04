@@ -4,39 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 import typing as typ
 from pathlib import Path
 
 import pytest
 
 from cuprum import ECHO, sh
-from cuprum.catalogue import ProgramCatalogue, ProjectSettings
-from cuprum.program import Program
 from cuprum.sh import ExecutionContext
+from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import SafeCmd
 
 
-def _python_catalogue() -> ProgramCatalogue:
-    """Construct a catalogue that allowlists the current Python executable."""
-    python_program = Program(Path(sys.executable).as_posix())
-    project = ProjectSettings(
-        name="runtime-tests",
-        programs=(python_program,),
-        documentation_locations=("docs/users-guide.md#execution-runtime",),
-        noise_rules=(),
-    )
-    return ProgramCatalogue(projects=(project,))
-
-
 @pytest.fixture
 def python_builder() -> typ.Callable[..., SafeCmd]:
     """Provide a SafeCmd builder for the current Python interpreter."""
-    catalogue = _python_catalogue()
-    program = next(iter(catalogue.allowlist))
-    return sh.make(program, catalogue=catalogue)
+    return build_python_builder()
 
 
 def test_run_captures_output_and_exit_code() -> None:
@@ -68,6 +52,7 @@ def test_run_applies_env_overrides(
 ) -> None:
     """run() overlays provided env vars on top of the current environment."""
     env_var = "CUPRUM_TEST_ENV"
+    original_value = os.environ.get(env_var)
     command = python_builder(
         "-c",
         f"import os;print(os.getenv('{env_var}'))",
@@ -79,7 +64,9 @@ def test_run_applies_env_overrides(
 
     assert result.stdout is not None
     assert result.stdout.strip() == "present"
-    assert env_var not in os.environ, "Environment overlays must not leak globally"
+    assert os.environ.get(env_var) == original_value, (
+        "Environment overlays must not leak globally"
+    )
 
 
 def test_run_captures_nonzero_exit_code_and_ok_flag(
@@ -106,7 +93,8 @@ def test_run_applies_cwd_override(
     result = asyncio.run(command.run(context=ExecutionContext(cwd=working_dir)))
 
     assert result.stdout is not None
-    assert result.stdout.strip() == working_dir.as_posix()
+    cwd_result = Path(result.stdout.strip())
+    assert cwd_result == working_dir
 
 
 def test_run_allows_disabling_capture() -> None:
@@ -134,7 +122,7 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
                 "import signal",
                 "import time",
                 (
-                    f"open({pid_file.as_posix()!r}, 'w', encoding='utf-8')"
+                    f"open({str(pid_file)!r}, 'w', encoding='utf-8')"
                     ".write(str(os.getpid()))"
                 ),
                 "def _ignore(_signum, _frame):",
@@ -148,7 +136,7 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
         encoding="utf-8",
     )
 
-    command = python_builder(script.as_posix())
+    command = python_builder(str(script))
 
     async def orchestrate() -> int:
         task = asyncio.create_task(
@@ -156,7 +144,7 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
                 capture=False,
                 context=ExecutionContext(
                     cancel_grace=0.1,
-                    env={"CU_PR_PID_FILE": pid_file.as_posix()},
+                    env={"CU_PR_PID_FILE": str(pid_file)},
                 ),
             ),
         )

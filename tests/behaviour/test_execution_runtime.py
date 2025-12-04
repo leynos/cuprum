@@ -13,9 +13,9 @@ import pytest
 from pytest_bdd import given, scenario, then, when
 
 from cuprum import ECHO, sh
-from cuprum.catalogue import ProgramCatalogue, ProjectSettings
 from cuprum.program import Program
 from cuprum.sh import ExecutionContext
+from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import CommandResult, SafeCmd
@@ -95,15 +95,9 @@ def given_long_running_command(tmp_path: Path) -> dict[str, object]:
         ),
         encoding="utf-8",
     )
-    python_program = Program(Path(sys.executable).as_posix())
-    project = ProjectSettings(
-        name="runtime-tests",
-        programs=(python_program,),
-        documentation_locations=("docs/users-guide.md#execution-runtime",),
-        noise_rules=(),
-    )
-    catalogue = ProgramCatalogue(projects=(project,))
-    command = sh.make(python_program, catalogue=catalogue)(script_path.as_posix())
+    python_program = Program(str(Path(sys.executable)))
+    catalogue = python_catalogue()
+    command = sh.make(python_program, catalogue=catalogue)(str(script_path))
     return {"command": command, "pid_file": pid_file}
 
 
