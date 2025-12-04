@@ -248,10 +248,10 @@ to read noise rules and documentation links without mutating the catalogue.
 
 Cuprum distinguishes between:
 
-- **`SafeCmd[Out]`** – commands created from curated `Program` values and typed
+- **`SafeCmd`** – commands created from curated `Program` values and typed
   argument builders;
-- **`DynamicCmd[Out]`** – commands constructed directly from arbitrary argv
-  (user input, legacy integration).
+- **`DynamicCmd`** – commands constructed directly from arbitrary argv (user
+  input, legacy integration).
 
 The public “safe” API produces `SafeCmd` instances. The `cuprum.unsafe`
 namespace exposes functions that construct `DynamicCmd` for the rare cases
@@ -327,10 +327,10 @@ Nominal identifier for an executable, as described above:
 Program = NewType("Program", str)
 ```
 
-#### 6.1.2 `SafeCmd[Out]`
+#### 6.1.2 `SafeCmd`
 
-Represents a prepared command instance that, when run, yields an `Out` value
-(e.g. `str`, `bytes`, or a user type):
+Represents a prepared command instance that, when run, yields a value (e.g.
+`str`, `bytes`, or a user type):
 
 - constructed from a `Program` and arguments;
 - carries execution options (cwd, env overrides, timeout, echo options);
@@ -339,17 +339,18 @@ Represents a prepared command instance that, when run, yields an `Out` value
 Example (type sketch, not final signature):
 
 ```python
-class SafeCmd(Generic[Out]):
+class SafeCmd:
     program: Program
     argv: tuple[str, ...]  # not including program name
 
-    def before(self, hook: BeforeHook) -> "SafeCmd[Out]": ...
-    def after(self, hook: AfterHook) -> "SafeCmd[Out]": ...
+    def before(self, hook: BeforeHook) -> "SafeCmd": ...
+    def after(self, hook: AfterHook) -> "SafeCmd": ...
 
-    async def run(self, *, capture: bool = True, echo: bool = False) -> Out: ...
-    def run_sync(self, *, capture: bool = True, echo: bool = False) -> Out: ...
+    async def run(self, *, capture: bool = True, echo: bool = False) -> object: ...
+    def run_sync(self, *, capture: bool = True, echo: bool = False) -> object: ...
 
-    def __or__(self, other: "SafeCmd[Any]") -> "Pipeline[Out]": ...
+    def __or__(self, other: "SafeCmd") -> "Pipeline":
+        ...
 ```
 
 #### 6.1.3 `DynamicCmd[Out]`
@@ -678,7 +679,8 @@ These events are surfaced to user code via hooks. A typical hook signature
 might be:
 
 ```python
-@dataclass class ExecEvent:
+@dataclass
+class ExecEvent:
     phase: Literal["plan", "start", "stdout", "stderr", "exit"]
     program: Program | None
     argv: tuple[str, ...]
