@@ -21,7 +21,7 @@ command execution.
 
 ### Step: execution runtime
 
-- [ ] Implement async `SafeCmd.run` with capture/echo toggles, env/cwd
+- [x] Implement async `SafeCmd.run` with capture/echo toggles, env/cwd
       overrides, structured result object, and cancellation that sends
       terminate then kill after a grace period; add integration tests that
       assert cleanup on cancellation.

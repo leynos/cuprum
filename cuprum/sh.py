@@ -1,15 +1,17 @@
-"""Safe command construction facade for curated programs.
+"""Safe command construction and execution facade for curated programs.
 
 This module focuses on the typed core: building ``SafeCmd`` instances from
-curated ``Program`` values. Execution is intentionally out of scope for this
-phase; the commands produced here are data objects that carry program
-metadata and structured argv for later runtime layers.
+curated ``Program`` values and providing a minimal async runtime for executing
+them with predictable semantics.
 """
 
 from __future__ import annotations
 
+import asyncio
 import collections.abc as cabc
 import dataclasses as dc
+import os
+import sys
 import typing as typ
 from pathlib import Path
 
@@ -25,6 +27,11 @@ if typ.TYPE_CHECKING:
 
 type _ArgValue = str | int | float | bool | Path
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
+type _EnvMapping = cabc.Mapping[str, str] | None
+type _CwdType = str | Path | None
+
+_READ_SIZE = 4096
+_DEFAULT_CANCEL_GRACE = 0.5
 
 
 def _stringify_arg(value: _ArgValue) -> str:
@@ -60,6 +67,23 @@ def _coerce_argv(
 
 
 @dc.dataclass(frozen=True, slots=True)
+class CommandResult:
+    """Structured result returned by command execution."""
+
+    program: Program
+    argv: tuple[str, ...]
+    exit_code: int
+    pid: int
+    stdout: str | None
+    stderr: str | None
+
+    @property
+    def ok(self) -> bool:
+        """Return True when the command exited successfully."""
+        return self.exit_code == 0
+
+
+@dc.dataclass(frozen=True, slots=True)
 class SafeCmd:
     """Typed representation of a curated command ready for execution."""
 
@@ -71,6 +95,76 @@ class SafeCmd:
     def argv_with_program(self) -> tuple[str, ...]:
         """Return argv prefixed with the program name."""
         return (str(self.program), *self.argv)
+
+    async def run(  # noqa: PLR0913
+        self,
+        *,
+        capture: bool = True,
+        echo: bool = False,
+        env: _EnvMapping = None,
+        cwd: _CwdType = None,
+        cancel_grace: float = _DEFAULT_CANCEL_GRACE,
+    ) -> CommandResult:
+        """Execute the command asynchronously with predictable cancellation.
+
+        ``capture`` controls whether stdout/stderr are retained; when disabled
+        the returned result contains ``None`` for the respective fields.
+        ``echo`` mirrors stdout/stderr to the parent process while still
+        respecting the ``capture`` flag.
+        """
+        resolved_env = _merge_env(env)
+        stdout_target = (
+            asyncio.subprocess.PIPE if capture or echo else asyncio.subprocess.DEVNULL
+        )
+        stderr_target = (
+            asyncio.subprocess.PIPE if capture or echo else asyncio.subprocess.DEVNULL
+        )
+
+        process = await asyncio.create_subprocess_exec(
+            *self.argv_with_program,
+            stdout=stdout_target,
+            stderr=stderr_target,
+            env=resolved_env,
+            cwd=str(cwd) if cwd is not None else None,
+        )
+
+        stdout_task = asyncio.create_task(
+            _consume_stream(
+                process.stdout,
+                capture_output=capture,
+                echo_output=echo,
+                sink=sys.stdout,
+            ),
+        )
+        stderr_task = asyncio.create_task(
+            _consume_stream(
+                process.stderr,
+                capture_output=capture,
+                echo_output=echo,
+                sink=sys.stderr,
+            ),
+        )
+
+        try:
+            exit_code = await process.wait()
+        except asyncio.CancelledError:
+            await _terminate_process(process, cancel_grace)
+            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+            raise
+
+        stdout_text, stderr_text = await asyncio.gather(
+            stdout_task,
+            stderr_task,
+        )
+
+        return CommandResult(
+            program=self.program,
+            argv=self.argv,
+            exit_code=exit_code,
+            pid=process.pid or -1,
+            stdout=stdout_text,
+            stderr=stderr_text,
+        )
 
 
 def make(
@@ -92,4 +186,73 @@ def make(
     return builder
 
 
-__all__ = ["SafeCmd", "SafeCmdBuilder", "UnknownProgramError", "make"]
+def _merge_env(extra: _EnvMapping) -> dict[str, str] | None:
+    """Overlay extra environment variables when provided."""
+    if extra is None:
+        return None
+    merged = os.environ.copy()
+    merged.update(extra)
+    return merged
+
+
+async def _consume_stream(
+    stream: asyncio.StreamReader | None,
+    *,
+    capture_output: bool,
+    echo_output: bool,
+    sink: typ.IO[str],
+) -> str | None:
+    """Read from a subprocess stream, teeing to sink when requested."""
+    if stream is None:
+        return "" if capture_output else None
+
+    buffer = bytearray() if capture_output else None
+    while True:
+        chunk = await stream.read(_READ_SIZE)
+        if not chunk:
+            break
+        if buffer is not None:
+            buffer.extend(chunk)
+        if echo_output:
+            _write_chunk(sink, chunk)
+
+    if buffer is None:
+        return None
+    return buffer.decode("utf-8", errors="replace")
+
+
+def _write_chunk(sink: typ.IO[str], chunk: bytes) -> None:
+    """Write a bytes chunk to a text sink without blocking the event loop."""
+    buffer = getattr(sink, "buffer", None)
+    if buffer is not None:
+        buffer.write(chunk)
+        buffer.flush()
+        return
+    text = chunk.decode("utf-8", errors="replace")
+    sink.write(text)
+    sink.flush()
+
+
+async def _terminate_process(
+    process: asyncio.subprocess.Process,
+    grace_period: float,
+) -> None:
+    """Terminate a running process, escalating to kill after the grace period."""
+    grace_period = max(0.0, grace_period)
+    if process.returncode is not None:
+        return
+    process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), grace_period)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+
+
+__all__ = [
+    "CommandResult",
+    "SafeCmd",
+    "SafeCmdBuilder",
+    "UnknownProgramError",
+    "make",
+]

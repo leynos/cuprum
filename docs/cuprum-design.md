@@ -791,6 +791,17 @@ Cancellation behaviour:
   period) before killing it.
 - Cancellation must also clean up any background tasks used for I/O.
 
+Implementation notes (current state):
+
+- `SafeCmd.run` yields a `CommandResult` containing `stdout`, `stderr`,
+  `exit_code`, and `pid`, plus an `ok` helper for convenience.
+- Output streams are decoded as UTF-8 with replacement for undecodable bytes to
+  avoid runtime errors while keeping observability.
+- Environment overrides are merged on top of `os.environ` without mutating
+  global state.
+- Cancellation sends `terminate`, waits 0.5s, and escalates to `kill` to ensure
+  child processes are not left running.
+
 ### 8.2 Pipelines and Structured Concurrency
 
 For pipelines, Cuprum must:
