@@ -15,7 +15,7 @@ command execution.
 - [x] Introduce the `Program` NewType and a curated catalogue module with a
       default allowlist; block unknown executables by default and cover with
       unit tests.
-- [ ] Add `sh.make` to construct `SafeCmd` instances with typed argv handling
+- [x] Add `sh.make` to construct `SafeCmd` instances with typed argv handling
       and minimal builder examples; document the expected builder pattern in
       `docs/users-guide.md`.
 

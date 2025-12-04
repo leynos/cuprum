@@ -15,3 +15,9 @@ Feature: Catalogue defaults
     When I look up the curated program "echo"
     Then the lookup succeeds for project "core-ops" with a typed program
     And the allowlist accepts the string name "ls"
+
+  Scenario: Safe command builder constructs typed argv
+    Given the curated program "echo" is present in the catalogue
+    When I build a safe command with "-n" and "hello world"
+    Then the safe command argv includes the program name and arguments
+    And the safe command exposes project metadata for downstream services

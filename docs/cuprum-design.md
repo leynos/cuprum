@@ -248,10 +248,10 @@ to read noise rules and documentation links without mutating the catalogue.
 
 Cuprum distinguishes between:
 
-- **`SafeCmd[Out]`** – commands created from curated `Program` values and typed
+- **`SafeCmd`** – commands created from curated `Program` values and typed
   argument builders;
-- **`DynamicCmd[Out]`** – commands constructed directly from arbitrary argv
-  (user input, legacy integration).
+- **`DynamicCmd`** – commands constructed directly from arbitrary argv (user
+  input, legacy integration).
 
 The public “safe” API produces `SafeCmd` instances. The `cuprum.unsafe`
 namespace exposes functions that construct `DynamicCmd` for the rare cases
@@ -327,10 +327,10 @@ Nominal identifier for an executable, as described above:
 Program = NewType("Program", str)
 ```
 
-#### 6.1.2 `SafeCmd[Out]`
+#### 6.1.2 `SafeCmd`
 
-Represents a prepared command instance that, when run, yields an `Out` value
-(e.g. `str`, `bytes`, or a user type):
+Represents a prepared command instance that, when run, yields a value (e.g.
+`str`, `bytes`, or a user type):
 
 - constructed from a `Program` and arguments;
 - carries execution options (cwd, env overrides, timeout, echo options);
@@ -339,17 +339,18 @@ Represents a prepared command instance that, when run, yields an `Out` value
 Example (type sketch, not final signature):
 
 ```python
-class SafeCmd(Generic[Out]):
+class SafeCmd:
     program: Program
     argv: tuple[str, ...]  # not including program name
 
-    def before(self, hook: BeforeHook) -> "SafeCmd[Out]": ...
-    def after(self, hook: AfterHook) -> "SafeCmd[Out]": ...
+    def before(self, hook: BeforeHook) -> "SafeCmd": ...
+    def after(self, hook: AfterHook) -> "SafeCmd": ...
 
-    async def run(self, *, capture: bool = True, echo: bool = False) -> Out: ...
-    def run_sync(self, *, capture: bool = True, echo: bool = False) -> Out: ...
+    async def run(self, *, capture: bool = True, echo: bool = False) -> object: ...
+    def run_sync(self, *, capture: bool = True, echo: bool = False) -> object: ...
 
-    def __or__(self, other: "SafeCmd[Any]") -> "Pipeline[Out]": ...
+    def __or__(self, other: "SafeCmd") -> "Pipeline":
+        ...
 ```
 
 #### 6.1.3 `DynamicCmd[Out]`
@@ -449,6 +450,71 @@ grep = sh.make(GREP)
 
 pipeline = ls("-l", "/var/log") | grep("ERROR")
 text = pipeline.run_sync(echo=True)
+```
+
+##### Implementation notes for the first iteration
+
+- `sh.make` validates the program against the active catalogue when the builder
+  is created, surfacing `UnknownProgramError` immediately.
+- Positional arguments are stringified with `str()`. Keyword arguments are
+  serialized as `--flag=value`, replacing underscores with hyphens in flag
+  names to align with common CLI conventions.
+- `None` is rejected as an argument value to catch accidental omissions early;
+  builders should decide whether to omit the flag or substitute a value.
+- `SafeCmd` instances carry the owning `ProjectSettings`, making catalogue
+  noise rules and documentation links visible to downstream hooks without an
+  extra lookup.
+
+The following diagram summarizes the relationships in the typed command core:
+
+```mermaid
+classDiagram
+    class Program {
+    }
+
+    class ProjectSettings {
+    }
+
+    class ProgramCatalogue {
+        +lookup(program: Program) ProgramEntry
+    }
+
+    class ProgramEntry {
+        +program: Program
+        +project: ProjectSettings
+    }
+
+    class SafeCmd {
+        +program: Program
+        +argv: tuple~str,...~
+        +project: ProjectSettings
+        +argv_with_program() tuple~str,...~
+    }
+
+    class SafeCmdBuilder {
+        <<callable>>
+        +__call__(*args: object, **kwargs: object) SafeCmd
+    }
+
+    class sh_module {
+        +_stringify_arg(value: object) str
+        +_serialize_kwargs(kwargs: dict~str,object~) tuple~str,...~
+        +_coerce_argv(args: tuple~object,...~, kwargs: dict~str,object~) tuple~str,...~
+        +make(program: Program, catalogue: ProgramCatalogue) SafeCmdBuilder
+    }
+
+    ProgramCatalogue --> ProgramEntry : returns
+    ProgramEntry --> Program : has
+    ProgramEntry --> ProjectSettings : has
+
+    SafeCmd --> Program : uses
+    SafeCmd --> ProjectSettings : uses
+
+    SafeCmdBuilder --> SafeCmd : builds
+
+    sh_module --> ProgramCatalogue : uses
+    sh_module --> SafeCmdBuilder : returns
+    sh_module --> SafeCmd : constructs
 ```
 
 Under the hood, this produces a `Pipeline[str]` instance, starts all component
