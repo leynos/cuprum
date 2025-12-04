@@ -15,6 +15,7 @@ from pytest_bdd import given, scenario, then, when
 from cuprum import ECHO, sh
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
 from cuprum.program import Program
+from cuprum.sh import ExecutionContext
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import CommandResult, SafeCmd
@@ -119,7 +120,9 @@ def when_cancel_command(
         task = asyncio.create_task(
             command.run(
                 capture=False,
-                env={"CUPRUM_PID_FILE": pid_file.as_posix()},
+                context=ExecutionContext(
+                    env={"CUPRUM_PID_FILE": pid_file.as_posix()},
+                ),
             ),
         )
         pid = await _wait_for_pid(pid_file)

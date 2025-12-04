@@ -797,8 +797,8 @@ Implementation notes (current state):
   `exit_code`, and `pid`, plus an `ok` helper for convenience.
 - Output streams are decoded as UTF-8 with replacement for undecodable bytes to
   avoid runtime errors while keeping observability.
-- Environment overrides are merged on top of `os.environ` without mutating
-  global state.
+- Environment overrides are supplied via an `ExecutionContext` and merged on top
+  of `os.environ` without mutating global state.
 - Cancellation sends `terminate`, waits 0.5s, and escalates to `kill` to ensure
   child processes are not left running.
 

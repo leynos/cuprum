@@ -105,19 +105,24 @@ and echo semantics and returns a structured `CommandResult`:
   only; the result will carry `None` for output fields.
 - `echo=True` tees stdout/stderr to the parent process while still capturing
   them when `capture=True`.
-- `env` overlays key/value pairs on top of the current environment without
-  mutating `os.environ`; use it to pass per-command settings.
-- `cwd` sets the working directory for the subprocess when provided.
+- Pass an `ExecutionContext` via the `context` parameter to override execution
+  details:
+  - `env` overlays key/value pairs on top of the current environment without
+    mutating `os.environ`; use it to pass per-command settings.
+  - `cwd` sets the working directory for the subprocess when provided.
+  - `cancel_grace` controls how long Cuprum waits after `SIGTERM` before
+    escalating to `SIGKILL`.
 - `exit_code`, `pid`, and `ok` on the `CommandResult` make it easy to branch on
   success.
 
 ```python
-from cuprum import ECHO, sh
+from cuprum import ECHO, ExecutionContext, sh
 
 
 async def greet() -> None:
     cmd = sh.make(ECHO)("-n", "hello runtime")
-    result = await cmd.run(echo=True)
+    ctx = ExecutionContext(env={"GREETING": "1"})
+    result = await cmd.run(echo=True, context=ctx)
     if not result.ok:
         raise RuntimeError(f"echo failed: {result.exit_code}")
     print(result.stdout)

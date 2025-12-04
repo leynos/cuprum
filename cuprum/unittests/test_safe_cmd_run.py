@@ -13,6 +13,7 @@ import pytest
 from cuprum import ECHO, sh
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
 from cuprum.program import Program
+from cuprum.sh import ExecutionContext
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import SafeCmd
@@ -71,7 +72,9 @@ def test_run_applies_env_overrides(
         f"import os;print(os.getenv('{env_var}'))",
     )
 
-    result = asyncio.run(command.run(env={env_var: "present"}))
+    result = asyncio.run(
+        command.run(context=ExecutionContext(env={env_var: "present"})),
+    )
 
     assert result.stdout is not None
     assert result.stdout.strip() == "present"
@@ -87,7 +90,7 @@ def test_run_applies_cwd_override(
     working_dir.mkdir()
     command = python_builder("-c", "import os;print(os.getcwd())")
 
-    result = asyncio.run(command.run(cwd=working_dir))
+    result = asyncio.run(command.run(context=ExecutionContext(cwd=working_dir)))
 
     assert result.stdout is not None
     assert result.stdout.strip() == working_dir.as_posix()

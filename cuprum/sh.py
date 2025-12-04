@@ -84,6 +84,15 @@ class CommandResult:
 
 
 @dc.dataclass(frozen=True, slots=True)
+class ExecutionContext:
+    """Execution parameters for SafeCmd runtime control."""
+
+    env: _EnvMapping = None
+    cwd: _CwdType = None
+    cancel_grace: float = _DEFAULT_CANCEL_GRACE
+
+
+@dc.dataclass(frozen=True, slots=True)
 class SafeCmd:
     """Typed representation of a curated command ready for execution."""
 
@@ -96,23 +105,24 @@ class SafeCmd:
         """Return argv prefixed with the program name."""
         return (str(self.program), *self.argv)
 
-    async def run(  # noqa: PLR0913
+    async def run(
         self,
         *,
         capture: bool = True,
         echo: bool = False,
-        env: _EnvMapping = None,
-        cwd: _CwdType = None,
-        cancel_grace: float = _DEFAULT_CANCEL_GRACE,
+        context: ExecutionContext | None = None,
     ) -> CommandResult:
         """Execute the command asynchronously with predictable cancellation.
 
         ``capture`` controls whether stdout/stderr are retained; when disabled
         the returned result contains ``None`` for the respective fields.
         ``echo`` mirrors stdout/stderr to the parent process while still
-        respecting the ``capture`` flag.
+        respecting the ``capture`` flag. ``context`` carries runtime settings
+        for environment overlays, working directory, and cancellation grace.
         """
-        resolved_env = _merge_env(env)
+        ctx = context or ExecutionContext()
+
+        resolved_env = _merge_env(ctx.env)
         stdout_target = (
             asyncio.subprocess.PIPE if capture or echo else asyncio.subprocess.DEVNULL
         )
@@ -125,7 +135,7 @@ class SafeCmd:
             stdout=stdout_target,
             stderr=stderr_target,
             env=resolved_env,
-            cwd=str(cwd) if cwd is not None else None,
+            cwd=str(ctx.cwd) if ctx.cwd is not None else None,
         )
 
         stdout_task = asyncio.create_task(
@@ -148,7 +158,7 @@ class SafeCmd:
         try:
             exit_code = await process.wait()
         except asyncio.CancelledError:
-            await _terminate_process(process, cancel_grace)
+            await _terminate_process(process, ctx.cancel_grace)
             await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
             raise
 
@@ -251,6 +261,7 @@ async def _terminate_process(
 
 __all__ = [
     "CommandResult",
+    "ExecutionContext",
     "SafeCmd",
     "SafeCmdBuilder",
     "UnknownProgramError",
