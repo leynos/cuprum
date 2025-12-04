@@ -46,6 +46,7 @@ def test_run_captures_output_and_exit_code() -> None:
     result = asyncio.run(command.run())
 
     assert result.exit_code == 0
+    assert result.ok is True
     assert result.stdout == "hello"
     assert result.stderr == ""
 
@@ -81,6 +82,18 @@ def test_run_applies_env_overrides(
     assert env_var not in os.environ, "Environment overlays must not leak globally"
 
 
+def test_run_captures_nonzero_exit_code_and_ok_flag(
+    python_builder: typ.Callable[..., SafeCmd],
+) -> None:
+    """run() captures non-zero exits and exposes ok flag."""
+    command = python_builder("-c", "import sys; sys.exit(3)")
+
+    result = asyncio.run(command.run())
+
+    assert result.exit_code == 3
+    assert result.ok is False
+
+
 def test_run_applies_cwd_override(
     python_builder: typ.Callable[..., SafeCmd],
     tmp_path: Path,
@@ -105,3 +118,55 @@ def test_run_allows_disabling_capture() -> None:
     assert result.exit_code == 0
     assert result.stdout is None
     assert result.stderr is None
+
+
+def test_non_cooperative_subprocess_is_escalated_and_killed(
+    tmp_path: Path,
+    python_builder: typ.Callable[..., SafeCmd],
+) -> None:
+    """Non-cooperative child is killed after cancel_grace elapses."""
+    script = tmp_path / "non_cooperative_child.py"
+    pid_file = tmp_path / "nc.pid"
+    script.write_text(
+        "\n".join(
+            (
+                "import os",
+                "import signal",
+                "import time",
+                (
+                    f"open({pid_file.as_posix()!r}, 'w', encoding='utf-8')"
+                    ".write(str(os.getpid()))"
+                ),
+                "def _ignore(_signum, _frame):",
+                "    pass",
+                "signal.signal(signal.SIGTERM, _ignore)",
+                "signal.signal(signal.SIGINT, _ignore)",
+                "while True:",
+                "    time.sleep(0.1)",
+            ),
+        ),
+        encoding="utf-8",
+    )
+
+    command = python_builder(script.as_posix())
+
+    async def orchestrate() -> int:
+        task = asyncio.create_task(
+            command.run(
+                capture=False,
+                context=ExecutionContext(
+                    cancel_grace=0.1,
+                    env={"CU_PR_PID_FILE": pid_file.as_posix()},
+                ),
+            ),
+        )
+        await asyncio.sleep(0.15)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return int(pid_file.read_text())
+
+    pid = asyncio.run(orchestrate())
+    asyncio.run(asyncio.sleep(0.05))
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)

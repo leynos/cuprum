@@ -138,6 +138,21 @@ class SafeCmd:
             cwd=str(ctx.cwd) if ctx.cwd is not None else None,
         )
 
+        if not capture and not echo:
+            try:
+                exit_code = await process.wait()
+            except asyncio.CancelledError:
+                await _terminate_process(process, ctx.cancel_grace)
+                raise
+            return CommandResult(
+                program=self.program,
+                argv=self.argv,
+                exit_code=exit_code,
+                pid=process.pid or -1,
+                stdout=None,
+                stderr=None,
+            )
+
         stdout_task = asyncio.create_task(
             _consume_stream(
                 process.stdout,
@@ -201,7 +216,7 @@ def _merge_env(extra: _EnvMapping) -> dict[str, str] | None:
     if extra is None:
         return None
     merged = os.environ.copy()
-    merged.update(extra)
+    merged |= extra
     return merged
 
 
@@ -226,13 +241,15 @@ async def _consume_stream(
         if echo_output:
             _write_chunk(sink, chunk)
 
-    if buffer is None:
-        return None
-    return buffer.decode("utf-8", errors="replace")
+    return None if buffer is None else buffer.decode("utf-8", errors="replace")
 
 
 def _write_chunk(sink: typ.IO[str], chunk: bytes) -> None:
-    """Write a bytes chunk to a text sink without blocking the event loop."""
+    """Write a bytes chunk to a text sink synchronously, avoiding extra encoding.
+
+    This writes directly to ``sink.buffer`` when available, or to ``sink`` itself,
+    and may still block if the underlying I/O is slow or back-pressured.
+    """
     buffer = getattr(sink, "buffer", None)
     if buffer is not None:
         buffer.write(chunk)
@@ -254,7 +271,7 @@ async def _terminate_process(
     process.terminate()
     try:
         await asyncio.wait_for(process.wait(), grace_period)
-    except TimeoutError:
+    except asyncio.TimeoutError:  # noqa: UP041 - explicit asyncio timeout needed
         process.kill()
         await process.wait()
 
