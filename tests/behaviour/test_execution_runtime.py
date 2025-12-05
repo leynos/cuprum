@@ -161,3 +161,92 @@ async def _wait_for_pid(pid_file: Path, timeout: float = 5.0) -> int:
         await asyncio.sleep(0.05)
     msg = f"PID file was not created within {timeout}s"
     raise TimeoutError(msg)
+
+
+@scenario(
+    "../features/execution_runtime.feature",
+    "Cancellation escalates a non-cooperative subprocess",
+)
+def test_cancellation_escalates_non_cooperative() -> None:
+    """Behavioural coverage for escalation after cancel grace."""
+
+
+@given(
+    "a non-cooperative safe command",
+    target_fixture="non_cooperative_command",
+)
+def given_non_cooperative_command(tmp_path: Path) -> dict[str, object]:
+    """Construct a SafeCmd that ignores termination signals."""
+    script_path = tmp_path / "stubborn_worker.py"
+    pid_file = tmp_path / "stubborn.pid"
+    script_path.write_text(
+        "\n".join(
+            (
+                "import os",
+                "import pathlib",
+                "import signal",
+                "import time",
+                f"pid_file = pathlib.Path({str(pid_file)!r})",
+                "pid_file.write_text(str(os.getpid()))",
+                "def _ignore(_signum, _frame):",
+                "    pass",
+                "signal.signal(signal.SIGTERM, _ignore)",
+                "signal.signal(signal.SIGINT, _ignore)",
+                "while True:",
+                "    time.sleep(1)",
+            ),
+        ),
+        encoding="utf-8",
+    )
+    python_program = Program(str(Path(sys.executable)))
+    catalogue = python_catalogue()
+    command = sh.make(python_program, catalogue=catalogue)(str(script_path))
+    return {"command": command, "pid_file": pid_file}
+
+
+@when("I cancel the command with a short grace period")
+def when_cancel_non_cooperative(
+    behaviour_state: dict[str, object],
+    non_cooperative_command: dict[str, object],
+) -> None:
+    """Cancel a non-cooperative command and record its PID."""
+    command = typ.cast("SafeCmd", non_cooperative_command["command"])
+    pid_file = typ.cast("Path", non_cooperative_command["pid_file"])
+
+    async def orchestrate() -> int:
+        task = asyncio.create_task(
+            command.run(
+                capture=False,
+                context=ExecutionContext(cancel_grace=0.1),
+            ),
+        )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 5.0
+        while loop.time() < deadline:
+            if pid_file.exists():
+                break
+            await asyncio.sleep(0.05)
+        else:  # pragma: no cover - defensive guard
+            pytest.fail("PID file was not created within 5s")
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return int(pid_file.read_text())
+
+    behaviour_state["pid"] = asyncio.run(orchestrate())
+
+
+@then("the subprocess is killed after escalation")
+def then_subprocess_killed_after_escalation(
+    behaviour_state: dict[str, object],
+) -> None:
+    """Assert that a stubborn subprocess is eventually killed."""
+    pid = typ.cast("int", behaviour_state["pid"])
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        if not _is_process_alive(pid):
+            break
+        time.sleep(0.05)
+    else:  # pragma: no cover - defensive failure
+        pytest.fail("Non-cooperative subprocess still running after escalation")

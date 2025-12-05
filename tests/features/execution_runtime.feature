@@ -10,3 +10,8 @@ Feature: Execution runtime
     Given a long running safe command
     When I cancel the command after it starts
     Then the subprocess stops cleanly
+
+  Scenario: Cancellation escalates a non-cooperative subprocess
+    Given a non-cooperative safe command
+    When I cancel the command with a short grace period
+    Then the subprocess is killed after escalation
