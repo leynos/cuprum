@@ -142,13 +142,17 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
         task = asyncio.create_task(
             command.run(
                 capture=False,
-                context=ExecutionContext(
-                    cancel_grace=0.1,
-                    env={"CU_PR_PID_FILE": str(pid_file)},
-                ),
+                context=ExecutionContext(cancel_grace=0.1),
             ),
         )
-        await asyncio.sleep(0.15)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 5.0
+        while loop.time() < deadline:
+            if pid_file.exists():
+                break
+            await asyncio.sleep(0.05)
+        else:  # pragma: no cover - defensive guard for CI slowness
+            pytest.fail("PID file was not created within 5s")
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task

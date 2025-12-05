@@ -115,7 +115,7 @@ def when_cancel_command(
             command.run(
                 capture=False,
                 context=ExecutionContext(
-                    env={"CUPRUM_PID_FILE": pid_file.as_posix()},
+                    env={"CUPRUM_PID_FILE": str(pid_file)},
                 ),
             ),
         )
