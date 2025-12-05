@@ -247,8 +247,8 @@ async def _consume_stream(
 def _write_chunk(sink: typ.IO[str], chunk: bytes) -> None:
     """Write a bytes chunk to a text sink synchronously, avoiding extra encoding.
 
-    This writes directly to ``sink.buffer`` when available, or to ``sink`` itself,
-    and may still block if the underlying I/O is slow or back-pressured.
+    For stdio echo this blocking write is acceptable; future slow-sink handling
+    can layer on a background writer if needed.
     """
     buffer = getattr(sink, "buffer", None)
     if buffer is not None:
