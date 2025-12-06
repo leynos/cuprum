@@ -14,8 +14,8 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import SafeCmd
 
 
-def python_catalogue() -> ProgramCatalogue:
-    """Construct a catalogue that allowlists the current Python executable."""
+def python_catalogue() -> tuple[ProgramCatalogue, Program]:
+    """Construct a catalogue and expose the allowlisted Python program."""
     python_program = Program(str(Path(sys.executable)))
     project = ProjectSettings(
         name="runtime-tests",
@@ -23,11 +23,10 @@ def python_catalogue() -> ProgramCatalogue:
         documentation_locations=("docs/users-guide.md#execution-runtime",),
         noise_rules=(),
     )
-    return ProgramCatalogue(projects=(project,))
+    return ProgramCatalogue(projects=(project,)), python_program
 
 
 def python_builder() -> typ.Callable[..., SafeCmd]:
     """Provide a SafeCmd builder for the current Python interpreter."""
-    catalogue = python_catalogue()
-    program = next(iter(catalogue.allowlist))
+    catalogue, program = python_catalogue()
     return sh.make(program, catalogue=catalogue)

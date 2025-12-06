@@ -7,17 +7,17 @@ import os
 import sys
 import time
 import typing as typ
-from pathlib import Path
 
 import pytest
 from pytest_bdd import given, scenario, then, when
 
 from cuprum import ECHO, sh
-from cuprum.program import Program
 from cuprum.sh import ExecutionContext
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
+    from pathlib import Path
+
     from cuprum.sh import CommandResult, SafeCmd
 
 pytestmark = pytest.mark.skipif(
@@ -161,8 +161,7 @@ def _create_worker_command(
         ),
         encoding="utf-8",
     )
-    python_program = Program(str(Path(sys.executable)))
-    catalogue = python_catalogue()
+    catalogue, python_program = python_catalogue()
     command = sh.make(python_program, catalogue=catalogue)(str(script_path))
     return {"command": command, "pid_file": pid_file}
 
