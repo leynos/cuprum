@@ -20,6 +20,14 @@ from tests.helpers.catalogue import python_catalogue
 if typ.TYPE_CHECKING:
     from cuprum.sh import CommandResult, SafeCmd
 
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "Non-cooperative cancellation escalation relies on POSIX signals "
+        "and os.kill semantics."
+    ),
+)
+
 
 @scenario(
     "../features/execution_runtime.feature",
@@ -73,32 +81,16 @@ def then_command_result_has_output(run_result: CommandResult) -> None:
 )
 def given_long_running_command(tmp_path: Path) -> dict[str, object]:
     """Construct a SafeCmd that blocks until cancelled."""
-    script_path = tmp_path / "sleepy_worker.py"
-    pid_file = tmp_path / "worker.pid"
-    script_path.write_text(
-        "\n".join(
-            (
-                "import os",
-                "import pathlib",
-                "import signal",
-                "import sys",
-                "import time",
-                "pid_file = pathlib.Path(os.environ['CUPRUM_PID_FILE'])",
-                "pid_file.write_text(str(os.getpid()))",
-                "def _stop(_signum, _frame):",
-                "    sys.exit(0)",
-                "signal.signal(signal.SIGTERM, _stop)",
-                "signal.signal(signal.SIGINT, _stop)",
-                "while True:",
-                "    time.sleep(1)",
-            ),
+    return _create_worker_command(
+        tmp_path,
+        script_name="sleepy_worker.py",
+        signal_handler_body=(
+            "def _stop(_signum, _frame):",
+            "    sys.exit(0)",
+            "signal.signal(signal.SIGTERM, _stop)",
+            "signal.signal(signal.SIGINT, _stop)",
         ),
-        encoding="utf-8",
     )
-    python_program = Program(str(Path(sys.executable)))
-    catalogue = python_catalogue()
-    command = sh.make(python_program, catalogue=catalogue)(str(script_path))
-    return {"command": command, "pid_file": pid_file}
 
 
 @when("I cancel the command after it starts")
@@ -110,23 +102,7 @@ def when_cancel_command(
     command = typ.cast("SafeCmd", long_running_command["command"])
     pid_file = typ.cast("Path", long_running_command["pid_file"])
 
-    async def orchestrate() -> int:
-        task = asyncio.create_task(
-            command.run(
-                capture=False,
-                context=ExecutionContext(
-                    env={"CUPRUM_PID_FILE": str(pid_file)},
-                ),
-            ),
-        )
-        pid = await _wait_for_pid(pid_file)
-        await asyncio.sleep(0.1)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        return pid
-
-    behaviour_state["pid"] = asyncio.run(orchestrate())
+    behaviour_state["pid"] = _cancel_command_with_grace(command, pid_file)
 
 
 @then("the subprocess stops cleanly")
@@ -143,6 +119,38 @@ def _is_process_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _create_worker_command(
+    tmp_path: Path,
+    *,
+    script_name: str,
+    signal_handler_body: tuple[str, ...],
+) -> dict[str, object]:
+    """Create a SafeCmd-backed worker script with custom signal handling."""
+    script_path = tmp_path / script_name
+    pid_file = tmp_path / f"{script_path.stem}.pid"
+    script_path.write_text(
+        "\n".join(
+            (
+                "import os",
+                "import pathlib",
+                "import signal",
+                "import sys",
+                "import time",
+                "pid_file = pathlib.Path(os.environ['CUPRUM_PID_FILE'])",
+                "pid_file.write_text(str(os.getpid()))",
+                *signal_handler_body,
+                "while True:",
+                "    time.sleep(1)",
+            ),
+        ),
+        encoding="utf-8",
+    )
+    python_program = Program(str(Path(sys.executable)))
+    catalogue = python_catalogue()
+    command = sh.make(python_program, catalogue=catalogue)(str(script_path))
+    return {"command": command, "pid_file": pid_file}
 
 
 def _wait_for_process_death(
@@ -174,6 +182,39 @@ async def _wait_for_pid(pid_file: Path, timeout: float = 5.0) -> int:
     raise TimeoutError(msg)
 
 
+def _cancel_command_with_grace(
+    command: SafeCmd,
+    pid_file: Path,
+    *,
+    cancel_grace: float | None = None,
+) -> int:
+    """Run a command, cancel it, and return the recorded child PID."""
+
+    async def orchestrate() -> int:
+        grace = (
+            cancel_grace
+            if cancel_grace is not None
+            else ExecutionContext().cancel_grace
+        )
+        task = asyncio.create_task(
+            command.run(
+                capture=False,
+                context=ExecutionContext(
+                    env={"CUPRUM_PID_FILE": str(pid_file)},
+                    cancel_grace=grace,
+                ),
+            ),
+        )
+        pid = await _wait_for_pid(pid_file)
+        await asyncio.sleep(0.1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return pid
+
+    return asyncio.run(orchestrate())
+
+
 @scenario(
     "../features/execution_runtime.feature",
     "Cancellation escalates a non-cooperative subprocess",
@@ -188,31 +229,16 @@ def test_cancellation_escalates_non_cooperative() -> None:
 )
 def given_non_cooperative_command(tmp_path: Path) -> dict[str, object]:
     """Construct a SafeCmd that ignores termination signals."""
-    script_path = tmp_path / "stubborn_worker.py"
-    pid_file = tmp_path / "stubborn.pid"
-    script_path.write_text(
-        "\n".join(
-            (
-                "import os",
-                "import pathlib",
-                "import signal",
-                "import time",
-                "pid_file = pathlib.Path(os.environ['CUPRUM_PID_FILE'])",
-                "pid_file.write_text(str(os.getpid()))",
-                "def _ignore(_signum, _frame):",
-                "    pass",
-                "signal.signal(signal.SIGTERM, _ignore)",
-                "signal.signal(signal.SIGINT, _ignore)",
-                "while True:",
-                "    time.sleep(1)",
-            ),
+    return _create_worker_command(
+        tmp_path,
+        script_name="stubborn_worker.py",
+        signal_handler_body=(
+            "def _ignore(_signum, _frame):",
+            "    pass",
+            "signal.signal(signal.SIGTERM, _ignore)",
+            "signal.signal(signal.SIGINT, _ignore)",
         ),
-        encoding="utf-8",
     )
-    python_program = Program(str(Path(sys.executable)))
-    catalogue = python_catalogue()
-    command = sh.make(python_program, catalogue=catalogue)(str(script_path))
-    return {"command": command, "pid_file": pid_file}
 
 
 @when("I cancel the command with a short grace period")
@@ -224,23 +250,11 @@ def when_cancel_non_cooperative(
     command = typ.cast("SafeCmd", non_cooperative_command["command"])
     pid_file = typ.cast("Path", non_cooperative_command["pid_file"])
 
-    async def orchestrate() -> int:
-        task = asyncio.create_task(
-            command.run(
-                capture=False,
-                context=ExecutionContext(
-                    env={"CUPRUM_PID_FILE": str(pid_file)},
-                    cancel_grace=0.1,
-                ),
-            ),
-        )
-        await _wait_for_pid(pid_file)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        return int(pid_file.read_text())
-
-    behaviour_state["pid"] = asyncio.run(orchestrate())
+    behaviour_state["pid"] = _cancel_command_with_grace(
+        command,
+        pid_file,
+        cancel_grace=0.1,
+    )
 
 
 @then("the subprocess is killed after escalation")
@@ -250,12 +264,3 @@ def then_subprocess_killed_after_escalation(
     """Assert that a stubborn subprocess is eventually killed."""
     pid = typ.cast("int", behaviour_state["pid"])
     _wait_for_process_death(pid, timeout=5.0, context="escalation")
-
-
-pytestmark = pytest.mark.skipif(
-    sys.platform == "win32",
-    reason=(
-        "Non-cooperative cancellation escalation relies on POSIX signals "
-        "and os.kill semantics."
-    ),
-)
