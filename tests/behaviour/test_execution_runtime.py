@@ -133,13 +133,7 @@ def when_cancel_command(
 def then_subprocess_stops_cleanly(behaviour_state: dict[str, object]) -> None:
     """Assert the subprocess has been terminated after cancellation."""
     pid = typ.cast("int", behaviour_state["pid"])
-    deadline = time.time() + 5
-    while time.time() < deadline:
-        if not _is_process_alive(pid):
-            break
-        time.sleep(0.05)
-    else:  # pragma: no cover - defensive failure
-        pytest.fail("Subprocess still running after cancellation")
+    _wait_for_process_death(pid, timeout=5.0, context="cancellation")
 
 
 def _is_process_alive(pid: int) -> bool:
@@ -149,6 +143,23 @@ def _is_process_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _wait_for_process_death(
+    pid: int,
+    *,
+    timeout: float = 5.0,
+    context: str = "subprocess termination",
+) -> None:
+    """Poll for process death until timeout, failing if still alive."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _is_process_alive(pid):
+            return
+        time.sleep(0.05)
+    pytest.fail(  # pragma: no cover - defensive failure
+        f"Process {pid} still alive after {context}",
+    )
 
 
 async def _wait_for_pid(pid_file: Path, timeout: float = 5.0) -> int:
@@ -186,7 +197,7 @@ def given_non_cooperative_command(tmp_path: Path) -> dict[str, object]:
                 "import pathlib",
                 "import signal",
                 "import time",
-                f"pid_file = pathlib.Path({str(pid_file)!r})",
+                "pid_file = pathlib.Path(os.environ['CUPRUM_PID_FILE'])",
                 "pid_file.write_text(str(os.getpid()))",
                 "def _ignore(_signum, _frame):",
                 "    pass",
@@ -217,18 +228,13 @@ def when_cancel_non_cooperative(
         task = asyncio.create_task(
             command.run(
                 capture=False,
-                context=ExecutionContext(cancel_grace=0.1),
+                context=ExecutionContext(
+                    env={"CUPRUM_PID_FILE": str(pid_file)},
+                    cancel_grace=0.1,
+                ),
             ),
         )
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + 5.0
-        while loop.time() < deadline:
-            if pid_file.exists():
-                break
-            await asyncio.sleep(0.05)
-        else:  # pragma: no cover - defensive guard
-            pytest.fail("PID file was not created within 5s")
-
+        await _wait_for_pid(pid_file)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
@@ -243,13 +249,7 @@ def then_subprocess_killed_after_escalation(
 ) -> None:
     """Assert that a stubborn subprocess is eventually killed."""
     pid = typ.cast("int", behaviour_state["pid"])
-    deadline = time.time() + 5
-    while time.time() < deadline:
-        if not _is_process_alive(pid):
-            break
-        time.sleep(0.05)
-    else:  # pragma: no cover - defensive failure
-        pytest.fail("Non-cooperative subprocess still running after escalation")
+    _wait_for_process_death(pid, timeout=5.0, context="escalation")
 
 
 pytestmark = pytest.mark.skipif(
