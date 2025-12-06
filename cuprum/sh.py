@@ -68,7 +68,24 @@ def _coerce_argv(
 
 @dc.dataclass(frozen=True, slots=True)
 class CommandResult:
-    """Structured result returned by command execution."""
+    """Structured result returned by command execution.
+
+    Attributes
+    ----------
+    program:
+        Program that was executed.
+    argv:
+        Argument vector (excluding the program name) passed to the process.
+    exit_code:
+        Exit status reported by the process.
+    pid:
+        Process identifier; ``-1`` when unavailable.
+    stdout:
+        Captured standard output, or ``None`` when capture was disabled.
+    stderr:
+        Captured standard error, or ``None`` when capture was disabled.
+
+    """
 
     program: Program
     argv: tuple[str, ...]
@@ -85,7 +102,18 @@ class CommandResult:
 
 @dc.dataclass(frozen=True, slots=True)
 class ExecutionContext:
-    """Execution parameters for SafeCmd runtime control."""
+    """Execution parameters for SafeCmd runtime control.
+
+    Attributes
+    ----------
+    env:
+        Environment variable overlay applied to the subprocess.
+    cwd:
+        Working directory for the subprocess.
+    cancel_grace:
+        Seconds to wait after SIGTERM before escalating to SIGKILL.
+
+    """
 
     env: _EnvMapping = None
     cwd: _CwdType = None
@@ -114,11 +142,20 @@ class SafeCmd:
     ) -> CommandResult:
         """Execute the command asynchronously with predictable cancellation.
 
-        ``capture`` controls whether stdout/stderr are retained; when disabled
-        the returned result contains ``None`` for the respective fields.
-        ``echo`` mirrors stdout/stderr to the parent process while still
-        respecting the ``capture`` flag. ``context`` carries runtime settings
-        for environment overlays, working directory, and cancellation grace.
+        Parameters
+        ----------
+        capture:
+            When ``True`` capture stdout/stderr; otherwise discard them.
+        echo:
+            When ``True`` tee stdout/stderr to the parent process.
+        context:
+            Optional execution settings such as env, cwd, and cancel grace.
+
+        Returns
+        -------
+        CommandResult
+            Structured information about the completed process.
+
         """
         ctx = context or ExecutionContext()
 

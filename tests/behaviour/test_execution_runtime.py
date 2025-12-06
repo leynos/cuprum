@@ -250,3 +250,12 @@ def then_subprocess_killed_after_escalation(
         time.sleep(0.05)
     else:  # pragma: no cover - defensive failure
         pytest.fail("Non-cooperative subprocess still running after escalation")
+
+
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "Non-cooperative cancellation escalation relies on POSIX signals "
+        "and os.kill semantics."
+    ),
+)
