@@ -84,12 +84,7 @@ def given_long_running_command(tmp_path: Path) -> dict[str, object]:
     return _create_worker_command(
         tmp_path,
         script_name="sleepy_worker.py",
-        signal_handler_body=(
-            "def _stop(_signum, _frame):",
-            "    sys.exit(0)",
-            "signal.signal(signal.SIGTERM, _stop)",
-            "signal.signal(signal.SIGINT, _stop)",
-        ),
+        cooperative=True,
     )
 
 
@@ -125,11 +120,30 @@ def _create_worker_command(
     tmp_path: Path,
     *,
     script_name: str,
-    signal_handler_body: tuple[str, ...],
+    cooperative: bool = True,
 ) -> dict[str, object]:
-    """Create a SafeCmd-backed worker script with custom signal handling."""
+    """Create a SafeCmd-backed worker script.
+
+    Set ``cooperative`` to False to install signal handlers that ignore
+    termination signals instead of exiting cleanly.
+    """
     script_path = tmp_path / script_name
     pid_file = tmp_path / f"{script_path.stem}.pid"
+    signal_handler_body = (
+        (
+            "def _stop(_signum, _frame):",
+            "    sys.exit(0)",
+            "signal.signal(signal.SIGTERM, _stop)",
+            "signal.signal(signal.SIGINT, _stop)",
+        )
+        if cooperative
+        else (
+            "def _ignore(_signum, _frame):",
+            "    pass",
+            "signal.signal(signal.SIGTERM, _ignore)",
+            "signal.signal(signal.SIGINT, _ignore)",
+        )
+    )
     script_path.write_text(
         "\n".join(
             (
@@ -232,12 +246,7 @@ def given_non_cooperative_command(tmp_path: Path) -> dict[str, object]:
     return _create_worker_command(
         tmp_path,
         script_name="stubborn_worker.py",
-        signal_handler_body=(
-            "def _ignore(_signum, _frame):",
-            "    pass",
-            "signal.signal(signal.SIGTERM, _ignore)",
-            "signal.signal(signal.SIGINT, _ignore)",
-        ),
+        cooperative=False,
     )
 
 
