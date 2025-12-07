@@ -32,6 +32,8 @@ type _CwdType = str | Path | None
 
 _READ_SIZE = 4096
 _DEFAULT_CANCEL_GRACE = 0.5
+_DEFAULT_ENCODING = "utf-8"
+_DEFAULT_ERROR_HANDLING = "replace"
 
 
 def _stringify_arg(value: _ArgValue) -> str:
@@ -112,12 +114,35 @@ class ExecutionContext:
         Working directory for the subprocess.
     cancel_grace:
         Seconds to wait after SIGTERM before escalating to SIGKILL.
+    stdout_sink:
+        Text sink for echoing stdout; defaults to the active ``sys.stdout``.
+    stderr_sink:
+        Text sink for echoing stderr; defaults to the active ``sys.stderr``.
+    encoding:
+        Character encoding used when decoding subprocess output.
+    errors:
+        Error handling strategy applied during decoding.
 
     """
 
     env: _EnvMapping = None
     cwd: _CwdType = None
     cancel_grace: float = _DEFAULT_CANCEL_GRACE
+    stdout_sink: typ.IO[str] | None = None
+    stderr_sink: typ.IO[str] | None = None
+    encoding: str = _DEFAULT_ENCODING
+    errors: str = _DEFAULT_ERROR_HANDLING
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _StreamConfig:
+    """Configuration for decoding and echoing a subprocess stream."""
+
+    capture_output: bool
+    echo_output: bool
+    sink: typ.IO[str]
+    encoding: str
+    errors: str
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -159,19 +184,22 @@ class SafeCmd:
         """
         ctx = context or ExecutionContext()
 
-        resolved_env = _merge_env(ctx.env)
-        stdout_target = (
-            asyncio.subprocess.PIPE if capture or echo else asyncio.subprocess.DEVNULL
-        )
-        stderr_target = (
-            asyncio.subprocess.PIPE if capture or echo else asyncio.subprocess.DEVNULL
-        )
+        stdout_sink = ctx.stdout_sink if ctx.stdout_sink is not None else sys.stdout
+        stderr_sink = ctx.stderr_sink if ctx.stderr_sink is not None else sys.stderr
 
         process = await asyncio.create_subprocess_exec(
             *self.argv_with_program,
-            stdout=stdout_target,
-            stderr=stderr_target,
-            env=resolved_env,
+            stdout=(
+                asyncio.subprocess.PIPE
+                if capture or echo
+                else asyncio.subprocess.DEVNULL
+            ),
+            stderr=(
+                asyncio.subprocess.PIPE
+                if capture or echo
+                else asyncio.subprocess.DEVNULL
+            ),
+            env=_merge_env(ctx.env),
             cwd=str(ctx.cwd) if ctx.cwd is not None else None,
         )
 
@@ -190,20 +218,25 @@ class SafeCmd:
                 stderr=None,
             )
 
-        stdout_task = asyncio.create_task(
-            _consume_stream(
-                process.stdout,
-                capture_output=capture,
-                echo_output=echo,
-                sink=sys.stdout,
-            ),
+        stream_config = _StreamConfig(
+            capture_output=capture,
+            echo_output=echo,
+            sink=stdout_sink,
+            encoding=ctx.encoding,
+            errors=ctx.errors,
         )
-        stderr_task = asyncio.create_task(
-            _consume_stream(
-                process.stderr,
-                capture_output=capture,
-                echo_output=echo,
-                sink=sys.stderr,
+        consumers = (
+            asyncio.create_task(
+                _consume_stream(
+                    process.stdout,
+                    stream_config,
+                ),
+            ),
+            asyncio.create_task(
+                _consume_stream(
+                    process.stderr,
+                    dc.replace(stream_config, sink=stderr_sink),
+                ),
             ),
         )
 
@@ -211,13 +244,10 @@ class SafeCmd:
             exit_code = await process.wait()
         except asyncio.CancelledError:
             await _terminate_process(process, ctx.cancel_grace)
-            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+            await asyncio.gather(*consumers, return_exceptions=True)
             raise
 
-        stdout_text, stderr_text = await asyncio.gather(
-            stdout_task,
-            stderr_task,
-        )
+        stdout_text, stderr_text = await asyncio.gather(*consumers)
 
         return CommandResult(
             program=self.program,
@@ -259,29 +289,39 @@ def _merge_env(extra: _EnvMapping) -> dict[str, str] | None:
 
 async def _consume_stream(
     stream: asyncio.StreamReader | None,
-    *,
-    capture_output: bool,
-    echo_output: bool,
-    sink: typ.IO[str],
+    config: _StreamConfig,
 ) -> str | None:
     """Read from a subprocess stream, teeing to sink when requested."""
     if stream is None:
-        return "" if capture_output else None
+        return "" if config.capture_output else None
 
-    buffer = bytearray() if capture_output else None
+    buffer = bytearray() if config.capture_output else None
     while True:
         chunk = await stream.read(_READ_SIZE)
         if not chunk:
             break
         if buffer is not None:
             buffer.extend(chunk)
-        if echo_output:
-            _write_chunk(sink, chunk)
+        if config.echo_output:
+            _write_chunk(
+                config.sink,
+                chunk,
+                encoding=config.encoding,
+                errors=config.errors,
+            )
 
-    return None if buffer is None else buffer.decode("utf-8", errors="replace")
+    if buffer is None:
+        return None
+    return buffer.decode(config.encoding, errors=config.errors)
 
 
-def _write_chunk(sink: typ.IO[str], chunk: bytes) -> None:
+def _write_chunk(
+    sink: typ.IO[str],
+    chunk: bytes,
+    *,
+    encoding: str,
+    errors: str,
+) -> None:
     """Write a bytes chunk to a text sink synchronously, avoiding extra encoding.
 
     For stdio echo this blocking write is acceptable; future slow-sink handling
@@ -292,7 +332,7 @@ def _write_chunk(sink: typ.IO[str], chunk: bytes) -> None:
         buffer.write(chunk)
         buffer.flush()
         return
-    text = chunk.decode("utf-8", errors="replace")
+    text = chunk.decode(encoding, errors=errors)
     sink.write(text)
     sink.flush()
 
@@ -305,11 +345,17 @@ async def _terminate_process(
     grace_period = max(0.0, grace_period)
     if process.returncode is not None:
         return
-    process.terminate()
+    try:
+        process.terminate()
+    except (ProcessLookupError, OSError):
+        return
     try:
         await asyncio.wait_for(process.wait(), grace_period)
     except asyncio.TimeoutError:  # noqa: UP041 - explicit asyncio timeout needed
-        process.kill()
+        try:
+            process.kill()
+        except (ProcessLookupError, OSError):
+            return
         await process.wait()
 
 

@@ -110,8 +110,12 @@ and echo semantics and returns a structured `CommandResult`:
   - `env` overlays key/value pairs on top of the current environment without
     mutating `os.environ`; use it to pass per-command settings.
   - `cwd` sets the working directory for the subprocess when provided.
-  - `cancel_grace` controls how long Cuprum waits after `SIGTERM` before
-    escalating to `SIGKILL`.
+  - `cancel_grace` controls how long Cuprum waits after `SIGTERM` (termination
+    signal) before escalating to `SIGKILL` (kill signal).
+  - `stdout_sink` and `stderr_sink` route echoed output to alternative text
+    streams when `echo=True`.
+  - `encoding` and `errors` configure how captured output is decoded; defaults
+    are `"utf-8"` with `"replace"`.
 - `exit_code`, `pid`, and `ok` on the `CommandResult` make it easy to branch on
   success.
 
