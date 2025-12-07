@@ -271,4 +271,8 @@ def then_subprocess_killed_after_escalation(
 ) -> None:
     """Assert that a stubborn subprocess is eventually killed."""
     pid = typ.cast("int", behaviour_state["pid"])
-    _wait_for_process_death(pid, timeout=5.0, context="escalation")
+    _wait_for_process_death(
+        pid,
+        timeout=5.0,
+        context="escalation after SIGTERM ignored",
+    )

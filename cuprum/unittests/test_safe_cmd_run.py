@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import typing as typ
 from pathlib import Path
 
@@ -113,6 +114,8 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
     python_builder: typ.Callable[..., SafeCmd],
 ) -> None:
     """Non-cooperative child is killed after cancel_grace elapses."""
+    if sys.platform == "win32":  # pragma: no cover - platform-specific behaviour
+        pytest.skip("Cancellation escalation semantics rely on POSIX signals")
     script = tmp_path / "non_cooperative_child.py"
     pid_file = tmp_path / "nc.pid"
     script.write_text(
