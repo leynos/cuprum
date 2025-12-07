@@ -27,7 +27,7 @@ from cuprum.catalogue import (
     UnknownProgramError,
 )
 from cuprum.program import Program
-from cuprum.sh import SafeCmd, SafeCmdBuilder
+from cuprum.sh import CommandResult, ExecutionContext, SafeCmd, SafeCmdBuilder
 
 from . import sh
 
@@ -42,6 +42,8 @@ __all__ = [
     "ECHO",
     "LS",
     "PACKAGE_NAME",
+    "CommandResult",
+    "ExecutionContext",
     "Program",
     "ProgramCatalogue",
     "ProgramEntry",

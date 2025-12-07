@@ -95,3 +95,39 @@ def cat_file(path: Path, numbered: bool = False) -> SafeCmd:
 Builders keep argv construction in one place, making it easier to validate
 inputs, document behaviour, and reuse the same allowlisted program across a
 codebase.
+
+## Execution runtime
+
+`SafeCmd.run` executes curated commands asynchronously with predictable capture
+and echo semantics and returns a structured `CommandResult`:
+
+- `stdout` and `stderr` are captured by default. Set `capture=False` to stream
+  only; the result will carry `None` for output fields.
+- `echo=True` tees stdout/stderr to the parent process while still capturing
+  them when `capture=True`.
+- Pass an `ExecutionContext` via the `context` parameter to override execution
+  details:
+  - `env` overlays key/value pairs on top of the current environment without
+    mutating `os.environ`; use it to pass per-command settings.
+  - `cwd` sets the working directory for the subprocess when provided.
+  - `cancel_grace` controls how long Cuprum waits after `SIGTERM` before
+    escalating to `SIGKILL`.
+- `exit_code`, `pid`, and `ok` on the `CommandResult` make it easy to branch on
+  success.
+
+```python
+from cuprum import ECHO, ExecutionContext, sh
+
+
+async def greet() -> None:
+    cmd = sh.make(ECHO)("-n", "hello runtime")
+    ctx = ExecutionContext(env={"GREETING": "1"})
+    result = await cmd.run(echo=True, context=ctx)
+    if not result.ok:
+        raise RuntimeError(f"echo failed: {result.exit_code}")
+    print(result.stdout)
+```
+
+If the awaiting task is cancelled while a command is running, Cuprum sends
+`SIGTERM` to the subprocess, waits for a short grace period, and then escalates
+to `SIGKILL` to ensure the child process is cleaned up.
