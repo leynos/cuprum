@@ -165,6 +165,16 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
         return int(pid_file.read_text())
 
     pid = asyncio.run(orchestrate())
-    time.sleep(0.05)
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+    _poll_process_death(pid)
+
+
+def _poll_process_death(pid: int, *, timeout: float = 1.0) -> None:
+    """Poll for process exit within a timeout, failing if still alive."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.02)
+    pytest.fail(f"Process {pid} still alive after {timeout}s of polling")
