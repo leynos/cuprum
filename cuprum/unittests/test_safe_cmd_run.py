@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
 import typing as typ
 from pathlib import Path
 
@@ -122,12 +123,11 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
         "\n".join(
             (
                 "import os",
+                "import pathlib",
                 "import signal",
                 "import time",
-                (
-                    f"open({str(pid_file)!r}, 'w', encoding='utf-8')"
-                    ".write(str(os.getpid()))"
-                ),
+                "pid_file = pathlib.Path(os.environ['CUPRUM_PID_FILE'])",
+                "pid_file.write_text(str(os.getpid()))",
                 "def _ignore(_signum, _frame):",
                 "    pass",
                 "signal.signal(signal.SIGTERM, _ignore)",
@@ -145,7 +145,10 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
         task = asyncio.create_task(
             command.run(
                 capture=False,
-                context=ExecutionContext(cancel_grace=0.1),
+                context=ExecutionContext(
+                    env={"CUPRUM_PID_FILE": str(pid_file)},
+                    cancel_grace=0.1,
+                ),
             ),
         )
         loop = asyncio.get_running_loop()
@@ -162,6 +165,6 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
         return int(pid_file.read_text())
 
     pid = asyncio.run(orchestrate())
-    asyncio.run(asyncio.sleep(0.05))
+    time.sleep(0.05)
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
