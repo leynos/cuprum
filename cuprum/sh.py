@@ -258,6 +258,35 @@ class SafeCmd:
             stderr=stderr_text,
         )
 
+    def run_sync(
+        self,
+        *,
+        capture: bool = True,
+        echo: bool = False,
+        context: ExecutionContext | None = None,
+    ) -> CommandResult:
+        """Execute the command synchronously with predictable semantics.
+
+        This method mirrors ``run()`` by driving the event loop internally.
+        All parameters and return semantics are identical.
+
+        Parameters
+        ----------
+        capture:
+            When ``True`` capture stdout/stderr; otherwise discard them.
+        echo:
+            When ``True`` tee stdout/stderr to the parent process.
+        context:
+            Optional execution settings such as env, cwd, and cancel grace.
+
+        Returns
+        -------
+        CommandResult
+            Structured information about the completed process.
+
+        """
+        return asyncio.run(self.run(capture=capture, echo=echo, context=context))
+
 
 def make(
     program: Program,

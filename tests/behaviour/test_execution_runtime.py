@@ -45,6 +45,14 @@ def test_cancellation_terminates_subprocess() -> None:
     """Behavioural coverage for cancellation cleanup."""
 
 
+@scenario(
+    "../features/execution_runtime.feature",
+    "Sync run captures output by default",
+)
+def test_sync_run_captures_output() -> None:
+    """Behavioural coverage for sync capture semantics."""
+
+
 @pytest.fixture
 def behaviour_state() -> dict[str, object]:
     """Shared mutable state for behaviour scenarios."""
@@ -65,6 +73,15 @@ def given_simple_echo_command() -> SafeCmd:
 def when_run_command(simple_echo_command: SafeCmd) -> CommandResult:
     """Execute the SafeCmd using the async runtime."""
     return asyncio.run(simple_echo_command.run())
+
+
+@when(
+    "I run the command synchronously",
+    target_fixture="run_result",
+)
+def when_run_command_sync(simple_echo_command: SafeCmd) -> CommandResult:
+    """Execute the SafeCmd using the sync runtime."""
+    return simple_echo_command.run_sync()
 
 
 @then("the command result contains captured output")
