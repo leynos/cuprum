@@ -25,7 +25,7 @@ command execution.
       overrides, structured result object, and cancellation that sends
       terminate then kill after a grace period; add integration tests that
       assert cleanup on cancellation.
-- [ ] Provide `run_sync` that mirrors async behaviour by driving the event loop
+- [x] Provide `run_sync` that mirrors async behaviour by driving the event loop
       and ensures identical error and result semantics; cover parity with
       tests.
 

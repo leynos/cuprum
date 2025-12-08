@@ -15,3 +15,8 @@ Feature: Execution runtime
     Given a non-cooperative safe command
     When I cancel the command with a short grace period
     Then the subprocess is killed after escalation
+
+  Scenario: Sync run captures output by default
+    Given a simple safe echo command
+    When I run the command synchronously
+    Then the command result contains captured output

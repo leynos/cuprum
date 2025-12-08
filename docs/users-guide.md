@@ -135,3 +135,23 @@ async def greet() -> None:
 If the awaiting task is cancelled while a command is running, Cuprum sends
 `SIGTERM` to the subprocess, waits for a short grace period, and then escalates
 to `SIGKILL` to ensure the child process is cleaned up.
+
+### Synchronous execution
+
+For scripts or contexts where async/await is not available, use `run_sync()`:
+
+```python
+from cuprum import ECHO, ExecutionContext, sh
+
+
+def greet() -> None:
+    cmd = sh.make(ECHO)("-n", "hello sync")
+    ctx = ExecutionContext(env={"GREETING": "1"})
+    result = cmd.run_sync(echo=True, context=ctx)
+    if not result.ok:
+        raise RuntimeError(f"echo failed: {result.exit_code}")
+    print(result.stdout)
+```
+
+`run_sync()` accepts the same parameters as `run()` and returns an identical
+`CommandResult`. It drives the event loop internally via `asyncio.run()`.

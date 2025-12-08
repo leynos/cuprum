@@ -277,3 +277,185 @@ def _poll_process_death(pid: int, *, timeout: float = 1.0) -> None:
             return
         time.sleep(0.02)
     pytest.fail(f"Process {pid} still alive after {timeout}s of polling")
+
+
+# -----------------------------------------------------------------------------
+# run_sync() parity tests
+# -----------------------------------------------------------------------------
+
+
+def test_run_sync_captures_output_and_exit_code() -> None:
+    """run_sync() captures stdout/stderr and exit code by default."""
+    command = sh.make(ECHO)("-n", "hello")
+
+    result = command.run_sync()
+
+    assert result.exit_code == 0
+    assert result.ok is True
+    assert result.stdout == "hello"
+    assert result.stderr == ""
+
+
+def test_run_sync_captures_stderr_only(
+    python_builder: typ.Callable[..., SafeCmd],
+) -> None:
+    """run_sync() captures stderr independently when only stderr is written."""
+    command = python_builder(
+        "-c",
+        'import sys; print("err", file=sys.stderr)',
+    )
+
+    result = command.run_sync()
+
+    assert result.exit_code == 0
+    assert result.ok is True
+    assert result.stdout == ""
+    assert result.stderr is not None
+    assert result.stderr.strip() == "err"
+
+
+def test_run_sync_captures_and_echoes_stderr(
+    python_builder: typ.Callable[..., SafeCmd],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """run_sync(echo=True) both echoes stderr and captures it separately."""
+    command = python_builder(
+        "-c",
+        'import sys; print("err", file=sys.stderr)',
+    )
+
+    result = command.run_sync(echo=True)
+
+    captured = capsys.readouterr()
+
+    assert result.exit_code == 0
+    assert result.ok is True
+    assert result.stdout == ""
+    assert result.stderr is not None
+    assert result.stderr.strip() == "err"
+    assert captured.out == ""
+    assert captured.err.strip() == "err"
+
+
+def test_run_sync_echoes_when_requested(capfd: pytest.CaptureFixture[str]) -> None:
+    """run_sync() can echo output to stdout while still capturing it."""
+    command = sh.make(ECHO)("hello runtime")
+
+    result = command.run_sync(echo=True)
+
+    captured = capfd.readouterr()
+    assert result.stdout is not None
+    assert "hello runtime" in captured.out
+    assert result.stdout.strip() == "hello runtime"
+
+
+def test_run_sync_applies_env_overrides(
+    python_builder: typ.Callable[..., SafeCmd],
+) -> None:
+    """run_sync() overlays provided env vars on top of the current environment."""
+    env_var = "CUPRUM_TEST_ENV"
+    original_value = os.environ.get(env_var)
+    command = python_builder(
+        "-c",
+        f"import os;print(os.getenv('{env_var}'))",
+    )
+
+    result = command.run_sync(context=ExecutionContext(env={env_var: "present"}))
+
+    assert result.stdout is not None
+    assert result.stdout.strip() == "present"
+    assert os.environ.get(env_var) == original_value, (
+        "Environment overlays must not leak globally"
+    )
+
+
+def test_run_sync_captures_nonzero_exit_code_and_ok_flag(
+    python_builder: typ.Callable[..., SafeCmd],
+) -> None:
+    """run_sync() captures non-zero exits and exposes ok flag."""
+    command = python_builder("-c", "import sys; sys.exit(3)")
+
+    result = command.run_sync()
+
+    assert result.exit_code == 3
+    assert result.ok is False
+
+
+def test_run_sync_applies_cwd_override(
+    python_builder: typ.Callable[..., SafeCmd],
+    tmp_path: Path,
+) -> None:
+    """run_sync() executes in the provided working directory when supplied."""
+    working_dir = tmp_path / "work"
+    working_dir.mkdir()
+    command = python_builder("-c", "import os;print(os.getcwd())")
+
+    result = command.run_sync(context=ExecutionContext(cwd=working_dir))
+
+    assert result.stdout is not None
+    cwd_result = Path(result.stdout.strip())
+    assert cwd_result == working_dir
+
+
+def test_run_sync_allows_disabling_capture() -> None:
+    """run_sync(capture=False) executes the command without retaining output."""
+    command = sh.make(ECHO)("uncaptured output")
+
+    result = command.run_sync(capture=False)
+
+    assert result.exit_code == 0
+    assert result.stdout is None
+    assert result.stderr is None
+
+
+def test_run_sync_echoes_to_custom_sinks(
+    python_builder: typ.Callable[..., SafeCmd],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """run_sync(echo=True) can direct echo output to injected sinks."""
+    stdout_sink = io.StringIO()
+    stderr_sink = io.StringIO()
+    command = python_builder(
+        "-c",
+        'import sys; print("out"); print("err", file=sys.stderr)',
+    )
+
+    result = command.run_sync(
+        echo=True,
+        context=ExecutionContext(
+            stdout_sink=stdout_sink,
+            stderr_sink=stderr_sink,
+        ),
+    )
+    captured = capsys.readouterr()
+
+    assert result.stdout is not None
+    assert result.stderr is not None
+    assert result.stdout.strip() == "out"
+    assert result.stderr.strip() == "err"
+    assert stdout_sink.getvalue().strip() == "out"
+    assert stderr_sink.getvalue().strip() == "err"
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_run_sync_decodes_with_configured_encoding(
+    python_builder: typ.Callable[..., SafeCmd],
+) -> None:
+    """run_sync() uses the configured encoding/errors when decoding output."""
+    command = python_builder(
+        "-c",
+        ("import sys; sys.stdout.buffer.write(bytes([0x96])); sys.stdout.flush()"),
+    )
+
+    result = command.run_sync(
+        context=ExecutionContext(
+            encoding="cp1252",
+            errors="strict",
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert result.ok is True
+    assert result.stdout == "\u2013"
+    assert result.stderr == ""
