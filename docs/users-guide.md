@@ -155,3 +155,186 @@ def greet() -> None:
 
 `run_sync()` accepts the same parameters as `run()` and returns an identical
 `CommandResult`. It drives the event loop internally via `asyncio.run()`.
+
+## Execution context and hooks
+
+Cuprum provides `CuprumContext` to scope allowlists and execution hooks across
+your application. Contexts are backed by a `ContextVar`, giving you automatic
+isolation across threads and async tasks.
+
+### Scoped contexts
+
+Use `scoped()` to establish a narrowed execution context within a code block:
+
+```python
+from cuprum import ECHO, LS, scoped
+
+# Start with a base allowlist
+with scoped(allowlist=frozenset([ECHO, LS])) as ctx:
+    assert ctx.is_allowed(ECHO)  # True
+    assert ctx.is_allowed(LS)  # True
+
+    # Narrow further in nested scope
+    with scoped(allowlist=frozenset([ECHO])) as inner:
+        assert inner.is_allowed(ECHO)  # True
+        assert inner.is_allowed(LS)  # False (narrowed out)
+```
+
+Key properties of `scoped()`:
+
+- When the parent allowlist is empty, the provided allowlist becomes the new
+  base.
+- When the parent has programs, the new allowlist is intersected (can only
+  narrow, never widen).
+- Context is automatically restored when the block exits, even on exception.
+
+### Accessing the current context
+
+Use `current_context()` or `get_context()` to access the current execution
+context:
+
+```python
+from cuprum import ECHO, current_context, scoped
+
+with scoped(allowlist=frozenset([ECHO])):
+    ctx = current_context()
+    if ctx.is_allowed(ECHO):
+        print("ECHO is allowed")
+```
+
+### Dynamic allowlist extension
+
+Use `allow()` to temporarily add programs to the current context:
+
+```python
+from cuprum import ECHO, LS, allow, current_context, scoped
+
+with scoped(allowlist=frozenset([ECHO])):
+    # LS is not currently allowed
+    assert not current_context().is_allowed(LS)
+
+    # Temporarily allow LS
+    with allow(LS):
+        assert current_context().is_allowed(LS)
+
+    # LS is no longer allowed after the block
+    assert not current_context().is_allowed(LS)
+```
+
+For manual control, use the `AllowRegistration` handle directly:
+
+```python
+from cuprum import LS, allow, current_context, scoped
+
+with scoped():
+    reg = allow(LS)
+    assert current_context().is_allowed(LS)
+    reg.detach()  # Remove LS from allowlist
+    assert not current_context().is_allowed(LS)
+```
+
+### Before and after hooks
+
+Register hooks to run before or after command execution:
+
+```python
+from cuprum import ECHO, before, after, scoped, sh
+
+
+def log_before(cmd):
+    print(f"About to run: {cmd.program}")
+
+
+def log_after(cmd, result):
+    print(f"Finished {cmd.program} with exit code {result.exit_code}")
+
+
+with scoped(allowlist=frozenset([ECHO])):
+    with before(log_before), after(log_after):
+        cmd = sh.make(ECHO)("hello")
+        # Hooks will be invoked when cmd.run() is called
+```
+
+Hook ordering:
+
+- **Before hooks** execute in registration order (FIFO): parent hooks run
+  before child hooks.
+- **After hooks** execute in reverse order (LIFO): child hooks run before
+  parent hooks, enabling cleanup patterns.
+
+Like `allow()`, hook registrations can be detached manually:
+
+```python
+from cuprum import before, current_context, scoped
+
+
+def my_hook(cmd):
+    pass
+
+
+with scoped():
+    reg = before(my_hook)
+    assert my_hook in current_context().before_hooks
+    reg.detach()
+    assert my_hook not in current_context().before_hooks
+```
+
+### Thread and async task isolation
+
+`CuprumContext` uses Python's `ContextVar` mechanism, which provides automatic
+isolation:
+
+- Each thread gets its own context value.
+- Each async task inherits the context from its creator and can modify it
+  independently.
+
+This means you can safely use `scoped()` in concurrent code without worrying
+about context leaking between threads or tasks:
+
+```python
+import asyncio
+
+from cuprum import ECHO, LS, current_context, scoped
+
+
+async def worker(name: str, programs):
+    with scoped(allowlist=programs):
+        await asyncio.sleep(0.1)  # Simulate work
+        ctx = current_context()
+        print(f"{name}: ECHO allowed = {ctx.is_allowed(ECHO)}")
+
+
+async def main():
+    await asyncio.gather(
+        worker("task1", frozenset([ECHO])),
+        worker("task2", frozenset([LS])),
+    )
+    # task1 sees ECHO allowed, task2 does not
+
+
+asyncio.run(main())
+```
+
+### Checking allowlist membership
+
+Use `is_allowed()` to check if a program is permitted:
+
+```python
+from cuprum import ECHO, CuprumContext
+
+ctx = CuprumContext(allowlist=frozenset([ECHO]))
+if ctx.is_allowed(ECHO):
+    print("ECHO is allowed")
+```
+
+Use `check_allowed()` to raise `ForbiddenProgramError` if a program is not
+allowed:
+
+```python
+from cuprum import ECHO, LS, CuprumContext, ForbiddenProgramError
+
+ctx = CuprumContext(allowlist=frozenset([ECHO]))
+try:
+    ctx.check_allowed(LS)
+except ForbiddenProgramError as e:
+    print(f"Access denied: {e}")

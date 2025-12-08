@@ -26,6 +26,20 @@ from cuprum.catalogue import (
     ProjectSettings,
     UnknownProgramError,
 )
+from cuprum.context import (
+    AfterHook,
+    AllowRegistration,
+    BeforeHook,
+    CuprumContext,
+    ForbiddenProgramError,
+    HookRegistration,
+    after,
+    allow,
+    before,
+    current_context,
+    get_context,
+    scoped,
+)
 from cuprum.program import Program
 from cuprum.sh import CommandResult, ExecutionContext, SafeCmd, SafeCmdBuilder
 
@@ -42,8 +56,14 @@ __all__ = [
     "ECHO",
     "LS",
     "PACKAGE_NAME",
+    "AfterHook",
+    "AllowRegistration",
+    "BeforeHook",
     "CommandResult",
+    "CuprumContext",
     "ExecutionContext",
+    "ForbiddenProgramError",
+    "HookRegistration",
     "Program",
     "ProgramCatalogue",
     "ProgramEntry",
@@ -51,5 +71,11 @@ __all__ = [
     "SafeCmd",
     "SafeCmdBuilder",
     "UnknownProgramError",
+    "after",
+    "allow",
+    "before",
+    "current_context",
+    "get_context",
+    "scoped",
     "sh",
 ]
