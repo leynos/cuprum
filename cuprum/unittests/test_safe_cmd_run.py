@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 import sys
 import time
@@ -35,6 +36,47 @@ def test_run_captures_output_and_exit_code() -> None:
     assert result.ok is True
     assert result.stdout == "hello"
     assert result.stderr == ""
+
+
+def test_run_captures_stderr_only(
+    python_builder: typ.Callable[..., SafeCmd],
+) -> None:
+    """run() captures stderr independently when only stderr is written."""
+    command = python_builder(
+        "-c",
+        'import sys; print("err", file=sys.stderr)',
+    )
+
+    result = asyncio.run(command.run())
+
+    assert result.exit_code == 0
+    assert result.ok is True
+    assert result.stdout == ""
+    assert result.stderr is not None
+    assert result.stderr.strip() == "err"
+
+
+def test_run_captures_and_echoes_stderr(
+    python_builder: typ.Callable[..., SafeCmd],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """run(echo=True) both echoes stderr and captures it separately."""
+    command = python_builder(
+        "-c",
+        'import sys; print("err", file=sys.stderr)',
+    )
+
+    result = asyncio.run(command.run(echo=True))
+
+    captured = capsys.readouterr()
+
+    assert result.exit_code == 0
+    assert result.ok is True
+    assert result.stdout == ""
+    assert result.stderr is not None
+    assert result.stderr.strip() == "err"
+    assert captured.out == ""
+    assert captured.err.strip() == "err"
 
 
 def test_run_echoes_when_requested(capfd: pytest.CaptureFixture[str]) -> None:
@@ -166,6 +208,63 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
 
     pid = asyncio.run(orchestrate())
     _poll_process_death(pid)
+
+
+def test_run_echoes_to_custom_sinks(
+    python_builder: typ.Callable[..., SafeCmd],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """run(echo=True) can direct echo output to injected sinks."""
+    stdout_sink = io.StringIO()
+    stderr_sink = io.StringIO()
+    command = python_builder(
+        "-c",
+        'import sys; print("out"); print("err", file=sys.stderr)',
+    )
+
+    result = asyncio.run(
+        command.run(
+            echo=True,
+            context=ExecutionContext(
+                stdout_sink=stdout_sink,
+                stderr_sink=stderr_sink,
+            ),
+        ),
+    )
+    captured = capsys.readouterr()
+
+    assert result.stdout is not None
+    assert result.stderr is not None
+    assert result.stdout.strip() == "out"
+    assert result.stderr.strip() == "err"
+    assert stdout_sink.getvalue().strip() == "out"
+    assert stderr_sink.getvalue().strip() == "err"
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_run_decodes_with_configured_encoding(
+    python_builder: typ.Callable[..., SafeCmd],
+) -> None:
+    """run() uses the configured encoding/errors when decoding output."""
+    command = python_builder(
+        "-c",
+        ("import sys; sys.stdout.buffer.write(bytes([0x96])); sys.stdout.flush()"),
+    )
+
+    result = asyncio.run(
+        command.run(
+            context=ExecutionContext(
+                encoding="cp1252",
+                errors="strict",
+            ),
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert result.ok is True
+    assert result.stdout == "\u2013"
+    assert result.stderr == ""
 
 
 def _poll_process_death(pid: int, *, timeout: float = 1.0) -> None:
