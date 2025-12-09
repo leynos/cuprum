@@ -77,7 +77,7 @@ works best.
 
 ## Documentation
 
-For the full guide—including how to build your own programme catalogues, write
+For the full guide—including how to build your own program catalogues, write
 project-specific builders, and control execution contexts—see the
 [users' guide](docs/users-guide.md).
 
