@@ -91,4 +91,4 @@ allowlists.
 
 ## Licence
 
-ISC
+[ISC](LICENSE)
