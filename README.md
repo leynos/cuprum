@@ -81,6 +81,14 @@ For the full guide—including how to build your own programme catalogues, write
 project-specific builders, and control execution contexts—see the
 [users' guide](docs/users-guide.md).
 
+## Why "cuprum"?
+
+The name is a tip of the hat to [Plumbum](https://plumbum.readthedocs.io/), the
+library that showed us shell-like scripting in Python could actually be
+pleasant. "Cuprum" is Latin for copper—another metal used in pipes—and we hope
+to carry that spirit forward with a focus on type safety and explicit
+allowlists.
+
 ## Licence
 
 ISC
