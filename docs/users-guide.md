@@ -162,11 +162,13 @@ Cuprum provides `CuprumContext` to scope allowlists and execution hooks across
 your application. Contexts are backed by a `ContextVar`, giving you automatic
 isolation across threads and async tasks.
 
-> **Note:** Context integration with `SafeCmd.run()` is planned for a future
-> release. Currently, `CuprumContext` provides the infrastructure for scoped
-> allowlists and hooks, but `SafeCmd.run()` does not yet automatically check
-> allowlists or invoke hooks. You can manually call `ctx.check_allowed()` and
-> invoke hooks in your application code until full integration is available.
+When you call `SafeCmd.run()` or `run_sync()`, Cuprum automatically:
+
+1. Checks the current context's allowlist and raises `ForbiddenProgramError` if
+   the program is not permitted.
+2. Invokes all registered before hooks (in FIFO order) before process execution.
+3. Invokes all registered after hooks (in LIFO order) after the process
+   completes.
 
 ### Scoped contexts
 

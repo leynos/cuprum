@@ -61,7 +61,14 @@ class CuprumContext:
         return program in self.allowlist
 
     def check_allowed(self, program: Program) -> None:
-        """Raise ForbiddenProgramError if program is not allowed."""
+        """Raise ForbiddenProgramError if program is not allowed.
+
+        When the allowlist is empty, all programs are permitted (permissive
+        default). This allows gradual adoption: code can run without explicit
+        context setup, and scoped() can later establish restrictions.
+        """
+        if not self.allowlist:
+            return  # Empty allowlist permits all programs
         if not self.is_allowed(program):
             msg = f"Program '{program}' is not allowed in the current context"
             raise ForbiddenProgramError(msg)

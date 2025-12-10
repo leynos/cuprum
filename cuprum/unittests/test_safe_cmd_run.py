@@ -326,3 +326,160 @@ def _poll_process_death(pid: int, *, timeout: float = 1.0) -> None:
             return
         time.sleep(0.02)
     pytest.fail(f"Process {pid} still alive after {timeout}s of polling")
+
+
+# -----------------------------------------------------------------------------
+# Context integration tests (allowlist and hooks)
+# -----------------------------------------------------------------------------
+
+
+def test_run_raises_forbidden_when_program_not_in_allowlist(
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """run() raises ForbiddenProgramError when program is not in context allowlist."""
+    from cuprum.context import ForbiddenProgramError, scoped
+    from cuprum.program import Program
+
+    _, execute = execution_strategy
+    command = sh.make(ECHO)("hello")
+    # Create a context with an allowlist that does NOT include ECHO
+    other_program = Program("cat")
+    with (
+        scoped(allowlist=frozenset([other_program])),
+        pytest.raises(ForbiddenProgramError),
+    ):
+        execute(command, {})
+
+
+def test_run_succeeds_when_program_in_allowlist(
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """run() succeeds when program is in context allowlist."""
+    from cuprum.context import scoped
+
+    _, execute = execution_strategy
+    command = sh.make(ECHO)("-n", "allowed")
+    with scoped(allowlist=frozenset([ECHO])):
+        result = execute(command, {})
+    assert result.exit_code == 0
+    assert result.stdout == "allowed"
+
+
+def test_run_succeeds_with_empty_allowlist() -> None:
+    """run() succeeds when context allowlist is empty (default permits all)."""
+    # Default context has empty allowlist which permits all programs
+    command = sh.make(ECHO)("-n", "hello")
+    result = asyncio.run(command.run())
+    assert result.exit_code == 0
+    assert result.stdout == "hello"
+
+
+def test_run_invokes_before_hooks_in_fifo_order(
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """run() invokes before hooks in registration order (FIFO)."""
+    from cuprum.context import scoped
+
+    _, execute = execution_strategy
+    call_order: list[int] = []
+
+    def hook1(cmd: SafeCmd) -> None:
+        _ = cmd
+        call_order.append(1)
+
+    def hook2(cmd: SafeCmd) -> None:
+        _ = cmd
+        call_order.append(2)
+
+    command = sh.make(ECHO)("-n", "hooks")
+    with scoped(allowlist=frozenset([ECHO]), before_hooks=(hook1, hook2)):
+        execute(command, {})
+
+    assert call_order == [1, 2]
+
+
+def test_run_invokes_after_hooks_in_lifo_order(
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """run() invokes after hooks in LIFO order (inner hooks first)."""
+    from cuprum.context import scoped
+
+    _, execute = execution_strategy
+    call_order: list[int] = []
+
+    def hook1(cmd: SafeCmd, result: CommandResult) -> None:
+        _, _ = cmd, result
+        call_order.append(1)
+
+    def hook2(cmd: SafeCmd, result: CommandResult) -> None:
+        _, _ = cmd, result
+        call_order.append(2)
+
+    command = sh.make(ECHO)("-n", "hooks")
+    # After hooks are stored in LIFO order (prepended), so iteration is inner-first
+    with scoped(allowlist=frozenset([ECHO]), after_hooks=(hook1, hook2)):
+        execute(command, {})
+
+    # Hooks stored as (hook1, hook2) means hook1 runs first in iteration
+    assert call_order == [1, 2]
+
+
+def test_run_passes_command_and_result_to_hooks(
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """run() passes SafeCmd to before hooks and SafeCmd+result to after hooks."""
+    from cuprum.context import scoped
+
+    _, execute = execution_strategy
+    before_received: list[SafeCmd] = []
+    after_received: list[tuple[SafeCmd, CommandResult]] = []
+
+    def before_hook(cmd: SafeCmd) -> None:
+        before_received.append(cmd)
+
+    def after_hook(cmd: SafeCmd, result: CommandResult) -> None:
+        after_received.append((cmd, result))
+
+    command = sh.make(ECHO)("-n", "test")
+    with scoped(
+        allowlist=frozenset([ECHO]),
+        before_hooks=(before_hook,),
+        after_hooks=(after_hook,),
+    ):
+        result = execute(command, {})
+
+    assert len(before_received) == 1
+    assert before_received[0] is command
+    assert len(after_received) == 1
+    assert after_received[0][0] is command
+    assert after_received[0][1] is result
+
+
+def test_run_does_not_invoke_after_hooks_on_cancellation(
+    python_builder: typ.Callable[..., SafeCmd],
+) -> None:
+    """run() does not invoke after hooks when task is cancelled."""
+    from cuprum.context import scoped
+
+    after_called = False
+
+    def after_hook(cmd: SafeCmd, result: CommandResult) -> None:
+        nonlocal after_called
+        _, _ = cmd, result
+        after_called = True
+
+    # Use a long-running command that we can cancel
+    command = python_builder("-c", "import time; time.sleep(10)")
+
+    async def orchestrate() -> None:
+        with scoped(allowlist=frozenset([command.program]), after_hooks=(after_hook,)):
+            task = asyncio.create_task(
+                command.run(capture=False, context=ExecutionContext(cancel_grace=0.1)),
+            )
+            await asyncio.sleep(0.1)  # Let the process start
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    asyncio.run(orchestrate())
+    assert after_called is False
