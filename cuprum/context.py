@@ -284,30 +284,32 @@ class AllowRegistration:
     leaving outer scopes unaffected. The context is *not* captured at
     registration time; operations always use whatever context is current.
 
-    Important: detach() removes programs from the current context rather than
-    restoring the original context. For automatic restoration, use
-    AllowRegistration as a context manager or wrap in a scoped() block.
+    Token-based Restoration
+    -----------------------
+    The registration captures a token at creation time. When detach() is called,
+    the original context is restored via the token, ensuring no context pollution
+    even when used outside scoped() blocks.
     """
 
-    __slots__ = ("_detached", "_programs")
+    __slots__ = ("_detached", "_programs", "_token")
 
     def __init__(self, *programs: Program) -> None:
         """Create an allowlist registration and add programs to current context."""
         self._programs = frozenset(programs)
         self._detached = False
-        # Add programs to current context
+        # Add programs to current context and capture token for restoration
         ctx = current_context()
         new_ctx = dc.replace(ctx, allowlist=ctx.allowlist | self._programs)
-        _set_context(new_ctx)
+        self._token: Token[CuprumContext] | None = _set_context(new_ctx)
 
     def detach(self) -> None:
-        """Remove the allowed programs from the current context."""
+        """Restore the original context via the captured token."""
         if self._detached:
             return
         self._detached = True
-        ctx = current_context()
-        new_ctx = dc.replace(ctx, allowlist=ctx.allowlist - self._programs)
-        _set_context(new_ctx)
+        if self._token is not None:
+            _reset_context(self._token)
+            self._token = None
 
     def __enter__(self) -> AllowRegistration:
         """Enter context manager; programs are already registered."""
@@ -365,12 +367,14 @@ class HookRegistration:
     leaving outer scopes unaffected. The context is *not* captured at
     registration time; operations always use whatever context is current.
 
-    Important: detach() removes the hook from the current context rather than
-    restoring the original context. For automatic restoration, use
-    HookRegistration as a context manager or wrap in a scoped() block.
+    Token-based Restoration
+    -----------------------
+    The registration captures a token at creation time. When detach() is called,
+    the original context is restored via the token, ensuring no context pollution
+    even when used outside scoped() blocks.
     """
 
-    __slots__ = ("_detached", "_hook", "_hook_type")
+    __slots__ = ("_detached", "_hook", "_hook_type", "_token")
 
     def __init__(
         self,
@@ -381,25 +385,22 @@ class HookRegistration:
         self._hook = hook
         self._hook_type = hook_type
         self._detached = False
-        # Add hook to current context
+        # Add hook to current context and capture token for restoration
         ctx = current_context()
         if hook_type == "before":
             new_ctx = ctx.with_before_hook(typ.cast("BeforeHook", hook))
         else:
             new_ctx = ctx.with_after_hook(typ.cast("AfterHook", hook))
-        _set_context(new_ctx)
+        self._token: Token[CuprumContext] | None = _set_context(new_ctx)
 
     def detach(self) -> None:
-        """Remove the hook from the current context."""
+        """Restore the original context via the captured token."""
         if self._detached:
             return
         self._detached = True
-        ctx = current_context()
-        if self._hook_type == "before":
-            new_ctx = ctx.without_before_hook(typ.cast("BeforeHook", self._hook))
-        else:
-            new_ctx = ctx.without_after_hook(typ.cast("AfterHook", self._hook))
-        _set_context(new_ctx)
+        if self._token is not None:
+            _reset_context(self._token)
+            self._token = None
 
     def __enter__(self) -> HookRegistration:
         """Enter context manager; hook is already registered."""
