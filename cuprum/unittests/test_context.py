@@ -15,6 +15,9 @@ from cuprum.context import (
     BeforeHook,
     CuprumContext,
     ForbiddenProgramError,
+    after,
+    allow,
+    before,
     current_context,
     get_context,
     scoped,
@@ -180,8 +183,6 @@ def test_nested_scopes_stack_correctly() -> None:
 def test_allow_adds_programs_to_context() -> None:
     """AllowRegistration adds programs to current context allowlist."""
     with scoped(allowlist=frozenset([ECHO])):
-        from cuprum.context import allow
-
         reg = allow(LS)
         assert current_context().is_allowed(LS) is True
         reg.detach()
@@ -192,8 +193,6 @@ def test_allow_adds_programs_to_context() -> None:
 def test_allow_as_context_manager() -> None:
     """AllowRegistration can be used as a context manager."""
     with scoped(allowlist=frozenset([ECHO])):
-        from cuprum.context import allow
-
         with allow(LS):
             assert current_context().is_allowed(LS) is True
         assert current_context().is_allowed(LS) is False
@@ -206,8 +205,6 @@ def test_allow_as_context_manager() -> None:
 
 def test_before_hook_registration_and_detach() -> None:
     """before() registers a hook that can be detached."""
-    from cuprum.context import before
-
     hook: BeforeHook = mock.Mock()
     with scoped():
         reg = before(hook)
@@ -218,8 +215,6 @@ def test_before_hook_registration_and_detach() -> None:
 
 def test_after_hook_registration_and_detach() -> None:
     """after() registers a hook that can be detached."""
-    from cuprum.context import after
-
     hook: AfterHook = mock.Mock()
     with scoped():
         reg = after(hook)
@@ -230,8 +225,6 @@ def test_after_hook_registration_and_detach() -> None:
 
 def test_before_hook_as_context_manager() -> None:
     """before() can be used as a context manager."""
-    from cuprum.context import before
-
     hook: BeforeHook = mock.Mock()
     with scoped():
         with before(hook):
@@ -241,8 +234,6 @@ def test_before_hook_as_context_manager() -> None:
 
 def test_after_hook_as_context_manager() -> None:
     """after() can be used as a context manager."""
-    from cuprum.context import after
-
     hook: AfterHook = mock.Mock()
     with scoped():
         with after(hook):

@@ -254,6 +254,23 @@ class AllowRegistration:
     """Registration handle for dynamic allowlist extension.
 
     Supports detach() and context manager usage for scoped allowing.
+
+    Scope-aware Context Semantics
+    -----------------------------
+    AllowRegistration operates on the current context (via `current_context()`)
+    at both registration and deregistration time. This design interacts with
+    nested scopes as follows:
+
+    - When created, programs are added to the *current* context at that moment.
+    - When `detach()` is called (or the context manager exits), programs are
+      removed from the *current* context at that moment.
+    - Each nested `scoped()` block creates its own isolated context via
+      `dc.replace()`. Exiting an inner scope restores the outer scope's context.
+
+    This means if you register within a nested scope and call `detach()` within
+    that same scope, the programs are removed from the inner scope's context,
+    leaving outer scopes unaffected. The context is *not* captured at
+    registration time; operations always use whatever context is current.
     """
 
     __slots__ = ("_detached", "_programs")

@@ -162,6 +162,12 @@ Cuprum provides `CuprumContext` to scope allowlists and execution hooks across
 your application. Contexts are backed by a `ContextVar`, giving you automatic
 isolation across threads and async tasks.
 
+> **Note:** Context integration with `SafeCmd.run()` is planned for a future
+> release. Currently, `CuprumContext` provides the infrastructure for scoped
+> allowlists and hooks, but `SafeCmd.run()` does not yet automatically check
+> allowlists or invoke hooks. You can manually call `ctx.check_allowed()` and
+> invoke hooks in your application code until full integration is available.
+
 ### Scoped contexts
 
 Use `scoped()` to establish a narrowed execution context within a code block:
@@ -338,3 +344,4 @@ try:
     ctx.check_allowed(LS)
 except ForbiddenProgramError as e:
     print(f"Access denied: {e}")
+```
