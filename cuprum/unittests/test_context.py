@@ -70,11 +70,11 @@ def test_empty_hooks_by_default() -> None:
 
 def test_context_with_hooks() -> None:
     """Context retains provided hooks."""
-    before: BeforeHook = mock.Mock()
-    after: AfterHook = mock.Mock()
-    ctx = CuprumContext(before_hooks=(before,), after_hooks=(after,))
-    assert ctx.before_hooks == (before,)
-    assert ctx.after_hooks == (after,)
+    before_hook: BeforeHook = mock.Mock()
+    after_hook: AfterHook = mock.Mock()
+    ctx = CuprumContext(before_hooks=(before_hook,), after_hooks=(after_hook,))
+    assert ctx.before_hooks == (before_hook,)
+    assert ctx.after_hooks == (after_hook,)
 
 
 # =============================================================================
@@ -163,7 +163,7 @@ def test_scoped_restores_on_exception() -> None:
     """scoped() restores context even when exception is raised."""
     original = current_context()
     with (
-        pytest.raises(ValueError),  # noqa: PT011
+        pytest.raises(ValueError, match=r"test"),
         scoped(allowlist=frozenset([ECHO])),
     ):
         raise ValueError("test")

@@ -57,7 +57,12 @@ class CuprumContext:
     after_hooks: tuple[AfterHook, ...] = ()
 
     def is_allowed(self, program: Program) -> bool:
-        """Return True when the program is in the allowlist."""
+        """Return True when the program is in the allowlist.
+
+        Note: An empty allowlist returns False for all programs, but
+        check_allowed() treats an empty allowlist as permissive.
+        Use check_allowed() for enforcement with permissive defaults.
+        """
         return program in self.allowlist
 
     def check_allowed(self, program: Program) -> None:
@@ -278,6 +283,10 @@ class AllowRegistration:
     that same scope, the programs are removed from the inner scope's context,
     leaving outer scopes unaffected. The context is *not* captured at
     registration time; operations always use whatever context is current.
+
+    Important: detach() removes programs from the current context rather than
+    restoring the original context. For automatic restoration, use
+    AllowRegistration as a context manager or wrap in a scoped() block.
     """
 
     __slots__ = ("_detached", "_programs")
@@ -355,6 +364,10 @@ class HookRegistration:
     that same scope, the hook is removed from the inner scope's context,
     leaving outer scopes unaffected. The context is *not* captured at
     registration time; operations always use whatever context is current.
+
+    Important: detach() removes the hook from the current context rather than
+    restoring the original context. For automatic restoration, use
+    HookRegistration as a context manager or wrap in a scoped() block.
     """
 
     __slots__ = ("_detached", "_hook", "_hook_type")

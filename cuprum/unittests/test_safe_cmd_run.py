@@ -346,7 +346,7 @@ def test_run_raises_forbidden_when_program_not_in_allowlist(
     other_program = Program("cat")
     with (
         scoped(allowlist=frozenset([other_program])),
-        pytest.raises(ForbiddenProgramError),
+        pytest.raises(ForbiddenProgramError, match=r"echo"),
     ):
         execute(command, {})
 
