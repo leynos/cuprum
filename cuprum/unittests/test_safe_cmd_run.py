@@ -401,27 +401,28 @@ def test_run_invokes_before_hooks_in_fifo_order(
 def test_run_invokes_after_hooks_in_lifo_order(
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
-    """run() invokes after hooks in LIFO order (inner hooks first)."""
+    """run() invokes after hooks in LIFO order (inner hooks run before outer)."""
     from cuprum.context import scoped
 
     _, execute = execution_strategy
     call_order: list[int] = []
 
-    def hook1(cmd: SafeCmd, result: CommandResult) -> None:
+    def outer_hook(cmd: SafeCmd, result: CommandResult) -> None:
         _, _ = cmd, result
         call_order.append(1)
 
-    def hook2(cmd: SafeCmd, result: CommandResult) -> None:
+    def inner_hook(cmd: SafeCmd, result: CommandResult) -> None:
         _, _ = cmd, result
         call_order.append(2)
 
     command = sh.make(ECHO)("-n", "hooks")
-    # After hooks are stored in LIFO order (prepended), so iteration is inner-first
-    with scoped(allowlist=frozenset([ECHO]), after_hooks=(hook1, hook2)):
-        execute(command, {})
+    # Nest scopes so the inner after hook runs before the outer (LIFO)
+    with scoped(allowlist=frozenset([ECHO]), after_hooks=(outer_hook,)):  # noqa: SIM117
+        with scoped(after_hooks=(inner_hook,)):
+            execute(command, {})
 
-    # Hooks stored as (hook1, hook2) means hook1 runs first in iteration
-    assert call_order == [1, 2]
+    # Inner hook (2) runs first, then outer hook (1) - true LIFO semantics
+    assert call_order == [2, 1]
 
 
 def test_run_passes_command_and_result_to_hooks(

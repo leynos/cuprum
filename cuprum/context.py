@@ -337,7 +337,25 @@ def allow(*programs: Program) -> AllowRegistration:
 
 
 class HookRegistration:
-    """Registration handle for hooks with detach() and context manager support."""
+    """Registration handle for hooks with detach() and context manager support.
+
+    Scope-aware Context Semantics
+    -----------------------------
+    HookRegistration operates on the current context (via `current_context()`)
+    at both registration and deregistration time. This design interacts with
+    nested scopes as follows:
+
+    - When created, the hook is added to the *current* context at that moment.
+    - When `detach()` is called (or the context manager exits), the hook is
+      removed from the *current* context at that moment.
+    - Each nested `scoped()` block creates its own isolated context via
+      `dc.replace()`. Exiting an inner scope restores the outer scope's context.
+
+    This means if you register within a nested scope and call `detach()` within
+    that same scope, the hook is removed from the inner scope's context,
+    leaving outer scopes unaffected. The context is *not* captured at
+    registration time; operations always use whatever context is current.
+    """
 
     __slots__ = ("_detached", "_hook", "_hook_type")
 

@@ -170,6 +170,11 @@ When you call `SafeCmd.run()` or `run_sync()`, Cuprum automatically:
 3. Invokes all registered after hooks (in LIFO order) after the process
    completes.
 
+**Empty allowlist behavior:** When no context is established (or the context has
+an empty allowlist), all programs are permitted. This permissive default enables
+gradual adoption—code runs without explicit context setup, and you can later
+introduce restrictions via `scoped()`.
+
 ### Scoped contexts
 
 Use `scoped()` to establish a narrowed execution context within a code block:

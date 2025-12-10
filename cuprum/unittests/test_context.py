@@ -30,9 +30,16 @@ from cuprum.program import Program
 
 
 def test_empty_context_has_no_allowlist() -> None:
-    """A context without explicit allowlist blocks all programs."""
+    """A context without explicit allowlist has an empty frozenset."""
     ctx = CuprumContext()
     assert ctx.allowlist == frozenset()
+
+
+def test_check_allowed_permits_all_with_empty_allowlist() -> None:
+    """check_allowed permits all programs when allowlist is empty."""
+    ctx = CuprumContext()  # Empty allowlist permits all (permissive default)
+    ctx.check_allowed(ECHO)  # Must not raise
+    ctx.check_allowed(LS)  # Must not raise
 
 
 def test_context_with_allowlist() -> None:
