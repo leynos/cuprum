@@ -275,7 +275,11 @@ class AllowRegistration:
     exact context that existed when the registration was created, regardless of
     subsequent context modifications. If multiple registrations are created and
     detached in non-LIFO order, earlier tokens may restore states that remove
-    programs added by later registrations.
+    programs added by other registrations.
+
+    Detach in the same logical Context (thread or Task) in which the
+    registration was created. Resetting a ContextVar with a token from a
+    different Context raises ValueError and would break this guarantee.
     """
 
     __slots__ = ("_detached", "_programs", "_token")
@@ -344,6 +348,10 @@ class HookRegistration:
     even when used outside scoped() blocks. This means detach() restores the
     exact context that existed when the registration was created, regardless of
     subsequent context modifications.
+
+    As with AllowRegistration, detach the hook only from the Context where
+    it was registered; using the token in a different Context will raise
+    ValueError in the standard library.
     """
 
     __slots__ = ("_detached", "_hook", "_hook_type", "_token")
