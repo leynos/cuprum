@@ -105,20 +105,18 @@ def _build_logging_hooks(
         if logger.isEnabledFor(start_level):
             logger.log(
                 start_level,
-                "cuprum.start program=%s argv=%r pid_hint=%s",
+                "cuprum.start program=%s argv=%r",
                 cmd.program,
                 cmd.argv_with_program,
-                -1,
             )
 
     def on_exit(cmd: SafeCmd, result: CommandResult) -> None:
         with lock:
             started_at = start_times.pop(id(cmd), None)
-        duration_s: str | float
-        if started_at is None:
-            duration_s = "unknown"
-        else:
-            duration_s = time.perf_counter() - started_at
+        duration_s = (
+            time.perf_counter() - started_at if started_at is not None else None
+        )
+        duration_str = f"{duration_s:.6f}" if duration_s is not None else "unknown"
         if logger.isEnabledFor(exit_level):
             logger.log(
                 exit_level,
@@ -129,7 +127,7 @@ def _build_logging_hooks(
                 result.program,
                 result.pid,
                 result.exit_code,
-                (f"{duration_s:.6f}" if isinstance(duration_s, float) else duration_s),
+                duration_str,
                 len(result.stdout) if result.stdout is not None else 0,
                 len(result.stderr) if result.stderr is not None else 0,
             )

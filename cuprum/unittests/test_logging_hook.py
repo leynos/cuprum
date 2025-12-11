@@ -7,7 +7,8 @@ import typing as typ
 
 from cuprum import ECHO, sh
 from cuprum.context import current_context, scoped
-from cuprum.logging_hooks import logging_hook
+from cuprum.logging_hooks import _build_logging_hooks, logging_hook
+from cuprum.sh import CommandResult
 
 if typ.TYPE_CHECKING:
     import pytest
@@ -77,6 +78,75 @@ def test_logging_hook_handles_uncaptured_output(
         _ = cmd.run_sync(capture=False)
 
     messages = [record.getMessage() for record in caplog.records]
-    assert any("cuprum.exit" in msg for msg in messages)
-    # Should not crash when stdout/stderr are None
-    assert not [msg for msg in messages if "stdout_len=None" in msg]
+    exit_lines = [msg for msg in messages if "cuprum.exit" in msg]
+    assert exit_lines, "Expected an exit log line"
+    assert "stdout_len=0" in exit_lines[0]
+    assert "stderr_len=0" in exit_lines[0]
+
+
+def test_logging_hook_detach_is_idempotent() -> None:
+    """Calling detach() multiple times is safe and leaves hooks removed."""
+    logger = logging.getLogger("cuprum.test.registry.idempotent")
+    with scoped(allowlist=frozenset([ECHO])):
+        before_count = len(current_context().before_hooks)
+        after_count = len(current_context().after_hooks)
+
+        registration = logging_hook(logger=logger)
+        registration.detach()
+        registration.detach()  # second call should be a no-op
+
+        restored = current_context()
+        assert len(restored.before_hooks) == before_count
+        assert len(restored.after_hooks) == after_count
+
+
+def test_logging_hook_context_manager_detaches_and_is_idempotent() -> None:
+    """Context manager usage detaches hooks and allows further detach calls."""
+    logger = logging.getLogger("cuprum.test.registry.context_manager")
+    with scoped(allowlist=frozenset([ECHO])):
+        before_count = len(current_context().before_hooks)
+        after_count = len(current_context().after_hooks)
+
+        with logging_hook(logger=logger) as registration:
+            with_hooks = current_context()
+            assert len(with_hooks.before_hooks) == before_count + 1
+            assert len(with_hooks.after_hooks) == after_count + 1
+
+        restored = current_context()
+        assert len(restored.before_hooks) == before_count
+        assert len(restored.after_hooks) == after_count
+
+        registration.detach()
+        post_detach = current_context()
+        assert len(post_detach.before_hooks) == before_count
+        assert len(post_detach.after_hooks) == after_count
+
+
+def test_logging_hook_logs_unknown_duration(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Exit hook falls back to 'unknown' duration when start timestamp is missing."""
+    caplog.set_level(logging.INFO, logger="cuprum.test.duration")
+    logger = logging.getLogger("cuprum.test.duration")
+    _start, exit_ = _build_logging_hooks(
+        logger=logger,
+        start_level=logging.INFO,
+        exit_level=logging.INFO,
+    )
+
+    # Intentionally call exit without a matching start to hit the fallback path.
+    cmd: SafeCmd = sh.make(ECHO)("-n", "duration")
+    result = CommandResult(
+        program=cmd.program,
+        argv=cmd.argv,
+        exit_code=0,
+        pid=1234,
+        stdout=None,
+        stderr=None,
+    )
+    exit_(cmd, result)
+
+    messages = [record.getMessage() for record in caplog.records]
+    exit_lines = [msg for msg in messages if "cuprum.exit" in msg]
+    assert exit_lines, "Expected an exit log line"
+    assert "duration_s=unknown" in exit_lines[0]

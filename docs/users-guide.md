@@ -297,7 +297,7 @@ with scoped():
 Use `logging_hook()` to register paired hooks that emit structured start and
 exit events through the standard library `logging` module. The helper wires a
 before hook (start) and after hook (exit) into the current context and returns
-a registration handle you can use as a context manager:
+a registration handle that can be used as a context manager:
 
 ```python
 import logging
@@ -311,8 +311,8 @@ with scoped(allowlist=frozenset([ECHO])):
         sh.make(ECHO)("-n", "hello logging").run_sync()
 ```
 
-By default the hook logs to `logging.getLogger("cuprum")` at `INFO` level. You
-can override the logger or the log levels via `start_level` and `exit_level`.
+By default the hook logs to `logging.getLogger("cuprum")` at `INFO` level. The
+logger or the log levels can be overridden via `start_level` and `exit_level`.
 Start events include the program and argv; exit events include the program,
 pid, exit code, duration, and lengths of captured stdout/stderr (zero when
 capture is disabled).
@@ -326,8 +326,8 @@ isolation:
 - Each async task inherits the context from its creator and can modify it
   independently.
 
-This means you can safely use `scoped()` in concurrent code without worrying
-about context leaking between threads or tasks:
+This isolation allows `scoped()` to be used in concurrent code without context
+leaking between threads or tasks:
 
 ```python
 import asyncio

@@ -848,7 +848,8 @@ The following design decisions were made during implementation:
   `cuprum.start` and `cuprum.exit` messages via the standard `logging` module.
 - The default logger is `logging.getLogger("cuprum")` with start and exit levels
   set to `INFO`; both the logger and levels are configurable.
-- Start events include the program and argv (with program name prefixed) so that
+- Start events include the program and argv (with the program name prefixed) so
+  that
   downstream log processors can reconstruct the full command line.
 - Exit events include program, pid, exit code, duration (measured with
   `time.perf_counter()`), and lengths of captured stdout/stderr; lengths are
