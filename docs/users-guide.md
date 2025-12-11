@@ -170,10 +170,10 @@ When you call `SafeCmd.run()` or `run_sync()`, Cuprum automatically:
 3. Invokes all registered after hooks (in LIFO order) after the process
    completes.
 
-**Empty allowlist behavior:** When no context is established (or the context has
-an empty allowlist), all programs are permitted. This permissive default enables
-gradual adoption—code runs without explicit context setup, and you can later
-introduce restrictions via `scoped()`.
+**Empty allowlist behavior:** When no context is established (or the context
+has an empty allowlist), all programs are permitted. This permissive default
+enables gradual adoption—code runs without explicit context setup, and you can
+later introduce restrictions via `scoped()`.
 
 ### Scoped contexts
 
@@ -291,6 +291,31 @@ with scoped():
     reg.detach()
     assert my_hook not in current_context().before_hooks
 ```
+
+### Logging hook
+
+Use `logging_hook()` to register paired hooks that emit structured start and
+exit events through the standard library `logging` module. The helper wires a
+before hook (start) and after hook (exit) into the current context and returns
+a registration handle you can use as a context manager:
+
+```python
+import logging
+
+from cuprum import ECHO, logging_hook, scoped, sh
+
+logger = logging.getLogger("myapp.commands")
+
+with scoped(allowlist=frozenset([ECHO])):
+    with logging_hook(logger=logger):
+        sh.make(ECHO)("-n", "hello logging").run_sync()
+```
+
+By default the hook logs to `logging.getLogger("cuprum")` at `INFO` level. You
+can override the logger or the log levels via `start_level` and `exit_level`.
+Start events include the program and argv; exit events include the program,
+pid, exit code, duration, and lengths of captured stdout/stderr (zero when
+capture is disabled).
 
 ### Thread and async task isolation
 

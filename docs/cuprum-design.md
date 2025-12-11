@@ -842,6 +842,23 @@ The following design decisions were made during implementation:
 - Registration modifies the current context immediately on construction; exiting
   a context manager block calls detach automatically.
 
+### 8.1.2 Logging hook implementation notes
+
+- A built-in `logging_hook()` registers paired before/after hooks that emit
+  `cuprum.start` and `cuprum.exit` messages via the standard `logging` module.
+- The default logger is `logging.getLogger("cuprum")` with start and exit levels
+  set to `INFO`; both the logger and levels are configurable.
+- Start events include the program and argv (with program name prefixed) so that
+  downstream log processors can reconstruct the full command line.
+- Exit events include program, pid, exit code, duration (measured with
+  `time.perf_counter()`), and lengths of captured stdout/stderr; lengths are
+  zero when capture is disabled.
+- Start times are tracked in a thread-safe ``dict[int, float]`` keyed by
+  ``id(cmd)`` and guarded by a ``threading.Lock`` to avoid leaking memory or
+  racing in concurrent scenarios.
+- Detaching the logging hook unregisters the after hook before the before hook
+  to respect `ContextVar` token order.
+
 ### 8.2 Pipelines and Structured Concurrency
 
 For pipelines, Cuprum must:
