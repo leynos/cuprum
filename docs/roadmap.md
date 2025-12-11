@@ -31,7 +31,7 @@ command execution.
 
 ### Step: context and hooks
 
-- [ ] Add `CuprumContext` backed by a `ContextVar`, supporting allowlist
+- [x] Add `CuprumContext` backed by a `ContextVar`, supporting allowlist
       narrowing plus before/after hooks with deterministic ordering and
       `.detach()`; test nesting across threads and async tasks.
 - [ ] Ship a basic logging hook emitting start/exit events compatible with

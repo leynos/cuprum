@@ -21,6 +21,7 @@ from cuprum.catalogue import (
     ProjectSettings,
 )
 from cuprum.catalogue import UnknownProgramError as UnknownProgramError
+from cuprum.context import current_context
 
 if typ.TYPE_CHECKING:
     from cuprum.program import Program
@@ -181,11 +182,15 @@ class SafeCmd:
         CommandResult
             Structured information about the completed process.
 
-        """
-        ctx = context or ExecutionContext()
+        Raises
+        ------
+        ForbiddenProgramError
+            If the program is not in the current context's allowlist.
 
+        """
+        after_hooks = _run_before_hooks(self)
+        ctx = context or ExecutionContext()
         stdout_sink = ctx.stdout_sink if ctx.stdout_sink is not None else sys.stdout
-        stderr_sink = ctx.stderr_sink if ctx.stderr_sink is not None else sys.stderr
 
         process = await asyncio.create_subprocess_exec(
             *self.argv_with_program,
@@ -209,7 +214,7 @@ class SafeCmd:
             except asyncio.CancelledError:
                 await _terminate_process(process, ctx.cancel_grace)
                 raise
-            return CommandResult(
+            result = CommandResult(
                 program=self.program,
                 argv=self.argv,
                 exit_code=exit_code,
@@ -217,6 +222,10 @@ class SafeCmd:
                 stdout=None,
                 stderr=None,
             )
+            # Execute after hooks (LIFO order - stored prepended)
+            for hook in after_hooks:
+                hook(self, result)
+            return result
 
         stream_config = _StreamConfig(
             capture_output=capture,
@@ -235,7 +244,14 @@ class SafeCmd:
             asyncio.create_task(
                 _consume_stream(
                     process.stderr,
-                    dc.replace(stream_config, sink=stderr_sink),
+                    dc.replace(
+                        stream_config,
+                        sink=(
+                            ctx.stderr_sink
+                            if ctx.stderr_sink is not None
+                            else sys.stderr
+                        ),
+                    ),
                 ),
             ),
         )
@@ -249,7 +265,7 @@ class SafeCmd:
 
         stdout_text, stderr_text = await asyncio.gather(*consumers)
 
-        return CommandResult(
+        result = CommandResult(
             program=self.program,
             argv=self.argv,
             exit_code=exit_code,
@@ -257,6 +273,10 @@ class SafeCmd:
             stdout=stdout_text,
             stderr=stderr_text,
         )
+        # Execute after hooks (LIFO order - stored prepended)
+        for hook in after_hooks:
+            hook(self, result)
+        return result
 
     def run_sync(
         self,
@@ -305,6 +325,24 @@ def make(
         return SafeCmd(program=entry.program, argv=argv, project=entry.project)
 
     return builder
+
+
+if typ.TYPE_CHECKING:
+    from cuprum.context import AfterHook
+
+
+def _run_before_hooks(cmd: SafeCmd) -> tuple[AfterHook, ...]:
+    """Check allowlist, run before hooks, and return after hooks for later.
+
+    This helper validates the command against the current context's allowlist,
+    executes all registered before hooks in FIFO order, and returns the after
+    hooks tuple for invocation after command completion.
+    """
+    ctx = current_context()
+    ctx.check_allowed(cmd.program)
+    for hook in ctx.before_hooks:
+        hook(cmd)
+    return ctx.after_hooks
 
 
 def _merge_env(extra: _EnvMapping) -> dict[str, str] | None:

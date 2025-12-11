@@ -802,6 +802,46 @@ Implementation notes (current state):
 - Cancellation sends `terminate`, waits 0.5s, and escalates to `kill` to ensure
   child processes are not left running.
 
+### 8.1.1 CuprumContext Design Decisions
+
+The following design decisions were made during implementation:
+
+**Allowlist narrowing semantics:**
+
+- When `narrow()` is called on a context with an empty allowlist, the provided
+  allowlist is used directly as the new base. This allows establishing an
+  initial scope from the default (empty) context.
+- When `narrow()` is called on a context with a non-empty allowlist, the
+  provided allowlist is intersected with the parent's. This ensures narrowing
+  can only remove programs, never add them.
+- This two-mode behaviour balances safety (can't widen) with usability (can
+  establish base scopes).
+
+**Hook ordering:**
+
+- Before hooks are stored and executed in registration order (FIFO): parent
+  hooks run before child hooks.
+- After hooks are prepended and thus execute in reverse order (LIFO): child
+  hooks run before parent hooks. This enables cleanup patterns similar to
+  context managers.
+
+**ContextVar usage:**
+
+- The global `_current_context` is a `ContextVar[CuprumContext]` with a default
+  singleton context. The frozen dataclass design ensures the default is
+  effectively immutable.
+- Registration handles (`AllowRegistration`, `HookRegistration`) modify the
+  context by replacing the current value rather than mutating it, preserving
+  immutability guarantees.
+
+**Hook and allow registration:**
+
+- Both `HookRegistration` and `AllowRegistration` support manual `.detach()` and
+  context manager usage.
+- Detach is idempotent: calling it multiple times is safe.
+- Registration modifies the current context immediately on construction; exiting
+  a context manager block calls detach automatically.
+
 ### 8.2 Pipelines and Structured Concurrency
 
 For pipelines, Cuprum must:
