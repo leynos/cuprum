@@ -24,8 +24,8 @@ class LoggingHookRegistration:
     registration to respect ContextVar token stacking.
     """
 
-    start_registration: HookRegistration
-    exit_registration: HookRegistration
+    start_registration: HookRegistration | None
+    exit_registration: HookRegistration | None
     _detached: bool = False
 
     def detach(self) -> None:
@@ -33,9 +33,13 @@ class LoggingHookRegistration:
         if self._detached:
             return
         # Detach in reverse registration order to satisfy ContextVar token use.
-        self.exit_registration.detach()
-        self.start_registration.detach()
+        if self.exit_registration is not None:
+            self.exit_registration.detach()
+        if self.start_registration is not None:
+            self.start_registration.detach()
         self._detached = True
+        self.exit_registration = None  # type: ignore[assignment]
+        self.start_registration = None  # type: ignore[assignment]
 
     def __enter__(self) -> LoggingHookRegistration:
         """Return self to support context manager usage."""
@@ -100,11 +104,9 @@ def _build_logging_hooks(
     lock = threading.Lock()
 
     def on_start(cmd: SafeCmd) -> None:
-        exit_enabled = logger.isEnabledFor(exit_level)
-        if exit_enabled:
-            started_at = time.perf_counter()
-            with lock:
-                start_times[cmd] = started_at
+        started_at = time.perf_counter()
+        with lock:
+            start_times[cmd] = started_at
         if logger.isEnabledFor(start_level):
             logger.log(
                 start_level,

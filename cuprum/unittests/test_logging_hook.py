@@ -63,6 +63,9 @@ def test_logging_hook_emits_start_and_exit(
     assert "exit_code=0" in finish
     assert "pid=" in finish
     assert "duration_s=" in finish
+    assert "duration_s=unknown" not in finish
+    assert f"stdout_len={len(result.stdout or '')}" in finish
+    assert "stderr_len=0" in finish
     assert result.stdout is not None
 
 
@@ -80,8 +83,12 @@ def test_logging_hook_handles_uncaptured_output(
     messages = [record.getMessage() for record in caplog.records]
     exit_lines = [msg for msg in messages if "cuprum.exit" in msg]
     assert exit_lines, "Expected an exit log line"
-    assert "stdout_len=0" in exit_lines[0]
-    assert "stderr_len=0" in exit_lines[0]
+    exit_line = exit_lines[0]
+    assert "stdout_len=0" in exit_line
+    assert "stderr_len=0" in exit_line
+    assert "program=echo" in exit_line
+    assert "exit_code=0" in exit_line
+    assert "duration_s=" in exit_line
 
 
 def test_logging_hook_detach_is_idempotent() -> None:
@@ -150,3 +157,37 @@ def test_logging_hook_logs_unknown_duration(
     exit_lines = [msg for msg in messages if "cuprum.exit" in msg]
     assert exit_lines, "Expected an exit log line"
     assert "duration_s=unknown" in exit_lines[0]
+
+
+def test_logging_hook_logs_non_zero_exit_code(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Exit hook logs non-zero exit codes with duration and output lengths."""
+    caplog.set_level(logging.INFO, logger="cuprum.test.failure")
+    logger = logging.getLogger("cuprum.test.failure")
+    start, exit_ = _build_logging_hooks(
+        logger=logger,
+        start_level=logging.INFO,
+        exit_level=logging.INFO,
+    )
+
+    cmd: SafeCmd = sh.make(ECHO)("-n", "fail-path")
+    start(cmd)
+    result = CommandResult(
+        program=cmd.program,
+        argv=cmd.argv,
+        exit_code=1,
+        pid=4321,
+        stdout="x" * 10,
+        stderr="y" * 5,
+    )
+    exit_(cmd, result)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "exit_code=1" in msg
+        and "duration_s=" in msg
+        and "stdout_len=10" in msg
+        and "stderr_len=5" in msg
+        for msg in messages
+    ), "Expected exit log with non-zero exit code and output lengths"
