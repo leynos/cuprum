@@ -849,15 +849,14 @@ The following design decisions were made during implementation:
 - The default logger is `logging.getLogger("cuprum")` with start and exit levels
   set to `INFO`; both the logger and levels are configurable.
 - Start events include the program and argv (with the program name prefixed) so
-  that
-  downstream log processors can reconstruct the full command line.
+  that downstream log processors can reconstruct the full command line.
 - Exit events include program, pid, exit code, duration (measured with
   `time.perf_counter()`), and lengths of captured stdout/stderr; lengths are
   zero when capture is disabled.
-- Start times are tracked in a thread-safe ``dict[int, float]`` keyed by
-  ``id(cmd)`` and guarded by a ``threading.Lock`` to avoid leaking memory or
-  racing in concurrent scenarios.
-- Detaching the logging hook unregisters the after hook before the before hook
+- Start times are tracked in a thread-safe ``WeakKeyDictionary[SafeCmd, float]``
+  guarded by a ``threading.Lock`` so entries are reclaimed even when after
+  hooks are skipped (for example, on cancellation).
+- Detaching the logging hook unregisters the after hook ahead of the start hook
   to respect `ContextVar` token order.
 
 ### 8.2 Pipelines and Structured Concurrency

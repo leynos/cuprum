@@ -171,9 +171,9 @@ When you call `SafeCmd.run()` or `run_sync()`, Cuprum automatically:
    completes.
 
 **Empty allowlist behavior:** When no context is established (or the context
-has an empty allowlist), all programs are permitted. This permissive default
-enables gradual adoption—code runs without explicit context setup, and you can
-later introduce restrictions via `scoped()`.
+has an empty allowlist), all programs are permitted. This permissive default is
+intentional to ease adoption but weakens safety; establish an explicit
+allowlist via `scoped()` to enforce policy once onboarded.
 
 ### Scoped contexts
 
@@ -311,7 +311,7 @@ with scoped(allowlist=frozenset([ECHO])):
         sh.make(ECHO)("-n", "hello logging").run_sync()
 ```
 
-By default the hook logs to `logging.getLogger("cuprum")` at `INFO` level. The
+By default, the hook logs to `logging.getLogger("cuprum")` at `INFO` level. The
 logger or the log levels can be overridden via `start_level` and `exit_level`.
 Start events include the program and argv; exit events include the program,
 pid, exit code, duration, and lengths of captured stdout/stderr (zero when

@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 import typing as typ
+from weakref import WeakKeyDictionary
 
 from cuprum.context import HookRegistration, after, before
 
@@ -95,13 +96,15 @@ def _build_logging_hooks(
     typ.Callable[[SafeCmd, CommandResult], None],
 ]:
     """Create before/after hooks that log start and exit events."""
-    start_times: dict[int, float] = {}
+    start_times: WeakKeyDictionary[SafeCmd, float] = WeakKeyDictionary()
     lock = threading.Lock()
 
     def on_start(cmd: SafeCmd) -> None:
-        started_at = time.perf_counter()
-        with lock:
-            start_times[id(cmd)] = started_at
+        exit_enabled = logger.isEnabledFor(exit_level)
+        if exit_enabled:
+            started_at = time.perf_counter()
+            with lock:
+                start_times[cmd] = started_at
         if logger.isEnabledFor(start_level):
             logger.log(
                 start_level,
@@ -111,26 +114,28 @@ def _build_logging_hooks(
             )
 
     def on_exit(cmd: SafeCmd, result: CommandResult) -> None:
+        if not logger.isEnabledFor(exit_level):
+            return
         with lock:
-            started_at = start_times.pop(id(cmd), None)
-        duration_s = (
-            time.perf_counter() - started_at if started_at is not None else None
+            started_at = start_times.pop(cmd, None)
+        duration_str = (
+            f"{time.perf_counter() - started_at:.6f}"
+            if started_at is not None
+            else "unknown"
         )
-        duration_str = f"{duration_s:.6f}" if duration_s is not None else "unknown"
-        if logger.isEnabledFor(exit_level):
-            logger.log(
-                exit_level,
-                (
-                    "cuprum.exit program=%s pid=%s exit_code=%s duration_s=%s "
-                    "stdout_len=%s stderr_len=%s"
-                ),
-                result.program,
-                result.pid,
-                result.exit_code,
-                duration_str,
-                len(result.stdout) if result.stdout is not None else 0,
-                len(result.stderr) if result.stderr is not None else 0,
-            )
+        logger.log(
+            exit_level,
+            (
+                "cuprum.exit program=%s pid=%s exit_code=%s duration_s=%s "
+                "stdout_len=%s stderr_len=%s"
+            ),
+            result.program,
+            result.pid,
+            result.exit_code,
+            duration_str,
+            len(result.stdout) if result.stdout is not None else 0,
+            len(result.stderr) if result.stderr is not None else 0,
+        )
 
     return on_start, on_exit
 

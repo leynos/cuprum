@@ -153,6 +153,12 @@ class SafeCmd:
     program: Program
     argv: tuple[str, ...]
     project: ProjectSettings
+    __weakref__: object = dc.field(
+        init=False,
+        repr=False,
+        hash=False,
+        compare=False,
+    )
 
     @property
     def argv_with_program(self) -> tuple[str, ...]:
