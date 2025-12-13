@@ -42,7 +42,14 @@ from cuprum.context import (
 )
 from cuprum.logging_hooks import LoggingHookRegistration, logging_hook
 from cuprum.program import Program
-from cuprum.sh import CommandResult, ExecutionContext, SafeCmd, SafeCmdBuilder
+from cuprum.sh import (
+    CommandResult,
+    ExecutionContext,
+    Pipeline,
+    PipelineResult,
+    SafeCmd,
+    SafeCmdBuilder,
+)
 
 from . import sh
 
@@ -66,6 +73,8 @@ __all__ = [
     "ForbiddenProgramError",
     "HookRegistration",
     "LoggingHookRegistration",
+    "Pipeline",
+    "PipelineResult",
     "Program",
     "ProgramCatalogue",
     "ProgramEntry",
