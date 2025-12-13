@@ -842,6 +842,67 @@ The following design decisions were made during implementation:
 - Registration modifies the current context immediately on construction; exiting
   a context manager block calls detach automatically.
 
+### 8.1.2 Logging hook implementation notes
+
+- A built-in `logging_hook()` registers paired before/after hooks that emit
+  `cuprum.start` and `cuprum.exit` messages via the standard `logging` module.
+- The default logger is `logging.getLogger("cuprum")` with start and exit levels
+  set to `INFO`; both the logger and levels are configurable.
+- Start events include the program and argv (with the program name prefixed) so
+  that downstream log processors can reconstruct the full command line.
+- Exit events include program, pid, exit code, duration (measured with
+  `time.perf_counter()`), and lengths of captured stdout/stderr; lengths are
+  zero when capture is disabled.
+- Start times are tracked in a thread-safe ``WeakKeyDictionary[SafeCmd, float]``
+  guarded by a ``threading.Lock`` so entries are reclaimed even when after
+  hooks are skipped (for example, on cancellation).
+- Detaching the logging hook unregisters the after hook ahead of the start hook
+  to respect `ContextVar` token order.
+
+Figure 3: Sequence of start/exit logging hook execution
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant SafeCmd
+    participant BeforeHooks as on_start
+    participant AfterHooks as on_exit
+    participant StartTimes as start_times_store
+    participant Logger
+
+    User->>SafeCmd: run_sync()
+    SafeCmd->>BeforeHooks: on_start(cmd)
+
+    Note over BeforeHooks,StartTimes: Start hook
+    BeforeHooks->>Logger: isEnabledFor(exit_level)
+    alt exit logging enabled
+        BeforeHooks->>StartTimes: lock.acquire()
+        BeforeHooks->>StartTimes: start_times[cmd] = time.perf_counter()
+        BeforeHooks->>StartTimes: lock.release()
+    end
+    BeforeHooks->>Logger: isEnabledFor(start_level)
+    alt start logging enabled
+        BeforeHooks->>Logger: log(start_level, cuprum.start ...)
+    end
+
+    SafeCmd->>SafeCmd: execute process
+    SafeCmd-->>User: CommandResult
+
+    SafeCmd->>AfterHooks: on_exit(cmd, result)
+
+    Note over AfterHooks,StartTimes: Exit hook
+    AfterHooks->>Logger: isEnabledFor(exit_level)
+    alt exit logging disabled
+        AfterHooks-->>SafeCmd: return
+    else exit logging enabled
+        AfterHooks->>StartTimes: lock.acquire()
+        AfterHooks->>StartTimes: started_at = start_times.pop(cmd, None)
+        AfterHooks->>StartTimes: lock.release()
+        AfterHooks->>AfterHooks: compute duration_s
+        AfterHooks->>Logger: log(exit_level, cuprum.exit ...)
+    end
+```
+
 ### 8.2 Pipelines and Structured Concurrency
 
 For pipelines, Cuprum must:

@@ -34,7 +34,7 @@ command execution.
 - [x] Add `CuprumContext` backed by a `ContextVar`, supporting allowlist
       narrowing plus before/after hooks with deterministic ordering and
       `.detach()`; test nesting across threads and async tasks.
-- [ ] Ship a basic logging hook emitting start/exit events compatible with
+- [x] Ship a basic logging hook emitting start/exit events compatible with
       `logging` and wire it through context registration; document hook usage
       patterns.
 

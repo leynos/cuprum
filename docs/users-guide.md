@@ -170,10 +170,10 @@ When you call `SafeCmd.run()` or `run_sync()`, Cuprum automatically:
 3. Invokes all registered after hooks (in LIFO order) after the process
    completes.
 
-**Empty allowlist behavior:** When no context is established (or the context has
-an empty allowlist), all programs are permitted. This permissive default enables
-gradual adoption—code runs without explicit context setup, and you can later
-introduce restrictions via `scoped()`.
+**Empty allowlist behaviour:** When no context is established (or the context
+has an empty allowlist), all programs are permitted. This permissive default is
+intentional to ease adoption but weakens safety; establish an explicit
+allowlist via `scoped()` to enforce policy once onboarded.
 
 ### Scoped contexts
 
@@ -292,6 +292,31 @@ with scoped():
     assert my_hook not in current_context().before_hooks
 ```
 
+### Logging hook
+
+Use `logging_hook()` to register paired hooks that emit structured start and
+exit events through the standard library `logging` module. The helper wires a
+before hook (start) and after hook (exit) into the current context and returns
+a registration handle that can be used as a context manager:
+
+```python
+import logging
+
+from cuprum import ECHO, logging_hook, scoped, sh
+
+logger = logging.getLogger("myapp.commands")
+
+with scoped(allowlist=frozenset([ECHO])):
+    with logging_hook(logger=logger):
+        sh.make(ECHO)("-n", "hello logging").run_sync()
+```
+
+By default, the hook logs to `logging.getLogger("cuprum")` at `INFO` level. The
+logger or the log levels can be overridden via `start_level` and `exit_level`.
+Start events include the program and argv; exit events include the program,
+pid, exit code, duration, and lengths of captured stdout/stderr (zero when
+capture is disabled).
+
 ### Thread and async task isolation
 
 `CuprumContext` uses Python's `ContextVar` mechanism, which provides automatic
@@ -301,8 +326,8 @@ isolation:
 - Each async task inherits the context from its creator and can modify it
   independently.
 
-This means you can safely use `scoped()` in concurrent code without worrying
-about context leaking between threads or tasks:
+This isolation allows `scoped()` to be used in concurrent code without context
+leaking between threads or tasks:
 
 ```python
 import asyncio

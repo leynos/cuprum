@@ -40,6 +40,7 @@ from cuprum.context import (
     get_context,
     scoped,
 )
+from cuprum.logging_hooks import LoggingHookRegistration, logging_hook
 from cuprum.program import Program
 from cuprum.sh import CommandResult, ExecutionContext, SafeCmd, SafeCmdBuilder
 
@@ -64,6 +65,7 @@ __all__ = [
     "ExecutionContext",
     "ForbiddenProgramError",
     "HookRegistration",
+    "LoggingHookRegistration",
     "Program",
     "ProgramCatalogue",
     "ProgramEntry",
@@ -76,6 +78,7 @@ __all__ = [
     "before",
     "current_context",
     "get_context",
+    "logging_hook",
     "scoped",
     "sh",
 ]
