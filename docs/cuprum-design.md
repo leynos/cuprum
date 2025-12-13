@@ -366,12 +366,39 @@ Represents a pipeline of commands connected via stdin/stdout:
 class Pipeline(Generic[Out]):
     parts: tuple[SafeCmd[Any], ...]
 
-    async def run(self, *, capture: bool = True, echo: bool = False) -> Out: ...
-    def run_sync(self, *, capture: bool = True, echo: bool = False) -> Out: ...
+    async def run(
+        self,
+        *,
+        capture: bool = True,
+        echo: bool = False,
+    ) -> PipelineResult: ...
+    def run_sync(
+        self,
+        *,
+        capture: bool = True,
+        echo: bool = False,
+    ) -> PipelineResult: ...
 ```
 
 For the public design, the exact generic parameters are kept simple: we do
 **not** attempt to encode full pipeline structure at the type level.
+
+#### 6.1.5 `PipelineResult`
+
+Pipelines return a structured result so callers can inspect per-stage exit
+metadata alongside the final output:
+
+```python
+@dataclass(frozen=True, slots=True)
+class PipelineResult:
+    stages: tuple[CommandResult, ...]
+
+    @property
+    def final(self) -> CommandResult: ...
+
+    @property
+    def stdout(self) -> str | None: ...
+```
 
 ### 6.2 `cuprum.sh` – Safe Facade
 
@@ -449,7 +476,8 @@ ls = sh.make(LS)
 grep = sh.make(GREP)
 
 pipeline = ls("-l", "/var/log") | grep("ERROR")
-text = pipeline.run_sync(echo=True)
+result = pipeline.run_sync(echo=True)
+text = result.stdout
 ```
 
 ##### Implementation notes for the first iteration
@@ -518,8 +546,15 @@ classDiagram
 ```
 
 Under the hood, this produces a `Pipeline[str]` instance, starts all component
-processes concurrently, and streams data between them. `echo=True` enables
-tee‑style behaviour (see §8).
+processes concurrently, and streams data between them.
+
+##### Design decisions
+
+- Pipeline execution returns a `PipelineResult` so consumers can access
+  per-stage exit metadata (`result.stages`) without relying on side channels.
+- Only the final stage's stdout is captured. Intermediate stage stdout is
+  streamed into the next stage and represented as `None` on its stage result.
+- `echo=True` tees the final stage stdout and all stage stderr streams.
 
 #### 6.2.4 Context manipulation and allowlists
 
