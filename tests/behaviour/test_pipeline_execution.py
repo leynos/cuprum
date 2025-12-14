@@ -32,13 +32,21 @@ def test_pipeline_runs_async() -> None:
     """Behavioural coverage for async pipeline execution."""
 
 
+@scenario(
+    "../features/pipeline_execution.feature",
+    "Pipeline reports metadata when a stage fails",
+)
+def test_pipeline_reports_metadata_on_failure() -> None:
+    """Behavioural coverage for failure metadata semantics."""
+
+
 @dc.dataclass(frozen=True, slots=True)
 class _ScenarioPipeline:
     pipeline: Pipeline
     allowlist: frozenset[Program]
 
 
-@given("a simple two stage pipeline", target_fixture="simple_pipeline")
+@given("a simple two stage pipeline", target_fixture="pipeline_under_test")
 def given_simple_pipeline() -> _ScenarioPipeline:
     """Create a two stage pipeline that uppercases its input."""
     catalogue, python_program = python_catalogue()
@@ -53,20 +61,37 @@ def given_simple_pipeline() -> _ScenarioPipeline:
     return _ScenarioPipeline(pipeline=pipeline, allowlist=allowlist)
 
 
+@given(
+    "a two stage pipeline with a failing first stage",
+    target_fixture="pipeline_under_test",
+)
+def given_failing_pipeline() -> _ScenarioPipeline:
+    """Create a two stage pipeline where the first stage exits non-zero."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+
+    pipeline = python("-c", "import sys; sys.exit(1)") | python(
+        "-c",
+        "import sys; sys.exit(0)",
+    )
+    allowlist = frozenset([python_program])
+    return _ScenarioPipeline(pipeline=pipeline, allowlist=allowlist)
+
+
 @when("I run the pipeline synchronously", target_fixture="pipeline_result")
-def when_run_pipeline_sync(simple_pipeline: _ScenarioPipeline) -> PipelineResult:
+def when_run_pipeline_sync(pipeline_under_test: _ScenarioPipeline) -> PipelineResult:
     """Execute the pipeline via run_sync()."""
-    with scoped(allowlist=simple_pipeline.allowlist):
-        return simple_pipeline.pipeline.run_sync()
+    with scoped(allowlist=pipeline_under_test.allowlist):
+        return pipeline_under_test.pipeline.run_sync()
 
 
 @when("I run the pipeline asynchronously", target_fixture="pipeline_result")
-def when_run_pipeline_async(simple_pipeline: _ScenarioPipeline) -> PipelineResult:
+def when_run_pipeline_async(pipeline_under_test: _ScenarioPipeline) -> PipelineResult:
     """Execute the pipeline via run()."""
 
     async def run() -> PipelineResult:
-        with scoped(allowlist=simple_pipeline.allowlist):
-            return await simple_pipeline.pipeline.run()
+        with scoped(allowlist=pipeline_under_test.allowlist):
+            return await pipeline_under_test.pipeline.run()
 
     return asyncio.run(run())
 
@@ -82,4 +107,16 @@ def then_pipeline_exposes_stage_metadata(pipeline_result: PipelineResult) -> Non
     """Stage results include exit codes and process identifiers."""
     assert len(pipeline_result.stages) == 2
     assert all(stage.exit_code == 0 for stage in pipeline_result.stages)
+    assert all(stage.pid > 0 for stage in pipeline_result.stages)
+
+
+@then("the pipeline exposes per stage exit metadata when a stage fails")
+def then_pipeline_exposes_stage_metadata_on_failure(
+    pipeline_result: PipelineResult,
+) -> None:
+    """Stage results reflect failure while still reporting metadata."""
+    assert len(pipeline_result.stages) == 2
+    assert pipeline_result.ok is False
+    assert pipeline_result.stages[0].exit_code != 0
+    assert pipeline_result.stages[1].exit_code == 0
     assert all(stage.pid > 0 for stage in pipeline_result.stages)

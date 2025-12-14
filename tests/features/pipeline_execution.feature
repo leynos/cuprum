@@ -12,3 +12,7 @@ Feature: Pipeline execution
     When I run the pipeline asynchronously
     Then the pipeline output is transformed
 
+  Scenario: Pipeline reports metadata when a stage fails
+    Given a two stage pipeline with a failing first stage
+    When I run the pipeline synchronously
+    Then the pipeline exposes per stage exit metadata when a stage fails

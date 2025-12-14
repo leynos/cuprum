@@ -108,9 +108,12 @@ Running a pipeline returns a `PipelineResult` that exposes:
 - Per-stage exit metadata (via `result.stages`).
 
 ```python
+import sys
+from pathlib import Path
+
 from cuprum import ECHO, Program, ProgramCatalogue, ProjectSettings, scoped, sh
 
-PYTHON = Program("python")
+PYTHON = Program(str(Path(sys.executable)))
 project = ProjectSettings(
     name="pipeline-example",
     programs=(ECHO, PYTHON),

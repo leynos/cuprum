@@ -385,7 +385,7 @@ For the public design, the exact generic parameters are kept simple: we do
 
 #### 6.1.5 `PipelineResult`
 
-Pipelines return a structured result so callers can inspect per-stage exit
+Pipelines return a structured result, so callers can inspect per-stage exit
 metadata alongside the final output:
 
 ```python
@@ -399,6 +399,11 @@ class PipelineResult:
     @property
     def stdout(self) -> str | None: ...
 ```
+
+Contract notes:
+
+- When `capture=True`, `PipelineResult.stdout` contains the final stage stdout.
+- When `capture=False`, `PipelineResult.stdout` is `None`.
 
 ### 6.2 `cuprum.sh` – Safe Facade
 
@@ -478,6 +483,7 @@ grep = sh.make(GREP)
 pipeline = ls("-l", "/var/log") | grep("ERROR")
 result = pipeline.run_sync(echo=True)
 text = result.stdout
+assert text is not None
 ```
 
 ##### Implementation notes for the first iteration
