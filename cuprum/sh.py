@@ -588,6 +588,53 @@ def _flatten_stream_tasks(
     return tasks
 
 
+async def _collect_pipe_results(
+    pipe_tasks: list[asyncio.Task[None]],
+) -> list[object]:
+    """Collect pipe task results, capturing exceptions rather than raising them.
+
+    Uses return_exceptions=True to gather all results including any exceptions
+    that occurred during pipe streaming between pipeline stages.
+    """
+    return list(await asyncio.gather(*pipe_tasks, return_exceptions=True))
+
+
+def _surface_unexpected_pipe_failures(pipe_results: list[object]) -> None:
+    """Raise non-BrokenPipe exceptions from pipe results.
+
+    BrokenPipeError and ConnectionResetError are expected when downstream
+    processes terminate early (e.g., head) and should not fail the pipeline.
+    Other exceptions indicate genuine failures and must be surfaced.
+    """
+    for result in pipe_results:
+        if isinstance(result, Exception) and not isinstance(
+            result,
+            (BrokenPipeError, ConnectionResetError),
+        ):
+            raise result
+
+
+async def _cleanup_pipeline_on_error(
+    processes: list[asyncio.subprocess.Process],
+    pipe_tasks: list[asyncio.Task[None]],
+    stream_tasks: list[asyncio.Task[str | None]],
+    cancel_grace: float,
+) -> list[object]:
+    """Clean up pipeline resources after an error or cancellation.
+
+    Terminates all processes, collects pipe task results, and awaits stream
+    tasks to ensure orderly shutdown. Returns the collected pipe results for
+    use in the finally block.
+    """
+    await asyncio.gather(
+        *(_terminate_process(p, cancel_grace) for p in processes),
+        return_exceptions=True,
+    )
+    pipe_results = await _collect_pipe_results(pipe_tasks)
+    await asyncio.gather(*stream_tasks, return_exceptions=True)
+    return pipe_results
+
+
 async def _wait_for_pipeline(
     processes: list[asyncio.subprocess.Process],
     *,
@@ -602,30 +649,18 @@ async def _wait_for_pipeline(
         return list(await asyncio.gather(*(p.wait() for p in processes)))
     except BaseException as exc:
         caught = exc
-        await asyncio.gather(
-            *(_terminate_process(p, cancel_grace) for p in processes),
-            return_exceptions=True,
+        pipe_results = await _cleanup_pipeline_on_error(
+            processes,
+            pipe_tasks,
+            stream_tasks,
+            cancel_grace,
         )
-        pipe_results = list(
-            await asyncio.gather(*pipe_tasks, return_exceptions=True),
-        )
-        await asyncio.gather(*stream_tasks, return_exceptions=True)
         raise
     finally:
         if pipe_results is None:
-            pipe_results = list(
-                await asyncio.gather(*pipe_tasks, return_exceptions=True),
-            )
-
-        # Surface unexpected pipe failures. Broken pipes are handled inside the
-        # streaming helpers and should not cause pipeline execution to fail.
+            pipe_results = await _collect_pipe_results(pipe_tasks)
         if caught is None:
-            for result in pipe_results:
-                if isinstance(result, Exception) and not isinstance(
-                    result,
-                    (BrokenPipeError, ConnectionResetError),
-                ):
-                    raise result
+            _surface_unexpected_pipe_failures(pipe_results)
 
 
 def _run_pipeline_after_hooks(
