@@ -72,19 +72,50 @@ def _build_scenario_pipeline_from_commands(
     return _ScenarioPipeline(pipeline=pipeline, allowlist=allowlist)
 
 
+def _make_test_pipeline(
+    *stage_specs: tuple[Program, tuple[str, ...]],
+) -> _ScenarioPipeline:
+    """Build a test pipeline from program and argument specifications.
+
+    Args:
+        stage_specs: Each spec is (program, args_tuple) defining one stage.
+                    Program paths are resolved via python_catalogue if needed.
+
+    Returns:
+        A _ScenarioPipeline ready for execution with appropriate allowlist.
+
+    """
+    catalogue, python_program = python_catalogue()
+
+    # Map ECHO and python_program to command builders
+    builders: dict[Program, typ.Any] = {
+        ECHO: sh.make(ECHO),
+        python_program: sh.make(python_program, catalogue=catalogue),
+    }
+
+    # Build commands from specs
+    commands = []
+    programs_used: set[Program] = set()
+    for prog, args in stage_specs:
+        if prog not in builders:
+            builders[prog] = sh.make(prog, catalogue=catalogue)
+        commands.append((builders[prog], args))
+        programs_used.add(prog)
+
+    allowlist = frozenset(programs_used)
+    return _build_scenario_pipeline_from_commands(commands, allowlist)
+
+
 @given("a simple two stage pipeline", target_fixture="pipeline_under_test")
 def given_simple_pipeline() -> _ScenarioPipeline:
     """Create a two stage pipeline that uppercases its input."""
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-    echo = sh.make(ECHO)
-
-    return _build_scenario_pipeline_from_commands(
-        [
-            (echo, ("-n", "behaviour")),
-            (python, ("-c", "import sys; sys.stdout.write(sys.stdin.read().upper())")),
-        ],
-        allowlist=frozenset([ECHO, python_program]),
+    _, python_program = python_catalogue()
+    return _make_test_pipeline(
+        (ECHO, ("-n", "behaviour")),
+        (
+            python_program,
+            ("-c", "import sys; sys.stdout.write(sys.stdin.read().upper())"),
+        ),
     )
 
 
@@ -94,15 +125,10 @@ def given_simple_pipeline() -> _ScenarioPipeline:
 )
 def given_failing_pipeline() -> _ScenarioPipeline:
     """Create a two stage pipeline where the first stage exits non-zero."""
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-
-    return _build_scenario_pipeline_from_commands(
-        [
-            (python, ("-c", "import sys; sys.exit(1)")),
-            (python, ("-c", "import sys; sys.exit(0)")),
-        ],
-        allowlist=frozenset([python_program]),
+    _, python_program = python_catalogue()
+    return _make_test_pipeline(
+        (python_program, ("-c", "import sys; sys.exit(1)")),
+        (python_program, ("-c", "import sys; sys.exit(0)")),
     )
 
 

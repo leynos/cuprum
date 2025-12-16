@@ -369,14 +369,14 @@ class Pipeline(Generic[Out]):
     async def run(
         self,
         *,
-        capture: bool = True,
-        echo: bool = False,
+        capture: bool = True,  # capture final stage stdout and all stderr
+        echo: bool = False,    # echo captured streams to configured sinks
     ) -> PipelineResult: ...
     def run_sync(
         self,
         *,
-        capture: bool = True,
-        echo: bool = False,
+        capture: bool = True,  # capture final stage stdout and all stderr
+        echo: bool = False,    # echo captured streams to configured sinks
     ) -> PipelineResult: ...
 ```
 

@@ -141,7 +141,8 @@ Notes:
 
 - Only the final stage's stdout is captured; intermediate stage stdout is
   streamed and represented as `None` in `result.stages`.
-- `echo=True` tees the final stage stdout and all stage stderr streams.
+- `echo=True` echoes the final stage stdout and all stage stderr streams to
+  their configured sinks.
 
 ## Execution runtime
 

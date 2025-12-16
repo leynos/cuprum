@@ -226,7 +226,9 @@ def test_pump_stream_handles_downstream_close_without_hanging() -> None:
     reader, writer = asyncio.run(exercise())
 
     assert reader.read_calls == 4  # 3 chunks + EOF
-    assert writer.write_calls == 2  # third chunk is drained but not written
+    assert (
+        writer.write_calls == 2
+    )  # drain fails on second write; third chunk never written
     assert writer.closed is True
     assert writer.wait_closed_calls == 1
 
