@@ -483,6 +483,93 @@ async def _run_pipeline(
     return PipelineResult(stages=tuple(stage_results))
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _StageStreamConfig:
+    """Stream file descriptor configuration for a pipeline stage."""
+
+    stdin: int
+    stdout: int
+    stderr: int
+
+
+def _get_stage_stream_fds(
+    idx: int,
+    last_idx: int,
+    *,
+    capture_or_echo: bool,
+) -> _StageStreamConfig:
+    """Determine stream file descriptors for a pipeline stage.
+
+    First stage reads from DEVNULL; intermediate stages use pipes for stdin.
+    stdout is piped for intermediate stages or when capturing. stderr is piped
+    only when capturing or echoing.
+    """
+    stdin = asyncio.subprocess.DEVNULL if idx == 0 else asyncio.subprocess.PIPE
+    stdout = (
+        asyncio.subprocess.PIPE
+        if idx != last_idx or capture_or_echo
+        else asyncio.subprocess.DEVNULL
+    )
+    stderr = asyncio.subprocess.PIPE if capture_or_echo else asyncio.subprocess.DEVNULL
+    return _StageStreamConfig(stdin=stdin, stdout=stdout, stderr=stderr)
+
+
+def _create_stage_capture_tasks(
+    process: asyncio.subprocess.Process,
+    idx: int,
+    last_idx: int,
+    config: _PipelineRunConfig,
+) -> tuple[asyncio.Task[str | None] | None, asyncio.Task[str | None] | None]:
+    """Create stderr and stdout capture tasks for a pipeline stage.
+
+    Returns (stderr_task, stdout_task). stderr is captured for all stages when
+    capture_or_echo is enabled. stdout is only captured for the final stage.
+    """
+    stderr_task: asyncio.Task[str | None] | None = None
+    stdout_task: asyncio.Task[str | None] | None = None
+
+    if config.capture_or_echo:
+        stderr_task = asyncio.create_task(
+            _consume_stream(
+                process.stderr,
+                dc.replace(config.stream_config, sink=config.stderr_sink),
+            ),
+        )
+        if idx == last_idx:
+            stdout_task = asyncio.create_task(
+                _consume_stream(process.stdout, config.stream_config),
+            )
+
+    return stderr_task, stdout_task
+
+
+async def _cleanup_spawned_processes(
+    processes: list[asyncio.subprocess.Process],
+    stderr_tasks: list[asyncio.Task[str | None] | None],
+    stdout_task: asyncio.Task[str | None] | None,
+    cancel_grace: float,
+) -> None:
+    """Terminate processes and cancel tasks after a spawn failure.
+
+    Terminates all started processes and cancels any capture tasks to prevent
+    resource leaks when a pipeline stage fails to spawn.
+    """
+    await asyncio.gather(
+        *(_terminate_process(p, cancel_grace) for p in processes),
+        return_exceptions=True,
+    )
+
+    tasks: list[asyncio.Task[typ.Any]] = []
+    for task in stderr_tasks:
+        if task is not None:
+            task.cancel()
+            tasks.append(task)
+    if stdout_task is not None:
+        stdout_task.cancel()
+        tasks.append(stdout_task)
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def _spawn_pipeline_processes(
     parts: tuple[SafeCmd, ...],
     config: _PipelineRunConfig,
@@ -499,64 +586,38 @@ async def _spawn_pipeline_processes(
     last_idx = len(parts) - 1
     try:
         for idx, cmd in enumerate(parts):
-            stdin = asyncio.subprocess.DEVNULL if idx == 0 else asyncio.subprocess.PIPE
-            stdout = (
-                asyncio.subprocess.PIPE
-                if idx != last_idx or config.capture_or_echo
-                else asyncio.subprocess.DEVNULL
-            )
-            stderr = (
-                asyncio.subprocess.PIPE
-                if config.capture_or_echo
-                else asyncio.subprocess.DEVNULL
+            stream_fds = _get_stage_stream_fds(
+                idx,
+                last_idx,
+                capture_or_echo=config.capture_or_echo,
             )
 
             process = await asyncio.create_subprocess_exec(
                 *cmd.argv_with_program,
-                stdin=stdin,
-                stdout=stdout,
-                stderr=stderr,
+                stdin=stream_fds.stdin,
+                stdout=stream_fds.stdout,
+                stderr=stream_fds.stderr,
                 env=_merge_env(config.ctx.env),
                 cwd=str(config.ctx.cwd) if config.ctx.cwd is not None else None,
             )
             processes.append(process)
 
-            stderr_tasks.append(
-                asyncio.create_task(
-                    _consume_stream(
-                        process.stderr,
-                        dc.replace(config.stream_config, sink=config.stderr_sink),
-                    ),
-                )
-                if config.capture_or_echo
-                else None
+            stderr_task, new_stdout_task = _create_stage_capture_tasks(
+                process,
+                idx,
+                last_idx,
+                config,
             )
-
-            if idx == last_idx and config.capture_or_echo:
-                stdout_task = asyncio.create_task(
-                    _consume_stream(
-                        process.stdout,
-                        config.stream_config,
-                    ),
-                )
+            stderr_tasks.append(stderr_task)
+            if new_stdout_task is not None:
+                stdout_task = new_stdout_task
     except BaseException:
-        # If any stage fails to spawn, terminate the already-started stages.
-        # Otherwise long-lived upstream processes can leak in the background.
-        await asyncio.gather(
-            *(_terminate_process(p, config.ctx.cancel_grace) for p in processes),
-            return_exceptions=True,
+        await _cleanup_spawned_processes(
+            processes,
+            stderr_tasks,
+            stdout_task,
+            config.ctx.cancel_grace,
         )
-
-        tasks: list[asyncio.Task[typ.Any]] = []
-        for task in stderr_tasks:
-            if task is None:
-                continue
-            task.cancel()
-            tasks.append(task)
-        if stdout_task is not None:
-            stdout_task.cancel()
-            tasks.append(stdout_task)
-        await asyncio.gather(*tasks, return_exceptions=True)
         raise
 
     return processes, stderr_tasks, stdout_task

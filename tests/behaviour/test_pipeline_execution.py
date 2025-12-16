@@ -46,6 +46,32 @@ class _ScenarioPipeline:
     allowlist: frozenset[Program]
 
 
+def _build_scenario_pipeline_from_commands(
+    commands: list[tuple[typ.Any, tuple[str, ...]]],
+    allowlist: frozenset[Program],
+) -> _ScenarioPipeline:
+    """Build a _ScenarioPipeline from command builders and arguments.
+
+    Args:
+        commands: List of (command_builder, args_tuple) pairs.
+        allowlist: Programs to allow during execution.
+
+    Returns:
+        A _ScenarioPipeline with the constructed pipeline and allowlist.
+
+    """
+    if len(commands) < 2:
+        msg = "Pipeline requires at least two stages"
+        raise ValueError(msg)
+
+    # Build pipeline left-to-right
+    pipeline = commands[0][0](*commands[0][1])
+    for cmd, args in commands[1:]:
+        pipeline |= cmd(*args)
+
+    return _ScenarioPipeline(pipeline=pipeline, allowlist=allowlist)
+
+
 @given("a simple two stage pipeline", target_fixture="pipeline_under_test")
 def given_simple_pipeline() -> _ScenarioPipeline:
     """Create a two stage pipeline that uppercases its input."""
@@ -53,12 +79,13 @@ def given_simple_pipeline() -> _ScenarioPipeline:
     python = sh.make(python_program, catalogue=catalogue)
     echo = sh.make(ECHO)
 
-    pipeline = echo("-n", "behaviour") | python(
-        "-c",
-        "import sys; sys.stdout.write(sys.stdin.read().upper())",
+    return _build_scenario_pipeline_from_commands(
+        [
+            (echo, ("-n", "behaviour")),
+            (python, ("-c", "import sys; sys.stdout.write(sys.stdin.read().upper())")),
+        ],
+        allowlist=frozenset([ECHO, python_program]),
     )
-    allowlist = frozenset([ECHO, python_program])
-    return _ScenarioPipeline(pipeline=pipeline, allowlist=allowlist)
 
 
 @given(
@@ -70,12 +97,13 @@ def given_failing_pipeline() -> _ScenarioPipeline:
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
 
-    pipeline = python("-c", "import sys; sys.exit(1)") | python(
-        "-c",
-        "import sys; sys.exit(0)",
+    return _build_scenario_pipeline_from_commands(
+        [
+            (python, ("-c", "import sys; sys.exit(1)")),
+            (python, ("-c", "import sys; sys.exit(0)")),
+        ],
+        allowlist=frozenset([python_program]),
     )
-    allowlist = frozenset([python_program])
-    return _ScenarioPipeline(pipeline=pipeline, allowlist=allowlist)
 
 
 @when("I run the pipeline synchronously", target_fixture="pipeline_result")
