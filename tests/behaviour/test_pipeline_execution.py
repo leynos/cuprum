@@ -88,6 +88,7 @@ def _make_test_pipeline(
     catalogue, python_program = python_catalogue()
 
     # Map ECHO and python_program to command builders
+    # ECHO uses the default catalogue where it's registered; Python uses the custom one
     builders: dict[Program, typ.Any] = {
         ECHO: sh.make(ECHO),
         python_program: sh.make(python_program, catalogue=catalogue),
