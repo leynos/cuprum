@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import typing as typ
 
 import pytest
@@ -445,53 +446,54 @@ def _assert_pipeline_failure(
     assert result.exit_codes == exit_codes
 
 
+@dc.dataclass(frozen=True)
+class _FailFastScenario:
+    """Configuration for a fail-fast pipeline test scenario."""
+
+    exit_codes: tuple[int, int, int]
+    ready_stages: frozenset[int]
+    expected_failure_index: int
+    expected_exit_codes: list[int]
+    terminated_stages: frozenset[int]
+
+
 @pytest.mark.parametrize(
-    (
-        "scenario",
-        "exit_codes",
-        "ready_stages",
-        "expected_failure_index",
-        "expected_exit_codes",
-        "terminated_stages",
-    ),
+    "scenario",
     [
         pytest.param(
-            "early_stage_failure",
-            (7, 0, 0),
-            frozenset([0]),
-            0,
-            [7, -15, -15],
-            frozenset([1, 2]),
+            _FailFastScenario(
+                exit_codes=(7, 0, 0),
+                ready_stages=frozenset([0]),
+                expected_failure_index=0,
+                expected_exit_codes=[7, -15, -15],
+                terminated_stages=frozenset([1, 2]),
+            ),
             id="early-stage-failure-terminates-downstream",
         ),
         pytest.param(
-            "middle_stage_failure",
-            (0, 3, 0),
-            frozenset([1]),
-            1,
-            [-15, 3, -15],
-            frozenset([0, 2]),
+            _FailFastScenario(
+                exit_codes=(0, 3, 0),
+                ready_stages=frozenset([1]),
+                expected_failure_index=1,
+                expected_exit_codes=[-15, 3, -15],
+                terminated_stages=frozenset([0, 2]),
+            ),
             id="middle-stage-failure-terminates-downstream",
         ),
         pytest.param(
-            "last_stage_failure",
-            (0, 0, 5),
-            frozenset([0, 1, 2]),
-            2,
-            [0, 0, 5],
-            frozenset(),
+            _FailFastScenario(
+                exit_codes=(0, 0, 5),
+                ready_stages=frozenset([0, 1, 2]),
+                expected_failure_index=2,
+                expected_exit_codes=[0, 0, 5],
+                terminated_stages=frozenset(),
+            ),
             id="last-stage-failure-no-termination",
         ),
     ],
 )
 def test_wait_for_pipeline_fail_fast_scenarios(
-    scenario: str,
-    exit_codes: tuple[int, int, int],
-    ready_stages: frozenset[int],
-    *,
-    expected_failure_index: int,
-    expected_exit_codes: list[int],
-    terminated_stages: frozenset[int],
+    scenario: _FailFastScenario,
 ) -> None:
     """Validate fail-fast termination behaviour across different failure scenarios.
 
@@ -502,16 +504,19 @@ def test_wait_for_pipeline_fail_fast_scenarios(
     """
     p0, p1, p2, result = asyncio.run(
         _exercise_wait_for_pipeline(
-            exit_codes=exit_codes,
-            ready_stages=ready_stages,
+            exit_codes=scenario.exit_codes,
+            ready_stages=scenario.ready_stages,
         ),
     )
 
     _assert_pipeline_failure(
         result,
-        failure_index=expected_failure_index,
-        exit_codes=expected_exit_codes,
+        failure_index=scenario.expected_failure_index,
+        exit_codes=scenario.expected_exit_codes,
     )
 
     for idx, process in enumerate([p0, p1, p2]):
-        _assert_stage_terminated(process, should_terminate=(idx in terminated_stages))
+        _assert_stage_terminated(
+            process,
+            should_terminate=(idx in scenario.terminated_stages),
+        )
