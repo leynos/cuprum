@@ -141,6 +141,37 @@ def test_pipeline_can_append_stages() -> None:
     assert pipeline.parts == (first, second, third)
 
 
+def _run_test_pipeline(
+    stages_exit_codes: list[int],
+) -> PipelineResult:
+    """Execute a test pipeline with specified per-stage exit codes.
+
+    Args:
+        stages_exit_codes: Exit code for each pipeline stage.
+
+    Returns:
+        PipelineResult from synchronous execution.
+
+    """
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+
+    stages = [
+        python("-c", f"import sys; sys.exit({code})") for code in stages_exit_codes
+    ]
+
+    if len(stages) < 2:
+        msg = "test pipeline helper requires at least two stages"
+        raise ValueError(msg)
+
+    pipeline = stages[0] | stages[1]
+    for stage in stages[2:]:
+        pipeline |= stage
+
+    with scoped(allowlist=frozenset([python_program])):
+        return pipeline.run_sync()
+
+
 def test_pipeline_run_streams_stdout_between_stages() -> None:
     """Pipeline.run_sync streams stdout into the next stage stdin."""
     catalogue, python_program = python_catalogue()
@@ -167,16 +198,7 @@ def test_pipeline_run_streams_stdout_between_stages() -> None:
 
 def test_pipeline_run_sync_failure_sets_ok_false_and_final_to_failed_stage() -> None:
     """Pipeline.run_sync reports failure when a stage exits non-zero."""
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-
-    pipeline = python("-c", "import sys; sys.exit(0)") | python(
-        "-c",
-        "import sys; sys.exit(1)",
-    )
-
-    with scoped(allowlist=frozenset([python_program])):
-        result = pipeline.run_sync()
+    result = _run_test_pipeline([0, 1])
 
     assert isinstance(result, PipelineResult)
     assert result.ok is False
@@ -191,16 +213,7 @@ def test_pipeline_run_sync_failure_sets_ok_false_and_final_to_failed_stage() -> 
 
 def test_pipeline_run_sync_success_has_no_failure() -> None:
     """Successful pipelines report ok and no failure stage."""
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-
-    pipeline = python("-c", "import sys; sys.exit(0)") | python(
-        "-c",
-        "import sys; sys.exit(0)",
-    )
-
-    with scoped(allowlist=frozenset([python_program])):
-        result = pipeline.run_sync()
+    result = _run_test_pipeline([0, 0])
 
     assert isinstance(result, PipelineResult)
     assert result.ok is True
@@ -347,103 +360,114 @@ class _StubPipelineWaitProcess:
         return self.returncode
 
 
+async def _exercise_wait_for_pipeline(
+    exit_codes: tuple[int, int, int],
+    ready_stages: frozenset[int],
+) -> tuple[
+    _StubPipelineWaitProcess,
+    _StubPipelineWaitProcess,
+    _StubPipelineWaitProcess,
+    _PipelineWaitResult,
+]:
+    """Execute _wait_for_pipeline with stub processes and custom exit scenarios.
+
+    Args:
+        exit_codes: Exit code for each of the three stages.
+        ready_stages: Set of stage indices that should be immediately ready.
+
+    Returns:
+        Tuple of (process0, process1, process2, wait_result).
+
+    """
+    events = [asyncio.Event() for _ in range(3)]
+    for idx in ready_stages:
+        events[idx].set()
+
+    processes = [
+        _StubPipelineWaitProcess(pid=i + 1, exit_code=exit_codes[i], ready=events[i])
+        for i in range(3)
+    ]
+
+    result = await _wait_for_pipeline(
+        typ.cast("list[asyncio.subprocess.Process]", processes),
+        pipe_tasks=[],
+        cancel_grace=0.01,
+    )
+
+    return processes[0], processes[1], processes[2], result
+
+
+def _assert_stage_terminated(
+    process: _StubPipelineWaitProcess,
+    *,
+    should_terminate: bool,
+) -> None:
+    """Assert whether a process was terminated during fail-fast."""
+    if should_terminate:
+        assert process.terminate_calls == 1, (
+            f"Process {process.pid} should be terminated"
+        )
+    else:
+        assert process.terminate_calls == 0, (
+            f"Process {process.pid} should not be terminated"
+        )
+
+
+def _assert_pipeline_failure(
+    result: _PipelineWaitResult,
+    *,
+    failure_index: int | None,
+    exit_codes: list[int],
+) -> None:
+    """Assert pipeline wait result failure metadata."""
+    assert result.failure_index == failure_index
+    assert result.exit_codes == exit_codes
+
+
 def test_wait_for_pipeline_fail_fast_early_stage_failure_terminates_downstream() -> (
     None
 ):
     """Failing stage 0 terminates remaining stages and records failure index."""
+    p0, p1, p2, result = asyncio.run(
+        _exercise_wait_for_pipeline(
+            exit_codes=(7, 0, 0),
+            ready_stages=frozenset([0]),
+        ),
+    )
 
-    async def exercise() -> tuple[
-        _StubPipelineWaitProcess,
-        _StubPipelineWaitProcess,
-        _StubPipelineWaitProcess,
-        _PipelineWaitResult,
-    ]:
-        ready_0 = asyncio.Event()
-        ready_0.set()
-        ready_1 = asyncio.Event()
-        ready_2 = asyncio.Event()
-        p0 = _StubPipelineWaitProcess(pid=1, exit_code=7, ready=ready_0)
-        p1 = _StubPipelineWaitProcess(pid=2, exit_code=0, ready=ready_1)
-        p2 = _StubPipelineWaitProcess(pid=3, exit_code=0, ready=ready_2)
-        result = await _wait_for_pipeline(
-            typ.cast("list[asyncio.subprocess.Process]", [p0, p1, p2]),
-            pipe_tasks=[],
-            cancel_grace=0.01,
-        )
-        return p0, p1, p2, result
-
-    p0, p1, p2, result = asyncio.run(exercise())
-
-    assert result.failure_index == 0
-    assert result.exit_codes[0] == 7
-    assert p0.terminate_calls == 0
-    assert p1.terminate_calls == 1
-    assert p2.terminate_calls == 1
+    _assert_pipeline_failure(result, failure_index=0, exit_codes=[7, -15, -15])
+    _assert_stage_terminated(p0, should_terminate=False)
+    _assert_stage_terminated(p1, should_terminate=True)
+    _assert_stage_terminated(p2, should_terminate=True)
 
 
 def test_wait_for_pipeline_fail_fast_middle_stage_failure_terminates_downstream() -> (
     None
 ):
     """Failing stage 1 terminates remaining stages and records failure index."""
+    p0, p1, p2, result = asyncio.run(
+        _exercise_wait_for_pipeline(
+            exit_codes=(0, 3, 0),
+            ready_stages=frozenset([1]),
+        ),
+    )
 
-    async def exercise() -> tuple[
-        _StubPipelineWaitProcess,
-        _StubPipelineWaitProcess,
-        _StubPipelineWaitProcess,
-        _PipelineWaitResult,
-    ]:
-        ready_0 = asyncio.Event()
-        ready_1 = asyncio.Event()
-        ready_1.set()
-        ready_2 = asyncio.Event()
-        p0 = _StubPipelineWaitProcess(pid=1, exit_code=0, ready=ready_0)
-        p1 = _StubPipelineWaitProcess(pid=2, exit_code=3, ready=ready_1)
-        p2 = _StubPipelineWaitProcess(pid=3, exit_code=0, ready=ready_2)
-        result = await _wait_for_pipeline(
-            typ.cast("list[asyncio.subprocess.Process]", [p0, p1, p2]),
-            pipe_tasks=[],
-            cancel_grace=0.01,
-        )
-        return p0, p1, p2, result
-
-    p0, p1, p2, result = asyncio.run(exercise())
-
-    assert result.failure_index == 1
-    assert result.exit_codes[1] == 3
-    assert p1.terminate_calls == 0
-    assert p0.terminate_calls == 1
-    assert p2.terminate_calls == 1
+    _assert_pipeline_failure(result, failure_index=1, exit_codes=[-15, 3, -15])
+    _assert_stage_terminated(p0, should_terminate=True)
+    _assert_stage_terminated(p1, should_terminate=False)
+    _assert_stage_terminated(p2, should_terminate=True)
 
 
 def test_wait_for_pipeline_fail_fast_last_stage_failure_records_failure_index() -> None:
     """Failing final stage records the failure without terminating others."""
+    p0, p1, p2, result = asyncio.run(
+        _exercise_wait_for_pipeline(
+            exit_codes=(0, 0, 5),
+            ready_stages=frozenset([0, 1, 2]),
+        ),
+    )
 
-    async def exercise() -> tuple[
-        _StubPipelineWaitProcess,
-        _StubPipelineWaitProcess,
-        _StubPipelineWaitProcess,
-        _PipelineWaitResult,
-    ]:
-        ready_0 = asyncio.Event()
-        ready_1 = asyncio.Event()
-        ready_2 = asyncio.Event()
-        ready_0.set()
-        ready_1.set()
-        ready_2.set()
-        p0 = _StubPipelineWaitProcess(pid=1, exit_code=0, ready=ready_0)
-        p1 = _StubPipelineWaitProcess(pid=2, exit_code=0, ready=ready_1)
-        p2 = _StubPipelineWaitProcess(pid=3, exit_code=5, ready=ready_2)
-        result = await _wait_for_pipeline(
-            typ.cast("list[asyncio.subprocess.Process]", [p0, p1, p2]),
-            pipe_tasks=[],
-            cancel_grace=0.01,
-        )
-        return p0, p1, p2, result
-
-    p0, p1, p2, result = asyncio.run(exercise())
-
-    assert result.failure_index == 2
-    assert result.exit_codes == [0, 0, 5]
-    assert p0.terminate_calls == 0
-    assert p1.terminate_calls == 0
-    assert p2.terminate_calls == 0
+    _assert_pipeline_failure(result, failure_index=2, exit_codes=[0, 0, 5])
+    _assert_stage_terminated(p0, should_terminate=False)
+    _assert_stage_terminated(p1, should_terminate=False)
+    _assert_stage_terminated(p2, should_terminate=False)
