@@ -115,15 +115,26 @@ class PipelineResult:
         Command results for each pipeline stage, in execution order. For stages
         whose stdout is streamed into the next stage, ``stdout`` is ``None``.
         The final stage carries captured stdout when enabled.
+    failure_index:
+        Index of the stage that triggered fail-fast termination, or ``None``
+        when all stages completed successfully.
 
     """
 
     stages: tuple[CommandResult, ...]
+    failure_index: int | None = None
 
     @property
     def final(self) -> CommandResult:
         """Return the CommandResult for the last stage."""
         return self.stages[-1]
+
+    @property
+    def failure(self) -> CommandResult | None:
+        """Return the stage that triggered fail-fast termination, when any."""
+        if self.failure_index is None:
+            return None
+        return self.stages[self.failure_index]
 
     @property
     def ok(self) -> bool:
@@ -456,7 +467,7 @@ async def _run_pipeline(
         parts,
         config,
     )
-    exit_codes = await _wait_for_pipeline(
+    wait_result = await _wait_for_pipeline(
         processes,
         pipe_tasks=_create_pipe_tasks(processes),
         stream_tasks=_flatten_stream_tasks(stderr_tasks, stdout_task),
@@ -472,7 +483,7 @@ async def _run_pipeline(
             CommandResult(
                 program=cmd.program,
                 argv=cmd.argv,
-                exit_code=exit_codes[idx],
+                exit_code=wait_result.exit_codes[idx],
                 pid=process.pid if process.pid is not None else -1,
                 stdout=final_stdout if idx == len(parts) - 1 else None,
                 stderr=stderr_by_stage[idx],
@@ -480,7 +491,10 @@ async def _run_pipeline(
         )
     _run_pipeline_after_hooks(parts, after_hooks_by_stage, stage_results)
 
-    return PipelineResult(stages=tuple(stage_results))
+    return PipelineResult(
+        stages=tuple(stage_results),
+        failure_index=wait_result.failure_index,
+    )
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -702,12 +716,40 @@ async def _wait_for_pipeline(
     pipe_tasks: list[asyncio.Task[None]],
     stream_tasks: list[asyncio.Task[str | None]],
     cancel_grace: float,
-) -> list[int]:
+) -> _PipelineWaitResult:
     """Wait for pipeline completion, ensuring subprocess cleanup on cancellation."""
+    state = _PipelineWaitState.from_processes(processes)
+
     caught: BaseException | None = None
     pipe_results: list[object] | None = None
     try:
-        return list(await asyncio.gather(*(p.wait() for p in processes)))
+        pending = set(state.wait_tasks)
+        while pending:
+            done, pending = await asyncio.wait(
+                pending,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            for task in done:
+                idx = state.task_to_index[task]
+                exit_code = task.result()
+                state.exit_codes[idx] = exit_code
+                if state.failure_index is None and exit_code != 0:
+                    state.failure_index = idx
+                    await _terminate_pipeline_remaining_stages(
+                        processes,
+                        state.wait_tasks,
+                        idx,
+                        cancel_grace=cancel_grace,
+                    )
+
+        completed_exit_codes = [
+            -1 if code is None else code for code in state.exit_codes
+        ]
+        return _PipelineWaitResult(
+            exit_codes=completed_exit_codes,
+            failure_index=state.failure_index,
+        )
     except BaseException as exc:
         caught = exc
         pipe_results = await _cleanup_pipeline_on_error(
@@ -716,12 +758,97 @@ async def _wait_for_pipeline(
             stream_tasks,
             cancel_grace,
         )
+        await asyncio.gather(*state.wait_tasks, return_exceptions=True)
         raise
     finally:
         if pipe_results is None:
             pipe_results = await _collect_pipe_results(pipe_tasks)
         if caught is None:
             _surface_unexpected_pipe_failures(pipe_results)
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _PipelineWaitResult:
+    exit_codes: list[int]
+    failure_index: int | None
+
+
+@dc.dataclass(slots=True)
+class _PipelineWaitState:
+    wait_tasks: list[asyncio.Task[int]]
+    task_to_index: dict[asyncio.Task[int], int]
+    exit_codes: list[int | None]
+    failure_index: int | None = None
+
+    @classmethod
+    def from_processes(
+        cls,
+        processes: list[asyncio.subprocess.Process],
+    ) -> _PipelineWaitState:
+        wait_tasks = [asyncio.create_task(process.wait()) for process in processes]
+        return cls(
+            wait_tasks=wait_tasks,
+            task_to_index={task: idx for idx, task in enumerate(wait_tasks)},
+            exit_codes=[None] * len(processes),
+        )
+
+
+async def _terminate_process_via_wait_task(
+    process: asyncio.subprocess.Process,
+    wait_task: asyncio.Task[int],
+    grace_period: float,
+) -> None:
+    """Terminate a process, awaiting the provided wait task for completion."""
+    grace_period = max(0.0, grace_period)
+    if wait_task.done():
+        return
+    try:
+        process.terminate()
+    except (ProcessLookupError, OSError):
+        return
+    try:
+        await asyncio.wait_for(asyncio.shield(wait_task), grace_period)
+    except asyncio.TimeoutError:  # noqa: UP041 - explicit asyncio timeout needed
+        try:
+            process.kill()
+        except (ProcessLookupError, OSError):
+            return
+        await asyncio.shield(wait_task)
+
+
+async def _terminate_pipeline_remaining_stages(
+    processes: list[asyncio.subprocess.Process],
+    wait_tasks: list[asyncio.Task[int]],
+    failure_index: int,
+    *,
+    cancel_grace: float,
+) -> None:
+    """Terminate all still-running stages after a stage fails.
+
+    Once a stage exits non-zero, Cuprum applies fail-fast semantics by
+    terminating the remaining pipeline stages. This prevents pipelines from
+    hanging on long-running producers/consumers when downstream work is no
+    longer meaningful.
+    """
+    termination_tasks: list[asyncio.Task[None]] = []
+    for idx, (process, wait_task) in enumerate(
+        zip(processes, wait_tasks, strict=True),
+    ):
+        if idx == failure_index:
+            continue
+        if wait_task.done():
+            continue
+        termination_tasks.append(
+            asyncio.create_task(
+                _terminate_process_via_wait_task(
+                    process,
+                    wait_task,
+                    cancel_grace,
+                ),
+            ),
+        )
+    if termination_tasks:
+        await asyncio.gather(*termination_tasks, return_exceptions=True)
 
 
 def _run_pipeline_after_hooks(

@@ -46,7 +46,7 @@ Focus: provide pipeline execution, richer events, and concurrency helpers.
 
 - [x] Implement `Pipeline` composition via the `|` operator with streaming
       between stages and backpressure handling; expose exit metadata per stage.
-- [ ] Define and implement failure policy (fail fast, terminate downstream,
+- [x] Define and implement failure policy (fail fast, terminate downstream,
       surface failing stage) and cover with tests for early, middle, and late
       stage errors.
 

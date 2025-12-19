@@ -392,6 +392,10 @@ metadata alongside the final output:
 @dataclass(frozen=True, slots=True)
 class PipelineResult:
     stages: tuple[CommandResult, ...]
+    failure_index: int | None
+
+    @property
+    def failure(self) -> CommandResult | None: ...
 
     @property
     def final(self) -> CommandResult: ...
@@ -404,6 +408,9 @@ Contract notes:
 
 - When `capture=True`, `PipelineResult.stdout` contains the final stage stdout.
 - When `capture=False`, `PipelineResult.stdout` is `None`.
+- When a stage exits non-zero, Cuprum terminates the remaining pipeline stages
+  and sets `PipelineResult.failure_index` to the stage that triggered
+  termination.
 
 ### 6.2 `cuprum.sh` – Safe Facade
 
@@ -561,6 +568,9 @@ processes concurrently, and streams data between them.
 - Only the final stage's stdout is captured. Intermediate stage stdout is
   streamed into the next stage and represented as `None` on its stage result.
 - `echo=True` tees the final stage stdout and all stage stderr streams.
+- Pipelines apply fail-fast semantics: the first stage to exit non-zero
+  terminates the remaining stages. The failing stage is surfaced via
+  `result.failure` / `result.failure_index`.
 
 #### 6.2.4 Context manipulation and allowlists
 
@@ -961,11 +971,11 @@ subprocesses, leaving it ensures they are either completed or terminated.
 
 Error propagation policy (to be finalised, but roughly):
 
-- If an earlier stage in the pipeline fails, Cuprum may terminate later stages
-  or allow them to drain, depending on configuration.
-- The overall pipeline result should surface enough information to diagnose
-  which stage failed (e.g. via an exception that carries a list of stage
-  results).
+- Pipelines fail fast: once any stage exits non-zero, Cuprum terminates the
+  remaining stages.
+- The overall pipeline result surfaces the stage that triggered termination
+  via `PipelineResult.failure` / `PipelineResult.failure_index`, alongside the
+  per-stage results for diagnostics.
 
 ### 8.3 Parallel Execution (non‑pipeline)
 

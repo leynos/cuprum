@@ -41,6 +41,22 @@ def test_pipeline_reports_metadata_on_failure() -> None:
     """Behavioural coverage for failure metadata semantics."""
 
 
+@scenario(
+    "../features/pipeline_execution.feature",
+    "Pipeline fails fast when a middle stage fails",
+)
+def test_pipeline_fails_fast_on_middle_stage_failure() -> None:
+    """Behavioural coverage for middle-stage fail-fast semantics."""
+
+
+@scenario(
+    "../features/pipeline_execution.feature",
+    "Pipeline surfaces the failing stage when the final stage fails",
+)
+def test_pipeline_surfaces_failure_on_final_stage_failure() -> None:
+    """Behavioural coverage for final-stage failure reporting semantics."""
+
+
 @dc.dataclass(frozen=True, slots=True)
 class _ScenarioPipeline:
     pipeline: Pipeline
@@ -130,15 +146,44 @@ def given_simple_pipeline() -> _ScenarioPipeline:
 
 
 @given(
-    "a two stage pipeline with a failing first stage",
+    "a three stage pipeline with a failing first stage",
     target_fixture="pipeline_under_test",
 )
 def given_failing_pipeline() -> _ScenarioPipeline:
-    """Create a two stage pipeline where the first stage exits non-zero."""
+    """Create a three stage pipeline where the first stage exits non-zero."""
     _, python_program = python_catalogue()
     return _make_test_pipeline(
-        (python_program, ("-c", "import sys; sys.exit(1)")),
+        (python_program, ("-c", "import sys; sys.exit(7)")),
+        (python_program, ("-c", "import time, sys; time.sleep(2); sys.exit(0)")),
+        (python_program, ("-c", "import time, sys; time.sleep(2); sys.exit(0)")),
+    )
+
+
+@given(
+    "a three stage pipeline with a failing middle stage",
+    target_fixture="pipeline_under_test",
+)
+def given_middle_stage_failure_pipeline() -> _ScenarioPipeline:
+    """Create a three stage pipeline where the middle stage exits non-zero."""
+    _, python_program = python_catalogue()
+    return _make_test_pipeline(
+        (python_program, ("-c", "import time, sys; time.sleep(2); sys.exit(0)")),
+        (python_program, ("-c", "import sys; sys.exit(3)")),
+        (python_program, ("-c", "import time, sys; time.sleep(2); sys.exit(0)")),
+    )
+
+
+@given(
+    "a three stage pipeline with a failing final stage",
+    target_fixture="pipeline_under_test",
+)
+def given_final_stage_failure_pipeline() -> _ScenarioPipeline:
+    """Create a three stage pipeline where the final stage exits non-zero."""
+    _, python_program = python_catalogue()
+    return _make_test_pipeline(
         (python_program, ("-c", "import sys; sys.exit(0)")),
+        (python_program, ("-c", "import sys; sys.exit(0)")),
+        (python_program, ("-c", "import sys; sys.exit(5)")),
     )
 
 
@@ -174,13 +219,34 @@ def then_pipeline_exposes_stage_metadata(pipeline_result: PipelineResult) -> Non
     assert all(stage.pid > 0 for stage in pipeline_result.stages)
 
 
-@then("the pipeline exposes per stage exit metadata when a stage fails")
-def then_pipeline_exposes_stage_metadata_on_failure(
+@then("the pipeline exposes per stage exit metadata when a stage fails fast")
+def then_pipeline_exposes_stage_metadata_on_fail_fast_failure(
     pipeline_result: PipelineResult,
 ) -> None:
-    """Stage results reflect failure while still reporting metadata."""
-    assert len(pipeline_result.stages) == 2
+    """Stage results reflect fail-fast termination and surface the failure."""
+    assert len(pipeline_result.stages) == 3
     assert pipeline_result.ok is False
-    assert pipeline_result.stages[0].exit_code != 0
+    assert pipeline_result.failure is not None
+    assert pipeline_result.failure.exit_code != 0
+    assert pipeline_result.failure_index is not None
+    assert pipeline_result.failure_index < len(pipeline_result.stages) - 1
+    assert all(
+        stage.exit_code != 0
+        for stage in pipeline_result.stages[pipeline_result.failure_index + 1 :]
+    )
+    assert all(stage.pid > 0 for stage in pipeline_result.stages)
+
+
+@then("the pipeline exposes per stage exit metadata when the final stage fails")
+def then_pipeline_exposes_stage_metadata_on_final_stage_failure(
+    pipeline_result: PipelineResult,
+) -> None:
+    """Stage results surface the failing final stage while still reporting metadata."""
+    assert len(pipeline_result.stages) == 3
+    assert pipeline_result.ok is False
+    assert pipeline_result.failure is pipeline_result.stages[-1]
+    assert pipeline_result.failure_index == len(pipeline_result.stages) - 1
+    assert pipeline_result.stages[0].exit_code == 0
     assert pipeline_result.stages[1].exit_code == 0
+    assert pipeline_result.stages[2].exit_code != 0
     assert all(stage.pid > 0 for stage in pipeline_result.stages)
