@@ -196,34 +196,55 @@ def test_pipeline_run_streams_stdout_between_stages() -> None:
     assert result.stages[1].pid > 0
 
 
-def test_pipeline_run_sync_failure_sets_ok_false_and_final_to_failed_stage() -> None:
-    """Pipeline.run_sync reports failure when a stage exits non-zero."""
-    result = _run_test_pipeline([0, 1])
+@pytest.mark.parametrize(
+    ("scenario", "stage_codes", "expect_ok", "expect_failure_index"),
+    [
+        pytest.param(
+            "failure",
+            [0, 1],
+            False,
+            1,
+            id="failure-sets-ok-false-and-exposes-failed-stage",
+        ),
+        pytest.param(
+            "success",
+            [0, 0],
+            True,
+            None,
+            id="success-has-no-failure",
+        ),
+    ],
+)
+def test_pipeline_run_sync_failure_semantics(
+    scenario: str,
+    stage_codes: list[int],
+    *,
+    expect_ok: bool,
+    expect_failure_index: int | None,
+) -> None:
+    """Validate PipelineResult failure semantics for success and failure cases.
+
+    Tests that:
+    - Failed pipelines set ok=False and expose failure/failure_index
+    - Successful pipelines set ok=True with failure=None and failure_index=None
+    """
+    result = _run_test_pipeline(stage_codes)
 
     assert isinstance(result, PipelineResult)
-    assert result.ok is False
-    assert result.failure is result.stages[-1]
-    assert result.failure_index == 1
+    assert result.ok is expect_ok
+    assert result.failure_index == expect_failure_index
     assert result.final is result.stages[-1]
-    assert result.final.exit_code == 1
-    assert len(result.stages) == 2
-    assert result.stages[0].exit_code == 0
-    assert result.stages[1].exit_code == 1
+    assert len(result.stages) == len(stage_codes)
 
+    for idx, expected_code in enumerate(stage_codes):
+        assert result.stages[idx].exit_code == expected_code
 
-def test_pipeline_run_sync_success_has_no_failure() -> None:
-    """Successful pipelines report ok and no failure stage."""
-    result = _run_test_pipeline([0, 0])
-
-    assert isinstance(result, PipelineResult)
-    assert result.ok is True
-    assert result.failure is None
-    assert result.failure_index is None
-    assert result.final is result.stages[-1]
-    assert result.final.exit_code == 0
-    assert len(result.stages) == 2
-    assert result.stages[0].exit_code == 0
-    assert result.stages[1].exit_code == 0
+    if expect_failure_index is not None:
+        assert result.failure is result.stages[expect_failure_index]
+        assert result.final.exit_code != 0
+    else:
+        assert result.failure is None
+        assert result.final.exit_code == 0
 
 
 def test_pump_stream_drains_per_chunk() -> None:
@@ -424,50 +445,73 @@ def _assert_pipeline_failure(
     assert result.exit_codes == exit_codes
 
 
-def test_wait_for_pipeline_fail_fast_early_stage_failure_terminates_downstream() -> (
-    None
-):
-    """Failing stage 0 terminates remaining stages and records failure index."""
+@pytest.mark.parametrize(
+    (
+        "scenario",
+        "exit_codes",
+        "ready_stages",
+        "expected_failure_index",
+        "expected_exit_codes",
+        "terminated_stages",
+    ),
+    [
+        pytest.param(
+            "early_stage_failure",
+            (7, 0, 0),
+            frozenset([0]),
+            0,
+            [7, -15, -15],
+            frozenset([1, 2]),
+            id="early-stage-failure-terminates-downstream",
+        ),
+        pytest.param(
+            "middle_stage_failure",
+            (0, 3, 0),
+            frozenset([1]),
+            1,
+            [-15, 3, -15],
+            frozenset([0, 2]),
+            id="middle-stage-failure-terminates-downstream",
+        ),
+        pytest.param(
+            "last_stage_failure",
+            (0, 0, 5),
+            frozenset([0, 1, 2]),
+            2,
+            [0, 0, 5],
+            frozenset(),
+            id="last-stage-failure-no-termination",
+        ),
+    ],
+)
+def test_wait_for_pipeline_fail_fast_scenarios(
+    scenario: str,
+    exit_codes: tuple[int, int, int],
+    ready_stages: frozenset[int],
+    *,
+    expected_failure_index: int,
+    expected_exit_codes: list[int],
+    terminated_stages: frozenset[int],
+) -> None:
+    """Validate fail-fast termination behaviour across different failure scenarios.
+
+    Tests that:
+    - Early stage failures terminate all downstream stages
+    - Middle stage failures terminate all downstream stages
+    - Final stage failures record failure index without terminating others
+    """
     p0, p1, p2, result = asyncio.run(
         _exercise_wait_for_pipeline(
-            exit_codes=(7, 0, 0),
-            ready_stages=frozenset([0]),
+            exit_codes=exit_codes,
+            ready_stages=ready_stages,
         ),
     )
 
-    _assert_pipeline_failure(result, failure_index=0, exit_codes=[7, -15, -15])
-    _assert_stage_terminated(p0, should_terminate=False)
-    _assert_stage_terminated(p1, should_terminate=True)
-    _assert_stage_terminated(p2, should_terminate=True)
-
-
-def test_wait_for_pipeline_fail_fast_middle_stage_failure_terminates_downstream() -> (
-    None
-):
-    """Failing stage 1 terminates remaining stages and records failure index."""
-    p0, p1, p2, result = asyncio.run(
-        _exercise_wait_for_pipeline(
-            exit_codes=(0, 3, 0),
-            ready_stages=frozenset([1]),
-        ),
+    _assert_pipeline_failure(
+        result,
+        failure_index=expected_failure_index,
+        exit_codes=expected_exit_codes,
     )
 
-    _assert_pipeline_failure(result, failure_index=1, exit_codes=[-15, 3, -15])
-    _assert_stage_terminated(p0, should_terminate=True)
-    _assert_stage_terminated(p1, should_terminate=False)
-    _assert_stage_terminated(p2, should_terminate=True)
-
-
-def test_wait_for_pipeline_fail_fast_last_stage_failure_records_failure_index() -> None:
-    """Failing final stage records the failure without terminating others."""
-    p0, p1, p2, result = asyncio.run(
-        _exercise_wait_for_pipeline(
-            exit_codes=(0, 0, 5),
-            ready_stages=frozenset([0, 1, 2]),
-        ),
-    )
-
-    _assert_pipeline_failure(result, failure_index=2, exit_codes=[0, 0, 5])
-    _assert_stage_terminated(p0, should_terminate=False)
-    _assert_stage_terminated(p1, should_terminate=False)
-    _assert_stage_terminated(p2, should_terminate=False)
+    for idx, process in enumerate([p0, p1, p2]):
+        _assert_stage_terminated(process, should_terminate=(idx in terminated_stages))
