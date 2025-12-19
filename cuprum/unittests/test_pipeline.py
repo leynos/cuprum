@@ -8,16 +8,15 @@ import typing as typ
 import pytest
 
 from cuprum import ECHO, scoped, sh
-from cuprum.sh import (
+from cuprum._testing import (
     _READ_SIZE,
-    Pipeline,
-    PipelineResult,
     _PipelineWaitResult,
     _prepare_pipeline_config,
     _pump_stream,
     _spawn_pipeline_processes,
     _wait_for_pipeline,
 )
+from cuprum.sh import Pipeline, PipelineResult
 from tests.helpers.catalogue import python_catalogue
 
 
@@ -190,6 +189,30 @@ def test_pipeline_run_sync_failure_sets_ok_false_and_final_to_failed_stage() -> 
     assert result.stages[1].exit_code == 1
 
 
+def test_pipeline_run_sync_success_has_no_failure() -> None:
+    """Successful pipelines report ok and no failure stage."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+
+    pipeline = python("-c", "import sys; sys.exit(0)") | python(
+        "-c",
+        "import sys; sys.exit(0)",
+    )
+
+    with scoped(allowlist=frozenset([python_program])):
+        result = pipeline.run_sync()
+
+    assert isinstance(result, PipelineResult)
+    assert result.ok is True
+    assert result.failure is None
+    assert result.failure_index is None
+    assert result.final is result.stages[-1]
+    assert result.final.exit_code == 0
+    assert len(result.stages) == 2
+    assert result.stages[0].exit_code == 0
+    assert result.stages[1].exit_code == 0
+
+
 def test_pump_stream_drains_per_chunk() -> None:
     """Streaming between stages awaits drain for backpressure."""
 
@@ -345,7 +368,6 @@ def test_wait_for_pipeline_fail_fast_early_stage_failure_terminates_downstream()
         result = await _wait_for_pipeline(
             typ.cast("list[asyncio.subprocess.Process]", [p0, p1, p2]),
             pipe_tasks=[],
-            stream_tasks=[],
             cancel_grace=0.01,
         )
         return p0, p1, p2, result
@@ -380,7 +402,6 @@ def test_wait_for_pipeline_fail_fast_middle_stage_failure_terminates_downstream(
         result = await _wait_for_pipeline(
             typ.cast("list[asyncio.subprocess.Process]", [p0, p1, p2]),
             pipe_tasks=[],
-            stream_tasks=[],
             cancel_grace=0.01,
         )
         return p0, p1, p2, result
@@ -415,7 +436,6 @@ def test_wait_for_pipeline_fail_fast_last_stage_failure_records_failure_index() 
         result = await _wait_for_pipeline(
             typ.cast("list[asyncio.subprocess.Process]", [p0, p1, p2]),
             pipe_tasks=[],
-            stream_tasks=[],
             cancel_grace=0.01,
         )
         return p0, p1, p2, result

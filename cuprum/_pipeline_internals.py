@@ -57,21 +57,37 @@ async def _terminate_process(
     grace_period: float,
 ) -> None:
     """Terminate a running process, escalating to kill after the grace period."""
+    await _terminate_process_with_wait(
+        process,
+        grace_period=grace_period,
+        is_done=lambda: process.returncode is not None,
+        wait_for_exit=process.wait,
+    )
+
+
+async def _terminate_process_with_wait(
+    process: asyncio.subprocess.Process,
+    *,
+    grace_period: float,
+    is_done: typ.Callable[[], bool],
+    wait_for_exit: typ.Callable[[], typ.Awaitable[int]],
+) -> None:
+    """Terminate a process, awaiting completion via the provided waiter."""
     grace_period = max(0.0, grace_period)
-    if process.returncode is not None:
+    if is_done():
         return
     try:
         process.terminate()
     except (ProcessLookupError, OSError):
         return
     try:
-        await asyncio.wait_for(process.wait(), grace_period)
+        await asyncio.wait_for(wait_for_exit(), grace_period)
     except asyncio.TimeoutError:  # noqa: UP041 - explicit asyncio timeout needed
         try:
             process.kill()
         except (ProcessLookupError, OSError):
             return
-        await process.wait()
+        await wait_for_exit()
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -132,15 +148,23 @@ async def _run_pipeline(  # noqa: PLR0914
         parts,
         config,
     )
-    wait_result = await _wait_for_pipeline(
-        processes,
-        pipe_tasks=_create_pipe_tasks(processes),
-        stream_tasks=_flatten_stream_tasks(stderr_tasks, stdout_task),
-        cancel_grace=config.ctx.cancel_grace,
-    )
-
-    stderr_by_stage = [None if task is None else await task for task in stderr_tasks]
-    final_stdout = None if stdout_task is None else await stdout_task
+    pipe_tasks = _create_pipe_tasks(processes)
+    stream_tasks = _flatten_stream_tasks(stderr_tasks, stdout_task)
+    try:
+        wait_result = await _wait_for_pipeline(
+            processes,
+            pipe_tasks=pipe_tasks,
+            cancel_grace=config.ctx.cancel_grace,
+        )
+        stderr_by_stage = [
+            None if task is None else await task for task in stderr_tasks
+        ]
+        final_stdout = None if stdout_task is None else await stdout_task
+    except BaseException:
+        for task in stream_tasks:
+            task.cancel()
+        await asyncio.gather(*stream_tasks, return_exceptions=True)
+        raise
     stage_results: list[CommandResult] = []
     for idx, cmd in enumerate(parts):
         process = processes[idx]
@@ -354,25 +378,49 @@ def _surface_unexpected_pipe_failures(pipe_results: list[object]) -> None:
             raise result
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _PipelineWaitResult:
+    exit_codes: list[int]
+    failure_index: int | None
+
+
+@dc.dataclass(slots=True)
+class _PipelineWaitState:
+    wait_tasks: list[asyncio.Task[int]]
+    task_to_index: dict[asyncio.Task[int], int]
+    exit_codes: list[int | None]
+    failure_index: int | None = None
+
+    @classmethod
+    def from_processes(
+        cls,
+        processes: list[asyncio.subprocess.Process],
+    ) -> _PipelineWaitState:
+        wait_tasks = [asyncio.create_task(process.wait()) for process in processes]
+        return cls(
+            wait_tasks=wait_tasks,
+            task_to_index={task: idx for idx, task in enumerate(wait_tasks)},
+            exit_codes=[None] * len(processes),
+        )
+
+
 async def _cleanup_pipeline_on_error(
     processes: list[asyncio.subprocess.Process],
     pipe_tasks: list[asyncio.Task[None]],
-    stream_tasks: list[asyncio.Task[str | None]],
     cancel_grace: float,
 ) -> list[object]:
     """Clean up pipeline resources after an error or cancellation.
 
-    Terminates all processes, collects pipe task results, and awaits stream
-    tasks to ensure orderly shutdown. Returns the collected pipe results for
-    use in the finally block.
+    Terminates all processes and collects pipe task results. Stream consumer
+    tasks are owned by the caller (``_run_pipeline``).
+
+    Returns the collected pipe results for use in the finally block.
     """
     await asyncio.gather(
         *(_terminate_process(p, cancel_grace) for p in processes),
         return_exceptions=True,
     )
-    pipe_results = await _collect_pipe_results(pipe_tasks)
-    await asyncio.gather(*stream_tasks, return_exceptions=True)
-    return pipe_results
+    return await _collect_pipe_results(pipe_tasks)
 
 
 async def _process_completed_task(
@@ -387,12 +435,13 @@ async def _process_completed_task(
     state.exit_codes[idx] = exit_code
     if state.failure_index is None and exit_code != 0:
         state.failure_index = idx
-        await _terminate_pipeline_remaining_stages(
-            processes,
-            state.wait_tasks,
-            idx,
-            cancel_grace=cancel_grace,
-        )
+        if idx != len(processes) - 1:
+            await _terminate_pipeline_remaining_stages(
+                processes,
+                state.wait_tasks,
+                idx,
+                cancel_grace=cancel_grace,
+            )
 
 
 async def _finalize_pipeline_wait(
@@ -412,7 +461,6 @@ async def _wait_for_pipeline(
     processes: list[asyncio.subprocess.Process],
     *,
     pipe_tasks: list[asyncio.Task[None]],
-    stream_tasks: list[asyncio.Task[str | None]],
     cancel_grace: float,
 ) -> _PipelineWaitResult:
     """Wait for pipeline completion, ensuring subprocess cleanup on cancellation."""
@@ -448,7 +496,6 @@ async def _wait_for_pipeline(
         pipe_results = await _cleanup_pipeline_on_error(
             processes,
             pipe_tasks,
-            stream_tasks,
             cancel_grace,
         )
         await asyncio.gather(*state.wait_tasks, return_exceptions=True)
@@ -457,53 +504,18 @@ async def _wait_for_pipeline(
         pipe_results = await _finalize_pipeline_wait(pipe_tasks, pipe_results, caught)
 
 
-@dc.dataclass(frozen=True, slots=True)
-class _PipelineWaitResult:
-    exit_codes: list[int]
-    failure_index: int | None
-
-
-@dc.dataclass(slots=True)
-class _PipelineWaitState:
-    wait_tasks: list[asyncio.Task[int]]
-    task_to_index: dict[asyncio.Task[int], int]
-    exit_codes: list[int | None]
-    failure_index: int | None = None
-
-    @classmethod
-    def from_processes(
-        cls,
-        processes: list[asyncio.subprocess.Process],
-    ) -> _PipelineWaitState:
-        wait_tasks = [asyncio.create_task(process.wait()) for process in processes]
-        return cls(
-            wait_tasks=wait_tasks,
-            task_to_index={task: idx for idx, task in enumerate(wait_tasks)},
-            exit_codes=[None] * len(processes),
-        )
-
-
 async def _terminate_process_via_wait_task(
     process: asyncio.subprocess.Process,
     wait_task: asyncio.Task[int],
     grace_period: float,
 ) -> None:
     """Terminate a process, awaiting the provided wait task for completion."""
-    grace_period = max(0.0, grace_period)
-    if wait_task.done():
-        return
-    try:
-        process.terminate()
-    except (ProcessLookupError, OSError):
-        return
-    try:
-        await asyncio.wait_for(asyncio.shield(wait_task), grace_period)
-    except asyncio.TimeoutError:  # noqa: UP041 - explicit asyncio timeout needed
-        try:
-            process.kill()
-        except (ProcessLookupError, OSError):
-            return
-        await asyncio.shield(wait_task)
+    await _terminate_process_with_wait(
+        process,
+        grace_period=grace_period,
+        is_done=wait_task.done,
+        wait_for_exit=lambda: asyncio.shield(wait_task),
+    )
 
 
 async def _terminate_pipeline_remaining_stages(
