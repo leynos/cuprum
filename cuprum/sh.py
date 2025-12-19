@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import collections.abc as cabc
+import contextlib
 import dataclasses as dc
 import os
 import sys
@@ -35,6 +36,7 @@ _READ_SIZE = 4096
 _DEFAULT_CANCEL_GRACE = 0.5
 _DEFAULT_ENCODING = "utf-8"
 _DEFAULT_ERROR_HANDLING = "replace"
+_MIN_PIPELINE_STAGES = 2
 
 
 def _stringify_arg(value: _ArgValue) -> str:
@@ -104,6 +106,37 @@ class CommandResult:
 
 
 @dc.dataclass(frozen=True, slots=True)
+class PipelineResult:
+    """Structured result returned by pipeline execution.
+
+    Attributes
+    ----------
+    stages:
+        Command results for each pipeline stage, in execution order. For stages
+        whose stdout is streamed into the next stage, ``stdout`` is ``None``.
+        The final stage carries captured stdout when enabled.
+
+    """
+
+    stages: tuple[CommandResult, ...]
+
+    @property
+    def final(self) -> CommandResult:
+        """Return the CommandResult for the last stage."""
+        return self.stages[-1]
+
+    @property
+    def ok(self) -> bool:
+        """Return True when all pipeline stages exited successfully."""
+        return all(stage.ok for stage in self.stages)
+
+    @property
+    def stdout(self) -> str | None:
+        """Return the captured stdout from the last stage, when available."""
+        return self.final.stdout
+
+
+@dc.dataclass(frozen=True, slots=True)
 class ExecutionContext:
     """Execution parameters for SafeCmd runtime control.
 
@@ -164,6 +197,10 @@ class SafeCmd:
     def argv_with_program(self) -> tuple[str, ...]:
         """Return argv prefixed with the program name."""
         return (str(self.program), *self.argv)
+
+    def __or__(self, other: SafeCmd | Pipeline) -> Pipeline:
+        """Compose this command with another stage, producing a Pipeline."""
+        return Pipeline.concat(self, other)
 
     async def run(
         self,
@@ -314,6 +351,390 @@ class SafeCmd:
         return asyncio.run(self.run(capture=capture, echo=echo, context=context))
 
 
+@dc.dataclass(frozen=True, slots=True)
+class Pipeline:
+    """A sequence of SafeCmd stages connected via stdout/stdin piping."""
+
+    parts: tuple[SafeCmd, ...]
+
+    def __post_init__(self) -> None:
+        """Validate stage count invariants."""
+        if len(self.parts) < _MIN_PIPELINE_STAGES:
+            msg = "Pipeline must contain at least two stages"
+            raise ValueError(msg)
+
+    def __or__(self, other: SafeCmd | Pipeline) -> Pipeline:
+        """Compose pipelines, appending stages in left-to-right order."""
+        return Pipeline.concat(self, other)
+
+    @classmethod
+    def concat(cls, left: SafeCmd | Pipeline, right: SafeCmd | Pipeline) -> Pipeline:
+        """Compose a pipeline from two pipeline operands."""
+        left_parts = left.parts if isinstance(left, Pipeline) else (left,)
+        right_parts = right.parts if isinstance(right, Pipeline) else (right,)
+        return cls((*left_parts, *right_parts))
+
+    async def run(
+        self,
+        *,
+        capture: bool = True,
+        echo: bool = False,
+        context: ExecutionContext | None = None,
+    ) -> PipelineResult:
+        """Execute the pipeline asynchronously with streaming and backpressure."""
+        return await _run_pipeline(
+            self.parts,
+            capture=capture,
+            echo=echo,
+            context=context,
+        )
+
+    def run_sync(
+        self,
+        *,
+        capture: bool = True,
+        echo: bool = False,
+        context: ExecutionContext | None = None,
+    ) -> PipelineResult:
+        """Execute the pipeline synchronously via ``asyncio.run``."""
+        return asyncio.run(self.run(capture=capture, echo=echo, context=context))
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _PipelineRunConfig:
+    ctx: ExecutionContext
+    capture: bool
+    echo: bool
+    stdout_sink: typ.IO[str]
+    stderr_sink: typ.IO[str]
+
+    @property
+    def capture_or_echo(self) -> bool:
+        return self.capture or self.echo
+
+    @property
+    def stream_config(self) -> _StreamConfig:
+        return _StreamConfig(
+            capture_output=self.capture,
+            echo_output=self.echo,
+            sink=self.stdout_sink,
+            encoding=self.ctx.encoding,
+            errors=self.ctx.errors,
+        )
+
+
+def _prepare_pipeline_config(
+    *,
+    capture: bool,
+    echo: bool,
+    context: ExecutionContext | None,
+) -> _PipelineRunConfig:
+    """Normalise runtime options for pipeline execution."""
+    ctx = context or ExecutionContext()
+    stdout_sink = ctx.stdout_sink if ctx.stdout_sink is not None else sys.stdout
+    stderr_sink = ctx.stderr_sink if ctx.stderr_sink is not None else sys.stderr
+    return _PipelineRunConfig(
+        ctx=ctx,
+        capture=capture,
+        echo=echo,
+        stdout_sink=stdout_sink,
+        stderr_sink=stderr_sink,
+    )
+
+
+async def _run_pipeline(
+    parts: tuple[SafeCmd, ...],
+    *,
+    capture: bool,
+    echo: bool,
+    context: ExecutionContext | None,
+) -> PipelineResult:
+    """Execute a pipeline and return a structured result."""
+    config = _prepare_pipeline_config(capture=capture, echo=echo, context=context)
+    after_hooks_by_stage = tuple(_run_before_hooks(cmd) for cmd in parts)
+    processes, stderr_tasks, stdout_task = await _spawn_pipeline_processes(
+        parts,
+        config,
+    )
+    exit_codes = await _wait_for_pipeline(
+        processes,
+        pipe_tasks=_create_pipe_tasks(processes),
+        stream_tasks=_flatten_stream_tasks(stderr_tasks, stdout_task),
+        cancel_grace=config.ctx.cancel_grace,
+    )
+
+    stderr_by_stage = [None if task is None else await task for task in stderr_tasks]
+    final_stdout = None if stdout_task is None else await stdout_task
+    stage_results: list[CommandResult] = []
+    for idx, cmd in enumerate(parts):
+        process = processes[idx]
+        stage_results.append(
+            CommandResult(
+                program=cmd.program,
+                argv=cmd.argv,
+                exit_code=exit_codes[idx],
+                pid=process.pid if process.pid is not None else -1,
+                stdout=final_stdout if idx == len(parts) - 1 else None,
+                stderr=stderr_by_stage[idx],
+            ),
+        )
+    _run_pipeline_after_hooks(parts, after_hooks_by_stage, stage_results)
+
+    return PipelineResult(stages=tuple(stage_results))
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _StageStreamConfig:
+    """Stream file descriptor configuration for a pipeline stage."""
+
+    stdin: int
+    stdout: int
+    stderr: int
+
+
+def _get_stage_stream_fds(
+    idx: int,
+    last_idx: int,
+    *,
+    capture_or_echo: bool,
+) -> _StageStreamConfig:
+    """Determine stream file descriptors for a pipeline stage.
+
+    First stage reads from DEVNULL; intermediate stages use pipes for stdin.
+    stdout is piped for intermediate stages or when capturing. stderr is piped
+    only when capturing or echoing.
+    """
+    stdin = asyncio.subprocess.DEVNULL if idx == 0 else asyncio.subprocess.PIPE
+    stdout = (
+        asyncio.subprocess.PIPE
+        if idx != last_idx or capture_or_echo
+        else asyncio.subprocess.DEVNULL
+    )
+    stderr = asyncio.subprocess.PIPE if capture_or_echo else asyncio.subprocess.DEVNULL
+    return _StageStreamConfig(stdin=stdin, stdout=stdout, stderr=stderr)
+
+
+def _create_stage_capture_tasks(
+    process: asyncio.subprocess.Process,
+    idx: int,
+    last_idx: int,
+    config: _PipelineRunConfig,
+) -> tuple[asyncio.Task[str | None] | None, asyncio.Task[str | None] | None]:
+    """Create stderr and stdout capture tasks for a pipeline stage.
+
+    Returns (stderr_task, stdout_task). stderr is captured for all stages when
+    capture_or_echo is enabled. stdout is only captured for the final stage.
+    """
+    stderr_task: asyncio.Task[str | None] | None = None
+    stdout_task: asyncio.Task[str | None] | None = None
+
+    if config.capture_or_echo:
+        stderr_task = asyncio.create_task(
+            _consume_stream(
+                process.stderr,
+                dc.replace(config.stream_config, sink=config.stderr_sink),
+            ),
+        )
+        if idx == last_idx:
+            stdout_task = asyncio.create_task(
+                _consume_stream(process.stdout, config.stream_config),
+            )
+
+    return stderr_task, stdout_task
+
+
+async def _cleanup_spawned_processes(
+    processes: list[asyncio.subprocess.Process],
+    stderr_tasks: list[asyncio.Task[str | None] | None],
+    stdout_task: asyncio.Task[str | None] | None,
+    cancel_grace: float,
+) -> None:
+    """Terminate processes and cancel tasks after a spawn failure.
+
+    Terminates all started processes and cancels any capture tasks to prevent
+    resource leaks when a pipeline stage fails to spawn.
+    """
+    await asyncio.gather(
+        *(_terminate_process(p, cancel_grace) for p in processes),
+        return_exceptions=True,
+    )
+
+    tasks: list[asyncio.Task[typ.Any]] = []
+    for task in stderr_tasks:
+        if task is not None:
+            task.cancel()
+            tasks.append(task)
+    if stdout_task is not None:
+        stdout_task.cancel()
+        tasks.append(stdout_task)
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _spawn_pipeline_processes(
+    parts: tuple[SafeCmd, ...],
+    config: _PipelineRunConfig,
+) -> tuple[
+    list[asyncio.subprocess.Process],
+    list[asyncio.Task[str | None] | None],
+    asyncio.Task[str | None] | None,
+]:
+    """Start subprocesses for each stage and wire up capture tasks."""
+    processes: list[asyncio.subprocess.Process] = []
+    stderr_tasks: list[asyncio.Task[str | None] | None] = []
+    stdout_task: asyncio.Task[str | None] | None = None
+
+    last_idx = len(parts) - 1
+    try:
+        for idx, cmd in enumerate(parts):
+            stream_fds = _get_stage_stream_fds(
+                idx,
+                last_idx,
+                capture_or_echo=config.capture_or_echo,
+            )
+
+            process = await asyncio.create_subprocess_exec(
+                *cmd.argv_with_program,
+                stdin=stream_fds.stdin,
+                stdout=stream_fds.stdout,
+                stderr=stream_fds.stderr,
+                env=_merge_env(config.ctx.env),
+                cwd=str(config.ctx.cwd) if config.ctx.cwd is not None else None,
+            )
+            processes.append(process)
+
+            stderr_task, new_stdout_task = _create_stage_capture_tasks(
+                process,
+                idx,
+                last_idx,
+                config,
+            )
+            stderr_tasks.append(stderr_task)
+            if new_stdout_task is not None:
+                stdout_task = new_stdout_task
+    except BaseException:
+        await _cleanup_spawned_processes(
+            processes,
+            stderr_tasks,
+            stdout_task,
+            config.ctx.cancel_grace,
+        )
+        raise
+
+    return processes, stderr_tasks, stdout_task
+
+
+def _create_pipe_tasks(
+    processes: list[asyncio.subprocess.Process],
+) -> list[asyncio.Task[None]]:
+    """Create streaming tasks between adjacent pipeline stages."""
+    return [
+        asyncio.create_task(
+            _pump_stream(
+                processes[idx].stdout,
+                processes[idx + 1].stdin,
+            ),
+        )
+        for idx in range(len(processes) - 1)
+    ]
+
+
+def _flatten_stream_tasks(
+    stderr_tasks: list[asyncio.Task[str | None] | None],
+    stdout_task: asyncio.Task[str | None] | None,
+) -> list[asyncio.Task[str | None]]:
+    """Collect all running stream consumer tasks for cancellation cleanup."""
+    tasks = [task for task in stderr_tasks if task is not None]
+    if stdout_task is not None:
+        tasks.append(stdout_task)
+    return tasks
+
+
+async def _collect_pipe_results(
+    pipe_tasks: list[asyncio.Task[None]],
+) -> list[object]:
+    """Collect pipe task results, capturing exceptions rather than raising them.
+
+    Uses return_exceptions=True to gather all results including any exceptions
+    that occurred during pipe streaming between pipeline stages.
+    """
+    return list(await asyncio.gather(*pipe_tasks, return_exceptions=True))
+
+
+def _surface_unexpected_pipe_failures(pipe_results: list[object]) -> None:
+    """Raise non-BrokenPipe exceptions from pipe results.
+
+    BrokenPipeError and ConnectionResetError are expected when downstream
+    processes terminate early (e.g., head) and should not fail the pipeline.
+    Other exceptions indicate genuine failures and must be surfaced.
+    """
+    for result in pipe_results:
+        if isinstance(result, Exception) and not isinstance(
+            result,
+            (BrokenPipeError, ConnectionResetError),
+        ):
+            raise result
+
+
+async def _cleanup_pipeline_on_error(
+    processes: list[asyncio.subprocess.Process],
+    pipe_tasks: list[asyncio.Task[None]],
+    stream_tasks: list[asyncio.Task[str | None]],
+    cancel_grace: float,
+) -> list[object]:
+    """Clean up pipeline resources after an error or cancellation.
+
+    Terminates all processes, collects pipe task results, and awaits stream
+    tasks to ensure orderly shutdown. Returns the collected pipe results for
+    use in the finally block.
+    """
+    await asyncio.gather(
+        *(_terminate_process(p, cancel_grace) for p in processes),
+        return_exceptions=True,
+    )
+    pipe_results = await _collect_pipe_results(pipe_tasks)
+    await asyncio.gather(*stream_tasks, return_exceptions=True)
+    return pipe_results
+
+
+async def _wait_for_pipeline(
+    processes: list[asyncio.subprocess.Process],
+    *,
+    pipe_tasks: list[asyncio.Task[None]],
+    stream_tasks: list[asyncio.Task[str | None]],
+    cancel_grace: float,
+) -> list[int]:
+    """Wait for pipeline completion, ensuring subprocess cleanup on cancellation."""
+    caught: BaseException | None = None
+    pipe_results: list[object] | None = None
+    try:
+        return list(await asyncio.gather(*(p.wait() for p in processes)))
+    except BaseException as exc:
+        caught = exc
+        pipe_results = await _cleanup_pipeline_on_error(
+            processes,
+            pipe_tasks,
+            stream_tasks,
+            cancel_grace,
+        )
+        raise
+    finally:
+        if pipe_results is None:
+            pipe_results = await _collect_pipe_results(pipe_tasks)
+        if caught is None:
+            _surface_unexpected_pipe_failures(pipe_results)
+
+
+def _run_pipeline_after_hooks(
+    parts: tuple[SafeCmd, ...],
+    after_hooks_by_stage: tuple[tuple[AfterHook, ...], ...],
+    results: list[CommandResult],
+) -> None:
+    """Run registered after hooks for each pipeline stage."""
+    for cmd, hooks, result in zip(parts, after_hooks_by_stage, results, strict=True):
+        for hook in hooks:
+            hook(cmd, result)
+
+
 def make(
     program: Program,
     *,
@@ -388,6 +809,73 @@ async def _consume_stream(
     return buffer.decode(config.encoding, errors=config.errors)
 
 
+async def _pump_stream(
+    reader: asyncio.StreamReader | None,
+    writer: asyncio.StreamWriter | None,
+) -> None:
+    """Stream stdout into stdin with backpressure via ``drain``.
+
+    When the downstream stdin closes early (for example because the next stage
+    terminates), this helper continues draining stdout to avoid deadlocking
+    upstream stages.
+    """
+    if reader is None:
+        await _close_stream_writer(writer)
+        return
+
+    active_writer = writer
+    while True:
+        chunk = await reader.read(_READ_SIZE)
+        if not chunk:
+            break
+        active_writer = await _write_to_stream_writer(active_writer, chunk)
+
+    await _close_stream_writer(active_writer)
+
+
+async def _write_to_stream_writer(
+    writer: asyncio.StreamWriter | None,
+    chunk: bytes,
+) -> asyncio.StreamWriter | None:
+    """Write a chunk to a writer, returning None when downstream closes."""
+    if writer is None:
+        return None
+    try:
+        writer.write(chunk)
+        await writer.drain()
+    except (BrokenPipeError, ConnectionResetError):
+        await _close_stream_writer(writer)
+        return None
+    return writer
+
+
+async def _close_stream_writer(writer: asyncio.StreamWriter | None) -> None:
+    """Close a writer, swallowing errors from already-closed pipes."""
+    if writer is None:
+        return
+    with contextlib.suppress(
+        AttributeError,
+        NotImplementedError,
+        BrokenPipeError,
+        ConnectionResetError,
+    ):
+        writer.write_eof()
+    try:
+        writer.close()
+    except (BrokenPipeError, ConnectionResetError):
+        return
+    wait_closed = getattr(writer, "wait_closed", None)
+    if wait_closed is None:
+        return
+    with contextlib.suppress(
+        AttributeError,
+        NotImplementedError,
+        BrokenPipeError,
+        ConnectionResetError,
+    ):
+        await wait_closed()
+
+
 def _write_chunk(
     sink: typ.IO[str],
     chunk: bytes,
@@ -435,6 +923,8 @@ async def _terminate_process(
 __all__ = [
     "CommandResult",
     "ExecutionContext",
+    "Pipeline",
+    "PipelineResult",
     "SafeCmd",
     "SafeCmdBuilder",
     "UnknownProgramError",

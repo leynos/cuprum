@@ -96,6 +96,54 @@ Builders keep argv construction in one place, making it easier to validate
 inputs, document behaviour, and reuse the same allowlisted program across a
 codebase.
 
+## Pipeline execution
+
+Compose `SafeCmd` instances into a `Pipeline` via the `|` operator. Pipelines
+stream data from each stage's stdout into the next stage's stdin and apply
+backpressure using `asyncio`'s pipe `drain()` semantics.
+
+Running a pipeline returns a `PipelineResult` that exposes:
+
+- The captured output of the final stage (via `result.stdout`).
+- Per-stage exit metadata (via `result.stages`).
+
+```python
+import sys
+from pathlib import Path
+
+from cuprum import ECHO, Program, ProgramCatalogue, ProjectSettings, scoped, sh
+
+PYTHON = Program(str(Path(sys.executable)))
+project = ProjectSettings(
+    name="pipeline-example",
+    programs=(ECHO, PYTHON),
+    documentation_locations=(),
+    noise_rules=(),
+)
+catalogue = ProgramCatalogue(projects=(project,))
+
+echo = sh.make(ECHO, catalogue=catalogue)
+python = sh.make(PYTHON, catalogue=catalogue)
+
+pipeline = echo("-n", "hello") | python(
+    "-c",
+    "import sys; sys.stdout.write(sys.stdin.read().upper())",
+)
+
+with scoped(allowlist=catalogue.allowlist):
+    result = pipeline.run_sync()
+
+print(result.stdout)  # "HELLO"
+print([stage.exit_code for stage in result.stages])  # per-stage exit codes
+```
+
+Notes:
+
+- Only the final stage's stdout is captured; intermediate stage stdout is
+  streamed and represented as `None` in `result.stages`.
+- `echo=True` echoes the final stage stdout and all stage stderr streams to
+  their configured sinks.
+
 ## Execution runtime
 
 `SafeCmd.run` executes curated commands asynchronously with predictable capture

@@ -18,6 +18,8 @@ def test_public_exports_are_available() -> None:
     assert c.ProgramEntry is not None, "ProgramEntry must be exported"
     assert c.ProjectSettings is not None, "ProjectSettings must be exported"
     assert c.UnknownProgramError is not None, "UnknownProgramError must be exported"
+    assert c.Pipeline is not None, "Pipeline must be exported"
+    assert c.PipelineResult is not None, "PipelineResult must be exported"
 
 
 def test_public_catalogue_behaviour_via_reexports() -> None:
