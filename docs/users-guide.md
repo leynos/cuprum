@@ -143,6 +143,9 @@ Notes:
   streamed and represented as `None` in `result.stages`.
 - `echo=True` echoes the final stage stdout and all stage stderr streams to
   their configured sinks.
+- Pipelines fail fast: when a stage exits non-zero, Cuprum terminates the
+  remaining stages. The failing stage is available via `result.failure` /
+  `result.failure_index`.
 
 ## Execution runtime
 

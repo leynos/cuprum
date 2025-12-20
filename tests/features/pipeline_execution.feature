@@ -13,6 +13,16 @@ Feature: Pipeline execution
     Then the pipeline output is transformed
 
   Scenario: Pipeline reports metadata when a stage fails
-    Given a two stage pipeline with a failing first stage
+    Given a three stage pipeline with a failing first stage
     When I run the pipeline synchronously
-    Then the pipeline exposes per stage exit metadata when a stage fails
+    Then the pipeline exposes per stage exit metadata when a stage fails fast
+
+  Scenario: Pipeline fails fast when a middle stage fails
+    Given a three stage pipeline with a failing middle stage
+    When I run the pipeline synchronously
+    Then the pipeline exposes per stage exit metadata when a stage fails fast
+
+  Scenario: Pipeline surfaces the failing stage when the final stage fails
+    Given a three stage pipeline with a failing final stage
+    When I run the pipeline synchronously
+    Then the pipeline exposes per stage exit metadata when the final stage fails
