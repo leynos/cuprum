@@ -5,15 +5,25 @@ from __future__ import annotations
 import asyncio
 import dataclasses as dc
 import sys
+import time
 import typing as typ
+from pathlib import Path
 
+from cuprum._observability import (
+    _emit_exec_event,
+    _freeze_str_mapping,
+    _merge_tags,
+    _wait_for_exec_hook_tasks,
+)
 from cuprum._streams import _consume_stream, _pump_stream, _StreamConfig
 from cuprum.context import current_context
+from cuprum.events import ExecEvent
 
 if typ.TYPE_CHECKING:
     import types
 
-    from cuprum.context import AfterHook
+    from cuprum.context import AfterHook, BeforeHook
+    from cuprum.events import ExecHook
     from cuprum.sh import CommandResult, ExecutionContext, PipelineResult, SafeCmd
 
 _MIN_PIPELINE_STAGES = 2
@@ -27,18 +37,22 @@ def _sh_module() -> types.ModuleType:
     return module
 
 
-def _run_before_hooks(cmd: SafeCmd) -> tuple[AfterHook, ...]:
-    """Check allowlist, run before hooks, and return after hooks for later.
+@dc.dataclass(frozen=True, slots=True)
+class _ExecutionHooks:
+    before_hooks: tuple[BeforeHook, ...]
+    after_hooks: tuple[AfterHook, ...]
+    observe_hooks: tuple[ExecHook, ...]
 
-    This helper validates the command against the current context's allowlist,
-    executes all registered before hooks in FIFO order, and returns the after
-    hooks tuple for invocation after command completion.
-    """
+
+def _run_before_hooks(cmd: SafeCmd) -> _ExecutionHooks:
+    """Collect hooks for a command after enforcing the current allowlist."""
     ctx = current_context()
     ctx.check_allowed(cmd.program)
-    for hook in ctx.before_hooks:
-        hook(cmd)
-    return ctx.after_hooks
+    return _ExecutionHooks(
+        before_hooks=ctx.before_hooks,
+        after_hooks=ctx.after_hooks,
+        observe_hooks=ctx.observe_hooks,
+    )
 
 
 def _merge_env(extra: typ.Mapping[str, str] | None) -> dict[str, str] | None:
@@ -113,6 +127,49 @@ class _PipelineRunConfig:
         )
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _StageObservation:
+    cmd: SafeCmd
+    hooks: _ExecutionHooks
+    tags: typ.Mapping[str, object]
+    cwd: Path | None
+    env_overlay: typ.Mapping[str, str] | None
+    pending_tasks: list[asyncio.Task[None]]
+
+    def emit(
+        self,
+        phase: typ.Literal["plan", "start", "stdout", "stderr", "exit"],
+        details: _EventDetails,
+    ) -> None:
+        if not self.hooks.observe_hooks:
+            return
+        _emit_exec_event(
+            self.hooks.observe_hooks,
+            ExecEvent(
+                phase=phase,
+                program=self.cmd.program,
+                argv=self.cmd.argv_with_program,
+                cwd=self.cwd,
+                env=self.env_overlay,
+                pid=details.pid,
+                timestamp=time.time(),
+                line=details.line,
+                exit_code=details.exit_code,
+                duration_s=details.duration_s,
+                tags=self.tags,
+            ),
+            pending_tasks=self.pending_tasks,
+        )
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _EventDetails:
+    pid: int | None
+    line: str | None = None
+    exit_code: int | None = None
+    duration_s: float | None = None
+
+
 def _prepare_pipeline_config(
     *,
     capture: bool,
@@ -143,11 +200,49 @@ async def _run_pipeline(  # noqa: PLR0914
     """Execute a pipeline and return a structured result."""
     sh = _sh_module()
     config = _prepare_pipeline_config(capture=capture, echo=echo, context=context)
-    after_hooks_by_stage = tuple(_run_before_hooks(cmd) for cmd in parts)
-    processes, stderr_tasks, stdout_task = await _spawn_pipeline_processes(
-        parts,
-        config,
+    hooks_by_stage = tuple(_run_before_hooks(cmd) for cmd in parts)
+    pending_tasks: list[asyncio.Task[None]] = []
+    cwd = None if config.ctx.cwd is None else Path(config.ctx.cwd)
+    env_overlay = _freeze_str_mapping(config.ctx.env)
+    observations = tuple(
+        _StageObservation(
+            cmd=cmd,
+            hooks=hooks,
+            tags=_merge_tags(
+                {
+                    "project": cmd.project.name,
+                    "capture": capture,
+                    "echo": echo,
+                    "pipeline_stage_index": idx,
+                    "pipeline_stages": len(parts),
+                },
+                config.ctx.tags,
+            ),
+            cwd=cwd,
+            env_overlay=env_overlay,
+            pending_tasks=pending_tasks,
+        )
+        for idx, (cmd, hooks) in enumerate(zip(parts, hooks_by_stage, strict=True))
     )
+    try:
+        for obs in observations:
+            obs.emit("plan", _EventDetails(pid=None))
+            for hook in obs.hooks.before_hooks:
+                hook(obs.cmd)
+
+        (
+            processes,
+            stderr_tasks,
+            stdout_task,
+            started_at,
+        ) = await _spawn_pipeline_processes(
+            parts,
+            config,
+            observations=observations,
+        )
+    except BaseException:
+        await _wait_for_exec_hook_tasks(pending_tasks)
+        raise
     pipe_tasks = _create_pipe_tasks(processes)
     stream_tasks = _flatten_stream_tasks(stderr_tasks, stdout_task)
     try:
@@ -155,6 +250,7 @@ async def _run_pipeline(  # noqa: PLR0914
             processes,
             pipe_tasks=pipe_tasks,
             cancel_grace=config.ctx.cancel_grace,
+            started_at=started_at,
         )
         stderr_by_stage = [
             None if task is None else await task for task in stderr_tasks
@@ -164,21 +260,37 @@ async def _run_pipeline(  # noqa: PLR0914
         for task in stream_tasks:
             task.cancel()
         await asyncio.gather(*stream_tasks, return_exceptions=True)
+        await _wait_for_exec_hook_tasks(pending_tasks)
         raise
     stage_results: list[CommandResult] = []
-    for idx, cmd in enumerate(parts):
+    for idx, obs in enumerate(observations):
         process = processes[idx]
+        ended_at = wait_result.ended_at[idx]
+        duration_s = (
+            None
+            if ended_at is None
+            else max(0.0, ended_at - wait_result.started_at[idx])
+        )
+        obs.emit(
+            "exit",
+            _EventDetails(
+                pid=process.pid,
+                exit_code=wait_result.exit_codes[idx],
+                duration_s=duration_s,
+            ),
+        )
         stage_results.append(
             sh.CommandResult(
-                program=cmd.program,
-                argv=cmd.argv,
+                program=obs.cmd.program,
+                argv=obs.cmd.argv,
                 exit_code=wait_result.exit_codes[idx],
                 pid=process.pid if process.pid is not None else -1,
                 stdout=final_stdout if idx == len(parts) - 1 else None,
                 stderr=stderr_by_stage[idx],
             ),
         )
-    _run_pipeline_after_hooks(parts, after_hooks_by_stage, stage_results)
+    _run_pipeline_after_hooks(parts, hooks_by_stage, stage_results)
+    await _wait_for_exec_hook_tasks(pending_tasks)
 
     return sh.PipelineResult(
         stages=tuple(stage_results),
@@ -219,9 +331,10 @@ def _get_stage_stream_fds(
 
 def _create_stage_capture_tasks(
     process: asyncio.subprocess.Process,
-    idx: int,
-    last_idx: int,
     config: _PipelineRunConfig,
+    *,
+    is_last_stage: bool,
+    observation: _StageObservation,
 ) -> tuple[asyncio.Task[str | None] | None, asyncio.Task[str | None] | None]:
     """Create stderr and stdout capture tasks for a pipeline stage.
 
@@ -231,17 +344,45 @@ def _create_stage_capture_tasks(
     stderr_task: asyncio.Task[str | None] | None = None
     stdout_task: asyncio.Task[str | None] | None = None
 
-    if config.capture_or_echo:
-        stderr_task = asyncio.create_task(
-            _consume_stream(
-                process.stderr,
-                dc.replace(config.stream_config, sink=config.stderr_sink),
-            ),
-        )
-        if idx == last_idx:
-            stdout_task = asyncio.create_task(
-                _consume_stream(process.stdout, config.stream_config),
+    if not config.capture_or_echo:
+        return stderr_task, stdout_task
+
+    stderr_on_line: typ.Callable[[str], None] | None = None
+    if observation.hooks.observe_hooks:
+
+        def stderr_on_line(line: str) -> None:
+            observation.emit(
+                "stderr",
+                _EventDetails(pid=process.pid, line=line),
             )
+
+    stderr_task = asyncio.create_task(
+        _consume_stream(
+            process.stderr,
+            dc.replace(config.stream_config, sink=config.stderr_sink),
+            on_line=stderr_on_line,
+        ),
+    )
+
+    if not is_last_stage:
+        return stderr_task, stdout_task
+
+    stdout_on_line: typ.Callable[[str], None] | None = None
+    if observation.hooks.observe_hooks:
+
+        def stdout_on_line(line: str) -> None:
+            observation.emit(
+                "stdout",
+                _EventDetails(pid=process.pid, line=line),
+            )
+
+    stdout_task = asyncio.create_task(
+        _consume_stream(
+            process.stdout,
+            config.stream_config,
+            on_line=stdout_on_line,
+        ),
+    )
 
     return stderr_task, stdout_task
 
@@ -273,43 +414,89 @@ async def _cleanup_spawned_processes(
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
-async def _spawn_pipeline_processes(
+def _build_spawn_observations(
     parts: tuple[SafeCmd, ...],
     config: _PipelineRunConfig,
+) -> tuple[_StageObservation, ...]:
+    hooks_by_stage = tuple(_run_before_hooks(cmd) for cmd in parts)
+    pending_tasks: list[asyncio.Task[None]] = []
+    cwd = None if config.ctx.cwd is None else Path(config.ctx.cwd)
+    env_overlay = _freeze_str_mapping(config.ctx.env)
+    observations = tuple(
+        _StageObservation(
+            cmd=cmd,
+            hooks=hooks,
+            tags=_merge_tags(
+                {
+                    "project": cmd.project.name,
+                    "capture": config.capture,
+                    "echo": config.echo,
+                    "pipeline_stage_index": idx,
+                    "pipeline_stages": len(parts),
+                },
+            ),
+            cwd=cwd,
+            env_overlay=env_overlay,
+            pending_tasks=pending_tasks,
+        )
+        for idx, (cmd, hooks) in enumerate(zip(parts, hooks_by_stage, strict=True))
+    )
+    if any(obs.hooks.observe_hooks for obs in observations):
+        msg = "spawn helpers require explicit observations when observe hooks exist"
+        raise RuntimeError(msg)
+    return observations
+
+
+async def _spawn_pipeline_processes(
+    _parts: tuple[SafeCmd, ...],
+    config: _PipelineRunConfig,
+    *,
+    observations: tuple[_StageObservation, ...] | None = None,
 ) -> tuple[
     list[asyncio.subprocess.Process],
     list[asyncio.Task[str | None] | None],
     asyncio.Task[str | None] | None,
+    list[float],
 ]:
     """Start subprocesses for each stage and wire up capture tasks."""
+    if observations is None:
+        observations = _build_spawn_observations(_parts, config)
+
     processes: list[asyncio.subprocess.Process] = []
     stderr_tasks: list[asyncio.Task[str | None] | None] = []
     stdout_task: asyncio.Task[str | None] | None = None
+    started_at: list[float] = []
 
-    last_idx = len(parts) - 1
+    last_idx = len(observations) - 1
     try:
-        for idx, cmd in enumerate(parts):
-            stream_fds = _get_stage_stream_fds(
-                idx,
-                last_idx,
-                capture_or_echo=config.capture_or_echo,
-            )
-
+        for idx, observation in enumerate(observations):
             process = await asyncio.create_subprocess_exec(
-                *cmd.argv_with_program,
-                stdin=stream_fds.stdin,
-                stdout=stream_fds.stdout,
-                stderr=stream_fds.stderr,
+                *observation.cmd.argv_with_program,
+                stdin=(
+                    asyncio.subprocess.DEVNULL if idx == 0 else asyncio.subprocess.PIPE
+                ),
+                stdout=(
+                    asyncio.subprocess.PIPE
+                    if idx != last_idx or config.capture_or_echo
+                    else asyncio.subprocess.DEVNULL
+                ),
+                stderr=(
+                    asyncio.subprocess.PIPE
+                    if config.capture_or_echo
+                    else asyncio.subprocess.DEVNULL
+                ),
                 env=_merge_env(config.ctx.env),
                 cwd=str(config.ctx.cwd) if config.ctx.cwd is not None else None,
             )
             processes.append(process)
+            started_at.append(time.perf_counter())
+            observation.emit("start", _EventDetails(pid=process.pid))
 
             stderr_task, new_stdout_task = _create_stage_capture_tasks(
                 process,
-                idx,
-                last_idx,
                 config,
+                is_last_stage=(idx == last_idx),
+                observation=observation,
             )
             stderr_tasks.append(stderr_task)
             if new_stdout_task is not None:
@@ -323,7 +510,7 @@ async def _spawn_pipeline_processes(
         )
         raise
 
-    return processes, stderr_tasks, stdout_task
+    return processes, stderr_tasks, stdout_task, started_at
 
 
 def _create_pipe_tasks(
@@ -382,6 +569,8 @@ def _surface_unexpected_pipe_failures(pipe_results: list[object]) -> None:
 class _PipelineWaitResult:
     exit_codes: list[int]
     failure_index: int | None
+    started_at: list[float]
+    ended_at: list[float | None]
 
 
 @dc.dataclass(slots=True)
@@ -389,18 +578,24 @@ class _PipelineWaitState:
     wait_tasks: list[asyncio.Task[int]]
     task_to_index: dict[asyncio.Task[int], int]
     exit_codes: list[int | None]
+    started_at: list[float]
+    ended_at: list[float | None]
     failure_index: int | None = None
 
     @classmethod
     def from_processes(
         cls,
         processes: list[asyncio.subprocess.Process],
+        *,
+        started_at: list[float],
     ) -> _PipelineWaitState:
         wait_tasks = [asyncio.create_task(process.wait()) for process in processes]
         return cls(
             wait_tasks=wait_tasks,
             task_to_index={task: idx for idx, task in enumerate(wait_tasks)},
             exit_codes=[None] * len(processes),
+            started_at=started_at,
+            ended_at=[None] * len(processes),
         )
 
 
@@ -433,6 +628,7 @@ async def _process_completed_task(
     idx = state.task_to_index[task]
     exit_code = task.result()
     state.exit_codes[idx] = exit_code
+    state.ended_at[idx] = time.perf_counter()
     if state.failure_index is None and exit_code != 0:
         state.failure_index = idx
         if idx != len(processes) - 1:
@@ -462,9 +658,10 @@ async def _wait_for_pipeline(
     *,
     pipe_tasks: list[asyncio.Task[None]],
     cancel_grace: float,
+    started_at: list[float],
 ) -> _PipelineWaitResult:
     """Wait for pipeline completion, ensuring subprocess cleanup on cancellation."""
-    state = _PipelineWaitState.from_processes(processes)
+    state = _PipelineWaitState.from_processes(processes, started_at=started_at)
 
     caught: BaseException | None = None
     pipe_results: list[object] | None = None
@@ -490,6 +687,8 @@ async def _wait_for_pipeline(
         return _PipelineWaitResult(
             exit_codes=completed_exit_codes,
             failure_index=state.failure_index,
+            started_at=state.started_at,
+            ended_at=state.ended_at,
         )
     except BaseException as exc:
         caught = exc
@@ -555,10 +754,10 @@ async def _terminate_pipeline_remaining_stages(
 
 def _run_pipeline_after_hooks(
     parts: tuple[SafeCmd, ...],
-    after_hooks_by_stage: tuple[tuple[AfterHook, ...], ...],
+    hooks_by_stage: tuple[_ExecutionHooks, ...],
     results: list[CommandResult],
 ) -> None:
     """Run registered after hooks for each pipeline stage."""
-    for cmd, hooks, result in zip(parts, after_hooks_by_stage, results, strict=True):
-        for hook in hooks:
+    for cmd, hooks, result in zip(parts, hooks_by_stage, results, strict=True):
+        for hook in hooks.after_hooks:
             hook(cmd, result)

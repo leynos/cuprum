@@ -420,6 +420,7 @@ async def _exercise_wait_for_pipeline(
         typ.cast("list[asyncio.subprocess.Process]", processes),
         pipe_tasks=[],
         cancel_grace=0.01,
+        started_at=[0.0, 0.0, 0.0],
     )
 
     return processes[0], processes[1], processes[2], result

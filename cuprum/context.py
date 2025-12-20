@@ -24,6 +24,8 @@ import dataclasses as dc
 import typing as typ
 from contextvars import ContextVar, Token
 
+from cuprum.events import ExecHook
+
 if typ.TYPE_CHECKING:
     from cuprum.program import Program
     from cuprum.sh import CommandResult, SafeCmd
@@ -49,12 +51,15 @@ class CuprumContext:
         Tuple of hooks invoked before command execution (FIFO order).
     after_hooks:
         Tuple of hooks invoked after command execution (LIFO order).
+    observe_hooks:
+        Tuple of hooks invoked for structured execution events (FIFO order).
 
     """
 
     allowlist: frozenset[Program] = dc.field(default_factory=frozenset)
     before_hooks: tuple[BeforeHook, ...] = ()
     after_hooks: tuple[AfterHook, ...] = ()
+    observe_hooks: tuple[ExecHook, ...] = ()
 
     def is_allowed(self, program: Program) -> bool:
         """Return True when the program is in the allowlist.
@@ -84,6 +89,7 @@ class CuprumContext:
         allowlist: frozenset[Program] | None = None,
         before_hooks: tuple[BeforeHook, ...] = (),
         after_hooks: tuple[AfterHook, ...] = (),
+        observe_hooks: tuple[ExecHook, ...] = (),
     ) -> CuprumContext:
         """Create a derived context with narrowed allowlist and extended hooks.
 
@@ -96,6 +102,8 @@ class CuprumContext:
             Additional before hooks appended after parent hooks.
         after_hooks:
             Additional after hooks prepended before parent hooks (LIFO).
+        observe_hooks:
+            Additional observe hooks appended after parent hooks (FIFO).
 
         Returns
         -------
@@ -122,11 +130,13 @@ class CuprumContext:
         new_before = self.before_hooks + before_hooks
         # After hooks run inner-to-outer, so prepend new hooks
         new_after = after_hooks + self.after_hooks
+        new_observe = self.observe_hooks + observe_hooks
 
         return CuprumContext(
             allowlist=new_allowlist,
             before_hooks=new_before,
             after_hooks=new_after,
+            observe_hooks=new_observe,
         )
 
     def with_allowlist(self, allowlist: frozenset[Program]) -> CuprumContext:
@@ -154,6 +164,15 @@ class CuprumContext:
         """Return a context with the specified after hook removed."""
         new_hooks = tuple(h for h in self.after_hooks if h is not hook)
         return dc.replace(self, after_hooks=new_hooks)
+
+    def with_observe_hook(self, hook: ExecHook) -> CuprumContext:
+        """Return a context with an additional observe hook."""
+        return dc.replace(self, observe_hooks=(*self.observe_hooks, hook))
+
+    def without_observe_hook(self, hook: ExecHook) -> CuprumContext:
+        """Return a context with the specified observe hook removed."""
+        new_hooks = tuple(h for h in self.observe_hooks if h is not hook)
+        return dc.replace(self, observe_hooks=new_hooks)
 
     def with_program(self, program: Program) -> CuprumContext:
         """Return a context with the program added to the allowlist."""
@@ -204,12 +223,14 @@ class _ScopedContext:
         allowlist: frozenset[Program] | None = None,
         before_hooks: tuple[BeforeHook, ...] = (),
         after_hooks: tuple[AfterHook, ...] = (),
+        observe_hooks: tuple[ExecHook, ...] = (),
     ) -> None:
         parent = current_context()
         self._ctx = parent.narrow(
             allowlist=allowlist,
             before_hooks=before_hooks,
             after_hooks=after_hooks,
+            observe_hooks=observe_hooks,
         )
         self._token: Token[CuprumContext] | None = None
 
@@ -232,6 +253,7 @@ def scoped(
     allowlist: frozenset[Program] | None = None,
     before_hooks: tuple[BeforeHook, ...] = (),
     after_hooks: tuple[AfterHook, ...] = (),
+    observe_hooks: tuple[ExecHook, ...] = (),
 ) -> _ScopedContext:
     """Create a scoped context manager for narrowed execution.
 
@@ -243,6 +265,8 @@ def scoped(
         Hooks to run before command execution.
     after_hooks:
         Hooks to run after command execution.
+    observe_hooks:
+        Hooks to run for structured execution events.
 
     Returns
     -------
@@ -259,6 +283,7 @@ def scoped(
         allowlist=allowlist,
         before_hooks=before_hooks,
         after_hooks=after_hooks,
+        observe_hooks=observe_hooks,
     )
 
 
@@ -358,8 +383,8 @@ class HookRegistration:
 
     def __init__(
         self,
-        hook: BeforeHook | AfterHook,
-        hook_type: typ.Literal["before", "after"],
+        hook: BeforeHook | AfterHook | ExecHook,
+        hook_type: typ.Literal["before", "after", "observe"],
     ) -> None:
         """Create a hook registration and add hook to current context."""
         self._hook = hook
@@ -369,8 +394,10 @@ class HookRegistration:
         ctx = current_context()
         if hook_type == "before":
             new_ctx = ctx.with_before_hook(typ.cast("BeforeHook", hook))
-        else:
+        elif hook_type == "after":
             new_ctx = ctx.with_after_hook(typ.cast("AfterHook", hook))
+        else:
+            new_ctx = ctx.with_observe_hook(typ.cast("ExecHook", hook))
         self._token: Token[CuprumContext] | None = _set_context(new_ctx)
 
     def detach(self) -> None:
@@ -446,11 +473,30 @@ def after(hook: AfterHook) -> HookRegistration:
     return HookRegistration(hook, "after")
 
 
+def observe(hook: ExecHook) -> HookRegistration:
+    """Register a structured execution event hook in the current context.
+
+    Parameters
+    ----------
+    hook:
+        Callable invoked with :class:`~cuprum.events.ExecEvent` values as Cuprum
+        executes commands and pipelines.
+
+    Returns
+    -------
+    HookRegistration
+        A handle that can be detached or used as a context manager.
+
+    """
+    return HookRegistration(hook, "observe")
+
+
 __all__ = [
     "AfterHook",
     "AllowRegistration",
     "BeforeHook",
     "CuprumContext",
+    "ExecHook",
     "ForbiddenProgramError",
     "HookRegistration",
     "after",
@@ -458,5 +504,6 @@ __all__ = [
     "before",
     "current_context",
     "get_context",
+    "observe",
     "scoped",
 ]

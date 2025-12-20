@@ -910,6 +910,27 @@ The following design decisions were made during implementation:
 - Detaching the logging hook unregisters the after hook ahead of the start hook
   to respect `ContextVar` token order.
 
+### 8.1.3 Structured execution events (observe hooks)
+
+The structured event stream (`ExecEvent`) is exposed via `sh.observe()` and
+implemented with the following decisions:
+
+- **Event phases:** Cuprum emits `plan`, `start`, `stdout`, `stderr`, and `exit`
+  phases for both single commands and pipeline stages. Pipeline stage events
+  are tagged with a stage index and stage count.
+- **Line emission:** `stdout`/`stderr` phases are emitted per decoded line. Line
+  terminators are removed, and the final partial line (when output does not end
+  with a newline) is still emitted.
+- **Timing:** `ExecEvent.timestamp` uses wall-clock time (`time.time()`), while
+  `ExecEvent.duration_s` uses a monotonic measurement (`time.perf_counter()`)
+  between subprocess spawn and subprocess exit.
+- **Tags:** Cuprum attaches a default `project` tag and runtime tags such as
+  `capture`/`echo`. Callers can attach additional tags via
+  `ExecutionContext.tags`; caller tags take precedence when keys overlap.
+- **Async observers:** Observe hooks may be synchronous or async. Async hooks
+  are scheduled as background tasks during execution and awaited before
+  returning results so `run_sync()` does not leak pending tasks.
+
 Figure 3: Sequence of start/exit logging hook execution
 
 ```mermaid

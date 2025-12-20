@@ -11,9 +11,16 @@ import asyncio
 import collections.abc as cabc
 import dataclasses as dc
 import sys
+import time
 import typing as typ
 from pathlib import Path
 
+from cuprum._observability import (
+    _emit_exec_event,
+    _freeze_str_mapping,
+    _merge_tags,
+    _wait_for_exec_hook_tasks,
+)
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
     _merge_env,
@@ -31,8 +38,11 @@ from cuprum.catalogue import (
     ProjectSettings,
 )
 from cuprum.catalogue import UnknownProgramError as UnknownProgramError
+from cuprum.context import observe as observe
+from cuprum.events import ExecEvent
 
 if typ.TYPE_CHECKING:
+    from cuprum.events import ExecHook
     from cuprum.program import Program
 
 type _ArgValue = str | int | float | bool | Path
@@ -173,6 +183,8 @@ class ExecutionContext:
         Character encoding used when decoding subprocess output.
     errors:
         Error handling strategy applied during decoding.
+    tags:
+        Optional metadata attached to structured execution events.
 
     """
 
@@ -183,6 +195,205 @@ class ExecutionContext:
     stderr_sink: typ.IO[str] | None = None
     encoding: str = _DEFAULT_ENCODING
     errors: str = _DEFAULT_ERROR_HANDLING
+    tags: cabc.Mapping[str, object] | None = None
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _CommandObservation:
+    cmd: SafeCmd
+    observe_hooks: tuple[ExecHook, ...]
+    cwd: Path | None
+    env_overlay: cabc.Mapping[str, str] | None
+    tags: cabc.Mapping[str, object]
+    pending_tasks: list[asyncio.Task[None]]
+
+    def emit(
+        self,
+        phase: typ.Literal["plan", "start", "stdout", "stderr", "exit"],
+        details: _EventDetails,
+    ) -> None:
+        if not self.observe_hooks:
+            return
+        _emit_exec_event(
+            self.observe_hooks,
+            ExecEvent(
+                phase=phase,
+                program=self.cmd.program,
+                argv=self.cmd.argv_with_program,
+                cwd=self.cwd,
+                env=self.env_overlay,
+                pid=details.pid,
+                timestamp=time.time(),
+                line=details.line,
+                exit_code=details.exit_code,
+                duration_s=details.duration_s,
+                tags=self.tags,
+            ),
+            pending_tasks=self.pending_tasks,
+        )
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _EventDetails:
+    pid: int | None
+    line: str | None = None
+    exit_code: int | None = None
+    duration_s: float | None = None
+
+
+async def _wait_for_exit_code(
+    process: asyncio.subprocess.Process,
+    ctx: ExecutionContext,
+    *,
+    consumers: tuple[asyncio.Task[typ.Any], ...] = (),
+) -> tuple[int, float]:
+    """Wait for a subprocess, handling cancellation and capturing exit time."""
+    try:
+        exit_code = await process.wait()
+    except asyncio.CancelledError:
+        await _terminate_process(process, ctx.cancel_grace)
+        if consumers:
+            await asyncio.gather(*consumers, return_exceptions=True)
+        raise
+    else:
+        exited_at = time.perf_counter()
+        return exit_code, exited_at
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _SubprocessExecution:
+    cmd: SafeCmd
+    ctx: ExecutionContext
+    capture: bool
+    echo: bool
+    observation: _CommandObservation
+
+
+async def _spawn_subprocess(
+    execution: _SubprocessExecution,
+) -> asyncio.subprocess.Process:
+    return await asyncio.create_subprocess_exec(
+        *execution.cmd.argv_with_program,
+        stdout=(
+            asyncio.subprocess.PIPE
+            if execution.capture or execution.echo
+            else asyncio.subprocess.DEVNULL
+        ),
+        stderr=(
+            asyncio.subprocess.PIPE
+            if execution.capture or execution.echo
+            else asyncio.subprocess.DEVNULL
+        ),
+        env=_merge_env(execution.ctx.env),
+        cwd=(str(execution.ctx.cwd) if execution.ctx.cwd is not None else None),
+    )
+
+
+async def _run_subprocess_with_streams(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+    *,
+    pid: int | None,
+) -> tuple[int, float, str | None, str | None]:
+    stream_config = _StreamConfig(
+        capture_output=execution.capture,
+        echo_output=execution.echo,
+        sink=(
+            execution.ctx.stdout_sink
+            if execution.ctx.stdout_sink is not None
+            else sys.stdout
+        ),
+        encoding=execution.ctx.encoding,
+        errors=execution.ctx.errors,
+    )
+
+    stdout_on_line = (
+        None
+        if not execution.observation.observe_hooks
+        else lambda line: execution.observation.emit(
+            "stdout",
+            _EventDetails(pid=pid, line=line),
+        )
+    )
+    stderr_on_line = (
+        None
+        if not execution.observation.observe_hooks
+        else lambda line: execution.observation.emit(
+            "stderr",
+            _EventDetails(pid=pid, line=line),
+        )
+    )
+    consumers = (
+        asyncio.create_task(
+            _consume_stream(
+                process.stdout,
+                stream_config,
+                on_line=stdout_on_line,
+            ),
+        ),
+        asyncio.create_task(
+            _consume_stream(
+                process.stderr,
+                dc.replace(
+                    stream_config,
+                    sink=(
+                        execution.ctx.stderr_sink
+                        if execution.ctx.stderr_sink is not None
+                        else sys.stderr
+                    ),
+                ),
+                on_line=stderr_on_line,
+            ),
+        ),
+    )
+    exit_code, exited_at = await _wait_for_exit_code(
+        process,
+        execution.ctx,
+        consumers=consumers,
+    )
+    stdout_text, stderr_text = await asyncio.gather(*consumers)
+    return exit_code, exited_at, stdout_text, stderr_text
+
+
+async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
+    process = await _spawn_subprocess(execution)
+    started_at = time.perf_counter()
+    pid = process.pid
+    execution.observation.emit("start", _EventDetails(pid=pid))
+
+    stdout_text: str | None = None
+    stderr_text: str | None = None
+    if not execution.capture and not execution.echo:
+        exit_code, exited_at = await _wait_for_exit_code(process, execution.ctx)
+    else:
+        (
+            exit_code,
+            exited_at,
+            stdout_text,
+            stderr_text,
+        ) = await _run_subprocess_with_streams(
+            process,
+            execution,
+            pid=pid,
+        )
+
+    execution.observation.emit(
+        "exit",
+        _EventDetails(
+            pid=pid,
+            exit_code=exit_code,
+            duration_s=max(0.0, exited_at - started_at),
+        ),
+    )
+
+    return CommandResult(
+        program=execution.cmd.program,
+        argv=execution.cmd.argv,
+        exit_code=exit_code,
+        pid=process.pid if process.pid is not None else -1,
+        stdout=stdout_text,
+        stderr=stderr_text,
+    )
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -237,94 +448,44 @@ class SafeCmd:
             If the program is not in the current context's allowlist.
 
         """
-        after_hooks = _run_before_hooks(self)
         ctx = context or ExecutionContext()
-        stdout_sink = ctx.stdout_sink if ctx.stdout_sink is not None else sys.stdout
-
-        process = await asyncio.create_subprocess_exec(
-            *self.argv_with_program,
-            stdout=(
-                asyncio.subprocess.PIPE
-                if capture or echo
-                else asyncio.subprocess.DEVNULL
-            ),
-            stderr=(
-                asyncio.subprocess.PIPE
-                if capture or echo
-                else asyncio.subprocess.DEVNULL
-            ),
-            env=_merge_env(ctx.env),
-            cwd=str(ctx.cwd) if ctx.cwd is not None else None,
+        execution_hooks = _run_before_hooks(self)
+        pending_tasks: list[asyncio.Task[None]] = []
+        cwd = Path(ctx.cwd) if ctx.cwd is not None else None
+        env_overlay = _freeze_str_mapping(ctx.env)
+        tags = _merge_tags(
+            {"project": self.project.name, "capture": capture, "echo": echo},
+            ctx.tags,
+        )
+        observation = _CommandObservation(
+            cmd=self,
+            observe_hooks=execution_hooks.observe_hooks,
+            cwd=cwd,
+            env_overlay=env_overlay,
+            tags=tags,
+            pending_tasks=pending_tasks,
         )
 
-        if not capture and not echo:
-            try:
-                exit_code = await process.wait()
-            except asyncio.CancelledError:
-                await _terminate_process(process, ctx.cancel_grace)
-                raise
-            result = CommandResult(
-                program=self.program,
-                argv=self.argv,
-                exit_code=exit_code,
-                pid=process.pid if process.pid is not None else -1,
-                stdout=None,
-                stderr=None,
-            )
-            # Execute after hooks (LIFO order - stored prepended)
-            for hook in after_hooks:
-                hook(self, result)
-            return result
-
-        stream_config = _StreamConfig(
-            capture_output=capture,
-            echo_output=echo,
-            sink=stdout_sink,
-            encoding=ctx.encoding,
-            errors=ctx.errors,
-        )
-        consumers = (
-            asyncio.create_task(
-                _consume_stream(
-                    process.stdout,
-                    stream_config,
-                ),
-            ),
-            asyncio.create_task(
-                _consume_stream(
-                    process.stderr,
-                    dc.replace(
-                        stream_config,
-                        sink=(
-                            ctx.stderr_sink
-                            if ctx.stderr_sink is not None
-                            else sys.stderr
-                        ),
-                    ),
-                ),
-            ),
-        )
+        observation.emit("plan", _EventDetails(pid=None))
+        for hook in execution_hooks.before_hooks:
+            hook(self)
 
         try:
-            exit_code = await process.wait()
+            result = await _execute_subprocess(
+                _SubprocessExecution(
+                    cmd=self,
+                    ctx=ctx,
+                    capture=capture,
+                    echo=echo,
+                    observation=observation,
+                ),
+            )
         except asyncio.CancelledError:
-            await _terminate_process(process, ctx.cancel_grace)
-            await asyncio.gather(*consumers, return_exceptions=True)
+            await _wait_for_exec_hook_tasks(pending_tasks)
             raise
-
-        stdout_text, stderr_text = await asyncio.gather(*consumers)
-
-        result = CommandResult(
-            program=self.program,
-            argv=self.argv,
-            exit_code=exit_code,
-            pid=process.pid if process.pid is not None else -1,
-            stdout=stdout_text,
-            stderr=stderr_text,
-        )
-        # Execute after hooks (LIFO order - stored prepended)
-        for hook in after_hooks:
+        for hook in execution_hooks.after_hooks:
             hook(self, result)
+        await _wait_for_exec_hook_tasks(pending_tasks)
         return result
 
     def run_sync(
@@ -434,4 +595,5 @@ __all__ = [
     "SafeCmdBuilder",
     "UnknownProgramError",
     "make",
+    "observe",
 ]
