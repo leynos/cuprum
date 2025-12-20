@@ -147,10 +147,14 @@ def _run_test_pipeline(
 ) -> PipelineResult:
     """Execute a test pipeline with specified per-stage exit codes.
 
-    Args:
-        stages_exit_codes: Exit code for each pipeline stage.
+    Parameters
+    ----------
+    stages_exit_codes:
+        Exit code for each pipeline stage.
 
-    Returns:
+    Returns
+    -------
+    PipelineResult
         PipelineResult from synchronous execution.
 
     """
@@ -198,17 +202,15 @@ def test_pipeline_run_streams_stdout_between_stages() -> None:
 
 
 @pytest.mark.parametrize(
-    ("scenario", "stage_codes", "expect_ok", "expect_failure_index"),
+    ("stage_codes", "expect_ok", "expect_failure_index"),
     [
         pytest.param(
-            "failure",
             [0, 1],
             False,
             1,
             id="failure-sets-ok-false-and-exposes-failed-stage",
         ),
         pytest.param(
-            "success",
             [0, 0],
             True,
             None,
@@ -217,7 +219,6 @@ def test_pipeline_run_streams_stdout_between_stages() -> None:
     ],
 )
 def test_pipeline_run_sync_failure_semantics(
-    scenario: str,
     stage_codes: list[int],
     *,
     expect_ok: bool,
@@ -393,11 +394,16 @@ async def _exercise_wait_for_pipeline(
 ]:
     """Execute _wait_for_pipeline with stub processes and custom exit scenarios.
 
-    Args:
-        exit_codes: Exit code for each of the three stages.
-        ready_stages: Set of stage indices that should be immediately ready.
+    Parameters
+    ----------
+    exit_codes:
+        Exit code for each of the three stages.
+    ready_stages:
+        Set of stage indices that should be immediately ready.
 
-    Returns:
+    Returns
+    -------
+    tuple
         Tuple of (process0, process1, process2, wait_result).
 
     """
