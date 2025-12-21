@@ -446,7 +446,7 @@ def _assert_pipeline_failure(
     result: _PipelineWaitResult,
     *,
     failure_index: int | None,
-    exit_codes: list[int],
+    exit_codes: tuple[int, ...],
 ) -> None:
     """Assert pipeline wait result failure metadata."""
     assert result.failure_index == failure_index
@@ -460,7 +460,7 @@ class _FailFastScenario:
     exit_codes: tuple[int, int, int]
     ready_stages: frozenset[int]
     expected_failure_index: int
-    expected_exit_codes: list[int]
+    expected_exit_codes: tuple[int, int, int]
     terminated_stages: frozenset[int]
 
 
@@ -472,7 +472,7 @@ class _FailFastScenario:
                 exit_codes=(7, 0, 0),
                 ready_stages=frozenset([0]),
                 expected_failure_index=0,
-                expected_exit_codes=[7, -15, -15],
+                expected_exit_codes=(7, -15, -15),
                 terminated_stages=frozenset([1, 2]),
             ),
             id="early-stage-failure-terminates-downstream",
@@ -482,7 +482,7 @@ class _FailFastScenario:
                 exit_codes=(0, 3, 0),
                 ready_stages=frozenset([1]),
                 expected_failure_index=1,
-                expected_exit_codes=[-15, 3, -15],
+                expected_exit_codes=(-15, 3, -15),
                 terminated_stages=frozenset([0, 2]),
             ),
             id="middle-stage-failure-terminates-downstream",
@@ -492,7 +492,7 @@ class _FailFastScenario:
                 exit_codes=(0, 0, 5),
                 ready_stages=frozenset([0, 1, 2]),
                 expected_failure_index=2,
-                expected_exit_codes=[0, 0, 5],
+                expected_exit_codes=(0, 0, 5),
                 terminated_stages=frozenset(),
             ),
             id="last-stage-failure-no-termination",

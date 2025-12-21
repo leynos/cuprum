@@ -178,6 +178,31 @@ def _flatten_stream_tasks(
     return tasks
 
 
+async def _cancel_stream_tasks(
+    stderr_tasks: list[asyncio.Task[str | None] | None],
+    stdout_task: asyncio.Task[str | None] | None,
+) -> None:
+    """Cancel stream consumer tasks and await their completion."""
+    tasks = _flatten_stream_tasks(stderr_tasks, stdout_task)
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _gather_optional_text_tasks(
+    tasks: list[asyncio.Task[str | None] | None],
+) -> tuple[str | None, ...]:
+    """Await optional capture tasks, returning a tuple aligned with inputs."""
+    return tuple(
+        await asyncio.gather(
+            *(
+                task if task is not None else asyncio.sleep(0, result=None)
+                for task in tasks
+            ),
+        ),
+    )
+
+
 async def _collect_pipe_results(
     pipe_tasks: list[asyncio.Task[None]],
 ) -> list[object]:

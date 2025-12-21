@@ -133,6 +133,7 @@ def _build_spawn_observations(
                     "pipeline_stage_index": idx,
                     "pipeline_stages": len(parts),
                 },
+                config.ctx.tags,
             ),
             cwd=cwd,
             env_overlay=env_overlay,

@@ -19,10 +19,10 @@ from cuprum._process_lifecycle import (
 
 @dc.dataclass(frozen=True, slots=True)
 class _PipelineWaitResult:
-    exit_codes: list[int]
+    exit_codes: tuple[int, ...]
     failure_index: int | None
-    started_at: list[float]
-    ended_at: list[float | None]
+    started_at: tuple[float, ...]
+    ended_at: tuple[float | None, ...]
 
 
 @dc.dataclass(slots=True)
@@ -114,14 +114,14 @@ async def _wait_for_pipeline(
                     cancel_grace,
                 )
 
-        completed_exit_codes = [
+        completed_exit_codes = tuple(
             -1 if code is None else code for code in state.exit_codes
-        ]
+        )
         return _PipelineWaitResult(
             exit_codes=completed_exit_codes,
             failure_index=state.failure_index,
-            started_at=state.started_at,
-            ended_at=state.ended_at,
+            started_at=tuple(state.started_at),
+            ended_at=tuple(state.ended_at),
         )
     except BaseException as exc:
         caught = exc

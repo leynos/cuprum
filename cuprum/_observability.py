@@ -48,6 +48,18 @@ async def _await_awaitable(awaitable: cabc.Awaitable[None]) -> None:
 
 
 async def _wait_for_exec_hook_tasks(pending_tasks: list[asyncio.Task[None]]) -> None:
+    """Await background observe-hook tasks and surface the first failure.
+
+    Observe hooks may return awaitables; those awaitables are scheduled as tasks
+    by ``_emit_exec_event`` and added to ``pending_tasks``. This helper awaits
+    all pending tasks and re-raises the first ``BaseException`` encountered.
+
+    Notes
+    -----
+    When multiple hooks fail, only the first exception is raised; subsequent
+    exceptions are not surfaced and may be masked by the first failure.
+
+    """
     if not pending_tasks:
         return
     results = await asyncio.gather(*pending_tasks, return_exceptions=True)

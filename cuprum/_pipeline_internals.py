@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses as dc
 import sys
 import time
@@ -17,8 +16,9 @@ from cuprum._observability import (
 )
 from cuprum._pipeline_spawn import _spawn_pipeline_processes
 from cuprum._pipeline_streams import (
+    _cancel_stream_tasks,
     _create_pipe_tasks,
-    _flatten_stream_tasks,
+    _gather_optional_text_tasks,
     _PipelineRunConfig,
     _prepare_pipeline_config,
 )
@@ -27,6 +27,7 @@ from cuprum.context import current_context
 from cuprum.events import ExecEvent
 
 if typ.TYPE_CHECKING:
+    import asyncio
     import types
 
     from cuprum.context import AfterHook, BeforeHook
@@ -108,7 +109,7 @@ class _EventDetails:
 @dc.dataclass(frozen=True, slots=True)
 class _PipelineStageResultInputs:
     wait_result: _PipelineWaitResult
-    stderr_by_stage: list[str | None]
+    stderr_by_stage: tuple[str | None, ...]
     final_stdout: str | None
 
 
@@ -240,18 +241,11 @@ async def _run_pipeline(
         )
         inputs = _PipelineStageResultInputs(
             wait_result=wait_result,
-            stderr_by_stage=[
-                None if task is None else await task for task in stderr_tasks
-            ],
+            stderr_by_stage=await _gather_optional_text_tasks(stderr_tasks),
             final_stdout=None if stdout_task is None else await stdout_task,
         )
     except BaseException:
-        for task in _flatten_stream_tasks(stderr_tasks, stdout_task):
-            task.cancel()
-        await asyncio.gather(
-            *_flatten_stream_tasks(stderr_tasks, stdout_task),
-            return_exceptions=True,
-        )
+        await _cancel_stream_tasks(stderr_tasks, stdout_task)
         await _wait_for_exec_hook_tasks(pending_tasks)
         raise
     stage_results = _build_pipeline_stage_results(

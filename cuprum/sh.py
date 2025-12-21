@@ -16,15 +16,16 @@ import typing as typ
 from pathlib import Path
 
 from cuprum._observability import (
-    _emit_exec_event,
     _freeze_str_mapping,
     _merge_tags,
     _wait_for_exec_hook_tasks,
 )
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
+    _EventDetails,
     _run_before_hooks,
     _run_pipeline,
+    _StageObservation,
 )
 from cuprum._process_lifecycle import _merge_env, _terminate_process
 from cuprum._streams import (
@@ -38,10 +39,8 @@ from cuprum.catalogue import (
 )
 from cuprum.catalogue import UnknownProgramError as UnknownProgramError
 from cuprum.context import observe as observe
-from cuprum.events import ExecEvent
 
 if typ.TYPE_CHECKING:
-    from cuprum.events import ExecHook
     from cuprum.program import Program
 
 type _ArgValue = str | int | float | bool | Path
@@ -197,49 +196,6 @@ class ExecutionContext:
     tags: cabc.Mapping[str, object] | None = None
 
 
-@dc.dataclass(frozen=True, slots=True)
-class _CommandObservation:
-    cmd: SafeCmd
-    observe_hooks: tuple[ExecHook, ...]
-    cwd: Path | None
-    env_overlay: cabc.Mapping[str, str] | None
-    tags: cabc.Mapping[str, object]
-    pending_tasks: list[asyncio.Task[None]]
-
-    def emit(
-        self,
-        phase: typ.Literal["plan", "start", "stdout", "stderr", "exit"],
-        details: _EventDetails,
-    ) -> None:
-        if not self.observe_hooks:
-            return
-        _emit_exec_event(
-            self.observe_hooks,
-            ExecEvent(
-                phase=phase,
-                program=self.cmd.program,
-                argv=self.cmd.argv_with_program,
-                cwd=self.cwd,
-                env=self.env_overlay,
-                pid=details.pid,
-                timestamp=time.time(),
-                line=details.line,
-                exit_code=details.exit_code,
-                duration_s=details.duration_s,
-                tags=self.tags,
-            ),
-            pending_tasks=self.pending_tasks,
-        )
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _EventDetails:
-    pid: int | None
-    line: str | None = None
-    exit_code: int | None = None
-    duration_s: float | None = None
-
-
 async def _wait_for_exit_code(
     process: asyncio.subprocess.Process,
     ctx: ExecutionContext,
@@ -265,7 +221,7 @@ class _SubprocessExecution:
     ctx: ExecutionContext
     capture: bool
     echo: bool
-    observation: _CommandObservation
+    observation: _StageObservation
 
 
 async def _spawn_subprocess(
@@ -308,7 +264,7 @@ async def _run_subprocess_with_streams(
 
     stdout_on_line = (
         None
-        if not execution.observation.observe_hooks
+        if not execution.observation.hooks.observe_hooks
         else lambda line: execution.observation.emit(
             "stdout",
             _EventDetails(pid=pid, line=line),
@@ -316,7 +272,7 @@ async def _run_subprocess_with_streams(
     )
     stderr_on_line = (
         None
-        if not execution.observation.observe_hooks
+        if not execution.observation.hooks.observe_hooks
         else lambda line: execution.observation.emit(
             "stderr",
             _EventDetails(pid=pid, line=line),
@@ -456,9 +412,9 @@ class SafeCmd:
             {"project": self.project.name, "capture": capture, "echo": echo},
             ctx.tags,
         )
-        observation = _CommandObservation(
+        observation = _StageObservation(
             cmd=self,
-            observe_hooks=execution_hooks.observe_hooks,
+            hooks=execution_hooks,
             cwd=cwd,
             env_overlay=env_overlay,
             tags=tags,
@@ -479,11 +435,15 @@ class SafeCmd:
                     observation=observation,
                 ),
             )
+            for hook in execution_hooks.after_hooks:
+                hook(self, result)
         except asyncio.CancelledError:
+            await asyncio.shield(_wait_for_exec_hook_tasks(pending_tasks))
+            raise
+        except BaseException:
             await _wait_for_exec_hook_tasks(pending_tasks)
             raise
-        for hook in execution_hooks.after_hooks:
-            hook(self, result)
+
         await _wait_for_exec_hook_tasks(pending_tasks)
         return result
 
