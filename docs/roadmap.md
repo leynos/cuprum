@@ -54,7 +54,7 @@ Focus: provide pipeline execution, richer events, and concurrency helpers.
 
 - [x] Expand execution events to include stdout/stderr line emissions, timings,
       and tag metadata; add `sh.observe` (or equivalent) registration.
-- [ ] Provide example adapters for `logging`, Prometheus-style metrics, and
+- [x] Provide example adapters for `logging`, Prometheus-style metrics, and
       OpenTelemetry traces, ensuring hooks remain optional and non-blocking.
 
 ### Step: concurrency helpers

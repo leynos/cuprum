@@ -1005,6 +1005,61 @@ extension: Cuprum can offer a helper (or rely on user‑managed `asyncio.gather`
 that runs several `SafeCmd` instances at once, respecting the same cancellation
 semantics.
 
+### 8.4 Telemetry Adapter Design Decisions
+
+Cuprum provides example adapters in `cuprum.adapters` that demonstrate how to
+integrate `ExecEvent` streams with common telemetry backends. The following
+design decisions guide these adapters:
+
+**Protocol-based decoupling:**
+
+- Adapters define `typing.Protocol` classes (`MetricsCollector`, `Tracer`,
+  `Span`) rather than depending on external telemetry libraries.
+- This keeps Cuprum's dependency footprint minimal while allowing users to
+  implement the protocols with their preferred backend (Prometheus,
+  OpenTelemetry, statsd, custom solutions, etc.).
+- Reference implementations (`InMemoryMetrics`, `InMemoryTracer`) serve as
+  documentation and test utilities.
+
+**Non-blocking execution:**
+
+- All adapter hooks are synchronous and complete quickly.
+- Hooks do not perform I/O or network operations directly; they update
+  in-memory structures that can be flushed asynchronously by the backend.
+- For high-throughput scenarios, users should configure their telemetry
+  backends with buffering and async export.
+
+**Thread safety:**
+
+- Reference implementations use `threading.Lock` to protect shared state.
+- Protocol implementations must be thread-safe since hooks may be invoked from
+  multiple threads or async tasks concurrently.
+
+**Metrics adapter specifics:**
+
+- Counter metrics (`cuprum_executions_total`, `cuprum_failures_total`,
+  `cuprum_stdout_lines_total`, `cuprum_stderr_lines_total`) are incremented on
+  the corresponding event phases.
+- Histogram metrics (`cuprum_duration_seconds`) are observed on `exit` events.
+- All metrics include `program` and `project` labels for multi-dimensional
+  analysis.
+
+**Tracing adapter specifics:**
+
+- Spans are started on `start` events and ended on `exit` events.
+- Active spans are tracked by PID in a dictionary to correlate start/exit.
+- Output lines can optionally be recorded as span events (controlled by
+  `record_output` parameter).
+- Span status is set based on exit code (OK for 0, ERROR otherwise).
+- Pipeline stages create separate spans with `pipeline_stage_index` attribute.
+
+**Structured logging adapter specifics:**
+
+- Builds on observe hooks rather than before/after hooks for richer event data.
+- Attaches structured `extra` fields with `cuprum_` prefix to log records.
+- Provides configurable log levels per phase (plan, start, output, exit).
+- Includes a `JsonLoggingFormatter` for log aggregation systems.
+
 ______________________________________________________________________
 
 ## 9. Error Model
