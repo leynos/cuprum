@@ -15,6 +15,7 @@ from cuprum._observability import (
     _merge_tags,
     _wait_for_exec_hook_tasks,
 )
+from cuprum._pipeline_spawn import _spawn_pipeline_processes
 from cuprum._pipeline_streams import (
     _create_pipe_tasks,
     _flatten_stream_tasks,
@@ -22,7 +23,6 @@ from cuprum._pipeline_streams import (
     _prepare_pipeline_config,
 )
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
-from cuprum._process_lifecycle import _spawn_pipeline_processes
 from cuprum.context import current_context
 from cuprum.events import ExecEvent
 
