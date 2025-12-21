@@ -23,11 +23,10 @@ from cuprum._observability import (
 )
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
-    _merge_env,
     _run_before_hooks,
     _run_pipeline,
-    _terminate_process,
 )
+from cuprum._process_lifecycle import _merge_env, _terminate_process
 from cuprum._streams import (
     _consume_stream,
     _StreamConfig,
