@@ -31,6 +31,7 @@ from cuprum.context import (
     AllowRegistration,
     BeforeHook,
     CuprumContext,
+    ExecHook,
     ForbiddenProgramError,
     HookRegistration,
     after,
@@ -38,8 +39,10 @@ from cuprum.context import (
     before,
     current_context,
     get_context,
+    observe,
     scoped,
 )
+from cuprum.events import ExecEvent
 from cuprum.logging_hooks import LoggingHookRegistration, logging_hook
 from cuprum.program import Program
 from cuprum.sh import (
@@ -69,6 +72,8 @@ __all__ = [
     "BeforeHook",
     "CommandResult",
     "CuprumContext",
+    "ExecEvent",
+    "ExecHook",
     "ExecutionContext",
     "ForbiddenProgramError",
     "HookRegistration",
@@ -88,6 +93,7 @@ __all__ = [
     "current_context",
     "get_context",
     "logging_hook",
+    "observe",
     "scoped",
     "sh",
 ]

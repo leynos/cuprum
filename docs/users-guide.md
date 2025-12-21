@@ -368,6 +368,44 @@ Start events include the program and argv; exit events include the program,
 pid, exit code, duration, and lengths of captured stdout/stderr (zero when
 capture is disabled).
 
+### Structured execution events
+
+For richer observability, register an observe hook with `sh.observe()`. Observe
+hooks receive `ExecEvent` values describing:
+
+- `plan` — intent to execute the program (argv/cwd/env resolved).
+- `start` — subprocess spawned (pid available).
+- `stdout` / `stderr` — decoded output emitted as lines.
+- `exit` — subprocess finished (exit code and duration).
+
+Hooks can be used for structured logging, metrics, or tracing without coupling
+Cuprum to a specific telemetry library.
+
+```python
+from cuprum import ECHO, ExecEvent, scoped, sh
+from cuprum.sh import ExecutionContext
+
+
+events: list[ExecEvent] = []
+
+
+def capture(ev: ExecEvent) -> None:
+    events.append(ev)
+
+
+with scoped(allowlist=frozenset([ECHO])), sh.observe(capture):
+    ctx = ExecutionContext(tags={"run_id": "demo"})
+    sh.make(ECHO)("-n", "hello events").run_sync(context=ctx)
+
+stdout_lines = [ev.line for ev in events if ev.phase == "stdout"]
+exit_events = [ev for ev in events if ev.phase == "exit"]
+assert "hello events" in stdout_lines
+assert exit_events[0].tags["run_id"] == "demo"
+```
+
+`ExecutionContext.tags` is merged into each event's `tags` mapping. Cuprum also
+adds default tags such as the project name and pipeline stage metadata.
+
 ### Thread and async task isolation
 
 `CuprumContext` uses Python's `ContextVar` mechanism, which provides automatic

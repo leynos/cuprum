@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import contextlib
 import dataclasses as dc
 import typing as typ
@@ -26,8 +27,20 @@ class _StreamConfig:
 async def _consume_stream(
     stream: asyncio.StreamReader | None,
     config: _StreamConfig,
+    *,
+    on_line: typ.Callable[[str], None] | None = None,
 ) -> str | None:
     """Read from a subprocess stream, teeing to sink when requested."""
+    if on_line is None:
+        return await _consume_stream_without_lines(stream, config)
+    return await _consume_stream_with_lines(stream, config, on_line=on_line)
+
+
+async def _consume_stream_without_lines(
+    stream: asyncio.StreamReader | None,
+    config: _StreamConfig,
+) -> str | None:
+    """Read from a subprocess stream without emitting line callbacks."""
     if stream is None:
         return "" if config.capture_output else None
 
@@ -45,6 +58,51 @@ async def _consume_stream(
                 encoding=config.encoding,
                 errors=config.errors,
             )
+
+    if buffer is None:
+        return None
+    return buffer.decode(config.encoding, errors=config.errors)
+
+
+async def _consume_stream_with_lines(
+    stream: asyncio.StreamReader | None,
+    config: _StreamConfig,
+    *,
+    on_line: typ.Callable[[str], None],
+) -> str | None:
+    """Read from a subprocess stream while emitting decoded output lines."""
+    if stream is None:
+        return "" if config.capture_output else None
+
+    buffer = bytearray() if config.capture_output else None
+    decoder_factory = codecs.getincrementaldecoder(config.encoding)
+    decoder = decoder_factory(errors=config.errors)
+    pending_text = ""
+
+    while True:
+        chunk = await stream.read(_READ_SIZE)
+        if not chunk:
+            break
+        if buffer is not None:
+            buffer.extend(chunk)
+        if config.echo_output:
+            _write_chunk(
+                config.sink,
+                chunk,
+                encoding=config.encoding,
+                errors=config.errors,
+            )
+        pending_text = _emit_completed_lines(
+            pending_text + decoder.decode(chunk),
+            on_line=on_line,
+        )
+
+    pending_text = _emit_completed_lines(
+        pending_text + decoder.decode(b"", final=True),
+        on_line=on_line,
+    )
+    if pending_text:
+        on_line(_strip_line_ending(pending_text))
 
     if buffer is None:
         return None
@@ -138,3 +196,35 @@ def _write_chunk(
     text = chunk.decode(encoding, errors=errors)
     sink.write(text)
     sink.flush()
+
+
+def _emit_completed_lines(
+    text: str,
+    *,
+    on_line: typ.Callable[[str], None],
+) -> str:
+    """Emit complete lines from text and return the remaining partial line."""
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return text
+
+    remainder = ""
+    if not _ends_with_line_ending(lines[-1]):
+        remainder = lines.pop()
+
+    for line in lines:
+        on_line(_strip_line_ending(line))
+
+    return remainder
+
+
+def _ends_with_line_ending(line: str) -> bool:
+    return line.endswith("\n") or line.endswith("\r")
+
+
+def _strip_line_ending(line: str) -> str:
+    if line.endswith("\r\n"):
+        return line[:-2]
+    if line.endswith("\n") or line.endswith("\r"):
+        return line[:-1]
+    return line

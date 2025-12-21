@@ -12,14 +12,15 @@ from __future__ import annotations
 
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
-    _merge_env,
-    _PipelineWaitResult,
-    _prepare_pipeline_config,
     _run_before_hooks,
     _run_pipeline,
+)
+from cuprum._pipeline_streams import _prepare_pipeline_config
+from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
+from cuprum._process_lifecycle import (
+    _merge_env,
     _spawn_pipeline_processes,
     _terminate_process,
-    _wait_for_pipeline,
 )
 from cuprum._streams import (
     _READ_SIZE,
