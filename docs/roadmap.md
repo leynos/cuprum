@@ -92,3 +92,75 @@ compromising explicitness.
 - [ ] Document policy switches and recommended defaults in
       `docs/users-guide.md` and add release notes describing the migration path
       for existing users.
+
+## Phase 4 – performance extensions
+
+Focus: provide optional Rust-based stream operations for high-throughput
+scenarios whilst maintaining pure Python as a first-class pathway.
+
+### Step: build system integration
+
+- [ ] Add maturin as optional build backend alongside hatchling; configure
+      `pyproject.toml` to support both pure Python and native wheel builds.
+- [ ] Create `rust/` directory with Cargo workspace; implement minimal PyO3
+      bindings exposing `is_available()` stub and verify import from Python.
+- [ ] Extend CI matrix to build native wheels for Linux (x86_64, aarch64),
+      macOS (x86_64, arm64), and Windows (x86_64, arm64) using maturin and
+      cibuildwheel.
+- [ ] Add pure Python fallback wheel job that excludes native code; verify both
+      wheel types install correctly and coexist in the same environment.
+
+### Step: core pump extension
+
+- [ ] Implement `rust_pump_stream()` with GIL release, configurable buffer size
+      (default 64KB), and proper error propagation to Python exceptions; add
+      unit tests covering normal operation and error paths.
+- [ ] Implement `rust_consume_stream()` with incremental UTF-8 decoding matching
+      Python pathway behaviour for `errors="replace"` semantics; verify parity
+      with edge-case tests.
+- [ ] Add Linux-specific `splice()` codepath with runtime detection; fall back
+      to read/write loop on unsupported platforms or file descriptor types.
+- [ ] Create `cuprum/_backend.py` dispatcher with `CUPRUM_STREAM_BACKEND`
+      environment variable support (`auto`, `rust`, `python`); cache
+      availability check results for performance.
+
+### Step: test infrastructure
+
+- [ ] Parametrise existing stream unit tests (`test_pipeline.py`) to run against
+      both Python and Rust pathways using a `stream_backend` fixture; skip Rust
+      tests when extension is unavailable.
+- [ ] Add behavioural parity tests verifying identical output for edge cases:
+      empty streams, partial UTF-8 sequences at chunk boundaries, broken pipes,
+      and backpressure scenarios.
+- [ ] Create integration tests for pathway selection logic including environment
+      variable overrides, forced fallback, and error handling when Rust is
+      requested but unavailable.
+- [ ] Add property-based tests using hypothesis for stream content preservation
+      across random payloads and chunk boundaries.
+
+### Step: benchmarking CI
+
+- [ ] Create benchmark suite using `pytest-benchmark` for microbenchmarks
+      (pump latency, consume throughput) and `hyperfine` for end-to-end pipeline
+      throughput measurement.
+- [ ] Define benchmark scenarios: small (1KB), medium (1MB), large (100MB)
+      payloads; single-stage and multi-stage pipelines; with and without line
+      callbacks.
+- [ ] Add CI job that runs benchmarks on pull requests and main branch pushes;
+      store results as JSON artefacts and fail if Rust pathway regresses beyond
+      10% threshold.
+- [ ] Generate benchmark comparison report (Python vs Rust) and publish summary
+      table to GitHub Actions workflow summary.
+
+### Step: documentation
+
+- [ ] Extend `docs/cuprum-design.md` with Section 13 covering Rust extension
+      architecture, API boundary, fallback strategy, and performance
+      characteristics.
+- [ ] Add performance guidance to `docs/users-guide.md` explaining when to use
+      each pathway, how to configure selection via environment variable, and
+      expected throughput improvements.
+- [ ] Document build prerequisites (Rust toolchain 1.70+, cargo, maturin) for
+      contributors building from source with native extensions.
+- [ ] Add troubleshooting section for common issues: missing wheel on exotic
+      platforms, forced fallback behaviour, and benchmark result interpretation.
