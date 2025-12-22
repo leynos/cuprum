@@ -1347,6 +1347,40 @@ This strategy ensures:
 - users can opt into or out of the Rust pathway explicitly;
 - Continuous Integration (CI) can test both pathways in isolation.
 
+For screen readers: The following flowchart illustrates the backend selection
+algorithm, showing how the environment variable and availability checks
+determine which pathway is used.
+
+```mermaid
+flowchart TD
+    A["Start stream_operation
+(Pipeline_run / SafeCmd_run)"] --> B["Call _get_stream_backend"]
+    B --> C["Read CUPRUM_STREAM_BACKEND
+(env var or default auto)"]
+
+    C -->|"value == rust"| D["Try import cuprum._streams_rs
+and call is_available"]
+    C -->|"value == python"| E["Select python_backend"]
+    C -->|"value == auto"| F["Try import cuprum._streams_rs
+and call is_available"]
+
+    D -->|"import or is_available fails"| G["Raise ImportError
+(rust forced but unavailable)"]
+    D -->|"success"| H["Select rust_backend"]
+
+    F -->|"success"| H
+    F -->|"import or is_available fails"| E
+
+    E --> I["Use cuprum._streams
+(_pump_stream / _consume_stream)"]
+    H --> J["Use cuprum._streams_rs
+(rust_pump_stream / rust_consume_stream)"]
+
+    I --> K["Return result to caller"]
+    J --> K
+    G --> L["Error propagated to caller"]
+```
+
 ### 13.5 Performance Characteristics
 
 The following table summarises when each pathway is recommended:
@@ -1357,18 +1391,42 @@ The following table summarises when each pathway is recommended:
 | Large data pipelines (>100MB)  | Rust                | Avoids event loop round-trips      |
 | Many concurrent pipelines      | Rust                | Reduced GIL contention             |
 | Debugging/tracing output lines | Python              | `on_line` callbacks require Python |
-| Platform without Rust wheel    | Python              | Automatic fallback                 |
+| Platform without a Rust wheel  | Python              | Automatic fallback                 |
 
 The Rust pathway provides the greatest benefit for:
 
 - `_pump_stream()` in multi-stage pipelines (data transfer between stages);
-- `_consume_stream_without_lines()` when line callbacks are not required.
+- `_consume_stream()` without line callbacks (the internal
+  `_consume_stream_without_lines()` code path).
 
 The Python pathway remains preferable when:
 
 - line-by-line observation hooks (`on_line`) are registered;
+- teeing to sinks (`echo_output`) is required;
 - debugging requires visibility into the event loop;
 - platform wheels are unavailable.
+
+#### Rust pathway limitations
+
+The Rust extension intentionally does not support all features of the Python
+pathway. The following behaviours are only available via the Python backend:
+
+- **Line callbacks (`on_line`):** The `_consume_stream_with_lines()` code path
+  requires Python callbacks for each decoded line. When an `on_line` handler is
+  registered, the dispatcher automatically routes to the Python pathway.
+
+- **Teeing to sinks (`echo_output`):** The Python pathway can write chunks to a
+  `sink` (e.g. `sys.stdout`) whilst simultaneously capturing output. The Rust
+  extension does not support this; when `echo_output=True`, the dispatcher
+  routes to Python.
+
+- **Custom encodings:** The Rust extension supports UTF-8 with
+  `errors="replace"`
+  semantics. Other encodings or error modes route to the Python pathway.
+
+The dispatcher in `cuprum/_backend.py` inspects the stream configuration and
+automatically selects the Python pathway when any unsupported feature is
+requested. Callers do not need to manage this routing explicitly.
 
 ### 13.6 Thread Safety and Asyncio Integration
 

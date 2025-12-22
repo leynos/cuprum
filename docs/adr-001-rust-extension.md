@@ -31,9 +31,9 @@ For a 1GB data stream:
 - Global Interpreter Lock (GIL) contention when multiple asyncio tasks compete
   for CPU.
 
-This bottleneck limits Cuprum's suitability for ETL workloads, log processing,
-and data pipeline orchestration where gigabytes of data flow through pipeline
-stages.
+This bottleneck limits Cuprum's suitability for extract–transform–load (ETL)
+workloads, log processing, and data pipeline orchestration where gigabytes of
+data flow through pipeline stages.
 
 ______________________________________________________________________
 

@@ -118,7 +118,7 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 - [ ] Implement `rust_consume_stream()` with incremental UTF-8 decoding matching
       Python pathway behaviour for `errors="replace"` semantics; verify parity
       with edge-case tests.
-- [ ] Add Linux-specific `splice()` codepath with runtime detection; fall back
+- [ ] Add Linux-specific `splice()` code path with runtime detection; fall back
       to read/write loop on unsupported platforms or file descriptor types.
 - [ ] Create `cuprum/_backend.py` dispatcher with `CUPRUM_STREAM_BACKEND`
       environment variable support (`auto`, `rust`, `python`); cache
