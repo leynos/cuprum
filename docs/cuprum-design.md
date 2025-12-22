@@ -1168,15 +1168,18 @@ behavioural guarantees.
 
 ### 13.1 Motivation
 
-The current implementation reads and writes data in 4KB chunks (defined by
+The current implementation reads and writes data in 4 KB chunks (defined by
 `_READ_SIZE = 4096` in `cuprum/_streams.py`). The core functions affected are:
 
 - `_pump_stream()` – transfers data between pipeline stages with backpressure;
-- `_consume_stream()` – reads subprocess output, optionally teeing to sinks;
+- `_consume_stream()` – dispatcher that routes to one of the two functions
+  below based on whether line callbacks are registered;
+- `_consume_stream_without_lines()` – reads subprocess output without line
+  parsing, optionally teeing to sinks;
 - `_consume_stream_with_lines()` – handles line-by-line callbacks with
   incremental UTF-8 decoding.
 
-For a 1GB data stream, this results in:
+For a 1 GB data stream, this results in:
 
 - approximately 262,000 round-trips through the Python event loop;
 - approximately 262,000 `bytes` object allocations;
@@ -1387,8 +1390,8 @@ The following table summarises when each pathway is recommended:
 
 | Scenario                       | Recommended pathway | Rationale                          |
 | ------------------------------ | ------------------- | ---------------------------------- |
-| Small commands (<1MB output)   | Either              | Overhead difference negligible     |
-| Large data pipelines (>100MB)  | Rust                | Avoids event loop round-trips      |
+| Small commands (<1 MB output)  | Either              | Overhead difference negligible     |
+| Large data pipelines (>100 MB) | Rust                | Avoids event loop round-trips      |
 | Many concurrent pipelines      | Rust                | Reduced GIL contention             |
 | Debugging/tracing output lines | Python              | `on_line` callbacks require Python |
 | Platform without a Rust wheel  | Python              | Automatic fallback                 |
@@ -1421,8 +1424,8 @@ pathway. The following behaviours are only available via the Python backend:
   routes to Python.
 
 - **Custom encodings:** The Rust extension supports UTF-8 with
-  `errors="replace"`
-  semantics. Other encodings or error modes route to the Python pathway.
+  `errors="replace"` semantics. Other encodings or error modes route to the
+  Python pathway.
 
 The dispatcher in `cuprum/_backend.py` inspects the stream configuration and
 automatically selects the Python pathway when any unsupported feature is
@@ -1458,10 +1461,10 @@ Error propagation from Rust to Python uses standard exception mechanisms. The
 Rust extension raises `OSError` for I/O failures, matching the behaviour of
 Python's built-in I/O operations.
 
-### 13.7 Linux splice() Optimisation
+### 13.7 Linux splice() Optimization
 
 On Linux, the Rust extension can use the `splice()` system call for zero-copy
-transfer between pipe file descriptors. This optimisation:
+transfer between pipe file descriptors. This optimization:
 
 - avoids copying data into userspace entirely;
 - reduces memory bandwidth requirements;
@@ -1491,7 +1494,7 @@ extension in development mode.
 
 Both pathways are tested as first-class implementations:
 
-- all stream-related tests are parametrised to run against both backends;
+- all stream-related tests are parametrized to run against both backends;
 - behavioural parity tests verify identical output for edge cases (empty
   streams, partial UTF-8, broken pipes);
 - property-based tests (hypothesis) verify stream content preservation;

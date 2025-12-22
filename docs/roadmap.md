@@ -113,7 +113,7 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 ### Step: core pump extension
 
 - [ ] Implement `rust_pump_stream()` with GIL release, configurable buffer size
-      (default 64KB), and proper error propagation to Python exceptions; add
+      (default 64 KB), and proper error propagation to Python exceptions; add
       unit tests covering normal operation and error paths.
 - [ ] Implement `rust_consume_stream()` with incremental UTF-8 decoding matching
       Python pathway behaviour for `errors="replace"` semantics; verify parity
@@ -126,7 +126,7 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 
 ### Step: test infrastructure
 
-- [ ] Parametrise existing stream unit tests (`test_pipeline.py`) to run against
+- [ ] Parametrize existing stream unit tests (`test_pipeline.py`) to run against
       both Python and Rust pathways using a `stream_backend` fixture; skip Rust
       tests when extension is unavailable.
 - [ ] Add behavioural parity tests verifying identical output for edge cases:
@@ -143,7 +143,7 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 - [ ] Create benchmark suite using `pytest-benchmark` for microbenchmarks
       (pump latency, consume throughput) and `hyperfine` for end-to-end pipeline
       throughput measurement.
-- [ ] Define benchmark scenarios: small (1KB), medium (1MB), large (100MB)
+- [ ] Define benchmark scenarios: small (1 KB), medium (1 MB), large (100 MB)
       payloads; single-stage and multi-stage pipelines; with and without line
       callbacks.
 - [ ] Add CI job that runs benchmarks on pull requests and main branch pushes;

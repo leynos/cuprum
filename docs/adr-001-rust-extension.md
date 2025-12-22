@@ -10,12 +10,15 @@ ______________________________________________________________________
 
 ## Context
 
-Cuprum's stream operations route data through Python's asyncio event loop in
-4KB chunks (defined by `_READ_SIZE = 4096` in `cuprum/_streams.py`). The core
+Cuprum's stream operations route data through Python's asyncio event loop in 4
+KB chunks (defined by `_READ_SIZE = 4096` in `cuprum/_streams.py`). The core
 functions affected are:
 
 - `_pump_stream()` – transfers data between pipeline stages with backpressure;
-- `_consume_stream()` – reads subprocess output, optionally teeing to sinks;
+- `_consume_stream()` – dispatcher that routes to one of the two functions
+  below based on whether line callbacks are registered;
+- `_consume_stream_without_lines()` – reads subprocess output without line
+  parsing, optionally teeing to sinks;
 - `_consume_stream_with_lines()` – handles line-by-line callbacks with
   incremental UTF-8 decoding.
 
@@ -23,7 +26,7 @@ For typical command execution (e.g. `git status`, `ls -l`), this overhead is
 negligible. However, for high-throughput pipelines processing large data
 volumes, the overhead accumulates significantly:
 
-For a 1GB data stream:
+For a 1 GB data stream:
 
 - approximately 262,000 round-trips through the Python event loop;
 - approximately 262,000 `bytes` object allocations;
@@ -55,13 +58,13 @@ pump and consume functions that operate outside the GIL.
    - `rust` – force Rust pathway; raise `ImportError` if unavailable;
    - `python` – force pure Python pathway.
 
-3. **Larger default buffer for Rust:** The Rust extension uses a 64KB default
-   buffer (vs 4KB in Python) to reduce syscall frequency whilst still providing
-   reasonable memory overhead.
+3. **Larger default buffer for Rust:** The Rust extension uses a 64 KB default
+   buffer (vs 4 KB in Python) to reduce syscall frequency whilst still
+   providing reasonable memory overhead.
 
-4. **Platform-specific optimisations:** On Linux, the extension leverages the
+4. **Platform-specific optimizations:** On Linux, the extension leverages the
    `splice()` system call for zero-copy transfer between pipe file descriptors.
-   Other platforms use an optimised read/write loop.
+   Other platforms use an optimized read/write loop.
 
 5. **File descriptor API boundary:** The Rust extension accepts raw file
    descriptors rather than asyncio stream objects, enabling operation outside
@@ -107,7 +110,7 @@ sockets.
 
 ### Alternative 4: Increase Python buffer size only
 
-Simply increase `_READ_SIZE` from 4KB to 64KB or larger.
+Simply increase `_READ_SIZE` from 4 KB to 64 KB or larger.
 
 **Rejected because:**
 
@@ -133,20 +136,20 @@ ______________________________________________________________________
 
 ### Positive
 
-- **Dramatic throughput improvement:** For large pipelines (>100MB), the Rust
-  pathway can achieve 5-10x throughput improvement by eliminating event loop
+- **Dramatic throughput improvement:** For large pipelines (>100 MB), the Rust
+  pathway can achieve 5–10x throughput improvement by eliminating event loop
   overhead.
 
 - **Reduced GIL contention:** Rust operations release the GIL, allowing other
   Python threads and asyncio tasks to proceed during I/O.
 
-- **Zero-copy on Linux:** The `splice()` optimisation avoids copying data into
+- **Zero-copy on Linux:** The `splice()` optimization avoids copying data into
   userspace entirely for inter-stage transfers.
 
 - **Pure Python fallback:** Installations without native wheels continue to
   work unchanged; the feature is purely additive.
 
-- **First-class both pathways:** Parametrised testing ensures both
+- **First-class both pathways:** Parametrized testing ensures both
   implementations maintain behavioural parity and receive equal attention.
 
 ### Negative
@@ -180,7 +183,7 @@ ______________________________________________________________________
 
 ### Both pathways as first-class
 
-All stream-related tests shall be parametrised to run against both backends:
+All stream-related tests shall be parametrized to run against both backends:
 
 ```python
 @pytest.fixture(params=["python", "rust"])
@@ -202,7 +205,7 @@ The following properties must hold for both pathways:
 | Broken pipe handling             | Unit test: downstream closes mid-stream |
 | Backpressure propagation         | Integration test: slow consumer         |
 | Empty stream handling            | Unit test: zero-byte transfer           |
-| Large transfer (>4GB)            | Stress test: 64-bit size handling       |
+| Large transfer (>4 GB)           | Stress test: 64-bit size handling       |
 
 ### Benchmarking CI
 
@@ -215,7 +218,7 @@ Continuous Integration (CI) includes benchmark jobs that:
 
 Benchmark scenarios cover:
 
-- small (1KB), medium (1MB), large (100MB) payloads;
+- small (1 KB), medium (1 MB), large (100 MB) payloads;
 - single-stage and multi-stage pipelines;
 - with and without line callbacks.
 
