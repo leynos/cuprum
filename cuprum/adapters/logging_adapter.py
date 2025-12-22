@@ -24,6 +24,7 @@ Example::
 from __future__ import annotations
 
 import collections.abc as cabc
+import dataclasses
 import logging
 import typing as typ
 
@@ -33,21 +34,12 @@ if typ.TYPE_CHECKING:
 _DEFAULT_LOGGER_NAME = "cuprum.exec"
 
 
-def structured_logging_hook(  # noqa: PLR0913
-    *,
-    logger: logging.Logger | None = None,
-    plan_level: int = logging.DEBUG,
-    start_level: int = logging.INFO,
-    output_level: int = logging.DEBUG,
-    exit_level: int = logging.INFO,
-) -> ExecHook:
-    """Create an observe hook that logs execution events with structured data.
+@dataclasses.dataclass
+class LogLevels:
+    """Configuration for logging levels per execution event phase.
 
-    Parameters
+    Attributes
     ----------
-    logger:
-        Logger instance for event emission. Defaults to
-        ``logging.getLogger("cuprum.exec")``.
     plan_level:
         Log level for ``plan`` events (intent to execute). Default DEBUG.
     start_level:
@@ -56,6 +48,30 @@ def structured_logging_hook(  # noqa: PLR0913
         Log level for ``stdout``/``stderr`` events. Default DEBUG.
     exit_level:
         Log level for ``exit`` events (process completed). Default INFO.
+
+    """
+
+    plan_level: int = logging.DEBUG
+    start_level: int = logging.INFO
+    output_level: int = logging.DEBUG
+    exit_level: int = logging.INFO
+
+
+def structured_logging_hook(
+    *,
+    logger: logging.Logger | None = None,
+    levels: LogLevels | None = None,
+) -> ExecHook:
+    """Create an observe hook that logs execution events with structured data.
+
+    Parameters
+    ----------
+    logger:
+        Logger instance for event emission. Defaults to
+        ``logging.getLogger("cuprum.exec")``.
+    levels:
+        Log level configuration for different event phases. Defaults to
+        ``LogLevels()`` with standard levels.
 
     Returns
     -------
@@ -71,7 +87,7 @@ def structured_logging_hook(  # noqa: PLR0913
     The hook attaches structured ``extra`` data to log records including:
 
     - ``cuprum_phase``: Event phase (plan, start, stdout, stderr, exit)
-    - ``cuprum_program``: Program being executed
+    - ``cuprum_program``: Programme being executed
     - ``cuprum_argv``: Full argument vector
     - ``cuprum_pid``: Process ID (when available)
     - ``cuprum_exit_code``: Exit code (for exit events)
@@ -80,16 +96,18 @@ def structured_logging_hook(  # noqa: PLR0913
 
     """
     log = logger or logging.getLogger(_DEFAULT_LOGGER_NAME)
-    levels: dict[str, int] = {
-        "plan": plan_level,
-        "start": start_level,
-        "stdout": output_level,
-        "stderr": output_level,
-        "exit": exit_level,
+    lvls = levels or LogLevels()
+
+    level_map: dict[str, int] = {
+        "plan": lvls.plan_level,
+        "start": lvls.start_level,
+        "stdout": lvls.output_level,
+        "stderr": lvls.output_level,
+        "exit": lvls.exit_level,
     }
 
     def hook(event: ExecEvent) -> None:
-        level = levels.get(event.phase, logging.DEBUG)
+        level = level_map.get(event.phase, logging.DEBUG)
         if not log.isEnabledFor(level):
             return
 
@@ -194,5 +212,6 @@ def _json_serializable(value: object) -> object:
 
 __all__ = [
     "JsonLoggingFormatter",
+    "LogLevels",
     "structured_logging_hook",
 ]

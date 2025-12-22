@@ -12,10 +12,12 @@ from pathlib import Path
 from cuprum import sh
 from cuprum.adapters.logging_adapter import (
     JsonLoggingFormatter,
+    LogLevels,
     structured_logging_hook,
 )
 from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook, metrics_hook
 from cuprum.adapters.tracing_adapter import (
+    InMemorySpan,
     InMemoryTracer,
     TracingHook,
     tracing_hook,
@@ -45,6 +47,18 @@ def _python_builder(
 class TestStructuredLoggingHook:
     """Tests for structured_logging_hook."""
 
+    @staticmethod
+    def _assert_phase_logged(messages: list[str], phase: str) -> None:
+        """Check if a phase appears in any message."""
+        assert any(phase in m for m in messages), f"Expected {phase!r} in messages"
+
+    @staticmethod
+    def _assert_output_logged(messages: list[str], phase: str, output: str) -> None:
+        """Check if a phase with specific output appears in any message."""
+        assert any(phase in m and output in m for m in messages), (
+            f"Expected {phase!r} with {output!r} in messages"
+        )
+
     def test_logs_all_phases(self, caplog: pytest.LogCaptureFixture) -> None:
         """Hook logs plan, start, stdout, stderr, and exit events."""
         builder, catalogue = _python_builder(project_name="logging-test")
@@ -70,11 +84,11 @@ class TestStructuredLoggingHook:
         assert result.exit_code == 0
 
         messages = [r.message for r in caplog.records]
-        assert any("cuprum.plan" in m for m in messages)
-        assert any("cuprum.start" in m for m in messages)
-        assert any("cuprum.stdout" in m and "out1" in m for m in messages)
-        assert any("cuprum.stderr" in m and "err1" in m for m in messages)
-        assert any("cuprum.exit" in m for m in messages)
+        self._assert_phase_logged(messages, "cuprum.plan")
+        self._assert_phase_logged(messages, "cuprum.start")
+        self._assert_output_logged(messages, "cuprum.stdout", "out1")
+        self._assert_output_logged(messages, "cuprum.stderr", "err1")
+        self._assert_phase_logged(messages, "cuprum.exit")
 
     def test_includes_extra_fields(self, caplog: pytest.LogCaptureFixture) -> None:
         """Hook attaches cuprum_* extra fields to log records."""
@@ -102,13 +116,13 @@ class TestStructuredLoggingHook:
 
         logger = logging.getLogger("cuprum.exec.levels")
         logger.setLevel(logging.INFO)
-        hook = structured_logging_hook(
-            logger=logger,
+        levels = LogLevels(
             plan_level=logging.DEBUG,
             start_level=logging.INFO,
             output_level=logging.DEBUG,
             exit_level=logging.WARNING,
         )
+        hook = structured_logging_hook(logger=logger, levels=levels)
 
         with caplog.at_level(logging.INFO, logger="cuprum.exec.levels"):
             with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
@@ -251,6 +265,35 @@ class TestMetricsHook:
 class TestTracingHook:
     """Tests for TracingHook and InMemoryTracer."""
 
+    def _run_traced_command(
+        self,
+        *,
+        project_name: str,
+        command_code: str,
+        record_output: bool = True,
+    ) -> tuple[InMemoryTracer, InMemorySpan]:
+        """Run a Python command with tracing and return the tracer and first span.
+
+        Args:
+            project_name: Name for the project settings.
+            command_code: Python code to execute via `-c` flag.
+            record_output: Whether to record stdout/stderr as span events.
+
+        Returns:
+            Tuple of (tracer, first_span) for assertions in the calling test.
+
+        """
+        builder, catalogue = _python_builder(project_name=project_name)
+        cmd = builder("-c", command_code)
+
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer, record_output=record_output)
+
+        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+            cmd.run_sync()
+
+        return tracer, tracer.spans[0]
+
     def test_creates_span_for_execution(self) -> None:
         """Hook creates a span from start to exit."""
         builder, catalogue = _python_builder(project_name="tracing-span")
@@ -271,32 +314,22 @@ class TestTracingHook:
 
     def test_sets_exit_attributes(self) -> None:
         """Hook sets exit_code and duration_s on span."""
-        builder, catalogue = _python_builder(project_name="tracing-exit")
-        cmd = builder("-c", "print('done')")
+        _, span = self._run_traced_command(
+            project_name="tracing-exit",
+            command_code="print('done')",
+        )
 
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-
-        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
-            cmd.run_sync()
-
-        span = tracer.spans[0]
         assert span.attributes.get("cuprum.exit_code") == 0
         assert span.attributes.get("cuprum.duration_s") is not None
         assert span.status_ok is True
 
     def test_sets_error_status_on_failure(self) -> None:
         """Hook sets error status on non-zero exit."""
-        builder, catalogue = _python_builder(project_name="tracing-error")
-        cmd = builder("-c", "import sys; sys.exit(42)")
+        _, span = self._run_traced_command(
+            project_name="tracing-error",
+            command_code="import sys; sys.exit(42)",
+        )
 
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-
-        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
-            cmd.run_sync()
-
-        span = tracer.spans[0]
         assert span.attributes.get("cuprum.exit_code") == 42
         assert span.status_ok is False
 
@@ -334,30 +367,21 @@ class TestTracingHook:
 
     def test_disables_output_recording(self) -> None:
         """Hook skips output events when record_output=False."""
-        builder, catalogue = _python_builder(project_name="tracing-no-output")
-        cmd = builder("-c", "print('skip')")
+        _, span = self._run_traced_command(
+            project_name="tracing-no-output",
+            command_code="print('skip')",
+            record_output=False,
+        )
 
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer, record_output=False)
-
-        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
-            cmd.run_sync()
-
-        span = tracer.spans[0]
         assert len(span.events) == 0
 
     def test_includes_project_tag(self) -> None:
         """Hook includes project tag in span attributes."""
-        builder, catalogue = _python_builder(project_name="my-project")
-        cmd = builder("-c", "print('x')")
+        _, span = self._run_traced_command(
+            project_name="my-project",
+            command_code="print('x')",
+        )
 
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-
-        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
-            cmd.run_sync()
-
-        span = tracer.spans[0]
         assert span.attributes.get("cuprum.project") == "my-project"
 
     def test_pipeline_creates_multiple_spans(self) -> None:
