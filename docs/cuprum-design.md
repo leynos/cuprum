@@ -1386,7 +1386,7 @@ and call is_available"]
 
 ### 13.5 Performance Characteristics
 
-The following table summarises when each pathway is recommended:
+The following table summarizes when each pathway is recommended:
 
 | Scenario                       | Recommended pathway | Rationale                          |
 | ------------------------------ | ------------------- | ---------------------------------- |
