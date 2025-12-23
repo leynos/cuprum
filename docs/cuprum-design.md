@@ -1154,3 +1154,354 @@ This document defines the desired behaviour and public surface. Implementers
 should treat it as a set of behavioural contracts and design constraints rather
 than a rigid class diagram, and should favour boring, explicit implementations
 over cleverness—especially in the type‑system and configuration layers.
+
+______________________________________________________________________
+
+## 13. Performance-Optimised Stream Operations
+
+Cuprum's stream operations route data through Python's asyncio event loop in
+small chunks. For typical command execution, this overhead is negligible.
+However, for high-throughput pipelines processing large data volumes, the
+overhead accumulates. This section describes an optional Rust extension that
+addresses these bottlenecks whilst preserving Cuprum's existing API and
+behavioural guarantees.
+
+### 13.1 Motivation
+
+The current implementation reads and writes data in 4 KB chunks (defined by
+`_READ_SIZE = 4096` in `cuprum/_streams.py`). The core functions affected are:
+
+- `_pump_stream()` – transfers data between pipeline stages with backpressure;
+- `_consume_stream()` – dispatcher that routes to one of the two functions
+  below based on whether line callbacks are registered;
+- `_consume_stream_without_lines()` – reads subprocess output without line
+  parsing, optionally teeing to sinks;
+- `_consume_stream_with_lines()` – handles line-by-line callbacks with
+  incremental UTF-8 decoding.
+
+For a 1 GB data stream, this results in:
+
+- approximately 262,000 round-trips through the Python event loop;
+- approximately 262,000 `bytes` object allocations;
+- repeated buffer copying between Python and OS buffers;
+- Global Interpreter Lock (GIL) contention when multiple asyncio tasks compete
+  for CPU.
+
+A Rust extension can address these bottlenecks by:
+
+- handling the pump loop entirely outside the GIL;
+- using a single reusable memory buffer to reduce allocation churn;
+- handling I/O interrupts more efficiently than the asyncio event loop;
+- on Linux, using `splice()` to zero-copy move data between pipe file
+  descriptors.
+
+### 13.2 Extension Architecture
+
+The Rust extension provides alternative implementations of the stream
+operations. Both pathways remain available and are treated as first-class:
+
+**Pure Python pathway (`cuprum._streams`):**
+
+- The existing asyncio-based implementation;
+- Used when the Rust extension is unavailable or explicitly disabled;
+- Remains the reference implementation for behavioural correctness.
+
+**Rust pathway (`cuprum._streams_rs`):**
+
+- Handles the pump loop outside the GIL;
+- Uses a single reusable memory buffer to reduce allocation churn;
+- Provides faster I/O interrupt handling than asyncio;
+- On Linux, leverages `splice()` for zero-copy between pipe file descriptors.
+
+For screen readers: The following flowchart shows how Cuprum selects between
+the Python and Rust stream pathways based on environment configuration and
+extension availability.
+
+```mermaid
+flowchart TD
+    subgraph Public API
+        A[Pipeline.run / SafeCmd.run]
+    end
+
+    subgraph Dispatcher
+        B{_get_stream_backend}
+        C[Check CUPRUM_STREAM_BACKEND env]
+        D[Check extension availability]
+    end
+
+    subgraph Python Pathway
+        E[cuprum._streams]
+        F[_pump_stream]
+        G[_consume_stream]
+    end
+
+    subgraph Rust Pathway
+        H[cuprum._streams_rs]
+        I[rust_pump_stream]
+        J[rust_consume_stream]
+    end
+
+    A --> B
+    B --> C
+    C --> D
+    D -->|rust unavailable or disabled| E
+    D -->|rust available and enabled| H
+    E --> F
+    E --> G
+    H --> I
+    H --> J
+```
+
+### 13.3 API Boundary
+
+The Rust extension exposes three functions via PyO3:
+
+```python
+# cuprum/_streams_rs.pyi (type stubs)
+from __future__ import annotations
+
+
+def rust_pump_stream(
+    reader_fd: int,
+    writer_fd: int,
+    *,
+    buffer_size: int = 65536,
+) -> int:
+    """Pump data between file descriptors outside the GIL.
+
+    Parameters
+    ----------
+    reader_fd:
+        File descriptor to read from (stdout of upstream process).
+    writer_fd:
+        File descriptor to write to (stdin of downstream process).
+    buffer_size:
+        Size of the internal transfer buffer in bytes.
+
+    Returns
+    -------
+    int
+        Total bytes transferred.
+
+    Raises
+    ------
+    OSError
+        When an I/O error occurs during transfer.
+
+    """
+    ...
+
+
+def rust_consume_stream(
+    reader_fd: int,
+    *,
+    buffer_size: int = 65536,
+    encoding: str = "utf-8",
+    errors: str = "replace",
+) -> str:
+    """Consume a stream and return decoded output.
+
+    Parameters
+    ----------
+    reader_fd:
+        File descriptor to read from.
+    buffer_size:
+        Size of the internal read buffer in bytes.
+    encoding:
+        Character encoding for decoding.
+    errors:
+        Error handling mode for decoding.
+
+    Returns
+    -------
+    str
+        Decoded stream content.
+
+    """
+    ...
+
+
+def is_available() -> bool:
+    """Return True if the Rust extension is functional."""
+    ...
+```
+
+The extension accepts raw file descriptors rather than asyncio stream objects.
+This enables operation outside the Python runtime whilst the dispatcher handles
+the translation between asyncio streams and file descriptors.
+
+### 13.4 Fallback Strategy
+
+Cuprum selects the stream backend at runtime using the following precedence:
+
+1. **Environment variable (`CUPRUM_STREAM_BACKEND`):**
+   - `rust` – force Rust pathway; raise `ImportError` if unavailable;
+   - `python` – force pure Python pathway;
+   - `auto` (default) – use Rust if available, fall back to Python.
+
+2. **Extension availability check:**
+   - Attempt to import `cuprum._streams_rs`;
+   - Call `is_available()` to verify functionality;
+   - Cache the result for subsequent operations.
+
+This strategy ensures:
+
+- existing pure Python installations continue to work unchanged;
+- users can opt into or out of the Rust pathway explicitly;
+- Continuous Integration (CI) can test both pathways in isolation.
+
+For screen readers: The following flowchart illustrates the backend selection
+algorithm, showing how the environment variable and availability checks
+determine which pathway is used.
+
+```mermaid
+flowchart TD
+    A["Start stream_operation
+(Pipeline_run / SafeCmd_run)"] --> B["Call _get_stream_backend"]
+    B --> C["Read CUPRUM_STREAM_BACKEND
+(env var or default auto)"]
+
+    C -->|"value == rust"| D["Try import cuprum._streams_rs
+and call is_available"]
+    C -->|"value == python"| E["Select python_backend"]
+    C -->|"value == auto"| F["Try import cuprum._streams_rs
+and call is_available"]
+
+    D -->|"import or is_available fails"| G["Raise ImportError
+(rust forced but unavailable)"]
+    D -->|"success"| H["Select rust_backend"]
+
+    F -->|"success"| H
+    F -->|"import or is_available fails"| E
+
+    E --> I["Use cuprum._streams
+(_pump_stream / _consume_stream)"]
+    H --> J["Use cuprum._streams_rs
+(rust_pump_stream / rust_consume_stream)"]
+
+    I --> K["Return result to caller"]
+    J --> K
+    G --> L["Error propagated to caller"]
+```
+
+### 13.5 Performance Characteristics
+
+The following table summarizes when each pathway is recommended:
+
+| Scenario                       | Recommended pathway | Rationale                          |
+| ------------------------------ | ------------------- | ---------------------------------- |
+| Small commands (<1 MB output)  | Either              | Overhead difference negligible     |
+| Large data pipelines (>100 MB) | Rust                | Avoids event loop round-trips      |
+| Many concurrent pipelines      | Rust                | Reduced GIL contention             |
+| Debugging/tracing output lines | Python              | `on_line` callbacks require Python |
+| Platform without a Rust wheel  | Python              | Automatic fallback                 |
+
+The Rust pathway provides the greatest benefit for:
+
+- `_pump_stream()` in multi-stage pipelines (data transfer between stages);
+- `_consume_stream()` without line callbacks (the internal
+  `_consume_stream_without_lines()` code path).
+
+The Python pathway remains preferable when:
+
+- line-by-line observation hooks (`on_line`) are registered;
+- teeing to sinks (`echo_output`) is required;
+- debugging requires visibility into the event loop;
+- platform wheels are unavailable.
+
+#### Rust pathway limitations
+
+The Rust extension intentionally does not support all features of the Python
+pathway. The following behaviours are only available via the Python backend:
+
+- **Line callbacks (`on_line`):** The `_consume_stream_with_lines()` code path
+  requires Python callbacks for each decoded line. When an `on_line` handler is
+  registered, the dispatcher automatically routes to the Python pathway.
+
+- **Teeing to sinks (`echo_output`):** The Python pathway can write chunks to a
+  `sink` (e.g. `sys.stdout`) whilst simultaneously capturing output. The Rust
+  extension does not support this; when `echo_output=True`, the dispatcher
+  routes to Python.
+
+- **Custom encodings:** The Rust extension supports UTF-8 with
+  `errors="replace"` semantics. Other encodings or error modes route to the
+  Python pathway.
+
+The dispatcher in `cuprum/_backend.py` inspects the stream configuration and
+automatically selects the Python pathway when any unsupported feature is
+requested. Callers do not need to manage this routing explicitly.
+
+### 13.6 Thread Safety and Asyncio Integration
+
+The Rust extension releases the GIL during I/O operations, allowing other
+Python threads and asyncio tasks to proceed. Integration with asyncio uses
+`loop.run_in_executor()`:
+
+```python
+async def _pump_stream_dispatch(
+    reader: asyncio.StreamReader | None,
+    writer: asyncio.StreamWriter | None,
+) -> None:
+    backend = _get_stream_backend()
+    if backend == "rust" and _can_use_rust_pump(reader, writer):
+        loop = asyncio.get_running_loop()
+        reader_fd = _extract_fd(reader)
+        writer_fd = _extract_fd(writer)
+        await loop.run_in_executor(
+            None,
+            _streams_rs.rust_pump_stream,
+            reader_fd,
+            writer_fd,
+        )
+    else:
+        await _pump_stream(reader, writer)
+```
+
+Error propagation from Rust to Python uses standard exception mechanisms. The
+Rust extension raises `OSError` for I/O failures, matching the behaviour of
+Python's built-in I/O operations.
+
+### 13.7 Linux splice() Optimization
+
+On Linux, the Rust extension can use the `splice()` system call for zero-copy
+transfer between pipe file descriptors. This optimization:
+
+- avoids copying data into userspace entirely;
+- reduces memory bandwidth requirements;
+- provides the greatest speedup for large pipeline transfers.
+
+The extension detects splice availability at runtime and falls back to
+read/write loops on other platforms or when the file descriptors do not support
+splice.
+
+### 13.8 Build and Distribution
+
+The Rust extension is built using maturin and distributed as platform-specific
+wheels:
+
+- Linux: x86_64 and aarch64;
+- macOS: x86_64 and arm64;
+- Windows: x86_64 and arm64.
+
+A pure Python wheel is always published alongside native wheels to ensure
+fallback availability on platforms without native wheel support.
+
+Contributors building from source require a Rust toolchain (rustc 1.70+, cargo)
+in addition to Python. The `maturin develop` command builds and installs the
+extension in development mode.
+
+### 13.9 Testing Strategy
+
+Both pathways are tested as first-class implementations:
+
+- all stream-related tests are parametrized to run against both backends;
+- behavioural parity tests verify identical output for edge cases (empty
+  streams, partial UTF-8, broken pipes);
+- property-based tests (hypothesis) verify stream content preservation;
+- integration tests exercise pathway selection logic.
+
+CI includes benchmark jobs that compare Python and Rust pathway throughput,
+failing if the Rust pathway regresses beyond a defined threshold.
+
+See ADR-001 (`docs/adr-001-rust-extension.md`) for detailed design decisions
+and alternatives considered.
