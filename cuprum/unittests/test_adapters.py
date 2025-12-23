@@ -261,6 +261,59 @@ class TestMetricsHook:
         assert metrics.counters == {}
         assert metrics.histograms == {}
 
+    def test_passes_program_and_project_labels(self) -> None:
+        """MetricsHook passes correct labels to collector."""
+
+        class LabelRecordingCollector:
+            """Collector that records metric name, value, and labels."""
+
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, float, dict[str, str]]] = []
+
+            def inc_counter(
+                self,
+                name: str,
+                value: float,
+                labels: dict[str, str],
+            ) -> None:
+                self.calls.append((name, value, dict(labels)))
+
+            def observe_histogram(
+                self,
+                name: str,
+                value: float,
+                labels: dict[str, str],
+            ) -> None:
+                self.calls.append((name, value, dict(labels)))
+
+        collector = LabelRecordingCollector()
+        hook = MetricsHook(collector)  # type: ignore[arg-type]
+
+        builder, catalogue = _python_builder(project_name="label-test")
+        cmd = builder("-c", "print('x')")
+
+        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+            cmd.run_sync()
+
+        # Verify at least one call was made with correct labels
+        assert len(collector.calls) > 0
+
+        # Check execution counter has correct labels
+        exec_calls = [c for c in collector.calls if c[0] == "cuprum_executions_total"]
+        assert len(exec_calls) == 1
+        _, _, labels = exec_calls[0]
+        assert labels["program"] == sys.executable
+        assert labels["project"] == "label-test"
+
+        # Check duration histogram has correct labels
+        duration_calls = [
+            c for c in collector.calls if c[0] == "cuprum_duration_seconds"
+        ]
+        assert len(duration_calls) == 1
+        _, _, labels = duration_calls[0]
+        assert labels["program"] == sys.executable
+        assert labels["project"] == "label-test"
+
 
 class TestTracingHook:
     """Tests for TracingHook and InMemoryTracer."""
@@ -433,3 +486,116 @@ class TestTracingHook:
         tracer.reset()
 
         assert tracer.spans == []
+
+    def test_pid_less_events_do_not_create_spans(self) -> None:
+        """Events without a pid are ignored by the tracing hook."""
+        from cuprum.events import ExecEvent
+        from cuprum.program import Program
+
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+
+        # Create a mock event with pid=None
+        event = ExecEvent(
+            phase="start",
+            program=Program("echo"),
+            argv=("echo", "hello"),
+            cwd=None,
+            env=None,
+            pid=None,
+            timestamp=0.0,
+            line=None,
+            exit_code=None,
+            duration_s=None,
+            tags={},
+        )
+
+        # Call the hook for start, output, and exit phases
+        hook(event)
+
+        output_event = ExecEvent(
+            phase="stdout",
+            program=Program("echo"),
+            argv=("echo", "hello"),
+            cwd=None,
+            env=None,
+            pid=None,
+            timestamp=0.0,
+            line="hello",
+            exit_code=None,
+            duration_s=None,
+            tags={},
+        )
+        hook(output_event)
+
+        exit_event = ExecEvent(
+            phase="exit",
+            program=Program("echo"),
+            argv=("echo", "hello"),
+            cwd=None,
+            env=None,
+            pid=None,
+            timestamp=0.0,
+            line=None,
+            exit_code=0,
+            duration_s=0.1,
+            tags={},
+        )
+        hook(exit_event)
+
+        # No spans should have been created
+        assert tracer.spans == []
+
+    def test_pipeline_attributes_are_set_on_spans(self) -> None:
+        """Pipeline-related tags are included in span attributes."""
+        from cuprum.events import ExecEvent
+        from cuprum.program import Program
+
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+
+        # Create a mock event with pipeline tags
+        start_event = ExecEvent(
+            phase="start",
+            program=Program("cat"),
+            argv=("cat",),
+            cwd=None,
+            env=None,
+            pid=1234,
+            timestamp=0.0,
+            line=None,
+            exit_code=None,
+            duration_s=None,
+            tags={
+                "project": "pipeline-test",
+                "pipeline_stage_index": 1,
+                "pipeline_stages": 3,
+            },
+        )
+        hook(start_event)
+
+        # End the span
+        exit_event = ExecEvent(
+            phase="exit",
+            program=Program("cat"),
+            argv=("cat",),
+            cwd=None,
+            env=None,
+            pid=1234,
+            timestamp=0.0,
+            line=None,
+            exit_code=0,
+            duration_s=0.1,
+            tags={
+                "project": "pipeline-test",
+                "pipeline_stage_index": 1,
+                "pipeline_stages": 3,
+            },
+        )
+        hook(exit_event)
+
+        assert len(tracer.spans) == 1
+        span = tracer.spans[0]
+        assert span.attributes.get("cuprum.pipeline_stage_index") == 1
+        assert span.attributes.get("cuprum.pipeline_stages") == 3
+        assert span.attributes.get("cuprum.project") == "pipeline-test"

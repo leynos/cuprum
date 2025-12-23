@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses
+import json
 import logging
 import typing as typ
 
@@ -183,8 +184,6 @@ class JsonLoggingFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         """Format the log record as a JSON string."""
-        import json
-
         output: dict[str, object] = {
             "timestamp": self.formatTime(record),
             "level": record.levelname,

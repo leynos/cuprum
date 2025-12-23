@@ -18,7 +18,7 @@ from tests.helpers.catalogue import python_catalogue
 
 @scenario(
     "../features/telemetry_adapters.feature",
-    "Structured logging hook emits JSON-compatible records",
+    "Structured logging hook emits structured records",
 )
 def test_structured_logging_hook_emits_records() -> None:
     """Behavioural coverage for structured logging adapter."""

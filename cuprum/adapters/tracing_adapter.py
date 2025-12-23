@@ -39,7 +39,7 @@ Example with OpenTelemetry::
         def add_event(self, name, attributes=None):
             self._span.add_event(name, attributes=attributes or {})
 
-        def set_status(self, ok):
+        def set_status(self, *, ok):
             from opentelemetry.trace import StatusCode
             code = StatusCode.OK if ok else StatusCode.ERROR
             self._span.set_status(code)

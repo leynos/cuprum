@@ -5,7 +5,7 @@ Feature: Telemetry adapters for structured execution events
   Background:
     Given a curated Python command for testing
 
-  Scenario: Structured logging hook emits JSON-compatible records
+  Scenario: Structured logging hook emits structured records
     Given a structured logging hook with a test logger
     When I run a command that writes to stdout and stderr
     Then the logger receives records for all execution phases

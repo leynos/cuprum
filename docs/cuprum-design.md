@@ -1041,7 +1041,7 @@ design decisions guide these adapters:
   `cuprum_stdout_lines_total`, `cuprum_stderr_lines_total`) are incremented on
   the corresponding event phases.
 - Histogram metrics (`cuprum_duration_seconds`) are observed on `exit` events.
-- All metrics include `program` and `project` labels for multi-dimensional
+- All metrics include `program` and `project` labels for multi‑dimensional
   analysis.
 
 **Tracing adapter specifics:**

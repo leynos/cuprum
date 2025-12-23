@@ -521,8 +521,8 @@ logger.addHandler(handler)
 ### Metrics adapter
 
 The `metrics_adapter` module provides a Prometheus-style metrics hook that
-collects counters and histograms. It uses a protocol class so you can implement
-the backend with your preferred metrics library.
+collects counters and histograms. It uses a protocol class so the backend can
+be implemented with any preferred metrics library.
 
 ```python
 from cuprum import ECHO, scoped, sh
@@ -634,7 +634,7 @@ class OTelSpan:
     def add_event(self, name, attributes=None):
         self._span.add_event(name, attributes=attributes or {})
 
-    def set_status(self, ok):
+    def set_status(self, *, ok):
         from opentelemetry.trace import StatusCode
 
         code = StatusCode.OK if ok else StatusCode.ERROR
