@@ -155,7 +155,7 @@ class Tracer(typ.Protocol):
         ...
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class InMemorySpan:
     """Reference in-memory span for testing and examples."""
 
@@ -186,7 +186,7 @@ class InMemorySpan:
         self.ended = True
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class InMemoryTracer:
     """Reference in-memory tracer for testing and examples.
 

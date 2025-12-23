@@ -1,4 +1,14 @@
-"""Behavioural tests for telemetry adapter modules."""
+"""Behavioural tests for telemetry adapter modules.
+
+Note on type casting
+--------------------
+This module uses ``typ.cast("typ.Any", ...)`` extensively when accessing
+pytest-bdd fixture values from dictionaries. This pattern is necessary because
+pytest-bdd fixtures return ``object`` types, and the dict-based fixture approach
+used here (returning ``dict[str, object]``) loses type information. The casts
+reduce type safety but are confined to test code where runtime behavior is
+verified by assertions.
+"""
 
 from __future__ import annotations
 
