@@ -25,6 +25,9 @@ from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
 from cuprum.context import scoped
 from tests.helpers.catalogue import python_catalogue
 
+if typ.TYPE_CHECKING:
+    from cuprum.events import ExecHook
+
 
 @scenario(
     "../features/telemetry_adapters.feature",
@@ -130,6 +133,28 @@ def given_tracer(behaviour_state: dict[str, object]) -> dict[str, object]:
     return {"tracer": tracer, "hook": hook}
 
 
+def _execute_python_command(
+    behaviour_state: dict[str, object],
+    python_cmd_fixture: dict[str, object],
+    hook: ExecHook,
+    script: str,
+) -> None:
+    """Execute a Python command with the given hook and store the result.
+
+    This helper extracts catalogue and builder from python_cmd_fixture, builds
+    a command with the given script, runs it inside scoped/observe contexts,
+    and stores the result in behaviour_state.
+    """
+    catalogue = typ.cast("typ.Any", python_cmd_fixture["catalogue"])
+    builder = typ.cast("typ.Any", python_cmd_fixture["builder"])
+    cmd = builder("-c", script)
+
+    with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+        result = cmd.run_sync()
+
+    behaviour_state["result"] = result
+
+
 @when("I run a command that writes to stdout and stderr")
 def when_run_stdout_stderr(
     behaviour_state: dict[str, object],
@@ -137,10 +162,7 @@ def when_run_stdout_stderr(
     logging_hook_fixture: dict[str, object],
 ) -> None:
     """Run a command that writes to both streams."""
-    catalogue = typ.cast("typ.Any", python_cmd_fixture["catalogue"])
-    builder = typ.cast("typ.Any", python_cmd_fixture["builder"])
-    hook = typ.cast("typ.Any", logging_hook_fixture["hook"])
-
+    hook = typ.cast("ExecHook", logging_hook_fixture["hook"])
     script = "\n".join(
         (
             "import sys",
@@ -148,12 +170,7 @@ def when_run_stdout_stderr(
             "print('stderr-line', file=sys.stderr)",
         ),
     )
-    cmd = builder("-c", script)
-
-    with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
-        result = cmd.run_sync()
-
-    behaviour_state["result"] = result
+    _execute_python_command(behaviour_state, python_cmd_fixture, hook, script)
 
 
 @when("I run a command that succeeds")
@@ -163,16 +180,8 @@ def when_run_success(
     metrics_fixture: dict[str, object],
 ) -> None:
     """Run a command that exits with code 0."""
-    catalogue = typ.cast("typ.Any", python_cmd_fixture["catalogue"])
-    builder = typ.cast("typ.Any", python_cmd_fixture["builder"])
-    hook = typ.cast("typ.Any", metrics_fixture["hook"])
-
-    cmd = builder("-c", "print('ok')")
-
-    with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
-        result = cmd.run_sync()
-
-    behaviour_state["result"] = result
+    hook = typ.cast("ExecHook", metrics_fixture["hook"])
+    _execute_python_command(behaviour_state, python_cmd_fixture, hook, "print('ok')")
 
 
 @when("I run a command that fails with non-zero exit")
@@ -182,24 +191,19 @@ def when_run_failure(
     request: pytest.FixtureRequest,
 ) -> None:
     """Run a failing command with either metrics or tracer hook."""
-    catalogue = typ.cast("typ.Any", python_cmd_fixture["catalogue"])
-    builder = typ.cast("typ.Any", python_cmd_fixture["builder"])
-
     # Determine which hook to use based on which fixture is available
+    hook: ExecHook
     if "metrics_fixture" in request.fixturenames:
-        hook = typ.cast("typ.Any", request.getfixturevalue("metrics_fixture")["hook"])
+        hook = typ.cast("ExecHook", request.getfixturevalue("metrics_fixture")["hook"])
     elif "tracer_fixture" in request.fixturenames:
-        hook = typ.cast("typ.Any", request.getfixturevalue("tracer_fixture")["hook"])
+        hook = typ.cast("ExecHook", request.getfixturevalue("tracer_fixture")["hook"])
     else:
         msg = "Neither metrics_fixture nor tracer_fixture available"
         raise RuntimeError(msg)
 
-    cmd = builder("-c", "import sys; sys.exit(1)")
-
-    with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
-        result = cmd.run_sync()
-
-    behaviour_state["result"] = result
+    _execute_python_command(
+        behaviour_state, python_cmd_fixture, hook, "import sys; sys.exit(1)"
+    )
 
 
 @when("I run a command that writes output")
@@ -209,10 +213,7 @@ def when_run_with_output(
     tracer_fixture: dict[str, object],
 ) -> None:
     """Run a command with output for tracing."""
-    catalogue = typ.cast("typ.Any", python_cmd_fixture["catalogue"])
-    builder = typ.cast("typ.Any", python_cmd_fixture["builder"])
-    hook = typ.cast("typ.Any", tracer_fixture["hook"])
-
+    hook = typ.cast("ExecHook", tracer_fixture["hook"])
     script = "\n".join(
         (
             "import sys",
@@ -220,12 +221,7 @@ def when_run_with_output(
             "print('traced-error', file=sys.stderr)",
         ),
     )
-    cmd = builder("-c", script)
-
-    with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
-        result = cmd.run_sync()
-
-    behaviour_state["result"] = result
+    _execute_python_command(behaviour_state, python_cmd_fixture, hook, script)
 
 
 @then("the logger receives records for all execution phases")
