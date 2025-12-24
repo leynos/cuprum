@@ -249,7 +249,8 @@ def then_extra_fields_present(
     handler = typ.cast("typ.Any", logging_hook_fixture["handler"])
     records = handler.records
 
-    start_record = next(r for r in records if "cuprum.start" in r.message)
+    start_record = next((r for r in records if "cuprum.start" in r.message), None)
+    assert start_record is not None, "No start record found in log records"
     assert hasattr(start_record, "cuprum_phase")
     assert start_record.cuprum_phase == "start"
     assert hasattr(start_record, "cuprum_program")
