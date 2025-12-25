@@ -28,6 +28,24 @@ from tests.helpers.catalogue import python_catalogue
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecHook
 
+_STDOUT_STDERR_SCRIPT = "\n".join(
+    (
+        "import sys",
+        "print('stdout-line')",
+        "print('stderr-line', file=sys.stderr)",
+    ),
+)
+
+_SUCCESS_SCRIPT = "print('ok')"
+_FAILURE_SCRIPT = "import sys; sys.exit(1)"
+_OUTPUT_SCRIPT = "\n".join(
+    (
+        "import sys",
+        "print('traced-output')",
+        "print('traced-error', file=sys.stderr)",
+    ),
+)
+
 
 @scenario(
     "../features/telemetry_adapters.feature",
@@ -155,6 +173,30 @@ def _execute_python_command(
     behaviour_state["result"] = result
 
 
+def _run_command_with_hook(
+    behaviour_state: dict[str, object],
+    python_cmd_fixture: dict[str, object],
+    hook_fixture: dict[str, object],
+    script: str,
+) -> None:
+    """Run a Python command with a hook extracted from a fixture.
+
+    Parameters
+    ----------
+    behaviour_state:
+        Shared mutable state dictionary.
+    python_cmd_fixture:
+        Python command builder fixture.
+    hook_fixture:
+        Fixture containing a hook under the "hook" key.
+    script:
+        Python script to execute with -c flag.
+
+    """
+    hook = typ.cast("ExecHook", hook_fixture["hook"])
+    _execute_python_command(behaviour_state, python_cmd_fixture, hook, script)
+
+
 @when("I run a command that writes to stdout and stderr")
 def when_run_stdout_stderr(
     behaviour_state: dict[str, object],
@@ -162,15 +204,9 @@ def when_run_stdout_stderr(
     logging_hook_fixture: dict[str, object],
 ) -> None:
     """Run a command that writes to both streams."""
-    hook = typ.cast("ExecHook", logging_hook_fixture["hook"])
-    script = "\n".join(
-        (
-            "import sys",
-            "print('stdout-line')",
-            "print('stderr-line', file=sys.stderr)",
-        ),
+    _run_command_with_hook(
+        behaviour_state, python_cmd_fixture, logging_hook_fixture, _STDOUT_STDERR_SCRIPT
     )
-    _execute_python_command(behaviour_state, python_cmd_fixture, hook, script)
 
 
 @when("I run a command that succeeds")
@@ -180,8 +216,9 @@ def when_run_success(
     metrics_fixture: dict[str, object],
 ) -> None:
     """Run a command that exits with code 0."""
-    hook = typ.cast("ExecHook", metrics_fixture["hook"])
-    _execute_python_command(behaviour_state, python_cmd_fixture, hook, "print('ok')")
+    _run_command_with_hook(
+        behaviour_state, python_cmd_fixture, metrics_fixture, _SUCCESS_SCRIPT
+    )
 
 
 @when("I run a command that fails with metrics tracking")
@@ -191,9 +228,8 @@ def when_run_failure_with_metrics(
     metrics_fixture: dict[str, object],
 ) -> None:
     """Run a failing command with metrics hook."""
-    hook = typ.cast("ExecHook", metrics_fixture["hook"])
-    _execute_python_command(
-        behaviour_state, python_cmd_fixture, hook, "import sys; sys.exit(1)"
+    _run_command_with_hook(
+        behaviour_state, python_cmd_fixture, metrics_fixture, _FAILURE_SCRIPT
     )
 
 
@@ -204,9 +240,8 @@ def when_run_failure_with_tracer(
     tracer_fixture: dict[str, object],
 ) -> None:
     """Run a failing command with tracer hook."""
-    hook = typ.cast("ExecHook", tracer_fixture["hook"])
-    _execute_python_command(
-        behaviour_state, python_cmd_fixture, hook, "import sys; sys.exit(1)"
+    _run_command_with_hook(
+        behaviour_state, python_cmd_fixture, tracer_fixture, _FAILURE_SCRIPT
     )
 
 
@@ -217,15 +252,9 @@ def when_run_with_output(
     tracer_fixture: dict[str, object],
 ) -> None:
     """Run a command with output for tracing."""
-    hook = typ.cast("ExecHook", tracer_fixture["hook"])
-    script = "\n".join(
-        (
-            "import sys",
-            "print('traced-output')",
-            "print('traced-error', file=sys.stderr)",
-        ),
+    _run_command_with_hook(
+        behaviour_state, python_cmd_fixture, tracer_fixture, _OUTPUT_SCRIPT
     )
-    _execute_python_command(behaviour_state, python_cmd_fixture, hook, script)
 
 
 @then("the logger receives records for all execution phases")
