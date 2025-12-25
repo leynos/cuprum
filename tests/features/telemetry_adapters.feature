@@ -19,7 +19,7 @@ Feature: Telemetry adapters for structured execution events
 
   Scenario: Metrics hook tracks failure counts
     Given an in-memory metrics collector
-    When I run a command that fails with non-zero exit
+    When I run a command that fails with metrics tracking
     Then the failure counter is incremented
 
   Scenario: Tracing hook creates spans with attributes
@@ -31,5 +31,5 @@ Feature: Telemetry adapters for structured execution events
 
   Scenario: Tracing hook sets error status on failure
     Given an in-memory tracer
-    When I run a command that fails with non-zero exit
+    When I run a command that fails with tracing
     Then the span status indicates an error

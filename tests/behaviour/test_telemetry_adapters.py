@@ -184,23 +184,27 @@ def when_run_success(
     _execute_python_command(behaviour_state, python_cmd_fixture, hook, "print('ok')")
 
 
-@when("I run a command that fails with non-zero exit")
-def when_run_failure(
+@when("I run a command that fails with metrics tracking")
+def when_run_failure_with_metrics(
     behaviour_state: dict[str, object],
     python_cmd_fixture: dict[str, object],
-    request: pytest.FixtureRequest,
+    metrics_fixture: dict[str, object],
 ) -> None:
-    """Run a failing command with either metrics or tracer hook."""
-    # Determine which hook to use based on which fixture is available
-    hook: ExecHook
-    if "metrics_fixture" in request.fixturenames:
-        hook = typ.cast("ExecHook", request.getfixturevalue("metrics_fixture")["hook"])
-    elif "tracer_fixture" in request.fixturenames:
-        hook = typ.cast("ExecHook", request.getfixturevalue("tracer_fixture")["hook"])
-    else:
-        msg = "Neither metrics_fixture nor tracer_fixture available"
-        raise RuntimeError(msg)
+    """Run a failing command with metrics hook."""
+    hook = typ.cast("ExecHook", metrics_fixture["hook"])
+    _execute_python_command(
+        behaviour_state, python_cmd_fixture, hook, "import sys; sys.exit(1)"
+    )
 
+
+@when("I run a command that fails with tracing")
+def when_run_failure_with_tracer(
+    behaviour_state: dict[str, object],
+    python_cmd_fixture: dict[str, object],
+    tracer_fixture: dict[str, object],
+) -> None:
+    """Run a failing command with tracer hook."""
+    hook = typ.cast("ExecHook", tracer_fixture["hook"])
     _execute_python_command(
         behaviour_state, python_cmd_fixture, hook, "import sys; sys.exit(1)"
     )
