@@ -466,3 +466,209 @@ try:
 except ForbiddenProgramError as e:
     print(f"Access denied: {e}")
 ```
+
+## Telemetry adapters
+
+Cuprum provides example adapters in `cuprum.adapters` that demonstrate how to
+integrate execution events with common observability backends. These adapters
+are optional and non-blocking; they do not depend on external telemetry
+libraries but define protocols that can be implemented with any backend.
+
+### Structured logging adapter
+
+The `logging_adapter` module provides an observe hook that emits structured log
+records for each execution phase. Unlike the simpler `logging_hook()`, this
+adapter uses the full `ExecEvent` stream for fine-grained observability.
+
+```python
+import logging
+
+from cuprum import ECHO, scoped, sh
+from cuprum.adapters.logging_adapter import structured_logging_hook
+
+logging.basicConfig(level=logging.DEBUG)
+
+with scoped(allowlist=frozenset([ECHO])):
+    hook = structured_logging_hook()
+    with sh.observe(hook):
+        sh.make(ECHO)("hello").run_sync()
+```
+
+The hook attaches `cuprum_*` prefixed extra fields to log records:
+
+- `cuprum_phase`: Event phase (plan, start, stdout, stderr, exit)
+- `cuprum_program`: Program being executed
+- `cuprum_argv`: Full argument vector
+- `cuprum_pid`: Process ID (when available)
+- `cuprum_exit_code`: Exit code (for exit events)
+- `cuprum_duration_s`: Duration in seconds (for exit events)
+- `cuprum_tags`: Event tags as a dict
+
+For JSON output suitable for log aggregation systems, use the
+`JsonLoggingFormatter`:
+
+```python
+import logging
+
+from cuprum.adapters.logging_adapter import JsonLoggingFormatter
+
+handler = logging.StreamHandler()
+handler.setFormatter(JsonLoggingFormatter())
+logger = logging.getLogger("cuprum.exec")
+logger.addHandler(handler)
+```
+
+### Metrics adapter
+
+The `metrics_adapter` module provides a Prometheus-style metrics hook that
+collects counters and histograms. It uses a protocol class so the backend can
+be implemented with any preferred metrics library.
+
+```python
+from cuprum import ECHO, scoped, sh
+from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
+
+metrics = InMemoryMetrics()
+
+with scoped(allowlist=frozenset([ECHO])):
+    with sh.observe(MetricsHook(metrics)):
+        sh.make(ECHO)("hello").run_sync()
+
+print(metrics.counters)  # {'cuprum_executions_total': 1.0, ...}
+print(metrics.histograms)  # {'cuprum_duration_seconds': [...]}
+```
+
+The hook collects:
+
+- `cuprum_executions_total`: Counter incremented on each command start
+- `cuprum_failures_total`: Counter incremented on non-zero exit
+- `cuprum_duration_seconds`: Histogram of execution durations
+- `cuprum_stdout_lines_total`: Counter of stdout lines emitted
+- `cuprum_stderr_lines_total`: Counter of stderr lines emitted
+
+All metrics include `program` and `project` labels.
+
+To integrate with a real metrics library like `prometheus_client`, implement
+the `MetricsCollector` protocol:
+
+```python
+from prometheus_client import Counter, Histogram
+
+from cuprum.adapters.metrics_adapter import MetricsCollector, MetricsHook
+
+
+class PrometheusMetrics:
+    def __init__(self) -> None:
+        self._exec_total = Counter(
+            "cuprum_executions_total",
+            "Total command executions",
+            ["program", "project"],
+        )
+        self._duration = Histogram(
+            "cuprum_duration_seconds",
+            "Execution duration",
+            ["program", "project"],
+        )
+
+    def inc_counter(self, name, value, labels):
+        if name == "cuprum_executions_total":
+            self._exec_total.labels(**labels).inc(value)
+
+    def observe_histogram(self, name, value, labels):
+        if name == "cuprum_duration_seconds":
+            self._duration.labels(**labels).observe(value)
+
+
+hook = MetricsHook(PrometheusMetrics())
+```
+
+### Tracing adapter
+
+The `tracing_adapter` module provides an OpenTelemetry-style tracing hook that
+creates spans for command execution. It uses protocol classes so you can
+implement the backend with your preferred tracing library.
+
+```python
+from cuprum import ECHO, scoped, sh
+from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
+
+tracer = InMemoryTracer()
+
+with scoped(allowlist=frozenset([ECHO])):
+    with sh.observe(TracingHook(tracer)):
+        sh.make(ECHO)("hello").run_sync()
+
+span = tracer.spans[0]
+print(span.name)  # 'cuprum.exec echo'
+print(span.attributes)  # {'cuprum.program': 'echo', ...}
+```
+
+The hook creates spans with these attributes:
+
+- `cuprum.program`: The program being executed
+- `cuprum.argv`: Full argument vector
+- `cuprum.pid`: Process ID
+- `cuprum.exit_code`: Exit code (set on span end)
+- `cuprum.duration_s`: Duration in seconds (set on span end)
+- `cuprum.project`: Project name from tags
+- `cuprum.pipeline_stage_index`: Pipeline stage index (if applicable)
+
+Output lines (stdout/stderr) are recorded as span events when
+`record_output=True` (the default).
+
+To integrate with OpenTelemetry, implement the `Tracer` and `Span` protocols:
+
+```python
+from opentelemetry import trace
+
+from cuprum.adapters.tracing_adapter import Span, Tracer, TracingHook
+
+
+class OTelSpan:
+    def __init__(self, otel_span) -> None:
+        self._span = otel_span
+
+    def set_attribute(self, key, value):
+        self._span.set_attribute(key, value)
+
+    def add_event(self, name, attributes=None):
+        self._span.add_event(name, attributes=attributes or {})
+
+    def set_status(self, *, ok):
+        from opentelemetry.trace import StatusCode
+
+        code = StatusCode.OK if ok else StatusCode.ERROR
+        self._span.set_status(code)
+
+    def end(self):
+        self._span.end()
+
+
+class OTelTracer:
+    def __init__(self, tracer) -> None:
+        self._tracer = tracer
+
+    def start_span(self, name, attributes=None):
+        span = self._tracer.start_span(name, attributes=attributes)
+        return OTelSpan(span)
+
+
+otel_tracer = trace.get_tracer("cuprum")
+hook = TracingHook(OTelTracer(otel_tracer))
+```
+
+### Design principles for adapters
+
+The adapters follow these design principles:
+
+1. **Optional dependencies**: Adapters do not import external telemetry
+   libraries. They define protocols that can be implemented with any backend.
+
+2. **Non-blocking execution**: Hooks are synchronous and complete quickly.
+   For high-throughput scenarios, consider buffering or async handlers.
+
+3. **Protocol-based integration**: Use Python's `Protocol` classes to define
+   the interface, making it easy to swap implementations without inheritance.
+
+4. **Reference implementations**: The `InMemoryMetrics` and `InMemoryTracer`
+   classes serve as both documentation and test utilities.
