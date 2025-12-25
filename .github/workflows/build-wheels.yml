@@ -33,7 +33,7 @@ jobs:
             arch: aarch64
             cibw_arch: arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
       - uses: ./.github/actions/build-wheels
         with:
           python-version: ${{ inputs['python-version'] }}
