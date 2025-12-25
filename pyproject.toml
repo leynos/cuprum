@@ -5,7 +5,12 @@ description = "cuprum package"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "ISC" }
+authors = [{ name = "Payton McIntosh", email = "pmcintosh@df12.net" }]
 dependencies = []
+
+[project.urls]
+Homepage = "https://df12.studio/docs.html"
+Repository = "https://github.com/leynos/cuprum"
 
 [dependency-groups]
 dev = [
