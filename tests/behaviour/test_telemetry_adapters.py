@@ -2,12 +2,13 @@
 
 Note on type casting
 --------------------
-This module uses ``typ.cast("typ.Any", ...)`` extensively when accessing
-pytest-bdd fixture values from dictionaries. This pattern is necessary because
-pytest-bdd fixtures return ``object`` types, and the dict-based fixture approach
-used here (returning ``dict[str, object]``) loses type information. The casts
-reduce type safety but are confined to test code where runtime behavior is
-verified by assertions.
+This module uses ``typ.cast()`` when accessing pytest-bdd fixture values from
+dictionaries. This pattern is necessary because pytest-bdd fixtures return
+``object`` types, and the dict-based fixture approach used here (returning
+``dict[str, object]``) loses type information. More specific types (e.g.
+``"ExecHook"``, ``"InMemoryMetrics"``) are used when the target type is known;
+``"typ.Any"`` is used otherwise. The casts reduce type safety but are confined
+to test code where runtime behavior is verified by assertions.
 """
 
 from __future__ import annotations
@@ -284,16 +285,18 @@ def then_extra_fields_present(
 
     start_record = next((r for r in records if "cuprum.start" in r.message), None)
     assert start_record is not None, "No start record found in log records"
-    assert hasattr(start_record, "cuprum_phase")
-    assert start_record.cuprum_phase == "start"
-    assert hasattr(start_record, "cuprum_program")
+    assert hasattr(start_record, "cuprum_phase"), "Missing cuprum_phase attribute"
+    assert start_record.cuprum_phase == "start", "cuprum_phase should be 'start'"
+    assert hasattr(start_record, "cuprum_program"), "Missing cuprum_program attribute"
 
 
 @then("the execution counter is incremented")
 def then_counter_incremented(behaviour_state: dict[str, object]) -> None:
     """Verify execution counter was incremented."""
     metrics = typ.cast("InMemoryMetrics", behaviour_state["metrics"])
-    assert metrics.counters.get("cuprum_executions_total") == 1.0
+    assert metrics.counters.get("cuprum_executions_total") == 1.0, (
+        "Execution counter should be 1.0"
+    )
 
 
 @then("the duration histogram contains an observation")
@@ -301,24 +304,26 @@ def then_histogram_observation(behaviour_state: dict[str, object]) -> None:
     """Verify duration histogram has an observation."""
     metrics = typ.cast("InMemoryMetrics", behaviour_state["metrics"])
     durations = metrics.histograms.get("cuprum_duration_seconds", [])
-    assert len(durations) == 1
-    assert durations[0] >= 0.0
+    assert len(durations) == 1, "Duration histogram should have exactly one observation"
+    assert durations[0] >= 0.0, "Duration should be non-negative"
 
 
 @then("the failure counter is incremented")
 def then_failure_counter_incremented(behaviour_state: dict[str, object]) -> None:
     """Verify failure counter was incremented."""
     metrics = typ.cast("InMemoryMetrics", behaviour_state["metrics"])
-    assert metrics.counters.get("cuprum_failures_total") == 1.0
+    assert metrics.counters.get("cuprum_failures_total") == 1.0, (
+        "Failure counter should be 1.0"
+    )
 
 
 @then("a span is created and ended")
 def then_span_created(behaviour_state: dict[str, object]) -> None:
     """Verify a span was created and properly ended."""
     tracer = typ.cast("InMemoryTracer", behaviour_state["tracer"])
-    assert len(tracer.spans) == 1
+    assert len(tracer.spans) == 1, "Expected exactly one span"
     span = tracer.spans[0]
-    assert span.ended is True
+    assert span.ended is True, "Span should be ended"
 
 
 @then("the span has program and exit code attributes")
@@ -326,9 +331,9 @@ def then_span_attributes(behaviour_state: dict[str, object]) -> None:
     """Verify span has expected attributes."""
     tracer = typ.cast("InMemoryTracer", behaviour_state["tracer"])
     span = tracer.spans[0]
-    assert "cuprum.program" in span.attributes
-    assert "cuprum.exit_code" in span.attributes
-    assert span.attributes["cuprum.exit_code"] == 0
+    assert "cuprum.program" in span.attributes, "Missing cuprum.program attribute"
+    assert "cuprum.exit_code" in span.attributes, "Missing cuprum.exit_code attribute"
+    assert span.attributes["cuprum.exit_code"] == 0, "Exit code should be 0"
 
 
 @then("the span records output as events")
@@ -337,8 +342,8 @@ def then_span_events(behaviour_state: dict[str, object]) -> None:
     tracer = typ.cast("InMemoryTracer", behaviour_state["tracer"])
     span = tracer.spans[0]
     event_names = [name for name, _ in span.events]
-    assert "cuprum.stdout" in event_names
-    assert "cuprum.stderr" in event_names
+    assert "cuprum.stdout" in event_names, "Missing cuprum.stdout event"
+    assert "cuprum.stderr" in event_names, "Missing cuprum.stderr event"
 
 
 @then("the span status indicates an error")
@@ -346,5 +351,5 @@ def then_span_error_status(behaviour_state: dict[str, object]) -> None:
     """Verify span status indicates failure."""
     tracer = typ.cast("InMemoryTracer", behaviour_state["tracer"])
     span = tracer.spans[0]
-    assert span.status_ok is False
-    assert span.attributes.get("cuprum.exit_code") == 1
+    assert span.status_ok is False, "Span status should indicate error"
+    assert span.attributes.get("cuprum.exit_code") == 1, "Exit code should be 1"
