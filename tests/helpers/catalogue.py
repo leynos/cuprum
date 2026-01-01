@@ -38,7 +38,7 @@ def cat_catalogue() -> tuple[ProgramCatalogue, Program]:
     project = ProjectSettings(
         name="stream-fidelity-tests",
         programs=(cat_program,),
-        documentation_locations=("docs/users-guide.md#stream-fidelity",),
+        documentation_locations=("docs/users-guide.md#pipeline-execution",),
         noise_rules=(),
     )
     return ProgramCatalogue(projects=(project,)), cat_program

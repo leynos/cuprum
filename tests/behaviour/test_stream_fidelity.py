@@ -27,13 +27,13 @@ _BYTES_PER_LINE = 48  # Results in 64 chars of base64 per line
 def _generate_test_data() -> str:
     """Generate deterministic random base64 data for testing.
 
-    Uses a fixed seed so the output is identical across runs,
-    enabling reliable snapshot comparisons.
+    Uses a local RNG with fixed seed so the output is identical across runs,
+    enabling reliable snapshot comparisons without affecting global state.
     """
-    random.seed(_SEED)
+    rng = random.Random(_SEED)  # noqa: S311
     lines = []
     for _ in range(_LINES):
-        raw = random.randbytes(_BYTES_PER_LINE)  # noqa: S311
+        raw = rng.randbytes(_BYTES_PER_LINE)
         lines.append(base64.b64encode(raw).decode("ascii"))
     return "\n".join(lines)
 
