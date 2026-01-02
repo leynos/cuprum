@@ -10,7 +10,7 @@ from pytest_bdd import given, scenario, then, when
 
 from cuprum import scoped, sh
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
-from tests.helpers.catalogue import cat_catalogue, python_catalogue
+from tests.helpers.catalogue import cat_program, python_catalogue
 
 if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
@@ -54,26 +54,26 @@ def given_random_data() -> tuple[Pipeline, frozenset[Program]]:
     """Generate test data and build the pipeline."""
     data = _generate_test_data()
 
-    # Build catalogues for Python and cat
-    _, python_program = python_catalogue()
-    _, cat_program = cat_catalogue()
+    # Get programs for the pipeline
+    _, python_prog = python_catalogue()
+    cat_prog = cat_program()
 
     # Combine into single catalogue for the pipeline
     project = ProjectSettings(
         name="stream-fidelity-tests",
-        programs=(python_program, cat_program),
-        documentation_locations=(),
+        programs=(python_prog, cat_prog),
+        documentation_locations=("docs/users-guide.md#pipeline-execution",),
         noise_rules=(),
     )
     catalogue = ProgramCatalogue(projects=(project,))
 
-    python_cmd = sh.make(python_program, catalogue=catalogue)
-    cat_cmd = sh.make(cat_program, catalogue=catalogue)
+    python_cmd = sh.make(python_prog, catalogue=catalogue)
+    cat_cmd = sh.make(cat_prog, catalogue=catalogue)
 
     # Pipeline: Python outputs data, cat passes it through
     pipeline = python_cmd("-c", f"print({data!r})") | cat_cmd()
 
-    allowlist = frozenset([python_program, cat_program])
+    allowlist = frozenset([python_prog, cat_prog])
     return pipeline, allowlist
 
 

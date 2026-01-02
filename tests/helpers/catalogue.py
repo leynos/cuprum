@@ -32,13 +32,6 @@ def python_builder() -> typ.Callable[..., SafeCmd]:
     return sh.make(program, catalogue=catalogue)
 
 
-def cat_catalogue() -> tuple[ProgramCatalogue, Program]:
-    """Construct a catalogue and expose the allowlisted cat program."""
-    cat_program = Program("cat")
-    project = ProjectSettings(
-        name="stream-fidelity-tests",
-        programs=(cat_program,),
-        documentation_locations=("docs/users-guide.md#pipeline-execution",),
-        noise_rules=(),
-    )
-    return ProgramCatalogue(projects=(project,)), cat_program
+def cat_program() -> Program:
+    """Return the cat program for stream fidelity tests."""
+    return Program("cat")
