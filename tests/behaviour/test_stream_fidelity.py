@@ -51,7 +51,18 @@ def test_pipeline_preserves_random_data() -> None:
     target_fixture="test_pipeline",
 )
 def given_random_data() -> tuple[Pipeline, frozenset[Program]]:
-    """Generate test data and build the pipeline."""
+    """Generate test data and build the pipeline.
+
+    Returns
+    -------
+    tuple[Pipeline, frozenset[Program]]
+        A tuple containing:
+        - Pipeline: The composed python->cat pipeline that prints the
+          generated base64 data via Python and pipes it through cat.
+        - frozenset[Program]: The allowlist of programs (python_prog and
+          cat_prog) required by scoped() to permit execution.
+
+    """
     data = _generate_test_data()
 
     # Get programs for the pipeline
