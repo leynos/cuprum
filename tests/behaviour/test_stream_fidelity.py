@@ -9,8 +9,11 @@ import typing as typ
 from pytest_bdd import given, scenario, then, when
 
 from cuprum import scoped, sh
-from cuprum.catalogue import ProgramCatalogue, ProjectSettings
-from tests.helpers.catalogue import cat_program, python_catalogue
+from tests.helpers.catalogue import (
+    cat_program,
+    combine_programs_into_catalogue,
+    python_catalogue,
+)
 
 if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
@@ -70,13 +73,12 @@ def given_random_data() -> tuple[Pipeline, frozenset[Program]]:
     cat_prog = cat_program()
 
     # Combine into single catalogue for the pipeline
-    project = ProjectSettings(
-        name="stream-fidelity-tests",
-        programs=(python_prog, cat_prog),
+    catalogue = combine_programs_into_catalogue(
+        python_prog,
+        cat_prog,
+        project_name="stream-fidelity-tests",
         documentation_locations=("docs/users-guide.md#pipeline-execution",),
-        noise_rules=(),
     )
-    catalogue = ProgramCatalogue(projects=(project,))
 
     python_cmd = sh.make(python_prog, catalogue=catalogue)
     cat_cmd = sh.make(cat_prog, catalogue=catalogue)

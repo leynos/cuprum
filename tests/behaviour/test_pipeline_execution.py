@@ -9,8 +9,7 @@ import typing as typ
 from pytest_bdd import given, scenario, then, when
 
 from cuprum import ECHO, scoped, sh
-from cuprum.catalogue import ProgramCatalogue, ProjectSettings
-from tests.helpers.catalogue import python_catalogue
+from tests.helpers.catalogue import combine_programs_into_catalogue, python_catalogue
 
 if typ.TYPE_CHECKING:
     from cuprum.program import Program
@@ -105,13 +104,11 @@ def _make_test_pipeline(
     _, python_program = python_catalogue()
 
     # Build a combined catalogue containing both ECHO and Python
-    project = ProjectSettings(
-        name="pipeline-tests",
-        programs=(ECHO, python_program),
-        documentation_locations=(),
-        noise_rules=(),
+    catalogue = combine_programs_into_catalogue(
+        ECHO,
+        python_program,
+        project_name="pipeline-tests",
     )
-    catalogue = ProgramCatalogue(projects=(project,))
 
     # Map programs to command builders using the combined catalogue
     builders: dict[Program, typ.Any] = {
