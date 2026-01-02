@@ -1,6 +1,7 @@
 """Represent curated executables with a nominal ``Program`` type.
 
-Examples:
+Examples
+--------
 >>> from cuprum.program import Program
 >>> ECHO = Program("echo")
 >>> ECHO == "echo"

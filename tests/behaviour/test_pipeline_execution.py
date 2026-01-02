@@ -72,7 +72,8 @@ def _build_scenario_pipeline_from_commands(
         commands: List of (command_builder, args_tuple) pairs.
         allowlist: Programs to allow during execution.
 
-    Returns:
+    Returns
+    -------
         A _ScenarioPipeline with the constructed pipeline and allowlist.
 
     """
@@ -97,7 +98,8 @@ def _make_test_pipeline(
         stage_specs: Each spec is (program, args_tuple) defining one stage.
                     Program paths are resolved via python_catalogue if needed.
 
-    Returns:
+    Returns
+    -------
         A _ScenarioPipeline ready for execution with appropriate allowlist.
 
     """
