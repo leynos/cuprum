@@ -9,8 +9,7 @@ import typing as typ
 from pytest_bdd import given, scenario, then, when
 
 from cuprum import ECHO, scoped, sh
-from cuprum.catalogue import ProgramCatalogue, ProjectSettings
-from tests.helpers.catalogue import python_catalogue
+from tests.helpers.catalogue import combine_programs_into_catalogue, python_catalogue
 
 if typ.TYPE_CHECKING:
     from cuprum.program import Program
@@ -73,7 +72,8 @@ def _build_scenario_pipeline_from_commands(
         commands: List of (command_builder, args_tuple) pairs.
         allowlist: Programs to allow during execution.
 
-    Returns:
+    Returns
+    -------
         A _ScenarioPipeline with the constructed pipeline and allowlist.
 
     """
@@ -98,20 +98,19 @@ def _make_test_pipeline(
         stage_specs: Each spec is (program, args_tuple) defining one stage.
                     Program paths are resolved via python_catalogue if needed.
 
-    Returns:
+    Returns
+    -------
         A _ScenarioPipeline ready for execution with appropriate allowlist.
 
     """
     _, python_program = python_catalogue()
 
     # Build a combined catalogue containing both ECHO and Python
-    project = ProjectSettings(
-        name="pipeline-tests",
-        programs=(ECHO, python_program),
-        documentation_locations=(),
-        noise_rules=(),
+    catalogue = combine_programs_into_catalogue(
+        ECHO,
+        python_program,
+        project_name="pipeline-tests",
     )
-    catalogue = ProgramCatalogue(projects=(project,))
 
     # Map programs to command builders using the combined catalogue
     builders: dict[Program, typ.Any] = {

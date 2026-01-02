@@ -20,6 +20,8 @@ dev = [
     "pyright",
     "pytest-timeout",
     "pytest-xdist",
+    "syrupy",
+    "ty",
 ]
 
 [tool.ruff]
@@ -112,6 +114,10 @@ datetime = "dt"
 "unittest.mock" = "mock"
 "msgspec.json" = "msjson"
 typing = "typ"
+
+[tool.ruff.lint.pydocstyle]
+# Enforce NumPy docstring style
+convention = "numpy"
 
 [tool.ruff.lint.mccabe]
 max-complexity = 8

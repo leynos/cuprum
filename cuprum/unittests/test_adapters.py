@@ -332,7 +332,8 @@ class TestTracingHook:
             command_code: Python code to execute via `-c` flag.
             record_output: Whether to record stdout/stderr as span events.
 
-        Returns:
+        Returns
+        -------
             Tuple of (tracer, first_span) for assertions in the calling test.
 
         """
