@@ -716,24 +716,55 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-### Limiting concurrency
+### ConcurrentConfig
 
-Pass `concurrency=N` to limit parallel execution. This uses an
-`asyncio.Semaphore` internally:
+Configure execution via the `ConcurrentConfig` dataclass:
 
 ```python
 from cuprum import ECHO, run_concurrent_sync, scoped, sh
+from cuprum.concurrent import ConcurrentConfig
+
+echo = sh.make(ECHO)
+commands = [echo("-n", f"task-{i}") for i in range(10)]
+
+config = ConcurrentConfig(
+    concurrency=3,  # At most 3 commands run simultaneously
+    capture=True,  # Capture stdout/stderr (default)
+    echo=False,  # Do not tee output (default)
+    fail_fast=False,  # Continue after failures (default)
+)
+
+with scoped(allowlist=frozenset([ECHO])):
+    result = run_concurrent_sync(*commands, config=config)
+```
+
+Configuration attributes:
+
+- `concurrency`: Maximum parallel commands. `None` (default) runs all in
+  parallel; `1` runs sequentially.
+- `capture`: When `True` (default), capture stdout/stderr into results.
+- `echo`: When `True`, tee output to configured sinks.
+- `context`: Shared `ExecutionContext` for all commands.
+- `fail_fast`: When `True`, cancel remaining commands after first failure.
+
+When `config` is `None` (the default), `ConcurrentConfig()` is used.
+
+### Limiting concurrency
+
+Pass a `ConcurrentConfig` with `concurrency=N` to limit parallel execution.
+This uses an `asyncio.Semaphore` internally:
+
+```python
+from cuprum import ECHO, run_concurrent_sync, scoped, sh
+from cuprum.concurrent import ConcurrentConfig
 
 echo = sh.make(ECHO)
 commands = [echo("-n", f"task-{i}") for i in range(10)]
 
 with scoped(allowlist=frozenset([ECHO])):
     # At most 3 commands run simultaneously
-    result = run_concurrent_sync(*commands, concurrency=3)
+    result = run_concurrent_sync(*commands, config=ConcurrentConfig(concurrency=3))
 ```
-
-When `concurrency=None` (the default), all commands run in parallel without
-limit. When `concurrency=1`, commands execute sequentially.
 
 ### Failure handling
 
@@ -754,13 +785,15 @@ if not result.ok:
 
 ### Fail-fast mode
 
-Enable `fail_fast=True` to cancel remaining commands after the first failure:
+Enable `fail_fast=True` in the config to cancel remaining commands after the
+first failure:
 
 ```python
 from cuprum import run_concurrent_sync, scoped
+from cuprum.concurrent import ConcurrentConfig
 
 with scoped(allowlist=...):
-    result = run_concurrent_sync(*commands, fail_fast=True)
+    result = run_concurrent_sync(*commands, config=ConcurrentConfig(fail_fast=True))
 
 if not result.ok:
     print(f"First failure: {result.first_failure}")

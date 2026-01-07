@@ -27,6 +27,7 @@ from cuprum.catalogue import (
     UnknownProgramError,
 )
 from cuprum.concurrent import (
+    ConcurrentConfig,
     ConcurrentResult,
     run_concurrent,
     run_concurrent_sync,
@@ -76,6 +77,7 @@ __all__ = [
     "AllowRegistration",
     "BeforeHook",
     "CommandResult",
+    "ConcurrentConfig",
     "ConcurrentResult",
     "CuprumContext",
     "ExecEvent",

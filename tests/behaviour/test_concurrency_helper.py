@@ -9,7 +9,7 @@ import typing as typ
 from pytest_bdd import given, scenario, then, when
 
 from cuprum import ECHO, scoped, sh
-from cuprum.concurrent import ConcurrentResult, run_concurrent_sync
+from cuprum.concurrent import ConcurrentConfig, ConcurrentResult, run_concurrent_sync
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
@@ -137,7 +137,10 @@ def when_run_with_concurrency_limit(
     """Execute commands with concurrency limit of 2."""
     start = time.perf_counter()
     with scoped(allowlist=commands_under_test.allowlist):
-        result = run_concurrent_sync(*commands_under_test.commands, concurrency=2)
+        result = run_concurrent_sync(
+            *commands_under_test.commands,
+            config=ConcurrentConfig(concurrency=2),
+        )
     elapsed = time.perf_counter() - start
     return _ConcurrentExecution(result=result, elapsed=elapsed)
 
@@ -154,7 +157,7 @@ def when_run_collect_all(
     with scoped(allowlist=commands_under_test.allowlist):
         result = run_concurrent_sync(
             *commands_under_test.commands,
-            fail_fast=False,
+            config=ConcurrentConfig(fail_fast=False),
         )
     elapsed = time.perf_counter() - start
     return _ConcurrentExecution(result=result, elapsed=elapsed)
@@ -167,7 +170,10 @@ def when_run_fail_fast(
     """Execute commands with fail-fast enabled."""
     start = time.perf_counter()
     with scoped(allowlist=commands_under_test.allowlist):
-        result = run_concurrent_sync(*commands_under_test.commands, fail_fast=True)
+        result = run_concurrent_sync(
+            *commands_under_test.commands,
+            config=ConcurrentConfig(fail_fast=True),
+        )
     elapsed = time.perf_counter() - start
     return _ConcurrentExecution(result=result, elapsed=elapsed)
 

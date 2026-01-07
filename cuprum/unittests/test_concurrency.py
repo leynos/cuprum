@@ -8,7 +8,12 @@ import time
 import pytest
 
 from cuprum import ECHO, ForbiddenProgramError, scoped, sh
-from cuprum.concurrent import ConcurrentResult, run_concurrent, run_concurrent_sync
+from cuprum.concurrent import (
+    ConcurrentConfig,
+    ConcurrentResult,
+    run_concurrent,
+    run_concurrent_sync,
+)
 from tests.helpers.catalogue import python_catalogue
 
 
@@ -75,7 +80,7 @@ def test_concurrency_limit_restricts_parallel_execution() -> None:
 
     with scoped(allowlist=frozenset([python_program])):
         start = time.perf_counter()
-        result = run_concurrent_sync(*commands, concurrency=2)
+        result = run_concurrent_sync(*commands, config=ConcurrentConfig(concurrency=2))
         elapsed = time.perf_counter() - start
 
     assert result.ok is True
@@ -97,7 +102,9 @@ def test_concurrency_none_allows_unlimited() -> None:
 
     with scoped(allowlist=frozenset([python_program])):
         start = time.perf_counter()
-        result = run_concurrent_sync(*commands, concurrency=None)
+        result = run_concurrent_sync(
+            *commands, config=ConcurrentConfig(concurrency=None)
+        )
         elapsed = time.perf_counter() - start
 
     assert result.ok is True
@@ -119,7 +126,7 @@ def test_concurrency_one_executes_sequentially() -> None:
 
     with scoped(allowlist=frozenset([python_program])):
         start = time.perf_counter()
-        result = run_concurrent_sync(*commands, concurrency=1)
+        result = run_concurrent_sync(*commands, config=ConcurrentConfig(concurrency=1))
         elapsed = time.perf_counter() - start
 
     assert result.ok is True
@@ -138,7 +145,9 @@ def test_collect_all_mode_continues_after_failure() -> None:
     cmd3 = python("-c", "print('third')")
 
     with scoped(allowlist=frozenset([python_program])):
-        result = run_concurrent_sync(cmd1, cmd2, cmd3, fail_fast=False)
+        result = run_concurrent_sync(
+            cmd1, cmd2, cmd3, config=ConcurrentConfig(fail_fast=False)
+        )
 
     assert result.ok is False
     assert len(result.results) == 3
@@ -159,7 +168,9 @@ def test_fail_fast_mode_cancels_pending() -> None:
 
     with scoped(allowlist=frozenset([python_program])):
         start = time.perf_counter()
-        result = run_concurrent_sync(cmd1, cmd2, fail_fast=True)
+        result = run_concurrent_sync(
+            cmd1, cmd2, config=ConcurrentConfig(fail_fast=True)
+        )
         elapsed = time.perf_counter() - start
 
     assert result.ok is False
@@ -252,26 +263,14 @@ def test_empty_commands_raises_value_error() -> None:
 
 def test_concurrency_zero_raises_value_error() -> None:
     """Concurrency of 0 raises ValueError."""
-    echo = sh.make(ECHO)
-    cmd = echo("-n", "hello")
-
-    with (
-        scoped(allowlist=frozenset([ECHO])),
-        pytest.raises(ValueError, match="concurrency must be >= 1"),
-    ):
-        run_concurrent_sync(cmd, concurrency=0)
+    with pytest.raises(ValueError, match="concurrency must be >= 1"):
+        ConcurrentConfig(concurrency=0)
 
 
 def test_concurrency_negative_raises_value_error() -> None:
     """Negative concurrency raises ValueError."""
-    echo = sh.make(ECHO)
-    cmd = echo("-n", "hello")
-
-    with (
-        scoped(allowlist=frozenset([ECHO])),
-        pytest.raises(ValueError, match="concurrency must be >= 1"),
-    ):
-        run_concurrent_sync(cmd, concurrency=-1)
+    with pytest.raises(ValueError, match="concurrency must be >= 1"):
+        ConcurrentConfig(concurrency=-1)
 
 
 def test_forbidden_program_raises_before_execution() -> None:
@@ -351,7 +350,7 @@ def test_capture_false_returns_none_stdout() -> None:
     cmd = echo("-n", "hello")
 
     with scoped(allowlist=frozenset([ECHO])):
-        result = run_concurrent_sync(cmd, capture=False)
+        result = run_concurrent_sync(cmd, config=ConcurrentConfig(capture=False))
 
     assert result.ok is True
     assert result.results[0].stdout is None

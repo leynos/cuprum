@@ -29,6 +29,46 @@ class _ConcurrentRunConfig:
 
 
 @dc.dataclass(frozen=True, slots=True)
+class ConcurrentConfig:
+    """Configuration for concurrent command execution.
+
+    Attributes
+    ----------
+    concurrency:
+        Maximum number of commands to execute concurrently. When None,
+        all commands are started immediately with no throttling.
+        Must be >= 1 when provided.
+    capture:
+        When True, capture stdout/stderr for each command into the
+        CommandResult. When False, output is not captured and stdout
+        will be None in results.
+    echo:
+        When True, tee output to configured sinks (stdout/stderr by
+        default) in addition to capturing.
+    context:
+        Shared execution context for all commands. When None, uses
+        the current context from the execution environment.
+    fail_fast:
+        When True, cancel remaining commands after the first command
+        exits with a non-zero status. When False (default), all
+        commands run to completion regardless of individual failures.
+
+    """
+
+    concurrency: int | None = None
+    capture: bool = True
+    echo: bool = False
+    context: ExecutionContext | None = None
+    fail_fast: bool = False
+
+    def __post_init__(self) -> None:
+        """Validate configuration parameters."""
+        if self.concurrency is not None and self.concurrency < 1:
+            msg = f"concurrency must be >= 1, got {self.concurrency}"
+            raise ValueError(msg)
+
+
+@dc.dataclass(frozen=True, slots=True)
 class ConcurrentResult:
     """Aggregated result from concurrent command execution.
 
@@ -114,6 +154,37 @@ async def _run_collect_all(
     )
 
 
+def _build_final_results(
+    results: list[CommandResult | None],
+) -> tuple[list[CommandResult], list[int]]:
+    """Build final results and sorted failure indices from partial results.
+
+    Parameters
+    ----------
+    results:
+        List of CommandResult or None for cancelled commands.
+
+    Returns
+    -------
+    tuple[list[CommandResult], list[int]]
+        Tuple of (final_results, sorted_failures) where final_results contains
+        only completed commands and sorted_failures contains indices of failed
+        commands in ascending order.
+
+    """
+    final_results: list[CommandResult] = []
+    failures: list[int] = []
+
+    for idx, result in enumerate(results):
+        if result is not None:
+            final_results.append(result)
+            if not result.ok:
+                failures.append(idx)
+
+    failures.sort()
+    return final_results, failures
+
+
 async def _run_fail_fast(
     commands: cabc.Sequence[SafeCmd],
     semaphore: asyncio.Semaphore | None,
@@ -121,7 +192,6 @@ async def _run_fail_fast(
 ) -> ConcurrentResult:
     """Execute commands with fail-fast cancellation on first non-zero exit."""
     results: list[CommandResult | None] = [None] * len(commands)
-    failures: list[int] = []
     first_failure_index: int | None = None
 
     async def run_indexed(idx: int, cmd: SafeCmd) -> None:
@@ -140,19 +210,7 @@ async def _run_fail_fast(
         # Expected when a command fails; continue to build result
         pass
 
-    # Build final results from whatever completed
-    final_results: list[CommandResult] = []
-    for idx, result in enumerate(results):
-        if result is not None:
-            final_results.append(result)
-            if not result.ok:
-                failures.append(idx)
-        else:
-            # Command was cancelled before completion; not included in results
-            pass
-
-    # Sort failures for consistent ordering
-    failures.sort()
+    final_results, failures = _build_final_results(results)
 
     return ConcurrentResult(
         results=tuple(final_results),
@@ -160,13 +218,9 @@ async def _run_fail_fast(
     )
 
 
-async def run_concurrent(  # noqa: PLR0913
+async def run_concurrent(
     *commands: SafeCmd,
-    concurrency: int | None = None,
-    capture: bool = True,
-    echo: bool = False,
-    context: ExecutionContext | None = None,
-    fail_fast: bool = False,
+    config: ConcurrentConfig | None = None,
 ) -> ConcurrentResult:
     """Execute multiple SafeCmd instances concurrently.
 
@@ -174,17 +228,11 @@ async def run_concurrent(  # noqa: PLR0913
     ----------
     *commands:
         SafeCmd instances to execute concurrently.
-    concurrency:
-        Maximum concurrent executions. None means unlimited.
-        Must be >= 1 when provided.
-    capture:
-        When True, capture stdout/stderr for each command.
-    echo:
-        When True, tee output to configured sinks.
-    context:
-        Shared execution context for all commands.
-    fail_fast:
-        When True, cancel remaining commands after first failure.
+    config:
+        Configuration for concurrent execution. When None, uses default
+        ConcurrentConfig() which allows unlimited concurrency, captures
+        output, does not echo, uses current context, and collects all
+        results (no fail-fast).
 
     Returns
     -------
@@ -196,15 +244,13 @@ async def run_concurrent(  # noqa: PLR0913
     ForbiddenProgramError
         If any command's program is not in the current allowlist.
     ValueError
-        If concurrency < 1 or no commands provided.
+        If config.concurrency < 1 or no commands provided.
 
     """
+    cfg = config or ConcurrentConfig()
+
     if not commands:
         msg = "At least one command must be provided"
-        raise ValueError(msg)
-
-    if concurrency is not None and concurrency < 1:
-        msg = f"concurrency must be >= 1, got {concurrency}"
         raise ValueError(msg)
 
     # Pre-flight allowlist check for all commands
@@ -213,21 +259,21 @@ async def run_concurrent(  # noqa: PLR0913
         ctx.check_allowed(cmd.program)
 
     # Create semaphore if concurrency limit specified
-    semaphore = asyncio.Semaphore(concurrency) if concurrency is not None else None
-    config = _ConcurrentRunConfig(capture=capture, echo=echo, context=context)
+    semaphore = (
+        asyncio.Semaphore(cfg.concurrency) if cfg.concurrency is not None else None
+    )
+    run_config = _ConcurrentRunConfig(
+        capture=cfg.capture, echo=cfg.echo, context=cfg.context
+    )
 
-    if fail_fast:
-        return await _run_fail_fast(commands, semaphore, config)
-    return await _run_collect_all(commands, semaphore, config)
+    if cfg.fail_fast:
+        return await _run_fail_fast(commands, semaphore, run_config)
+    return await _run_collect_all(commands, semaphore, run_config)
 
 
-def run_concurrent_sync(  # noqa: PLR0913
+def run_concurrent_sync(
     *commands: SafeCmd,
-    concurrency: int | None = None,
-    capture: bool = True,
-    echo: bool = False,
-    context: ExecutionContext | None = None,
-    fail_fast: bool = False,
+    config: ConcurrentConfig | None = None,
 ) -> ConcurrentResult:
     """Execute multiple SafeCmd instances concurrently (synchronous wrapper).
 
@@ -238,17 +284,11 @@ def run_concurrent_sync(  # noqa: PLR0913
     ----------
     *commands:
         SafeCmd instances to execute concurrently.
-    concurrency:
-        Maximum concurrent executions. None means unlimited.
-        Must be >= 1 when provided.
-    capture:
-        When True, capture stdout/stderr for each command.
-    echo:
-        When True, tee output to configured sinks.
-    context:
-        Shared execution context for all commands.
-    fail_fast:
-        When True, cancel remaining commands after first failure.
+    config:
+        Configuration for concurrent execution. When None, uses default
+        ConcurrentConfig() which allows unlimited concurrency, captures
+        output, does not echo, uses current context, and collects all
+        results (no fail-fast).
 
     Returns
     -------
@@ -259,16 +299,13 @@ def run_concurrent_sync(  # noqa: PLR0913
     return asyncio.run(
         run_concurrent(
             *commands,
-            concurrency=concurrency,
-            capture=capture,
-            echo=echo,
-            context=context,
-            fail_fast=fail_fast,
+            config=config,
         ),
     )
 
 
 __all__ = [
+    "ConcurrentConfig",
     "ConcurrentResult",
     "run_concurrent",
     "run_concurrent_sync",
