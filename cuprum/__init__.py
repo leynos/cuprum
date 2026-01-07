@@ -26,6 +26,11 @@ from cuprum.catalogue import (
     ProjectSettings,
     UnknownProgramError,
 )
+from cuprum.concurrent import (
+    ConcurrentResult,
+    run_concurrent,
+    run_concurrent_sync,
+)
 from cuprum.context import (
     AfterHook,
     AllowRegistration,
@@ -71,6 +76,7 @@ __all__ = [
     "AllowRegistration",
     "BeforeHook",
     "CommandResult",
+    "ConcurrentResult",
     "CuprumContext",
     "ExecEvent",
     "ExecHook",
@@ -94,6 +100,8 @@ __all__ = [
     "get_context",
     "logging_hook",
     "observe",
+    "run_concurrent",
+    "run_concurrent_sync",
     "scoped",
     "sh",
 ]

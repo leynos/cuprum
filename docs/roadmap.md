@@ -60,10 +60,10 @@ Focus: Provide pipeline execution, richer events, and concurrency helpers.
 
 ### 2.3. Concurrency helpers
 
-- [ ] 2.3.1. Add helper to run multiple `SafeCmd` instances concurrently with
+- [x] 2.3.1. Add helper to run multiple `SafeCmd` instances concurrently with
   optional concurrency limits, while preserving hook semantics and aggregated
   results.
-  - [ ] Document common patterns alongside examples.
+  - [x] Document common patterns alongside examples.
 
 ## 3. Builders and ergonomics
 
