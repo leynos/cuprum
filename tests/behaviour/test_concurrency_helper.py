@@ -115,16 +115,40 @@ def given_failing_and_slow_commands() -> _ScenarioCommands:
     return _ScenarioCommands(commands=commands, allowlist=frozenset([python_program]))
 
 
+def _execute_concurrent(
+    commands_under_test: _ScenarioCommands,
+    config: ConcurrentConfig | None = None,
+) -> _ConcurrentExecution:
+    """Execute commands concurrently and measure elapsed time.
+
+    Parameters
+    ----------
+    commands_under_test:
+        The scenario commands containing the commands to execute and the
+        allowlist to scope the execution context.
+    config:
+        Optional ConcurrentConfig to pass to run_concurrent_sync. When None,
+        uses default configuration (unlimited concurrency, collect-all mode).
+
+    Returns
+    -------
+    _ConcurrentExecution
+        The execution result containing the ConcurrentResult and elapsed time.
+
+    """
+    start = time.perf_counter()
+    with scoped(allowlist=commands_under_test.allowlist):
+        result = run_concurrent_sync(*commands_under_test.commands, config=config)
+    elapsed = time.perf_counter() - start
+    return _ConcurrentExecution(result=result, elapsed=elapsed)
+
+
 @when("I run them concurrently", target_fixture="execution_result")
 def when_run_concurrently(
     commands_under_test: _ScenarioCommands,
 ) -> _ConcurrentExecution:
     """Execute commands concurrently with default settings."""
-    start = time.perf_counter()
-    with scoped(allowlist=commands_under_test.allowlist):
-        result = run_concurrent_sync(*commands_under_test.commands)
-    elapsed = time.perf_counter() - start
-    return _ConcurrentExecution(result=result, elapsed=elapsed)
+    return _execute_concurrent(commands_under_test)
 
 
 @when(
@@ -135,14 +159,9 @@ def when_run_with_concurrency_limit(
     commands_under_test: _ScenarioCommands,
 ) -> _ConcurrentExecution:
     """Execute commands with concurrency limit of 2."""
-    start = time.perf_counter()
-    with scoped(allowlist=commands_under_test.allowlist):
-        result = run_concurrent_sync(
-            *commands_under_test.commands,
-            config=ConcurrentConfig(concurrency=2),
-        )
-    elapsed = time.perf_counter() - start
-    return _ConcurrentExecution(result=result, elapsed=elapsed)
+    return _execute_concurrent(
+        commands_under_test, config=ConcurrentConfig(concurrency=2)
+    )
 
 
 @when(
@@ -153,14 +172,9 @@ def when_run_collect_all(
     commands_under_test: _ScenarioCommands,
 ) -> _ConcurrentExecution:
     """Execute commands in collect-all mode (fail_fast=False)."""
-    start = time.perf_counter()
-    with scoped(allowlist=commands_under_test.allowlist):
-        result = run_concurrent_sync(
-            *commands_under_test.commands,
-            config=ConcurrentConfig(fail_fast=False),
-        )
-    elapsed = time.perf_counter() - start
-    return _ConcurrentExecution(result=result, elapsed=elapsed)
+    return _execute_concurrent(
+        commands_under_test, config=ConcurrentConfig(fail_fast=False)
+    )
 
 
 @when("I run them with fail-fast enabled", target_fixture="execution_result")
@@ -168,14 +182,9 @@ def when_run_fail_fast(
     commands_under_test: _ScenarioCommands,
 ) -> _ConcurrentExecution:
     """Execute commands with fail-fast enabled."""
-    start = time.perf_counter()
-    with scoped(allowlist=commands_under_test.allowlist):
-        result = run_concurrent_sync(
-            *commands_under_test.commands,
-            config=ConcurrentConfig(fail_fast=True),
-        )
-    elapsed = time.perf_counter() - start
-    return _ConcurrentExecution(result=result, elapsed=elapsed)
+    return _execute_concurrent(
+        commands_under_test, config=ConcurrentConfig(fail_fast=True)
+    )
 
 
 @then("all results are returned in submission order")

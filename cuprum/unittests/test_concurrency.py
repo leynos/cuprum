@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import time
+import typing as typ
 
 import pytest
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+    import contextlib
 
 from cuprum import ECHO, ForbiddenProgramError, scoped, sh
 from cuprum.concurrent import (
@@ -15,6 +20,85 @@ from cuprum.concurrent import (
     run_concurrent_sync,
 )
 from tests.helpers.catalogue import python_catalogue
+
+
+def _assert_concurrent_timing(  # noqa: PLR0917
+    num_commands: int,
+    sleep_seconds: float,
+    concurrency: int | None,
+    min_elapsed: float,
+    max_elapsed: float | None = None,
+) -> None:
+    """Run concurrent sleep commands and assert timing constraints.
+
+    Creates `num_commands` Python commands that each sleep for `sleep_seconds`,
+    runs them concurrently with the specified concurrency setting, and asserts
+    that the elapsed time falls within the expected bounds.
+
+    Args:
+    ----
+        num_commands: Number of sleep commands to run.
+        sleep_seconds: Duration each command sleeps for.
+        concurrency: Concurrency limit (None for unlimited).
+        min_elapsed: Minimum expected elapsed time in seconds.
+        max_elapsed: Maximum expected elapsed time in seconds (optional).
+
+    """
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+
+    commands = [
+        python("-c", f"import time; time.sleep({sleep_seconds}); print('done')")
+        for _ in range(num_commands)
+    ]
+
+    with scoped(allowlist=frozenset([python_program])):
+        start = time.perf_counter()
+        result = run_concurrent_sync(
+            *commands, config=ConcurrentConfig(concurrency=concurrency)
+        )
+        elapsed = time.perf_counter() - start
+
+    assert result.ok is True
+    assert len(result.results) == num_commands
+    assert elapsed >= min_elapsed, (
+        f"Expected >= {min_elapsed}s with concurrency={concurrency}, got {elapsed:.3f}s"
+    )
+    if max_elapsed is not None:
+        assert elapsed < max_elapsed, (
+            f"Expected < {max_elapsed}s with concurrency={concurrency}, "
+            f"got {elapsed:.3f}s"
+        )
+
+
+def _run_hook_test[T](
+    hook_context: cabc.Callable[[list[T]], contextlib.AbstractContextManager[None]],
+    num_commands: int = 3,
+) -> list[T]:
+    """Run concurrent echo commands within a hook context and return hook calls.
+
+    Creates `num_commands` echo commands, runs them concurrently within the
+    provided hook context, and returns the list populated by the hook.
+
+    Args:
+    ----
+        hook_context: A factory that takes an empty list and returns a context
+            manager. The hook implementation should append to the list.
+        num_commands: Number of echo commands to run (default: 3).
+
+    Returns
+    -------
+        The list of values collected by the hook during execution.
+
+    """
+    echo = sh.make(ECHO)
+    commands = [echo("-n", f"cmd{i}") for i in range(num_commands)]
+    hook_calls: list[T] = []
+
+    with scoped(allowlist=frozenset([ECHO])), hook_context(hook_calls):
+        run_concurrent_sync(*commands)
+
+    return hook_calls
 
 
 def test_run_concurrent_returns_concurrent_result() -> None:
@@ -70,69 +154,33 @@ def test_run_concurrent_sync_mirrors_async() -> None:
 
 def test_concurrency_limit_restricts_parallel_execution() -> None:
     """Concurrency limit restricts the number of parallel executions."""
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-
-    # Commands that sleep briefly to allow overlap detection
-    commands = [
-        python("-c", "import time; time.sleep(0.1); print('done')") for _ in range(4)
-    ]
-
-    with scoped(allowlist=frozenset([python_program])):
-        start = time.perf_counter()
-        result = run_concurrent_sync(*commands, config=ConcurrentConfig(concurrency=2))
-        elapsed = time.perf_counter() - start
-
-    assert result.ok is True
-    assert len(result.results) == 4
-    # With concurrency=2 and 4 commands of 0.1s each, should take ~0.2s
-    # Allow margin for startup overhead
-    assert elapsed >= 0.15, f"Expected >= 0.15s with concurrency=2, got {elapsed:.3f}s"
+    _assert_concurrent_timing(
+        num_commands=4,
+        sleep_seconds=0.1,
+        concurrency=2,
+        min_elapsed=0.15,
+    )
 
 
 def test_concurrency_none_allows_unlimited() -> None:
     """concurrency=None allows all commands to run in parallel."""
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-
-    # Commands that sleep briefly
-    commands = [
-        python("-c", "import time; time.sleep(0.1); print('done')") for _ in range(4)
-    ]
-
-    with scoped(allowlist=frozenset([python_program])):
-        start = time.perf_counter()
-        result = run_concurrent_sync(
-            *commands, config=ConcurrentConfig(concurrency=None)
-        )
-        elapsed = time.perf_counter() - start
-
-    assert result.ok is True
-    assert len(result.results) == 4
-    # With unlimited concurrency, all should run in parallel (~0.1s)
-    assert elapsed < 0.3, (
-        f"Expected < 0.3s with unlimited concurrency, got {elapsed:.3f}s"
+    _assert_concurrent_timing(
+        num_commands=4,
+        sleep_seconds=0.1,
+        concurrency=None,
+        min_elapsed=0.0,
+        max_elapsed=0.3,
     )
 
 
 def test_concurrency_one_executes_sequentially() -> None:
     """concurrency=1 executes commands sequentially."""
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-
-    commands = [
-        python("-c", "import time; time.sleep(0.05); print('done')") for _ in range(3)
-    ]
-
-    with scoped(allowlist=frozenset([python_program])):
-        start = time.perf_counter()
-        result = run_concurrent_sync(*commands, config=ConcurrentConfig(concurrency=1))
-        elapsed = time.perf_counter() - start
-
-    assert result.ok is True
-    assert len(result.results) == 3
-    # With concurrency=1 and 3 commands of 0.05s each, should take ~0.15s
-    assert elapsed >= 0.1, f"Expected >= 0.1s with concurrency=1, got {elapsed:.3f}s"
+    _assert_concurrent_timing(
+        num_commands=3,
+        sleep_seconds=0.05,
+        concurrency=1,
+        min_elapsed=0.1,
+    )
 
 
 def test_collect_all_mode_continues_after_failure() -> None:
@@ -201,15 +249,13 @@ def test_before_hooks_fire_per_command() -> None:
     """Before hooks fire for each command in concurrent execution."""
     from cuprum import SafeCmd, before
 
-    echo = sh.make(ECHO)
-    commands = [echo("-n", f"cmd{i}") for i in range(3)]
-    hook_calls: list[str] = []
+    def make_tracker(calls: list[str]) -> cabc.Callable[[SafeCmd], None]:
+        def track_before(cmd: SafeCmd) -> None:
+            calls.append(str(cmd.program))
 
-    def track_before(cmd: SafeCmd) -> None:
-        hook_calls.append(str(cmd.program))
+        return track_before
 
-    with scoped(allowlist=frozenset([ECHO])), before(track_before):
-        run_concurrent_sync(*commands)
+    hook_calls = _run_hook_test(lambda calls: before(make_tracker(calls)))
 
     assert len(hook_calls) == 3
     assert all(call == "echo" for call in hook_calls)
@@ -219,16 +265,14 @@ def test_after_hooks_fire_per_command() -> None:
     """After hooks fire for each command in concurrent execution."""
     from cuprum import CommandResult, SafeCmd, after
 
-    echo = sh.make(ECHO)
-    commands = [echo("-n", f"cmd{i}") for i in range(3)]
-    hook_calls: list[int] = []
+    def make_tracker(calls: list[int]) -> cabc.Callable[[SafeCmd, CommandResult], None]:
+        def track_after(cmd: SafeCmd, result: CommandResult) -> None:
+            _ = cmd  # Unused
+            calls.append(result.exit_code)
 
-    def track_after(cmd: SafeCmd, result: CommandResult) -> None:
-        _ = cmd  # Unused
-        hook_calls.append(result.exit_code)
+        return track_after
 
-    with scoped(allowlist=frozenset([ECHO])), after(track_after):
-        run_concurrent_sync(*commands)
+    hook_calls = _run_hook_test(lambda calls: after(make_tracker(calls)))
 
     assert len(hook_calls) == 3
     assert all(code == 0 for code in hook_calls)
