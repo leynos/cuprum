@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import time
 import typing as typ
 
@@ -22,12 +23,28 @@ from cuprum.concurrent import (
 from tests.helpers.catalogue import python_catalogue
 
 
-def _assert_concurrent_timing(  # noqa: PLR0917
+@dataclasses.dataclass(frozen=True, slots=True)
+class _TimingExpectation:
+    """Expected timing bounds for concurrent command execution.
+
+    Attributes
+    ----------
+        min_elapsed: Minimum expected elapsed time in seconds. The test will
+            fail if execution completes faster than this threshold.
+        max_elapsed: Maximum expected elapsed time in seconds (optional). If
+            provided, the test will fail if execution takes longer than this.
+
+    """
+
+    min_elapsed: float
+    max_elapsed: float | None = None
+
+
+def _assert_concurrent_timing(
     num_commands: int,
     sleep_seconds: float,
     concurrency: int | None,
-    min_elapsed: float,
-    max_elapsed: float | None = None,
+    timing: _TimingExpectation,
 ) -> None:
     """Run concurrent sleep commands and assert timing constraints.
 
@@ -40,8 +57,7 @@ def _assert_concurrent_timing(  # noqa: PLR0917
         num_commands: Number of sleep commands to run.
         sleep_seconds: Duration each command sleeps for.
         concurrency: Concurrency limit (None for unlimited).
-        min_elapsed: Minimum expected elapsed time in seconds.
-        max_elapsed: Maximum expected elapsed time in seconds (optional).
+        timing: Expected timing bounds for the concurrent execution.
 
     """
     catalogue, python_program = python_catalogue()
@@ -61,12 +77,13 @@ def _assert_concurrent_timing(  # noqa: PLR0917
 
     assert result.ok is True
     assert len(result.results) == num_commands
-    assert elapsed >= min_elapsed, (
-        f"Expected >= {min_elapsed}s with concurrency={concurrency}, got {elapsed:.3f}s"
+    assert elapsed >= timing.min_elapsed, (
+        f"Expected >= {timing.min_elapsed}s with concurrency={concurrency}, "
+        f"got {elapsed:.3f}s"
     )
-    if max_elapsed is not None:
-        assert elapsed < max_elapsed, (
-            f"Expected < {max_elapsed}s with concurrency={concurrency}, "
+    if timing.max_elapsed is not None:
+        assert elapsed < timing.max_elapsed, (
+            f"Expected < {timing.max_elapsed}s with concurrency={concurrency}, "
             f"got {elapsed:.3f}s"
         )
 
@@ -158,7 +175,7 @@ def test_concurrency_limit_restricts_parallel_execution() -> None:
         num_commands=4,
         sleep_seconds=0.1,
         concurrency=2,
-        min_elapsed=0.15,
+        timing=_TimingExpectation(min_elapsed=0.15),
     )
 
 
@@ -168,8 +185,7 @@ def test_concurrency_none_allows_unlimited() -> None:
         num_commands=4,
         sleep_seconds=0.1,
         concurrency=None,
-        min_elapsed=0.0,
-        max_elapsed=0.3,
+        timing=_TimingExpectation(min_elapsed=0.0, max_elapsed=0.3),
     )
 
 
@@ -179,7 +195,7 @@ def test_concurrency_one_executes_sequentially() -> None:
         num_commands=3,
         sleep_seconds=0.05,
         concurrency=1,
-        min_elapsed=0.1,
+        timing=_TimingExpectation(min_elapsed=0.1),
     )
 
 
