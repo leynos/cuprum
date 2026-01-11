@@ -13,6 +13,7 @@ Example:
 
 from __future__ import annotations
 
+from cuprum._constants import PACKAGE_NAME
 from cuprum.catalogue import (
     CORE_OPS_PROJECT,
     DEFAULT_CATALOGUE,
@@ -61,8 +62,6 @@ from cuprum.sh import (
 )
 
 from . import sh
-
-PACKAGE_NAME = "cuprum"
 
 __all__ = [
     "CORE_OPS_PROJECT",
