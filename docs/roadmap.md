@@ -95,6 +95,18 @@ compromising explicitness.
   `docs/users-guide.md` and add release notes describing the migration path for
   existing users.
 
+### 3.4 Execution timeouts
+
+- [ ] 3.4.1. Add `timeout` parameters to `SafeCmd.run` / `run_sync` and
+  `Pipeline.run` / `run_sync`, matching `subprocess.run` semantics and
+  surfacing a `TimeoutExpired` exception with partial output when captured.
+- [ ] 3.4.2. Introduce scoped runtime defaults via `CuprumContext` so a timeout
+  can be set once per scope (for example, `sh.scoped(timeout=...)`) with clear
+  precedence over per-call values.
+- [ ] 3.4.3. Add unit and behavioural tests for single-command and pipeline
+  timeouts, including cleanup behaviour and partial output capture; document
+  usage and semantics in `docs/users-guide.md`.
+
 ## 4. Performance extensions
 
 Focus: Provide optional Rust-based stream operations for high-throughput
