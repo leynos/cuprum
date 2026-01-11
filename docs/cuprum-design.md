@@ -1063,6 +1063,66 @@ concurrently with optional concurrency limits. The implementation uses
 - `first_failure`: Property returning the first failed `CommandResult`, or
   `None` if all succeeded.
 
+Figure 4: Concurrent execution flow with allowlist validation and semaphore
+gating
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant run_concurrent
+    participant AllowlistCheck
+    participant Semaphore
+    participant SafeCmd as SafeCmd<br/>(per instance)
+    participant ResultAggregator
+
+    Caller->>run_concurrent: run_concurrent(*commands, config)
+
+    run_concurrent->>AllowlistCheck: Validate all programs<br/>against context allowlist
+    alt Any forbidden
+        AllowlistCheck-->>Caller: ForbiddenProgramError
+    end
+
+    loop For each SafeCmd (concurrent)
+        run_concurrent->>Semaphore: Acquire (if configured)
+        Semaphore-->>SafeCmd: Gate concurrent execution
+        SafeCmd->>SafeCmd: Fire before hook
+        SafeCmd->>SafeCmd: Execute process
+        SafeCmd->>SafeCmd: Fire exit hook
+        SafeCmd->>ResultAggregator: Record result & status
+        Semaphore->>Semaphore: Release
+    end
+
+    ResultAggregator->>run_concurrent: Aggregate results<br/>in submission order
+    run_concurrent-->>Caller: ConcurrentResult<br/>(results, failures, ok)
+```
+
+Figure 5: Fail-fast mode cancellation behaviour
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant run_concurrent
+    participant TaskGroup
+
+    Caller->>run_concurrent: run_concurrent(*commands,<br/>config with fail_fast=True)
+
+    rect rgb(200, 150, 255)
+        Note over TaskGroup: Fail-fast mode
+        loop Launch commands in TaskGroup
+            run_concurrent->>TaskGroup: spawn command task
+        end
+
+        alt First non-zero exit detected
+            TaskGroup->>TaskGroup: Raise _FirstFailureError
+            TaskGroup->>TaskGroup: Cancel pending tasks
+            Note over TaskGroup: Send SIGTERM→grace→SIGKILL
+        end
+    end
+
+    TaskGroup-->>run_concurrent: Partial results<br/>(completed + cancelled)
+    run_concurrent-->>Caller: ConcurrentResult<br/>(partial results,<br/>failure indices)
+```
+
 ### 8.4 Telemetry Adapter Design Decisions
 
 Cuprum provides example adapters in `cuprum.adapters` that demonstrate how to
