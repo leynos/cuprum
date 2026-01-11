@@ -76,8 +76,8 @@ def given_three_quick_echo_commands() -> _ScenarioCommands:
 @given("four commands that sleep briefly", target_fixture="commands_under_test")
 def given_four_sleeping_commands() -> _ScenarioCommands:
     """Create four commands that sleep briefly to test concurrency limiting."""
-    _, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=python_catalogue()[0])
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
     commands = tuple(
         python("-c", "import time; time.sleep(0.1); print('done')") for _ in range(4)
     )
@@ -90,8 +90,8 @@ def given_four_sleeping_commands() -> _ScenarioCommands:
 )
 def given_mixed_success_failure_commands() -> _ScenarioCommands:
     """Create commands where one fails."""
-    _, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=python_catalogue()[0])
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
     commands = (
         python("-c", "print('success1')"),
         python("-c", "import sys; sys.exit(42)"),
@@ -106,8 +106,8 @@ def given_mixed_success_failure_commands() -> _ScenarioCommands:
 )
 def given_failing_and_slow_commands() -> _ScenarioCommands:
     """Create a failing command and a slow command for fail-fast testing."""
-    _, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=python_catalogue()[0])
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
     commands = (
         python("-c", "import sys; sys.exit(1)"),
         python("-c", "import time; time.sleep(2); print('slow')"),

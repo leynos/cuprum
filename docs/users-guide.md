@@ -721,8 +721,7 @@ asyncio.run(main())
 Configure execution via the `ConcurrentConfig` dataclass:
 
 ```python
-from cuprum import ECHO, run_concurrent_sync, scoped, sh
-from cuprum.concurrent import ConcurrentConfig
+from cuprum import ECHO, ConcurrentConfig, run_concurrent_sync, scoped, sh
 
 echo = sh.make(ECHO)
 commands = [echo("-n", f"task-{i}") for i in range(10)]
@@ -755,8 +754,7 @@ Pass a `ConcurrentConfig` with `concurrency=N` to limit parallel execution.
 This uses an `asyncio.Semaphore` internally:
 
 ```python
-from cuprum import ECHO, run_concurrent_sync, scoped, sh
-from cuprum.concurrent import ConcurrentConfig
+from cuprum import ECHO, ConcurrentConfig, run_concurrent_sync, scoped, sh
 
 echo = sh.make(ECHO)
 commands = [echo("-n", f"task-{i}") for i in range(10)]
@@ -789,8 +787,7 @@ Enable `fail_fast=True` in the config to cancel remaining commands after the
 first failure:
 
 ```python
-from cuprum import run_concurrent_sync, scoped
-from cuprum.concurrent import ConcurrentConfig
+from cuprum import ConcurrentConfig, run_concurrent_sync, scoped
 
 with scoped(allowlist=...):
     result = run_concurrent_sync(*commands, config=ConcurrentConfig(fail_fast=True))
@@ -801,8 +798,8 @@ if not result.ok:
 ```
 
 In fail-fast mode, commands that were already running receive cancellation
-(SIGTERM then SIGKILL after the grace period). Commands that had not yet
-started are not scheduled.
+(SIGTERM (termination signal) then SIGKILL (kill signal) after the grace
+period). Commands that had not yet started are not scheduled.
 
 ### Hook semantics
 

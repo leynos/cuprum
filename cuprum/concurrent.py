@@ -112,14 +112,16 @@ async def _run_with_semaphore(
     config: _ConcurrentRunConfig,
 ) -> CommandResult:
     """Execute a single command, optionally throttled by semaphore."""
+
+    async def execute() -> CommandResult:
+        return await cmd.run(
+            capture=config.capture, echo=config.echo, context=config.context
+        )
+
     if semaphore is not None:
         async with semaphore:
-            return await cmd.run(
-                capture=config.capture, echo=config.echo, context=config.context
-            )
-    return await cmd.run(
-        capture=config.capture, echo=config.echo, context=config.context
-    )
+            return await execute()
+    return await execute()
 
 
 async def _run_collect_all(
@@ -255,15 +257,17 @@ async def run_concurrent(
         msg = "At least one command must be provided"
         raise ValueError(msg)
 
-    # Pre-flight allowlist check for all commands
-    ctx = current_context()
+    # Pre-flight allowlist check using the current CuprumContext (allowlist/hooks)
+    # Note: CuprumContext (allowlist) is separate from ExecutionContext (runtime params)
+    cuprum_ctx = current_context()
     for cmd in commands:
-        ctx.check_allowed(cmd.program)
+        cuprum_ctx.check_allowed(cmd.program)
 
     # Create semaphore if concurrency limit specified
     semaphore = (
         asyncio.Semaphore(cfg.concurrency) if cfg.concurrency is not None else None
     )
+    # ExecutionContext is passed through for runtime parameters (env, cwd, etc.)
     run_config = _ConcurrentRunConfig(
         capture=cfg.capture, echo=cfg.echo, context=cfg.context
     )

@@ -52,12 +52,16 @@ def _assert_concurrent_timing(
     runs them concurrently with the specified concurrency setting, and asserts
     that the elapsed time falls within the expected bounds.
 
-    Args:
-    ----
-        num_commands: Number of sleep commands to run.
-        sleep_seconds: Duration each command sleeps for.
-        concurrency: Concurrency limit (None for unlimited).
-        timing: Expected timing bounds for the concurrent execution.
+    Parameters
+    ----------
+    num_commands:
+        Number of sleep commands to run.
+    sleep_seconds:
+        Duration each command sleeps for.
+    concurrency:
+        Concurrency limit (None for unlimited).
+    timing:
+        Expected timing bounds for the concurrent execution.
 
     """
     catalogue, python_program = python_catalogue()
@@ -97,14 +101,17 @@ def _run_hook_test[T](
     Creates `num_commands` echo commands, runs them concurrently within the
     provided hook context, and returns the list populated by the hook.
 
-    Args:
-    ----
-        hook_context: A factory that takes an empty list and returns a context
-            manager. The hook implementation should append to the list.
-        num_commands: Number of echo commands to run (default: 3).
+    Parameters
+    ----------
+    hook_context:
+        A factory that takes an empty list and returns a context manager.
+        The hook implementation should append to the list.
+    num_commands:
+        Number of echo commands to run (default: 3).
 
     Returns
     -------
+    list[T]
         The list of values collected by the hook during execution.
 
     """
@@ -171,31 +178,34 @@ def test_run_concurrent_sync_mirrors_async() -> None:
 
 def test_concurrency_limit_restricts_parallel_execution() -> None:
     """Concurrency limit restricts the number of parallel executions."""
+    # Use longer sleeps and conservative thresholds to avoid flakiness under CI load
     _assert_concurrent_timing(
         num_commands=4,
-        sleep_seconds=0.1,
+        sleep_seconds=0.2,
         concurrency=2,
-        timing=_TimingExpectation(min_elapsed=0.15),
+        timing=_TimingExpectation(min_elapsed=0.3),
     )
 
 
 def test_concurrency_none_allows_unlimited() -> None:
     """concurrency=None allows all commands to run in parallel."""
+    # Use longer sleeps with wider margin for max_elapsed to tolerate CI jitter
     _assert_concurrent_timing(
         num_commands=4,
-        sleep_seconds=0.1,
+        sleep_seconds=0.2,
         concurrency=None,
-        timing=_TimingExpectation(min_elapsed=0.0, max_elapsed=0.3),
+        timing=_TimingExpectation(min_elapsed=0.0, max_elapsed=0.6),
     )
 
 
 def test_concurrency_one_executes_sequentially() -> None:
     """concurrency=1 executes commands sequentially."""
+    # Use longer sleeps for more reliable sequential timing detection
     _assert_concurrent_timing(
         num_commands=3,
-        sleep_seconds=0.05,
+        sleep_seconds=0.15,
         concurrency=1,
-        timing=_TimingExpectation(min_elapsed=0.1),
+        timing=_TimingExpectation(min_elapsed=0.35),
     )
 
 
@@ -240,7 +250,13 @@ def test_fail_fast_mode_cancels_pending() -> None:
     assert result.ok is False
     # The slow command should be cancelled, so elapsed time should be short
     assert elapsed < 0.5, f"Expected < 0.5s with fail-fast, got {elapsed:.3f}s"
+
+    # Verify shape of results and failures
+    # At minimum cmd1 completed (failed); cmd2 may or may not be in results
+    assert len(result.results) >= 1, "At least the failed command should be in results"
+    assert result.failures == (0,), "First result should be the failure"
     assert result.first_failure is not None
+    assert result.first_failure is result.results[0]
     assert result.first_failure.exit_code == 42
 
 
@@ -458,6 +474,17 @@ def test_fail_fast_first_failure_indexes_correctly_when_earlier_cancelled() -> N
     assert elapsed < 1.0, f"Expected < 1.0s with fail-fast, got {elapsed:.3f}s"
     assert result.ok is False
 
+    # Verify shape: only the failed command should be in results (slow was cancelled)
+    assert len(result.results) >= 1, "At least the failed command should be in results"
+    assert len(result.failures) == 1, "Exactly one failure expected"
+
+    # failures tuple must use remapped indices into the compacted results array
+    assert result.failures[0] < len(result.results), (
+        f"Failure index {result.failures[0]} out of range for results of "
+        f"length {len(result.results)}"
+    )
+
     # first_failure must correctly index the failed result
     assert result.first_failure is not None
+    assert result.first_failure is result.results[result.failures[0]]
     assert result.first_failure.exit_code == 99

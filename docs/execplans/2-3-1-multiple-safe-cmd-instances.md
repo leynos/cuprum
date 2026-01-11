@@ -49,24 +49,19 @@ class ConcurrentResult:
 ```python
 async def run_concurrent(
     *commands: SafeCmd,
-    concurrency: int | None = None,
-    capture: bool = True,
-    echo: bool = False,
-    context: ExecutionContext | None = None,
-    fail_fast: bool = False,
+    config: ConcurrentConfig | None = None,
 ) -> ConcurrentResult:
     """Execute multiple SafeCmd instances concurrently."""
 
 def run_concurrent_sync(
     *commands: SafeCmd,
-    concurrency: int | None = None,
-    capture: bool = True,
-    echo: bool = False,
-    context: ExecutionContext | None = None,
-    fail_fast: bool = False,
+    config: ConcurrentConfig | None = None,
 ) -> ConcurrentResult:
     """Synchronous wrapper for run_concurrent."""
 ```
+
+Configuration is provided via the `ConcurrentConfig` dataclass which groups
+`concurrency`, `capture`, `echo`, `context`, and `fail_fast` parameters.
 
 ## Design decisions
 
@@ -101,7 +96,8 @@ limit.
 
 - **External cancellation**: When the `run_concurrent` coroutine is cancelled,
   all running command tasks receive `CancelledError`. Each command's
-  cancellation handler sends SIGTERM, waits the grace period, then SIGKILL.
+  cancellation handler sends SIGTERM (termination signal), waits the grace
+  period, then SIGKILL (kill signal).
 - **Fail-fast cancellation**: First non-zero exit cancels pending commands;
   partial results are returned for completed commands.
 
