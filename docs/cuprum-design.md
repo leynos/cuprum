@@ -1000,10 +1000,68 @@ Error propagation policy (to be finalised, but roughly):
 
 ### 8.3 Parallel Execution (non‑pipeline)
 
-Running multiple unrelated commands concurrently is a straightforward
-extension: Cuprum can offer a helper (or rely on user‑managed `asyncio.gather`)
-that runs several `SafeCmd` instances at once, respecting the same cancellation
-semantics.
+Cuprum provides `run_concurrent` for executing multiple `SafeCmd` instances
+concurrently with optional concurrency limits. The implementation uses
+`asyncio.Semaphore` for throttling and preserves hook semantics per command.
+
+#### 8.3.1 Concurrent execution design decisions
+
+**Result ordering:**
+
+- Results are returned in submission order, not completion order. This
+  provides predictable behaviour and matches the user's mental model of the
+  input list.
+
+**Hook handling:**
+
+- Hooks fire per command to maintain consistency with single-command
+  execution. Before hooks run when each command starts (may be interleaved),
+  after hooks run when each command completes (may be interleaved), and observe
+  hooks receive `ExecEvent` values for each command.
+- Commands share the execution context, so all commands see the same hooks and
+  allowlist.
+
+**Concurrency limiting:**
+
+- When `concurrency=N` is provided, an `asyncio.Semaphore(N)` gates command
+  execution. Each command acquires the semaphore before spawning and releases
+  it after completion.
+- When `concurrency=None` (the default), all commands run in parallel without
+  limit. When `concurrency=1`, commands execute sequentially.
+
+**Pre-flight allowlist check:**
+
+- Before any command executes, `run_concurrent` iterates all commands and
+  calls `current_context().check_allowed(cmd.program)` for each. If any
+  command's program is forbidden, `ForbiddenProgramError` is raised immediately
+  before any execution begins.
+
+**Failure modes:**
+
+- Collect-all mode (default, `fail_fast=False`): All commands run to
+  completion regardless of failures. The `ConcurrentResult.failures` tuple
+  contains indices of commands that exited non-zero, in ascending order.
+- Fail-fast mode (`fail_fast=True`): Uses `asyncio.TaskGroup` for structured
+  cancellation. When a command exits non-zero, an internal exception is raised
+  to trigger TaskGroup cancellation. Commands that were already running receive
+  cancellation; commands that had not yet started are not scheduled.
+
+**Cancellation semantics:**
+
+- External cancellation: When the `run_concurrent` coroutine is cancelled, all
+  running command tasks receive `CancelledError`. Each command's cancellation
+  handler sends SIGTERM, waits the grace period, then SIGKILL. The
+  `CancelledError` propagates to the caller after cleanup.
+- Fail-fast cancellation: First non-zero exit cancels pending commands;
+  partial results are returned for completed commands.
+
+**ConcurrentResult structure:**
+
+- `results`: Tuple of `CommandResult` in submission order.
+- `failures`: Tuple of indices where commands exited non-zero.
+- `ok`: Property returning `True` when `failures` is empty.
+- `first_failure`: Property returning the first failed `CommandResult`, or
+  `None` if all succeeded.
 
 ### 8.4 Telemetry Adapter Design Decisions
 

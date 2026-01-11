@@ -13,6 +13,7 @@ Example:
 
 from __future__ import annotations
 
+from cuprum._constants import PACKAGE_NAME
 from cuprum.catalogue import (
     CORE_OPS_PROJECT,
     DEFAULT_CATALOGUE,
@@ -25,6 +26,12 @@ from cuprum.catalogue import (
     ProgramEntry,
     ProjectSettings,
     UnknownProgramError,
+)
+from cuprum.concurrent import (
+    ConcurrentConfig,
+    ConcurrentResult,
+    run_concurrent,
+    run_concurrent_sync,
 )
 from cuprum.context import (
     AfterHook,
@@ -56,8 +63,6 @@ from cuprum.sh import (
 
 from . import sh
 
-PACKAGE_NAME = "cuprum"
-
 __all__ = [
     "CORE_OPS_PROJECT",
     "DEFAULT_CATALOGUE",
@@ -71,6 +76,8 @@ __all__ = [
     "AllowRegistration",
     "BeforeHook",
     "CommandResult",
+    "ConcurrentConfig",
+    "ConcurrentResult",
     "CuprumContext",
     "ExecEvent",
     "ExecHook",
@@ -94,6 +101,8 @@ __all__ = [
     "get_context",
     "logging_hook",
     "observe",
+    "run_concurrent",
+    "run_concurrent_sync",
     "scoped",
     "sh",
 ]
