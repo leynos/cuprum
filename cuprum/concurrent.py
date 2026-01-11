@@ -196,14 +196,11 @@ async def _run_fail_fast(
 ) -> ConcurrentResult:
     """Execute commands with fail-fast cancellation on first non-zero exit."""
     results: list[CommandResult | None] = [None] * len(commands)
-    first_failure_index: int | None = None
 
     async def run_indexed(idx: int, cmd: SafeCmd) -> None:
-        nonlocal first_failure_index
         result = await _run_with_semaphore(cmd, semaphore, config)
         results[idx] = result
-        if not result.ok and first_failure_index is None:
-            first_failure_index = idx
+        if not result.ok:
             raise _FirstFailureError(idx, result)
 
     try:
