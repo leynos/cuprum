@@ -430,3 +430,34 @@ def test_async_run_concurrent() -> None:
 
     assert result.ok is True
     assert len(result.results) == 2
+
+
+def test_fail_fast_first_failure_indexes_correctly_when_earlier_cancelled() -> None:
+    """first_failure indexes correctly when earlier commands are cancelled.
+
+    When fail-fast cancels earlier (slower) commands, the failures tuple must
+    use remapped indices into the compacted results array, not original
+    submission indices. This test ensures first_failure doesn't raise IndexError
+    or return the wrong result when a later command fails first.
+    """
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+
+    # cmd0 sleeps (will be cancelled), cmd1 fails immediately
+    cmd0 = python("-c", "import time; time.sleep(2); print('slow')")
+    cmd1 = python("-c", "import sys; sys.exit(99)")
+
+    with scoped(allowlist=frozenset([python_program])):
+        start = time.perf_counter()
+        result = run_concurrent_sync(
+            cmd0, cmd1, config=ConcurrentConfig(fail_fast=True)
+        )
+        elapsed = time.perf_counter() - start
+
+    # Should complete quickly due to fail-fast
+    assert elapsed < 1.0, f"Expected < 1.0s with fail-fast, got {elapsed:.3f}s"
+    assert result.ok is False
+
+    # first_failure must correctly index the failed result
+    assert result.first_failure is not None
+    assert result.first_failure.exit_code == 99

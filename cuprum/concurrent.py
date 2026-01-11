@@ -157,7 +157,7 @@ async def _run_collect_all(
 def _build_final_results(
     results: list[CommandResult | None],
 ) -> tuple[list[CommandResult], list[int]]:
-    """Build final results and sorted failure indices from partial results.
+    """Build final results and remapped failure indices from partial results.
 
     Parameters
     ----------
@@ -167,21 +167,23 @@ def _build_final_results(
     Returns
     -------
     tuple[list[CommandResult], list[int]]
-        Tuple of (final_results, sorted_failures) where final_results contains
-        only completed commands and sorted_failures contains indices of failed
-        commands in ascending order.
+        Tuple of (final_results, remapped_failures) where final_results contains
+        only completed commands and remapped_failures contains indices into
+        final_results (not original positions) for failed commands, in ascending
+        order.
 
     """
     final_results: list[CommandResult] = []
     failures: list[int] = []
 
-    for idx, result in enumerate(results):
+    for result in results:
         if result is not None:
+            compacted_idx = len(final_results)
             final_results.append(result)
             if not result.ok:
-                failures.append(idx)
+                failures.append(compacted_idx)
 
-    failures.sort()
+    # failures are already in ascending order since we process sequentially
     return final_results, failures
 
 
