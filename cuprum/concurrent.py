@@ -76,8 +76,14 @@ class ConcurrentResult:
     ----------
     results:
         CommandResult instances in submission order (not completion order).
+        When ``fail_fast=True`` is used, execution may cancel remaining
+        commands after the first failure; in this case, results contains
+        only the completed (non-cancelled) CommandResult instances and
+        may be a subset of the originally submitted commands.
     failures:
-        Indices of commands that exited non-zero, in ascending order.
+        Indices into ``results`` for commands that exited non-zero, in
+        ascending order. Note: these are indices into the ``results``
+        tuple, not the original submission indices.
 
     """
 
@@ -142,9 +148,12 @@ async def _run_collect_all(
     results: list[CommandResult] = []
     failures: list[int] = []
 
+    # Re-raise the first BaseException to propagate critical exceptions like
+    # CancelledError immediately. This is an intentional trade-off: any
+    # subsequent exceptions from other tasks are dropped and not preserved
+    # for diagnostics, but it ensures cancellation signals propagate promptly.
     for idx, raw in enumerate(raw_results):
         if isinstance(raw, BaseException):
-            # Re-raise unexpected exceptions (e.g., CancelledError)
             raise raw
         results.append(raw)
         if not raw.ok:
