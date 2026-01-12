@@ -948,7 +948,7 @@ implemented with the following decisions:
   `ExecutionContext.tags`; caller tags take precedence when keys overlap.
 - **Async observers:** Observe hooks may be synchronous or async. Async hooks
   are scheduled as background tasks during execution and awaited before
-  returning results; this ensures `run_sync()` does not leak pending tasks.
+  returning results, so `run_sync()` does not leak pending tasks.
 
 ### 8.1.4 Timeouts (planned design)
 
@@ -997,7 +997,7 @@ Semantics (aligned with `subprocess.run` and plumbum):
   `subprocess.TimeoutExpired`:
   - `.cmd` contains the executed argv (or a pipeline description).
   - `.timeout` contains the configured timeout value.
-  - `.stdout` / `.stderr` carry any captured output so callers can inspect
+  - `.stdout` / `.stderr` carry any captured output, so callers can inspect
     partial results (set to `None` when `capture=False`).
 - For pipelines, the timeout applies to the entire pipeline run, and all
   stages are terminated on expiry. Partial output is surfaced using the same

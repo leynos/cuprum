@@ -104,8 +104,10 @@ compromising explicitness.
   can be set once per scope (for example, `sh.scoped(timeout=…)`) with clear
   precedence rules relative to per-call values (explicit timeouts win).
 - [ ] 3.4.3. Add unit and behavioural tests for single-command and pipeline
-  timeouts, including cleanup behaviour and partial output capture; document
-  usage and semantics in `docs/users-guide.md`.
+  timeouts, including cleanup behaviour and partial output capture. Ensure a
+  test covers `ExecutionContext(timeout=None)` falling through to the scoped
+  default (rather than disabling timeouts). Document usage and semantics in
+  `docs/users-guide.md`.
 
 ## 4. Performance extensions
 
