@@ -948,7 +948,7 @@ implemented with the following decisions:
   `ExecutionContext.tags`; caller tags take precedence when keys overlap.
 - **Async observers:** Observe hooks may be synchronous or async. Async hooks
   are scheduled as background tasks during execution and awaited before
-  returning results, so `run_sync()` does not leak pending tasks.
+  returning results; this ensures `run_sync()` does not leak pending tasks.
 
 ### 8.1.4 Timeouts (planned design)
 
@@ -983,9 +983,9 @@ with sh.scoped(timeout=3.0):
 Resolution order for timeouts:
 
 1. Explicit `timeout` argument to `run` / `run_sync` when not `None`.
-2. `ExecutionContext.timeout` when provided and not `None`. If a context is
-   provided with `timeout=None`, fall back to the scoped default instead of
-   forcing "no timeout".
+2. If an `ExecutionContext` is provided and its `timeout` is not `None`, use
+   it. When the context is omitted, or when it is provided with `timeout=None`,
+   continue to the scoped default instead of forcing "no timeout".
 3. `CuprumContext` runtime default; when unset, no timeout is enforced.
 
 Semantics (aligned with `subprocess.run` and plumbum):

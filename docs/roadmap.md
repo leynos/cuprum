@@ -95,7 +95,7 @@ compromising explicitness.
   `docs/users-guide.md` and add release notes describing the migration path for
   existing users.
 
-### 3.4 Execution timeouts
+### 3.4. Execution timeouts
 
 - [ ] 3.4.1. Add `timeout` parameters to `SafeCmd.run` / `run_sync` and
   `Pipeline.run` / `run_sync`, matching `subprocess.run` semantics and
