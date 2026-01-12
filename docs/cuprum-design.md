@@ -988,6 +988,9 @@ Resolution order for timeouts:
    continue to the scoped default instead of forcing "no timeout".
 3. `CuprumContext` runtime default; when unset, no timeout is enforced.
 
+Test scenario: within `with sh.scoped(timeout=3.0):`, passing
+`ExecutionContext(timeout=None)` should still apply the 3.0s scoped timeout.
+
 Semantics (aligned with `subprocess.run` and plumbum):
 
 - `timeout` is a wall-clock limit in seconds (float accepted).
