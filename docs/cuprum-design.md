@@ -948,9 +948,13 @@ implemented with the following decisions:
   `ExecutionContext.tags`; caller tags take precedence when keys overlap.
 - **Async observers:** Observe hooks may be synchronous or async. Async hooks
   are scheduled as background tasks during execution and awaited before
-  returning results so `run_sync()` does not leak pending tasks.
+  returning results, so `run_sync()` does not leak pending tasks.
 
-### 8.1.4 Timeouts (proposal)
+### 8.1.4 Timeouts (planned design)
+
+This section captures the intended timeout design. The API sketches above
+include `timeout` and `context` to document the target surface, even though
+runtime support is still pending.
 
 Cuprum should support timeouts that mirror `subprocess.run` and plumbum while
 remaining opt-in by default:
@@ -958,7 +962,7 @@ remaining opt-in by default:
 - **Default off:** Timeout is `None` unless explicitly set.
 - **Per call:** `timeout` parameters on `SafeCmd.run` / `run_sync` and
   `Pipeline.run` / `run_sync` offer a one-shot timeout.
-- **Scoped default:** `CuprumContext` carries runtime defaults so a context
+- **Scoped default:** `CuprumContext` carries runtime defaults, so a context
   manager can set a timeout once and have it apply to calls that do not pass a
   `timeout` value.
 
@@ -978,9 +982,11 @@ with sh.scoped(timeout=3.0):
 
 Resolution order for timeouts:
 
-1. Explicit `timeout` argument to `run` / `run_sync`.
-2. `ExecutionContext.timeout` when a context object is provided.
-3. `CuprumContext` runtime default.
+1. Explicit `timeout` argument to `run` / `run_sync` when not `None`.
+2. `ExecutionContext.timeout` when provided and not `None`. If a context is
+   provided with `timeout=None`, fall back to the scoped default instead of
+   forcing "no timeout".
+3. `CuprumContext` runtime default; when unset, no timeout is enforced.
 
 Semantics (aligned with `subprocess.run` and plumbum):
 
