@@ -12,6 +12,7 @@ from pytest_bdd import given, scenario, then, when
 from cuprum.catalogue import ECHO, LS
 from cuprum.context import (
     CuprumContext,
+    ScopeConfig,
     before,
     current_context,
     scoped,
@@ -100,10 +101,10 @@ def when_enter_scoped_echo_only(
 ) -> None:
     """Enter a scoped context with narrowed allowlist."""
     _ = outer_context  # Required fixture, used to establish scenario context
-    # Use the outer context as a base and narrow via scoped()
+    # Use the outer context as a base and narrow via scoped(ScopeConfig())
     with (
-        scoped(allowlist=frozenset([ECHO, LS])),
-        scoped(allowlist=frozenset([ECHO])) as inner,
+        scoped(ScopeConfig(allowlist=frozenset([ECHO, LS]))),
+        scoped(ScopeConfig(allowlist=frozenset([ECHO]))) as inner,
     ):
         behaviour_state["inner_context"] = inner
 
@@ -129,9 +130,9 @@ def when_enter_exit_scoped(
 ) -> None:
     """Enter and exit a nested scope."""
     _ = outer_context  # Required fixture, used to establish scenario context
-    with scoped(allowlist=frozenset([ECHO, LS])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO, LS]))):
         behaviour_state["before_exit"] = current_context()
-        with scoped(allowlist=frozenset([ECHO])):
+        with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
             pass
         behaviour_state["after_exit"] = current_context()
 
@@ -263,7 +264,7 @@ def when_detach_hook(
 ) -> None:
     """Register and detach a hook."""
     hook = typ.cast("BeforeHook", hook_context["hook"])
-    with scoped():
+    with scoped(ScopeConfig()):
         reg = before(hook)
         behaviour_state["hook_in_context_before"] = (
             hook in current_context().before_hooks
@@ -302,7 +303,7 @@ def when_threads_check_allowlist(
     results: dict[str, tuple[bool, bool]] = {}
 
     def thread_worker(name: str, programs: frozenset[Program]) -> None:
-        with scoped(allowlist=programs):
+        with scoped(ScopeConfig(allowlist=programs)):
             ctx = current_context()
             results[name] = (ctx.is_allowed(ECHO), ctx.is_allowed(LS))
 
@@ -349,7 +350,7 @@ def when_tasks_check_allowlist(
     results: dict[str, tuple[bool, bool]] = {}
 
     async def task_worker(name: str, programs: frozenset[Program]) -> None:
-        with scoped(allowlist=programs):
+        with scoped(ScopeConfig(allowlist=programs)):
             await asyncio.sleep(0.01)  # Allow interleaving
             ctx = current_context()
             results[name] = (ctx.is_allowed(ECHO), ctx.is_allowed(LS))

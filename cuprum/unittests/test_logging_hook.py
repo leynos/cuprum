@@ -6,7 +6,7 @@ import logging
 import typing as typ
 
 from cuprum import ECHO, sh
-from cuprum.context import current_context, scoped
+from cuprum.context import ScopeConfig, current_context, scoped
 from cuprum.logging_hooks import _build_logging_hooks, logging_hook
 from cuprum.sh import CommandResult
 
@@ -19,7 +19,7 @@ if typ.TYPE_CHECKING:
 def test_logging_hook_registers_and_detaches() -> None:
     """logging_hook adds paired hooks to the current context and detaches cleanly."""
     logger = logging.getLogger("cuprum.test.registry")
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         before_count = len(current_context().before_hooks)
         after_count = len(current_context().after_hooks)
 
@@ -43,7 +43,7 @@ def test_logging_hook_emits_start_and_exit(
     caplog.set_level(logging.INFO, logger="cuprum.test.emit")
     logger = logging.getLogger("cuprum.test.emit")
 
-    with scoped(allowlist=frozenset([ECHO])), logging_hook(logger=logger):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), logging_hook(logger=logger):
         cmd: SafeCmd = sh.make(ECHO)("-n", "hello logs")
         result = cmd.run_sync()
 
@@ -76,7 +76,7 @@ def test_logging_hook_handles_uncaptured_output(
     caplog.set_level(logging.INFO, logger="cuprum.test.uncaptured")
     logger = logging.getLogger("cuprum.test.uncaptured")
 
-    with scoped(allowlist=frozenset([ECHO])), logging_hook(logger=logger):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), logging_hook(logger=logger):
         cmd: SafeCmd = sh.make(ECHO)("uncaptured")
         _ = cmd.run_sync(capture=False)
 
@@ -94,7 +94,7 @@ def test_logging_hook_handles_uncaptured_output(
 def test_logging_hook_detach_is_idempotent() -> None:
     """Calling detach() multiple times is safe and leaves hooks removed."""
     logger = logging.getLogger("cuprum.test.registry.idempotent")
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         before_count = len(current_context().before_hooks)
         after_count = len(current_context().after_hooks)
 
@@ -110,7 +110,7 @@ def test_logging_hook_detach_is_idempotent() -> None:
 def test_logging_hook_context_manager_detaches_and_is_idempotent() -> None:
     """Context manager usage detaches hooks and allows further detach calls."""
     logger = logging.getLogger("cuprum.test.registry.context_manager")
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         before_count = len(current_context().before_hooks)
         after_count = len(current_context().after_hooks)
 

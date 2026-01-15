@@ -8,7 +8,7 @@ import typing as typ
 
 from pytest_bdd import given, scenario, then, when
 
-from cuprum import scoped, sh
+from cuprum import ScopeConfig, scoped, sh
 from tests.helpers.catalogue import (
     cat_program,
     combine_programs_into_catalogue,
@@ -63,7 +63,7 @@ def given_random_data() -> tuple[Pipeline, frozenset[Program]]:
         - Pipeline: The composed python->cat pipeline that prints the
           generated base64 data via Python and pipes it through cat.
         - frozenset[Program]: The allowlist of programs (python_prog and
-          cat_prog) required by scoped() to permit execution.
+          cat_prog) required by scoped(ScopeConfig()) to permit execution.
 
     """
     data = _generate_test_data()
@@ -99,7 +99,7 @@ def when_pipe_through_cat(
 ) -> PipelineResult:
     """Execute the pipeline synchronously."""
     pipeline, allowlist = test_pipeline
-    with scoped(allowlist=allowlist):
+    with scoped(ScopeConfig(allowlist=allowlist)):
         return pipeline.run_sync()
 
 

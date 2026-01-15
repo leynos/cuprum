@@ -8,7 +8,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import ECHO, scoped, sh
+from cuprum import ECHO, ScopeConfig, TimeoutExpired, scoped, sh
 from cuprum._testing import (
     _READ_SIZE,
     _PipelineWaitResult,
@@ -173,7 +173,7 @@ def _run_test_pipeline(
     for stage in stages[2:]:
         pipeline |= stage
 
-    with scoped(allowlist=frozenset([python_program])):
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
         return pipeline.run_sync()
 
 
@@ -188,7 +188,7 @@ def test_pipeline_run_streams_stdout_between_stages() -> None:
         "import sys; sys.stdout.write(sys.stdin.read().upper())",
     )
 
-    with scoped(allowlist=frozenset([ECHO, python_program])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO, python_program]))):
         result = pipeline.run_sync()
 
     assert isinstance(result, PipelineResult)
@@ -199,6 +199,27 @@ def test_pipeline_run_streams_stdout_between_stages() -> None:
     assert result.stages[1].exit_code == 0
     assert result.stages[0].pid > 0
     assert result.stages[1].pid > 0
+
+
+def test_pipeline_timeout_raises_timeout_expired() -> None:
+    """Pipeline timeouts raise TimeoutExpired and respect capture flags."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+
+    pipeline = python("-c", "import time; time.sleep(5)") | python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read())",
+    )
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([python_program]))),
+        pytest.raises(TimeoutExpired) as exc_info,
+    ):
+        pipeline.run_sync(timeout=0.2, capture=False)
+
+    assert exc_info.value.timeout == 0.2
+    assert exc_info.value.output is None
+    assert exc_info.value.stderr is None
 
 
 @pytest.mark.parametrize(

@@ -8,7 +8,7 @@ import typing as typ
 
 from pytest_bdd import given, scenario, then, when
 
-from cuprum import ECHO, scoped, sh
+from cuprum import ECHO, ScopeConfig, scoped, sh
 from tests.helpers.catalogue import combine_programs_into_catalogue, python_catalogue
 
 if typ.TYPE_CHECKING:
@@ -189,7 +189,7 @@ def given_final_stage_failure_pipeline() -> _ScenarioPipeline:
 @when("I run the pipeline synchronously", target_fixture="pipeline_result")
 def when_run_pipeline_sync(pipeline_under_test: _ScenarioPipeline) -> PipelineResult:
     """Execute the pipeline via run_sync()."""
-    with scoped(allowlist=pipeline_under_test.allowlist):
+    with scoped(ScopeConfig(allowlist=pipeline_under_test.allowlist)):
         return pipeline_under_test.pipeline.run_sync()
 
 
@@ -198,7 +198,7 @@ def when_run_pipeline_async(pipeline_under_test: _ScenarioPipeline) -> PipelineR
     """Execute the pipeline via run()."""
 
     async def run() -> PipelineResult:
-        with scoped(allowlist=pipeline_under_test.allowlist):
+        with scoped(ScopeConfig(allowlist=pipeline_under_test.allowlist)):
             return await pipeline_under_test.pipeline.run()
 
     return asyncio.run(run())

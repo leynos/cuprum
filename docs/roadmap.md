@@ -101,8 +101,9 @@ compromising explicitness.
   `Pipeline.run` / `run_sync`, matching `subprocess.run` semantics and
   surfacing a `TimeoutExpired` exception with partial output when captured.
 - [ ] 3.4.2. Introduce scoped runtime defaults via `CuprumContext` so a timeout
-  can be set once per scope (for example, `sh.scoped(timeout=…)`) with clear
-  precedence rules relative to per-call values (explicit timeouts win).
+  can be set once per scope (for example, `sh.scoped(ScopeConfig(timeout=…))`).
+  Precedence should be explicit timeout > `ExecutionContext.timeout` >
+  `CuprumContext` default.
 - [ ] 3.4.3. Add unit and behavioural tests for single-command and pipeline
   timeouts, including cleanup behaviour and partial output capture. Ensure a
   test covers `ExecutionContext(timeout=None)` falling through to the scoped

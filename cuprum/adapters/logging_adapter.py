@@ -11,12 +11,14 @@ log records suitable for log aggregation systems (ELK, Splunk, etc.).
 Example::
 
     import logging
-    from cuprum import scoped, sh
+    from cuprum import ScopeConfig, scoped, sh
     from cuprum.adapters.logging_adapter import structured_logging_hook
 
     logging.basicConfig(level=logging.DEBUG)
 
-    with scoped(allowlist=my_allowlist), sh.observe(structured_logging_hook()):
+    with scoped(
+        ScopeConfig(allowlist=my_allowlist)
+    ), sh.observe(structured_logging_hook()):
         sh.make(ECHO)("hello").run_sync()
 
 """

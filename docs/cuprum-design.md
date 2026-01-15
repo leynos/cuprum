@@ -277,9 +277,9 @@ Internally, a `ContextVar[CuprumContext]` holds the current context. Public
 APIs (`sh.allow`, `sh.before`, `sh.scoped`) update this context in a controlled
 way.
 
-Contexts are nested: entering a new `with sh.scoped(...)` creates a derived
-context, and exiting restores the previous one. This behaves correctly across
-threads and async tasks.
+Contexts are nested: entering a new `with sh.scoped(ScopeConfig(...))` creates
+a derived context, and exiting restores the previous one. This behaves
+correctly across threads and async tasks.
 
 ### 5.4 Hooks
 
@@ -289,7 +289,7 @@ mechanism:
 - **Context‑wide hooks:** registered via `sh.before` / `sh.after`, affecting
   all commands in the current context.
 - **Scoped hooks:** registered via context managers (`with sh.before(...):`,
-  `with sh.scoped(before=[...]):`), active only in a block.
+  `with sh.scoped(ScopeConfig(before=[...])):`), active only in a block.
 - **Per‑command hooks:** attached to a specific `SafeCmd` instance
   (`cmd.before(...)`, `cmd.after(...)`).
 
@@ -636,7 +636,7 @@ from cuprum import sh
 from cmds import GIT
 
 async def deploy():
-    async with sh.scoped(allow={GIT}, before=[audit_hook], after=[metrics_hook]):
+    async with sh.scoped(ScopeConfig(allow={GIT}, before=[audit_hook], after=[metrics_hook])):
         cmd = make_git_deploy_cmd()
         await cmd.run()
 ```
@@ -950,13 +950,12 @@ implemented with the following decisions:
   are scheduled as background tasks during execution and awaited before
   returning results, so `run_sync()` does not leak pending tasks.
 
-### 8.1.4 Timeouts (planned design)
+### 8.1.4 Timeouts
 
-This section captures the intended timeout design. The API sketches above
-include `timeout` and `context` to document the target surface, even though
-runtime support is still pending.
+This section describes Cuprum's timeout behaviour and the resolution order used
+when defaults are layered.
 
-Cuprum should support timeouts that mirror `subprocess.run` and plumbum while
+Cuprum supports timeouts that mirror `subprocess.run` and plumbum while
 remaining opt-in by default:
 
 - **Default off:** Timeout is `None` unless explicitly set.
@@ -970,13 +969,13 @@ Rationale: The explicit parameter matches `subprocess.run` and plumbum, keeping
 timeouts discoverable at the call site. The scoped default uses existing
 context mechanics to apply policy without mutating global state.
 
-Proposed API shape:
+Example usage:
 
 ```python
 cmd.run(timeout=5.0)
 cmd.run_sync(timeout=2.5)
 
-with sh.scoped(timeout=3.0):
+with sh.scoped(ScopeConfig(timeout=3.0)):
     cmd.run_sync()
 ```
 
@@ -988,7 +987,10 @@ Resolution order for timeouts:
    continue to the scoped default instead of forcing "no timeout".
 3. `CuprumContext` runtime default; when unset, no timeout is enforced.
 
-Test scenario: within `with sh.scoped(timeout=3.0):`, passing
+Providing `ExecutionContext(timeout=None)` is treated the same as omitting the
+context; resolution continues to the scoped default when present.
+
+Test scenario: within `with sh.scoped(ScopeConfig(timeout=3.0)):`, passing
 `ExecutionContext(timeout=None)` should still apply the 3.0s scoped timeout.
 
 Semantics (aligned with `subprocess.run` and plumbum):

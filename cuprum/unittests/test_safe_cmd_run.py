@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from cuprum import ECHO, sh
+from cuprum import ECHO, TimeoutExpired, sh
 from cuprum.sh import CommandResult, ExecutionContext
 from tests.helpers.catalogue import python_builder as build_python_builder
 
@@ -190,6 +190,22 @@ def test_allows_disabling_capture(
     assert result.stderr is None
 
 
+def test_timeout_raises_timeout_expired(
+    python_builder: typ.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Timeouts raise TimeoutExpired with captured output when enabled."""
+    _, execute = execution_strategy
+    command = python_builder("-c", "import time; time.sleep(2)")
+
+    with pytest.raises(TimeoutExpired) as exc_info:
+        execute(command, {"timeout": 0.1, "capture": False})
+
+    assert exc_info.value.timeout == 0.1
+    assert exc_info.value.stdout is None
+    assert exc_info.value.stderr is None
+
+
 def test_echoes_to_custom_sinks(
     python_builder: typ.Callable[..., SafeCmd],
     capsys: pytest.CaptureFixture[str],
@@ -337,7 +353,7 @@ def test_run_raises_forbidden_when_program_not_in_allowlist(
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """run() raises ForbiddenProgramError when program is not in context allowlist."""
-    from cuprum.context import ForbiddenProgramError, scoped
+    from cuprum.context import ForbiddenProgramError, ScopeConfig, scoped
     from cuprum.program import Program
 
     _, execute = execution_strategy
@@ -345,7 +361,7 @@ def test_run_raises_forbidden_when_program_not_in_allowlist(
     # Create a context with an allowlist that does NOT include ECHO
     other_program = Program("cat")
     with (
-        scoped(allowlist=frozenset([other_program])),
+        scoped(ScopeConfig(allowlist=frozenset([other_program]))),
         pytest.raises(ForbiddenProgramError, match=r"echo"),
     ):
         execute(command, {})
@@ -355,11 +371,11 @@ def test_run_succeeds_when_program_in_allowlist(
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """run() succeeds when program is in context allowlist."""
-    from cuprum.context import scoped
+    from cuprum.context import ScopeConfig, scoped
 
     _, execute = execution_strategy
     command = sh.make(ECHO)("-n", "allowed")
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         result = execute(command, {})
     assert result.exit_code == 0
     assert result.stdout == "allowed"
@@ -378,7 +394,7 @@ def test_run_invokes_before_hooks_in_fifo_order(
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """run() invokes before hooks in registration order (FIFO)."""
-    from cuprum.context import scoped
+    from cuprum.context import ScopeConfig, scoped
 
     _, execute = execution_strategy
     call_order: list[int] = []
@@ -392,7 +408,7 @@ def test_run_invokes_before_hooks_in_fifo_order(
         call_order.append(2)
 
     command = sh.make(ECHO)("-n", "hooks")
-    with scoped(allowlist=frozenset([ECHO]), before_hooks=(hook1, hook2)):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]), before_hooks=(hook1, hook2))):
         execute(command, {})
 
     assert call_order == [1, 2]
@@ -402,7 +418,7 @@ def test_run_invokes_after_hooks_in_lifo_order(
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """run() invokes after hooks in LIFO order (inner hooks run before outer)."""
-    from cuprum.context import scoped
+    from cuprum.context import ScopeConfig, scoped
 
     _, execute = execution_strategy
     call_order: list[int] = []
@@ -417,8 +433,8 @@ def test_run_invokes_after_hooks_in_lifo_order(
 
     command = sh.make(ECHO)("-n", "hooks")
     # Nest scopes so the inner after hook runs before the outer (LIFO)
-    with scoped(allowlist=frozenset([ECHO]), after_hooks=(outer_hook,)):  # noqa: SIM117
-        with scoped(after_hooks=(inner_hook,)):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]), after_hooks=(outer_hook,))):  # noqa: SIM117
+        with scoped(ScopeConfig(after_hooks=(inner_hook,))):
             execute(command, {})
 
     # Inner hook (2) runs first, then outer hook (1) - true LIFO semantics
@@ -429,7 +445,7 @@ def test_run_passes_command_and_result_to_hooks(
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """run() passes SafeCmd to before hooks and SafeCmd+result to after hooks."""
-    from cuprum.context import scoped
+    from cuprum.context import ScopeConfig, scoped
 
     _, execute = execution_strategy
     before_received: list[SafeCmd] = []
@@ -443,9 +459,11 @@ def test_run_passes_command_and_result_to_hooks(
 
     command = sh.make(ECHO)("-n", "test")
     with scoped(
-        allowlist=frozenset([ECHO]),
-        before_hooks=(before_hook,),
-        after_hooks=(after_hook,),
+        ScopeConfig(
+            allowlist=frozenset([ECHO]),
+            before_hooks=(before_hook,),
+            after_hooks=(after_hook,),
+        )
     ):
         result = execute(command, {})
 
@@ -460,7 +478,7 @@ def test_run_does_not_invoke_after_hooks_on_cancellation(
     python_builder: typ.Callable[..., SafeCmd],
 ) -> None:
     """run() does not invoke after hooks when task is cancelled."""
-    from cuprum.context import scoped
+    from cuprum.context import ScopeConfig, scoped
 
     after_called = False
 
@@ -473,7 +491,11 @@ def test_run_does_not_invoke_after_hooks_on_cancellation(
     command = python_builder("-c", "import time; time.sleep(10)")
 
     async def orchestrate() -> None:
-        with scoped(allowlist=frozenset([command.program]), after_hooks=(after_hook,)):
+        with scoped(
+            ScopeConfig(
+                allowlist=frozenset([command.program]), after_hooks=(after_hook,)
+            )
+        ):
             task = asyncio.create_task(
                 command.run(capture=False, context=ExecutionContext(cancel_grace=0.1)),
             )

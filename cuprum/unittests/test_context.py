@@ -146,37 +146,37 @@ def test_get_context_returns_same_as_current() -> None:
 
 
 def test_scoped_narrows_allowlist_in_block() -> None:
-    """scoped() narrows allowlist within the context block."""
-    with scoped(allowlist=frozenset([ECHO])) as ctx:
+    """scoped(ScopeConfig()) narrows allowlist within the context block."""
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))) as ctx:
         assert ctx.is_allowed(ECHO) is True
         assert current_context() is ctx
 
 
 def test_scoped_restores_context_after_block() -> None:
-    """scoped() restores previous context after exiting block."""
+    """scoped(ScopeConfig()) restores previous context after exiting block."""
     original = current_context()
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         pass
     assert current_context() is original
 
 
 def test_scoped_restores_on_exception() -> None:
-    """scoped() restores context even when exception is raised."""
+    """scoped(ScopeConfig()) restores context even when exception is raised."""
     original = current_context()
     with (
         pytest.raises(ValueError, match=r"test"),
-        scoped(allowlist=frozenset([ECHO])),
+        scoped(ScopeConfig(allowlist=frozenset([ECHO]))),
     ):
         raise ValueError("test")
     assert current_context() is original
 
 
 def test_nested_scopes_stack_correctly() -> None:
-    """Nested scoped() calls narrow progressively."""
-    with scoped(allowlist=frozenset([ECHO, LS])) as outer:
+    """Nested scoped(ScopeConfig()) calls narrow progressively."""
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO, LS]))) as outer:
         assert outer.is_allowed(ECHO) is True
         assert outer.is_allowed(LS) is True
-        with scoped(allowlist=frozenset([ECHO])) as inner:
+        with scoped(ScopeConfig(allowlist=frozenset([ECHO]))) as inner:
             assert inner.is_allowed(ECHO) is True
             assert inner.is_allowed(LS) is False
         # Back to outer scope
@@ -190,7 +190,7 @@ def test_nested_scopes_stack_correctly() -> None:
 
 def test_allow_adds_programs_to_context() -> None:
     """AllowRegistration adds programs to current context allowlist."""
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         reg = allow(LS)
         assert current_context().is_allowed(LS) is True
         reg.detach()
@@ -200,7 +200,7 @@ def test_allow_adds_programs_to_context() -> None:
 
 def test_allow_as_context_manager() -> None:
     """AllowRegistration can be used as a context manager."""
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         with allow(LS):
             assert current_context().is_allowed(LS) is True
         assert current_context().is_allowed(LS) is False
@@ -214,7 +214,7 @@ def test_allow_as_context_manager() -> None:
 def test_before_hook_registration_and_detach() -> None:
     """before() registers a hook that can be detached."""
     hook: BeforeHook = mock.Mock()
-    with scoped():
+    with scoped(ScopeConfig()):
         reg = before(hook)
         assert hook in current_context().before_hooks
         reg.detach()
@@ -224,7 +224,7 @@ def test_before_hook_registration_and_detach() -> None:
 def test_after_hook_registration_and_detach() -> None:
     """after() registers a hook that can be detached."""
     hook: AfterHook = mock.Mock()
-    with scoped():
+    with scoped(ScopeConfig()):
         reg = after(hook)
         assert hook in current_context().after_hooks
         reg.detach()
@@ -234,7 +234,7 @@ def test_after_hook_registration_and_detach() -> None:
 def test_before_hook_as_context_manager() -> None:
     """before() can be used as a context manager."""
     hook: BeforeHook = mock.Mock()
-    with scoped():
+    with scoped(ScopeConfig()):
         with before(hook):
             assert hook in current_context().before_hooks
         assert hook not in current_context().before_hooks
@@ -243,7 +243,7 @@ def test_before_hook_as_context_manager() -> None:
 def test_after_hook_as_context_manager() -> None:
     """after() can be used as a context manager."""
     hook: AfterHook = mock.Mock()
-    with scoped():
+    with scoped(ScopeConfig()):
         with after(hook):
             assert hook in current_context().after_hooks
         assert hook not in current_context().after_hooks
@@ -326,7 +326,7 @@ def test_context_is_isolated_per_thread() -> None:
     results: dict[str, bool] = {}
 
     def thread_worker(name: str, programs: frozenset[Program]) -> None:
-        with scoped(allowlist=programs):
+        with scoped(ScopeConfig(allowlist=programs)):
             results[name] = current_context().is_allowed(ECHO)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
@@ -349,7 +349,7 @@ def test_context_is_isolated_per_async_task() -> None:
     results: dict[str, bool] = {}
 
     async def task_worker(name: str, programs: frozenset[Program]) -> None:
-        with scoped(allowlist=programs):
+        with scoped(ScopeConfig(allowlist=programs)):
             await asyncio.sleep(0.01)  # Yield to allow interleaving
             results[name] = current_context().is_allowed(ECHO)
 

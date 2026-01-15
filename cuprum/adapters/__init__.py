@@ -14,23 +14,29 @@ as inspiration for project-specific integrations.
 
 Example usage::
 
-    from cuprum import scoped, sh
+    from cuprum import ScopeConfig, scoped, sh
     from cuprum.adapters.logging_adapter import structured_logging_hook
     from cuprum.adapters.metrics_adapter import MetricsHook, InMemoryMetrics
     from cuprum.adapters.tracing_adapter import TracingHook, InMemoryTracer
 
     # Structured logging
-    with scoped(allowlist=my_allowlist), sh.observe(structured_logging_hook()):
+    with scoped(
+        ScopeConfig(allowlist=my_allowlist)
+    ), sh.observe(structured_logging_hook()):
         cmd.run_sync()
 
     # Metrics collection
     metrics = InMemoryMetrics()
-    with scoped(allowlist=my_allowlist), sh.observe(MetricsHook(metrics)):
+    with scoped(
+        ScopeConfig(allowlist=my_allowlist)
+    ), sh.observe(MetricsHook(metrics)):
         cmd.run_sync()
 
     # Distributed tracing
     tracer = InMemoryTracer()
-    with scoped(allowlist=my_allowlist), sh.observe(TracingHook(tracer)):
+    with scoped(
+        ScopeConfig(allowlist=my_allowlist)
+    ), sh.observe(TracingHook(tracer)):
         cmd.run_sync()
 
 """

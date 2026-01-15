@@ -5,11 +5,11 @@ allowlists and hooks for command execution. Contexts support narrowing
 (restricting the allowlist) and hook registration with deterministic ordering.
 
 Example:
->>> from cuprum.context import scoped, before, current_context
+>>> from cuprum.context import ScopeConfig, scoped, before, current_context
 >>> from cuprum.catalogue import ECHO
 >>> def log_hook(cmd):
 ...     print(f"Running: {cmd}")
->>> with scoped(allowlist=frozenset([ECHO])):
+>>> with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
 ...     with before(log_hook):
 ...         ctx = current_context()
 ...         ctx.is_allowed(ECHO)
@@ -90,7 +90,7 @@ class CuprumContext:
 
         When the allowlist is empty, all programs are permitted (permissive
         default). This allows gradual adoption: code can run without explicit
-        context setup, and scoped() can later establish restrictions.
+        context setup, and scoped(ScopeConfig()) can later establish restrictions.
         """
         if not self.allowlist:
             return  # Empty allowlist permits all programs
@@ -239,28 +239,13 @@ class _ScopedContext:
             _reset_context(self._token)
 
 
-def scoped(  # noqa: PLR0913
-    *,
-    allowlist: frozenset[Program] | None = None,
-    before_hooks: tuple[BeforeHook, ...] = (),
-    after_hooks: tuple[AfterHook, ...] = (),
-    observe_hooks: tuple[ExecHook, ...] = (),
-    timeout: float | None = None,
-) -> _ScopedContext:
+def scoped(config: ScopeConfig) -> _ScopedContext:
     """Create a scoped context manager for narrowed execution.
 
     Parameters
     ----------
-    allowlist:
-        Programs to allow (intersected with parent allowlist).
-    before_hooks:
-        Hooks to run before command execution.
-    after_hooks:
-        Hooks to run after command execution.
-    observe_hooks:
-        Hooks to run for structured execution events.
-    timeout:
-        Optional default timeout in seconds for the scoped context.
+    config:
+        Scope configuration describing allowlist and hook updates.
 
     Returns
     -------
@@ -269,17 +254,10 @@ def scoped(  # noqa: PLR0913
 
     Example
     -------
-    >>> with scoped(allowlist=frozenset([ECHO])) as ctx:
+    >>> with scoped(ScopeConfig(allowlist=frozenset([ECHO]))) as ctx:
     ...     assert ctx.is_allowed(ECHO)
 
     """
-    config = ScopeConfig(
-        allowlist=allowlist,
-        before_hooks=before_hooks,
-        after_hooks=after_hooks,
-        observe_hooks=observe_hooks,
-        timeout=timeout,
-    )
     return _ScopedContext(config)
 
 
@@ -292,8 +270,9 @@ class AllowRegistration:
     -----------------------
     The registration captures a token at creation time. When detach() is called,
     the original context is restored via the token, ensuring no context pollution
-    even when used outside scoped() blocks. This means detach() restores the
-    exact context that existed when the registration was created, regardless of
+    even when used outside scoped(ScopeConfig()) blocks. This means detach()
+    restores the exact context that existed when the registration was created,
+    regardless of
     subsequent context modifications. If multiple registrations are created and
     detached in non-LIFO order, earlier tokens may restore states that remove
     programs added by other registrations.
@@ -366,8 +345,9 @@ class HookRegistration:
     -----------------------
     The registration captures a token at creation time. When detach() is called,
     the original context is restored via the token, ensuring no context pollution
-    even when used outside scoped() blocks. This means detach() restores the
-    exact context that existed when the registration was created, regardless of
+    even when used outside scoped(ScopeConfig()) blocks. This means detach()
+    restores the exact context that existed when the registration was created,
+    regardless of
     subsequent context modifications.
 
     As with AllowRegistration, detach the hook only from the Context where

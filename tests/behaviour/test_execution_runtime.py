@@ -11,7 +11,7 @@ import typing as typ
 import pytest
 from pytest_bdd import given, scenario, then, when
 
-from cuprum import ECHO, sh
+from cuprum import ECHO, TimeoutExpired, sh
 from cuprum.sh import ExecutionContext
 from tests.helpers.catalogue import python_catalogue
 
@@ -43,6 +43,14 @@ def test_run_captures_output() -> None:
 )
 def test_cancellation_terminates_subprocess() -> None:
     """Behavioural coverage for cancellation cleanup."""
+
+
+@scenario(
+    "../features/execution_runtime.feature",
+    "Timeout terminates running subprocess",
+)
+def test_timeout_terminates_subprocess() -> None:
+    """Behavioural coverage for timeout cleanup."""
 
 
 @scenario(
@@ -115,13 +123,44 @@ def when_cancel_command(
     pid_file = typ.cast("Path", long_running_command["pid_file"])
 
     behaviour_state["pid"] = _cancel_command_with_grace(command, pid_file)
+    behaviour_state["cleanup_context"] = "cancellation"
+
+
+@when("I run the command with a timeout")
+def when_run_command_with_timeout(
+    behaviour_state: dict[str, object],
+    long_running_command: dict[str, object],
+) -> None:
+    """Run a command with a timeout and record the error and PID."""
+    command = typ.cast("SafeCmd", long_running_command["command"])
+    pid_file = typ.cast("Path", long_running_command["pid_file"])
+    timeout = 0.5
+
+    ctx = ExecutionContext(env={"CUPRUM_PID_FILE": str(pid_file)})
+    with pytest.raises(TimeoutExpired) as exc_info:
+        command.run_sync(capture=False, timeout=timeout, context=ctx)
+
+    behaviour_state["timeout_error"] = exc_info.value
+    behaviour_state["timeout_value"] = timeout
+    behaviour_state["pid"] = asyncio.run(_wait_for_pid(pid_file))
+    behaviour_state["cleanup_context"] = "timeout"
 
 
 @then("the subprocess stops cleanly")
 def then_subprocess_stops_cleanly(behaviour_state: dict[str, object]) -> None:
-    """Assert the subprocess has been terminated after cancellation."""
+    """Assert the subprocess has been terminated after cleanup."""
     pid = typ.cast("int", behaviour_state["pid"])
-    _wait_for_process_death(pid, timeout=5.0, context="cancellation")
+    context = typ.cast("str", behaviour_state.get("cleanup_context", "cancellation"))
+    _wait_for_process_death(pid, timeout=5.0, context=context)
+
+
+@then("a timeout error is raised")
+def then_timeout_error_is_raised(behaviour_state: dict[str, object]) -> None:
+    """Assert that a TimeoutExpired error is raised with expected settings."""
+    error = typ.cast("TimeoutExpired", behaviour_state["timeout_error"])
+    timeout_value = typ.cast("float", behaviour_state["timeout_value"])
+    assert isinstance(error, TimeoutExpired)
+    assert error.timeout == timeout_value
 
 
 def _is_process_alive(pid: int) -> bool:

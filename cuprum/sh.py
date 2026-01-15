@@ -201,6 +201,29 @@ class ExecutionContext:
     tags: cabc.Mapping[str, object] | None = None
 
 
+class TimeoutExpired(TimeoutError):  # noqa: N818  # match subprocess.TimeoutExpired naming.
+    """Raised when command execution exceeds the configured timeout."""
+
+    def __init__(
+        self,
+        *,
+        cmd: typ.Sequence[str] | object,
+        timeout: float,
+        output: str | bytes | None = None,
+        stderr: str | bytes | None = None,
+    ) -> None:
+        super().__init__(f"Command {cmd!r} timed out after {timeout} seconds")
+        self.cmd = cmd
+        self.timeout = timeout
+        self.output = output
+        self.stderr = stderr
+
+    @property
+    def stdout(self) -> str | bytes | None:
+        """Return captured stdout, mirroring subprocess.TimeoutExpired.output."""
+        return self.output
+
+
 def _resolve_timeout(
     *,
     timeout: float | None,
@@ -218,11 +241,20 @@ async def _wait_for_exit_code(
     process: asyncio.subprocess.Process,
     ctx: ExecutionContext,
     *,
+    timeout: float | None = None,
     consumers: tuple[asyncio.Task[typ.Any], ...] = (),
 ) -> tuple[int, float]:
     """Wait for a subprocess, handling cancellation and capturing exit time."""
     try:
-        exit_code = await process.wait()
+        if timeout is None:
+            exit_code = await process.wait()
+        else:
+            exit_code = await asyncio.wait_for(process.wait(), timeout)
+    except TimeoutError:
+        await _terminate_process(process, ctx.cancel_grace)
+        if consumers:
+            await asyncio.gather(*consumers, return_exceptions=True)
+        raise
     except asyncio.CancelledError:
         await _terminate_process(process, ctx.cancel_grace)
         if consumers:
@@ -239,7 +271,26 @@ class _SubprocessExecution:
     ctx: ExecutionContext
     capture: bool
     echo: bool
+    timeout: float | None
     observation: _StageObservation
+
+
+class _SubprocessTimeoutError(Exception):
+    """Internal wrapper for subprocess timeouts with captured output."""
+
+    def __init__(
+        self,
+        *,
+        timeout: float,
+        stdout: str | None,
+        stderr: str | None,
+        exited_at: float,
+    ) -> None:
+        super().__init__(f"Execution exceeded {timeout}s timeout")
+        self.timeout = timeout
+        self.stdout = stdout
+        self.stderr = stderr
+        self.exited_at = exited_at
 
 
 async def _spawn_subprocess(
@@ -267,6 +318,7 @@ async def _run_subprocess_with_streams(
     execution: _SubprocessExecution,
     *,
     pid: int | None,
+    timeout: float | None,
 ) -> tuple[int, float, str | None, str | None]:
     stream_config = _StreamConfig(
         capture_output=execution.capture,
@@ -319,11 +371,24 @@ async def _run_subprocess_with_streams(
             ),
         ),
     )
-    exit_code, exited_at = await _wait_for_exit_code(
-        process,
-        execution.ctx,
-        consumers=consumers,
-    )
+    try:
+        exit_code, exited_at = await _wait_for_exit_code(
+            process,
+            execution.ctx,
+            timeout=timeout,
+            consumers=consumers,
+        )
+    except TimeoutError as exc:
+        stdout_text, stderr_text = await asyncio.gather(*consumers)
+        if timeout is None:
+            msg = "TimeoutError without a configured timeout"
+            raise RuntimeError(msg) from exc
+        raise _SubprocessTimeoutError(
+            timeout=timeout,
+            stdout=stdout_text,
+            stderr=stderr_text,
+            exited_at=time.perf_counter(),
+        ) from exc
     stdout_text, stderr_text = await asyncio.gather(*consumers)
     return exit_code, exited_at, stdout_text, stderr_text
 
@@ -336,19 +401,62 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
 
     stdout_text: str | None = None
     stderr_text: str | None = None
-    if not execution.capture and not execution.echo:
-        exit_code, exited_at = await _wait_for_exit_code(process, execution.ctx)
-    else:
-        (
-            exit_code,
-            exited_at,
-            stdout_text,
-            stderr_text,
-        ) = await _run_subprocess_with_streams(
-            process,
-            execution,
-            pid=pid,
+    try:
+        if not execution.capture and not execution.echo:
+            exit_code, exited_at = await _wait_for_exit_code(
+                process,
+                execution.ctx,
+                timeout=execution.timeout,
+            )
+        else:
+            (
+                exit_code,
+                exited_at,
+                stdout_text,
+                stderr_text,
+            ) = await _run_subprocess_with_streams(
+                process,
+                execution,
+                pid=pid,
+                timeout=execution.timeout,
+            )
+    except TimeoutError as exc:
+        timeout = execution.timeout
+        if timeout is None:
+            msg = "TimeoutError without a configured timeout"
+            raise RuntimeError(msg) from exc
+        exit_code = process.returncode if process.returncode is not None else -1
+        exited_at = time.perf_counter()
+        execution.observation.emit(
+            "exit",
+            _EventDetails(
+                pid=pid,
+                exit_code=exit_code,
+                duration_s=max(0.0, exited_at - started_at),
+            ),
         )
+        raise TimeoutExpired(
+            cmd=execution.cmd.argv_with_program,
+            timeout=timeout,
+            output=stdout_text,
+            stderr=stderr_text,
+        ) from exc
+    except _SubprocessTimeoutError as exc:
+        exit_code = process.returncode if process.returncode is not None else -1
+        execution.observation.emit(
+            "exit",
+            _EventDetails(
+                pid=pid,
+                exit_code=exit_code,
+                duration_s=max(0.0, exc.exited_at - started_at),
+            ),
+        )
+        raise TimeoutExpired(
+            cmd=execution.cmd.argv_with_program,
+            timeout=exc.timeout,
+            output=exc.stdout,
+            stderr=exc.stderr,
+        ) from exc
 
     execution.observation.emit(
         "exit",
@@ -397,6 +505,7 @@ class SafeCmd:
         *,
         capture: bool = True,
         echo: bool = False,
+        timeout: float | None = None,
         context: ExecutionContext | None = None,
     ) -> CommandResult:
         """Execute the command asynchronously with predictable cancellation.
@@ -407,6 +516,8 @@ class SafeCmd:
             When ``True`` capture stdout/stderr; otherwise discard them.
         echo:
             When ``True`` tee stdout/stderr to the parent process.
+        timeout:
+            Optional wall-clock timeout in seconds; ``None`` disables timeouts.
         context:
             Optional execution settings such as env, cwd, and cancel grace.
 
@@ -419,9 +530,12 @@ class SafeCmd:
         ------
         ForbiddenProgramError
             If the program is not in the current context's allowlist.
+        TimeoutExpired
+            If the command exceeds the configured timeout.
 
         """
         ctx = context or ExecutionContext()
+        effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         execution_hooks = _run_before_hooks(self)
         pending_tasks: list[asyncio.Task[None]] = []
         cwd = Path(ctx.cwd) if ctx.cwd is not None else None
@@ -450,6 +564,7 @@ class SafeCmd:
                     ctx=ctx,
                     capture=capture,
                     echo=echo,
+                    timeout=effective_timeout,
                     observation=observation,
                 ),
             )
@@ -470,6 +585,7 @@ class SafeCmd:
         *,
         capture: bool = True,
         echo: bool = False,
+        timeout: float | None = None,
         context: ExecutionContext | None = None,
     ) -> CommandResult:
         """Execute the command synchronously with predictable semantics.
@@ -483,6 +599,8 @@ class SafeCmd:
             When ``True`` capture stdout/stderr; otherwise discard them.
         echo:
             When ``True`` tee stdout/stderr to the parent process.
+        timeout:
+            Optional wall-clock timeout in seconds; ``None`` disables timeouts.
         context:
             Optional execution settings such as env, cwd, and cancel grace.
 
@@ -492,7 +610,14 @@ class SafeCmd:
             Structured information about the completed process.
 
         """
-        return asyncio.run(self.run(capture=capture, echo=echo, context=context))
+        return asyncio.run(
+            self.run(
+                capture=capture,
+                echo=echo,
+                timeout=timeout,
+                context=context,
+            ),
+        )
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -523,13 +648,16 @@ class Pipeline:
         *,
         capture: bool = True,
         echo: bool = False,
+        timeout: float | None = None,
         context: ExecutionContext | None = None,
     ) -> PipelineResult:
         """Execute the pipeline asynchronously with streaming and backpressure."""
+        effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         return await _run_pipeline(
             self.parts,
             capture=capture,
             echo=echo,
+            timeout=effective_timeout,
             context=context,
         )
 
@@ -538,10 +666,18 @@ class Pipeline:
         *,
         capture: bool = True,
         echo: bool = False,
+        timeout: float | None = None,
         context: ExecutionContext | None = None,
     ) -> PipelineResult:
         """Execute the pipeline synchronously via ``asyncio.run``."""
-        return asyncio.run(self.run(capture=capture, echo=echo, context=context))
+        return asyncio.run(
+            self.run(
+                capture=capture,
+                echo=echo,
+                timeout=timeout,
+                context=context,
+            ),
+        )
 
 
 def make(
@@ -570,6 +706,7 @@ __all__ = [
     "PipelineResult",
     "SafeCmd",
     "SafeCmdBuilder",
+    "TimeoutExpired",
     "UnknownProgramError",
     "make",
     "observe",
