@@ -30,6 +30,7 @@ from cuprum._streams import (
     _StreamConfig,
     _write_chunk,
 )
+from cuprum.sh import _resolve_timeout
 
 _EXPORTS = {
     "_MIN_PIPELINE_STAGES": _MIN_PIPELINE_STAGES,
@@ -47,6 +48,7 @@ _EXPORTS = {
     "_pump_stream": _pump_stream,
     "_StreamConfig": _StreamConfig,
     "_write_chunk": _write_chunk,
+    "_resolve_timeout": _resolve_timeout,
 }
 
 __all__ = list(_EXPORTS)

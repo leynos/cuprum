@@ -38,7 +38,9 @@ from cuprum.catalogue import (
     ProjectSettings,
 )
 from cuprum.catalogue import UnknownProgramError as UnknownProgramError
+from cuprum.context import current_context as _current_context
 from cuprum.context import observe as observe
+from cuprum.context import scoped as scoped
 
 if typ.TYPE_CHECKING:
     from cuprum.program import Program
@@ -173,6 +175,8 @@ class ExecutionContext:
         Working directory for the subprocess.
     cancel_grace:
         Seconds to wait after SIGTERM before escalating to SIGKILL.
+    timeout:
+        Optional runtime timeout in seconds. ``None`` means no override.
     stdout_sink:
         Text sink for echoing stdout; defaults to the active ``sys.stdout``.
     stderr_sink:
@@ -189,11 +193,25 @@ class ExecutionContext:
     env: _EnvMapping = None
     cwd: _CwdType = None
     cancel_grace: float = _DEFAULT_CANCEL_GRACE
+    timeout: float | None = None
     stdout_sink: typ.IO[str] | None = None
     stderr_sink: typ.IO[str] | None = None
     encoding: str = _DEFAULT_ENCODING
     errors: str = _DEFAULT_ERROR_HANDLING
     tags: cabc.Mapping[str, object] | None = None
+
+
+def _resolve_timeout(
+    *,
+    timeout: float | None,
+    context: ExecutionContext | None,
+) -> float | None:
+    """Resolve the effective timeout from explicit, context, and scoped values."""
+    if timeout is not None:
+        return timeout
+    if context is not None and context.timeout is not None:
+        return context.timeout
+    return _current_context().timeout
 
 
 async def _wait_for_exit_code(
@@ -555,4 +573,5 @@ __all__ = [
     "UnknownProgramError",
     "make",
     "observe",
+    "scoped",
 ]

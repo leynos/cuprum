@@ -53,6 +53,9 @@ class CuprumContext:
         Tuple of hooks invoked after command execution (LIFO order).
     observe_hooks:
         Tuple of hooks invoked for structured execution events (FIFO order).
+    timeout:
+        Optional default timeout in seconds applied when a call does not supply
+        an explicit timeout.
 
     """
 
@@ -60,6 +63,7 @@ class CuprumContext:
     before_hooks: tuple[BeforeHook, ...] = ()
     after_hooks: tuple[AfterHook, ...] = ()
     observe_hooks: tuple[ExecHook, ...] = ()
+    timeout: float | None = None
 
     def is_allowed(self, program: Program) -> bool:
         """Return True when the program is in the allowlist.
@@ -83,13 +87,14 @@ class CuprumContext:
             msg = f"Program '{program}' is not allowed in the current context"
             raise ForbiddenProgramError(msg)
 
-    def narrow(
+    def narrow(  # noqa: PLR0913
         self,
         *,
         allowlist: frozenset[Program] | None = None,
         before_hooks: tuple[BeforeHook, ...] = (),
         after_hooks: tuple[AfterHook, ...] = (),
         observe_hooks: tuple[ExecHook, ...] = (),
+        timeout: float | None = None,
     ) -> CuprumContext:
         """Create a derived context with narrowed allowlist and extended hooks.
 
@@ -104,6 +109,9 @@ class CuprumContext:
             Additional after hooks prepended before parent hooks (LIFO).
         observe_hooks:
             Additional observe hooks appended after parent hooks (FIFO).
+        timeout:
+            Optional default timeout in seconds. ``None`` preserves the parent
+            timeout.
 
         Returns
         -------
@@ -131,12 +139,14 @@ class CuprumContext:
         # After hooks run inner-to-outer, so prepend new hooks
         new_after = after_hooks + self.after_hooks
         new_observe = self.observe_hooks + observe_hooks
+        new_timeout = self.timeout if timeout is None else timeout
 
         return CuprumContext(
             allowlist=new_allowlist,
             before_hooks=new_before,
             after_hooks=new_after,
             observe_hooks=new_observe,
+            timeout=new_timeout,
         )
 
     def with_allowlist(self, allowlist: frozenset[Program]) -> CuprumContext:
@@ -217,13 +227,14 @@ class _ScopedContext:
 
     __slots__ = ("_ctx", "_token")
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         allowlist: frozenset[Program] | None = None,
         before_hooks: tuple[BeforeHook, ...] = (),
         after_hooks: tuple[AfterHook, ...] = (),
         observe_hooks: tuple[ExecHook, ...] = (),
+        timeout: float | None = None,
     ) -> None:
         parent = current_context()
         self._ctx = parent.narrow(
@@ -231,6 +242,7 @@ class _ScopedContext:
             before_hooks=before_hooks,
             after_hooks=after_hooks,
             observe_hooks=observe_hooks,
+            timeout=timeout,
         )
         self._token: Token[CuprumContext] | None = None
 
@@ -248,12 +260,13 @@ class _ScopedContext:
             _reset_context(self._token)
 
 
-def scoped(
+def scoped(  # noqa: PLR0913
     *,
     allowlist: frozenset[Program] | None = None,
     before_hooks: tuple[BeforeHook, ...] = (),
     after_hooks: tuple[AfterHook, ...] = (),
     observe_hooks: tuple[ExecHook, ...] = (),
+    timeout: float | None = None,
 ) -> _ScopedContext:
     """Create a scoped context manager for narrowed execution.
 
@@ -267,6 +280,8 @@ def scoped(
         Hooks to run after command execution.
     observe_hooks:
         Hooks to run for structured execution events.
+    timeout:
+        Optional default timeout in seconds for the scoped context.
 
     Returns
     -------
@@ -284,6 +299,7 @@ def scoped(
         before_hooks=before_hooks,
         after_hooks=after_hooks,
         observe_hooks=observe_hooks,
+        timeout=timeout,
     )
 
 
