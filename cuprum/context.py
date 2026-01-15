@@ -40,6 +40,17 @@ class ForbiddenProgramError(PermissionError):
 
 
 @dc.dataclass(frozen=True, slots=True)
+class ScopeConfig:
+    """Configuration object for scoped execution context updates."""
+
+    allowlist: frozenset[Program] | None = None
+    before_hooks: tuple[BeforeHook, ...] = ()
+    after_hooks: tuple[AfterHook, ...] = ()
+    observe_hooks: tuple[ExecHook, ...] = ()
+    timeout: float | None = None
+
+
+@dc.dataclass(frozen=True, slots=True)
 class CuprumContext:
     """Immutable execution context holding allowlist and hooks.
 
@@ -87,31 +98,13 @@ class CuprumContext:
             msg = f"Program '{program}' is not allowed in the current context"
             raise ForbiddenProgramError(msg)
 
-    def narrow(  # noqa: PLR0913
-        self,
-        *,
-        allowlist: frozenset[Program] | None = None,
-        before_hooks: tuple[BeforeHook, ...] = (),
-        after_hooks: tuple[AfterHook, ...] = (),
-        observe_hooks: tuple[ExecHook, ...] = (),
-        timeout: float | None = None,
-    ) -> CuprumContext:
+    def narrow(self, config: ScopeConfig) -> CuprumContext:
         """Create a derived context with narrowed allowlist and extended hooks.
 
         Parameters
         ----------
-        allowlist:
-            New allowlist; intersected with parent if parent is non-empty,
-            otherwise used directly. None keeps the parent list unchanged.
-        before_hooks:
-            Additional before hooks appended after parent hooks.
-        after_hooks:
-            Additional after hooks prepended before parent hooks (LIFO).
-        observe_hooks:
-            Additional observe hooks appended after parent hooks (FIFO).
-        timeout:
-            Optional default timeout in seconds. ``None`` preserves the parent
-            timeout.
+        config:
+            Scope configuration describing allowlist and hook updates.
 
         Returns
         -------
@@ -126,20 +119,20 @@ class CuprumContext:
         add programs). This ensures safety while allowing initial setup.
 
         """
-        if allowlist is None:
+        if config.allowlist is None:
             new_allowlist = self.allowlist
         elif self.allowlist:
             # Parent has programs: intersect to narrow
-            new_allowlist = self.allowlist & allowlist
+            new_allowlist = self.allowlist & config.allowlist
         else:
             # Parent is empty: use provided allowlist as new base
-            new_allowlist = allowlist
+            new_allowlist = config.allowlist
 
-        new_before = self.before_hooks + before_hooks
+        new_before = self.before_hooks + config.before_hooks
         # After hooks run inner-to-outer, so prepend new hooks
-        new_after = after_hooks + self.after_hooks
-        new_observe = self.observe_hooks + observe_hooks
-        new_timeout = self.timeout if timeout is None else timeout
+        new_after = config.after_hooks + self.after_hooks
+        new_observe = self.observe_hooks + config.observe_hooks
+        new_timeout = self.timeout if config.timeout is None else config.timeout
 
         return CuprumContext(
             allowlist=new_allowlist,
@@ -227,23 +220,9 @@ class _ScopedContext:
 
     __slots__ = ("_ctx", "_token")
 
-    def __init__(  # noqa: PLR0913
-        self,
-        *,
-        allowlist: frozenset[Program] | None = None,
-        before_hooks: tuple[BeforeHook, ...] = (),
-        after_hooks: tuple[AfterHook, ...] = (),
-        observe_hooks: tuple[ExecHook, ...] = (),
-        timeout: float | None = None,
-    ) -> None:
+    def __init__(self, config: ScopeConfig) -> None:
         parent = current_context()
-        self._ctx = parent.narrow(
-            allowlist=allowlist,
-            before_hooks=before_hooks,
-            after_hooks=after_hooks,
-            observe_hooks=observe_hooks,
-            timeout=timeout,
-        )
+        self._ctx = parent.narrow(config)
         self._token: Token[CuprumContext] | None = None
 
     def __enter__(self) -> CuprumContext:
@@ -294,13 +273,14 @@ def scoped(  # noqa: PLR0913
     ...     assert ctx.is_allowed(ECHO)
 
     """
-    return _ScopedContext(
+    config = ScopeConfig(
         allowlist=allowlist,
         before_hooks=before_hooks,
         after_hooks=after_hooks,
         observe_hooks=observe_hooks,
         timeout=timeout,
     )
+    return _ScopedContext(config)
 
 
 class AllowRegistration:
@@ -515,6 +495,7 @@ __all__ = [
     "ExecHook",
     "ForbiddenProgramError",
     "HookRegistration",
+    "ScopeConfig",
     "after",
     "allow",
     "before",

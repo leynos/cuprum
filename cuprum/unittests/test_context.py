@@ -15,6 +15,7 @@ from cuprum.context import (
     BeforeHook,
     CuprumContext,
     ForbiddenProgramError,
+    ScopeConfig,
     after,
     allow,
     before,
@@ -85,7 +86,7 @@ def test_context_with_hooks() -> None:
 def test_narrow_reduces_allowlist() -> None:
     """narrow() intersects with parent allowlist."""
     parent = CuprumContext(allowlist=frozenset([ECHO, LS]))
-    narrowed = parent.narrow(allowlist=frozenset([ECHO]))
+    narrowed = parent.narrow(ScopeConfig(allowlist=frozenset([ECHO])))
     assert narrowed.allowlist == frozenset([ECHO])
 
 
@@ -93,14 +94,14 @@ def test_narrow_cannot_widen_allowlist() -> None:
     """narrow() cannot add programs not in parent when parent is non-empty."""
     new_program = Program("cat")
     parent = CuprumContext(allowlist=frozenset([ECHO]))
-    narrowed = parent.narrow(allowlist=frozenset([ECHO, new_program]))
+    narrowed = parent.narrow(ScopeConfig(allowlist=frozenset([ECHO, new_program])))
     assert narrowed.allowlist == frozenset([ECHO])
 
 
 def test_narrow_establishes_base_when_parent_empty() -> None:
     """narrow() uses provided allowlist when parent is empty."""
     parent = CuprumContext()  # Empty allowlist
-    narrowed = parent.narrow(allowlist=frozenset([ECHO, LS]))
+    narrowed = parent.narrow(ScopeConfig(allowlist=frozenset([ECHO, LS])))
     assert narrowed.allowlist == frozenset([ECHO, LS])
 
 
@@ -109,7 +110,7 @@ def test_narrow_appends_before_hooks() -> None:
     parent_hook: BeforeHook = mock.Mock()
     child_hook: BeforeHook = mock.Mock()
     parent = CuprumContext(before_hooks=(parent_hook,))
-    narrowed = parent.narrow(before_hooks=(child_hook,))
+    narrowed = parent.narrow(ScopeConfig(before_hooks=(child_hook,)))
     assert narrowed.before_hooks == (parent_hook, child_hook)
 
 
@@ -118,7 +119,7 @@ def test_narrow_prepends_after_hooks() -> None:
     parent_hook: AfterHook = mock.Mock()
     child_hook: AfterHook = mock.Mock()
     parent = CuprumContext(after_hooks=(parent_hook,))
-    narrowed = parent.narrow(after_hooks=(child_hook,))
+    narrowed = parent.narrow(ScopeConfig(after_hooks=(child_hook,)))
     # After hooks run inner-to-outer: child first, then parent
     assert narrowed.after_hooks == (child_hook, parent_hook)
 
