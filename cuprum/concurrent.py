@@ -93,7 +93,7 @@ class ConcurrentResult:
     @property
     def ok(self) -> bool:
         """Return True when all commands exited successfully."""
-        return len(self.failures) == 0
+        return not self.failures
 
     @property
     def first_failure(self) -> CommandResult | None:
@@ -118,16 +118,14 @@ async def _run_with_semaphore(
     config: _ConcurrentRunConfig,
 ) -> CommandResult:
     """Execute a single command, optionally throttled by semaphore."""
-
-    async def execute() -> CommandResult:
-        return await cmd.run(
-            capture=config.capture, echo=config.echo, context=config.context
-        )
-
     if semaphore is not None:
         async with semaphore:
-            return await execute()
-    return await execute()
+            return await cmd.run(
+                capture=config.capture, echo=config.echo, context=config.context
+            )
+    return await cmd.run(
+        capture=config.capture, echo=config.echo, context=config.context
+    )
 
 
 async def _run_collect_all(
