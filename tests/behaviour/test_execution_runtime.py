@@ -137,7 +137,7 @@ def when_run_command_with_timeout(
     timeout = 0.5
 
     ctx = ExecutionContext(env={"CUPRUM_PID_FILE": str(pid_file)})
-    with pytest.raises(TimeoutExpired) as exc_info:
+    with pytest.raises(TimeoutExpired, match=r"timed out") as exc_info:
         command.run_sync(capture=False, timeout=timeout, context=ctx)
 
     behaviour_state["timeout_error"] = exc_info.value

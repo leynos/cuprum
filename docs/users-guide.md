@@ -720,12 +720,12 @@ submission order, and hooks fire per command to preserve existing semantics.
 ### Basic usage
 
 ```python
-from cuprum import ECHO, run_concurrent_sync, scoped, sh
+from cuprum import ECHO, ScopeConfig, run_concurrent_sync, scoped, sh
 
 echo = sh.make(ECHO)
 commands = [echo("-n", f"task-{i}") for i in range(5)]
 
-with scoped(allowlist=frozenset([ECHO])):
+with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
     result = run_concurrent_sync(*commands)
 
 print(f"All succeeded: {result.ok}")
@@ -738,14 +738,14 @@ For async code, use `run_concurrent`:
 ```python
 import asyncio
 
-from cuprum import ECHO, run_concurrent, scoped, sh
+from cuprum import ECHO, ScopeConfig, run_concurrent, scoped, sh
 
 
 async def main() -> None:
     echo = sh.make(ECHO)
     commands = [echo("-n", f"task-{i}") for i in range(5)]
 
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         result = await run_concurrent(*commands)
 
     print(f"All succeeded: {result.ok}")

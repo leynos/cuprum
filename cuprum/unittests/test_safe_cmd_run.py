@@ -198,7 +198,7 @@ def test_timeout_raises_timeout_expired(
     _, execute = execution_strategy
     command = python_builder("-c", "import time; time.sleep(2)")
 
-    with pytest.raises(TimeoutExpired) as exc_info:
+    with pytest.raises(TimeoutExpired, match=r"timed out") as exc_info:
         execute(command, {"timeout": 0.1, "capture": False})
 
     assert exc_info.value.timeout == 0.1
@@ -433,7 +433,9 @@ def test_run_invokes_after_hooks_in_lifo_order(
 
     command = sh.make(ECHO)("-n", "hooks")
     # Nest scopes so the inner after hook runs before the outer (LIFO)
-    with scoped(ScopeConfig(allowlist=frozenset([ECHO]), after_hooks=(outer_hook,))):  # noqa: SIM117
+    with scoped(  # noqa: SIM117 — nested scopes required for LIFO hook ordering test
+        ScopeConfig(allowlist=frozenset([ECHO]), after_hooks=(outer_hook,))
+    ):
         with scoped(ScopeConfig(after_hooks=(inner_hook,))):
             execute(command, {})
 

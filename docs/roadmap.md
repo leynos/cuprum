@@ -103,7 +103,7 @@ compromising explicitness.
 - [ ] 3.4.2. Introduce scoped runtime defaults via `CuprumContext` so a timeout
   can be set once per scope (for example, `sh.scoped(ScopeConfig(timeout=…))`).
   Precedence should be explicit timeout > `ExecutionContext.timeout` >
-  `CuprumContext` default.
+  `ScopeConfig.timeout` (scoped default).
 - [ ] 3.4.3. Add unit and behavioural tests for single-command and pipeline
   timeouts, including cleanup behaviour and partial output capture. Ensure a
   test covers `ExecutionContext(timeout=None)` falling through to the scoped

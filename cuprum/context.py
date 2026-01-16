@@ -41,7 +41,23 @@ class ForbiddenProgramError(PermissionError):
 
 @dc.dataclass(frozen=True, slots=True)
 class ScopeConfig:
-    """Configuration object for scoped execution context updates."""
+    """Configuration object for scoped execution context updates.
+
+    Attributes
+    ----------
+    allowlist:
+        Optional allowlist for the scope. When ``None``, inherit the current
+        allowlist.
+    before_hooks:
+        Hooks invoked before command execution (FIFO order).
+    after_hooks:
+        Hooks invoked after command execution (LIFO order).
+    observe_hooks:
+        Hooks invoked for structured execution events.
+    timeout:
+        Optional default timeout in seconds for calls within the scope.
+
+    """
 
     allowlist: frozenset[Program] | None = None
     before_hooks: tuple[BeforeHook, ...] = ()
@@ -346,8 +362,7 @@ class HookRegistration:
     the original context is restored via the token, ensuring no context pollution
     even when used outside scoped(ScopeConfig()) blocks. This means detach()
     restores the exact context that existed when the registration was created,
-    regardless of
-    subsequent context modifications.
+    regardless of subsequent context modifications.
 
     As with AllowRegistration, detach the hook only from the Context where
     it was registered; using the token in a different Context will raise

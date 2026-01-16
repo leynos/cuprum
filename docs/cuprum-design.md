@@ -354,7 +354,7 @@ class SafeCmd:
         echo: bool = False,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-    ) -> object: ...
+    ) -> CommandResult: ...
     def run_sync(
         self,
         *,
@@ -362,7 +362,7 @@ class SafeCmd:
         echo: bool = False,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-    ) -> object: ...
+    ) -> CommandResult: ...
 
     def __or__(self, other: "SafeCmd") -> "Pipeline":
         ...
@@ -636,7 +636,7 @@ from cuprum import sh
 from cmds import GIT
 
 async def deploy():
-    async with sh.scoped(ScopeConfig(allowlist=(GIT,), before_hooks=(audit_hook,), after_hooks=(metrics_hook,))):
+    async with sh.scoped(ScopeConfig(allowlist=frozenset([GIT]), before_hooks=(audit_hook,), after_hooks=(metrics_hook,))):
         cmd = make_git_deploy_cmd()
         await cmd.run()
 ```

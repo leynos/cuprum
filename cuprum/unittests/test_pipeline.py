@@ -213,7 +213,7 @@ def test_pipeline_timeout_raises_timeout_expired() -> None:
 
     with (
         scoped(ScopeConfig(allowlist=frozenset([python_program]))),
-        pytest.raises(TimeoutExpired) as exc_info,
+        pytest.raises(TimeoutExpired, match=r"timed out") as exc_info,
     ):
         pipeline.run_sync(timeout=0.2, capture=False)
 
