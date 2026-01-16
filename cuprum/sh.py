@@ -427,21 +427,84 @@ def _emit_exit_event(  # noqa: PLR0913
     )
 
 
-def _raise_timeout_expired(  # noqa: PLR0913
-    *,
-    cmd_argv: tuple[str, ...],
-    timeout: float,
-    stdout: str | None,
-    stderr: str | None,
+@dc.dataclass(frozen=True, slots=True)
+class _TimeoutContext:
+    """Context information for a timeout exception."""
+
+    cmd_argv: tuple[str, ...]
+    timeout: float
+    stdout: str | None
+    stderr: str | None
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _ExecutionTracking:
+    """Hook and task tracking for command execution."""
+
+    execution_hooks: _ExecutionHooks
+    pending_tasks: list[asyncio.Task[None]]
+
+
+def _raise_timeout_expired(
+    timeout_ctx: _TimeoutContext,
     exc: BaseException,
 ) -> typ.NoReturn:
     """Raise TimeoutExpired with captured output and chain the original exception."""
     raise TimeoutExpired(
-        cmd=cmd_argv,
-        timeout=timeout,
-        output=stdout,
-        stderr=stderr,
+        cmd=timeout_ctx.cmd_argv,
+        timeout=timeout_ctx.timeout,
+        output=timeout_ctx.stdout,
+        stderr=timeout_ctx.stderr,
     ) from exc
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _SubprocessTimeoutContext:
+    """Context for handling subprocess timeout exceptions."""
+
+    execution: _SubprocessExecution
+    process: asyncio.subprocess.Process
+    started_at: float
+    stdout_text: str | None
+    stderr_text: str | None
+
+
+def _handle_subprocess_timeout(
+    ctx: _SubprocessTimeoutContext,
+    exc: TimeoutError | _SubprocessTimeoutError,
+) -> typ.NoReturn:
+    """Handle a subprocess timeout by emitting exit event and raising TimeoutExpired."""
+    if isinstance(exc, _SubprocessTimeoutError):
+        timeout = exc.timeout
+        exited_at = exc.exited_at
+        stdout = exc.stdout
+        stderr = exc.stderr
+    else:
+        timeout = ctx.execution.timeout
+        if timeout is None:
+            msg = "TimeoutError without a configured timeout"
+            raise RuntimeError(msg) from exc
+        exited_at = time.perf_counter()
+        stdout = ctx.stdout_text
+        stderr = ctx.stderr_text
+
+    exit_code = _get_exit_code(ctx.process)
+    _emit_exit_event(
+        ctx.execution.observation,
+        pid=ctx.process.pid,
+        exit_code=exit_code,
+        started_at=ctx.started_at,
+        exited_at=exited_at,
+    )
+    _raise_timeout_expired(
+        _TimeoutContext(
+            cmd_argv=ctx.execution.cmd.argv_with_program,
+            timeout=timeout,
+            stdout=stdout,
+            stderr=stderr,
+        ),
+        exc,
+    )
 
 
 async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
@@ -471,42 +534,16 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
                 pid=pid,
                 timeout=execution.timeout,
             )
-    except TimeoutError as exc:
-        timeout = execution.timeout
-        if timeout is None:
-            msg = "TimeoutError without a configured timeout"
-            raise RuntimeError(msg) from exc
-        exit_code = _get_exit_code(process)
-        exited_at = time.perf_counter()
-        _emit_exit_event(
-            execution.observation,
-            pid=pid,
-            exit_code=exit_code,
-            started_at=started_at,
-            exited_at=exited_at,
-        )
-        _raise_timeout_expired(
-            cmd_argv=execution.cmd.argv_with_program,
-            timeout=timeout,
-            stdout=stdout_text,
-            stderr=stderr_text,
-            exc=exc,
-        )
-    except _SubprocessTimeoutError as exc:
-        exit_code = _get_exit_code(process)
-        _emit_exit_event(
-            execution.observation,
-            pid=pid,
-            exit_code=exit_code,
-            started_at=started_at,
-            exited_at=exc.exited_at,
-        )
-        _raise_timeout_expired(
-            cmd_argv=execution.cmd.argv_with_program,
-            timeout=exc.timeout,
-            stdout=exc.stdout,
-            stderr=exc.stderr,
-            exc=exc,
+    except (TimeoutError, _SubprocessTimeoutError) as exc:
+        _handle_subprocess_timeout(
+            _SubprocessTimeoutContext(
+                execution=execution,
+                process=process,
+                started_at=started_at,
+                stdout_text=stdout_text,
+                stderr_text=stderr_text,
+            ),
+            exc,
         )
 
     _emit_exit_event(
@@ -530,17 +567,12 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
 def _prepare_execution_observation(  # noqa: PLR0913
     cmd: SafeCmd,
     context: ExecutionContext,
+    tracking: _ExecutionTracking,
     *,
     capture: bool,
     echo: bool,
-    execution_hooks: _ExecutionHooks,
-    pending_tasks: list[asyncio.Task[None]],
 ) -> _StageObservation:
-    """Prepare the observation context for command execution.
-
-    Constructs a StageObservation encapsulating the resolved cwd, environment
-    overlay, merged tags, and hook references needed to emit execution events.
-    """
+    """Prepare the observation context for command execution."""
     cwd = Path(context.cwd) if context.cwd is not None else None
     env_overlay = _freeze_str_mapping(context.env)
     tags = _merge_tags(
@@ -549,11 +581,11 @@ def _prepare_execution_observation(  # noqa: PLR0913
     )
     return _StageObservation(
         cmd=cmd,
-        hooks=execution_hooks,
+        hooks=tracking.execution_hooks,
         cwd=cwd,
         env_overlay=env_overlay,
         tags=tags,
-        pending_tasks=pending_tasks,
+        pending_tasks=tracking.pending_tasks,
     )
 
 
@@ -616,19 +648,20 @@ class SafeCmd:
         """
         ctx = context or ExecutionContext()
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
-        execution_hooks = _run_before_hooks(self)
-        pending_tasks: list[asyncio.Task[None]] = []
+        tracking = _ExecutionTracking(
+            execution_hooks=_run_before_hooks(self),
+            pending_tasks=[],
+        )
         observation = _prepare_execution_observation(
             self,
             ctx,
+            tracking,
             capture=capture,
             echo=echo,
-            execution_hooks=execution_hooks,
-            pending_tasks=pending_tasks,
         )
 
         observation.emit("plan", _EventDetails(pid=None))
-        for hook in execution_hooks.before_hooks:
+        for hook in tracking.execution_hooks.before_hooks:
             hook(self)
 
         try:
@@ -642,16 +675,16 @@ class SafeCmd:
                     observation=observation,
                 ),
             )
-            for hook in execution_hooks.after_hooks:
+            for hook in tracking.execution_hooks.after_hooks:
                 hook(self, result)
         except asyncio.CancelledError:
-            await asyncio.shield(_wait_for_exec_hook_tasks(pending_tasks))
+            await asyncio.shield(_wait_for_exec_hook_tasks(tracking.pending_tasks))
             raise
         except BaseException:
-            await _wait_for_exec_hook_tasks(pending_tasks)
+            await _wait_for_exec_hook_tasks(tracking.pending_tasks)
             raise
 
-        await _wait_for_exec_hook_tasks(pending_tasks)
+        await _wait_for_exec_hook_tasks(tracking.pending_tasks)
         return result
 
     def run_sync(

@@ -156,19 +156,25 @@ async def _gather_pipeline_outputs(
     return stderr_by_stage, final_stdout
 
 
-def _build_timeout_expired_error(  # noqa: PLR0913
+@dc.dataclass(frozen=True, slots=True)
+class _PipelineOutputs:
+    """Captured outputs from pipeline execution."""
+
+    stderr_by_stage: tuple[str | None, ...]
+    final_stdout: str | None
+    capture: bool
+
+
+def _build_timeout_expired_error(
     parts: tuple[SafeCmd, ...],
     timeout: float,
-    stderr_by_stage: tuple[str | None, ...],
-    final_stdout: str | None,
-    *,
-    capture: bool,
+    outputs: _PipelineOutputs,
 ) -> BaseException:
     """Construct a TimeoutExpired exception with captured outputs."""
     stderr_text = None
-    if capture:
-        stderr_text = "".join(text or "" for text in stderr_by_stage)
-    output = final_stdout if capture else None
+    if outputs.capture:
+        stderr_text = "".join(text or "" for text in outputs.stderr_by_stage)
+    output = outputs.final_stdout if outputs.capture else None
     return _sh_module().TimeoutExpired(
         cmd=tuple(cmd.argv_with_program for cmd in parts),
         timeout=timeout,
@@ -204,13 +210,12 @@ async def _collect_pipeline_inputs(
         if timeout is None:
             msg = "TimeoutError without a configured timeout"
             raise RuntimeError(msg) from exc
-        raise _build_timeout_expired_error(
-            parts,
-            timeout,
-            stderr_by_stage,
-            final_stdout,
+        outputs = _PipelineOutputs(
+            stderr_by_stage=stderr_by_stage,
+            final_stdout=final_stdout,
             capture=config.capture,
-        ) from exc
+        )
+        raise _build_timeout_expired_error(parts, timeout, outputs) from exc
 
 
 def _build_pipeline_observations(
