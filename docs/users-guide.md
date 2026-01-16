@@ -672,3 +672,168 @@ The adapters follow these design principles:
 
 4. **Reference implementations**: The `InMemoryMetrics` and `InMemoryTracer`
    classes serve as both documentation and test utilities.
+
+## Concurrent command execution
+
+Cuprum provides `run_concurrent` to execute multiple `SafeCmd` instances
+concurrently with optional concurrency limits. Results are returned in
+submission order, and hooks fire per command to preserve existing semantics.
+
+### Basic usage
+
+```python
+from cuprum import ECHO, run_concurrent_sync, scoped, sh
+
+echo = sh.make(ECHO)
+commands = [echo("-n", f"task-{i}") for i in range(5)]
+
+with scoped(allowlist=frozenset([ECHO])):
+    result = run_concurrent_sync(*commands)
+
+print(f"All succeeded: {result.ok}")
+for cmd_result in result.results:
+    print(cmd_result.stdout)
+```
+
+For async code, use `run_concurrent`:
+
+```python
+import asyncio
+
+from cuprum import ECHO, run_concurrent, scoped, sh
+
+
+async def main() -> None:
+    echo = sh.make(ECHO)
+    commands = [echo("-n", f"task-{i}") for i in range(5)]
+
+    with scoped(allowlist=frozenset([ECHO])):
+        result = await run_concurrent(*commands)
+
+    print(f"All succeeded: {result.ok}")
+
+
+asyncio.run(main())
+```
+
+### ConcurrentConfig
+
+Configure execution via the `ConcurrentConfig` dataclass:
+
+```python
+from cuprum import ECHO, ConcurrentConfig, run_concurrent_sync, scoped, sh
+
+echo = sh.make(ECHO)
+commands = [echo("-n", f"task-{i}") for i in range(10)]
+
+config = ConcurrentConfig(
+    concurrency=3,  # At most 3 commands run simultaneously
+    capture=True,  # Capture stdout/stderr (default)
+    echo=False,  # Do not tee output (default)
+    fail_fast=False,  # Continue after failures (default)
+)
+
+with scoped(allowlist=frozenset([ECHO])):
+    result = run_concurrent_sync(*commands, config=config)
+```
+
+Configuration attributes:
+
+- `concurrency`: Maximum parallel commands. `None` (default) runs all in
+  parallel; `1` runs sequentially.
+- `capture`: When `True` (default), capture stdout/stderr into results.
+- `echo`: When `True`, tee output to configured sinks.
+- `context`: Shared `ExecutionContext` for all commands.
+- `fail_fast`: When `True`, cancel remaining commands after first failure.
+
+When `config` is `None` (the default), `ConcurrentConfig()` is used.
+
+### Limiting concurrency
+
+Pass a `ConcurrentConfig` with `concurrency=N` to limit parallel execution.
+This uses an `asyncio.Semaphore` internally:
+
+```python
+from cuprum import ECHO, ConcurrentConfig, run_concurrent_sync, scoped, sh
+
+echo = sh.make(ECHO)
+commands = [echo("-n", f"task-{i}") for i in range(10)]
+
+with scoped(allowlist=frozenset([ECHO])):
+    # At most 3 commands run simultaneously
+    result = run_concurrent_sync(*commands, config=ConcurrentConfig(concurrency=3))
+```
+
+### Failure handling
+
+By default, `run_concurrent` uses collect-all mode: all commands run to
+completion regardless of failures. The `ConcurrentResult.failures` tuple
+contains indices of commands that exited non-zero:
+
+```python
+from cuprum import run_concurrent_sync, scoped
+
+with scoped(allowlist=...):
+    result = run_concurrent_sync(cmd1, cmd2, cmd3)
+
+if not result.ok:
+    print(f"Failed command indices: {result.failures}")
+    print(f"First failure: {result.first_failure}")
+```
+
+### Fail-fast mode
+
+Enable `fail_fast=True` in the config to cancel remaining commands after the
+first failure:
+
+```python
+from cuprum import ConcurrentConfig, run_concurrent_sync, scoped
+
+with scoped(allowlist=...):
+    result = run_concurrent_sync(*commands, config=ConcurrentConfig(fail_fast=True))
+
+if not result.ok:
+    print(f"First failure: {result.first_failure}")
+    # Remaining commands were cancelled
+```
+
+In fail-fast mode, commands that were already running receive cancellation
+(SIGTERM (termination signal) then SIGKILL (kill signal) after the grace
+period). Commands that had not yet started are not scheduled.
+
+### Hook semantics
+
+Hooks fire per command, preserving consistency with single-command execution:
+
+- **Before hooks** run when each command starts (may be interleaved).
+- **After hooks** run when each command completes (may be interleaved).
+- **Observe hooks** receive `ExecEvent` values for each command.
+
+Commands share the execution context, so all commands see the same hooks and
+allowlist:
+
+```python
+from cuprum import ECHO, before, run_concurrent_sync, scoped, sh
+
+
+def log_start(cmd) -> None:
+    print(f"Starting: {cmd.program}")
+
+
+echo = sh.make(ECHO)
+commands = [echo("-n", f"task-{i}") for i in range(3)]
+
+with scoped(allowlist=frozenset([ECHO])), before(log_start):
+    # log_start fires for each command
+    result = run_concurrent_sync(*commands)
+```
+
+### ConcurrentResult properties
+
+The `ConcurrentResult` dataclass provides:
+
+- `results`: Tuple of `CommandResult` in submission order.
+- `failures`: Tuple of indices where commands exited non-zero.
+- `ok`: `True` when all commands succeeded.
+- `first_failure`: The first failed `CommandResult`, or `None` if all
+  succeeded.
