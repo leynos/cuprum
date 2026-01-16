@@ -324,7 +324,9 @@ def test_spawn_pipeline_processes_terminates_started_stages_on_failure(
     echo = sh.make(ECHO)
     first = echo("-n", "hello")
     second = echo("-n", "world")
-    config = _prepare_pipeline_config(capture=True, echo=False, context=None)
+    config = _prepare_pipeline_config(
+        capture=True, echo=False, timeout=None, context=None
+    )
 
     spawned: list[_StubSpawnProcess] = []
     call_count = 0

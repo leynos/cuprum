@@ -7,8 +7,7 @@ import typing as typ
 import pytest
 from pytest_bdd import given, scenario, then, when
 
-from cuprum import sh
-from cuprum.context import ScopeConfig, scoped
+from cuprum import ScopeConfig, scoped, sh
 from cuprum.sh import ExecutionContext
 from tests.helpers.catalogue import python_catalogue
 

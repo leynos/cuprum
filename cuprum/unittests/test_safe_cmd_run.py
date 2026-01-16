@@ -194,7 +194,7 @@ def test_timeout_raises_timeout_expired(
     python_builder: typ.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
-    """Timeouts raise TimeoutExpired with captured output when enabled."""
+    """Timeouts raise TimeoutExpired with no output when capture is disabled."""
     _, execute = execution_strategy
     command = python_builder("-c", "import time; time.sleep(2)")
 

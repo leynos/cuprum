@@ -23,10 +23,12 @@ from cuprum._observability import (
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
     _EventDetails,
+    _ExecutionHooks,
     _run_before_hooks,
     _run_pipeline,
     _StageObservation,
 )
+from cuprum._pipeline_streams import _prepare_pipeline_config
 from cuprum._process_lifecycle import _merge_env, _terminate_process
 from cuprum._streams import (
     _consume_stream,
@@ -313,6 +315,53 @@ async def _spawn_subprocess(
     )
 
 
+def _create_stream_callback(
+    observation: _StageObservation,
+    event_type: typ.Literal["stdout", "stderr"],
+    pid: int | None,
+) -> cabc.Callable[[str], None] | None:
+    """Create a callback for emitting stream line events, or None if no hooks."""
+    if not observation.hooks.observe_hooks:
+        return None
+    return lambda line: observation.emit(event_type, _EventDetails(pid=pid, line=line))
+
+
+def _spawn_stream_consumers(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+    stream_config: _StreamConfig,
+    *,
+    pid: int | None,
+) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
+    """Spawn stdout and stderr stream consumer tasks."""
+    stdout_on_line = _create_stream_callback(execution.observation, "stdout", pid)
+    stderr_on_line = _create_stream_callback(execution.observation, "stderr", pid)
+    stderr_config = dc.replace(
+        stream_config,
+        sink=(
+            execution.ctx.stderr_sink
+            if execution.ctx.stderr_sink is not None
+            else sys.stderr
+        ),
+    )
+    return (
+        asyncio.create_task(
+            _consume_stream(
+                process.stdout,
+                stream_config,
+                on_line=stdout_on_line,
+            ),
+        ),
+        asyncio.create_task(
+            _consume_stream(
+                process.stderr,
+                stderr_config,
+                on_line=stderr_on_line,
+            ),
+        ),
+    )
+
+
 async def _run_subprocess_with_streams(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
@@ -331,46 +380,7 @@ async def _run_subprocess_with_streams(
         encoding=execution.ctx.encoding,
         errors=execution.ctx.errors,
     )
-
-    stdout_on_line = (
-        None
-        if not execution.observation.hooks.observe_hooks
-        else lambda line: execution.observation.emit(
-            "stdout",
-            _EventDetails(pid=pid, line=line),
-        )
-    )
-    stderr_on_line = (
-        None
-        if not execution.observation.hooks.observe_hooks
-        else lambda line: execution.observation.emit(
-            "stderr",
-            _EventDetails(pid=pid, line=line),
-        )
-    )
-    consumers = (
-        asyncio.create_task(
-            _consume_stream(
-                process.stdout,
-                stream_config,
-                on_line=stdout_on_line,
-            ),
-        ),
-        asyncio.create_task(
-            _consume_stream(
-                process.stderr,
-                dc.replace(
-                    stream_config,
-                    sink=(
-                        execution.ctx.stderr_sink
-                        if execution.ctx.stderr_sink is not None
-                        else sys.stderr
-                    ),
-                ),
-                on_line=stderr_on_line,
-            ),
-        ),
-    )
+    consumers = _spawn_stream_consumers(process, execution, stream_config, pid=pid)
     try:
         exit_code, exited_at = await _wait_for_exit_code(
             process,
@@ -391,6 +401,47 @@ async def _run_subprocess_with_streams(
         ) from exc
     stdout_text, stderr_text = await asyncio.gather(*consumers)
     return exit_code, exited_at, stdout_text, stderr_text
+
+
+def _get_exit_code(process: asyncio.subprocess.Process) -> int:
+    """Return the process exit code, defaulting to -1 if unavailable."""
+    return process.returncode if process.returncode is not None else -1
+
+
+def _emit_exit_event(  # noqa: PLR0913
+    observation: _StageObservation,
+    *,
+    pid: int | None,
+    exit_code: int,
+    started_at: float,
+    exited_at: float,
+) -> None:
+    """Emit an exit event with process details and duration."""
+    observation.emit(
+        "exit",
+        _EventDetails(
+            pid=pid,
+            exit_code=exit_code,
+            duration_s=max(0.0, exited_at - started_at),
+        ),
+    )
+
+
+def _raise_timeout_expired(  # noqa: PLR0913
+    *,
+    cmd_argv: tuple[str, ...],
+    timeout: float,
+    stdout: str | None,
+    stderr: str | None,
+    exc: BaseException,
+) -> typ.NoReturn:
+    """Raise TimeoutExpired with captured output and chain the original exception."""
+    raise TimeoutExpired(
+        cmd=cmd_argv,
+        timeout=timeout,
+        output=stdout,
+        stderr=stderr,
+    ) from exc
 
 
 async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
@@ -425,46 +476,45 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
         if timeout is None:
             msg = "TimeoutError without a configured timeout"
             raise RuntimeError(msg) from exc
-        exit_code = process.returncode if process.returncode is not None else -1
+        exit_code = _get_exit_code(process)
         exited_at = time.perf_counter()
-        execution.observation.emit(
-            "exit",
-            _EventDetails(
-                pid=pid,
-                exit_code=exit_code,
-                duration_s=max(0.0, exited_at - started_at),
-            ),
-        )
-        raise TimeoutExpired(
-            cmd=execution.cmd.argv_with_program,
-            timeout=timeout,
-            output=stdout_text,
-            stderr=stderr_text,
-        ) from exc
-    except _SubprocessTimeoutError as exc:
-        exit_code = process.returncode if process.returncode is not None else -1
-        execution.observation.emit(
-            "exit",
-            _EventDetails(
-                pid=pid,
-                exit_code=exit_code,
-                duration_s=max(0.0, exc.exited_at - started_at),
-            ),
-        )
-        raise TimeoutExpired(
-            cmd=execution.cmd.argv_with_program,
-            timeout=exc.timeout,
-            output=exc.stdout,
-            stderr=exc.stderr,
-        ) from exc
-
-    execution.observation.emit(
-        "exit",
-        _EventDetails(
+        _emit_exit_event(
+            execution.observation,
             pid=pid,
             exit_code=exit_code,
-            duration_s=max(0.0, exited_at - started_at),
-        ),
+            started_at=started_at,
+            exited_at=exited_at,
+        )
+        _raise_timeout_expired(
+            cmd_argv=execution.cmd.argv_with_program,
+            timeout=timeout,
+            stdout=stdout_text,
+            stderr=stderr_text,
+            exc=exc,
+        )
+    except _SubprocessTimeoutError as exc:
+        exit_code = _get_exit_code(process)
+        _emit_exit_event(
+            execution.observation,
+            pid=pid,
+            exit_code=exit_code,
+            started_at=started_at,
+            exited_at=exc.exited_at,
+        )
+        _raise_timeout_expired(
+            cmd_argv=execution.cmd.argv_with_program,
+            timeout=exc.timeout,
+            stdout=exc.stdout,
+            stderr=exc.stderr,
+            exc=exc,
+        )
+
+    _emit_exit_event(
+        execution.observation,
+        pid=pid,
+        exit_code=exit_code,
+        started_at=started_at,
+        exited_at=exited_at,
     )
 
     return CommandResult(
@@ -474,6 +524,36 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
         pid=process.pid if process.pid is not None else -1,
         stdout=stdout_text,
         stderr=stderr_text,
+    )
+
+
+def _prepare_execution_observation(  # noqa: PLR0913
+    cmd: SafeCmd,
+    context: ExecutionContext,
+    *,
+    capture: bool,
+    echo: bool,
+    execution_hooks: _ExecutionHooks,
+    pending_tasks: list[asyncio.Task[None]],
+) -> _StageObservation:
+    """Prepare the observation context for command execution.
+
+    Constructs a StageObservation encapsulating the resolved cwd, environment
+    overlay, merged tags, and hook references needed to emit execution events.
+    """
+    cwd = Path(context.cwd) if context.cwd is not None else None
+    env_overlay = _freeze_str_mapping(context.env)
+    tags = _merge_tags(
+        {"project": cmd.project.name, "capture": capture, "echo": echo},
+        context.tags,
+    )
+    return _StageObservation(
+        cmd=cmd,
+        hooks=execution_hooks,
+        cwd=cwd,
+        env_overlay=env_overlay,
+        tags=tags,
+        pending_tasks=pending_tasks,
     )
 
 
@@ -538,18 +618,12 @@ class SafeCmd:
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         execution_hooks = _run_before_hooks(self)
         pending_tasks: list[asyncio.Task[None]] = []
-        cwd = Path(ctx.cwd) if ctx.cwd is not None else None
-        env_overlay = _freeze_str_mapping(ctx.env)
-        tags = _merge_tags(
-            {"project": self.project.name, "capture": capture, "echo": echo},
-            ctx.tags,
-        )
-        observation = _StageObservation(
-            cmd=self,
-            hooks=execution_hooks,
-            cwd=cwd,
-            env_overlay=env_overlay,
-            tags=tags,
+        observation = _prepare_execution_observation(
+            self,
+            ctx,
+            capture=capture,
+            echo=echo,
+            execution_hooks=execution_hooks,
             pending_tasks=pending_tasks,
         )
 
@@ -653,13 +727,13 @@ class Pipeline:
     ) -> PipelineResult:
         """Execute the pipeline asynchronously with streaming and backpressure."""
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
-        return await _run_pipeline(
-            self.parts,
+        config = _prepare_pipeline_config(
             capture=capture,
             echo=echo,
             timeout=effective_timeout,
             context=context,
         )
+        return await _run_pipeline(self.parts, config)
 
     def run_sync(
         self,

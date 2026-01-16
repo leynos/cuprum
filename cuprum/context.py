@@ -272,10 +272,9 @@ class AllowRegistration:
     the original context is restored via the token, ensuring no context pollution
     even when used outside scoped(ScopeConfig()) blocks. This means detach()
     restores the exact context that existed when the registration was created,
-    regardless of
-    subsequent context modifications. If multiple registrations are created and
-    detached in non-LIFO order, earlier tokens may restore states that remove
-    programs added by other registrations.
+    regardless of subsequent context modifications. If multiple registrations are
+    created and detached in non-LIFO order, earlier tokens may restore states
+    that remove programs added by other registrations.
 
     Detach in the same logical Context (thread or Task) in which the
     registration was created. Resetting a ContextVar with a token from a

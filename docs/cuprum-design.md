@@ -636,7 +636,7 @@ from cuprum import sh
 from cmds import GIT
 
 async def deploy():
-    async with sh.scoped(ScopeConfig(allow={GIT}, before=[audit_hook], after=[metrics_hook])):
+    async with sh.scoped(ScopeConfig(allowlist=(GIT,), before_hooks=(audit_hook,), after_hooks=(metrics_hook,))):
         cmd = make_git_deploy_cmd()
         await cmd.run()
 ```
