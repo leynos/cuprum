@@ -4,7 +4,7 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`, and
 `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
-Status: DRAFT
+Status: COMPLETE
 
 PLANS.md: Not present in the repository root at plan time, so no additional
 plan governance applies.
@@ -16,8 +16,8 @@ typed argument helpers (SafePath and GitRef) with runtime validation. Success
 is observable when callers can import the new builders, create SafeCmd
 instances with validated arguments, and see the expected argv output in unit
 and Behaviour-Driven Development (BDD) tests. All required quality gates pass,
-and documentation reflects the new API, with the roadmap item 3.1.1 marked
-as done.
+and documentation reflects the new API, with the roadmap item 3.1.1 marked as
+done.
 
 ## Constraints
 
@@ -49,43 +49,56 @@ as done.
   subset of accepted ref formats, test common refs, and provide clear error
   messages.
 - Risk: SafePath validation might block valid rsync or tar paths (for example,
-  relative paths or traversal segments needed by callers).
-  Severity: medium. Likelihood: medium. Mitigation: allow explicit opt-in for
-  relative paths via a helper flag and document this behaviour.
+  relative paths or traversal segments needed by callers). Severity: medium.
+  Likelihood: medium. Mitigation: allow explicit opt-in for relative paths via
+  a helper flag and document this behaviour.
 - Risk: Users may expect remote rsync targets, which SafePath should not
-  accept.
-  Severity: low. Likelihood: medium. Mitigation: document that remote targets
-  are out of scope for the core builders and require custom builders.
+  accept. Severity: low. Likelihood: medium. Mitigation: document that remote
+  targets are out of scope for the core builders and require custom builders.
 
 ## Progress
 
 - [x] (2026-01-16 00:00Z) Drafted ExecPlan for roadmap item 3.1.1.
-- [ ] Define typed helper validation rules and builder API surface.
-- [ ] Add unit tests and BDD scenarios that initially fail.
-- [ ] Implement typed helpers and builder functions for git, rsync, and tar.
-- [ ] Update catalogue defaults and public exports.
-- [ ] Update docs and mark roadmap item done.
-- [ ] Run formatting, lint, typecheck, and tests.
+- [x] (2026-01-16 01:00Z) Defined validation rules and builder API surface.
+- [x] (2026-01-16 01:15Z) Added unit tests and BDD scenarios for builders.
+- [x] (2026-01-16 01:35Z) Implemented SafePath/GitRef and core builders.
+- [x] (2026-01-16 01:45Z) Updated catalogue defaults and public exports.
+- [x] (2026-01-16 02:00Z) Updated docs and marked roadmap item done.
+- [x] (2026-01-16 02:30Z) Ran formatting, lint, typecheck, and tests.
 
 ## Surprises & discoveries
 
-None yet.
+- Observation: Ruff's max-args lint limit requires builder options to be
+  bundled to keep function signatures concise. Evidence: `max-args = 4` is
+  configured in `pyproject.toml`. Impact: Added `RsyncOptions` and
+  `TarCreateOptions` dataclasses to hold optional flags.
+- Observation: Pytest collected two modules named `test_builder_library.py`,
+  causing an import mismatch error. Evidence: pytest reported a file mismatch
+  during `make test`. Impact: Renamed the behaviour test file to
+  `tests/behaviour/test_builder_library_behaviour.py`.
 
 ## Decision log
 
 - Decision: Implement a new `cuprum/builders` package with submodules per tool
-  and a shared `args.py` for typed helpers.
-  Rationale: Keeps builder APIs grouped and discoverable without bloating
-  `cuprum/sh.py`.
-  Date/Author: 2026-01-16 (Codex).
+  and a shared `args.py` for typed helpers. Rationale: Keeps builder APIs
+  grouped and discoverable without bloating `cuprum/sh.py`. Date/Author:
+  2026-01-16 (Codex).
 - Decision: Use conservative runtime validation for SafePath and GitRef and
   call validators inside builder functions, not only in helper constructors.
   Rationale: Avoids bypassing validation when callers pass raw strings.
   Date/Author: 2026-01-16 (Codex).
+- Decision: Bundle rsync and tar flags in option dataclasses to satisfy lint
+  rules while keeping builder APIs explicit. Rationale: Ruff's `max-args` limit
+  discourages long argument lists; options keep signatures short without hiding
+  behaviour. Date/Author: 2026-01-16 (Codex).
 
 ## Outcomes & retrospective
 
-Pending.
+Shipped the core builder library for git, rsync, and tar with validated
+SafePath/GitRef helpers and option dataclasses. Added unit and BDD coverage,
+updated the default catalogue and public exports, refreshed documentation, and
+marked roadmap item 3.1.1 as done. All required quality gates and documentation
+checks passed.
 
 ## Context and orientation
 
@@ -117,9 +130,10 @@ Stage B: scaffolding and tests. Create the `cuprum/builders/` package and
 define stub APIs so tests can import them. Add unit tests in
 `cuprum/unittests/test_builder_library.py` to cover validation rules and argv
 construction. Add BDD scenarios in `tests/features/builder_library.feature`
-with step implementations in `tests/behaviour/test_builder_library.py` that
-exercise the public builder surface. These tests should fail before the real
-implementation is added.
+with step implementations in
+`tests/behaviour/test_builder_library_behaviour.py` that exercise the public
+builder surface. These tests should fail before the real implementation is
+added.
 
 Stage C: implementation. Fill in `SafePath` and `GitRef` helpers (runtime
 validation plus conversion to string), then implement builder functions for
@@ -131,9 +145,9 @@ package or functions.
 Stage D: hardening, documentation, and cleanup. Update `docs/users-guide.md`
 with a new section describing the core builder library, examples, and
 validation behaviour. Record design decisions and validation rules in
-`docs/cuprum-design.md`. Mark roadmap item 3.1.1 as done in
-`docs/roadmap.md`. Run formatting, linting, typechecking, and tests, fixing any
-issues before completion.
+`docs/cuprum-design.md`. Mark roadmap item 3.1.1 as done in `docs/roadmap.md`.
+Run formatting, linting, typechecking, and tests, fixing any issues before
+completion.
 
 ## Concrete steps
 
@@ -150,7 +164,7 @@ issues before completion.
      `cuprum/builders/tar.py` with minimal stubs.
    - Write unit tests in `cuprum/unittests/test_builder_library.py`.
    - Write BDD scenarios in `tests/features/builder_library.feature` and step
-     implementations in `tests/behaviour/test_builder_library.py`.
+     implementations in `tests/behaviour/test_builder_library_behaviour.py`.
    - Run `pytest` for the new tests and confirm they fail for the right
      reasons.
 
@@ -257,17 +271,41 @@ Builders (all return `SafeCmd` and call validators internally):
       def git_rev_parse(ref: str) -> SafeCmd
 
     cuprum/builders/rsync.py
-      def rsync_sync(source: str, destination: str, *, archive: bool = False,
-          delete: bool = False, dry_run: bool = False, verbose: bool = False,
-          compress: bool = False) -> SafeCmd
+      @dataclass(frozen=True, slots=True)
+      class RsyncOptions:
+          archive: bool = False
+          delete: bool = False
+          dry_run: bool = False
+          verbose: bool = False
+          compress: bool = False
+          allow_relative: bool = False
+
+      def rsync_sync(
+          source: str | Path,
+          destination: str | Path,
+          *,
+          options: RsyncOptions | None = None,
+      ) -> SafeCmd
 
     cuprum/builders/tar.py
-      def tar_create(archive: str, sources: Sequence[str], *,
-          gzip: bool = False, bzip2: bool = False, xz: bool = False) -> SafeCmd
-      def tar_extract(
-          archive: str,
+      @dataclass(frozen=True, slots=True)
+      class TarCreateOptions:
+          gzip: bool = False
+          bzip2: bool = False
+          xz: bool = False
+          allow_relative: bool = False
+
+      def tar_create(
+          archive: str | Path,
+          sources: Sequence[str | Path],
           *,
-          destination: str | None = None,
+          options: TarCreateOptions | None = None,
+      ) -> SafeCmd
+      def tar_extract(
+          archive: str | Path,
+          *,
+          destination: str | Path | None = None,
+          allow_relative: bool = False,
       ) -> SafeCmd
 
 Exports and catalogue updates:
@@ -278,3 +316,11 @@ Exports and catalogue updates:
   `cuprum/__init__.py`.
 
 No new third-party dependencies are permitted without escalation.
+
+## Revision note
+
+- 2026-01-16: Updated status to IN PROGRESS, marked completed milestones,
+  added option dataclass interfaces for rsync and tar to satisfy lint limits,
+  and documented the resulting discovery and decision.
+- 2026-01-16: Marked the plan COMPLETE after successful quality gates.
+- 2026-01-16: Updated plan references after renaming the behaviour test module.

@@ -1309,6 +1309,23 @@ Focus:
 - Refine APIs based on feedback and real‑world usage, without compromising the
   core safety and context model.
 
+#### 11.3.1 Core builder library decisions
+
+Cuprum ships a small core builder library in `cuprum.builders` for `git`,
+`rsync`, and `tar`. These builders are optional, but they provide a canonical
+reference for typed argument validation that project-specific builders can
+extend. The following decisions guide the core builder set:
+
+- `SafePath` validation rejects empty strings, embedded NUL characters, and
+  `..` path segments. Absolute paths are required by default, with an
+  `allow_relative=True` opt-in for relative paths.
+- `GitRef` validation accepts only `[A-Za-z0-9._/-]` and rejects whitespace,
+  leading `-`, `..`, `//`, `@{`, trailing `.lock`, and trailing `.`.
+- Builders validate inputs internally and expose `allow_relative` parameters
+  on option dataclasses where relative paths are expected to be legitimate.
+- `RsyncOptions` and `TarCreateOptions` bundle flag choices to keep builder
+  function signatures short and lint-friendly.
+
 ______________________________________________________________________
 
 ## 12. Summary
