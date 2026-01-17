@@ -39,6 +39,36 @@ class ForbiddenProgramError(PermissionError):
     """Raised when attempting to run a program not in the current allowlist."""
 
 
+def _validate_timeout(timeout: float | None, class_name: str) -> float | None:
+    """Validate and coerce timeout value.
+
+    Parameters
+    ----------
+    timeout:
+        The timeout value to validate. May be None, float, or int.
+    class_name:
+        Name of the class for error messages.
+
+    Returns
+    -------
+    float | None
+        The validated timeout as a float, or None.
+
+    Raises
+    ------
+    ValueError
+        When timeout is negative.
+
+    """
+    if timeout is None:
+        return None
+    timeout_float = float(timeout)
+    if timeout_float < 0:
+        msg = f"{class_name} timeout must be non-negative, got {timeout_float}"
+        raise ValueError(msg)
+    return timeout_float
+
+
 @dc.dataclass(frozen=True, slots=True)
 class ScopeConfig:
     """Configuration object for scoped execution context updates.
@@ -64,6 +94,12 @@ class ScopeConfig:
     after_hooks: tuple[AfterHook, ...] = ()
     observe_hooks: tuple[ExecHook, ...] = ()
     timeout: float | None = None
+
+    def __post_init__(self) -> None:
+        """Validate and coerce timeout after initialization."""
+        validated = _validate_timeout(self.timeout, "ScopeConfig")
+        # Use object.__setattr__ because the dataclass is frozen
+        object.__setattr__(self, "timeout", validated)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -91,6 +127,12 @@ class CuprumContext:
     after_hooks: tuple[AfterHook, ...] = ()
     observe_hooks: tuple[ExecHook, ...] = ()
     timeout: float | None = None
+
+    def __post_init__(self) -> None:
+        """Validate and coerce timeout after initialization."""
+        validated = _validate_timeout(self.timeout, "CuprumContext")
+        # Use object.__setattr__ because the dataclass is frozen
+        object.__setattr__(self, "timeout", validated)
 
     def is_allowed(self, program: Program) -> bool:
         """Return True when the program is in the allowlist.
