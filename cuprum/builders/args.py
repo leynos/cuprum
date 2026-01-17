@@ -12,6 +12,34 @@ GitRef = typ.NewType("GitRef", str)
 _GIT_REF_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
 
 
+def _convert_to_string(value: str | Path) -> str:
+    if isinstance(value, Path):
+        return value.as_posix()
+    if isinstance(value, str):
+        return value
+    msg = f"SafePath expects str or Path, got {type(value).__name__}"
+    raise TypeError(msg)
+
+
+def _validate_path_string(raw_value: str, *, allow_relative: bool) -> None:
+    checks = (
+        (raw_value == "", "SafePath cannot be empty"),
+        ("\x00" in raw_value, "SafePath cannot contain NUL characters"),
+        (
+            ".." in PurePath(raw_value).parts,
+            "SafePath cannot contain '..' segments",
+        ),
+        (
+            not allow_relative and not PurePath(raw_value).is_absolute(),
+            "SafePath requires an absolute path by default",
+        ),
+    )
+    for condition, message in checks:
+        if condition:
+            msg = message
+            raise ValueError(msg)
+
+
 def safe_path(value: str | Path, *, allow_relative: bool = False) -> SafePath:
     """Validate and normalise a filesystem path.
 
@@ -27,30 +55,9 @@ def safe_path(value: str | Path, *, allow_relative: bool = False) -> SafePath:
     SafePath
         Normalised path string.
     """
-    if isinstance(value, Path):
-        raw_value = value.as_posix()
-    elif isinstance(value, str):
-        raw_value = value
-    else:
-        msg = f"SafePath expects str or Path, got {type(value).__name__}"
-        raise TypeError(msg)
-
-    if raw_value == "":
-        msg = "SafePath cannot be empty"
-        raise ValueError(msg)
-    if "\x00" in raw_value:
-        msg = "SafePath cannot contain NUL characters"
-        raise ValueError(msg)
-
-    path = PurePath(raw_value)
-    if ".." in path.parts:
-        msg = "SafePath cannot contain '..' segments"
-        raise ValueError(msg)
-    if not allow_relative and not path.is_absolute():
-        msg = "SafePath requires an absolute path by default"
-        raise ValueError(msg)
-
-    return SafePath(path.as_posix())
+    raw_value = _convert_to_string(value)
+    _validate_path_string(raw_value, allow_relative=allow_relative)
+    return SafePath(PurePath(raw_value).as_posix())
 
 
 def _validate_git_ref(value: str) -> None:

@@ -25,6 +25,24 @@ class TarCreateOptions:
     allow_relative: bool = False
 
 
+def _get_compression_flag(options: TarCreateOptions) -> str:
+    compression_flags = [
+        options.gzip,
+        options.bzip2,
+        options.xz,
+    ]
+    if sum(1 for flag in compression_flags if flag) > 1:
+        msg = "Select only one compression option for tar_create"
+        raise ValueError(msg)
+    if options.gzip:
+        return "-z"
+    if options.bzip2:
+        return "-j"
+    if options.xz:
+        return "-J"
+    return ""
+
+
 def tar_create(
     archive: str | Path,
     sources: typ.Sequence[str | Path],
@@ -37,22 +55,11 @@ def tar_create(
         raise ValueError(msg)
 
     resolved_options = options or TarCreateOptions()
-    compression_flags = [
-        resolved_options.gzip,
-        resolved_options.bzip2,
-        resolved_options.xz,
-    ]
-    if sum(1 for flag in compression_flags if flag) > 1:
-        msg = "Select only one compression option for tar_create"
-        raise ValueError(msg)
+    compression_flag = _get_compression_flag(resolved_options)
 
     args: list[str] = ["-c"]
-    if resolved_options.gzip:
-        args.append("-z")
-    if resolved_options.bzip2:
-        args.append("-j")
-    if resolved_options.xz:
-        args.append("-J")
+    if compression_flag:
+        args.append(compression_flag)
 
     args.extend([
         "-f",
