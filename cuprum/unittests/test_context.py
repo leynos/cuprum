@@ -385,84 +385,79 @@ def test_check_allowed_passes_for_allowed_program() -> None:
 
 
 # =============================================================================
-# Timeout Validation - ScopeConfig
+# Timeout Validation
 # =============================================================================
 
 
-def test_scope_config_none_timeout_is_valid() -> None:
-    """ScopeConfig accepts None timeout (no validation error)."""
-    config = ScopeConfig(timeout=None)
-    assert config.timeout is None
+@pytest.mark.parametrize(
+    ("timeout_input", "expected_result", "error_pattern"),
+    [
+        pytest.param(None, None, None, id="none-is-valid"),
+        pytest.param(0.0, 0.0, None, id="zero-is-valid"),
+        pytest.param(5.0, 5.0, None, id="positive-float-is-valid"),
+        pytest.param(
+            typ.cast("float", 5),
+            5.0,
+            None,
+            id="positive-int-coerced-to-float",
+        ),
+        pytest.param(-1.0, None, r"timeout must be non-negative.*-1\.0", id="negative"),
+        pytest.param(
+            typ.cast("float", -5),
+            None,
+            r"timeout must be non-negative.*-5\.0",
+            id="negative-int",
+        ),
+    ],
+)
+def test_scope_config_timeout_validation(
+    timeout_input: float | None,
+    expected_result: float | None,
+    error_pattern: str | None,
+) -> None:
+    """ScopeConfig validates and coerces timeout values correctly."""
+    if error_pattern is not None:
+        with pytest.raises(ValueError, match=error_pattern):
+            ScopeConfig(timeout=timeout_input)
+    else:
+        config = ScopeConfig(timeout=timeout_input)
+        assert config.timeout == expected_result
+        if expected_result is not None:
+            assert isinstance(config.timeout, float)
 
 
-def test_scope_config_zero_timeout_is_valid() -> None:
-    """ScopeConfig accepts zero timeout."""
-    config = ScopeConfig(timeout=0.0)
-    assert config.timeout == 0.0
-
-
-def test_scope_config_positive_float_timeout_is_valid() -> None:
-    """ScopeConfig accepts positive float timeout."""
-    config = ScopeConfig(timeout=5.0)
-    assert config.timeout == 5.0
-
-
-def test_scope_config_positive_int_timeout_is_coerced_to_float() -> None:
-    """ScopeConfig coerces int timeout to float."""
-    config = ScopeConfig(timeout=5)  # type: ignore[arg-type]
-    assert config.timeout == 5.0
-    assert isinstance(config.timeout, float)
-
-
-def test_scope_config_negative_timeout_raises_value_error() -> None:
-    """ScopeConfig raises ValueError for negative timeout."""
-    with pytest.raises(ValueError, match=r"timeout must be non-negative.*-1\.0"):
-        ScopeConfig(timeout=-1.0)
-
-
-def test_scope_config_negative_int_timeout_raises_value_error() -> None:
-    """ScopeConfig raises ValueError for negative int timeout."""
-    with pytest.raises(ValueError, match=r"timeout must be non-negative.*-5\.0"):
-        ScopeConfig(timeout=-5)  # type: ignore[arg-type]
-
-
-# =============================================================================
-# Timeout Validation - CuprumContext
-# =============================================================================
-
-
-def test_cuprum_context_none_timeout_is_valid() -> None:
-    """CuprumContext accepts None timeout (no validation error)."""
-    ctx = CuprumContext(timeout=None)
-    assert ctx.timeout is None
-
-
-def test_cuprum_context_zero_timeout_is_valid() -> None:
-    """CuprumContext accepts zero timeout."""
-    ctx = CuprumContext(timeout=0.0)
-    assert ctx.timeout == 0.0
-
-
-def test_cuprum_context_positive_float_timeout_is_valid() -> None:
-    """CuprumContext accepts positive float timeout."""
-    ctx = CuprumContext(timeout=5.0)
-    assert ctx.timeout == 5.0
-
-
-def test_cuprum_context_positive_int_timeout_is_coerced_to_float() -> None:
-    """CuprumContext coerces int timeout to float."""
-    ctx = CuprumContext(timeout=5)  # type: ignore[arg-type]
-    assert ctx.timeout == 5.0
-    assert isinstance(ctx.timeout, float)
-
-
-def test_cuprum_context_negative_timeout_raises_value_error() -> None:
-    """CuprumContext raises ValueError for negative timeout."""
-    with pytest.raises(ValueError, match=r"timeout must be non-negative.*-1\.0"):
-        CuprumContext(timeout=-1.0)
-
-
-def test_cuprum_context_negative_int_timeout_raises_value_error() -> None:
-    """CuprumContext raises ValueError for negative int timeout."""
-    with pytest.raises(ValueError, match=r"timeout must be non-negative.*-5\.0"):
-        CuprumContext(timeout=-5)  # type: ignore[arg-type]
+@pytest.mark.parametrize(
+    ("timeout_input", "expected_result", "error_pattern"),
+    [
+        pytest.param(None, None, None, id="none-is-valid"),
+        pytest.param(0.0, 0.0, None, id="zero-is-valid"),
+        pytest.param(5.0, 5.0, None, id="positive-float-is-valid"),
+        pytest.param(
+            typ.cast("float", 5),
+            5.0,
+            None,
+            id="positive-int-coerced-to-float",
+        ),
+        pytest.param(-1.0, None, r"timeout must be non-negative.*-1\.0", id="negative"),
+        pytest.param(
+            typ.cast("float", -5),
+            None,
+            r"timeout must be non-negative.*-5\.0",
+            id="negative-int",
+        ),
+    ],
+)
+def test_cuprum_context_timeout_validation(
+    timeout_input: float | None,
+    expected_result: float | None,
+    error_pattern: str | None,
+) -> None:
+    """CuprumContext validates and coerces timeout values correctly."""
+    if error_pattern is not None:
+        with pytest.raises(ValueError, match=error_pattern):
+            CuprumContext(timeout=timeout_input)
+    else:
+        ctx = CuprumContext(timeout=timeout_input)
+        assert ctx.timeout == expected_result
+        if expected_result is not None:
+            assert isinstance(ctx.timeout, float)
