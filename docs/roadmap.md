@@ -72,9 +72,9 @@ compromising explicitness.
 
 ### 3.1. Builder library and validation
 
-- [ ] 3.1.1. Publish a core builder set for common tools (git, rsync, tar) using
+- [x] 3.1.1. Publish a core builder set for common tools (git, rsync, tar) using
   typed argument helpers such as `SafePath` and `GitRef`, with validation.
-  - [ ] Add unit tests that exercise validation and builder output.
+  - [x] Add unit tests that exercise validation and builder output.
 - [ ] 3.1.2. Provide a scaffold and guidance for project-specific builders,
   including a template module and checklist in `docs/users-guide.md`.
 

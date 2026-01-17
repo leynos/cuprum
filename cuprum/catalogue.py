@@ -123,13 +123,16 @@ CORE_OPS_PROJECT = "core-ops"
 DOCUMENTATION_PROJECT = "docs"
 
 ECHO = Program("echo")
+GIT = Program("git")
 LS = Program("ls")
+RSYNC = Program("rsync")
+TAR = Program("tar")
 DOC_TOOL = Program("mdbook")
 
 DEFAULT_PROJECTS: tuple[ProjectSettings, ...] = (
     ProjectSettings(
         name=CORE_OPS_PROJECT,
-        programs=(ECHO, LS),
+        programs=(ECHO, GIT, LS, RSYNC, TAR),
         documentation_locations=("docs/users-guide.md#program-catalogue",),
         noise_rules=(r"^progress:", r"^note:"),
     ),
@@ -150,7 +153,10 @@ __all__ = [
     "DOCUMENTATION_PROJECT",
     "DOC_TOOL",
     "ECHO",
+    "GIT",
     "LS",
+    "RSYNC",
+    "TAR",
     "ProgramCatalogue",
     "ProgramEntry",
     "ProjectSettings",

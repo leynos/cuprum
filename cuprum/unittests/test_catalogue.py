@@ -9,7 +9,10 @@ from cuprum.catalogue import (
     DEFAULT_CATALOGUE,
     DOC_TOOL,
     ECHO,
+    GIT,
     LS,
+    RSYNC,
+    TAR,
     ProgramCatalogue,
     ProjectSettings,
     UnknownProgramError,
@@ -27,6 +30,10 @@ def test_program_newtype_round_trip() -> None:
 def test_default_allowlist_contains_curated_programs() -> None:
     """The default allowlist surfaces curated program constants."""
     assert ECHO in DEFAULT_CATALOGUE.allowlist, "Echo missing from allowlist"
+    assert DOC_TOOL in DEFAULT_CATALOGUE.allowlist, "Doc tool missing from allowlist"
+    assert GIT in DEFAULT_CATALOGUE.allowlist, "Git missing from allowlist"
+    assert RSYNC in DEFAULT_CATALOGUE.allowlist, "Rsync missing from allowlist"
+    assert TAR in DEFAULT_CATALOGUE.allowlist, "Tar missing from allowlist"
     assert CORE_OPS_PROJECT in DEFAULT_CATALOGUE.visible_settings(), (
         "Core project metadata not exposed"
     )

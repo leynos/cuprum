@@ -96,6 +96,58 @@ Builders keep argv construction in one place, making it easier to validate
 inputs, document behaviour, and reuse the same allowlisted program across a
 codebase.
 
+### Core builders for common tools
+
+Cuprum ships a small builder library for common tools in `cuprum.builders`.
+These builders are optional but provide a consistent, typed entry point for
+git, rsync, and tar commands.
+
+The library includes typed argument helpers:
+
+- `safe_path()` produces a `SafePath` by validating filesystem paths. It
+  rejects empty strings, NUL characters, and `..` segments. By default it
+  requires absolute paths; set `allow_relative=True` to permit relative paths.
+- `git_ref()` produces a `GitRef` by validating git ref names. It rejects
+  whitespace, leading `-`, `..`, `//`, `@{`, trailing `.lock`, trailing `.`,
+  and refs with characters outside `[A-Za-z0-9._/-]`.
+
+Builder functions validate inputs internally, so callers may pass `str` or
+`Path` values directly, or call the helper functions for explicitness.
+
+```python
+from pathlib import Path
+
+from cuprum.builders import (
+    RsyncOptions,
+    TarCreateOptions,
+    git_checkout,
+    rsync_sync,
+    tar_create,
+    tar_extract,
+)
+
+git_cmd = git_checkout("main", create_branch=True)
+rsync_cmd = rsync_sync(
+    Path("/srv/data"),
+    Path("/backups/data"),
+    options=RsyncOptions(archive=True, delete=True),
+)
+tar_cmd = tar_create(
+    Path("/backups/data.tar.gz"),
+    [Path("/srv/data")],
+    options=TarCreateOptions(gzip=True),
+)
+restore_cmd = tar_extract(
+    Path("/backups/data.tar.gz"),
+    destination=Path("/srv/restore"),
+)
+```
+
+If you need relative paths, use `allow_relative=True` on the relevant options
+objects (for example, `RsyncOptions`) or call
+`safe_path(..., allow_relative=True)` yourself before passing the result into a
+builder.
+
 ## Pipeline execution
 
 Compose `SafeCmd` instances into a `Pipeline` via the `|` operator. Pipelines
