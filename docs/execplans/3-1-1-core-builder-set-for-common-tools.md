@@ -245,15 +245,17 @@ iterating, but keep the repository clean.
 
 New modules and interfaces to provide:
 
-    cuprum/builders/args.py
-      SafePath = NewType("SafePath", str)
-      GitRef = NewType("GitRef", str)
-      def safe_path(
-          value: str | Path,
-          *,
-          allow_relative: bool = False,
-      ) -> SafePath
-      def git_ref(value: str) -> GitRef
+```plaintext
+cuprum/builders/args.py
+  SafePath = NewType("SafePath", str)
+  GitRef = NewType("GitRef", str)
+  def safe_path(
+      value: str | Path,
+      *,
+      allow_relative: bool = False,
+  ) -> SafePath
+  def git_ref(value: str) -> GitRef
+```
 
 Validation rules (documented and tested):
 
@@ -266,49 +268,55 @@ Validation rules (documented and tested):
 
 Builders (all return `SafeCmd` and call validators internally):
 
-    cuprum/builders/git.py
-      def git_status(*, short: bool = False, branch: bool = False) -> SafeCmd
-      def git_checkout(ref: str, *, create_branch: bool = False,
-          detach: bool = False, force: bool = False) -> SafeCmd
-      def git_rev_parse(ref: str) -> SafeCmd
+```plaintext
+cuprum/builders/git.py
+  def git_status(*, short: bool = False, branch: bool = False) -> SafeCmd
+  def git_checkout(ref: str, *, create_branch: bool = False,
+      detach: bool = False, force: bool = False) -> SafeCmd
+  def git_rev_parse(ref: str) -> SafeCmd
+```
 
-    cuprum/builders/rsync.py
-      @dataclass(frozen=True, slots=True)
-      class RsyncOptions:
-          archive: bool = False
-          delete: bool = False
-          dry_run: bool = False
-          verbose: bool = False
-          compress: bool = False
-          allow_relative: bool = False
+```plaintext
+cuprum/builders/rsync.py
+  @dataclass(frozen=True, slots=True)
+  class RsyncOptions:
+      archive: bool = False
+      delete: bool = False
+      dry_run: bool = False
+      verbose: bool = False
+      compress: bool = False
+      allow_relative: bool = False
 
-      def rsync_sync(
-          source: str | Path,
-          destination: str | Path,
-          *,
-          options: RsyncOptions | None = None,
-      ) -> SafeCmd
+  def rsync_sync(
+      source: str | Path,
+      destination: str | Path,
+      *,
+      options: RsyncOptions | None = None,
+  ) -> SafeCmd
+```
 
-    cuprum/builders/tar.py
-      @dataclass(frozen=True, slots=True)
-      class TarCreateOptions:
-          gzip: bool = False
-          bzip2: bool = False
-          xz: bool = False
-          allow_relative: bool = False
+```plaintext
+cuprum/builders/tar.py
+  @dataclass(frozen=True, slots=True)
+  class TarCreateOptions:
+      gzip: bool = False
+      bzip2: bool = False
+      xz: bool = False
+      allow_relative: bool = False
 
-      def tar_create(
-          archive: str | Path,
-          sources: Sequence[str | Path],
-          *,
-          options: TarCreateOptions | None = None,
-      ) -> SafeCmd
-      def tar_extract(
-          archive: str | Path,
-          *,
-          destination: str | Path | None = None,
-          allow_relative: bool = False,
-      ) -> SafeCmd
+  def tar_create(
+      archive: str | Path,
+      sources: Sequence[str | Path],
+      *,
+      options: TarCreateOptions | None = None,
+  ) -> SafeCmd
+  def tar_extract(
+      archive: str | Path,
+      *,
+      destination: str | Path | None = None,
+      allow_relative: bool = False,
+  ) -> SafeCmd
+```
 
 Exports and catalogue updates:
 

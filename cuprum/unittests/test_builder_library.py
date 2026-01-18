@@ -28,13 +28,18 @@ def test_safe_path_requires_absolute_by_default(tmp_path: Path) -> None:
         safe_path(relative)
 
     absolute = tmp_path / "file.txt"
-    assert safe_path(absolute) == absolute.as_posix()
+    assert safe_path(absolute) == absolute.as_posix(), (
+        "safe_path should return POSIX for an absolute Path"
+    )
 
 
 def test_safe_path_allows_relative_when_opted_in() -> None:
     """SafePath supports relative paths when allow_relative is True."""
     relative = Path("relative/file.txt")
-    assert safe_path(relative, allow_relative=True) == relative.as_posix()
+    assert safe_path(relative, allow_relative=True) == relative.as_posix(), (
+        "safe_path should return POSIX string for relative paths when "
+        "allow_relative=True"
+    )
 
 
 def test_safe_path_rejects_empty_and_null() -> None:
@@ -64,7 +69,7 @@ def test_safe_path_rejects_parent_segments(tmp_path: Path) -> None:
 )
 def test_git_ref_accepts_valid_values(value: str) -> None:
     """GitRef allows common branch, tag, and object names."""
-    assert git_ref(value) == value
+    assert git_ref(value) == value, f"git_ref failed for value: {value}"
 
 
 @pytest.mark.parametrize(
