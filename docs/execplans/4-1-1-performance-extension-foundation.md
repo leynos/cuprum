@@ -1,0 +1,327 @@
+# Performance extensions foundation (4.1 + 4.5)
+
+This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
+`Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`, and
+`Outcomes & Retrospective` must be kept up to date as work proceeds.
+
+Status: DRAFT
+
+PLANS.md is not present in this repository.
+
+## Purpose / Big Picture
+
+Deliver the build-system and documentation foundation for optional Rust-backed
+stream operations. After this change, contributors can build native wheels with
+maturin and cibuildwheel, still publish a pure-Python wheel, and Python can
+import a minimal Rust extension that exposes `is_available()` to prove the
+binding works. Users can read updated documentation explaining the Rust
+architecture, API boundary, fallback strategy, and performance traits. Success
+is visible when both wheel types build and install, the Rust module imports and
+returns a stub value, and the CI matrix includes the requested platforms.
+
+## Constraints
+
+- Keep pure Python as a first-class pathway; no feature may require Rust at
+  runtime.
+- Follow the documentation style guide in
+  `docs/documentation-style-guide.md`, including 80-column wrapping.
+- Use Makefile targets for tests, linting, formatting, and type checking.
+- When running commands with long output, use `set -o pipefail` and `tee` to
+  capture logs.
+- Do not introduce public API changes beyond the optional Rust extension
+  import surface without explicit approval.
+- Rust lints in Appendix 1 must be enforced in the new Cargo workspace.
+- CI must continue to pass on existing workflows; new jobs must not break
+  existing ones.
+
+## Tolerances (Exception Triggers)
+
+- Scope: if implementation requires touching more than 25 files or more than
+  1,500 net lines, stop and escalate.
+- Interfaces: if a public Python API signature must change, stop and
+  escalate.
+- Dependencies: if additional external dependencies beyond hatchling, maturin,
+  PyO3, cibuildwheel, and Rust tooling are required, stop and escalate.
+- CI: if adding a new workflow or reworking more than one existing workflow is
+  required, stop and escalate.
+- Tests: if tests still fail after two full fix attempts, stop and escalate.
+- Ambiguity: if the mismatch between the roadmap numbering (4.1.4 vs 4.1.5 in
+  the prompt) would require adding new roadmap items, stop and escalate with
+  options.
+
+## Risks
+
+- Risk: `pyproject.toml` currently uses `uv_build` and the request mentions
+  hatchling, so the build backend migration could be disruptive.
+  Severity: high
+  Likelihood: medium
+  Mitigation: read `docs/roadmap.md` and existing build tooling; document the
+  chosen migration path and keep a pure-Python build working end-to-end.
+
+- Risk: CI wheel matrix and Rust toolchain setup might not be compatible with
+  the current GitHub Actions environment or uv-based build.
+  Severity: medium
+  Likelihood: medium
+  Mitigation: follow existing `build-wheels` action patterns, add Rust setup
+  steps from Appendix 3, and validate locally where possible.
+
+- Risk: `docs/cuprum-design.md` already contains Section 13, so the requested
+  update may be a revision rather than an addition.
+  Severity: low
+  Likelihood: high
+  Mitigation: update Section 13 to explicitly cover architecture, API boundary,
+  fallback strategy, and performance characteristics, noting changes in the
+  Decision Log.
+
+## Progress
+
+- [ ] (2026-01-18 00:00Z) Review build system (`pyproject.toml`), CI workflows,
+  and existing Rust ADR/design documentation.
+- [ ] Draft test plan with unit tests (pytest) and behavioural tests
+  (pytest-bdd) for the Rust extension availability stub and import path.
+- [ ] Define Rust workspace layout and minimal PyO3 binding for
+  `is_available()`.
+- [ ] Plan pyproject + packaging updates for hatchling + maturin coexistence
+  and pure-Python fallback wheel build.
+- [ ] Plan CI changes for wheel matrix, Rust setup, and pure-Python wheel job.
+- [ ] Plan documentation updates to `docs/cuprum-design.md` and
+  `docs/users-guide.md`, and update `docs/roadmap.md` entries to done.
+- [ ] Capture validation steps, acceptance criteria, and recovery guidance.
+
+## Surprises & Discoveries
+
+- None yet.
+
+## Decision Log
+
+- Decision: Treat this work as Phase 4.1 build-system integration plus Phase
+  4.5 documentation updates, aligning to the roadmap while noting the prompt's
+  4.1.5 numbering mismatch.
+  Rationale: Keeps changes scoped to requested foundation work and aligns with
+  the existing roadmap structure.
+  Date/Author: 2026-01-18 / Codex
+
+## Outcomes & Retrospective
+
+- Pending; this plan is not yet executed.
+
+## Context and Orientation
+
+Relevant files and directories:
+
+- `pyproject.toml` currently uses `uv_build` as the build backend.
+- `docs/roadmap.md` defines Phase 4.1 tasks (4.1.1 to 4.1.4).
+- `docs/adr-001-rust-extension.md` records the Rust extension decision and
+  runtime selection model.
+- `docs/cuprum-design.md` contains Section 13 on performance-optimised stream
+  operations (needs revision to meet the prompt's Section 13 requirements).
+- `docs/users-guide.md` documents user-facing behaviour and must include any
+  new configuration or build guidance.
+- `cuprum/_streams.py` is the existing Python stream implementation that the
+  Rust extension will complement.
+- `.github/workflows/build-wheels.yml` and
+  `.github/actions/build-wheels/action.yml` define the current wheel build
+  pipeline via cibuildwheel.
+- `.github/workflows/ci.yml` is the primary lint/test workflow.
+
+Terminology:
+
+- "Pure Python wheel" means a wheel built without native Rust code and no
+  dependency on a Rust toolchain at install time.
+- "Native wheel" means a wheel built with the Rust extension embedded.
+- "Backend" refers to a PEP 517 build backend specified in `pyproject.toml`.
+
+## Plan of Work
+
+Stage A: discovery and decisions (no code changes).
+
+- Re-read `docs/roadmap.md`, `docs/adr-001-rust-extension.md`, and
+  `docs/cuprum-design.md` Section 13 to confirm intended architecture and
+  ensure the plan aligns with existing decisions.
+- Inspect `pyproject.toml` and existing CI workflows to decide how to support
+  both hatchling and maturin without breaking the current uv workflow.
+- Document the build-system decision in `docs/cuprum-design.md` Section 13 and
+  in this plan's Decision Log (for example: keep hatchling as default backend
+  and use maturin via CI for native wheels, or migrate to hatchling + maturin
+  backend for native builds).
+- Decide the Python import surface for the Rust extension (for example,
+  `cuprum._rust` or `cuprum._rust_backend`) and document the intended
+  `is_available()` signature.
+
+Stage B: scaffolding and tests (small, verifiable diffs).
+
+- Add unit tests under `cuprum/unittests/` that validate the new import path
+  and `is_available()` behaviour. These tests should use a fallback path so
+  they pass when Rust is unavailable (e.g., skip or assert fallback to Python
+  stub).
+- Add a pytest-bdd feature under `tests/features/` and a corresponding
+  behavioural test under `tests/behaviour/` that exercises installation and
+  import expectations at a user level (for example, importing the module and
+  calling `is_available()` returns `True` when the Rust extension is present
+  and `False` otherwise).
+- Ensure the tests are written before implementation so they fail without the
+  new module and pass after it is wired in.
+
+Stage C: implementation (minimal code and build integration).
+
+- Create `rust/` with a Cargo workspace. Add `rust/Cargo.toml` and a crate for
+  the PyO3 extension. Use the Rust lint configuration from Appendix 1 at the
+  workspace level. Include crate-level docs to satisfy missing_docs lints.
+- Implement minimal PyO3 binding exporting `is_available()` returning `True`
+  from Rust. Provide Python-side fallback module (if needed) that returns
+  `False` when the Rust extension is missing.
+- Update `pyproject.toml` to support hatchling and maturin for optional native
+  builds. Ensure pure-Python builds still succeed without Rust. Document the
+  chosen backend approach (including any required `tool.maturin` or
+  `tool.hatch.build` settings).
+- Add a Rust-specific `Makefile` under `rust/` using Appendix 2 targets (or
+  merge compatible targets into the root Makefile if that is the project
+  preference). Ensure `make check-fmt` and `make lint` remain applicable for
+  Rust and Python.
+- Extend CI wheel builds:
+  - Add Rust setup steps from Appendix 3 in the wheel build action.
+  - Ensure cibuildwheel uses maturin for native wheels on Linux, macOS, and
+    Windows for x86_64 and arm64/aarch64.
+  - Add a pure-Python wheel job (or mode) that excludes native builds, and
+    verify both wheel types can be installed in the same environment.
+
+Stage D: documentation, roadmap, and validation.
+
+- Update `docs/cuprum-design.md` Section 13 to explicitly cover:
+  - Rust extension architecture (crate layout, PyO3 boundary).
+  - API boundary between Python and Rust (what crosses the FFI boundary).
+  - Fallback strategy (auto/rust/python selection and behaviour).
+  - Performance characteristics and limitations.
+- Update `docs/users-guide.md` with user-facing guidance on the Rust extension,
+  including build prerequisites, environment selection, and expected behaviour
+  for missing native wheels.
+- Update `docs/roadmap.md` to mark the relevant Phase 4.1 and 4.5 items as
+  done. Note the numbering mismatch in the Decision Log and keep the roadmap
+  consistent with its existing numbering.
+- Run formatting, linting, type checking, and tests using Makefile targets.
+
+## Concrete Steps
+
+All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
+`tee` for long outputs.
+
+1) Inspect existing docs and build configuration.
+
+    rg -n "build-backend" pyproject.toml
+    rg -n "maturin|hatch" pyproject.toml docs
+    rg -n "wheel" .github/workflows -g "*.yml"
+
+2) Write tests first.
+
+    set -o pipefail
+    uv run pytest cuprum/unittests/test_rust_extension.py | tee /tmp/test-rust-unit.txt
+
+    set -o pipefail
+    uv run pytest tests/behaviour/test_rust_extension.py tests/features/rust_extension.feature \
+      | tee /tmp/test-rust-behaviour.txt
+
+3) Implement Rust scaffold and Python fallback, then re-run the new tests.
+
+    set -o pipefail
+    uv run pytest cuprum/unittests/test_rust_extension.py | tee /tmp/test-rust-unit.txt
+
+    set -o pipefail
+    uv run pytest tests/behaviour/test_rust_extension.py tests/features/rust_extension.feature \
+      | tee /tmp/test-rust-behaviour.txt
+
+4) Run formatting, linting, type checking, and full test suite.
+
+    set -o pipefail
+    make check-fmt | tee /tmp/make-check-fmt.txt
+
+    set -o pipefail
+    make lint | tee /tmp/make-lint.txt
+
+    set -o pipefail
+    make typecheck | tee /tmp/make-typecheck.txt
+
+    set -o pipefail
+    make test | tee /tmp/make-test.txt
+
+5) Run Markdown linting and Mermaid validation after doc changes.
+
+    set -o pipefail
+    MDLINT=/root/.bun/bin/markdownlint-cli2 make markdownlint \
+      | tee /tmp/make-markdownlint.txt
+
+    set -o pipefail
+    make nixie | tee /tmp/make-nixie.txt
+
+## Validation and Acceptance
+
+Acceptance is satisfied when all of the following are true:
+
+- Running the new unit tests and behavioural tests fails before implementation
+  and passes after the Rust extension scaffold is added.
+- Python can import the Rust extension module on native-wheel builds and
+  `is_available()` returns `True` from Rust.
+- When the Rust extension is absent, the Python fallback is available and
+  `is_available()` returns `False` without breaking existing behaviour.
+- CI wheel matrix includes Linux (x86_64, aarch64), macOS (x86_64, arm64), and
+  Windows (x86_64, arm64) native wheel builds using maturin and cibuildwheel.
+- A pure-Python wheel job builds successfully and coexists with native wheels
+  in the same environment.
+- Documentation updates in `docs/cuprum-design.md` and `docs/users-guide.md`
+  reflect the new architecture and user guidance.
+- `docs/roadmap.md` marks the relevant 4.1 and 4.5 items as done.
+- Quality gates succeed:
+  - `make check-fmt`
+  - `make lint`
+  - `make typecheck`
+  - `make test`
+  - `make markdownlint`
+  - `make nixie`
+
+## Idempotence and Recovery
+
+- All steps are repeatable; re-running the commands should be safe.
+- If a step fails, fix the reported issue and re-run the same command to
+  confirm the fix. Keep the temporary logs in `/tmp` for inspection.
+- If the build backend change breaks packaging, revert the build-system section
+  in `pyproject.toml`, document the failure in the Decision Log, and
+  re-evaluate the backend approach before continuing.
+
+## Artifacts and Notes
+
+Expected artifacts after CI configuration:
+
+- New Rust workspace files under `rust/` (Cargo workspace and crate).
+- Updated `pyproject.toml` build-system configuration supporting hatchling and
+  maturin.
+- Updated CI workflows or actions to build native and pure-Python wheels.
+- Updated documentation in `docs/cuprum-design.md`, `docs/users-guide.md`, and
+  roadmap changes in `docs/roadmap.md`.
+
+## Interfaces and Dependencies
+
+Python interface:
+
+- New internal module path for the Rust extension, such as
+  `cuprum._rust_backend` with a function:
+
+    def is_available() -> bool: ...
+
+- Optional Python fallback module (same import path) returning `False` when the
+  Rust extension is missing.
+
+Rust interface:
+
+- Workspace path: `rust/` with a crate that builds a Python extension module
+  (PyO3). The Rust module must export `is_available()` returning `true`.
+- Enforce Rust lints from Appendix 1 via workspace `Cargo.toml`.
+
+Dependencies:
+
+- Python build tooling: hatchling (default) and maturin (native builds).
+- Rust: PyO3, cargo, rustfmt, clippy, and optional `cargo nextest` if used by
+  the Rust Makefile.
+- CI: cibuildwheel for wheel builds; Rust setup steps from Appendix 3.
+
+## Revision note (required when editing an ExecPlan)
+
+Initial draft authored on 2026-01-18. No revisions yet.
