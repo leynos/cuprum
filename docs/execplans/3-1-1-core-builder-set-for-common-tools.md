@@ -219,13 +219,15 @@ Quality criteria:
 
 Use `tee` and `set -o pipefail` for long-running commands. Example:
 
-    set -o pipefail
-    make check-fmt 2>&1 | tee /tmp/make-check-fmt.log
-    make lint 2>&1 | tee /tmp/make-lint.log
-    make typecheck 2>&1 | tee /tmp/make-typecheck.log
-    make test 2>&1 | tee /tmp/make-test.log
-    make markdownlint 2>&1 | tee /tmp/make-markdownlint.log
-    make nixie 2>&1 | tee /tmp/make-nixie.log
+```plaintext
+set -o pipefail
+make check-fmt 2>&1 | tee /tmp/make-check-fmt.log
+make lint 2>&1 | tee /tmp/make-lint.log
+make typecheck 2>&1 | tee /tmp/make-typecheck.log
+make test 2>&1 | tee /tmp/make-test.log
+make markdownlint 2>&1 | tee /tmp/make-markdownlint.log
+make nixie 2>&1 | tee /tmp/make-nixie.log
+```
 
 ## Idempotence and recovery
 

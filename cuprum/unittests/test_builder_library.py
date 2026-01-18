@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import typing as typ
 from pathlib import Path
 
 import pytest
@@ -177,6 +178,15 @@ def test_tar_create_rejects_missing_sources(tmp_path: Path) -> None:
     archive = tmp_path / "archive.tar"
     with pytest.raises(ValueError, match="tar_create"):
         tar_create(archive, [])
+
+
+def test_tar_create_rejects_single_path_source(tmp_path: Path) -> None:
+    """tar_create rejects a single path provided as sources."""
+    archive = tmp_path / "archive.tar"
+    source = tmp_path / "source"
+    sequence = typ.cast("typ.Sequence[str | Path]", source)
+    with pytest.raises(TypeError, match="tar_create requires a sequence of"):
+        tar_create(archive, sequence)
 
 
 def test_tar_extract_builder_outputs_args(tmp_path: Path) -> None:

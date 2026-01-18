@@ -4,20 +4,22 @@ from __future__ import annotations
 
 import dataclasses as dc
 import typing as typ
+from pathlib import Path
 
 from cuprum import sh
 from cuprum.builders.args import safe_path
 from cuprum.catalogue import TAR
 
 if typ.TYPE_CHECKING:
-    from pathlib import Path
-
     from cuprum.sh import SafeCmd
 
 
 @dc.dataclass(frozen=True, slots=True)
 class TarCreateOptions:
-    """Optional flags for tar_create."""
+    """Optional flags for tar_create.
+
+    The allow_relative flag applies to both archive and source paths.
+    """
 
     gzip: bool = False
     bzip2: bool = False
@@ -26,6 +28,7 @@ class TarCreateOptions:
 
 
 def _get_compression_flag(options: TarCreateOptions) -> str:
+    """Return the compression flag for tar_create, if any."""
     compression_flags = [
         options.gzip,
         options.bzip2,
@@ -53,6 +56,9 @@ def tar_create(
     if not sources:
         msg = "tar_create requires at least one source path"
         raise ValueError(msg)
+    if isinstance(sources, (str, Path)):
+        msg = "tar_create requires a sequence of source paths, not a single path"
+        raise TypeError(msg)
 
     resolved_options = options or TarCreateOptions()
     compression_flag = _get_compression_flag(resolved_options)

@@ -148,7 +148,9 @@ def then_git_argv_matches(
 @then("a git ref validation error is raised")
 def then_git_ref_error_raised(git_result: _CommandResult) -> None:
     """Verify git ref validation raised an error."""
-    assert isinstance(git_result.error, ValueError)
+    assert isinstance(git_result.error, ValueError), (
+        "Expected git_ref validation to raise ValueError"
+    )
 
 
 @then(
