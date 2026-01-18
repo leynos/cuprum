@@ -270,15 +270,16 @@ command execution in a logical scope:
 - **before hooks:** a list/tuple of callbacks invoked prior to execution;
 - **after hooks:** callbacks invoked after completion;
 - **output hooks (optional):** callbacks observing stdout/stderr lines;
-- **misc flags:** future extension point (e.g. default echo behaviour).
+- **runtime defaults:** optional execution defaults (for example, a scoped
+  timeout) applied when a call does not supply explicit runtime overrides.
 
 Internally, a `ContextVar[CuprumContext]` holds the current context. Public
 APIs (`sh.allow`, `sh.before`, `sh.scoped`) update this context in a controlled
 way.
 
-Contexts are nested: entering a new `with sh.scoped(...)` creates a derived
-context, and exiting restores the previous one. This behaves correctly across
-threads and async tasks.
+Contexts are nested: entering a new `with sh.scoped(ScopeConfig(...))` creates
+a derived context, and exiting restores the previous one. This behaves
+correctly across threads and async tasks.
 
 ### 5.4 Hooks
 
@@ -288,7 +289,7 @@ mechanism:
 - **Context‑wide hooks:** registered via `sh.before` / `sh.after`, affecting
   all commands in the current context.
 - **Scoped hooks:** registered via context managers (`with sh.before(...):`,
-  `with sh.scoped(before=[...]):`), active only in a block.
+  `with sh.scoped(ScopeConfig(before=[...])):`), active only in a block.
 - **Per‑command hooks:** attached to a specific `SafeCmd` instance
   (`cmd.before(...)`, `cmd.after(...)`).
 
@@ -346,8 +347,22 @@ class SafeCmd:
     def before(self, hook: BeforeHook) -> "SafeCmd": ...
     def after(self, hook: AfterHook) -> "SafeCmd": ...
 
-    async def run(self, *, capture: bool = True, echo: bool = False) -> object: ...
-    def run_sync(self, *, capture: bool = True, echo: bool = False) -> object: ...
+    async def run(
+        self,
+        *,
+        capture: bool = True,
+        echo: bool = False,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+    ) -> CommandResult: ...
+    def run_sync(
+        self,
+        *,
+        capture: bool = True,
+        echo: bool = False,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+    ) -> CommandResult: ...
 
     def __or__(self, other: "SafeCmd") -> "Pipeline":
         ...
@@ -371,12 +386,16 @@ class Pipeline(Generic[Out]):
         *,
         capture: bool = True,  # capture final stage stdout and all stderr
         echo: bool = False,    # echo captured streams to configured sinks
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
     ) -> PipelineResult: ...
     def run_sync(
         self,
         *,
         capture: bool = True,  # capture final stage stdout and all stderr
         echo: bool = False,    # echo captured streams to configured sinks
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
     ) -> PipelineResult: ...
 ```
 
@@ -617,7 +636,7 @@ from cuprum import sh
 from cmds import GIT
 
 async def deploy():
-    async with sh.scoped(allow={GIT}, before=[audit_hook], after=[metrics_hook]):
+    async with sh.scoped(ScopeConfig(allowlist=frozenset([GIT]), before_hooks=(audit_hook,), after_hooks=(metrics_hook,))):
         cmd = make_git_deploy_cmd()
         await cmd.run()
 ```
@@ -929,7 +948,66 @@ implemented with the following decisions:
   `ExecutionContext.tags`; caller tags take precedence when keys overlap.
 - **Async observers:** Observe hooks may be synchronous or async. Async hooks
   are scheduled as background tasks during execution and awaited before
-  returning results so `run_sync()` does not leak pending tasks.
+  returning results, so `run_sync()` does not leak pending tasks.
+
+### 8.1.4 Timeouts
+
+This section describes Cuprum's timeout behaviour and the resolution order used
+when defaults are layered.
+
+Cuprum supports timeouts that mirror `subprocess.run` and plumbum while
+remaining opt-in by default:
+
+- **Default off:** Timeout is `None` unless explicitly set.
+- **Per call:** `timeout` parameters on `SafeCmd.run` / `run_sync` and
+  `Pipeline.run` / `run_sync` offer a one-shot timeout.
+- **Scoped default:** `CuprumContext` carries runtime defaults, so a context
+  manager can set a timeout once and have it apply to calls that do not pass a
+  `timeout` value.
+
+Rationale: The explicit parameter matches `subprocess.run` and plumbum, keeping
+timeouts discoverable at the call site. The scoped default uses existing
+context mechanics to apply policy without mutating global state.
+
+Example usage:
+
+```python
+cmd.run(timeout=5.0)
+cmd.run_sync(timeout=2.5)
+
+with sh.scoped(ScopeConfig(timeout=3.0)):
+    cmd.run_sync()
+```
+
+Resolution order for timeouts:
+
+1. Explicit `timeout` argument to `run` / `run_sync` when not `None`.
+2. If an `ExecutionContext` is provided and its `timeout` is not `None`, use
+   it. When the context is omitted, or when it is provided with `timeout=None`,
+   continue to the scoped default instead of forcing "no timeout".
+3. `CuprumContext` runtime default; when unset, no timeout is enforced.
+
+Providing `ExecutionContext(timeout=None)` is treated the same as omitting the
+context; resolution continues to the scoped default when present.
+
+Test scenario: within `with sh.scoped(ScopeConfig(timeout=3.0)):`, passing
+`ExecutionContext(timeout=None)` should still apply the 3.0s scoped timeout.
+
+Semantics (aligned with `subprocess.run` and plumbum):
+
+- `timeout` is a wall-clock limit in seconds (float accepted).
+- On expiry, Cuprum terminates the process, waits for `cancel_grace`, and then
+  kills if needed, matching existing cancellation behaviour.
+- Raise a `TimeoutExpired` exception that mirrors
+  `subprocess.TimeoutExpired`:
+  - `.cmd` contains the executed argv (or a pipeline description).
+  - `.timeout` contains the configured timeout value.
+  - `.stdout` / `.stderr` carry any captured output, so callers can inspect
+    partial results (set to `None` when `capture=False`).
+- For pipelines, the timeout applies to the entire pipeline run, and all
+  stages are terminated on expiry. Partial output is surfaced using the same
+  capture rules as successful runs (final stage stdout plus all stderr when
+  capture is enabled).
 
 Figure 3: Sequence of start/exit logging hook execution
 

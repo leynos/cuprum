@@ -13,7 +13,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import contextlib
 
-from cuprum import ECHO, ForbiddenProgramError, scoped, sh
+from cuprum import ECHO, ForbiddenProgramError, ScopeConfig, scoped, sh
 from cuprum.concurrent import (
     ConcurrentConfig,
     ConcurrentResult,
@@ -72,7 +72,7 @@ def _assert_concurrent_timing(
         for _ in range(num_commands)
     ]
 
-    with scoped(allowlist=frozenset([python_program])):
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
         start = time.perf_counter()
         result = run_concurrent_sync(
             *commands, config=ConcurrentConfig(concurrency=concurrency)
@@ -119,7 +119,7 @@ def _run_hook_test[T](
     commands = [echo("-n", f"cmd{i}") for i in range(num_commands)]
     hook_calls: list[T] = []
 
-    with scoped(allowlist=frozenset([ECHO])), hook_context(hook_calls):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), hook_context(hook_calls):
         run_concurrent_sync(*commands)
 
     return hook_calls
@@ -131,7 +131,7 @@ def test_run_concurrent_returns_concurrent_result() -> None:
     cmd1 = echo("-n", "one")
     cmd2 = echo("-n", "two")
 
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         result = run_concurrent_sync(cmd1, cmd2)
 
     assert isinstance(result, ConcurrentResult)
@@ -150,7 +150,7 @@ def test_run_concurrent_preserves_submission_order() -> None:
     cmd2 = python("-c", "print('second')")
     cmd3 = python("-c", "print('third')")
 
-    with scoped(allowlist=frozenset([python_program])):
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
         result = run_concurrent_sync(cmd1, cmd2, cmd3)
 
     assert len(result.results) == 3
@@ -167,7 +167,7 @@ def test_run_concurrent_sync_mirrors_async() -> None:
     echo = sh.make(ECHO)
     cmd = echo("-n", "hello")
 
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         sync_result = run_concurrent_sync(cmd)
         async_result = asyncio.run(run_concurrent(cmd))
 
@@ -218,7 +218,7 @@ def test_collect_all_mode_continues_after_failure() -> None:
     cmd2 = python("-c", "import sys; sys.exit(1)")  # Fails
     cmd3 = python("-c", "print('third')")
 
-    with scoped(allowlist=frozenset([python_program])):
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
         result = run_concurrent_sync(
             cmd1, cmd2, cmd3, config=ConcurrentConfig(fail_fast=False)
         )
@@ -240,7 +240,7 @@ def test_fail_fast_mode_cancels_pending() -> None:
     cmd1 = python("-c", "import sys; sys.exit(42)")
     cmd2 = python("-c", "import time; time.sleep(1); print('should not complete')")
 
-    with scoped(allowlist=frozenset([python_program])):
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
         start = time.perf_counter()
         result = run_concurrent_sync(
             cmd1, cmd2, config=ConcurrentConfig(fail_fast=True)
@@ -270,7 +270,7 @@ def test_failures_tuple_contains_correct_indices() -> None:
     cmd2 = python("-c", "print('ok')")
     cmd3 = python("-c", "import sys; sys.exit(2)")  # Fails
 
-    with scoped(allowlist=frozenset([python_program])):
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
         result = run_concurrent_sync(cmd0, cmd1, cmd2, cmd3)
 
     assert result.failures == (1, 3)
@@ -321,7 +321,7 @@ def test_observe_hooks_receive_events_per_command() -> None:
     def track_events(ev: ExecEvent) -> None:
         events.append(ev)
 
-    with scoped(allowlist=frozenset([ECHO])), observe(track_events):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), observe(track_events):
         run_concurrent_sync(*commands)
 
     # Each command should emit plan, start, stdout (if any), exit events
@@ -358,7 +358,8 @@ def test_forbidden_program_raises_before_execution() -> None:
     cmd2 = echo("-n", "world")
 
     # Allowlist only LS, so ECHO is forbidden
-    with scoped(allowlist=frozenset([LS])), pytest.raises(ForbiddenProgramError):
+    forbidden_ctx = scoped(ScopeConfig(allowlist=frozenset([LS])))
+    with forbidden_ctx, pytest.raises(ForbiddenProgramError):
         run_concurrent_sync(cmd1, cmd2)
 
 
@@ -412,7 +413,7 @@ def test_single_command_works() -> None:
     echo = sh.make(ECHO)
     cmd = echo("-n", "solo")
 
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         result = run_concurrent_sync(cmd)
 
     assert result.ok is True
@@ -425,7 +426,7 @@ def test_capture_false_returns_none_stdout() -> None:
     echo = sh.make(ECHO)
     cmd = echo("-n", "hello")
 
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         result = run_concurrent_sync(cmd, config=ConcurrentConfig(capture=False))
 
     assert result.ok is True
@@ -439,7 +440,7 @@ def test_async_run_concurrent() -> None:
     cmd2 = echo("-n", "async2")
 
     async def exercise() -> ConcurrentResult:
-        with scoped(allowlist=frozenset([ECHO])):
+        with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
             return await run_concurrent(cmd1, cmd2)
 
     result = asyncio.run(exercise())
@@ -463,7 +464,7 @@ def test_fail_fast_first_failure_indexes_correctly_when_earlier_cancelled() -> N
     cmd0 = python("-c", "import time; time.sleep(2); print('slow')")
     cmd1 = python("-c", "import sys; sys.exit(99)")
 
-    with scoped(allowlist=frozenset([python_program])):
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
         start = time.perf_counter()
         result = run_concurrent_sync(
             cmd0, cmd1, config=ConcurrentConfig(fail_fast=True)

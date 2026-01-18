@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
 import sys
 import time
@@ -20,19 +21,17 @@ from cuprum._pipeline_streams import (
     _create_pipe_tasks,
     _gather_optional_text_tasks,
     _PipelineRunConfig,
-    _prepare_pipeline_config,
 )
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
 from cuprum.context import current_context
 from cuprum.events import ExecEvent
 
 if typ.TYPE_CHECKING:
-    import asyncio
     import types
 
     from cuprum.context import AfterHook, BeforeHook
     from cuprum.events import ExecHook
-    from cuprum.sh import CommandResult, ExecutionContext, PipelineResult, SafeCmd
+    from cuprum.sh import CommandResult, PipelineResult, SafeCmd
 
 _MIN_PIPELINE_STAGES = 2
 
@@ -111,6 +110,112 @@ class _PipelineStageResultInputs:
     wait_result: _PipelineWaitResult
     stderr_by_stage: tuple[str | None, ...]
     final_stdout: str | None
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _PipelineSpawnResult:
+    processes: list[asyncio.subprocess.Process]
+    stderr_tasks: list[asyncio.Task[str | None] | None]
+    stdout_task: asyncio.Task[str | None] | None
+    started_at: list[float]
+
+
+async def _await_pipeline_wait_result(
+    spawn: _PipelineSpawnResult,
+    config: _PipelineRunConfig,
+    *,
+    timeout_deadline: float | None,
+) -> _PipelineWaitResult:
+    wait_timeout: float | None = None
+    if timeout_deadline is not None:
+        wait_timeout = max(0.0, timeout_deadline - time.monotonic())
+    if wait_timeout is None:
+        return await _wait_for_pipeline(
+            spawn.processes,
+            pipe_tasks=_create_pipe_tasks(spawn.processes),
+            cancel_grace=config.ctx.cancel_grace,
+            started_at=spawn.started_at,
+        )
+    return await asyncio.wait_for(
+        _wait_for_pipeline(
+            spawn.processes,
+            pipe_tasks=_create_pipe_tasks(spawn.processes),
+            cancel_grace=config.ctx.cancel_grace,
+            started_at=spawn.started_at,
+        ),
+        wait_timeout,
+    )
+
+
+async def _gather_pipeline_outputs(
+    spawn: _PipelineSpawnResult,
+) -> tuple[tuple[str | None, ...], str | None]:
+    """Gather stderr by stage and final stdout from spawn tasks."""
+    stderr_by_stage = await _gather_optional_text_tasks(spawn.stderr_tasks)
+    final_stdout = None if spawn.stdout_task is None else await spawn.stdout_task
+    return stderr_by_stage, final_stdout
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _PipelineOutputs:
+    """Captured outputs from pipeline execution."""
+
+    stderr_by_stage: tuple[str | None, ...]
+    final_stdout: str | None
+    capture: bool
+
+
+def _build_timeout_expired_error(
+    parts: tuple[SafeCmd, ...],
+    timeout: float,
+    outputs: _PipelineOutputs,
+) -> BaseException:
+    """Construct a TimeoutExpired exception with captured outputs."""
+    stderr_text = None
+    if outputs.capture:
+        stderr_text = "".join(text or "" for text in outputs.stderr_by_stage)
+    output = outputs.final_stdout if outputs.capture else None
+    return _sh_module().TimeoutExpired(
+        cmd=tuple(cmd.argv_with_program for cmd in parts),
+        timeout=timeout,
+        output=output,
+        stderr=stderr_text,
+    )
+
+
+async def _collect_pipeline_inputs(
+    parts: tuple[SafeCmd, ...],
+    spawn: _PipelineSpawnResult,
+    config: _PipelineRunConfig,
+) -> _PipelineStageResultInputs:
+    timeout = config.timeout
+    timeout_deadline: float | None = None
+    if timeout is not None:
+        timeout_deadline = time.monotonic() + timeout
+
+    try:
+        wait_result = await _await_pipeline_wait_result(
+            spawn,
+            config,
+            timeout_deadline=timeout_deadline,
+        )
+        stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)
+        return _PipelineStageResultInputs(
+            wait_result=wait_result,
+            stderr_by_stage=stderr_by_stage,
+            final_stdout=final_stdout,
+        )
+    except TimeoutError as exc:
+        stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)
+        if timeout is None:
+            msg = "TimeoutError without a configured timeout"
+            raise RuntimeError(msg) from exc
+        outputs = _PipelineOutputs(
+            stderr_by_stage=stderr_by_stage,
+            final_stdout=final_stdout,
+            capture=config.capture,
+        )
+        raise _build_timeout_expired_error(parts, timeout, outputs) from exc
 
 
 def _build_pipeline_observations(
@@ -204,13 +309,9 @@ async def _finalize_pipeline_execution(
 
 async def _run_pipeline(
     parts: tuple[SafeCmd, ...],
-    *,
-    capture: bool,
-    echo: bool,
-    context: ExecutionContext | None,
+    config: _PipelineRunConfig,
 ) -> PipelineResult:
     """Execute a pipeline and return a structured result."""
-    config = _prepare_pipeline_config(capture=capture, echo=echo, context=context)
     pending_tasks: list[asyncio.Task[None]] = []
     observations = _build_pipeline_observations(
         parts,
@@ -229,29 +330,32 @@ async def _run_pipeline(
             config,
             observations=observations,
         )
+        spawn = _PipelineSpawnResult(
+            processes=processes,
+            stderr_tasks=stderr_tasks,
+            stdout_task=stdout_task,
+            started_at=started_at,
+        )
     except BaseException:
         await _wait_for_exec_hook_tasks(pending_tasks)
         raise
     try:
-        wait_result = await _wait_for_pipeline(
-            processes,
-            pipe_tasks=_create_pipe_tasks(processes),
-            cancel_grace=config.ctx.cancel_grace,
-            started_at=started_at,
+        inputs = await _collect_pipeline_inputs(
+            parts,
+            spawn,
+            config,
         )
-        inputs = _PipelineStageResultInputs(
-            wait_result=wait_result,
-            stderr_by_stage=await _gather_optional_text_tasks(stderr_tasks),
-            final_stdout=None if stdout_task is None else await stdout_task,
-        )
+    except _sh_module().TimeoutExpired:
+        await _wait_for_exec_hook_tasks(pending_tasks)
+        raise
     except BaseException:
-        await _cancel_stream_tasks(stderr_tasks, stdout_task)
+        await _cancel_stream_tasks(spawn.stderr_tasks, spawn.stdout_task)
         await _wait_for_exec_hook_tasks(pending_tasks)
         raise
     stage_results = _build_pipeline_stage_results(
         parts,
         observations,
-        processes=processes,
+        processes=spawn.processes,
         inputs=inputs,
     )
     await _finalize_pipeline_execution(

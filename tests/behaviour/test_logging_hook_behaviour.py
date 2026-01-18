@@ -9,7 +9,7 @@ import pytest
 from pytest_bdd import given, scenario, then, when
 
 from cuprum import ECHO, sh
-from cuprum.context import scoped
+from cuprum.context import ScopeConfig, scoped
 from cuprum.logging_hooks import logging_hook
 
 if typ.TYPE_CHECKING:
@@ -48,7 +48,7 @@ def when_run_safe_command(
     """Run an allowlisted command while the logging hook is active."""
     logger = typ.cast("logging.Logger", behaviour_state["logger"])
 
-    with scoped(allowlist=frozenset([ECHO])), logging_hook(logger=logger):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), logging_hook(logger=logger):
         cmd: SafeCmd = sh.make(ECHO)("-n", "bdd")
         behaviour_state["result"] = cmd.run_sync()
 

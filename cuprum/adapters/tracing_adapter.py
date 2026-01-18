@@ -14,12 +14,14 @@ backend (OpenTelemetry, Jaeger, Zipkin, etc.).
 
 Example with the in-memory reference implementation::
 
-    from cuprum import scoped, sh
+    from cuprum import ScopeConfig, scoped, sh
     from cuprum.adapters.tracing_adapter import TracingHook, InMemoryTracer
 
     tracer = InMemoryTracer()
 
-    with scoped(allowlist=my_allowlist), sh.observe(TracingHook(tracer)):
+    with scoped(
+        ScopeConfig(allowlist=my_allowlist)
+    ), sh.observe(TracingHook(tracer)):
         sh.make(ECHO)("hello").run_sync()
 
     print(tracer.spans)  # [Span(name='cuprum.exec echo', ...)]

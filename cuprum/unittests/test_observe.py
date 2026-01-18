@@ -8,7 +8,7 @@ from pathlib import Path
 
 from cuprum import sh
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
-from cuprum.context import current_context, scoped
+from cuprum.context import ScopeConfig, current_context, scoped
 from cuprum.program import Program
 from cuprum.sh import ExecutionContext
 
@@ -41,7 +41,7 @@ def _run_with_observe(
     def hook(ev: ExecEvent) -> None:
         events.append(ev)
 
-    with scoped(allowlist=allowlist), sh.observe(hook):
+    with scoped(ScopeConfig(allowlist=allowlist)), sh.observe(hook):
         result = cmd.run_sync(context=context)
     return result, events
 
@@ -55,7 +55,7 @@ def test_observe_registration_detaches_cleanly() -> None:
     def hook(ev: ExecEvent) -> None:
         events.append(ev)
 
-    with scoped(allowlist=catalogue.allowlist):
+    with scoped(ScopeConfig(allowlist=catalogue.allowlist)):
         before_count = len(current_context().observe_hooks)
         registration = sh.observe(hook)
         with_hooks = current_context()

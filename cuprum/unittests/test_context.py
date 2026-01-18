@@ -15,6 +15,7 @@ from cuprum.context import (
     BeforeHook,
     CuprumContext,
     ForbiddenProgramError,
+    ScopeConfig,
     after,
     allow,
     before,
@@ -85,7 +86,7 @@ def test_context_with_hooks() -> None:
 def test_narrow_reduces_allowlist() -> None:
     """narrow() intersects with parent allowlist."""
     parent = CuprumContext(allowlist=frozenset([ECHO, LS]))
-    narrowed = parent.narrow(allowlist=frozenset([ECHO]))
+    narrowed = parent.narrow(ScopeConfig(allowlist=frozenset([ECHO])))
     assert narrowed.allowlist == frozenset([ECHO])
 
 
@@ -93,14 +94,14 @@ def test_narrow_cannot_widen_allowlist() -> None:
     """narrow() cannot add programs not in parent when parent is non-empty."""
     new_program = Program("cat")
     parent = CuprumContext(allowlist=frozenset([ECHO]))
-    narrowed = parent.narrow(allowlist=frozenset([ECHO, new_program]))
+    narrowed = parent.narrow(ScopeConfig(allowlist=frozenset([ECHO, new_program])))
     assert narrowed.allowlist == frozenset([ECHO])
 
 
 def test_narrow_establishes_base_when_parent_empty() -> None:
     """narrow() uses provided allowlist when parent is empty."""
     parent = CuprumContext()  # Empty allowlist
-    narrowed = parent.narrow(allowlist=frozenset([ECHO, LS]))
+    narrowed = parent.narrow(ScopeConfig(allowlist=frozenset([ECHO, LS])))
     assert narrowed.allowlist == frozenset([ECHO, LS])
 
 
@@ -109,7 +110,7 @@ def test_narrow_appends_before_hooks() -> None:
     parent_hook: BeforeHook = mock.Mock()
     child_hook: BeforeHook = mock.Mock()
     parent = CuprumContext(before_hooks=(parent_hook,))
-    narrowed = parent.narrow(before_hooks=(child_hook,))
+    narrowed = parent.narrow(ScopeConfig(before_hooks=(child_hook,)))
     assert narrowed.before_hooks == (parent_hook, child_hook)
 
 
@@ -118,7 +119,7 @@ def test_narrow_prepends_after_hooks() -> None:
     parent_hook: AfterHook = mock.Mock()
     child_hook: AfterHook = mock.Mock()
     parent = CuprumContext(after_hooks=(parent_hook,))
-    narrowed = parent.narrow(after_hooks=(child_hook,))
+    narrowed = parent.narrow(ScopeConfig(after_hooks=(child_hook,)))
     # After hooks run inner-to-outer: child first, then parent
     assert narrowed.after_hooks == (child_hook, parent_hook)
 
@@ -145,37 +146,37 @@ def test_get_context_returns_same_as_current() -> None:
 
 
 def test_scoped_narrows_allowlist_in_block() -> None:
-    """scoped() narrows allowlist within the context block."""
-    with scoped(allowlist=frozenset([ECHO])) as ctx:
+    """scoped(ScopeConfig()) narrows allowlist within the context block."""
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))) as ctx:
         assert ctx.is_allowed(ECHO) is True
         assert current_context() is ctx
 
 
 def test_scoped_restores_context_after_block() -> None:
-    """scoped() restores previous context after exiting block."""
+    """scoped(ScopeConfig()) restores previous context after exiting block."""
     original = current_context()
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         pass
     assert current_context() is original
 
 
 def test_scoped_restores_on_exception() -> None:
-    """scoped() restores context even when exception is raised."""
+    """scoped(ScopeConfig()) restores context even when exception is raised."""
     original = current_context()
     with (
         pytest.raises(ValueError, match=r"test"),
-        scoped(allowlist=frozenset([ECHO])),
+        scoped(ScopeConfig(allowlist=frozenset([ECHO]))),
     ):
         raise ValueError("test")
     assert current_context() is original
 
 
 def test_nested_scopes_stack_correctly() -> None:
-    """Nested scoped() calls narrow progressively."""
-    with scoped(allowlist=frozenset([ECHO, LS])) as outer:
+    """Nested scoped(ScopeConfig()) calls narrow progressively."""
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO, LS]))) as outer:
         assert outer.is_allowed(ECHO) is True
         assert outer.is_allowed(LS) is True
-        with scoped(allowlist=frozenset([ECHO])) as inner:
+        with scoped(ScopeConfig(allowlist=frozenset([ECHO]))) as inner:
             assert inner.is_allowed(ECHO) is True
             assert inner.is_allowed(LS) is False
         # Back to outer scope
@@ -189,7 +190,7 @@ def test_nested_scopes_stack_correctly() -> None:
 
 def test_allow_adds_programs_to_context() -> None:
     """AllowRegistration adds programs to current context allowlist."""
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         reg = allow(LS)
         assert current_context().is_allowed(LS) is True
         reg.detach()
@@ -199,7 +200,7 @@ def test_allow_adds_programs_to_context() -> None:
 
 def test_allow_as_context_manager() -> None:
     """AllowRegistration can be used as a context manager."""
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         with allow(LS):
             assert current_context().is_allowed(LS) is True
         assert current_context().is_allowed(LS) is False
@@ -213,7 +214,7 @@ def test_allow_as_context_manager() -> None:
 def test_before_hook_registration_and_detach() -> None:
     """before() registers a hook that can be detached."""
     hook: BeforeHook = mock.Mock()
-    with scoped():
+    with scoped(ScopeConfig()):
         reg = before(hook)
         assert hook in current_context().before_hooks
         reg.detach()
@@ -223,7 +224,7 @@ def test_before_hook_registration_and_detach() -> None:
 def test_after_hook_registration_and_detach() -> None:
     """after() registers a hook that can be detached."""
     hook: AfterHook = mock.Mock()
-    with scoped():
+    with scoped(ScopeConfig()):
         reg = after(hook)
         assert hook in current_context().after_hooks
         reg.detach()
@@ -233,7 +234,7 @@ def test_after_hook_registration_and_detach() -> None:
 def test_before_hook_as_context_manager() -> None:
     """before() can be used as a context manager."""
     hook: BeforeHook = mock.Mock()
-    with scoped():
+    with scoped(ScopeConfig()):
         with before(hook):
             assert hook in current_context().before_hooks
         assert hook not in current_context().before_hooks
@@ -242,7 +243,7 @@ def test_before_hook_as_context_manager() -> None:
 def test_after_hook_as_context_manager() -> None:
     """after() can be used as a context manager."""
     hook: AfterHook = mock.Mock()
-    with scoped():
+    with scoped(ScopeConfig()):
         with after(hook):
             assert hook in current_context().after_hooks
         assert hook not in current_context().after_hooks
@@ -325,7 +326,7 @@ def test_context_is_isolated_per_thread() -> None:
     results: dict[str, bool] = {}
 
     def thread_worker(name: str, programs: frozenset[Program]) -> None:
-        with scoped(allowlist=programs):
+        with scoped(ScopeConfig(allowlist=programs)):
             results[name] = current_context().is_allowed(ECHO)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
@@ -348,7 +349,7 @@ def test_context_is_isolated_per_async_task() -> None:
     results: dict[str, bool] = {}
 
     async def task_worker(name: str, programs: frozenset[Program]) -> None:
-        with scoped(allowlist=programs):
+        with scoped(ScopeConfig(allowlist=programs)):
             await asyncio.sleep(0.01)  # Yield to allow interleaving
             results[name] = current_context().is_allowed(ECHO)
 
@@ -381,3 +382,67 @@ def test_check_allowed_passes_for_allowed_program() -> None:
     """check_allowed does not raise for allowed programs."""
     ctx = CuprumContext(allowlist=frozenset([ECHO]))
     ctx.check_allowed(ECHO)  # Should not raise
+
+
+# =============================================================================
+# Timeout Validation
+# =============================================================================
+
+_TIMEOUT_VALIDATION_CASES = [
+    pytest.param(None, None, None, id="none-is-valid"),
+    pytest.param(0.0, 0.0, None, id="zero-is-valid"),
+    pytest.param(5.0, 5.0, None, id="positive-float-is-valid"),
+    pytest.param(
+        typ.cast("float", 5),
+        5.0,
+        None,
+        id="positive-int-coerced-to-float",
+    ),
+    pytest.param(-1.0, None, r"timeout must be non-negative.*-1\.0", id="negative"),
+    pytest.param(
+        typ.cast("float", -5),
+        None,
+        r"timeout must be non-negative.*-5\.0",
+        id="negative-int",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("timeout_input", "expected_result", "error_pattern"),
+    _TIMEOUT_VALIDATION_CASES,
+)
+def test_scope_config_timeout_validation(
+    timeout_input: float | None,
+    expected_result: float | None,
+    error_pattern: str | None,
+) -> None:
+    """ScopeConfig validates and coerces timeout values correctly."""
+    if error_pattern is not None:
+        with pytest.raises(ValueError, match=error_pattern):
+            ScopeConfig(timeout=timeout_input)
+    else:
+        config = ScopeConfig(timeout=timeout_input)
+        assert config.timeout == expected_result
+        if expected_result is not None:
+            assert isinstance(config.timeout, float)
+
+
+@pytest.mark.parametrize(
+    ("timeout_input", "expected_result", "error_pattern"),
+    _TIMEOUT_VALIDATION_CASES,
+)
+def test_cuprum_context_timeout_validation(
+    timeout_input: float | None,
+    expected_result: float | None,
+    error_pattern: str | None,
+) -> None:
+    """CuprumContext validates and coerces timeout values correctly."""
+    if error_pattern is not None:
+        with pytest.raises(ValueError, match=error_pattern):
+            CuprumContext(timeout=timeout_input)
+    else:
+        ctx = CuprumContext(timeout=timeout_input)
+        assert ctx.timeout == expected_result
+        if expected_result is not None:
+            assert isinstance(ctx.timeout, float)

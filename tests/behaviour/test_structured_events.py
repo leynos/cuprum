@@ -7,8 +7,7 @@ import typing as typ
 import pytest
 from pytest_bdd import given, scenario, then, when
 
-from cuprum import sh
-from cuprum.context import scoped
+from cuprum import ScopeConfig, scoped, sh
 from cuprum.sh import ExecutionContext
 from tests.helpers.catalogue import python_catalogue
 
@@ -63,7 +62,7 @@ def when_run_with_observe_hook(
     def hook(ev: ExecEvent) -> None:
         events.append(ev)
 
-    with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+    with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
         _ = cmd.run_sync(context=ExecutionContext(tags={"run_id": "bdd"}))
 
     behaviour_state["events"] = events

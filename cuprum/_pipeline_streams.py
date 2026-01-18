@@ -19,6 +19,7 @@ class _PipelineRunConfig:
     ctx: ExecutionContext
     capture: bool
     echo: bool
+    timeout: float | None
     stdout_sink: typ.IO[str]
     stderr_sink: typ.IO[str]
 
@@ -41,6 +42,7 @@ def _prepare_pipeline_config(
     *,
     capture: bool,
     echo: bool,
+    timeout: float | None,
     context: ExecutionContext | None,
 ) -> _PipelineRunConfig:
     """Normalise runtime options for pipeline execution."""
@@ -54,6 +56,7 @@ def _prepare_pipeline_config(
         ctx=ctx,
         capture=capture,
         echo=echo,
+        timeout=timeout,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,
     )

@@ -23,7 +23,7 @@ from cuprum import sh
 from cuprum.adapters.logging_adapter import structured_logging_hook
 from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
 from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
-from cuprum.context import scoped
+from cuprum.context import ScopeConfig, scoped
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
@@ -168,7 +168,7 @@ def _execute_python_command(
     builder = typ.cast("typ.Any", python_cmd_fixture["builder"])
     cmd = builder("-c", script)
 
-    with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+    with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
         result = cmd.run_sync()
 
     behaviour_state["result"] = result

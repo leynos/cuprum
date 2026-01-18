@@ -13,12 +13,14 @@ backend (prometheus_client, statsd, OpenTelemetry metrics, etc.).
 
 Example with the in-memory reference implementation::
 
-    from cuprum import scoped, sh
+    from cuprum import ScopeConfig, scoped, sh
     from cuprum.adapters.metrics_adapter import MetricsHook, InMemoryMetrics
 
     metrics = InMemoryMetrics()
 
-    with scoped(allowlist=my_allowlist), sh.observe(MetricsHook(metrics)):
+    with scoped(
+        ScopeConfig(allowlist=my_allowlist)
+    ), sh.observe(MetricsHook(metrics)):
         sh.make(ECHO)("hello").run_sync()
 
     print(metrics.counters)  # {'cuprum_executions_total': 1, ...}

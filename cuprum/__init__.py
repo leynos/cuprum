@@ -41,6 +41,7 @@ from cuprum.context import (
     ExecHook,
     ForbiddenProgramError,
     HookRegistration,
+    ScopeConfig,
     after,
     allow,
     before,
@@ -59,6 +60,7 @@ from cuprum.sh import (
     PipelineResult,
     SafeCmd,
     SafeCmdBuilder,
+    TimeoutExpired,
 )
 
 from . import sh
@@ -93,6 +95,8 @@ __all__ = [
     "ProjectSettings",
     "SafeCmd",
     "SafeCmdBuilder",
+    "ScopeConfig",
+    "TimeoutExpired",
     "UnknownProgramError",
     "after",
     "allow",

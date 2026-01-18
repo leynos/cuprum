@@ -8,7 +8,7 @@ import typing as typ
 
 from pytest_bdd import given, scenario, then, when
 
-from cuprum import ECHO, scoped, sh
+from cuprum import ECHO, ScopeConfig, scoped, sh
 from cuprum.concurrent import ConcurrentConfig, ConcurrentResult, run_concurrent_sync
 from tests.helpers.catalogue import python_catalogue
 
@@ -137,7 +137,7 @@ def _execute_concurrent(
 
     """
     start = time.perf_counter()
-    with scoped(allowlist=commands_under_test.allowlist):
+    with scoped(ScopeConfig(allowlist=commands_under_test.allowlist)):
         result = run_concurrent_sync(*commands_under_test.commands, config=config)
     elapsed = time.perf_counter() - start
     return _ConcurrentExecution(result=result, elapsed=elapsed)
