@@ -5,11 +5,11 @@ allowlists and hooks for command execution. Contexts support narrowing
 (restricting the allowlist) and hook registration with deterministic ordering.
 
 Example:
->>> from cuprum.context import scoped, before, current_context
+>>> from cuprum.context import ScopeConfig, scoped, before, current_context
 >>> from cuprum.catalogue import ECHO
 >>> def log_hook(cmd):
 ...     print(f"Running: {cmd}")
->>> with scoped(allowlist=frozenset([ECHO])):
+>>> with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
 ...     with before(log_hook):
 ...         ctx = current_context()
 ...         ctx.is_allowed(ECHO)
@@ -39,6 +39,69 @@ class ForbiddenProgramError(PermissionError):
     """Raised when attempting to run a program not in the current allowlist."""
 
 
+def _validate_timeout(timeout: float | None, class_name: str) -> float | None:
+    """Validate and coerce timeout value.
+
+    Parameters
+    ----------
+    timeout:
+        The timeout value to validate. May be None, float, or int.
+    class_name:
+        Name of the class for error messages.
+
+    Returns
+    -------
+    float | None
+        The validated timeout as a float, or None.
+
+    Raises
+    ------
+    ValueError
+        When timeout is negative.
+
+    """
+    if timeout is None:
+        return None
+    timeout_float = float(timeout)
+    if timeout_float < 0:
+        msg = f"{class_name} timeout must be non-negative, got {timeout_float}"
+        raise ValueError(msg)
+    return timeout_float
+
+
+@dc.dataclass(frozen=True, slots=True)
+class ScopeConfig:
+    """Configuration object for scoped execution context updates.
+
+    Attributes
+    ----------
+    allowlist:
+        Optional allowlist for the scope. When ``None``, inherit the current
+        allowlist.
+    before_hooks:
+        Hooks invoked before command execution (FIFO order).
+    after_hooks:
+        Hooks invoked after command execution (LIFO order).
+    observe_hooks:
+        Hooks invoked for structured execution events.
+    timeout:
+        Optional default timeout in seconds for calls within the scope.
+
+    """
+
+    allowlist: frozenset[Program] | None = None
+    before_hooks: tuple[BeforeHook, ...] = ()
+    after_hooks: tuple[AfterHook, ...] = ()
+    observe_hooks: tuple[ExecHook, ...] = ()
+    timeout: float | None = None
+
+    def __post_init__(self) -> None:
+        """Validate and coerce timeout after initialization."""
+        validated = _validate_timeout(self.timeout, "ScopeConfig")
+        # Use object.__setattr__ because the dataclass is frozen
+        object.__setattr__(self, "timeout", validated)
+
+
 @dc.dataclass(frozen=True, slots=True)
 class CuprumContext:
     """Immutable execution context holding allowlist and hooks.
@@ -53,6 +116,9 @@ class CuprumContext:
         Tuple of hooks invoked after command execution (LIFO order).
     observe_hooks:
         Tuple of hooks invoked for structured execution events (FIFO order).
+    timeout:
+        Optional default timeout in seconds applied when a call does not supply
+        an explicit timeout.
 
     """
 
@@ -60,6 +126,13 @@ class CuprumContext:
     before_hooks: tuple[BeforeHook, ...] = ()
     after_hooks: tuple[AfterHook, ...] = ()
     observe_hooks: tuple[ExecHook, ...] = ()
+    timeout: float | None = None
+
+    def __post_init__(self) -> None:
+        """Validate and coerce timeout after initialization."""
+        validated = _validate_timeout(self.timeout, "CuprumContext")
+        # Use object.__setattr__ because the dataclass is frozen
+        object.__setattr__(self, "timeout", validated)
 
     def is_allowed(self, program: Program) -> bool:
         """Return True when the program is in the allowlist.
@@ -75,7 +148,7 @@ class CuprumContext:
 
         When the allowlist is empty, all programs are permitted (permissive
         default). This allows gradual adoption: code can run without explicit
-        context setup, and scoped() can later establish restrictions.
+        context setup, and scoped(ScopeConfig()) can later establish restrictions.
         """
         if not self.allowlist:
             return  # Empty allowlist permits all programs
@@ -83,27 +156,13 @@ class CuprumContext:
             msg = f"Program '{program}' is not allowed in the current context"
             raise ForbiddenProgramError(msg)
 
-    def narrow(
-        self,
-        *,
-        allowlist: frozenset[Program] | None = None,
-        before_hooks: tuple[BeforeHook, ...] = (),
-        after_hooks: tuple[AfterHook, ...] = (),
-        observe_hooks: tuple[ExecHook, ...] = (),
-    ) -> CuprumContext:
+    def narrow(self, config: ScopeConfig) -> CuprumContext:
         """Create a derived context with narrowed allowlist and extended hooks.
 
         Parameters
         ----------
-        allowlist:
-            New allowlist; intersected with parent if parent is non-empty,
-            otherwise used directly. None keeps the parent list unchanged.
-        before_hooks:
-            Additional before hooks appended after parent hooks.
-        after_hooks:
-            Additional after hooks prepended before parent hooks (LIFO).
-        observe_hooks:
-            Additional observe hooks appended after parent hooks (FIFO).
+        config:
+            Scope configuration describing allowlist and hook updates.
 
         Returns
         -------
@@ -118,25 +177,27 @@ class CuprumContext:
         add programs). This ensures safety while allowing initial setup.
 
         """
-        if allowlist is None:
+        if config.allowlist is None:
             new_allowlist = self.allowlist
         elif self.allowlist:
             # Parent has programs: intersect to narrow
-            new_allowlist = self.allowlist & allowlist
+            new_allowlist = self.allowlist & config.allowlist
         else:
             # Parent is empty: use provided allowlist as new base
-            new_allowlist = allowlist
+            new_allowlist = config.allowlist
 
-        new_before = self.before_hooks + before_hooks
+        new_before = self.before_hooks + config.before_hooks
         # After hooks run inner-to-outer, so prepend new hooks
-        new_after = after_hooks + self.after_hooks
-        new_observe = self.observe_hooks + observe_hooks
+        new_after = config.after_hooks + self.after_hooks
+        new_observe = self.observe_hooks + config.observe_hooks
+        new_timeout = self.timeout if config.timeout is None else config.timeout
 
         return CuprumContext(
             allowlist=new_allowlist,
             before_hooks=new_before,
             after_hooks=new_after,
             observe_hooks=new_observe,
+            timeout=new_timeout,
         )
 
     def with_allowlist(self, allowlist: frozenset[Program]) -> CuprumContext:
@@ -217,21 +278,9 @@ class _ScopedContext:
 
     __slots__ = ("_ctx", "_token")
 
-    def __init__(
-        self,
-        *,
-        allowlist: frozenset[Program] | None = None,
-        before_hooks: tuple[BeforeHook, ...] = (),
-        after_hooks: tuple[AfterHook, ...] = (),
-        observe_hooks: tuple[ExecHook, ...] = (),
-    ) -> None:
+    def __init__(self, config: ScopeConfig) -> None:
         parent = current_context()
-        self._ctx = parent.narrow(
-            allowlist=allowlist,
-            before_hooks=before_hooks,
-            after_hooks=after_hooks,
-            observe_hooks=observe_hooks,
-        )
+        self._ctx = parent.narrow(config)
         self._token: Token[CuprumContext] | None = None
 
     def __enter__(self) -> CuprumContext:
@@ -248,25 +297,13 @@ class _ScopedContext:
             _reset_context(self._token)
 
 
-def scoped(
-    *,
-    allowlist: frozenset[Program] | None = None,
-    before_hooks: tuple[BeforeHook, ...] = (),
-    after_hooks: tuple[AfterHook, ...] = (),
-    observe_hooks: tuple[ExecHook, ...] = (),
-) -> _ScopedContext:
+def scoped(config: ScopeConfig) -> _ScopedContext:
     """Create a scoped context manager for narrowed execution.
 
     Parameters
     ----------
-    allowlist:
-        Programs to allow (intersected with parent allowlist).
-    before_hooks:
-        Hooks to run before command execution.
-    after_hooks:
-        Hooks to run after command execution.
-    observe_hooks:
-        Hooks to run for structured execution events.
+    config:
+        Scope configuration describing allowlist and hook updates.
 
     Returns
     -------
@@ -275,16 +312,11 @@ def scoped(
 
     Example
     -------
-    >>> with scoped(allowlist=frozenset([ECHO])) as ctx:
+    >>> with scoped(ScopeConfig(allowlist=frozenset([ECHO]))) as ctx:
     ...     assert ctx.is_allowed(ECHO)
 
     """
-    return _ScopedContext(
-        allowlist=allowlist,
-        before_hooks=before_hooks,
-        after_hooks=after_hooks,
-        observe_hooks=observe_hooks,
-    )
+    return _ScopedContext(config)
 
 
 class AllowRegistration:
@@ -296,11 +328,11 @@ class AllowRegistration:
     -----------------------
     The registration captures a token at creation time. When detach() is called,
     the original context is restored via the token, ensuring no context pollution
-    even when used outside scoped() blocks. This means detach() restores the
-    exact context that existed when the registration was created, regardless of
-    subsequent context modifications. If multiple registrations are created and
-    detached in non-LIFO order, earlier tokens may restore states that remove
-    programs added by other registrations.
+    even when used outside scoped(ScopeConfig()) blocks. This means detach()
+    restores the exact context that existed when the registration was created,
+    regardless of subsequent context modifications. If multiple registrations are
+    created and detached in non-LIFO order, earlier tokens may restore states
+    that remove programs added by other registrations.
 
     Detach in the same logical Context (thread or Task) in which the
     registration was created. Resetting a ContextVar with a token from a
@@ -370,9 +402,9 @@ class HookRegistration:
     -----------------------
     The registration captures a token at creation time. When detach() is called,
     the original context is restored via the token, ensuring no context pollution
-    even when used outside scoped() blocks. This means detach() restores the
-    exact context that existed when the registration was created, regardless of
-    subsequent context modifications.
+    even when used outside scoped(ScopeConfig()) blocks. This means detach()
+    restores the exact context that existed when the registration was created,
+    regardless of subsequent context modifications.
 
     As with AllowRegistration, detach the hook only from the Context where
     it was registered; using the token in a different Context will raise
@@ -499,6 +531,7 @@ __all__ = [
     "ExecHook",
     "ForbiddenProgramError",
     "HookRegistration",
+    "ScopeConfig",
     "after",
     "allow",
     "before",

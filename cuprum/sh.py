@@ -10,8 +10,6 @@ from __future__ import annotations
 import asyncio
 import collections.abc as cabc
 import dataclasses as dc
-import sys
-import time
 import typing as typ
 from pathlib import Path
 
@@ -23,14 +21,16 @@ from cuprum._observability import (
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
     _EventDetails,
+    _ExecutionHooks,
     _run_before_hooks,
     _run_pipeline,
     _StageObservation,
 )
-from cuprum._process_lifecycle import _merge_env, _terminate_process
-from cuprum._streams import (
-    _consume_stream,
-    _StreamConfig,
+from cuprum._pipeline_streams import _prepare_pipeline_config
+from cuprum._subprocess_execution import (
+    _execute_subprocess,
+    _resolve_timeout,
+    _SubprocessExecution,
 )
 from cuprum.catalogue import (
     DEFAULT_CATALOGUE,
@@ -39,6 +39,7 @@ from cuprum.catalogue import (
 )
 from cuprum.catalogue import UnknownProgramError as UnknownProgramError
 from cuprum.context import observe as observe
+from cuprum.context import scoped as scoped
 
 if typ.TYPE_CHECKING:
     from cuprum.program import Program
@@ -173,6 +174,8 @@ class ExecutionContext:
         Working directory for the subprocess.
     cancel_grace:
         Seconds to wait after SIGTERM before escalating to SIGKILL.
+    timeout:
+        Optional runtime timeout in seconds. ``None`` means no override.
     stdout_sink:
         Text sink for echoing stdout; defaults to the active ``sys.stdout``.
     stderr_sink:
@@ -189,6 +192,7 @@ class ExecutionContext:
     env: _EnvMapping = None
     cwd: _CwdType = None
     cancel_grace: float = _DEFAULT_CANCEL_GRACE
+    timeout: float | None = None
     stdout_sink: typ.IO[str] | None = None
     stderr_sink: typ.IO[str] | None = None
     encoding: str = _DEFAULT_ENCODING
@@ -196,158 +200,69 @@ class ExecutionContext:
     tags: cabc.Mapping[str, object] | None = None
 
 
-async def _wait_for_exit_code(
-    process: asyncio.subprocess.Process,
-    ctx: ExecutionContext,
-    *,
-    consumers: tuple[asyncio.Task[typ.Any], ...] = (),
-) -> tuple[int, float]:
-    """Wait for a subprocess, handling cancellation and capturing exit time."""
-    try:
-        exit_code = await process.wait()
-    except asyncio.CancelledError:
-        await _terminate_process(process, ctx.cancel_grace)
-        if consumers:
-            await asyncio.gather(*consumers, return_exceptions=True)
-        raise
-    else:
-        exited_at = time.perf_counter()
-        return exit_code, exited_at
+class TimeoutExpired(TimeoutError):  # noqa: N818  # match subprocess.TimeoutExpired naming.
+    """Raised when command execution exceeds the configured timeout."""
+
+    def __init__(
+        self,
+        *,
+        cmd: typ.Sequence[str] | object,
+        timeout: float,
+        output: str | bytes | None = None,
+        stderr: str | bytes | None = None,
+    ) -> None:
+        super().__init__(f"Command {cmd!r} timed out after {timeout} seconds")
+        self.cmd = cmd
+        self.timeout = timeout
+        self.output = output
+        self.stderr = stderr
+
+    @property
+    def stdout(self) -> str | bytes | None:
+        """Return captured stdout, mirroring subprocess.TimeoutExpired.output."""
+        return self.output
 
 
 @dc.dataclass(frozen=True, slots=True)
-class _SubprocessExecution:
-    cmd: SafeCmd
-    ctx: ExecutionContext
+class _ExecutionTracking:
+    """Hook and task tracking for command execution."""
+
+    execution_hooks: _ExecutionHooks
+    pending_tasks: list[asyncio.Task[None]]
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _IOBehaviour:
+    """Runtime I/O behaviour flags for command execution."""
+
     capture: bool
     echo: bool
-    observation: _StageObservation
 
 
-async def _spawn_subprocess(
-    execution: _SubprocessExecution,
-) -> asyncio.subprocess.Process:
-    return await asyncio.create_subprocess_exec(
-        *execution.cmd.argv_with_program,
-        stdout=(
-            asyncio.subprocess.PIPE
-            if execution.capture or execution.echo
-            else asyncio.subprocess.DEVNULL
-        ),
-        stderr=(
-            asyncio.subprocess.PIPE
-            if execution.capture or execution.echo
-            else asyncio.subprocess.DEVNULL
-        ),
-        env=_merge_env(execution.ctx.env),
-        cwd=(str(execution.ctx.cwd) if execution.ctx.cwd is not None else None),
+def _prepare_execution_observation(
+    cmd: SafeCmd,
+    context: ExecutionContext,
+    tracking: _ExecutionTracking,
+    io_behaviour: _IOBehaviour,
+) -> _StageObservation:
+    """Prepare the observation context for command execution."""
+    cwd = Path(context.cwd) if context.cwd is not None else None
+    env_overlay = _freeze_str_mapping(context.env)
+    tags = _merge_tags(
+        {
+            "project": cmd.project.name,
+            "capture": io_behaviour.capture,
+            "echo": io_behaviour.echo,
+        },
+        context.tags,
     )
-
-
-async def _run_subprocess_with_streams(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-    *,
-    pid: int | None,
-) -> tuple[int, float, str | None, str | None]:
-    stream_config = _StreamConfig(
-        capture_output=execution.capture,
-        echo_output=execution.echo,
-        sink=(
-            execution.ctx.stdout_sink
-            if execution.ctx.stdout_sink is not None
-            else sys.stdout
-        ),
-        encoding=execution.ctx.encoding,
-        errors=execution.ctx.errors,
-    )
-
-    stdout_on_line = (
-        None
-        if not execution.observation.hooks.observe_hooks
-        else lambda line: execution.observation.emit(
-            "stdout",
-            _EventDetails(pid=pid, line=line),
-        )
-    )
-    stderr_on_line = (
-        None
-        if not execution.observation.hooks.observe_hooks
-        else lambda line: execution.observation.emit(
-            "stderr",
-            _EventDetails(pid=pid, line=line),
-        )
-    )
-    consumers = (
-        asyncio.create_task(
-            _consume_stream(
-                process.stdout,
-                stream_config,
-                on_line=stdout_on_line,
-            ),
-        ),
-        asyncio.create_task(
-            _consume_stream(
-                process.stderr,
-                dc.replace(
-                    stream_config,
-                    sink=(
-                        execution.ctx.stderr_sink
-                        if execution.ctx.stderr_sink is not None
-                        else sys.stderr
-                    ),
-                ),
-                on_line=stderr_on_line,
-            ),
-        ),
-    )
-    exit_code, exited_at = await _wait_for_exit_code(
-        process,
-        execution.ctx,
-        consumers=consumers,
-    )
-    stdout_text, stderr_text = await asyncio.gather(*consumers)
-    return exit_code, exited_at, stdout_text, stderr_text
-
-
-async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
-    process = await _spawn_subprocess(execution)
-    started_at = time.perf_counter()
-    pid = process.pid
-    execution.observation.emit("start", _EventDetails(pid=pid))
-
-    stdout_text: str | None = None
-    stderr_text: str | None = None
-    if not execution.capture and not execution.echo:
-        exit_code, exited_at = await _wait_for_exit_code(process, execution.ctx)
-    else:
-        (
-            exit_code,
-            exited_at,
-            stdout_text,
-            stderr_text,
-        ) = await _run_subprocess_with_streams(
-            process,
-            execution,
-            pid=pid,
-        )
-
-    execution.observation.emit(
-        "exit",
-        _EventDetails(
-            pid=pid,
-            exit_code=exit_code,
-            duration_s=max(0.0, exited_at - started_at),
-        ),
-    )
-
-    return CommandResult(
-        program=execution.cmd.program,
-        argv=execution.cmd.argv,
-        exit_code=exit_code,
-        pid=process.pid if process.pid is not None else -1,
-        stdout=stdout_text,
-        stderr=stderr_text,
+    return _StageObservation(
+        cmd=cmd,
+        hooks=tracking.execution_hooks,
+        cwd=cwd,
+        env_overlay=env_overlay,
+        tags=tags,
+        pending_tasks=tracking.pending_tasks,
     )
 
 
@@ -379,6 +294,7 @@ class SafeCmd:
         *,
         capture: bool = True,
         echo: bool = False,
+        timeout: float | None = None,
         context: ExecutionContext | None = None,
     ) -> CommandResult:
         """Execute the command asynchronously with predictable cancellation.
@@ -389,6 +305,8 @@ class SafeCmd:
             When ``True`` capture stdout/stderr; otherwise discard them.
         echo:
             When ``True`` tee stdout/stderr to the parent process.
+        timeout:
+            Optional wall-clock timeout in seconds; ``None`` disables timeouts.
         context:
             Optional execution settings such as env, cwd, and cancel grace.
 
@@ -401,28 +319,26 @@ class SafeCmd:
         ------
         ForbiddenProgramError
             If the program is not in the current context's allowlist.
+        TimeoutExpired
+            If the command exceeds the configured timeout.
 
         """
         ctx = context or ExecutionContext()
-        execution_hooks = _run_before_hooks(self)
-        pending_tasks: list[asyncio.Task[None]] = []
-        cwd = Path(ctx.cwd) if ctx.cwd is not None else None
-        env_overlay = _freeze_str_mapping(ctx.env)
-        tags = _merge_tags(
-            {"project": self.project.name, "capture": capture, "echo": echo},
-            ctx.tags,
+        effective_timeout = _resolve_timeout(timeout=timeout, context=context)
+        tracking = _ExecutionTracking(
+            execution_hooks=_run_before_hooks(self),
+            pending_tasks=[],
         )
-        observation = _StageObservation(
-            cmd=self,
-            hooks=execution_hooks,
-            cwd=cwd,
-            env_overlay=env_overlay,
-            tags=tags,
-            pending_tasks=pending_tasks,
+        io_behaviour = _IOBehaviour(capture=capture, echo=echo)
+        observation = _prepare_execution_observation(
+            self,
+            ctx,
+            tracking,
+            io_behaviour,
         )
 
         observation.emit("plan", _EventDetails(pid=None))
-        for hook in execution_hooks.before_hooks:
+        for hook in tracking.execution_hooks.before_hooks:
             hook(self)
 
         try:
@@ -432,19 +348,20 @@ class SafeCmd:
                     ctx=ctx,
                     capture=capture,
                     echo=echo,
+                    timeout=effective_timeout,
                     observation=observation,
                 ),
             )
-            for hook in execution_hooks.after_hooks:
+            for hook in tracking.execution_hooks.after_hooks:
                 hook(self, result)
         except asyncio.CancelledError:
-            await asyncio.shield(_wait_for_exec_hook_tasks(pending_tasks))
+            await asyncio.shield(_wait_for_exec_hook_tasks(tracking.pending_tasks))
             raise
         except BaseException:
-            await _wait_for_exec_hook_tasks(pending_tasks)
+            await _wait_for_exec_hook_tasks(tracking.pending_tasks)
             raise
 
-        await _wait_for_exec_hook_tasks(pending_tasks)
+        await _wait_for_exec_hook_tasks(tracking.pending_tasks)
         return result
 
     def run_sync(
@@ -452,6 +369,7 @@ class SafeCmd:
         *,
         capture: bool = True,
         echo: bool = False,
+        timeout: float | None = None,
         context: ExecutionContext | None = None,
     ) -> CommandResult:
         """Execute the command synchronously with predictable semantics.
@@ -465,6 +383,8 @@ class SafeCmd:
             When ``True`` capture stdout/stderr; otherwise discard them.
         echo:
             When ``True`` tee stdout/stderr to the parent process.
+        timeout:
+            Optional wall-clock timeout in seconds; ``None`` disables timeouts.
         context:
             Optional execution settings such as env, cwd, and cancel grace.
 
@@ -474,7 +394,14 @@ class SafeCmd:
             Structured information about the completed process.
 
         """
-        return asyncio.run(self.run(capture=capture, echo=echo, context=context))
+        return asyncio.run(
+            self.run(
+                capture=capture,
+                echo=echo,
+                timeout=timeout,
+                context=context,
+            ),
+        )
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -505,25 +432,36 @@ class Pipeline:
         *,
         capture: bool = True,
         echo: bool = False,
+        timeout: float | None = None,
         context: ExecutionContext | None = None,
     ) -> PipelineResult:
         """Execute the pipeline asynchronously with streaming and backpressure."""
-        return await _run_pipeline(
-            self.parts,
+        effective_timeout = _resolve_timeout(timeout=timeout, context=context)
+        config = _prepare_pipeline_config(
             capture=capture,
             echo=echo,
+            timeout=effective_timeout,
             context=context,
         )
+        return await _run_pipeline(self.parts, config)
 
     def run_sync(
         self,
         *,
         capture: bool = True,
         echo: bool = False,
+        timeout: float | None = None,
         context: ExecutionContext | None = None,
     ) -> PipelineResult:
         """Execute the pipeline synchronously via ``asyncio.run``."""
-        return asyncio.run(self.run(capture=capture, echo=echo, context=context))
+        return asyncio.run(
+            self.run(
+                capture=capture,
+                echo=echo,
+                timeout=timeout,
+                context=context,
+            ),
+        )
 
 
 def make(
@@ -552,7 +490,9 @@ __all__ = [
     "PipelineResult",
     "SafeCmd",
     "SafeCmdBuilder",
+    "TimeoutExpired",
     "UnknownProgramError",
     "make",
     "observe",
+    "scoped",
 ]

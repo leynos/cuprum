@@ -111,7 +111,7 @@ Running a pipeline returns a `PipelineResult` that exposes:
 import sys
 from pathlib import Path
 
-from cuprum import ECHO, Program, ProgramCatalogue, ProjectSettings, scoped, sh
+from cuprum import ECHO, Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
 
 PYTHON = Program(str(Path(sys.executable)))
 project = ProjectSettings(
@@ -130,7 +130,7 @@ pipeline = echo("-n", "hello") | python(
     "import sys; sys.stdout.write(sys.stdin.read().upper())",
 )
 
-with scoped(allowlist=catalogue.allowlist):
+with scoped(ScopeConfig(allowlist=catalogue.allowlist)):
     result = pipeline.run_sync()
 
 print(result.stdout)  # "HELLO"
@@ -163,6 +163,8 @@ and echo semantics and returns a structured `CommandResult`:
   - `cwd` sets the working directory for the subprocess when provided.
   - `cancel_grace` controls how long Cuprum waits after `SIGTERM` (termination
     signal) before escalating to `SIGKILL` (kill signal).
+  - `timeout` sets a default wall-clock limit in seconds when the call does not
+    pass an explicit `timeout` parameter.
   - `stdout_sink` and `stderr_sink` route echoed output to alternative text
     streams when `echo=True`.
   - `encoding` and `errors` configure how captured output is decoded; defaults
@@ -186,6 +188,37 @@ async def greet() -> None:
 If the awaiting task is cancelled while a command is running, Cuprum sends
 `SIGTERM` to the subprocess, waits for a short grace period, and then escalates
 to `SIGKILL` to ensure the child process is cleaned up.
+
+### Timeouts
+
+Use the `timeout` parameter on `run()` / `run_sync()` to enforce a wall-clock
+limit in seconds. Timeouts are opt-in; when left as `None` no limit is
+enforced. When a timeout expires, Cuprum terminates the subprocess, waits for
+`cancel_grace`, escalates to `SIGKILL` if needed, and raises `TimeoutExpired`
+(mirroring `subprocess.TimeoutExpired`).
+
+Timeout resolution order:
+
+- Explicit `timeout` argument on `run()` / `run_sync` when not `None`.
+- `ExecutionContext.timeout` when provided and not `None`.
+- `ScopeConfig(timeout=...)` default set via `scoped()` when present.
+
+Example usage:
+
+```python
+from cuprum import ECHO, ScopeConfig, TimeoutExpired, scoped, sh
+
+cmd = sh.make(ECHO)("-n", "hello")
+
+with scoped(ScopeConfig(timeout=3.0)):
+    try:
+        cmd.run_sync()
+    except TimeoutExpired as exc:
+        print(f"timed out after {exc.timeout}s")
+```
+
+Pipeline timeouts apply to the entire pipeline run; partial output is surfaced
+using the same capture rules as successful runs.
 
 ### Synchronous execution
 
@@ -213,6 +246,10 @@ Cuprum provides `CuprumContext` to scope allowlists and execution hooks across
 your application. Contexts are backed by a `ContextVar`, giving you automatic
 isolation across threads and async tasks.
 
+**Upgrade note (v0.2.0):** `scoped()` now accepts a single `ScopeConfig`
+argument instead of keyword parameters. Update calls like
+`with scoped(allowlist=...)` to `with scoped(ScopeConfig(allowlist=...))`.
+
 When you call `SafeCmd.run()` or `run_sync()`, Cuprum automatically:
 
 1. Checks the current context's allowlist and raises `ForbiddenProgramError` if
@@ -224,27 +261,28 @@ When you call `SafeCmd.run()` or `run_sync()`, Cuprum automatically:
 **Empty allowlist behaviour:** When no context is established (or the context
 has an empty allowlist), all programs are permitted. This permissive default is
 intentional to ease adoption but weakens safety; establish an explicit
-allowlist via `scoped()` to enforce policy once onboarded.
+allowlist via `scoped(ScopeConfig())` to enforce policy once onboarded.
 
 ### Scoped contexts
 
-Use `scoped()` to establish a narrowed execution context within a code block:
+Use `scoped(ScopeConfig())` to establish a narrowed execution context within a
+code block:
 
 ```python
-from cuprum import ECHO, LS, scoped
+from cuprum import ECHO, LS, ScopeConfig, scoped
 
 # Start with a base allowlist
-with scoped(allowlist=frozenset([ECHO, LS])) as ctx:
+with scoped(ScopeConfig(allowlist=frozenset([ECHO, LS]))) as ctx:
     assert ctx.is_allowed(ECHO)  # True
     assert ctx.is_allowed(LS)  # True
 
     # Narrow further in nested scope
-    with scoped(allowlist=frozenset([ECHO])) as inner:
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))) as inner:
         assert inner.is_allowed(ECHO)  # True
         assert inner.is_allowed(LS)  # False (narrowed out)
 ```
 
-Key properties of `scoped()`:
+Key properties of `scoped(ScopeConfig())`:
 
 - When the parent allowlist is empty, the provided allowlist becomes the new
   base.
@@ -258,9 +296,9 @@ Use `current_context()` or `get_context()` to access the current execution
 context:
 
 ```python
-from cuprum import ECHO, current_context, scoped
+from cuprum import ECHO, current_context, ScopeConfig, scoped
 
-with scoped(allowlist=frozenset([ECHO])):
+with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
     ctx = current_context()
     if ctx.is_allowed(ECHO):
         print("ECHO is allowed")
@@ -271,9 +309,9 @@ with scoped(allowlist=frozenset([ECHO])):
 Use `allow()` to temporarily add programs to the current context:
 
 ```python
-from cuprum import ECHO, LS, allow, current_context, scoped
+from cuprum import ECHO, LS, allow, current_context, ScopeConfig, scoped
 
-with scoped(allowlist=frozenset([ECHO])):
+with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
     # LS is not currently allowed
     assert not current_context().is_allowed(LS)
 
@@ -288,9 +326,9 @@ with scoped(allowlist=frozenset([ECHO])):
 For manual control, use the `AllowRegistration` handle directly:
 
 ```python
-from cuprum import LS, allow, current_context, scoped
+from cuprum import LS, allow, current_context, ScopeConfig, scoped
 
-with scoped():
+with scoped(ScopeConfig()):
     reg = allow(LS)
     assert current_context().is_allowed(LS)
     reg.detach()  # Remove LS from allowlist
@@ -302,7 +340,7 @@ with scoped():
 Register hooks to run before or after command execution:
 
 ```python
-from cuprum import ECHO, before, after, scoped, sh
+from cuprum import ECHO, before, after, ScopeConfig, scoped, sh
 
 
 def log_before(cmd):
@@ -313,7 +351,7 @@ def log_after(cmd, result):
     print(f"Finished {cmd.program} with exit code {result.exit_code}")
 
 
-with scoped(allowlist=frozenset([ECHO])):
+with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
     with before(log_before), after(log_after):
         cmd = sh.make(ECHO)("hello")
         # Hooks will be invoked when cmd.run() is called
@@ -329,14 +367,14 @@ Hook ordering:
 Like `allow()`, hook registrations can be detached manually:
 
 ```python
-from cuprum import before, current_context, scoped
+from cuprum import before, current_context, ScopeConfig, scoped
 
 
 def my_hook(cmd):
     pass
 
 
-with scoped():
+with scoped(ScopeConfig()):
     reg = before(my_hook)
     assert my_hook in current_context().before_hooks
     reg.detach()
@@ -353,11 +391,11 @@ a registration handle that can be used as a context manager:
 ```python
 import logging
 
-from cuprum import ECHO, logging_hook, scoped, sh
+from cuprum import ECHO, logging_hook, ScopeConfig, scoped, sh
 
 logger = logging.getLogger("myapp.commands")
 
-with scoped(allowlist=frozenset([ECHO])):
+with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
     with logging_hook(logger=logger):
         sh.make(ECHO)("-n", "hello logging").run_sync()
 ```
@@ -382,7 +420,7 @@ Hooks can be used for structured logging, metrics, or tracing without coupling
 Cuprum to a specific telemetry library.
 
 ```python
-from cuprum import ECHO, ExecEvent, scoped, sh
+from cuprum import ECHO, ExecEvent, ScopeConfig, scoped, sh
 from cuprum.sh import ExecutionContext
 
 
@@ -393,7 +431,7 @@ def capture(ev: ExecEvent) -> None:
     events.append(ev)
 
 
-with scoped(allowlist=frozenset([ECHO])), sh.observe(capture):
+with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), sh.observe(capture):
     ctx = ExecutionContext(tags={"run_id": "demo"})
     sh.make(ECHO)("-n", "hello events").run_sync(context=ctx)
 
@@ -415,17 +453,17 @@ isolation:
 - Each async task inherits the context from its creator and can modify it
   independently.
 
-This isolation allows `scoped()` to be used in concurrent code without context
-leaking between threads or tasks:
+This isolation allows `scoped(ScopeConfig())` to be used in concurrent code
+without context leaking between threads or tasks:
 
 ```python
 import asyncio
 
-from cuprum import ECHO, LS, current_context, scoped
+from cuprum import ECHO, LS, current_context, ScopeConfig, scoped
 
 
 async def worker(name: str, programs):
-    with scoped(allowlist=programs):
+    with scoped(ScopeConfig(allowlist=programs)):
         await asyncio.sleep(0.1)  # Simulate work
         ctx = current_context()
         print(f"{name}: ECHO allowed = {ctx.is_allowed(ECHO)}")
@@ -483,12 +521,12 @@ adapter uses the full `ExecEvent` stream for fine-grained observability.
 ```python
 import logging
 
-from cuprum import ECHO, scoped, sh
+from cuprum import ECHO, ScopeConfig, scoped, sh
 from cuprum.adapters.logging_adapter import structured_logging_hook
 
 logging.basicConfig(level=logging.DEBUG)
 
-with scoped(allowlist=frozenset([ECHO])):
+with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
     hook = structured_logging_hook()
     with sh.observe(hook):
         sh.make(ECHO)("hello").run_sync()
@@ -525,12 +563,12 @@ collects counters and histograms. It uses a protocol class so the backend can
 be implemented with any preferred metrics library.
 
 ```python
-from cuprum import ECHO, scoped, sh
+from cuprum import ECHO, ScopeConfig, scoped, sh
 from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
 
 metrics = InMemoryMetrics()
 
-with scoped(allowlist=frozenset([ECHO])):
+with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
     with sh.observe(MetricsHook(metrics)):
         sh.make(ECHO)("hello").run_sync()
 
@@ -589,12 +627,12 @@ creates spans for command execution. It uses protocol classes so you can
 implement the backend with your preferred tracing library.
 
 ```python
-from cuprum import ECHO, scoped, sh
+from cuprum import ECHO, ScopeConfig, scoped, sh
 from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
 
 tracer = InMemoryTracer()
 
-with scoped(allowlist=frozenset([ECHO])):
+with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
     with sh.observe(TracingHook(tracer)):
         sh.make(ECHO)("hello").run_sync()
 
@@ -682,12 +720,12 @@ submission order, and hooks fire per command to preserve existing semantics.
 ### Basic usage
 
 ```python
-from cuprum import ECHO, run_concurrent_sync, scoped, sh
+from cuprum import ECHO, ScopeConfig, run_concurrent_sync, scoped, sh
 
 echo = sh.make(ECHO)
 commands = [echo("-n", f"task-{i}") for i in range(5)]
 
-with scoped(allowlist=frozenset([ECHO])):
+with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
     result = run_concurrent_sync(*commands)
 
 print(f"All succeeded: {result.ok}")
@@ -700,14 +738,14 @@ For async code, use `run_concurrent`:
 ```python
 import asyncio
 
-from cuprum import ECHO, run_concurrent, scoped, sh
+from cuprum import ECHO, ScopeConfig, run_concurrent, scoped, sh
 
 
 async def main() -> None:
     echo = sh.make(ECHO)
     commands = [echo("-n", f"task-{i}") for i in range(5)]
 
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         result = await run_concurrent(*commands)
 
     print(f"All succeeded: {result.ok}")

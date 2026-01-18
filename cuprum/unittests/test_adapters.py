@@ -23,7 +23,7 @@ from cuprum.adapters.tracing_adapter import (
     tracing_hook,
 )
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
-from cuprum.context import scoped
+from cuprum.context import ScopeConfig, scoped
 from cuprum.program import Program
 
 if typ.TYPE_CHECKING:
@@ -78,7 +78,7 @@ class TestStructuredLoggingHook:
         hook = structured_logging_hook(logger=logger)
 
         with caplog.at_level(logging.DEBUG, logger="cuprum.exec.test"):
-            with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+            with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
                 result = cmd.run_sync()
 
         assert result.exit_code == 0
@@ -100,7 +100,7 @@ class TestStructuredLoggingHook:
         hook = structured_logging_hook(logger=logger)
 
         with caplog.at_level(logging.DEBUG, logger="cuprum.exec.extras"):
-            with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+            with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
                 cmd.run_sync()
 
         start_record = next(r for r in caplog.records if "cuprum.start" in r.message)
@@ -125,7 +125,7 @@ class TestStructuredLoggingHook:
         hook = structured_logging_hook(logger=logger, levels=levels)
 
         with caplog.at_level(logging.INFO, logger="cuprum.exec.levels"):
-            with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+            with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
                 cmd.run_sync()
 
         messages = [r.message for r in caplog.records]
@@ -177,7 +177,7 @@ class TestMetricsHook:
         metrics = InMemoryMetrics()
         hook = MetricsHook(metrics)
 
-        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
         assert metrics.counters.get("cuprum_executions_total") == 1.0
@@ -200,7 +200,7 @@ class TestMetricsHook:
         metrics = InMemoryMetrics()
         hook = MetricsHook(metrics)
 
-        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
         assert metrics.counters.get("cuprum_stdout_lines_total") == 2.0
@@ -214,7 +214,7 @@ class TestMetricsHook:
         metrics = InMemoryMetrics()
         hook = MetricsHook(metrics)
 
-        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
         durations = metrics.histograms.get("cuprum_duration_seconds", [])
@@ -229,7 +229,7 @@ class TestMetricsHook:
         metrics = InMemoryMetrics()
         hook = MetricsHook(metrics)
 
-        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
         assert metrics.counters.get("cuprum_failures_total") == 1.0
@@ -242,7 +242,7 @@ class TestMetricsHook:
         builder, catalogue = _python_builder()
         cmd = builder("-c", "print('factory')")
 
-        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
         assert metrics.counters.get("cuprum_executions_total") == 1.0
@@ -292,7 +292,7 @@ class TestMetricsHook:
         builder, catalogue = _python_builder(project_name="label-test")
         cmd = builder("-c", "print('x')")
 
-        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
         # Verify at least one call was made with correct labels
@@ -343,7 +343,7 @@ class TestTracingHook:
         tracer = InMemoryTracer()
         hook = TracingHook(tracer, record_output=record_output)
 
-        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
         return tracer, tracer.spans[0]
@@ -356,7 +356,7 @@ class TestTracingHook:
         tracer = InMemoryTracer()
         hook = TracingHook(tracer)
 
-        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
         assert len(tracer.spans) == 1
@@ -404,7 +404,7 @@ class TestTracingHook:
         tracer = InMemoryTracer()
         hook = TracingHook(tracer, record_output=True)
 
-        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
         span = tracer.spans[0]
@@ -457,7 +457,7 @@ class TestTracingHook:
         tracer = InMemoryTracer()
         hook = TracingHook(tracer)
 
-        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             pipeline.run_sync()
 
         assert len(tracer.spans) == 2
@@ -471,7 +471,7 @@ class TestTracingHook:
         builder, catalogue = _python_builder()
         cmd = builder("-c", "print('factory')")
 
-        with scoped(allowlist=catalogue.allowlist), sh.observe(hook):
+        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
         assert len(tracer.spans) == 1
