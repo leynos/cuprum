@@ -23,6 +23,8 @@ returns a stub value, and the CI matrix includes the requested platforms.
 
 - Keep pure Python as a first-class pathway; no feature may require Rust at
   runtime.
+- Use `uv_build` as the primary build backend; the hatchling mention in the
+  prompt is outdated and must not drive changes.
 - Follow the documentation style guide in
   `docs/documentation-style-guide.md`, including 80-column wrapping.
 - Use Makefile targets for tests, linting, formatting, and type checking.
@@ -40,8 +42,9 @@ returns a stub value, and the CI matrix includes the requested platforms.
   1,500 net lines, stop and escalate.
 - Interfaces: if a public Python API signature must change, stop and
   escalate.
-- Dependencies: if additional external dependencies beyond hatchling, maturin,
-  PyO3, cibuildwheel, and Rust tooling are required, stop and escalate.
+- Dependencies: if additional external dependencies beyond `uv_build`,
+  maturin, PyO3, cibuildwheel, and Rust tooling are required, stop and
+  escalate.
 - CI: if adding a new workflow or reworking more than one existing workflow is
   required, stop and escalate.
 - Tests: if tests still fail after two full fix attempts, stop and escalate.
@@ -51,12 +54,13 @@ returns a stub value, and the CI matrix includes the requested platforms.
 
 ## Risks
 
-- Risk: `pyproject.toml` currently uses `uv_build` and the request mentions
-  hatchling, so the build backend migration could be disruptive.
-  Severity: high
+- Risk: The plan must keep `uv_build` as the primary backend while adding
+  maturin support for native wheels, which may require careful `pyproject.toml`
+  configuration.
+  Severity: medium
   Likelihood: medium
-  Mitigation: read `docs/roadmap.md` and existing build tooling; document the
-  chosen migration path and keep a pure-Python build working end-to-end.
+  Mitigation: document how `uv_build` remains the default and ensure pure
+  Python builds work end-to-end before adding native-wheel steps.
 
 - Risk: CI wheel matrix and Rust toolchain setup might not be compatible with
   the current GitHub Actions environment or uv-based build.
@@ -81,7 +85,7 @@ returns a stub value, and the CI matrix includes the requested platforms.
   (pytest-bdd) for the Rust extension availability stub and import path.
 - [ ] Define Rust workspace layout and minimal PyO3 binding for
   `is_available()`.
-- [ ] Plan pyproject + packaging updates for hatchling + maturin coexistence
+- [ ] Plan pyproject + packaging updates for `uv_build` + maturin coexistence
   and pure-Python fallback wheel build.
 - [ ] Plan CI changes for wheel matrix, Rust setup, and pure-Python wheel job.
 - [ ] Plan documentation updates to `docs/cuprum-design.md` and
@@ -99,6 +103,11 @@ returns a stub value, and the CI matrix includes the requested platforms.
   4.1.5 numbering mismatch.
   Rationale: Keeps changes scoped to requested foundation work and aligns with
   the existing roadmap structure.
+  Date/Author: 2026-01-18 / Codex
+- Decision: Keep `uv_build` as the primary build backend; treat the hatchling
+  mention as outdated per user instruction.
+  Rationale: Matches the current `pyproject.toml` and avoids unnecessary build
+  migration risk.
   Date/Author: 2026-01-18 / Codex
 
 ## Outcomes & Retrospective
@@ -139,11 +148,10 @@ Stage A: discovery and decisions (no code changes).
   `docs/cuprum-design.md` Section 13 to confirm intended architecture and
   ensure the plan aligns with existing decisions.
 - Inspect `pyproject.toml` and existing CI workflows to decide how to support
-  both hatchling and maturin without breaking the current uv workflow.
+  `uv_build` alongside maturin without breaking the current uv workflow.
 - Document the build-system decision in `docs/cuprum-design.md` Section 13 and
-  in this plan's Decision Log (for example: keep hatchling as default backend
-  and use maturin via CI for native wheels, or migrate to hatchling + maturin
-  backend for native builds).
+  in this plan's Decision Log (for example: keep `uv_build` as the default
+  backend and use maturin via CI for native wheels).
 - Decide the Python import surface for the Rust extension (for example,
   `cuprum._rust` or `cuprum._rust_backend`) and document the intended
   `is_available()` signature.
@@ -170,10 +178,10 @@ Stage C: implementation (minimal code and build integration).
 - Implement minimal PyO3 binding exporting `is_available()` returning `True`
   from Rust. Provide Python-side fallback module (if needed) that returns
   `False` when the Rust extension is missing.
-- Update `pyproject.toml` to support hatchling and maturin for optional native
-  builds. Ensure pure-Python builds still succeed without Rust. Document the
-  chosen backend approach (including any required `tool.maturin` or
-  `tool.hatch.build` settings).
+- Update `pyproject.toml` to support `uv_build` plus maturin for optional
+  native builds. Ensure pure-Python builds still succeed without Rust.
+  Document the chosen backend approach (including any required `tool.maturin`
+  settings).
 - Add a Rust-specific `Makefile` under `rust/` using Appendix 2 targets (or
   merge compatible targets into the root Makefile if that is the project
   preference). Ensure `make check-fmt` and `make lint` remain applicable for
@@ -208,7 +216,7 @@ All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
 1) Inspect existing docs and build configuration.
 
     rg -n "build-backend" pyproject.toml
-    rg -n "maturin|hatch" pyproject.toml docs
+    rg -n "maturin|uv_build" pyproject.toml docs
     rg -n "wheel" .github/workflows -g "*.yml"
 
 2) Write tests first.
@@ -291,8 +299,8 @@ Acceptance is satisfied when all of the following are true:
 Expected artifacts after CI configuration:
 
 - New Rust workspace files under `rust/` (Cargo workspace and crate).
-- Updated `pyproject.toml` build-system configuration supporting hatchling and
-  maturin.
+- Updated `pyproject.toml` build-system configuration supporting `uv_build`
+  and maturin.
 - Updated CI workflows or actions to build native and pure-Python wheels.
 - Updated documentation in `docs/cuprum-design.md`, `docs/users-guide.md`, and
   roadmap changes in `docs/roadmap.md`.
@@ -317,11 +325,12 @@ Rust interface:
 
 Dependencies:
 
-- Python build tooling: hatchling (default) and maturin (native builds).
+- Python build tooling: `uv_build` (default) and maturin (native builds).
 - Rust: PyO3, cargo, rustfmt, clippy, and optional `cargo nextest` if used by
   the Rust Makefile.
 - CI: cibuildwheel for wheel builds; Rust setup steps from Appendix 3.
 
 ## Revision note (required when editing an ExecPlan)
 
-Initial draft authored on 2026-01-18. No revisions yet.
+Initial draft authored on 2026-01-18. Revised to lock in `uv_build` as the
+primary backend per user instruction.
