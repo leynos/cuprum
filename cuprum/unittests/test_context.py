@@ -388,27 +388,29 @@ def test_check_allowed_passes_for_allowed_program() -> None:
 # Timeout Validation
 # =============================================================================
 
+_TIMEOUT_VALIDATION_CASES = [
+    pytest.param(None, None, None, id="none-is-valid"),
+    pytest.param(0.0, 0.0, None, id="zero-is-valid"),
+    pytest.param(5.0, 5.0, None, id="positive-float-is-valid"),
+    pytest.param(
+        typ.cast("float", 5),
+        5.0,
+        None,
+        id="positive-int-coerced-to-float",
+    ),
+    pytest.param(-1.0, None, r"timeout must be non-negative.*-1\.0", id="negative"),
+    pytest.param(
+        typ.cast("float", -5),
+        None,
+        r"timeout must be non-negative.*-5\.0",
+        id="negative-int",
+    ),
+]
+
 
 @pytest.mark.parametrize(
     ("timeout_input", "expected_result", "error_pattern"),
-    [
-        pytest.param(None, None, None, id="none-is-valid"),
-        pytest.param(0.0, 0.0, None, id="zero-is-valid"),
-        pytest.param(5.0, 5.0, None, id="positive-float-is-valid"),
-        pytest.param(
-            typ.cast("float", 5),
-            5.0,
-            None,
-            id="positive-int-coerced-to-float",
-        ),
-        pytest.param(-1.0, None, r"timeout must be non-negative.*-1\.0", id="negative"),
-        pytest.param(
-            typ.cast("float", -5),
-            None,
-            r"timeout must be non-negative.*-5\.0",
-            id="negative-int",
-        ),
-    ],
+    _TIMEOUT_VALIDATION_CASES,
 )
 def test_scope_config_timeout_validation(
     timeout_input: float | None,
@@ -428,24 +430,7 @@ def test_scope_config_timeout_validation(
 
 @pytest.mark.parametrize(
     ("timeout_input", "expected_result", "error_pattern"),
-    [
-        pytest.param(None, None, None, id="none-is-valid"),
-        pytest.param(0.0, 0.0, None, id="zero-is-valid"),
-        pytest.param(5.0, 5.0, None, id="positive-float-is-valid"),
-        pytest.param(
-            typ.cast("float", 5),
-            5.0,
-            None,
-            id="positive-int-coerced-to-float",
-        ),
-        pytest.param(-1.0, None, r"timeout must be non-negative.*-1\.0", id="negative"),
-        pytest.param(
-            typ.cast("float", -5),
-            None,
-            r"timeout must be non-negative.*-5\.0",
-            id="negative-int",
-        ),
-    ],
+    _TIMEOUT_VALIDATION_CASES,
 )
 def test_cuprum_context_timeout_validation(
     timeout_input: float | None,
