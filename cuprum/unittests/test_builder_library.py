@@ -93,19 +93,19 @@ def test_git_ref_rejects_invalid_values(value: str) -> None:
 def test_git_status_builder_outputs_flags() -> None:
     """git_status builds the expected argv."""
     cmd = git_status(short=True, branch=True)
-    assert cmd.argv == ("status", "--short", "--branch")
+    assert cmd.argv == ("status", "--short", "--branch"), "git_status argv mismatch"
 
 
 def test_git_checkout_builder_outputs_args() -> None:
     """git_checkout builds checkout argv with branch creation."""
     cmd = git_checkout("feature/test", create_branch=True)
-    assert cmd.argv == ("checkout", "-b", "feature/test")
+    assert cmd.argv == ("checkout", "-b", "feature/test"), "git_checkout argv mismatch"
 
 
 def test_git_checkout_builder_force_branch_creation() -> None:
     """git_checkout uses -B when forcing branch creation."""
     cmd = git_checkout("feature/test", create_branch=True, force=True)
-    assert cmd.argv == ("checkout", "-B", "feature/test")
+    assert cmd.argv == ("checkout", "-B", "feature/test"), "git_checkout argv mismatch"
 
 
 def test_git_checkout_rejects_conflicting_flags() -> None:
@@ -117,7 +117,7 @@ def test_git_checkout_rejects_conflicting_flags() -> None:
 def test_git_rev_parse_builder_outputs_args() -> None:
     """git_rev_parse builds the expected argv."""
     cmd = git_rev_parse("main")
-    assert cmd.argv == ("rev-parse", "main")
+    assert cmd.argv == ("rev-parse", "main"), "git_rev_parse argv mismatch"
 
 
 def test_rsync_builder_outputs_args(tmp_path: Path) -> None:
@@ -143,7 +143,7 @@ def test_rsync_builder_outputs_args(tmp_path: Path) -> None:
         "--compress",
         source.as_posix(),
         destination.as_posix(),
-    )
+    ), "rsync_sync argv mismatch"
 
 
 def test_tar_create_builder_outputs_args(tmp_path: Path) -> None:
@@ -158,7 +158,7 @@ def test_tar_create_builder_outputs_args(tmp_path: Path) -> None:
         archive.as_posix(),
         sources[0].as_posix(),
         sources[1].as_posix(),
-    )
+    ), "tar_create argv mismatch"
 
 
 def test_tar_create_rejects_multiple_compression(tmp_path: Path) -> None:
@@ -184,9 +184,10 @@ def test_tar_create_rejects_single_path_source(tmp_path: Path) -> None:
     """tar_create rejects a single path provided as sources."""
     archive = tmp_path / "archive.tar"
     source = tmp_path / "source"
-    sequence = typ.cast("typ.Sequence[str | Path]", source)
-    with pytest.raises(TypeError, match="tar_create requires a sequence of"):
-        tar_create(archive, sequence)
+    for value in (source, source.as_posix()):
+        sequence = typ.cast("typ.Sequence[str | Path]", value)
+        with pytest.raises(TypeError, match="tar_create requires a sequence of"):
+            tar_create(archive, sequence)
 
 
 def test_tar_extract_builder_outputs_args(tmp_path: Path) -> None:
@@ -200,4 +201,4 @@ def test_tar_extract_builder_outputs_args(tmp_path: Path) -> None:
         archive.as_posix(),
         "-C",
         destination.as_posix(),
-    )
+    ), "tar_extract argv mismatch"

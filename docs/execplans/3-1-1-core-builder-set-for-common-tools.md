@@ -233,8 +233,8 @@ make nixie 2>&1 | tee /tmp/make-nixie.log
 
 All steps are additive and safe to rerun. If a test or lint step fails, fix the
 underlying issue and rerun the same command. If a change must be reverted, use
-`git checkout -- <path>` for the specific files you changed, then reapply the
-step carefully.
+`git checkout -- <path>` for the specific files that were changed, then reapply
+the step carefully.
 
 ## Artifacts and notes
 
