@@ -243,10 +243,11 @@ All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
 
     ```bash
     uv build --wheel --out-dir dist
-    maturin build --release --compatibility pypi --out wheelhouse \
+    maturin build --release --out wheelhouse \
       --manifest-path rust/cuprum-rust/Cargo.toml
     # For Linux manylinux builds:
-    maturin build --release --compatibility manylinux_2_28 --out wheelhouse \
+    maturin build --release --manylinux 2_28 \
+      --interpreter /opt/python/cp312-cp312/bin/python --out wheelhouse \
       --manifest-path rust/cuprum-rust/Cargo.toml
     ```
 
@@ -384,4 +385,5 @@ recorded approval to begin implementation. Recorded execution progress and the
 module naming decision for the Rust availability probe. Updated the plan to
 remove cibuildwheel, document direct maturin builds, and add the uv publish
 release flow. Marked the plan complete after validation steps succeeded and
-updated the Linux manylinux compatibility flag in the documented build commands.
+updated the Linux manylinux command to use an explicit interpreter and
+`--manylinux 2_28` instead of the invalid `--compatibility pypi` flag.

@@ -25,13 +25,13 @@ jobs:
         include:
           - os: ubuntu-latest
             arch: x86_64
-            target: x86_64-unknown-linux-gnu
-            manylinux: manylinux_2_28
+            target: ""
+            manylinux: 2_28
           # aarch64 wheels are built via QEMU emulation under maturin-action.
           - os: ubuntu-latest
             arch: aarch64
             target: aarch64-unknown-linux-gnu
-            manylinux: manylinux_2_28
+            manylinux: 2_28
             emulation: qemu
           - os: macos-13
             arch: x86_64
@@ -53,7 +53,10 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           command: build
-          args: --release --compatibility ${{ matrix.manylinux }} --out wheelhouse --manifest-path rust/cuprum-rust/Cargo.toml
+          args: >-
+            --release --out wheelhouse --manifest-path rust/cuprum-rust/Cargo.toml
+            --interpreter
+            /opt/python/cp${{ replace(inputs['python-version'], '.', '') }}-cp${{ replace(inputs['python-version'], '.', '') }}/bin/python
       - name: Build native wheels (macOS/Windows)
         if: "!startsWith(matrix.os, 'ubuntu')"
         uses: ./.github/actions/build-wheels

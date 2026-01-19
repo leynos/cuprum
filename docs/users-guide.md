@@ -922,17 +922,21 @@ uv build --wheel --out-dir dist
 - Native wheel (per platform):
 
 ```bash
-maturin build --release --compatibility pypi --out wheelhouse \
+maturin build --release --out wheelhouse \
   --manifest-path rust/cuprum-rust/Cargo.toml
 ```
 
 For Linux wheels, the native build runs inside a manylinux-compatible container
-and uses a matching compatibility tag:
+and uses a matching compatibility tag plus an explicit interpreter:
 
 ```bash
-maturin build --release --compatibility manylinux_2_28 --out wheelhouse \
+maturin build --release --manylinux 2_28 \
+  --interpreter /opt/python/cp312-cp312/bin/python --out wheelhouse \
   --manifest-path rust/cuprum-rust/Cargo.toml
 ```
+
+The CI workflow supplies `manylinux 2_28` via the maturin action configuration
+to ensure the resulting wheel tags are manylinux-compatible.
 
 ### Verification procedure
 

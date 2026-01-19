@@ -33,7 +33,7 @@ runs:
       shell: bash
       run: |
         set -eu
-        args=(--release --compatibility pypi --out "${{ inputs.wheelhouse }}" \\
+        args=(--release --out "${{ inputs.wheelhouse }}" \\
           --manifest-path rust/cuprum-rust/Cargo.toml)
         if [ -n "${{ inputs.target }}" ]; then
           args+=(--target "${{ inputs.target }}")
