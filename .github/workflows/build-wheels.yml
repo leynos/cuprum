@@ -44,6 +44,16 @@ jobs:
             target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - name: Resolve manylinux interpreter
+        if: startsWith(matrix.os, 'ubuntu')
+        id: manylinux-python
+        shell: bash
+        run: |
+          set -eu
+          python_version="${{ inputs.python-version }}"
+          version_digits="${python_version//./}"
+          interpreter="/opt/python/cp${version_digits}-cp${version_digits}/bin/python"
+          echo "path=${interpreter}" >> "${GITHUB_OUTPUT}"
       - name: Build manylinux wheels (Linux)
         # Maturin action builds inside a manylinux container for PyPI tags.
         if: startsWith(matrix.os, 'ubuntu')
@@ -55,8 +65,7 @@ jobs:
           command: build
           args: >-
             --release --out wheelhouse --manifest-path rust/cuprum-rust/Cargo.toml
-            --interpreter
-            /opt/python/cp${{ replace(inputs['python-version'], '.', '') }}-cp${{ replace(inputs['python-version'], '.', '') }}/bin/python
+            --interpreter ${{ steps.manylinux-python.outputs.path }}
       - name: Build native wheels (macOS/Windows)
         if: "!startsWith(matrix.os, 'ubuntu')"
         uses: ./.github/actions/build-wheels
