@@ -78,3 +78,8 @@ jobs:
             --format "cobertura" \
             --metric "line-coverage" \
             coverage.xml
+
+  build-wheels:
+    uses: ./.github/workflows/build-wheels.yml
+    with:
+      python-version: '3.13'

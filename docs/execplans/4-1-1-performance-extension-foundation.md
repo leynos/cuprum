@@ -4,7 +4,7 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`, and
 `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
-Status: DRAFT
+Status: COMPLETE
 
 PLANS.md is not present in this repository.
 
@@ -43,8 +43,7 @@ returns a stub value, and the CI matrix includes the requested platforms.
 - Interfaces: if a public Python API signature must change, stop and
   escalate.
 - Dependencies: if additional external dependencies beyond `uv_build`,
-  maturin, PyO3, cibuildwheel, and Rust tooling are required, stop and
-  escalate.
+  maturin, PyO3, cibuildwheel, and Rust tooling are required, stop and escalate.
 - CI: if adding a new workflow or reworking more than one existing workflow is
   required, stop and escalate.
 - Tests: if tests still fail after two full fix attempts, stop and escalate.
@@ -56,41 +55,38 @@ returns a stub value, and the CI matrix includes the requested platforms.
 
 - Risk: The plan must keep `uv_build` as the primary backend while adding
   maturin support for native wheels, which may require careful `pyproject.toml`
-  configuration.
-  Severity: medium
-  Likelihood: medium
-  Mitigation: document how `uv_build` remains the default and ensure pure
-  Python builds work end-to-end before adding native-wheel steps.
+  configuration. Severity: medium Likelihood: medium Mitigation: document how
+  `uv_build` remains the default and ensure pure Python builds work end-to-end
+  before adding native-wheel steps.
 
 - Risk: CI wheel matrix and Rust toolchain setup might not be compatible with
-  the current GitHub Actions environment or uv-based build.
-  Severity: medium
-  Likelihood: medium
-  Mitigation: follow existing `build-wheels` action patterns, add Rust setup
-  steps from Appendix 3, and validate locally where possible.
+  the current GitHub Actions environment or uv-based build. Severity: medium
+  Likelihood: medium Mitigation: follow existing `build-wheels` action
+  patterns, add Rust setup steps from Appendix 3, and validate locally where
+  possible.
 
 - Risk: `docs/cuprum-design.md` already contains Section 13, so the requested
-  update may be a revision rather than an addition.
-  Severity: low
-  Likelihood: high
-  Mitigation: update Section 13 to explicitly cover architecture, API boundary,
-  fallback strategy, and performance characteristics, noting changes in the
-  Decision Log.
+  update may be a revision rather than an addition. Severity: low Likelihood:
+  high Mitigation: update Section 13 to explicitly cover architecture, API
+  boundary, fallback strategy, and performance characteristics, noting changes
+  in the Decision Log.
 
 ## Progress
 
-- [ ] (2026-01-18 00:00Z) Review build system (`pyproject.toml`), CI workflows,
-  and existing Rust ADR/design documentation.
-- [ ] Draft test plan with unit tests (pytest) and behavioural tests
-  (pytest-bdd) for the Rust extension availability stub and import path.
-- [ ] Define Rust workspace layout and minimal PyO3 binding for
-  `is_available()`.
-- [ ] Plan pyproject + packaging updates for `uv_build` + maturin coexistence
-  and pure-Python fallback wheel build.
-- [ ] Plan CI changes for wheel matrix, Rust setup, and pure-Python wheel job.
-- [ ] Plan documentation updates to `docs/cuprum-design.md` and
-  `docs/users-guide.md`, and update `docs/roadmap.md` entries to done.
-- [ ] Capture validation steps, acceptance criteria, and recovery guidance.
+- [x] (2026-01-19 00:00Z) Plan approved and implementation started.
+- [x] (2026-01-19 00:10Z) Reviewed `pyproject.toml`, CI workflows, and Rust
+  ADR/design documentation.
+- [x] (2026-01-19 00:20Z) Drafted tests for the Rust extension availability
+  probe (unit + behavioural).
+- [x] (2026-01-19 00:30Z) Defined Rust workspace layout and implemented PyO3
+  `is_available()` binding plus Python fallback.
+- [x] (2026-01-19 00:40Z) Planned and applied `pyproject.toml` updates for
+  `uv_build` plus maturin support.
+- [x] (2026-01-19 00:50Z) Planned and applied CI changes for wheel matrix,
+  Rust setup, and pure-Python wheel verification.
+- [x] (2026-01-19 01:00Z) Updated documentation and roadmap entries.
+- [x] (2026-01-19 01:20Z) Ran formatting, linting, type checking, tests, and
+  Markdown validation per acceptance criteria.
 
 ## Surprises & Discoveries
 
@@ -100,19 +96,27 @@ returns a stub value, and the CI matrix includes the requested platforms.
 
 - Decision: Treat this work as Phase 4.1 build-system integration plus Phase
   4.5 documentation updates, aligning to the roadmap while noting the prompt's
-  4.1.5 numbering mismatch.
-  Rationale: Keeps changes scoped to requested foundation work and aligns with
-  the existing roadmap structure.
-  Date/Author: 2026-01-18 / Codex
+  4.1.5 numbering mismatch. Rationale: Keeps changes scoped to requested
+  foundation work and aligns with the existing roadmap structure. Date/Author:
+  2026-01-18 / Codex
 - Decision: Keep `uv_build` as the primary build backend; treat the hatchling
-  mention as outdated per user instruction.
-  Rationale: Matches the current `pyproject.toml` and avoids unnecessary build
-  migration risk.
-  Date/Author: 2026-01-18 / Codex
+  mention as outdated per user instruction. Rationale: Matches the current
+  `pyproject.toml` and avoids unnecessary build migration risk. Date/Author:
+  2026-01-18 / Codex
+- Decision: Expose the native module as `cuprum._rust_backend_native` with a
+  Python shim `cuprum._rust_backend` for safe availability probing. Rationale:
+  Avoids name collisions between the Python shim and the compiled extension
+  while keeping the import path stable for future backend dispatch.
+  Date/Author: 2026-01-19 / Codex
 
 ## Outcomes & Retrospective
 
-- Pending; this plan is not yet executed.
+The optional Rust extension foundation is now in place. Native wheel builds use
+maturin under cibuildwheel, pure Python wheels continue to use `uv_build`, and
+the Rust availability probe is exercised by new unit and behavioural tests.
+Documentation updates capture the architecture, API boundary, fallback
+strategy, and build prerequisites. CI now verifies that native and pure Python
+wheels install in the same environment in sequence.
 
 ## Context and Orientation
 
@@ -179,9 +183,8 @@ Stage C: implementation (minimal code and build integration).
   from Rust. Provide Python-side fallback module (if needed) that returns
   `False` when the Rust extension is missing.
 - Update `pyproject.toml` to support `uv_build` plus maturin for optional
-  native builds. Ensure pure-Python builds still succeed without Rust.
-  Document the chosen backend approach (including any required `tool.maturin`
-  settings).
+  native builds. Ensure pure-Python builds still succeed without Rust. Document
+  the chosen backend approach (including any required `tool.maturin` settings).
 - Add a Rust-specific `Makefile` under `rust/` using Appendix 2 targets (or
   merge compatible targets into the root Makefile if that is the project
   preference). Ensure `make check-fmt` and `make lint` remain applicable for
@@ -215,30 +218,41 @@ All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
 
 1) Inspect existing docs and build configuration.
 
+    ```bash
     rg -n "build-backend" pyproject.toml
     rg -n "maturin|uv_build" pyproject.toml docs
     rg -n "wheel" .github/workflows -g "*.yml"
+    ```
 
 2) Write tests first.
 
+    ```bash
     set -o pipefail
-    uv run pytest cuprum/unittests/test_rust_extension.py | tee /tmp/test-rust-unit.txt
+    uv run pytest cuprum/unittests/test_rust_extension.py \
+      | tee /tmp/test-rust-unit.txt
 
     set -o pipefail
-    uv run pytest tests/behaviour/test_rust_extension.py tests/features/rust_extension.feature \
+    uv run pytest tests/behaviour/test_rust_extension_behaviour.py \
+      tests/features/rust_extension.feature \
       | tee /tmp/test-rust-behaviour.txt
+    ```
 
 3) Implement Rust scaffold and Python fallback, then re-run the new tests.
 
+    ```bash
     set -o pipefail
-    uv run pytest cuprum/unittests/test_rust_extension.py | tee /tmp/test-rust-unit.txt
+    uv run pytest cuprum/unittests/test_rust_extension.py \
+      | tee /tmp/test-rust-unit.txt
 
     set -o pipefail
-    uv run pytest tests/behaviour/test_rust_extension.py tests/features/rust_extension.feature \
+    uv run pytest tests/behaviour/test_rust_extension_behaviour.py \
+      tests/features/rust_extension.feature \
       | tee /tmp/test-rust-behaviour.txt
+    ```
 
 4) Run formatting, linting, type checking, and full test suite.
 
+    ```bash
     set -o pipefail
     make check-fmt | tee /tmp/make-check-fmt.txt
 
@@ -250,15 +264,18 @@ All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
 
     set -o pipefail
     make test | tee /tmp/make-test.txt
+    ```
 
 5) Run Markdown linting and Mermaid validation after doc changes.
 
+    ```bash
     set -o pipefail
     MDLINT=/root/.bun/bin/markdownlint-cli2 make markdownlint \
       | tee /tmp/make-markdownlint.txt
 
     set -o pipefail
     make nixie | tee /tmp/make-nixie.txt
+    ```
 
 ## Validation and Acceptance
 
@@ -312,7 +329,7 @@ Python interface:
 - New internal module path for the Rust extension, such as
   `cuprum._rust_backend` with a function:
 
-    def is_available() -> bool: ...
+    def is_available() -> bool: …
 
 - Optional Python fallback module (same import path) returning `False` when the
   Rust extension is missing.
@@ -333,4 +350,7 @@ Dependencies:
 ## Revision note (required when editing an ExecPlan)
 
 Initial draft authored on 2026-01-18. Revised to lock in `uv_build` as the
-primary backend per user instruction.
+primary backend per user instruction. Updated status to IN PROGRESS and
+recorded approval to begin implementation. Recorded execution progress and the
+module naming decision for the Rust availability probe. Marked the plan
+complete after validation steps succeeded.

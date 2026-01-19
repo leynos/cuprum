@@ -14,24 +14,14 @@ permissions:
 
 
 jobs:
-
-  pure-wheel:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-        with:
-          fetch-depth: 0
-      - uses: ./.github/actions/pure-python-wheel
-        with:
-          python-version: '3.13'
-          artifact-name: wheels-pure
+  build-wheels:
+    uses: ./.github/workflows/build-wheels.yml
+    with:
+      python-version: '3.13'
 
   release:
-    # This project has no C or Rust extensions, so cross-platform
-    # builds are unnecessary. Only the pure Python wheel is published.
     needs:
-      - pure-wheel
+      - build-wheels
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4

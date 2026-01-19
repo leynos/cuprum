@@ -875,3 +875,33 @@ The `ConcurrentResult` dataclass provides:
 - `ok`: `True` when all commands succeeded.
 - `first_failure`: The first failed `CommandResult`, or `None` if all
   succeeded.
+
+## Performance extensions (optional Rust)
+
+Cuprum ships as a pure Python wheel by default. Some platforms also provide
+native wheels that bundle an optional Rust extension used by future stream
+optimisations. The Rust extension is not required to use Cuprum and does not
+change behaviour for pure Python installations.
+
+### Checking Rust availability
+
+You can check whether the optional extension is available in the current
+environment using the internal probe:
+
+```python
+from cuprum import _rust_backend
+
+if _rust_backend.is_available():
+    print("Rust extension is available")
+else:
+    print("Rust extension is not installed")
+```
+
+The probe returns `False` on pure Python installations and does not raise when
+native wheels are missing.
+
+### Building from source
+
+Contributors who want to build native wheels need a Rust toolchain (rustc and
+cargo, version 1.70 or newer) and maturin. Pure Python wheels continue to build
+using `uv_build` without any Rust dependencies.

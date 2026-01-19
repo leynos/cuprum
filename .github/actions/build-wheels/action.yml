@@ -16,6 +16,14 @@ runs:
     - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
       with:
         fetch-depth: 0
+    - name: Setup Rust
+      uses: leynos/shared-actions/.github/actions/setup-rust@aebb3f5b831102e2a10ef909c83d7d50ea86c332
+    - name: Install Whitaker
+      shell: bash
+      run: |
+        cargo binstall whitaker-installer
+        rustup toolchain install --component rustc-dev,llvm-tools-preview,rust-src nightly-2025-09-18
+        whitaker-installer --experimental
     - name: Set up Python
       uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
       with:
@@ -25,10 +33,16 @@ runs:
     - name: Build wheels
       shell: bash
       run: |
-        uvx --with 'cibuildwheel>=2.16.0,<4.0.0' cibuildwheel --output-dir wheelhouse
+        uvx --with 'cibuildwheel>=2.16.0,<4.0.0' --with 'maturin>=1.5,<2.0' \
+          cibuildwheel --output-dir wheelhouse
       env:
         CIBW_ARCHS: ${{ inputs.cibw-arch }}
+        CIBW_BUILD_FRONTEND: maturin
         CIBW_SKIP: 'pp*'
+        CIBW_ENVIRONMENT: >-
+          MATURIN_PYTHON_SOURCE=.
+          MATURIN_MANIFEST_PATH=rust/cuprum-rust/Cargo.toml
+          MATURIN_MODULE_NAME=cuprum._rust_backend_native
     - name: Upload wheel artifact
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
