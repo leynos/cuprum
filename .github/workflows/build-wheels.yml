@@ -53,7 +53,7 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           command: build
-          args: --release --compatibility pypi --out wheelhouse --manifest-path rust/cuprum-rust/Cargo.toml
+          args: --release --compatibility ${{ matrix.manylinux }} --out wheelhouse --manifest-path rust/cuprum-rust/Cargo.toml
       - name: Build native wheels (macOS/Windows)
         if: "!startsWith(matrix.os, 'ubuntu')"
         uses: ./.github/actions/build-wheels

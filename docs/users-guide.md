@@ -927,7 +927,12 @@ maturin build --release --compatibility pypi --out wheelhouse \
 ```
 
 For Linux wheels, the native build runs inside a manylinux-compatible container
-to ensure the resulting wheels meet PyPI tagging requirements.
+and uses a matching compatibility tag:
+
+```bash
+maturin build --release --compatibility manylinux_2_28 --out wheelhouse \
+  --manifest-path rust/cuprum-rust/Cargo.toml
+```
 
 ### Verification procedure
 

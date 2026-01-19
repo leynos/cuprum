@@ -92,6 +92,8 @@ the requested platforms.
   Markdown validation per acceptance criteria.
 - [x] (2026-01-19 02:10Z) Removed cibuildwheel from workflows and rebuilt the
   wheel pipeline using `uv build` + `maturin build` with metadata checks.
+- [x] (2026-01-19 02:30Z) Adjusted manylinux compatibility flags and updated
+  documentation to match the Linux build command.
 
 ## Surprises & Discoveries
 
@@ -243,6 +245,9 @@ All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
     uv build --wheel --out-dir dist
     maturin build --release --compatibility pypi --out wheelhouse \
       --manifest-path rust/cuprum-rust/Cargo.toml
+    # For Linux manylinux builds:
+    maturin build --release --compatibility manylinux_2_28 --out wheelhouse \
+      --manifest-path rust/cuprum-rust/Cargo.toml
     ```
 
 3) Write tests first.
@@ -378,4 +383,5 @@ primary backend per user instruction. Updated status to IN PROGRESS and
 recorded approval to begin implementation. Recorded execution progress and the
 module naming decision for the Rust availability probe. Updated the plan to
 remove cibuildwheel, document direct maturin builds, and add the uv publish
-release flow. Marked the plan complete after validation steps succeeded.
+release flow. Marked the plan complete after validation steps succeeded and
+updated the Linux manylinux compatibility flag in the documented build commands.
