@@ -1746,9 +1746,11 @@ wheels:
 - Windows: x86_64 and arm64.
 
 A pure Python wheel is always published alongside native wheels to ensure
-fallback availability on platforms without native wheel support. Pure Python
-wheels are built with `uv_build`, while native wheels are built with maturin
-under cibuildwheel orchestration.
+fallback availability on platforms without native wheel support. Cuprum does
+not use cibuildwheel; native wheels are built with `maturin build` in
+manylinux-compatible environments, while pure Python wheels are built with
+`uv_build`. Release workflows collect all wheels into a single directory and
+publish them in one `uv publish` command to keep metadata aligned.
 
 Contributors building from source require a Rust toolchain (rustc 1.70+, cargo)
 in addition to Python. The `maturin develop` command builds and installs the

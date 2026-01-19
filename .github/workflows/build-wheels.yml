@@ -8,39 +8,7 @@ on:
         required: true
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            arch: x86_64
-            cibw_arch: x86_64
-          - os: ubuntu-latest
-            arch: aarch64
-            cibw_arch: aarch64
-          - os: windows-latest
-            arch: x86_64
-            cibw_arch: AMD64
-          - os: windows-latest
-            arch: aarch64
-            cibw_arch: ARM64
-          - os: macos-latest
-            arch: x86_64
-            cibw_arch: x86_64
-          - os: macos-latest
-            arch: aarch64
-            cibw_arch: arm64
-    steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-      - uses: ./.github/actions/build-wheels
-        with:
-          python-version: ${{ inputs['python-version'] }}
-          cibw-arch: ${{ matrix.cibw_arch }}
-          artifact-name: wheels-${{ matrix.os }}-${{ matrix.arch }}
-
-  pure-python:
+  build-pure-wheel:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -49,11 +17,64 @@ jobs:
           python-version: ${{ inputs['python-version'] }}
           artifact-name: wheels-pure
 
+  build-native-wheels:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu
+            manylinux: manylinux_2_28
+          # aarch64 wheels are built via QEMU emulation under maturin-action.
+          - os: ubuntu-latest
+            arch: aarch64
+            target: aarch64-unknown-linux-gnu
+            manylinux: manylinux_2_28
+            emulation: qemu
+          - os: macos-13
+            arch: x86_64
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            arch: arm64
+            target: aarch64-apple-darwin
+          - os: windows-2022
+            arch: x86_64
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - name: Build manylinux wheels (Linux)
+        # Maturin action builds inside a manylinux container for PyPI tags.
+        if: startsWith(matrix.os, 'ubuntu')
+        uses: messense/maturin-action@v1
+        with:
+          maturin-version: '1.6.0'
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          command: build
+          args: --release --compatibility pypi --out wheelhouse --manifest-path rust/cuprum-rust/Cargo.toml
+      - name: Build native wheels (macOS/Windows)
+        if: "!startsWith(matrix.os, 'ubuntu')"
+        uses: ./.github/actions/build-wheels
+        with:
+          python-version: ${{ inputs['python-version'] }}
+          target: ${{ matrix.target }}
+          artifact-name: wheels-native-${{ matrix.os }}-${{ matrix.arch }}
+          wheelhouse: wheelhouse
+      - name: Upload wheel artifact (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wheels-native-${{ matrix.os }}-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+        # aarch64 wheels are built via QEMU emulation under maturin-action.
+
   verify-wheel-install:
     runs-on: ubuntu-latest
     needs:
-      - build
-      - pure-python
+      - build-pure-wheel
+      - build-native-wheels
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
       - name: Set up Python
@@ -72,12 +93,56 @@ jobs:
           source .venv/bin/activate
           python -m pip install --upgrade pip
           python -m pip install dist/wheels-pure/*.whl
-          python -c "from cuprum import _rust_backend; print(_rust_backend.is_available())"
+          python - <<'PY'
+          from cuprum import _rust_backend
+          assert _rust_backend.is_available() is False
+          PY
+          python - <<'PY'
+          import importlib.metadata as im
+          import json
+
+          meta = im.metadata("cuprum")
+          snapshot = {
+              "name": meta.get("Name"),
+              "version": meta.get("Version"),
+              "requires_python": meta.get("Requires-Python"),
+              "requires_dist": sorted(meta.get_all("Requires-Dist") or []),
+              "classifiers": sorted(meta.get_all("Classifier") or []),
+          }
+          with open("/tmp/cuprum-metadata.json", "w", encoding="utf-8") as handle:
+              json.dump(snapshot, handle, indent=2, sort_keys=True)
+          PY
           PYTAG=$(python - <<'PY'
           import sys
           print(f"cp{sys.version_info.major}{sys.version_info.minor}")
           PY
           )
           python -m pip install --force-reinstall \
-            dist/wheels-ubuntu-latest-x86_64/*${PYTAG}*.whl
-          python -c "from cuprum import _rust_backend; print(_rust_backend.is_available())"
+            dist/wheels-native-ubuntu-latest-x86_64/*${PYTAG}*.whl
+          python - <<'PY'
+          from cuprum import _rust_backend
+          assert _rust_backend.is_available() is True
+          PY
+          python - <<'PY'
+          import importlib.metadata as im
+          import json
+
+          with open("/tmp/cuprum-metadata.json", "r", encoding="utf-8") as handle:
+              baseline = json.load(handle)
+
+          meta = im.metadata("cuprum")
+          current = {
+              "name": meta.get("Name"),
+              "version": meta.get("Version"),
+              "requires_python": meta.get("Requires-Python"),
+              "requires_dist": sorted(meta.get_all("Requires-Dist") or []),
+              "classifiers": sorted(meta.get_all("Classifier") or []),
+          }
+
+          if baseline != current:
+              raise SystemExit(
+                  "Metadata mismatch between pure and native wheels:\n"
+                  f"pure={baseline}\n"
+                  f"native={current}"
+              )
+          PY

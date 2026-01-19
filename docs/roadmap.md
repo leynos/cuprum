@@ -124,8 +124,7 @@ scenarios whilst maintaining pure Python as a first-class pathway.
   minimal PyO3 bindings exposing `is_available()` stub and verify import from
   Python.
 - [x] 4.1.3. Extend the CI matrix to build native wheels for Linux (x86_64,
-  aarch64), macOS (x86_64, arm64), and Windows (x86_64, arm64) using maturin
-  and cibuildwheel.
+  aarch64), macOS (x86_64, arm64), and Windows (x86_64, arm64) using maturin.
 - [x] 4.1.4. Add a pure Python fallback wheel job that excludes native code;
   verify both wheel types install correctly and coexist in the same environment.
 

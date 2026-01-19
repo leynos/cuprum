@@ -12,12 +12,14 @@ PLANS.md is not present in this repository.
 
 Deliver the build-system and documentation foundation for optional Rust-backed
 stream operations. After this change, contributors can build native wheels with
-maturin and cibuildwheel, still publish a pure-Python wheel, and Python can
-import a minimal Rust extension that exposes `is_available()` to prove the
-binding works. Users can read updated documentation explaining the Rust
-architecture, API boundary, fallback strategy, and performance traits. Success
-is visible when both wheel types build and install, the Rust module imports and
-returns a stub value, and the CI matrix includes the requested platforms.
+maturin directly, build the pure-Python wheel with `uv_build`, and publish the
+full wheel set with `uv publish` in a single command. Python can import a
+minimal Rust extension that exposes `is_available()` to prove the binding
+works. Users can read updated documentation explaining the Rust architecture,
+API boundary, fallback strategy, and performance traits. Success is visible
+when both wheel types build and install, the Rust module imports and returns a
+stub value, metadata matches across wheel families, and the CI matrix includes
+the requested platforms.
 
 ## Constraints
 
@@ -33,6 +35,8 @@ returns a stub value, and the CI matrix includes the requested platforms.
 - Do not introduce public API changes beyond the optional Rust extension
   import surface without explicit approval.
 - Rust lints in Appendix 1 must be enforced in the new Cargo workspace.
+- Cuprum does not use cibuildwheel; native wheels must be built with maturin
+  directly.
 - CI must continue to pass on existing workflows; new jobs must not break
   existing ones.
 
@@ -43,7 +47,7 @@ returns a stub value, and the CI matrix includes the requested platforms.
 - Interfaces: if a public Python API signature must change, stop and
   escalate.
 - Dependencies: if additional external dependencies beyond `uv_build`,
-  maturin, PyO3, cibuildwheel, and Rust tooling are required, stop and escalate.
+  maturin, PyO3, and Rust tooling are required, stop and escalate.
 - CI: if adding a new workflow or reworking more than one existing workflow is
   required, stop and escalate.
 - Tests: if tests still fail after two full fix attempts, stop and escalate.
@@ -61,9 +65,8 @@ returns a stub value, and the CI matrix includes the requested platforms.
 
 - Risk: CI wheel matrix and Rust toolchain setup might not be compatible with
   the current GitHub Actions environment or uv-based build. Severity: medium
-  Likelihood: medium Mitigation: follow existing `build-wheels` action
-  patterns, add Rust setup steps from Appendix 3, and validate locally where
-  possible.
+  Likelihood: medium Mitigation: follow the updated maturin build workflow,
+  keep manylinux containers explicit, and validate locally where possible.
 
 - Risk: `docs/cuprum-design.md` already contains Section 13, so the requested
   update may be a revision rather than an addition. Severity: low Likelihood:
@@ -87,6 +90,8 @@ returns a stub value, and the CI matrix includes the requested platforms.
 - [x] (2026-01-19 01:00Z) Updated documentation and roadmap entries.
 - [x] (2026-01-19 01:20Z) Ran formatting, linting, type checking, tests, and
   Markdown validation per acceptance criteria.
+- [x] (2026-01-19 02:10Z) Removed cibuildwheel from workflows and rebuilt the
+  wheel pipeline using `uv build` + `maturin build` with metadata checks.
 
 ## Surprises & Discoveries
 
@@ -108,15 +113,21 @@ returns a stub value, and the CI matrix includes the requested platforms.
   Avoids name collisions between the Python shim and the compiled extension
   while keeping the import path stable for future backend dispatch.
   Date/Author: 2026-01-19 / Codex
+- Decision: Replace cibuildwheel with direct maturin builds and enforce a
+  two-route wheel strategy (`uv build` + `maturin build`) with metadata drift
+  checks. Rationale: Aligns CI and release workflows with the updated policy
+  and makes the manylinux strategy explicit. Date/Author: 2026-01-19 / Codex
 
 ## Outcomes & Retrospective
 
 The optional Rust extension foundation is now in place. Native wheel builds use
-maturin under cibuildwheel, pure Python wheels continue to use `uv_build`, and
+`maturin build` directly, pure Python wheels continue to use `uv_build`, and
 the Rust availability probe is exercised by new unit and behavioural tests.
 Documentation updates capture the architecture, API boundary, fallback
 strategy, and build prerequisites. CI now verifies that native and pure Python
-wheels install in the same environment in sequence.
+wheels install in the same environment in sequence and validates metadata
+consistency across wheel families. Release automation publishes the full wheel
+set with `uv publish` in a single step.
 
 ## Context and Orientation
 
@@ -134,7 +145,7 @@ Relevant files and directories:
   Rust extension will complement.
 - `.github/workflows/build-wheels.yml` and
   `.github/actions/build-wheels/action.yml` define the current wheel build
-  pipeline via cibuildwheel.
+  pipeline using direct maturin builds.
 - `.github/workflows/ci.yml` is the primary lint/test workflow.
 
 Terminology:
@@ -190,11 +201,13 @@ Stage C: implementation (minimal code and build integration).
   preference). Ensure `make check-fmt` and `make lint` remain applicable for
   Rust and Python.
 - Extend CI wheel builds:
-  - Add Rust setup steps from Appendix 3 in the wheel build action.
-  - Ensure cibuildwheel uses maturin for native wheels on Linux, macOS, and
-    Windows for x86_64 and arm64/aarch64.
-  - Add a pure-Python wheel job (or mode) that excludes native builds, and
-    verify both wheel types can be installed in the same environment.
+  - Add stable Rust setup and a pinned maturin version in the wheel build
+    action.
+  - Build native wheels with `maturin build` directly; use a manylinux
+    container on Linux and document the aarch64 strategy explicitly.
+  - Add a pure-Python wheel job that excludes native builds, and verify both
+    wheel types can be installed in the same environment with metadata drift
+    checks.
 
 Stage D: documentation, roadmap, and validation.
 
@@ -224,7 +237,15 @@ All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
     rg -n "wheel" .github/workflows -g "*.yml"
     ```
 
-2) Write tests first.
+2) Build wheels using the CI commands.
+
+    ```bash
+    uv build --wheel --out-dir dist
+    maturin build --release --compatibility pypi --out wheelhouse \
+      --manifest-path rust/cuprum-rust/Cargo.toml
+    ```
+
+3) Write tests first.
 
     ```bash
     set -o pipefail
@@ -237,7 +258,7 @@ All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
       | tee /tmp/test-rust-behaviour.txt
     ```
 
-3) Implement Rust scaffold and Python fallback, then re-run the new tests.
+4) Implement Rust scaffold and Python fallback, then re-run the new tests.
 
     ```bash
     set -o pipefail
@@ -250,7 +271,7 @@ All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
       | tee /tmp/test-rust-behaviour.txt
     ```
 
-4) Run formatting, linting, type checking, and full test suite.
+5) Run formatting, linting, type checking, and full test suite.
 
     ```bash
     set -o pipefail
@@ -266,7 +287,7 @@ All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
     make test | tee /tmp/make-test.txt
     ```
 
-5) Run Markdown linting and Mermaid validation after doc changes.
+6) Run Markdown linting and Mermaid validation after doc changes.
 
     ```bash
     set -o pipefail
@@ -288,9 +309,12 @@ Acceptance is satisfied when all of the following are true:
 - When the Rust extension is absent, the Python fallback is available and
   `is_available()` returns `False` without breaking existing behaviour.
 - CI wheel matrix includes Linux (x86_64, aarch64), macOS (x86_64, arm64), and
-  Windows (x86_64, arm64) native wheel builds using maturin and cibuildwheel.
+  Windows (x86_64, arm64) native wheel builds using maturin directly.
 - A pure-Python wheel job builds successfully and coexists with native wheels
-  in the same environment.
+  in the same environment, verified by installing pure then native wheels and
+  checking `_rust_backend.is_available()` plus metadata parity.
+- Release automation collects all wheels into a single directory and publishes
+  them via `uv publish` in a single command.
 - Documentation updates in `docs/cuprum-design.md` and `docs/users-guide.md`
   reflect the new architecture and user guidance.
 - `docs/roadmap.md` marks the relevant 4.1 and 4.5 items as done.
@@ -345,12 +369,13 @@ Dependencies:
 - Python build tooling: `uv_build` (default) and maturin (native builds).
 - Rust: PyO3, cargo, rustfmt, clippy, and optional `cargo nextest` if used by
   the Rust Makefile.
-- CI: cibuildwheel for wheel builds; Rust setup steps from Appendix 3.
+- CI: maturin for wheel builds; stable Rust toolchain setup in workflows.
 
 ## Revision note (required when editing an ExecPlan)
 
 Initial draft authored on 2026-01-18. Revised to lock in `uv_build` as the
 primary backend per user instruction. Updated status to IN PROGRESS and
 recorded approval to begin implementation. Recorded execution progress and the
-module naming decision for the Rust availability probe. Marked the plan
-complete after validation steps succeeded.
+module naming decision for the Rust availability probe. Updated the plan to
+remove cibuildwheel, document direct maturin builds, and add the uv publish
+release flow. Marked the plan complete after validation steps succeeded.

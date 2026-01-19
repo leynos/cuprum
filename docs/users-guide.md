@@ -883,6 +883,9 @@ native wheels that bundle an optional Rust extension used by future stream
 optimisations. The Rust extension is not required to use Cuprum and does not
 change behaviour for pure Python installations.
 
+Cuprum does not use cibuildwheel; native wheels are built with maturin
+directly, and the pure Python wheel is built with `uv_build`.
+
 ### Checking Rust availability
 
 You can check whether the optional extension is available in the current
@@ -905,3 +908,32 @@ native wheels are missing.
 Contributors who want to build native wheels need a Rust toolchain (rustc and
 cargo, version 1.70 or newer) and maturin. Pure Python wheels continue to build
 using `uv_build` without any Rust dependencies.
+
+### CI build commands
+
+The continuous integration (CI) workflows use two routes:
+
+- Pure Python wheel:
+
+```bash
+uv build --wheel --out-dir dist
+```
+
+- Native wheel (per platform):
+
+```bash
+maturin build --release --compatibility pypi --out wheelhouse \
+  --manifest-path rust/cuprum-rust/Cargo.toml
+```
+
+For Linux wheels, the native build runs inside a manylinux-compatible container
+to ensure the resulting wheels meet PyPI tagging requirements.
+
+### Verification procedure
+
+The canonical verification sequence is:
+
+1) Install the pure Python wheel and confirm the Rust probe returns `False`.
+2) Force-reinstall the native wheel and confirm the Rust probe returns `True`.
+3) Compare metadata (name, version, requires-python, dependencies, and
+   classifiers) across the two installs to detect drift.
