@@ -260,7 +260,7 @@ cuprum/builders/args.py
 Validation rules (documented and tested):
 
 - SafePath rejects empty strings, embedded NUL characters, and any `..` path
-  segments. By default it requires absolute paths; callers may opt in to
+  segments. By default, it requires absolute paths; callers may opt in to
   relative paths with `allow_relative=True`.
 - GitRef rejects empty strings, leading `-`, whitespace, and characters outside
   the conservative set `[A-Za-z0-9._/-]`. It also rejects `..`, `//`, `@{`,
