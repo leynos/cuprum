@@ -66,8 +66,35 @@ class _StubPumpWriter:
         self.wait_closed_calls += 1
 
 
-class _StubSpawnProcess:
-    def __init__(self, pid: int) -> None:
+class _StubProcess:
+    """Unified stub for asyncio.subprocess.Process in tests.
+
+    Supports two modes:
+    - Simple mode (default): terminate/kill only increment counters
+    - Signal mode (signal_on_terminate=True): terminate/kill also update exit code
+      and signal ready event, for coordinated fail-fast testing
+
+    Parameters
+    ----------
+    pid:
+        Process ID to report.
+    exit_code:
+        Exit code to return from wait(). Default -15 (SIGTERM).
+    ready:
+        Optional event that wait() will await before returning.
+    signal_on_terminate:
+        If True, terminate/kill update exit code and signal ready event.
+
+    """
+
+    def __init__(
+        self,
+        pid: int,
+        *,
+        exit_code: int = -15,
+        ready: asyncio.Event | None = None,
+        signal_on_terminate: bool = False,
+    ) -> None:
         self.pid = pid
         self.returncode: int | None = None
         self.stdout = None
@@ -76,18 +103,31 @@ class _StubSpawnProcess:
         self.terminate_calls = 0
         self.kill_calls = 0
         self.wait_calls = 0
+        self._exit_code = exit_code
+        self._ready = ready
+        self._signal_on_terminate = signal_on_terminate
 
     def terminate(self) -> None:
         self.terminate_calls += 1
+        if self._signal_on_terminate:
+            self._exit_code = -15
+            if self._ready is not None:
+                self._ready.set()
 
     def kill(self) -> None:
         self.kill_calls += 1
+        if self._signal_on_terminate:
+            self._exit_code = -9
+            if self._ready is not None:
+                self._ready.set()
 
     async def wait(self) -> int:
         self.wait_calls += 1
+        if self._ready is not None:
+            await self._ready.wait()
         await asyncio.sleep(0)
         if self.returncode is None:
-            self.returncode = -15
+            self.returncode = self._exit_code
         return self.returncode
 
 
@@ -328,18 +368,18 @@ def test_spawn_pipeline_processes_terminates_started_stages_on_failure(
         capture=True, echo=False, timeout=None, context=None
     )
 
-    spawned: list[_StubSpawnProcess] = []
+    spawned: list[_StubProcess] = []
     call_count = 0
 
     async def fake_create_subprocess_exec(
         *_: object,
         **__: object,
-    ) -> _StubSpawnProcess:
+    ) -> _StubProcess:
         nonlocal call_count
         call_count += 1
         await asyncio.sleep(0)
         if call_count == 1:
-            proc = _StubSpawnProcess(pid=12345)
+            proc = _StubProcess(pid=12345)
             spawned.append(proc)
             return proc
         raise FileNotFoundError("missing")
@@ -367,52 +407,13 @@ def test_pipeline_requires_at_least_two_stages() -> None:
         Pipeline((only,))
 
 
-class _StubPipelineWaitProcess:
-    def __init__(
-        self,
-        *,
-        pid: int,
-        exit_code: int,
-        ready: asyncio.Event | None = None,
-    ) -> None:
-        self.pid = pid
-        self.returncode: int | None = None
-        self.stdout = None
-        self.stderr = None
-        self.stdin = None
-        self.terminate_calls = 0
-        self.kill_calls = 0
-        self._exit_code = exit_code
-        self._ready = ready
-
-    def terminate(self) -> None:
-        self.terminate_calls += 1
-        self._exit_code = -15
-        if self._ready is not None:
-            self._ready.set()
-
-    def kill(self) -> None:
-        self.kill_calls += 1
-        self._exit_code = -9
-        if self._ready is not None:
-            self._ready.set()
-
-    async def wait(self) -> int:
-        if self._ready is not None:
-            await self._ready.wait()
-        await asyncio.sleep(0)
-        if self.returncode is None:
-            self.returncode = self._exit_code
-        return self.returncode
-
-
 async def _exercise_wait_for_pipeline(
     exit_codes: tuple[int, int, int],
     ready_stages: frozenset[int],
 ) -> tuple[
-    _StubPipelineWaitProcess,
-    _StubPipelineWaitProcess,
-    _StubPipelineWaitProcess,
+    _StubProcess,
+    _StubProcess,
+    _StubProcess,
     _PipelineWaitResult,
 ]:
     """Execute _wait_for_pipeline with stub processes and custom exit scenarios.
@@ -435,7 +436,12 @@ async def _exercise_wait_for_pipeline(
         events[idx].set()
 
     processes = [
-        _StubPipelineWaitProcess(pid=i + 1, exit_code=exit_codes[i], ready=events[i])
+        _StubProcess(
+            pid=i + 1,
+            exit_code=exit_codes[i],
+            ready=events[i],
+            signal_on_terminate=True,
+        )
         for i in range(3)
     ]
 
@@ -450,7 +456,7 @@ async def _exercise_wait_for_pipeline(
 
 
 def _assert_stage_terminated(
-    process: _StubPipelineWaitProcess,
+    process: _StubProcess,
     *,
     should_terminate: bool,
 ) -> None:

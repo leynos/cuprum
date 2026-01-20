@@ -64,6 +64,7 @@ check-fmt: ruff ## Verify formatting
 
 lint: ruff ## Run linters
 	ruff check
+	pyscn check
 
 typecheck: build ## Run typechecking
 	$(UV_ENV) uv sync --group dev
