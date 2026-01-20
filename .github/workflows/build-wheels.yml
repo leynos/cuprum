@@ -32,7 +32,6 @@ jobs:
             arch: aarch64
             target: aarch64-unknown-linux-gnu
             manylinux: 2_28
-            emulation: qemu
           - os: macos-13
             arch: x86_64
             target: x86_64-apple-darwin
@@ -44,20 +43,10 @@ jobs:
             target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-      - name: Resolve manylinux interpreter
-        if: startsWith(matrix.os, 'ubuntu')
-        id: manylinux-python
-        shell: bash
-        run: |
-          set -eu
-          python_version="${{ inputs.python-version }}"
-          version_digits="${python_version//./}"
-          interpreter="/opt/python/cp${version_digits}-cp${version_digits}/bin/python"
-          echo "path=${interpreter}" >> "${GITHUB_OUTPUT}"
-      - name: Build manylinux wheels (Linux)
+      - name: Build manylinux wheels (Linux x86_64)
         # Maturin action builds inside a manylinux container for PyPI tags.
-        if: startsWith(matrix.os, 'ubuntu')
-        uses: messense/maturin-action@v1
+        if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'x86_64'
+        uses: messense/maturin-action@47fbb7acd3db01f7830330b50689bd15135c12b9
         with:
           maturin-version: '1.6.0'
           target: ${{ matrix.target }}
@@ -65,7 +54,25 @@ jobs:
           command: build
           args: >-
             --release --out wheelhouse --manifest-path rust/cuprum-rust/Cargo.toml
-            --interpreter ${{ steps.manylinux-python.outputs.path }}
+            -i python${{ inputs.python-version }}
+      - name: Set up QEMU (Linux aarch64)
+        if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'aarch64'
+        uses: docker/setup-qemu-action@45136fd328ae20ed788d00d3bada68ab496c214c
+        with:
+          platforms: arm64
+      - name: Build manylinux wheels (Linux aarch64)
+        # aarch64 wheels are built via QEMU with an explicit manylinux container.
+        if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'aarch64'
+        uses: messense/maturin-action@47fbb7acd3db01f7830330b50689bd15135c12b9
+        with:
+          maturin-version: '1.6.0'
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          container: ghcr.io/rust-cross/manylinux_2_28-cross:aarch64
+          command: build
+          args: >-
+            --release --out wheelhouse --manifest-path rust/cuprum-rust/Cargo.toml
+            -i python${{ inputs.python-version }}
       - name: Build native wheels (macOS/Windows)
         if: "!startsWith(matrix.os, 'ubuntu')"
         uses: ./.github/actions/build-wheels
@@ -80,7 +87,6 @@ jobs:
         with:
           name: wheels-native-${{ matrix.os }}-${{ matrix.arch }}
           path: wheelhouse/*.whl
-        # aarch64 wheels are built via QEMU emulation under maturin-action.
 
   verify-wheel-install:
     runs-on: ubuntu-latest

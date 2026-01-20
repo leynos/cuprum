@@ -44,6 +44,10 @@ def then_probe_matches_native(availability: object) -> None:
     """Assert the probe matches the native module when installed."""
     try:
         native = importlib.import_module("cuprum._rust_backend_native")
-    except ModuleNotFoundError:
-        return
+    except ImportError as exc:
+        if isinstance(exc, ModuleNotFoundError) and exc.name == (
+            "cuprum._rust_backend_native"
+        ):
+            return
+        raise
     assert availability is native.is_available()

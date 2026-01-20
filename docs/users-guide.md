@@ -880,7 +880,7 @@ The `ConcurrentResult` dataclass provides:
 
 Cuprum ships as a pure Python wheel by default. Some platforms also provide
 native wheels that bundle an optional Rust extension used by future stream
-optimisations. The Rust extension is not required to use Cuprum and does not
+optimizations. The Rust extension is not required to use Cuprum and does not
 change behaviour for pure Python installations.
 
 Cuprum does not use cibuildwheel; native wheels are built with maturin
@@ -888,8 +888,8 @@ directly, and the pure Python wheel is built with `uv_build`.
 
 ### Checking Rust availability
 
-You can check whether the optional extension is available in the current
-environment using the internal probe:
+It is possible to check whether the optional extension is available in the
+current environment using the internal probe:
 
 ```python
 from cuprum import _rust_backend
@@ -927,11 +927,11 @@ maturin build --release --out wheelhouse \
 ```
 
 For Linux wheels, the native build runs inside a manylinux-compatible container
-and uses a matching compatibility tag plus an explicit interpreter:
+and uses a matching compatibility tag plus explicit interpreter selection:
 
 ```bash
 maturin build --release --manylinux 2_28 \
-  --interpreter /opt/python/cp312-cp312/bin/python --out wheelhouse \
+  -i python3.13 --out wheelhouse \
   --manifest-path rust/cuprum-rust/Cargo.toml
 ```
 

@@ -19,7 +19,7 @@ fn is_available(_py: Python<'_>) -> PyResult<bool> {
 /// Python module definition for the optional Rust backend.
 ///
 /// # Errors
-/// Returns a Python error if the module cannot be initialised.
+/// Returns a Python error if the module cannot be initialized.
 #[pymodule]
 fn _rust_backend_native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(is_available, module)?)?;

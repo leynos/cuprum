@@ -18,8 +18,8 @@ minimal Rust extension that exposes `is_available()` to prove the binding
 works. Users can read updated documentation explaining the Rust architecture,
 API boundary, fallback strategy, and performance traits. Success is visible
 when both wheel types build and install, the Rust module imports and returns a
-stub value, metadata matches across wheel families, and the CI matrix includes
-the requested platforms.
+stub value, metadata matches across wheel families, and the continuous
+integration (CI) matrix includes the requested platforms.
 
 ## Constraints
 
@@ -37,8 +37,8 @@ the requested platforms.
 - Rust lints in Appendix 1 must be enforced in the new Cargo workspace.
 - Cuprum does not use cibuildwheel; native wheels must be built with maturin
   directly.
-- CI must continue to pass on existing workflows; new jobs must not break
-  existing ones.
+- Continuous integration (CI) must continue to pass on existing workflows; new
+  jobs must not break existing ones.
 
 ## Tolerances (Exception Triggers)
 
@@ -78,7 +78,7 @@ the requested platforms.
 
 - [x] (2026-01-19 00:00Z) Plan approved and implementation started.
 - [x] (2026-01-19 00:10Z) Reviewed `pyproject.toml`, CI workflows, and Rust
-  ADR/design documentation.
+  architecture decision record (ADR)/design documentation.
 - [x] (2026-01-19 00:20Z) Drafted tests for the Rust extension availability
   probe (unit + behavioural).
 - [x] (2026-01-19 00:30Z) Defined Rust workspace layout and implemented PyO3
@@ -137,8 +137,8 @@ Relevant files and directories:
 
 - `pyproject.toml` currently uses `uv_build` as the build backend.
 - `docs/roadmap.md` defines Phase 4.1 tasks (4.1.1 to 4.1.4).
-- `docs/adr-001-rust-extension.md` records the Rust extension decision and
-  runtime selection model.
+- `docs/adr-001-rust-extension.md` records the Rust extension architecture
+  decision record (ADR) and runtime selection model.
 - `docs/cuprum-design.md` contains Section 13 on performance-optimised stream
   operations (needs revision to meet the prompt's Section 13 requirements).
 - `docs/users-guide.md` documents user-facing behaviour and must include any
@@ -215,7 +215,8 @@ Stage D: documentation, roadmap, and validation.
 
 - Update `docs/cuprum-design.md` Section 13 to explicitly cover:
   - Rust extension architecture (crate layout, PyO3 boundary).
-  - API boundary between Python and Rust (what crosses the FFI boundary).
+  - API boundary between Python and Rust (what crosses the foreign function
+    interface (FFI) boundary).
   - Fallback strategy (auto/rust/python selection and behaviour).
   - Performance characteristics and limitations.
 - Update `docs/users-guide.md` with user-facing guidance on the Rust extension,
@@ -247,7 +248,7 @@ All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
       --manifest-path rust/cuprum-rust/Cargo.toml
     # For Linux manylinux builds:
     maturin build --release --manylinux 2_28 \
-      --interpreter /opt/python/cp312-cp312/bin/python --out wheelhouse \
+      -i python3.13 --out wheelhouse \
       --manifest-path rust/cuprum-rust/Cargo.toml
     ```
 

@@ -16,7 +16,7 @@ def test_is_available_returns_false_when_module_missing(
     """Probe returns False when the native module is absent."""
 
     def _raise_missing(_: str) -> types.ModuleType:
-        raise ImportError
+        raise ModuleNotFoundError(name="cuprum._rust_backend_native")
 
     monkeypatch.setattr(importlib, "import_module", _raise_missing)
 
@@ -42,6 +42,10 @@ def test_native_module_reports_availability_when_installed() -> None:
     """Native extension reports availability when installed."""
     try:
         native = importlib.import_module("cuprum._rust_backend_native")
-    except ModuleNotFoundError:
-        pytest.skip("Rust extension is not installed.")
+    except ImportError as exc:
+        if isinstance(exc, ModuleNotFoundError) and exc.name == (
+            "cuprum._rust_backend_native"
+        ):
+            pytest.skip("Rust extension is not installed.")
+        raise
     assert native.is_available() is True

@@ -66,4 +66,6 @@ result_large_err = "deny"
 
 [workspace.lints.rust]
 missing_docs = "deny"
+
+[workspace.lints.rustdoc]
 missing_crate_level_docs = "deny"
