@@ -21,7 +21,10 @@ from cuprum.catalogue import (
     DOC_TOOL,
     DOCUMENTATION_PROJECT,
     ECHO,
+    GIT,
     LS,
+    RSYNC,
+    TAR,
     ProgramCatalogue,
     ProgramEntry,
     ProjectSettings,
@@ -63,7 +66,7 @@ from cuprum.sh import (
     TimeoutExpired,
 )
 
-from . import sh
+from . import builders, sh
 
 __all__ = [
     "CORE_OPS_PROJECT",
@@ -72,8 +75,11 @@ __all__ = [
     "DOCUMENTATION_PROJECT",
     "DOC_TOOL",
     "ECHO",
+    "GIT",
     "LS",
     "PACKAGE_NAME",
+    "RSYNC",
+    "TAR",
     "AfterHook",
     "AllowRegistration",
     "BeforeHook",
@@ -101,6 +107,7 @@ __all__ = [
     "after",
     "allow",
     "before",
+    "builders",
     "current_context",
     "get_context",
     "logging_hook",
