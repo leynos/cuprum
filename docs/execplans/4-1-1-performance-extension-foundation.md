@@ -232,7 +232,7 @@ Stage D: documentation, roadmap, and validation.
 All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
 `tee` for long outputs.
 
-1) Inspect existing docs and build configuration.
+1. Inspect existing docs and build configuration.
 
     ```bash
     rg -n "build-backend" pyproject.toml
@@ -240,7 +240,7 @@ All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
     rg -n "wheel" .github/workflows -g "*.yml"
     ```
 
-2) Build wheels using the CI commands.
+2. Build wheels using the CI commands.
 
     ```bash
     uv build --wheel --out-dir dist
@@ -252,7 +252,7 @@ All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
       --manifest-path rust/cuprum-rust/Cargo.toml
     ```
 
-3) Write tests first.
+3. Write tests first.
 
     ```bash
     set -o pipefail
@@ -265,7 +265,7 @@ All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
       | tee /tmp/test-rust-behaviour.txt
     ```
 
-4) Implement Rust scaffold and Python fallback, then re-run the new tests.
+4. Implement Rust scaffold and Python fallback, then re-run the new tests.
 
     ```bash
     set -o pipefail
@@ -278,7 +278,7 @@ All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
       | tee /tmp/test-rust-behaviour.txt
     ```
 
-5) Run formatting, linting, type checking, and full test suite.
+5. Run formatting, linting, type checking, and full test suite.
 
     ```bash
     set -o pipefail
@@ -294,7 +294,7 @@ All commands run from `/root/repo` unless noted. Use `set -o pipefail` and
     make test | tee /tmp/make-test.txt
     ```
 
-6) Run Markdown linting and Mermaid validation after doc changes.
+6. Run Markdown linting and Mermaid validation after doc changes.
 
     ```bash
     set -o pipefail

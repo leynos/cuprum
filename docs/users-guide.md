@@ -889,7 +889,10 @@ directly, and the pure Python wheel is built with `uv_build`.
 ### Checking Rust availability
 
 It is possible to check whether the optional extension is available in the
-current environment using the internal probe:
+current environment using the internal probe below. The module
+`cuprum._rust_backend` is private and not semver-stable; any public wrapper
+should use `cuprum.is_rust_available()` and call `_rust_backend.is_available()`
+internally, but that wrapper is not yet available:
 
 ```python
 from cuprum import _rust_backend
@@ -906,7 +909,7 @@ native wheels are missing.
 ### Building from source
 
 Contributors who want to build native wheels need a Rust toolchain (rustc and
-cargo, version 1.70 or newer) and maturin. Pure Python wheels continue to build
+cargo, version 1.74 or newer) and maturin. Pure Python wheels continue to build
 using `uv_build` without any Rust dependencies.
 
 ### CI build commands
