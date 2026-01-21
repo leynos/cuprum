@@ -908,6 +908,10 @@ native wheels are missing.
 
 ### Building from source
 
+For development builds, run `maturin develop` from the project root after
+installing a Rust toolchain. This installs Cuprum in editable/development mode
+as an alternative to building native wheels.
+
 Contributors who want to build native wheels need a Rust toolchain (rustc and
 cargo, version 1.74 or newer) and maturin. Pure Python wheels continue to build
 using `uv_build` without any Rust dependencies.
