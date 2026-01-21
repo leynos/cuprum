@@ -4,7 +4,7 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`, and
 `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
-Status: COMPLETE
+Status: IN PROGRESS
 
 PLANS.md is not present in this repository.
 
@@ -385,6 +385,6 @@ primary backend per user instruction. Updated status to IN PROGRESS and
 recorded approval to begin implementation. Recorded execution progress and the
 module naming decision for the Rust availability probe. Updated the plan to
 remove cibuildwheel, document direct maturin builds, and add the uv publish
-release flow. Marked the plan complete after validation steps succeeded and
-updated the Linux manylinux command to use an explicit interpreter and
-`--manylinux 2_28` instead of the invalid `--compatibility pypi` flag.
+release flow. Recorded validation steps and updated the Linux manylinux command
+to use an explicit interpreter and `--manylinux 2_28` instead of the invalid
+`--compatibility pypi` flag while keeping the status IN PROGRESS.

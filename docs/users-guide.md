@@ -942,7 +942,7 @@ to ensure the resulting wheel tags are manylinux-compatible.
 
 The canonical verification sequence is:
 
-1) Install the pure Python wheel and confirm the Rust probe returns `False`.
-2) Force-reinstall the native wheel and confirm the Rust probe returns `True`.
-3) Compare metadata (name, version, requires-python, dependencies, and
+1. Install the pure Python wheel and confirm the Rust probe returns `False`.
+2. Force-reinstall the native wheel and confirm the Rust probe returns `True`.
+3. Compare metadata (name, version, requires-python, dependencies, and
    classifiers) across the two installs to detect drift.

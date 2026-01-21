@@ -20,7 +20,9 @@ def test_is_available_returns_false_when_module_missing(
 
     monkeypatch.setattr(importlib, "import_module", _raise_missing)
 
-    assert _rust_backend.is_available() is False
+    assert _rust_backend.is_available() is False, (
+        "expected probe to report unavailable when module missing"
+    )
 
 
 def test_is_available_returns_true_when_module_present(
@@ -35,7 +37,9 @@ def test_is_available_returns_true_when_module_present(
 
     monkeypatch.setattr(importlib, "import_module", lambda _: _Native())
 
-    assert _rust_backend.is_available() is True
+    assert _rust_backend.is_available() is True, (
+        "expected probe to report available when native module present"
+    )
 
 
 def test_native_module_reports_availability_when_installed() -> None:
@@ -48,4 +52,6 @@ def test_native_module_reports_availability_when_installed() -> None:
         ):
             pytest.skip("Rust extension is not installed.")
         raise
-    assert native.is_available() is True
+    assert native.is_available() is True, (
+        "expected native extension to report available when installed"
+    )
