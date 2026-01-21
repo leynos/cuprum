@@ -7,6 +7,7 @@ import types
 
 import pytest
 
+import cuprum as c
 from cuprum import _rust_backend
 
 
@@ -54,4 +55,24 @@ def test_native_module_reports_availability_when_installed() -> None:
         raise
     assert native.is_available() is True, (
         "expected native extension to report available when installed"
+    )
+
+
+def test_public_probe_reports_unavailable_when_backend_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Public probe forwards to the backend availability check."""
+    monkeypatch.setattr(_rust_backend, "is_available", lambda: False)
+    assert c.is_rust_available() is False, (
+        "expected public probe to report unavailable when backend is unavailable"
+    )
+
+
+def test_public_probe_reports_available_when_backend_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Public probe forwards True from the backend availability check."""
+    monkeypatch.setattr(_rust_backend, "is_available", lambda: True)
+    assert c.is_rust_available() is True, (
+        "expected public probe to report available when backend is available"
     )

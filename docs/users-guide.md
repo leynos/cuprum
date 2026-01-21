@@ -889,15 +889,15 @@ directly, and the pure Python wheel is built with `uv_build`.
 ### Checking Rust availability
 
 It is possible to check whether the optional extension is available in the
-current environment using the internal probe below. The module
-`cuprum._rust_backend` is private and not semver-stable; any public wrapper
-should use `cuprum.is_rust_available()` and call `_rust_backend.is_available()`
-internally, but that wrapper is not yet available:
+current environment using the public helper `cuprum.is_rust_available()`, which
+wraps the internal probe `_rust_backend.is_available()`. The module
+`cuprum._rust_backend` is private and not semver-stable, so production code
+should avoid calling `_rust_backend.is_available()` directly:
 
 ```python
-from cuprum import _rust_backend
+import cuprum as c
 
-if _rust_backend.is_available():
+if c.is_rust_available():
     print("Rust extension is available")
 else:
     print("Rust extension is not installed")

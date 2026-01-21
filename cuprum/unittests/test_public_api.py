@@ -20,6 +20,7 @@ def test_public_exports_are_available() -> None:
     assert c.UnknownProgramError is not None, "UnknownProgramError must be exported"
     assert c.Pipeline is not None, "Pipeline must be exported"
     assert c.PipelineResult is not None, "PipelineResult must be exported"
+    assert callable(c.is_rust_available), "is_rust_available must be exported"
 
 
 def test_public_catalogue_behaviour_via_reexports() -> None:

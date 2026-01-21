@@ -7,6 +7,9 @@ on:
         type: string
         required: true
 
+env:
+  MATURIN_VERSION: "1.6.0"
+
 jobs:
   build-pure-wheel:
     runs-on: ubuntu-latest
@@ -48,7 +51,7 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'x86_64'
         uses: messense/maturin-action@47fbb7acd3db01f7830330b50689bd15135c12b9
         with:
-          maturin-version: '1.6.0'
+          maturin-version: ${{ env.MATURIN_VERSION }}
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           command: build
@@ -65,7 +68,7 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'aarch64'
         uses: messense/maturin-action@47fbb7acd3db01f7830330b50689bd15135c12b9
         with:
-          maturin-version: '1.6.0'
+          maturin-version: ${{ env.MATURIN_VERSION }}
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           container: ghcr.io/rust-cross/manylinux_2_28-cross:aarch64
@@ -81,6 +84,7 @@ jobs:
           target: ${{ matrix.target }}
           artifact-name: wheels-native-${{ matrix.os }}-${{ matrix.arch }}
           wheelhouse: wheelhouse
+          maturin-version: ${{ env.MATURIN_VERSION }}
       - name: Upload wheel artifact (Linux)
         if: startsWith(matrix.os, 'ubuntu')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -106,7 +110,7 @@ jobs:
       - name: Install pure Python wheel, then native wheel
         shell: bash
         env:
-          NATIVE_WHEEL_DIR_PATTERN: dist/wheels-native-ubuntu-latest-x86_64
+          NATIVE_WHEEL_DIR_PATTERN: dist/wheels-native-*
         run: |
           set -eu
           python -m venv .venv
@@ -114,8 +118,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install dist/wheels-pure/*.whl
           python - <<'PY'
-          from cuprum import _rust_backend
-          assert _rust_backend.is_available() is False
+          import cuprum as c
+          assert c.is_rust_available() is False
           PY
           python - <<'PY'
           import importlib.metadata as im
@@ -137,11 +141,21 @@ jobs:
           print(f"cp{sys.version_info.major}{sys.version_info.minor}")
           PY
           )
-          python -m pip install --force-reinstall \
-            "${NATIVE_WHEEL_DIR_PATTERN}"/*${PYTAG}*.whl
+          ARCH=$(uname -m)
+          shopt -s nullglob
+          NATIVE_WHEEL_GLOB=(
+            "${NATIVE_WHEEL_DIR_PATTERN}"/*${PYTAG}*manylinux*${ARCH}*.whl
+          )
+          if [ "${#NATIVE_WHEEL_GLOB[@]}" -ne 1 ]; then
+            echo "Expected exactly one native wheel for ${ARCH}." >&2
+            echo "Matched: ${NATIVE_WHEEL_GLOB[*]:-<none>}" >&2
+            ls -al dist >&2
+            exit 1
+          fi
+          python -m pip install --force-reinstall "${NATIVE_WHEEL_GLOB[0]}"
           python - <<'PY'
-          from cuprum import _rust_backend
-          assert _rust_backend.is_available() is True
+          import cuprum as c
+          assert c.is_rust_available() is True
           PY
           python - <<'PY'
           import importlib.metadata as im

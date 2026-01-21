@@ -4,7 +4,7 @@ Feature: Optional Rust extension availability
   breaking pure Python installations.
 
   Scenario: Rust extension availability is discoverable
-    Given the Cuprum Rust backend probe
+    Given the Cuprum Rust availability probe
     When I check whether the Rust extension is available
     Then the probe returns a boolean
     And the probe agrees with the native module when it is installed

@@ -139,7 +139,7 @@ Relevant files and directories:
 - `docs/roadmap.md` defines Phase 4.1 tasks (4.1.1 to 4.1.4).
 - `docs/adr-001-rust-extension.md` records the Rust extension architecture
   decision record (ADR) and runtime selection model.
-- `docs/cuprum-design.md` contains Section 13 on performance-optimised stream
+- `docs/cuprum-design.md` contains Section 13 on performance-optimized stream
   operations (needs revision to meet the prompt's Section 13 requirements).
 - `docs/users-guide.md` documents user-facing behaviour and must include any
   new configuration or build guidance.
@@ -374,8 +374,8 @@ Rust interface:
 Dependencies:
 
 - Python build tooling: `uv_build` (default) and maturin (native builds).
-- Rust: PyO3, cargo, rustfmt, clippy, and optional `cargo nextest` if used by
-  the Rust Makefile.
+- Rust: rustc 1.74+, cargo, PyO3, rustfmt, clippy, and optional `cargo nextest`
+  if used by the Rust Makefile.
 - CI: maturin for wheel builds; stable Rust toolchain setup in workflows.
 
 ## Revision note (required when editing an ExecPlan)

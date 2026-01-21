@@ -7,7 +7,7 @@ import typing as typ
 
 from pytest_bdd import given, scenario, then, when
 
-from cuprum import _rust_backend
+import cuprum as c
 
 
 @scenario(
@@ -18,10 +18,10 @@ def test_rust_extension_availability() -> None:
     """Behavioural coverage for the Rust availability probe."""
 
 
-@given("the Cuprum Rust backend probe", target_fixture="probe")
+@given("the Cuprum Rust availability probe", target_fixture="probe")
 def given_probe() -> typ.Callable[[], bool]:
     """Expose the Rust backend availability probe."""
-    return _rust_backend.is_available
+    return c.is_rust_available
 
 
 @when(

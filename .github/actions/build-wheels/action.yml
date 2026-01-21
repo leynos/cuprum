@@ -14,6 +14,10 @@ inputs:
     description: Output directory for built wheels
     required: false
     default: wheelhouse
+  maturin-version:
+    description: Maturin version to install
+    required: false
+    default: "1.6.0"
 runs:
   using: composite
   steps:
@@ -30,7 +34,7 @@ runs:
         toolchain: stable
     - name: Install maturin
       shell: bash
-      run: python -m pip install --upgrade "maturin==1.6.0"
+      run: python -m pip install --upgrade "maturin==${{ inputs.maturin-version }}"
     - name: Build wheels with maturin
       shell: bash
       run: |
