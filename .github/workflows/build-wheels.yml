@@ -46,6 +46,15 @@ jobs:
             target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - name: Compute Python tag for manylinux interpreter path
+        if: startsWith(matrix.os, 'ubuntu')
+        id: pytag
+        shell: bash
+        run: |
+          # Convert "3.13" to "cp313" format for manylinux /opt/python paths
+          pytag="cp$(echo '${{ inputs.python-version }}' | tr -d '.')"
+          echo "tag=${pytag}" >> "$GITHUB_OUTPUT"
+          echo "interpreter=/opt/python/${pytag}-${pytag}/bin/python" >> "$GITHUB_OUTPUT"
       - name: Build manylinux wheels (Linux x86_64)
         # Maturin action builds inside a manylinux container for PyPI tags.
         if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'x86_64'
@@ -57,7 +66,7 @@ jobs:
           command: build
           args: >-
             --release --out wheelhouse --manifest-path rust/cuprum-rust/Cargo.toml
-            -i python${{ inputs.python-version }}
+            -i ${{ steps.pytag.outputs.interpreter }}
       - name: Set up QEMU (Linux aarch64)
         if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'aarch64'
         uses: docker/setup-qemu-action@45136fd328ae20ed788d00d3bada68ab496c214c
@@ -75,7 +84,7 @@ jobs:
           command: build
           args: >-
             --release --out wheelhouse --manifest-path rust/cuprum-rust/Cargo.toml
-            -i python${{ inputs.python-version }}
+            -i ${{ steps.pytag.outputs.interpreter }}
       - name: Build native wheels (macOS/Windows)
         if: "!startsWith(matrix.os, 'ubuntu')"
         uses: ./.github/actions/build-wheels
