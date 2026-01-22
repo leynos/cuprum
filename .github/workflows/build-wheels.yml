@@ -73,7 +73,8 @@ jobs:
         with:
           platforms: arm64
       - name: Build manylinux wheels (Linux aarch64)
-        # aarch64 wheels are built via QEMU with an explicit manylinux container.
+        # aarch64 wheels are cross-compiled; use version-only interpreter spec
+        # since the container's Python binaries are aarch64 and cannot execute.
         if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'aarch64'
         uses: messense/maturin-action@47fbb7acd3db01f7830330b50689bd15135c12b9
         with:
@@ -84,7 +85,7 @@ jobs:
           command: build
           args: >-
             --release --out wheelhouse --manifest-path rust/cuprum-rust/Cargo.toml
-            -i ${{ steps.pytag.outputs.interpreter }}
+            -i ${{ inputs.python-version }}
       - name: Build native wheels (macOS/Windows)
         if: "!startsWith(matrix.os, 'ubuntu')"
         uses: ./.github/actions/build-wheels
