@@ -51,8 +51,11 @@ jobs:
         id: pytag
         shell: bash
         run: |
-          # Convert "3.13" to "cp313" format for manylinux /opt/python paths
-          pytag="cp$(echo '${{ inputs.python-version }}' | tr -d '.')"
+          # Convert "3.13" or "3.13.1" to "cp313" format for manylinux /opt/python paths
+          # Extract major.minor only, then remove the dot
+          version='${{ inputs.python-version }}'
+          major_minor="$(echo "${version}" | cut -d. -f1,2)"
+          pytag="cp$(echo "${major_minor}" | tr -d '.')"
           echo "tag=${pytag}" >> "$GITHUB_OUTPUT"
           echo "interpreter=/opt/python/${pytag}-${pytag}/bin/python" >> "$GITHUB_OUTPUT"
       - name: Build manylinux wheels (Linux x86_64)
