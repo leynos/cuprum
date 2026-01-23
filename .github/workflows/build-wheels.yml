@@ -156,8 +156,9 @@ jobs:
           )
           ARCH=$(uname -m)
           shopt -s nullglob
+          # Note: NATIVE_WHEEL_DIR_PATTERN must NOT be quoted to allow glob expansion
           NATIVE_WHEEL_GLOB=(
-            "${NATIVE_WHEEL_DIR_PATTERN}"/*${PYTAG}*manylinux*${ARCH}*.whl
+            ${NATIVE_WHEEL_DIR_PATTERN}/*${PYTAG}*manylinux*${ARCH}*.whl
           )
           if [ "${#NATIVE_WHEEL_GLOB[@]}" -ne 1 ]; then
             echo "Expected exactly one native wheel for ${ARCH}." >&2
