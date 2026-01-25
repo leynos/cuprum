@@ -28,7 +28,7 @@ jobs:
         include:
           - os: ubuntu-latest
             arch: x86_64
-            target: ""
+            target: x86_64-unknown-linux-gnu
             manylinux: 2_28
           # aarch64 wheels are built via QEMU emulation under maturin-action.
           - os: ubuntu-latest

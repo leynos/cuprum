@@ -1,10 +1,14 @@
 [build-system]
+# maturin 1.6+ required for stable module-name handling in mixed Python/Rust
+# projects; aligns with MATURIN_VERSION in .github/workflows/build-wheels.yml
 requires = ["maturin>=1.6,<2"]
 build-backend = "maturin"
 
 [project]
 name = "cuprum"
-version = "0.1.0"
+# Version is sourced from rust/cuprum-rust/Cargo.toml via maturin; keep
+# Cargo.toml version in sync with root pyproject.toml when releasing.
+dynamic = ["version"]
 description = "Optional Rust extension for cuprum stream operations"
 readme = "../../README.md"
 requires-python = ">=3.12"
