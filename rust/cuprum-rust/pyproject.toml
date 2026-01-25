@@ -1,0 +1,17 @@
+[build-system]
+requires = ["maturin>=1.6,<2"]
+build-backend = "maturin"
+
+[project]
+name = "cuprum"
+version = "0.1.0"
+description = "Optional Rust extension for cuprum stream operations"
+readme = "../../README.md"
+requires-python = ">=3.12"
+license = { text = "ISC" }
+authors = [{ name = "Payton McIntosh", email = "pmcintosh@df12.net" }]
+
+[tool.maturin]
+bindings = "pyo3"
+module-name = "cuprum._rust_backend_native"
+python-source = "../.."
