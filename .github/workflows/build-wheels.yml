@@ -130,8 +130,16 @@ jobs:
           source .venv/bin/activate
           python -m pip install --upgrade pip
 
-          # Resolve wheel paths to absolute paths to avoid CWD issues
-          PURE_WHEEL=$(realpath dist/wheels-pure/*.whl)
+          # Expand pure wheel glob and verify exactly one match
+          shopt -s nullglob
+          PURE_WHEEL_GLOB=(dist/wheels-pure/*.whl)
+          if [ "${#PURE_WHEEL_GLOB[@]}" -ne 1 ]; then
+            echo "Expected exactly one pure wheel." >&2
+            echo "Matched: ${PURE_WHEEL_GLOB[*]:-<none>}" >&2
+            ls -al dist/wheels-pure >&2 || true
+            exit 1
+          fi
+          PURE_WHEEL=$(realpath "${PURE_WHEEL_GLOB[0]}")
           python -m pip install "${PURE_WHEEL}"
 
           # Create temp dir and run Python checks there to avoid importing local repo
