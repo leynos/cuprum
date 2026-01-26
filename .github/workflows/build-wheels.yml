@@ -125,7 +125,7 @@ jobs:
         env:
           NATIVE_WHEEL_DIR_PATTERN: dist/wheels-native-*
         run: |
-          set -eu
+          set -euo pipefail
           python -m venv .venv
           source .venv/bin/activate
           python -m pip install --upgrade pip
