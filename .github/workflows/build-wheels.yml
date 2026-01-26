@@ -129,12 +129,20 @@ jobs:
           python -m venv .venv
           source .venv/bin/activate
           python -m pip install --upgrade pip
-          python -m pip install dist/wheels-pure/*.whl
-          python - <<'PY'
+
+          # Resolve wheel paths to absolute paths to avoid CWD issues
+          PURE_WHEEL=$(realpath dist/wheels-pure/*.whl)
+          python -m pip install "${PURE_WHEEL}"
+
+          # Create temp dir and run Python checks there to avoid importing local repo
+          VERIFY_DIR=$(mktemp -d)
+          (
+            cd "${VERIFY_DIR}"
+            python - <<'PY'
           import cuprum as c
           assert c.is_rust_available() is False
           PY
-          python - <<'PY'
+            python - <<'PY'
           import importlib.metadata as im
           import json
 
@@ -149,6 +157,8 @@ jobs:
           with open("/tmp/cuprum-metadata.json", "w", encoding="utf-8") as handle:
               json.dump(snapshot, handle, indent=2, sort_keys=True)
           PY
+          )
+
           PYTAG=$(python - <<'PY'
           import sys
           print(f"cp{sys.version_info.major}{sys.version_info.minor}")
@@ -166,13 +176,19 @@ jobs:
             ls -al dist >&2
             exit 1
           fi
+
+          NATIVE_WHEEL=$(realpath "${NATIVE_WHEEL_GLOB[0]}")
           echo "=== Inspecting native wheel contents ==="
-          unzip -l "${NATIVE_WHEEL_GLOB[0]}" | grep -E "_rust_backend|\.so"
-          python -m pip install --force-reinstall "${NATIVE_WHEEL_GLOB[0]}"
-          echo "=== Listing installed cuprum package ==="
-          python -c "import cuprum; import os; pkg_dir = os.path.dirname(cuprum.__file__); print(f'Package at: {pkg_dir}'); import subprocess; subprocess.run(['ls', '-la', pkg_dir])"
-          echo "=== Testing Rust extension import ==="
-          python - <<'PY'
+          unzip -l "${NATIVE_WHEEL}" | grep -E "_rust_backend|\.so"
+          python -m pip install --force-reinstall "${NATIVE_WHEEL}"
+
+          # Run native wheel checks in temp dir to avoid importing local repo
+          (
+            cd "${VERIFY_DIR}"
+            echo "=== Listing installed cuprum package ==="
+            python -c "import cuprum; import os; pkg_dir = os.path.dirname(cuprum.__file__); print(f'Package at: {pkg_dir}'); import subprocess; subprocess.run(['ls', '-la', pkg_dir])"
+            echo "=== Testing Rust extension import ==="
+            python - <<'PY'
           import cuprum as c
           import sys
           try:
@@ -186,7 +202,7 @@ jobs:
           print(f"is_rust_available() = {c.is_rust_available()}")
           assert c.is_rust_available() is True, f"Expected True but got {c.is_rust_available()}"
           PY
-          python - <<'PY'
+            python - <<'PY'
           import importlib.metadata as im
           import json
 
@@ -209,3 +225,4 @@ jobs:
                   f"native={current}"
               )
           PY
+          )
