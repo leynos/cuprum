@@ -173,7 +173,6 @@ jobs:
           PY
           )
           ARCH=$(uname -m)
-          shopt -s nullglob
           # Note: NATIVE_WHEEL_DIR_PATTERN must NOT be quoted to allow glob expansion
           NATIVE_WHEEL_GLOB=(
             ${NATIVE_WHEEL_DIR_PATTERN}/*${PYTAG}*manylinux*${ARCH}*.whl
