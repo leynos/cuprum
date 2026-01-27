@@ -117,16 +117,15 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 
 ### 4.1. Build system integration
 
-- [ ] 4.1.1. Add maturin as an optional build backend alongside hatchling;
+- [x] 4.1.1. Add maturin as an optional build backend alongside `uv_build`;
   configure `pyproject.toml` to support both pure Python and native wheel
   builds.
-- [ ] 4.1.2. Create a `rust/` directory with a Cargo workspace; implement
+- [x] 4.1.2. Create a `rust/` directory with a Cargo workspace; implement
   minimal PyO3 bindings exposing `is_available()` stub and verify import from
   Python.
-- [ ] 4.1.3. Extend the CI matrix to build native wheels for Linux (x86_64,
-  aarch64), macOS (x86_64, arm64), and Windows (x86_64, arm64) using maturin
-  and cibuildwheel.
-- [ ] 4.1.4. Add a pure Python fallback wheel job that excludes native code;
+- [x] 4.1.3. Extend the CI matrix to build native wheels for Linux (x86_64,
+  aarch64), macOS (x86_64, arm64), and Windows (x86_64, arm64) using maturin.
+- [x] 4.1.4. Add a pure Python fallback wheel job that excludes native code;
   verify both wheel types install correctly and coexist in the same environment.
 
 ### 4.2. Core pump extension
@@ -175,7 +174,7 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 
 ### 4.5. Documentation
 
-- [ ] 4.5.1. Extend `docs/cuprum-design.md` with Section 13 covering Rust
+- [x] 4.5.1. Extend `docs/cuprum-design.md` with Section 13 covering Rust
   extension architecture, API boundary, fallback strategy, and performance
   characteristics.
 - [ ] 4.5.2. Add performance guidance to `docs/users-guide.md` explaining when

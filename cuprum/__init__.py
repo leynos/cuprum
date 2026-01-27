@@ -56,6 +56,7 @@ from cuprum.context import (
 from cuprum.events import ExecEvent
 from cuprum.logging_hooks import LoggingHookRegistration, logging_hook
 from cuprum.program import Program
+from cuprum.rust import is_rust_available
 from cuprum.sh import (
     CommandResult,
     ExecutionContext,
@@ -110,6 +111,7 @@ __all__ = [
     "builders",
     "current_context",
     "get_context",
+    "is_rust_available",
     "logging_hook",
     "observe",
     "run_concurrent",

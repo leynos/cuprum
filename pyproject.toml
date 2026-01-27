@@ -1,5 +1,7 @@
 [project]
 name = "cuprum"
+# When updating version, also update rust/cuprum-rust/Cargo.toml to match;
+# CI verifies metadata parity between pure Python and native wheels.
 version = "0.1.0"
 description = "cuprum package"
 readme = "README.md"
@@ -22,6 +24,7 @@ dev = [
     "pytest-xdist",
     "syrupy",
     "ty",
+    "maturin==1.6.0",
 ]
 
 [tool.ruff]
@@ -140,3 +143,9 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = ""
+
+[tool.maturin]
+bindings = "pyo3"
+manifest-path = "rust/cuprum-rust/Cargo.toml"
+module-name = "cuprum._rust_backend_native"
+python-source = "."

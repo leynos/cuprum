@@ -1481,6 +1481,12 @@ operations. Both pathways remain available and are treated as first-class:
 - Provides faster I/O interrupt handling than asyncio;
 - On Linux, leverages `splice()` for zero-copy between pipe file descriptors.
 
+The foundation release also introduces a minimal availability probe. The native
+module is published as `cuprum._rust_backend_native`, while the Python wrapper
+`cuprum._rust_backend` exposes `is_available()` and returns `False` when the
+native module is missing. Later phases use this probe to gate stream dispatch
+decisions.
+
 For screen readers: The following flowchart shows how Cuprum selects between
 the Python and Rust stream pathways based on environment configuration and
 extension availability.
@@ -1597,6 +1603,11 @@ def is_available() -> bool:
 The extension accepts raw file descriptors rather than asyncio stream objects.
 This enables operation outside the Python runtime whilst the dispatcher handles
 the translation between asyncio streams and file descriptors.
+
+The availability probe is implemented in the dedicated module
+`cuprum._rust_backend_native` and re-exported by the Python shim
+`cuprum._rust_backend`. The shim provides a safe fallback that always returns
+`False` when the native module cannot be imported.
 
 ### 13.4 Fallback Strategy
 
@@ -1752,9 +1763,13 @@ wheels:
 - Windows: x86_64 and arm64.
 
 A pure Python wheel is always published alongside native wheels to ensure
-fallback availability on platforms without native wheel support.
+fallback availability on platforms without native wheel support. Cuprum does
+not use cibuildwheel; native wheels are built with `maturin build` in
+manylinux-compatible environments, while pure Python wheels are built with
+`uv_build`. Release workflows collect all wheels into a single directory and
+publish them in one `uv publish` command to keep metadata aligned.
 
-Contributors building from source require a Rust toolchain (rustc 1.70+, cargo)
+Contributors building from source require a Rust toolchain (rustc 1.74+, cargo)
 in addition to Python. The `maturin develop` command builds and installs the
 extension in development mode.
 

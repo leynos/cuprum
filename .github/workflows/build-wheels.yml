@@ -7,8 +7,20 @@ on:
         type: string
         required: true
 
+env:
+  MATURIN_VERSION: "1.6.0"
+
 jobs:
-  build:
+  build-pure-wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - uses: ./.github/actions/pure-python-wheel
+        with:
+          python-version: ${{ inputs['python-version'] }}
+          artifact-name: wheels-pure
+
+  build-native-wheels:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -16,26 +28,205 @@ jobs:
         include:
           - os: ubuntu-latest
             arch: x86_64
-            cibw_arch: x86_64
+            target: x86_64-unknown-linux-gnu
+            manylinux: 2_28
+          # aarch64 wheels are built via QEMU emulation under maturin-action.
           - os: ubuntu-latest
             arch: aarch64
-            cibw_arch: aarch64
-          - os: windows-latest
+            target: aarch64-unknown-linux-gnu
+            manylinux: 2_28
+          - os: macos-15-intel
             arch: x86_64
-            cibw_arch: AMD64
-          - os: windows-latest
-            arch: aarch64
-            cibw_arch: ARM64
+            target: x86_64-apple-darwin
           - os: macos-latest
+            arch: arm64
+            target: aarch64-apple-darwin
+          - os: windows-2022
             arch: x86_64
-            cibw_arch: x86_64
-          - os: macos-latest
-            arch: aarch64
-            cibw_arch: arm64
+            target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-      - uses: ./.github/actions/build-wheels
+      - name: Compute Python tag for manylinux interpreter path
+        if: startsWith(matrix.os, 'ubuntu')
+        id: pytag
+        shell: bash
+        run: |
+          # Convert "3.13" or "3.13.1" to "cp313" format for manylinux /opt/python paths
+          # Extract major.minor only, then remove the dot
+          version='${{ inputs.python-version }}'
+          major_minor="$(echo "${version}" | cut -d. -f1,2)"
+          pytag="cp$(echo "${major_minor}" | tr -d '.')"
+          echo "tag=${pytag}" >> "$GITHUB_OUTPUT"
+          echo "interpreter=/opt/python/${pytag}-${pytag}/bin/python" >> "$GITHUB_OUTPUT"
+      - name: Build manylinux wheels (Linux x86_64)
+        # Maturin action builds inside a manylinux container for PyPI tags.
+        if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'x86_64'
+        uses: messense/maturin-action@47fbb7acd3db01f7830330b50689bd15135c12b9
+        with:
+          maturin-version: ${{ env.MATURIN_VERSION }}
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          command: build
+          args: >-
+            --release --out wheelhouse --manifest-path rust/cuprum-rust/Cargo.toml
+            -i ${{ steps.pytag.outputs.interpreter }}
+      - name: Set up QEMU (Linux aarch64)
+        if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'aarch64'
+        uses: docker/setup-qemu-action@45136fd328ae20ed788d00d3bada68ab496c214c
+        with:
+          platforms: arm64
+      - name: Build manylinux wheels (Linux aarch64)
+        # aarch64 wheels are cross-compiled; use version-only interpreter spec
+        # since the container's Python binaries are aarch64 and cannot execute.
+        if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'aarch64'
+        uses: messense/maturin-action@47fbb7acd3db01f7830330b50689bd15135c12b9
+        with:
+          maturin-version: ${{ env.MATURIN_VERSION }}
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          container: ghcr.io/rust-cross/manylinux_2_28-cross:aarch64
+          command: build
+          args: >-
+            --release --out wheelhouse --manifest-path rust/cuprum-rust/Cargo.toml
+            -i ${{ inputs.python-version }}
+      - name: Build native wheels (macOS/Windows)
+        if: "!startsWith(matrix.os, 'ubuntu')"
+        uses: ./.github/actions/build-wheels
         with:
           python-version: ${{ inputs['python-version'] }}
-          cibw-arch: ${{ matrix.cibw_arch }}
-          artifact-name: wheels-${{ matrix.os }}-${{ matrix.arch }}
+          target: ${{ matrix.target }}
+          artifact-name: wheels-native-${{ matrix.os }}-${{ matrix.arch }}
+          wheelhouse: wheelhouse
+          maturin-version: ${{ env.MATURIN_VERSION }}
+      - name: Upload wheel artifact (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wheels-native-${{ matrix.os }}-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+
+  verify-wheel-install:
+    runs-on: ubuntu-latest
+    needs:
+      - build-pure-wheel
+      - build-native-wheels
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ inputs['python-version'] }}
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+      - name: Install pure Python wheel, then native wheel
+        shell: bash
+        env:
+          NATIVE_WHEEL_DIR_PATTERN: dist/wheels-native-*
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+
+          # Expand pure wheel glob and verify exactly one match
+          shopt -s nullglob
+          PURE_WHEEL_GLOB=(dist/wheels-pure/*.whl)
+          if [ "${#PURE_WHEEL_GLOB[@]}" -ne 1 ]; then
+            echo "Expected exactly one pure wheel." >&2
+            echo "Matched: ${PURE_WHEEL_GLOB[*]:-<none>}" >&2
+            ls -al dist/wheels-pure >&2 || true
+            exit 1
+          fi
+          PURE_WHEEL=$(realpath "${PURE_WHEEL_GLOB[0]}")
+          python -m pip install "${PURE_WHEEL}"
+
+          # Create temp dir and run Python checks there to avoid importing local repo
+          VERIFY_DIR=$(mktemp -d)
+          (
+            cd "${VERIFY_DIR}"
+            python - <<'PY'
+          import cuprum as c
+          assert c.is_rust_available() is False
+          PY
+            python - <<'PY'
+          import importlib.metadata as im
+          import json
+
+          meta = im.metadata("cuprum")
+          snapshot = {
+              "name": meta.get("Name"),
+              "version": meta.get("Version"),
+              "requires_python": meta.get("Requires-Python"),
+              "requires_dist": sorted(meta.get_all("Requires-Dist") or []),
+              "classifiers": sorted(meta.get_all("Classifier") or []),
+          }
+          with open("/tmp/cuprum-metadata.json", "w", encoding="utf-8") as handle:
+              json.dump(snapshot, handle, indent=2, sort_keys=True)
+          PY
+          )
+
+          PYTAG=$(python - <<'PY'
+          import sys
+          print(f"cp{sys.version_info.major}{sys.version_info.minor}")
+          PY
+          )
+          ARCH=$(uname -m)
+          # Note: NATIVE_WHEEL_DIR_PATTERN must NOT be quoted to allow glob expansion
+          NATIVE_WHEEL_GLOB=(
+            ${NATIVE_WHEEL_DIR_PATTERN}/*${PYTAG}*manylinux*${ARCH}*.whl
+          )
+          if [ "${#NATIVE_WHEEL_GLOB[@]}" -ne 1 ]; then
+            echo "Expected exactly one native wheel for ${ARCH}." >&2
+            echo "Matched: ${NATIVE_WHEEL_GLOB[*]:-<none>}" >&2
+            ls -al dist >&2
+            exit 1
+          fi
+
+          NATIVE_WHEEL=$(realpath "${NATIVE_WHEEL_GLOB[0]}")
+          echo "=== Inspecting native wheel contents ==="
+          unzip -l "${NATIVE_WHEEL}" | grep -E "_rust_backend|\.so"
+          python -m pip install --force-reinstall "${NATIVE_WHEEL}"
+
+          # Run native wheel checks in temp dir to avoid importing local repo
+          (
+            cd "${VERIFY_DIR}"
+            echo "=== Listing installed cuprum package ==="
+            python -c "import cuprum; import os; pkg_dir = os.path.dirname(cuprum.__file__); print(f'Package at: {pkg_dir}'); import subprocess; subprocess.run(['ls', '-la', pkg_dir])"
+            echo "=== Testing Rust extension import ==="
+            python - <<'PY'
+          import cuprum as c
+          import cuprum._rust_backend_native as native
+
+          print(f"Native module loaded: {native}")
+          print(f"native.is_available() = {native.is_available()}")
+          print(f"c.is_rust_available() = {c.is_rust_available()}")
+
+          assert native.is_available() is True, f"native.is_available() returned {native.is_available()}"
+          assert c.is_rust_available() is True, f"c.is_rust_available() returned {c.is_rust_available()}"
+          PY
+            python - <<'PY'
+          import importlib.metadata as im
+          import json
+
+          with open("/tmp/cuprum-metadata.json", "r", encoding="utf-8") as handle:
+              baseline = json.load(handle)
+
+          meta = im.metadata("cuprum")
+          current = {
+              "name": meta.get("Name"),
+              "version": meta.get("Version"),
+              "requires_python": meta.get("Requires-Python"),
+              "requires_dist": sorted(meta.get_all("Requires-Dist") or []),
+              "classifiers": sorted(meta.get_all("Classifier") or []),
+          }
+
+          if baseline != current:
+              raise SystemExit(
+                  "Metadata mismatch between pure and native wheels:\n"
+                  f"pure={baseline}\n"
+                  f"native={current}"
+              )
+          PY
+          )

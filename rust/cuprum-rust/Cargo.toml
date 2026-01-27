@@ -1,0 +1,17 @@
+[package]
+name = "cuprum-rust"
+version = "0.1.0"
+edition = "2024"
+license = "ISC"
+description = "Optional Rust extension for cuprum stream operations"
+publish = false
+
+[lib]
+name = "_rust_backend_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.27.2", features = ["extension-module"] }
+
+[lints]
+workspace = true

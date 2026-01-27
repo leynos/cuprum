@@ -927,3 +927,81 @@ The `ConcurrentResult` dataclass provides:
 - `ok`: `True` when all commands succeeded.
 - `first_failure`: The first failed `CommandResult`, or `None` if all
   succeeded.
+
+## Performance extensions (optional Rust)
+
+Cuprum ships as a pure Python wheel by default. Some platforms also provide
+native wheels that bundle an optional Rust extension used by future stream
+optimizations. The Rust extension is not required to use Cuprum and does not
+change behaviour for pure Python installations.
+
+Cuprum does not use cibuildwheel; native wheels are built with maturin
+directly, and the pure Python wheel is built with `uv_build`.
+
+### Checking Rust availability
+
+It is possible to check whether the optional extension is available in the
+current environment using the public helper `cuprum.is_rust_available()`, which
+wraps the internal probe `_rust_backend.is_available()`. The module
+`cuprum._rust_backend` is private and not semver-stable, so production code
+should avoid calling `_rust_backend.is_available()` directly:
+
+```python
+import cuprum as c
+
+if c.is_rust_available():
+    print("Rust extension is available")
+else:
+    print("Rust extension is not installed")
+```
+
+The probe returns `False` on pure Python installations and does not raise when
+native wheels are missing.
+
+### Building from source
+
+For development builds, run `maturin develop` from the project root after
+installing a Rust toolchain. This installs Cuprum in editable/development mode
+as an alternative to building native wheels.
+
+Contributors who want to build native wheels need a Rust toolchain (rustc and
+cargo, version 1.74 or newer) and maturin. Pure Python wheels continue to build
+using `uv_build` without any Rust dependencies.
+
+### CI build commands
+
+The continuous integration (CI) workflows use two routes:
+
+- Pure Python wheel:
+
+```bash
+uv build --wheel --out-dir dist
+```
+
+- Native wheel (per platform):
+
+```bash
+maturin build --release --out wheelhouse \
+  --manifest-path rust/cuprum-rust/Cargo.toml
+```
+
+For Linux wheels, the native build runs inside a manylinux-compatible container
+and uses a matching compatibility tag plus explicit interpreter selection:
+
+```bash
+maturin build --release --manylinux 2_28 \
+  -i python3.13 --out wheelhouse \
+  --manifest-path rust/cuprum-rust/Cargo.toml
+```
+
+The CI workflow supplies `manylinux 2_28` via the maturin action configuration
+to ensure the resulting wheel tags are manylinux-compatible.
+
+### Verification procedure
+
+The canonical verification sequence is:
+
+1. Install the pure Python wheel and confirm the Rust probe returns `False`.
+2. Force-reinstall the native wheel and confirm the Rust probe returns `True`.
+3. Compare metadata (name, version, requires-python, dependencies, and
+   classifiers) across the two installs to detect drift.
