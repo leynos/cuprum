@@ -197,17 +197,14 @@ jobs:
             echo "=== Testing Rust extension import ==="
             python - <<'PY'
           import cuprum as c
-          import sys
-          try:
-              import cuprum._rust_backend_native as native
-              print(f"Native module loaded: {native}")
-              print(f"is_available() = {native.is_available()}")
-          except ImportError as e:
-              print(f"Failed to import native module: {e}", file=sys.stderr)
-              import traceback
-              traceback.print_exc()
-          print(f"is_rust_available() = {c.is_rust_available()}")
-          assert c.is_rust_available() is True, f"Expected True but got {c.is_rust_available()}"
+          import cuprum._rust_backend_native as native
+
+          print(f"Native module loaded: {native}")
+          print(f"native.is_available() = {native.is_available()}")
+          print(f"c.is_rust_available() = {c.is_rust_available()}")
+
+          assert native.is_available() is True, f"native.is_available() returned {native.is_available()}"
+          assert c.is_rust_available() is True, f"c.is_rust_available() returned {c.is_rust_available()}"
           PY
             python - <<'PY'
           import importlib.metadata as im
