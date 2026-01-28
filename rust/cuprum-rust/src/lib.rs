@@ -11,7 +11,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 #[cfg(unix)]
-use std::os::fd::{FromRawFd, RawFd};
+use std::os::fd::FromRawFd;
 
 #[cfg(windows)]
 use std::os::windows::io::{FromRawHandle, RawHandle};
@@ -54,13 +54,13 @@ fn rust_pump_stream(
     let reader_fd = convert_fd(reader_fd)?;
     let writer_fd = convert_fd(writer_fd)?;
 
-    let result = py.allow_threads(|| pump_stream(reader_fd, writer_fd, buffer_size));
+    let result = py.detach(|| pump_stream(reader_fd, writer_fd, buffer_size));
     result.map_err(PyErr::from)
 }
 
 #[cfg(unix)]
 #[must_use]
-fn convert_fd(value: i64) -> PyResult<RawFd> {
+fn convert_fd(value: i64) -> PyResult<PlatformFd> {
     let fd = i32::try_from(value)
         .map_err(|_| PyValueError::new_err("file descriptor out of range"))?;
     if fd < 0 {
@@ -71,25 +71,23 @@ fn convert_fd(value: i64) -> PyResult<RawFd> {
 
 #[cfg(windows)]
 #[must_use]
-fn convert_fd(value: i64) -> PyResult<RawHandle> {
-    let handle_value = isize::try_from(value)
+fn convert_fd(value: i64) -> PyResult<PlatformFd> {
+    let handle_value = u64::try_from(value)
         .map_err(|_| PyValueError::new_err("file handle out of range"))?;
-    if handle_value < 0 {
-        return Err(PyValueError::new_err("file handle must be non-negative"));
-    }
-    Ok(handle_value as RawHandle)
+    Ok(usize::try_from(handle_value)
+        .map_err(|_| PyValueError::new_err("file handle out of range"))?)
 }
 
 #[cfg(unix)]
-fn file_from_raw(fd: RawFd) -> File {
+fn file_from_raw(fd: PlatformFd) -> File {
     // SAFETY: The caller ensures the fd is valid and owned by the caller.
     unsafe { File::from_raw_fd(fd) }
 }
 
 #[cfg(windows)]
-fn file_from_raw(handle: RawHandle) -> File {
+fn file_from_raw(handle: PlatformFd) -> File {
     // SAFETY: The caller ensures the handle is valid and owned by the caller.
-    unsafe { File::from_raw_handle(handle) }
+    unsafe { File::from_raw_handle(handle as RawHandle) }
 }
 
 fn pump_stream(
@@ -106,10 +104,10 @@ fn pump_stream(
 }
 
 #[cfg(unix)]
-type PlatformFd = RawFd;
+type PlatformFd = i32;
 
 #[cfg(windows)]
-type PlatformFd = RawHandle;
+type PlatformFd = usize;
 
 fn handle_write(writer: &mut File, chunk: &[u8]) -> Result<u64, io::Error> {
     writer.write_all(chunk)?;
