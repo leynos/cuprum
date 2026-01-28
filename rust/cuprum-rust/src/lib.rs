@@ -111,6 +111,12 @@ type PlatformFd = RawFd;
 #[cfg(windows)]
 type PlatformFd = RawHandle;
 
+fn handle_write(writer: &mut File, chunk: &[u8]) -> Result<u64, io::Error> {
+    writer.write_all(chunk)?;
+    u64::try_from(chunk.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "write length overflow"))
+}
+
 fn pump_stream_files(
     reader: &mut File,
     writer: &mut File,
@@ -125,28 +131,28 @@ fn pump_stream_files(
         if read_len == 0 {
             break;
         }
-        if writer_open {
-            let chunk = buffer.get(..read_len).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "read length exceeds buffer size",
-                )
-            })?;
-            if let Err(err) = writer.write_all(chunk) {
+        if !writer_open {
+            continue;
+        }
+
+        let chunk = buffer.get(..read_len).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "read length exceeds buffer size",
+            )
+        })?;
+
+        match handle_write(writer, chunk) {
+            Ok(bytes) => total_written = total_written.saturating_add(bytes),
+            Err(err)
                 if matches!(
                     err.kind(),
                     io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
-                ) {
-                    writer_open = false;
-                } else {
-                    return Err(err);
-                }
-            } else {
-                let read_len_u64 = u64::try_from(read_len).map_err(|_| {
-                    io::Error::new(io::ErrorKind::Other, "read length overflow")
-                })?;
-                total_written = total_written.saturating_add(read_len_u64);
+                ) =>
+            {
+                writer_open = false;
             }
+            Err(err) => return Err(err),
         }
     }
 

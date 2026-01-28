@@ -40,14 +40,25 @@ def _load_streams_rs() -> ModuleType:
     return _streams_rs
 
 
+@contextlib.contextmanager
+def _pipe_pair() -> typ.Iterator[tuple[int, int, int, int]]:
+    """Manage pipe creation and cleanup for stream tests."""
+    in_read, in_write = os.pipe()
+    out_read, out_write = os.pipe()
+    try:
+        yield in_read, in_write, out_read, out_write
+    finally:
+        _safe_close(in_read)
+        _safe_close(in_write)
+        _safe_close(out_read)
+        _safe_close(out_write)
+
+
 def test_rust_pump_stream_transfers_bytes() -> None:
     """rust_pump_stream transfers bytes between pipes."""
     streams = _load_streams_rs()
     payload = b"cuprum-stream-payload"
-    in_read, in_write = os.pipe()
-    out_read, out_write = os.pipe()
-
-    try:
+    with _pipe_pair() as (in_read, in_write, out_read, out_write):
         os.write(in_write, payload)
         _safe_close(in_write)
 
@@ -55,11 +66,6 @@ def test_rust_pump_stream_transfers_bytes() -> None:
 
         _safe_close(out_write)
         output = _read_all(out_read)
-    finally:
-        _safe_close(in_read)
-        _safe_close(in_write)
-        _safe_close(out_read)
-        _safe_close(out_write)
 
     assert output == payload
     assert transferred == len(payload)
@@ -69,10 +75,7 @@ def test_rust_pump_stream_respects_buffer_size() -> None:
     """rust_pump_stream honours the buffer_size parameter."""
     streams = _load_streams_rs()
     payload = os.urandom(16384)
-    in_read, in_write = os.pipe()
-    out_read, out_write = os.pipe()
-
-    try:
+    with _pipe_pair() as (in_read, in_write, out_read, out_write):
         os.write(in_write, payload)
         _safe_close(in_write)
 
@@ -84,11 +87,6 @@ def test_rust_pump_stream_respects_buffer_size() -> None:
 
         _safe_close(out_write)
         output = _read_all(out_read)
-    finally:
-        _safe_close(in_read)
-        _safe_close(in_write)
-        _safe_close(out_read)
-        _safe_close(out_write)
 
     assert output == payload
     assert transferred == len(payload)
