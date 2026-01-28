@@ -4,14 +4,14 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`, and
 `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
-Status: DRAFT
+Status: COMPLETE
 
 PLANS.md is not present in this repository.
 
 ## Purpose / big picture
 
 Provide a Rust-backed `rust_pump_stream()` that transfers data between file
-Descriptors outside the GIL with a configurable buffer (default 64 KB) and
+descriptors outside the GIL with a configurable buffer (default 64 KB) and
 clean error propagation to Python exceptions. The new function must be fully
 covered by unit and behavioural tests, and documentation must reflect the Rust
 extension architecture, API boundary, fallback strategy, and performance
@@ -50,8 +50,8 @@ entry 4.2.1 should be marked done after completion.
 
 - Risk: Rust file descriptor handling may accidentally close file descriptors
   owned by Python, causing subtle downstream failures. Severity: high
-  Likelihood: medium Mitigation: use `ManuallyDrop<File>` (or equivalent)
-  wrappers to avoid closing FDs and document ownership clearly.
+  Likelihood: medium Mitigation: avoid closing the reader FD by forgetting the
+  `File` wrapper. Allow the writer FD to close when the pump completes.
 - Risk: GIL release might not cover the full I/O loop, reducing throughput.
   Severity: medium Likelihood: medium Mitigation: wrap the entire pump loop in
   `Python::allow_threads` and avoid Python calls inside the loop.
@@ -64,31 +64,50 @@ entry 4.2.1 should be marked done after completion.
 
 ## Progress
 
-- [ ] (2026-01-28 00:00Z) Draft ExecPlan for 4.2.1 implementation.
-- [ ] Write failing unit tests for `rust_pump_stream` normal and error paths.
-- [ ] Write failing behavioural tests (pytest-bdd) that exercise the Rust
-  pump stream when available.
-- [ ] Implement Rust `rust_pump_stream()` with GIL release and error mapping.
-- [ ] Add or update Python shim module(s) to expose Rust function safely.
-- [ ] Update documentation (`docs/cuprum-design.md`, `docs/users-guide.md`).
-- [ ] Mark roadmap 4.2.1 as done and validate quality gates.
+- [x] (2026-01-28 01:10Z) Draft ExecPlan for 4.2.1 implementation.
+- [x] (2026-01-28 01:25Z) Write failing unit tests for `rust_pump_stream`
+  normal and error paths.
+- [x] (2026-01-28 01:30Z) Write failing behavioural tests (pytest-bdd) that
+  exercise the Rust pump stream when available.
+- [x] (2026-01-28 01:50Z) Implement Rust `rust_pump_stream()` with GIL release
+  and error mapping.
+- [x] (2026-01-28 01:55Z) Add Python shim module to expose Rust function
+  safely.
+- [x] (2026-01-28 02:10Z) Update documentation (`docs/cuprum-design.md`,
+  `docs/users-guide.md`).
+- [x] (2026-01-28 02:15Z) Mark roadmap 4.2.1 as done.
+- [x] (2026-01-28 02:45Z) Run quality gates and confirm results.
 
 ## Surprises & discoveries
 
 - Observation: Qdrant notes store could not be reached (`qdrant-find` failed).
-  Evidence: tool returned “All connection attempts failed.”
+  Evidence: tool returned "All connection attempts failed."
   Impact: no prior notes available for this plan; proceed with local docs only.
+- Observation: `make nixie` timed out with the default 10s command timeout.
+  Evidence: command timed out during Mermaid validation before completion.
+  Impact: reran with a longer timeout to confirm diagrams are valid.
 
 ## Decision log
 
-- Decision: Pending. Record module naming (`cuprum._streams_rs` vs
-  `_rust_backend_native`) and FD ownership strategy once confirmed.
-  Rationale: Must align implementation with existing docs and tests.
-  Date/Author: TBD
+- Decision: Expose stream functions through a Python shim module
+  `cuprum._streams_rs` that calls into `cuprum._rust_backend_native` and
+  performs Windows handle conversion. Rationale: keeps the native module name
+  stable while allowing Python-only platform adaptation. Date/Author:
+  2026-01-28 / Codex
+- Decision: Close the writer FD after pumping but keep the reader FD open by
+  forgetting the `File` wrapper. Rationale: matches Python `_pump_stream()`
+  semantics while avoiding accidental closure of upstream resources.
+  Date/Author: 2026-01-28 / Codex
 
 ## Outcomes & retrospective
 
-- Pending until implementation completes.
+- Implemented `rust_pump_stream()` with GIL release, configurable buffer size,
+  and `OSError` propagation for I/O failures while draining on broken pipes.
+- Added unit and behavioural tests; the Rust-specific tests skip when the
+  extension is unavailable.
+- Updated design and user documentation plus marked roadmap 4.2.1 complete.
+- Quality gates all pass (`make check-fmt`, `make lint`, `make typecheck`,
+  `make test`, `make markdownlint`, `make nixie`).
 
 ## Context and orientation
 
@@ -102,15 +121,16 @@ Relevant code and documents:
   `_rust_backend_native`.
 - `docs/cuprum-design.md` Section 13: describes Rust stream architecture and
   API boundary; must be updated to reflect actual implementation choices.
-- `docs/users-guide.md`: contains the “Performance extensions (optional Rust)”
+- `docs/users-guide.md`: contains the "Performance extensions (optional Rust)"
   section; must reflect any new consumer-visible behaviour.
 - `docs/roadmap.md`: 4.2.1 task must be marked done on completion.
 - `tests/behaviour/` and `tests/features/`: pytest-bdd behavioural tests.
 - `cuprum/unittests/`: unit tests (pytest).
 
-Current state: the Rust extension exists only as an availability probe. No
-`rust_pump_stream()` function or `cuprum._streams_rs` module exists yet. The
-Python `_pump_stream()` uses asyncio streams and 4 KB chunks.
+Current state: the Rust extension now exposes `rust_pump_stream()` via
+`cuprum._rust_backend_native`, with a Python shim in `cuprum._streams_rs`.
+`rust_consume_stream()` is still pending. The Python `_pump_stream()` remains
+the default reference implementation with 4 KB chunks.
 
 ## Plan of work
 
@@ -151,8 +171,8 @@ Extend the Rust module in `rust/cuprum-rust/src/lib.rs` to export
 - Validate `buffer_size > 0`, else raise `ValueError`.
 - Release the GIL with `Python::allow_threads` for the entire read/write loop.
 - Use a reusable buffer sized to `buffer_size`.
-- Use non-owning file descriptor wrappers (`ManuallyDrop<File>` or equivalent)
-  so Rust does not close FDs owned by Python.
+- Avoid closing the reader FD by forgetting the `File` wrapper; allow the
+  writer FD to close so downstream receives EOF, matching Python semantics.
 - On `BrokenPipe`/`ConnectionReset` during writes, stop writing but keep
   draining reads to avoid upstream deadlocks (matching `_pump_stream()`).
 - Map any other `std::io::Error` into `OSError` and propagate to Python.
@@ -268,7 +288,7 @@ Expected changes include:
 
 ## Interfaces and dependencies
 
-Planned Rust function (PyO3-exposed):
+Rust function (PyO3-exposed):
 
     rust_pump_stream(reader_fd: int, writer_fd: int, buffer_size: int = 65536)
         -> int
@@ -277,11 +297,11 @@ Planned Rust function (PyO3-exposed):
 - Raises `ValueError` for invalid buffer sizes.
 - Raises `OSError` for I/O errors other than expected broken pipes.
 
-Planned Python module exposure:
+Python module exposure:
 
 - `cuprum._rust_backend_native` remains the native module name.
-- If required for clarity or future dispatch, a new Python shim module
-  `cuprum/_streams_rs.py` re-exports `rust_pump_stream()`.
+- Python shim module `cuprum/_streams_rs.py` re-exports `rust_pump_stream()`
+  and handles Windows handle conversion before calling the native module.
 
 Dependencies:
 
@@ -290,4 +310,6 @@ Dependencies:
 
 ## Revision note (required when editing an ExecPlan)
 
-Initial draft authored on 2026-01-28 to plan 4.2.1 implementation.
+Initial draft authored on 2026-01-28 to plan 4.2.1 implementation. Updated on
+2026-01-28 to mark completion, record decisions, and document validation
+results (including the extended timeout for `make nixie`).
