@@ -54,18 +54,37 @@ def _pipe_pair() -> typ.Iterator[tuple[int, int, int, int]]:
         _safe_close(out_write)
 
 
-def test_rust_pump_stream_transfers_bytes() -> None:
-    """rust_pump_stream transfers bytes between pipes."""
-    streams = _load_streams_rs()
-    payload = b"cuprum-stream-payload"
+def _pump_payload(
+    streams: ModuleType,
+    payload: bytes,
+    *,
+    buffer_size: int | None = None,
+) -> tuple[bytes, int]:
+    """Pump payload through the Rust stream and return output and count."""
     with _pipe_pair() as (in_read, in_write, out_read, out_write):
         os.write(in_write, payload)
         _safe_close(in_write)
 
-        transferred = streams.rust_pump_stream(in_read, out_write)
+        if buffer_size is None:
+            transferred = streams.rust_pump_stream(in_read, out_write)
+        else:
+            transferred = streams.rust_pump_stream(
+                in_read,
+                out_write,
+                buffer_size=buffer_size,
+            )
 
         _safe_close(out_write)
         output = _read_all(out_read)
+
+    return output, transferred
+
+
+def test_rust_pump_stream_transfers_bytes() -> None:
+    """rust_pump_stream transfers bytes between pipes."""
+    streams = _load_streams_rs()
+    payload = b"cuprum-stream-payload"
+    output, transferred = _pump_payload(streams, payload)
 
     assert output == payload
     assert transferred == len(payload)
@@ -75,18 +94,7 @@ def test_rust_pump_stream_respects_buffer_size() -> None:
     """rust_pump_stream honours the buffer_size parameter."""
     streams = _load_streams_rs()
     payload = os.urandom(16384)
-    with _pipe_pair() as (in_read, in_write, out_read, out_write):
-        os.write(in_write, payload)
-        _safe_close(in_write)
-
-        transferred = streams.rust_pump_stream(
-            in_read,
-            out_write,
-            buffer_size=1024,
-        )
-
-        _safe_close(out_write)
-        output = _read_all(out_read)
+    output, transferred = _pump_payload(streams, payload, buffer_size=1024)
 
     assert output == payload
     assert transferred == len(payload)
