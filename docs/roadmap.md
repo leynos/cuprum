@@ -130,10 +130,10 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 
 ### 4.2. Core pump extension
 
-- [ ] 4.2.1. Implement `rust_pump_stream()` with GIL release, configurable
+- [x] 4.2.1. Implement `rust_pump_stream()` with GIL release, configurable
   buffer size (default 64 KB), and proper error propagation to Python
   exceptions.
-  - [ ] Add unit tests covering normal operation and error paths.
+  - [x] Add unit tests covering normal operation and error paths.
 - [ ] 4.2.2. Implement `rust_consume_stream()` with incremental UTF-8 decoding
   matching Python pathway behaviour for `errors="replace"` semantics; verify
   parity with edge-case tests.

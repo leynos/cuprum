@@ -1481,6 +1481,13 @@ operations. Both pathways remain available and are treated as first-class:
 - Provides faster I/O interrupt handling than asyncio;
 - On Linux, leverages `splice()` for zero-copy between pipe file descriptors.
 
+The native Rust functions are exported from
+`cuprum._rust_backend_native`. A thin Python shim module
+`cuprum._streams_rs` re-exports the stream functions and performs any
+platform-specific file descriptor conversion (for example, translating
+Windows file descriptors into OS handles). This keeps the native module
+name stable while allowing Python-only adaptations.
+
 The foundation release also introduces a minimal availability probe. The native
 module is published as `cuprum._rust_backend_native`, while the Python wrapper
 `cuprum._rust_backend` exposes `is_available()` and returns `False` when the
@@ -1528,7 +1535,9 @@ flowchart TD
 
 ### 13.3 API Boundary
 
-The Rust extension exposes three functions via PyO3:
+The Rust extension exposes three functions via PyO3. As of 4.2.1,
+`rust_pump_stream` and `is_available` are implemented; `rust_consume_stream`
+lands in 4.2.2.
 
 ```python
 # cuprum/_streams_rs.pyi (type stubs)
@@ -1559,8 +1568,11 @@ def rust_pump_stream(
 
     Raises
     ------
+    ValueError
+        When ``buffer_size`` is less than 1.
     OSError
-        When an I/O error occurs during transfer.
+        When an I/O error occurs during transfer. Expected broken-pipe
+        conditions are swallowed while the reader continues draining.
 
     """
     ...
