@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import os
 import typing as typ
 
@@ -10,6 +9,8 @@ import pytest
 from pytest_bdd import given, scenario, then, when
 
 from cuprum import _rust_backend
+from tests.helpers.stream_pipes import read_all as _read_all
+from tests.helpers.stream_pipes import safe_close as _safe_close
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
@@ -21,23 +22,6 @@ if typ.TYPE_CHECKING:
 )
 def test_rust_pump_stream_behaviour() -> None:
     """Validate the Rust pump stream behaviour."""
-
-
-def _safe_close(fd: int) -> None:
-    """Close a file descriptor, ignoring errors."""
-    with contextlib.suppress(OSError):
-        os.close(fd)
-
-
-def _read_all(fd: int, *, chunk_size: int = 4096) -> bytes:
-    """Read all data from a file descriptor until EOF."""
-    chunks: list[bytes] = []
-    while True:
-        chunk = os.read(fd, chunk_size)
-        if not chunk:
-            break
-        chunks.append(chunk)
-    return b"".join(chunks)
 
 
 def _load_streams_rs() -> ModuleType:

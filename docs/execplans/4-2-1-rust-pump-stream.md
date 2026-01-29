@@ -11,8 +11,9 @@ PLANS.md is not present in this repository.
 ## Purpose / big picture
 
 Provide a Rust-backed `rust_pump_stream()` that transfers data between file
-descriptors outside the GIL with a configurable buffer (default 64 KB) and
-clean error propagation to Python exceptions. The new function must be fully
+descriptors outside the Global Interpreter Lock (GIL) with a configurable
+buffer (default 64 KB) and clean error propagation to Python exceptions. The
+new function must be fully
 covered by unit and behavioural tests, and documentation must reflect the Rust
 extension architecture, API boundary, fallback strategy, and performance
 characteristics. Success is visible when the new tests fail before the Rust
@@ -50,8 +51,9 @@ entry 4.2.1 should be marked done after completion.
 
 - Risk: Rust file descriptor handling may accidentally close file descriptors
   owned by Python, causing subtle downstream failures. Severity: high
-  Likelihood: medium Mitigation: avoid closing the reader FD by forgetting the
-  `File` wrapper. Allow the writer FD to close when the pump completes.
+  Likelihood: medium Mitigation: avoid closing the reader file descriptor (FD)
+  by forgetting the `File` wrapper. Allow the writer FD to close when the pump
+  completes.
 - Risk: GIL release might not cover the full I/O loop, reducing throughput.
   Severity: medium Likelihood: medium Mitigation: wrap the entire pump loop in
   `Python::allow_threads` and avoid Python calls inside the loop.
@@ -152,8 +154,8 @@ via the chosen Python shim/module. Cover:
 - Configurable buffer size behaviour (non-default value).
 - Error path when an invalid or closed file descriptor is supplied (expect
   `OSError`).
-- Broken pipe handling: downstream closes early, function should not raise and
-  should continue draining input to match Python semantics.
+- Broken pipe handling: downstream closes early; the function should not raise
+  and should continue draining input to match Python semantics.
 
 Add behavioural tests using pytest-bdd that exercise the Rust pump stream when
 available. The behavioural test should be skipped cleanly if the native

@@ -2,33 +2,19 @@
 
 from __future__ import annotations
 
-import contextlib
+import errno
 import os
 import typing as typ
 
 import pytest
 
 from cuprum import _rust_backend
+from tests.helpers.stream_pipes import pipe_pair as _pipe_pair
+from tests.helpers.stream_pipes import read_all as _read_all
+from tests.helpers.stream_pipes import safe_close as _safe_close
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
-
-
-def _safe_close(fd: int) -> None:
-    """Close a file descriptor, ignoring errors."""
-    with contextlib.suppress(OSError):
-        os.close(fd)
-
-
-def _read_all(fd: int, *, chunk_size: int = 4096) -> bytes:
-    """Read all data from a file descriptor until EOF."""
-    chunks: list[bytes] = []
-    while True:
-        chunk = os.read(fd, chunk_size)
-        if not chunk:
-            break
-        chunks.append(chunk)
-    return b"".join(chunks)
 
 
 def _load_streams_rs() -> ModuleType:
@@ -38,20 +24,6 @@ def _load_streams_rs() -> ModuleType:
     from cuprum import _streams_rs
 
     return _streams_rs
-
-
-@contextlib.contextmanager
-def _pipe_pair() -> typ.Iterator[tuple[int, int, int, int]]:
-    """Manage pipe creation and cleanup for stream tests."""
-    in_read, in_write = os.pipe()
-    out_read, out_write = os.pipe()
-    try:
-        yield in_read, in_write, out_read, out_write
-    finally:
-        _safe_close(in_read)
-        _safe_close(in_write)
-        _safe_close(out_read)
-        _safe_close(out_write)
 
 
 def _pump_payload(
@@ -127,24 +99,36 @@ def test_rust_pump_stream_propagates_io_errors() -> None:
         _safe_close(write_fd)
 
 
+def test_rust_pump_stream_transfers_zero_bytes() -> None:
+    """rust_pump_stream handles empty input and returns zero."""
+    streams = _load_streams_rs()
+    payload = b""
+    output, transferred = _pump_payload(streams, payload)
+
+    assert output == payload
+    assert transferred == 0
+
+
 def test_rust_pump_stream_ignores_broken_pipe() -> None:
     """rust_pump_stream drains input even if the writer breaks."""
     streams = _load_streams_rs()
-    payload = b"broken-pipe"
-    in_read, in_write = os.pipe()
-    out_read, out_write = os.pipe()
-
-    try:
+    payload = b"x" * (64 * 1024)
+    with _pipe_pair() as (in_read, in_write, out_read, out_write):
         _safe_close(out_read)
         os.write(in_write, payload)
         _safe_close(in_write)
 
-        transferred = streams.rust_pump_stream(in_read, out_write)
-    finally:
-        _safe_close(in_read)
-        _safe_close(in_write)
-        _safe_close(out_read)
-        _safe_close(out_write)
+        try:
+            transferred = streams.rust_pump_stream(in_read, out_write)
+        except OSError as exc:
+            if getattr(exc, "errno", None) in {errno.EPIPE, errno.ECONNRESET}:
+                pytest.fail(
+                    "rust_pump_stream raised OSError for broken pipe/connection reset"
+                )
+            raise
+
+        remaining = os.read(in_read, 4096)
+        assert remaining == b""
 
     assert isinstance(transferred, int)
     assert transferred <= len(payload)

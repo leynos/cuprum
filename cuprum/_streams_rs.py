@@ -21,6 +21,7 @@ def _convert_fd_for_platform(fd: int) -> int:
     """Convert a file descriptor for platform-specific Rust handling."""
     if os.name != "nt":
         return fd
+    import ctypes
     import msvcrt
 
     # Use getattr to avoid cross-platform stub mismatches in type checking.
@@ -28,7 +29,10 @@ def _convert_fd_for_platform(fd: int) -> int:
         "typ.Callable[[int], int]",
         getattr(msvcrt, "get_osfhandle"),  # noqa: B009
     )
-    return get_osfhandle(fd)
+    handle = get_osfhandle(fd)
+    bit_size = ctypes.sizeof(ctypes.c_void_p) * 8
+    mask = (1 << bit_size) - 1
+    return handle & mask
 
 
 def rust_pump_stream(

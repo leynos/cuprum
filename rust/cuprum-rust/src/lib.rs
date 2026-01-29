@@ -72,10 +72,13 @@ fn convert_fd(value: i64) -> PyResult<PlatformFd> {
 #[cfg(windows)]
 #[must_use]
 fn convert_fd(value: i64) -> PyResult<PlatformFd> {
-    let handle_value = u64::try_from(value)
+    let handle_value = value as u64;
+    if usize::BITS >= 64 {
+        return Ok(handle_value as usize);
+    }
+    let truncated = u32::try_from(handle_value)
         .map_err(|_| PyValueError::new_err("file handle out of range"))?;
-    Ok(usize::try_from(handle_value)
-        .map_err(|_| PyValueError::new_err("file handle out of range"))?)
+    Ok(truncated as usize)
 }
 
 #[cfg(unix)]
@@ -99,6 +102,7 @@ fn pump_stream(
     let mut writer = file_from_raw(writer_fd);
     let result = pump_stream_files(&mut reader, &mut writer, buffer_size);
     // The caller owns the reader FD; avoid closing it here.
+    // The writer FD is treated as consumed and closes on drop to signal EOF.
     std::mem::forget(reader);
     result
 }
@@ -113,6 +117,28 @@ fn handle_write(writer: &mut File, chunk: &[u8]) -> Result<u64, io::Error> {
     writer.write_all(chunk)?;
     u64::try_from(chunk.len())
         .map_err(|_| io::Error::new(io::ErrorKind::Other, "write length overflow"))
+}
+
+fn handle_write_result(
+    writer: &mut File,
+    chunk: &[u8],
+    total_written: &mut u64,
+) -> Result<bool, io::Error> {
+    match handle_write(writer, chunk) {
+        Ok(bytes) => {
+            *total_written = total_written.saturating_add(bytes);
+            Ok(true)
+        }
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 fn pump_stream_files(
@@ -140,18 +166,7 @@ fn pump_stream_files(
             )
         })?;
 
-        match handle_write(writer, chunk) {
-            Ok(bytes) => total_written = total_written.saturating_add(bytes),
-            Err(err)
-                if matches!(
-                    err.kind(),
-                    io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
-                ) =>
-            {
-                writer_open = false;
-            }
-            Err(err) => return Err(err),
-        }
+        writer_open = handle_write_result(writer, chunk, &mut total_written)?;
     }
 
     Ok(total_written)
