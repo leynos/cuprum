@@ -93,6 +93,10 @@ fn file_from_raw(handle: PlatformFd) -> File {
     unsafe { File::from_raw_handle(handle as RawHandle) }
 }
 
+/// Pump bytes between file descriptors with explicit ownership semantics.
+///
+/// The reader FD is borrowed and left open. The writer FD is treated as
+/// consumed and closes on drop to signal EOF downstream.
 fn pump_stream(
     reader_fd: PlatformFd,
     writer_fd: PlatformFd,
@@ -159,12 +163,7 @@ fn pump_stream_files(
             continue;
         }
 
-        let chunk = buffer.get(..read_len).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "read length exceeds buffer size",
-            )
-        })?;
+        let chunk = &buffer[..read_len];
 
         writer_open = handle_write_result(writer, chunk, &mut total_written)?;
     }

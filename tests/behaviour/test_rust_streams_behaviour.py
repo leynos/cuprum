@@ -5,12 +5,9 @@ from __future__ import annotations
 import os
 import typing as typ
 
-import pytest
 from pytest_bdd import given, scenario, then, when
 
-from cuprum import _rust_backend
-from tests.helpers.stream_pipes import read_all as _read_all
-from tests.helpers.stream_pipes import safe_close as _safe_close
+from tests.helpers.stream_pipes import _pipe_pair, _read_all, _safe_close
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
@@ -24,20 +21,10 @@ def test_rust_pump_stream_behaviour() -> None:
     """Validate the Rust pump stream behaviour."""
 
 
-def _load_streams_rs() -> ModuleType:
-    """Import the Rust streams module or skip if unavailable."""
-    if not _rust_backend.is_available():
-        pytest.skip("Rust extension is not installed.")
-    from cuprum import _streams_rs
-
-    return _streams_rs
-
-
 @given("the Rust pump stream is available", target_fixture="rust_pump")
-def given_rust_pump() -> typ.Callable[[int, int], int]:
+def given_rust_pump(rust_streams: ModuleType) -> typ.Callable[[int, int], int]:
     """Expose the Rust pump stream function."""
-    streams = _load_streams_rs()
-    return streams.rust_pump_stream
+    return rust_streams.rust_pump_stream
 
 
 @when(
@@ -49,10 +36,7 @@ def when_pump_payload(
 ) -> tuple[bytes, bytes]:
     """Pump data through pipes using the Rust function."""
     payload = b"rust-pump-behaviour"
-    in_read, in_write = os.pipe()
-    out_read, out_write = os.pipe()
-
-    try:
+    with _pipe_pair() as (in_read, in_write, out_read, out_write):
         os.write(in_write, payload)
         _safe_close(in_write)
 
@@ -60,11 +44,6 @@ def when_pump_payload(
 
         _safe_close(out_write)
         output = _read_all(out_read)
-    finally:
-        _safe_close(in_read)
-        _safe_close(in_write)
-        _safe_close(out_read)
-        _safe_close(out_write)
 
     return payload, output
 
