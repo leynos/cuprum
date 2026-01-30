@@ -48,44 +48,49 @@ def _pump_payload(
     return output, transferred
 
 
-def test_rust_pump_stream_transfers_bytes(rust_streams: ModuleType) -> None:
-    """Validate that rust_pump_stream transfers bytes between pipes.
-
-    Parameters
-    ----------
-    rust_streams : ModuleType
-        The Rust streams module fixture.
-
-    Returns
-    -------
-    None
-    """
-    payload = b"cuprum-stream-payload"
-    output, transferred = _pump_payload(rust_streams, payload)
-
-    assert output == payload, "expected payload to round-trip through pump"
-    assert transferred == len(payload), "expected transferred count to match payload"
-
-
-def test_rust_pump_stream_respects_buffer_size(
+@pytest.mark.parametrize(
+    ("test_id", "payload", "buffer_size"),
+    [
+        ("basic_payload", b"cuprum-stream-payload", None),
+        ("custom_buffer_size", os.urandom(16384), 1024),
+        ("zero_bytes", b"", None),
+    ],
+    ids=lambda val: val if isinstance(val, str) else "",
+)
+def test_rust_pump_stream_transfers_data(
     rust_streams: ModuleType,
+    test_id: str,
+    payload: bytes,
+    buffer_size: int | None,
 ) -> None:
-    """Validate that rust_pump_stream honors the buffer_size parameter.
+    """Validate rust_pump_stream transfers bytes between pipes.
+
+    Parameterised test covering normal transfer, custom buffer sizes, and empty
+    input.
 
     Parameters
     ----------
     rust_streams : ModuleType
         The Rust streams module fixture.
+    test_id : str
+        Test case identifier for parameterisation.
+    payload : bytes
+        The payload to transfer through the pump.
+    buffer_size : int | None
+        Optional buffer size parameter; None uses default.
 
     Returns
     -------
     None
     """
-    payload = os.urandom(16384)
-    output, transferred = _pump_payload(rust_streams, payload, buffer_size=1024)
+    output, transferred = _pump_payload(rust_streams, payload, buffer_size=buffer_size)
 
-    assert output == payload, "expected payload to match output for custom buffer"
-    assert transferred == len(payload), "expected transferred count to match payload"
+    assert output == payload, (
+        f"expected payload to round-trip through pump ({test_id})"
+    )
+    assert transferred == len(payload), (
+        f"expected transferred count to match payload ({test_id})"
+    )
 
 
 def test_rust_pump_stream_raises_on_invalid_buffer(
@@ -137,27 +142,6 @@ def test_rust_pump_stream_propagates_io_errors(
     assert excinfo.value.errno in {errno.EBADF, errno.EINVAL}, (
         "expected errno to indicate an invalid file descriptor/handle"
     )
-
-
-def test_rust_pump_stream_transfers_zero_bytes(
-    rust_streams: ModuleType,
-) -> None:
-    """Verify rust_pump_stream handles empty input and returns zero.
-
-    Parameters
-    ----------
-    rust_streams : ModuleType
-        The Rust streams module fixture.
-
-    Returns
-    -------
-    None
-    """
-    payload = b""
-    output, transferred = _pump_payload(rust_streams, payload)
-
-    assert output == payload, "expected empty payload to remain empty"
-    assert transferred == 0, "expected zero bytes transferred for empty payload"
 
 
 def test_rust_pump_stream_ignores_broken_pipe(
