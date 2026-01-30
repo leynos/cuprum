@@ -85,9 +85,7 @@ def test_rust_pump_stream_transfers_data(
     """
     output, transferred = _pump_payload(rust_streams, payload, buffer_size=buffer_size)
 
-    assert output == payload, (
-        f"expected payload to round-trip through pump ({test_id})"
-    )
+    assert output == payload, f"expected payload to round-trip through pump ({test_id})"
     assert transferred == len(payload), (
         f"expected transferred count to match payload ({test_id})"
     )
