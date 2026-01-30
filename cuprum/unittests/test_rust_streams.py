@@ -1,4 +1,11 @@
-"""Unit tests for the Rust stream pump."""
+"""Unit tests for the Rust stream pump.
+
+These tests validate the optional Rust-backed pump behavior and error handling.
+
+Example
+-------
+pytest cuprum/unittests/test_rust_streams.py -k rust_pump_stream_transfers_bytes
+"""
 
 from __future__ import annotations
 
@@ -42,7 +49,17 @@ def _pump_payload(
 
 
 def test_rust_pump_stream_transfers_bytes(rust_streams: ModuleType) -> None:
-    """rust_pump_stream transfers bytes between pipes."""
+    """Validate that rust_pump_stream transfers bytes between pipes.
+
+    Parameters
+    ----------
+    rust_streams : ModuleType
+        The Rust streams module fixture.
+
+    Returns
+    -------
+    None
+    """
     payload = b"cuprum-stream-payload"
     output, transferred = _pump_payload(rust_streams, payload)
 
@@ -53,7 +70,17 @@ def test_rust_pump_stream_transfers_bytes(rust_streams: ModuleType) -> None:
 def test_rust_pump_stream_respects_buffer_size(
     rust_streams: ModuleType,
 ) -> None:
-    """rust_pump_stream honours the buffer_size parameter."""
+    """Validate that rust_pump_stream honors the buffer_size parameter.
+
+    Parameters
+    ----------
+    rust_streams : ModuleType
+        The Rust streams module fixture.
+
+    Returns
+    -------
+    None
+    """
     payload = os.urandom(16384)
     output, transferred = _pump_payload(rust_streams, payload, buffer_size=1024)
 
@@ -64,7 +91,17 @@ def test_rust_pump_stream_respects_buffer_size(
 def test_rust_pump_stream_raises_on_invalid_buffer(
     rust_streams: ModuleType,
 ) -> None:
-    """rust_pump_stream rejects invalid buffer sizes."""
+    """Verify rust_pump_stream rejects invalid buffer sizes.
+
+    Parameters
+    ----------
+    rust_streams : ModuleType
+        The Rust streams module fixture.
+
+    Returns
+    -------
+    None
+    """
     with contextlib.ExitStack() as stack:
         in_read, in_write = os.pipe()
         stack.callback(_safe_close, in_read)
@@ -76,7 +113,17 @@ def test_rust_pump_stream_raises_on_invalid_buffer(
 def test_rust_pump_stream_propagates_io_errors(
     rust_streams: ModuleType,
 ) -> None:
-    """rust_pump_stream raises OSError on I/O failure."""
+    """Verify rust_pump_stream raises OSError on I/O failure.
+
+    Parameters
+    ----------
+    rust_streams : ModuleType
+        The Rust streams module fixture.
+
+    Returns
+    -------
+    None
+    """
     with contextlib.ExitStack() as stack:
         read_fd, write_fd = os.pipe()
         stack.callback(_safe_close, read_fd)
@@ -84,7 +131,7 @@ def test_rust_pump_stream_propagates_io_errors(
         _safe_close(read_fd)
         with pytest.raises(
             OSError,
-            match=r"(Bad file descriptor|invalid handle)",
+            match=r"(?i)(Bad file descriptor|invalid handle|handle is invalid)",
         ) as excinfo:
             rust_streams.rust_pump_stream(read_fd, write_fd)
     assert excinfo.value.errno in {errno.EBADF, errno.EINVAL}, (
@@ -95,7 +142,17 @@ def test_rust_pump_stream_propagates_io_errors(
 def test_rust_pump_stream_transfers_zero_bytes(
     rust_streams: ModuleType,
 ) -> None:
-    """rust_pump_stream handles empty input and returns zero."""
+    """Verify rust_pump_stream handles empty input and returns zero.
+
+    Parameters
+    ----------
+    rust_streams : ModuleType
+        The Rust streams module fixture.
+
+    Returns
+    -------
+    None
+    """
     payload = b""
     output, transferred = _pump_payload(rust_streams, payload)
 
@@ -106,7 +163,17 @@ def test_rust_pump_stream_transfers_zero_bytes(
 def test_rust_pump_stream_ignores_broken_pipe(
     rust_streams: ModuleType,
 ) -> None:
-    """rust_pump_stream drains input even if the writer breaks."""
+    """Verify rust_pump_stream drains input even if the writer breaks.
+
+    Parameters
+    ----------
+    rust_streams : ModuleType
+        The Rust streams module fixture.
+
+    Returns
+    -------
+    None
+    """
     payload = b"x" * (64 * 1024)
     with _pipe_pair() as (in_read, in_write, out_read, out_write):
         _safe_close(out_read)

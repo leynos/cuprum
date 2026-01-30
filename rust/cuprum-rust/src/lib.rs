@@ -123,6 +123,13 @@ fn handle_write(writer: &mut File, chunk: &[u8]) -> Result<u64, io::Error> {
         .map_err(|_| io::Error::new(io::ErrorKind::Other, "write length overflow"))
 }
 
+fn is_nonfatal_write_error(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+    )
+}
+
 fn handle_write_result(
     writer: &mut File,
     chunk: &[u8],
@@ -133,15 +140,13 @@ fn handle_write_result(
             *total_written = total_written.saturating_add(bytes);
             Ok(true)
         }
-        Err(err)
-            if matches!(
-                err.kind(),
-                io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
-            ) =>
-        {
-            Ok(false)
+        Err(err) => {
+            if is_nonfatal_write_error(&err) {
+                Ok(false)
+            } else {
+                Err(err)
+            }
         }
-        Err(err) => Err(err),
     }
 }
 
