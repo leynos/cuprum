@@ -33,14 +33,10 @@ def _pump_payload(
         os.write(in_write, payload)
         _safe_close(in_write)
 
-        if buffer_size is None:
-            transferred = streams.rust_pump_stream(in_read, out_write)
-        else:
-            transferred = streams.rust_pump_stream(
-                in_read,
-                out_write,
-                buffer_size=buffer_size,
-            )
+        kwargs: dict[str, int] = {}
+        if buffer_size is not None:
+            kwargs["buffer_size"] = buffer_size
+        transferred = streams.rust_pump_stream(in_read, out_write, **kwargs)
 
         _safe_close(out_write)
         output = _read_all(out_read)
@@ -55,7 +51,7 @@ def _pump_payload(
         ("custom_buffer_size", os.urandom(16384), 1024),
         ("zero_bytes", b"", None),
     ],
-    ids=lambda val: val if isinstance(val, str) else "",
+    ids=["basic_payload", "custom_buffer_size", "zero_bytes"],
 )
 def test_rust_pump_stream_transfers_data(
     rust_streams: ModuleType,
