@@ -958,6 +958,13 @@ else:
 The probe returns `False` on pure Python installations and does not raise when
 native wheels are missing.
 
+### Rust stream pump (internal)
+
+The Rust extension now includes an internal pump function exposed as
+`cuprum._streams_rs.rust_pump_stream`. This private API is intended for
+Cuprum's internal pipeline dispatcher and may change without notice. Public
+command execution remains unchanged until the dispatcher integration lands.
+
 ### Building from source
 
 For development builds, run `maturin develop` from the project root after
