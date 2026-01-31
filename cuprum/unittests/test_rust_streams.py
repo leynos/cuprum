@@ -1,6 +1,6 @@
 """Unit tests for the Rust stream pump.
 
-These tests validate the optional Rust-backed pump behavior and error handling.
+These tests validate the optional Rust-backed pump behaviour and error handling.
 
 Example
 -------
@@ -30,7 +30,11 @@ def _pump_payload(
 ) -> tuple[bytes, int]:
     """Pump payload through the Rust stream and return output and count."""
     with _pipe_pair() as (in_read, in_write, out_read, out_write):
-        os.write(in_write, payload)
+        view = memoryview(payload)
+        while view:
+            written = os.write(in_write, view)
+            assert written > 0, "expected os.write to make progress"
+            view = view[written:]
         _safe_close(in_write)
 
         kwargs: dict[str, int] = {}
@@ -48,7 +52,7 @@ def _pump_payload(
     ("test_id", "payload", "buffer_size"),
     [
         ("basic_payload", b"cuprum-stream-payload", None),
-        ("custom_buffer_size", os.urandom(16384), 1024),
+        ("custom_buffer_size", bytes(range(256)) * 64, 1024),
         ("zero_bytes", b"", None),
     ],
     ids=["basic_payload", "custom_buffer_size", "zero_bytes"],
