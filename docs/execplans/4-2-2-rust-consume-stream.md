@@ -4,21 +4,18 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`, and
 `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
-Status: COMPLETE
+Status: DRAFT
 
 PLANS.md is not present in this repository.
 
 ## Purpose / big picture
 
-Provide a Rust-backed `rust_consume_stream()` that reads from a file descriptor
-and returns decoded text with incremental UTF-8 decoding matching Python's
-`errors="replace"` behaviour. The Rust function must align with the pure Python
-`_consume_stream_without_lines()` semantics for output capture while remaining
-optional and internal. Success is visible when new unit tests and behavioural
-tests fail before the implementation, pass after it, and all quality gates
-(`make check-fmt`, `make typecheck`, `make lint`, `make test`) complete
-successfully. The roadmap entry 4.2.2 is marked done only after the
-implementation, documentation updates, and validation succeed.
+Deliver `rust_consume_stream()` with incremental UTF-8 decoding that matches
+Python's `_consume_stream_with_lines()` behaviour for `errors="replace"`.
+Add parity tests for edge cases, update design and user documentation, and
+mark roadmap item 4.2.2 as done once all quality gates pass (`make check-fmt`,
+`make typecheck`, `make lint`, `make test`). The Rust pathway must remain
+optional, with pure Python as the default reference behaviour.
 
 ## Constraints
 
@@ -28,13 +25,12 @@ implementation, documentation updates, and validation succeed.
 - For long-running commands, use `set -o pipefail` with `tee` for logs.
 - Preserve existing public API behaviour; any public API signature change
   requires escalation.
-- Rust `rust_consume_stream()` must match the output of
-  `payload.decode("utf-8", errors="replace")` for the same byte stream.
-- The Rust consume helper always decodes UTF-8 with replacement semantics and
-  does not accept configurable encoding or error mode parameters.
-- The Rust implementation must release the Global Interpreter Lock (GIL)
-  during blocking I/O and must not close the reader file descriptor owned by
-  Python.
+- Rust pathway must release the GIL during blocking I/O.
+- Rust `rust_consume_stream()` must implement incremental UTF-8 decoding with
+  `errors="replace"`, matching Python behaviour for chunk boundaries and
+  final flush semantics.
+- Non-UTF-8 or non-`replace` configurations must continue to route to the
+  Python pathway (per design constraints).
 
 ## Tolerances (exception triggers)
 
@@ -45,299 +41,255 @@ implementation, documentation updates, and validation succeed.
 - Tests: if new tests still fail after two full fix attempts, stop and
   escalate.
 - Time: if a single milestone takes more than 4 hours, stop and escalate.
-- Ambiguity: if multiple valid interpretations exist and materially affect the
-  outcome, stop and present options with trade-offs.
+- Ambiguity: if module naming or API boundary conflicts with existing
+  documentation, stop and present options with trade-offs.
 
 ## Risks
 
-- Risk: incremental UTF-8 decoding may diverge from Python's `errors="replace"`
-  semantics for partial sequences. Severity: high Likelihood: medium
-  Mitigation: compare Rust output to Python's `bytes.decode` with test vectors
-  that include invalid bytes and boundary-split multibyte sequences.
-- Risk: reader file descriptor may be closed prematurely in Rust, breaking
-  upstream process management. Severity: high Likelihood: low Mitigation: treat
-  the file descriptor (FD) as borrowed and `std::mem::forget` the `File`.
-- Risk: tests may be flaky if pipes are not closed or if writes are not
-  drained. Severity: medium Likelihood: medium Mitigation: use existing
-  `tests/helpers/stream_pipes.py` helpers and ensure pipes are closed in
-  `finally` blocks.
-- Risk: documentation may already constrain API names. Severity: low
-  Likelihood: medium Mitigation: verify `docs/cuprum-design.md` Section 13
-  before making naming changes.
+- Risk: incremental decoding logic diverges from Python's
+  `_consume_stream_with_lines()` (especially around replacement characters at
+  chunk boundaries). Severity: high Likelihood: medium Mitigation: build
+  parity tests that replay edge-case byte sequences and compare outputs.
+- Risk: Rust GIL release does not cover the full read/decode loop, reducing
+  throughput and introducing contention. Severity: medium Likelihood: medium
+  Mitigation: keep the entire read/decode loop inside `Python::allow_threads`.
+- Risk: decoding errors are handled differently between Rust and Python,
+  causing non-deterministic output differences. Severity: medium
+  Likelihood: medium Mitigation: use Rust's incremental decoder configured for
+  UTF-8 and `replace`, mirroring Python's incremental decoder semantics.
 
 ## Progress
 
 - [x] (2026-01-31 00:00Z) Draft ExecPlan for 4.2.2 implementation.
-- [x] (2026-02-01 01:20Z) Add unit tests for `rust_consume_stream` parity and
-  edge cases.
-- [x] (2026-02-01 01:30Z) Add behavioural tests (pytest-bdd) for Rust consume
-  output.
-- [x] (2026-02-01 02:05Z) Implement Rust `rust_consume_stream()` and Python
-  shim updates.
-- [x] (2026-02-01 02:20Z) Update documentation and mark roadmap 4.2.2 done.
-- [x] (2026-02-01 02:40Z) Run quality gates and confirm results.
 
 ## Surprises & discoveries
 
-- Observation: Qdrant notes store could not be reached (`qdrant-find` failed).
-  Evidence: tool returned "All connection attempts failed." Impact: no prior
-  notes available for this plan; proceed with local docs only.
-- Observation: `pytest` was not available outside the virtual environment.
-  Evidence: `/bin/bash: line 2: pytest: command not found`. Impact: relied on
-  `make test` for validation.
-- Observation: `make fmt` failed because `fd` was missing. Evidence:
-  `/root/.local/bin/mdformat-all: line 20: fd: command not found`. Impact:
-  installed `fd-find` and added an `fd` symlink before rerunning formatting.
+- None yet.
 
 ## Decision log
 
-- Decision: implement incremental UTF-8 decoding in Rust without introducing
-  new dependencies, using `std::str::from_utf8` error metadata and a pending
-  buffer to preserve boundary-spanning sequences. Rationale: keeps the Rust
-  extension lightweight while matching Python `errors="replace"` behaviour.
-  Date/Author: 2026-01-31 / Codex
-- Decision: expose `rust_consume_stream()` via `cuprum._streams_rs` alongside
-  `rust_pump_stream()`, reusing the same platform file descriptor conversion.
-  Rationale: aligns with existing Rust shim patterns and the design document.
-  Date/Author: 2026-01-31 / Codex
+- None yet.
 
 ## Outcomes & retrospective
 
-- Implemented `rust_consume_stream()` with incremental UTF-8 decoding and
-  `errors="replace"` semantics, plus argument validation and GIL release.
-- Added unit tests and pytest-bdd scenarios for replacement semantics,
-  boundary splits, and argument validation.
-- Updated `docs/cuprum-design.md`, `docs/users-guide.md`, and marked roadmap
-  item 4.2.2 as done.
-- Quality gates passed (`make check-fmt`, `make lint`, `make typecheck`,
-  `make test`, `make markdownlint`, `make nixie`). Rust stream behaviour tests
-  were skipped because the extension was unavailable in the test environment.
+- Pending.
 
 ## Context and orientation
 
 Relevant code and documents:
 
 - `cuprum/_streams.py`: Python reference implementation of
-  `_consume_stream_without_lines()` and `_consume_stream_with_lines()`.
-- `cuprum/_streams_rs.py`: Python shim for the optional Rust stream functions.
-- `rust/cuprum-rust/src/lib.rs`: PyO3 module where Rust functions are exposed.
-- `cuprum/unittests/test_rust_streams.py`: existing Rust pump unit tests; add
-  consume stream unit tests here for parity.
-- `tests/behaviour/test_rust_streams_behaviour.py` and
-  `tests/features/rust_streams.feature`: pytest-bdd behavioural tests for Rust
-  stream functions.
-- `tests/helpers/stream_pipes.py`: pipe helpers for deterministic I/O tests.
-- `docs/cuprum-design.md` Section 13: design contract for Rust stream
-  functions and limitations.
-- `docs/users-guide.md`: public-facing documentation for optional Rust
-  functionality.
-- `docs/roadmap.md`: 4.2.2 entry must be marked done when complete.
+  `_consume_stream_with_lines()` and `_consume_stream_without_lines()`.
+- `cuprum/_streams_rs.py`: Python shim that re-exports Rust stream functions.
+- `rust/cuprum-rust/src/lib.rs`: PyO3 module that will expose
+  `rust_consume_stream()`.
+- `docs/cuprum-design.md` Section 13: Rust extension architecture and
+  limitations, including UTF-8/`errors="replace"` constraints.
+- `docs/users-guide.md`: user-facing performance guidance; update for any new
+  behaviour or limitations.
+- `docs/roadmap.md`: mark 4.2.2 as done after implementation and validation.
+- `tests/behaviour/` and `tests/features/`: pytest-bdd behavioural tests.
+- `cuprum/unittests/`: unit tests (pytest).
 
-Current state: the Rust extension now exposes `rust_pump_stream()` and
-`rust_consume_stream()` via `cuprum._streams_rs`. Python
-`_consume_stream_without_lines()` remains the reference behaviour, and the Rust
-pathway supports UTF-8 decoding with `errors="replace"` semantics only.
+Current state: `rust_pump_stream()` is implemented and exposed through
+`cuprum._streams_rs`; `rust_consume_stream()` is not yet implemented. The
+Python pathway remains the behavioural reference.
 
 ## Plan of work
 
-Stage A: confirm behaviour and constraints (no code changes).
+Stage A: confirm behaviour and API boundaries (no code changes).
 
-Review `docs/cuprum-design.md` Section 13 and `cuprum/_streams.py` to confirm
-what `errors="replace"` means for `_consume_stream_without_lines()`.
-Specifically note that Python decodes the entire buffer at the end, so chunk
-boundaries must not affect output. Capture any deviations or constraints in
-`Decision Log` before writing tests.
+Review `docs/cuprum-design.md` Section 13 and the Python `_consume_stream`
+variants in `cuprum/_streams.py`. Identify exact behaviours for incremental
+UTF-8 decoding with `errors="replace"`, including final flush semantics and
+line emission. Confirm that Rust is limited to UTF-8 + `replace` and that
+Python remains the fallback for other configurations.
 
 Stage B: write tests first (failing).
 
-Add unit tests in `cuprum/unittests/test_rust_streams.py` that exercise
-`rust_consume_stream()` directly via the `rust_streams` fixture. Cover:
+Add unit tests in `cuprum/unittests/` for `rust_consume_stream()` that cover:
 
-- Normal ASCII payload round-trip with default buffer size.
-- Payload containing multibyte UTF-8 characters split across buffer
-  boundaries using a small `buffer_size` (for example, 2 bytes).
-- Payload containing invalid bytes (for example, `b"\xff\xfe"`) to assert
-  replacement characters (`\uFFFD`) match
-  `payload.decode("utf-8", errors="replace")`.
-- Payload ending with an incomplete multibyte sequence to confirm the final
-  replacement behaviour matches Python's `errors="replace"` at EOF.
-- Validation errors: `buffer_size=0` should raise `ValueError`.
+- Normal consumption with ASCII and multibyte UTF-8 content.
+- Chunk boundary splits inside multibyte sequences (replacement behaviour).
+- Final flush behaviour when the last chunk ends with an incomplete sequence.
+- Invalid file descriptor handling and expected `OSError` mapping.
 
-Add behavioural tests using pytest-bdd:
+Add behavioural tests with pytest-bdd that compare Python and Rust outputs for
+edge-case byte sequences. The tests must skip cleanly when the Rust extension
+is unavailable.
 
-- Extend `tests/features/rust_streams.feature` with a new scenario that writes
-  a byte payload containing invalid UTF-8 and asserts the decoded text matches
-  the Python `errors="replace"` result.
-- Extend `tests/behaviour/test_rust_streams_behaviour.py` with steps that
-  write the payload, call `rust_consume_stream()`, and compare outputs.
+Stage C: implement Rust `rust_consume_stream()` and Python shims.
 
-Run the new tests to confirm they fail before implementation.
+Extend `rust/cuprum-rust/src/lib.rs` to export `rust_consume_stream()`:
 
-Stage C: implement Rust `rust_consume_stream()` and Python shim updates.
+- Signature should match the design doc and stubs (reader FD, buffer size,
+  encoding, errors).
+- Validate `buffer_size > 0` and raise `ValueError` otherwise.
+- Ensure only UTF-8 + `errors="replace"` is accepted; reject other values
+  with a clear `ValueError` or route in Python before calling Rust.
+- Release the GIL for the full read/decode loop.
+- Use an incremental UTF-8 decoder that mirrors Python's `codecs` behaviour.
+- Return the decoded string with correct replacement characters for invalid
+  sequences, including boundary and final flush handling.
+- Map `std::io::Error` to `OSError` for I/O failures.
 
-In `rust/cuprum-rust/src/lib.rs`, add a new PyO3 `rust_consume_stream()`
-function with signature:
-
-- `rust_consume_stream(reader_fd: int, buffer_size: int = 65536) -> str`.
-
-Implementation notes:
-
-- Validate `buffer_size > 0`; otherwise raise `ValueError`.
-- Convert the file descriptor with `convert_fd` and construct a `File` using
-  `file_from_raw`. Treat the reader FD as borrowed and `std::mem::forget` the
-  `File` to avoid closing it.
-- Release the GIL for the read loop with `Python::allow_threads` or
-  `py.detach`, mirroring `rust_pump_stream()`.
-- Read into a reusable buffer sized to `buffer_size`. Maintain a `Vec<u8>` of
-  pending bytes that represent an incomplete UTF-8 sequence at the end of the
-  current buffer.
-- Use `std::str::from_utf8` to decode the pending buffer. When an error is
-  returned:
-  - Append the valid prefix to the output string.
-  - If `error_len` is `Some(len)`, append `\uFFFD` and skip the invalid bytes,
-    then continue decoding the remainder.
-  - If `error_len` is `None`, preserve the trailing bytes (the incomplete
-    sequence) in the pending buffer and wait for the next chunk.
-- At EOF, if pending bytes remain, decode them and append a single `\uFFFD`
-  to match replacement semantics for incomplete sequences.
-- Map any `std::io::Error` to Python `OSError` via `PyErr::from`.
-
-In `cuprum/_streams_rs.py`, add a `rust_consume_stream()` wrapper mirroring
-`rust_pump_stream()`:
-
-- Convert file descriptors via `_convert_fd_for_platform`.
-- Pass through the `buffer_size` keyword argument.
-- Extend `__all__` accordingly.
+If the Python shim (`cuprum/_streams_rs.py`) or type stubs need updates, do so
+without changing the public API surface.
 
 Stage D: documentation and roadmap updates.
 
-Update `docs/cuprum-design.md` Section 13 to reflect the implemented Rust
-consume behaviour and its UTF-8 limitations. Update `docs/users-guide.md` to
-note the internal `rust_consume_stream()` function and the decoding limitations
-(UTF-8 with `errors="replace"`). Mark roadmap task 4.2.2 as done in
-`docs/roadmap.md` once tests and implementation pass.
+Update `docs/cuprum-design.md` Section 13 to reflect the implemented
+`rust_consume_stream()` semantics, especially incremental decoding and
+`errors="replace"` behaviour. Update `docs/users-guide.md` to describe when
+Rust consumption applies and when it falls back to Python. Mark 4.2.2 as done
+in `docs/roadmap.md` after tests and quality gates succeed. Record any design
+choices in the design document as required.
+
+Stage E: validation and quality gates.
+
+Run all required checks with Makefile targets and capture logs via `tee`.
+Ensure `make check-fmt`, `make typecheck`, `make lint`, and `make test`
+succeed. If documentation changes, also run `make markdownlint` and
+`make nixie`.
 
 ## Concrete steps
 
-All commands run from `/home/user/project`. Use `set -o pipefail` and `tee` for
-long outputs.
+All commands run from `/root/repo`. Use `set -o pipefail` and `tee` for long
+outputs.
 
-1. Inspect current implementations and tests:
+1. Inspect existing documentation and Rust module layout.
 
-   ```shell
-   rg -n "consume_stream" cuprum rust tests docs | sed -n '1,220p'
-   sed -n '1,220p' cuprum/_streams.py
-   sed -n '1,260p' cuprum/_streams_rs.py
-   sed -n '1,240p' rust/cuprum-rust/src/lib.rs
-   sed -n '1,220p' cuprum/unittests/test_rust_streams.py
-   sed -n '1,120p' tests/behaviour/test_rust_streams_behaviour.py
-   sed -n '1,200p' tests/features/rust_streams.feature
-   ```
+```bash
+rg -n "rust_consume_stream|_streams_rs" docs
+rg -n "consume_stream" cuprum/_streams.py
+rg -n "rust_consume_stream" rust
+```
 
-2. Add failing unit tests for `rust_consume_stream()` parity and errors.
+2. Add failing unit tests and run them.
 
-3. Add failing pytest-bdd scenario and step definitions for Rust consume
-   output.
+```bash
+set -o pipefail
+uv run pytest cuprum/unittests/test_rust_streams.py \
+  | tee /tmp/test-rust-streams-unit.txt
+```
 
-4. Run the new tests to confirm failure before implementation:
+3. Add failing behavioural tests and run them.
 
-   ```shell
-   set -o pipefail pytest cuprum/unittests/test_rust_streams.py -k \
-     rust_consume_stream 2>&1 | tee /tmp/cuprum-test-rust-consume-unit.log
+```bash
+set -o pipefail
+uv run pytest tests/behaviour/test_rust_streams_behaviour.py \
+  tests/features/rust_streams.feature \
+  | tee /tmp/test-rust-streams-bdd.txt
+```
 
-   set -o pipefail pytest tests/behaviour/test_rust_streams_behaviour.py -k \
-     rust_consume_stream 2>&1 | tee /tmp/cuprum-test-rust-consume-bdd.log
-   ```
+4. Implement `rust_consume_stream()` in Rust and update Python shims/stubs if
+   needed.
 
-5. Implement `rust_consume_stream()` in Rust and add the Python shim wrapper.
+5. Re-run the new unit and behavioural tests.
 
-6. Run targeted tests again to confirm they pass:
+```bash
+set -o pipefail
+uv run pytest cuprum/unittests/test_rust_streams.py \
+  | tee /tmp/test-rust-streams-unit.txt
 
-   ```shell
-   set -o pipefail pytest cuprum/unittests/test_rust_streams.py -k \
-     rust_consume_stream 2>&1 | tee /tmp/cuprum-test-rust-consume-unit.log
+set -o pipefail
+uv run pytest tests/behaviour/test_rust_streams_behaviour.py \
+  tests/features/rust_streams.feature \
+  | tee /tmp/test-rust-streams-bdd.txt
+```
 
-   set -o pipefail pytest tests/behaviour/test_rust_streams_behaviour.py -k \
-     rust_consume_stream 2>&1 | tee /tmp/cuprum-test-rust-consume-bdd.log
-   ```
+6. Update documentation and roadmap, then run quality gates.
 
-7. Update documentation (`docs/cuprum-design.md`, `docs/users-guide.md`) and
-   mark roadmap 4.2.2 as done.
+```bash
+set -o pipefail
+make check-fmt | tee /tmp/make-check-fmt.txt
 
-8. Run formatting and Markdown validation after docs changes:
+set -o pipefail
+make lint | tee /tmp/make-lint.txt
 
-   ```shell
-   set -o pipefail make fmt 2>&1 | tee /tmp/cuprum-make-fmt.log
+set -o pipefail
+make typecheck | tee /tmp/make-typecheck.txt
 
-   set -o pipefail make markdownlint 2>&1 | tee \
-     /tmp/cuprum-make-markdownlint.log
+set -o pipefail
+make test | tee /tmp/make-test.txt
+```
 
-   set -o pipefail make nixie 2>&1 | tee /tmp/cuprum-make-nixie.log
-   ```
+7. If docs changed, run markdown validation and Mermaid checks.
 
-9. Run quality gates (must all pass):
+```bash
+set -o pipefail
+make markdownlint | tee /tmp/make-markdownlint.txt
 
-   ```shell
-   set -o pipefail make check-fmt 2>&1 | tee /tmp/cuprum-make-check-fmt.log
-
-   set -o pipefail make lint 2>&1 | tee /tmp/cuprum-make-lint.log
-
-   set -o pipefail make typecheck 2>&1 | tee /tmp/cuprum-make-typecheck.log
-
-   set -o pipefail make test 2>&1 | tee /tmp/cuprum-make-test.log
-   ```
+set -o pipefail
+make nixie | tee /tmp/make-nixie.txt
+```
 
 ## Validation and acceptance
 
-Behavioural acceptance criteria:
+Done means:
 
-- `rust_consume_stream()` returns the same string as
-  `payload.decode("utf-8", errors="replace")` for payloads containing invalid
-  UTF-8 and for payloads split across chunk boundaries.
-- A payload ending in an incomplete UTF-8 sequence yields a final replacement
-  character, matching Python's `errors="replace"` behaviour.
-- Invalid buffer sizes (for example, `buffer_size=0`) raise `ValueError`.
-
-Quality criteria (what done means):
-
-- Tests: new unit tests and pytest-bdd scenarios pass, and `make test` passes.
-- Lint/typecheck: `make lint` and `make typecheck` pass.
-- Formatting: `make check-fmt` passes after `make fmt` is applied.
-- Markdown: `make markdownlint` and `make nixie` pass after doc changes.
-
-Quality method (validation approach):
-
-- Run the commands listed in "Concrete steps" using `set -o pipefail` and
-  `tee` logs.
+- New unit tests cover normal transfers, multibyte boundaries, and error
+  handling for `rust_consume_stream()`.
+- New pytest-bdd behavioural tests verify parity with the Python pathway for
+  edge cases and skip cleanly when Rust is unavailable.
+- Rust implementation releases the GIL, defaults to a 64 KB buffer, and
+  matches Python's incremental UTF-8 decoding with `errors="replace"`.
+- Documentation updates in `docs/cuprum-design.md` and `docs/users-guide.md`
+  reflect the Rust consume stream and its limitations.
+- `docs/roadmap.md` marks 4.2.2 as done.
+- Quality gates pass: `make check-fmt`, `make lint`, `make typecheck`,
+  `make test`, plus `make markdownlint` and `make nixie` if docs changed.
 
 ## Idempotence and recovery
 
-All steps are repeatable. If a step fails, fix the issue and re-run the same
-command. If the Rust extension is unavailable in the environment, the new
-Rust-specific tests should skip via the existing `rust_streams` fixture; do not
-remove the tests. No destructive commands are required.
+- Steps are repeatable; re-running tests and formatting is safe.
+- If a test fails, fix the issue and re-run the same command to confirm.
+- If decoding semantics diverge from Python, pause and update the Decision Log
+  before proceeding.
 
 ## Artifacts and notes
 
-Keep the following evidence in logs when validating:
+Expected changes include:
 
-- `pytest` output showing the new Rust consume tests passing.
-- `make` logs for `check-fmt`, `lint`, `typecheck`, `test`, `markdownlint`, and
-  `nixie`.
+- Rust function in `rust/cuprum-rust/src/lib.rs` implementing
+  `rust_consume_stream()`.
+- Optional Python shim or stub updates in `cuprum/_streams_rs.py` and
+  `cuprum/_streams_rs.pyi` (if present).
+- New unit tests in `cuprum/unittests/test_rust_streams.py`.
+- New behavioural tests in `tests/behaviour/test_rust_streams_behaviour.py`
+  and `tests/features/rust_streams.feature`.
+- Documentation updates in `docs/cuprum-design.md` and `docs/users-guide.md`.
+- Roadmap update in `docs/roadmap.md` for 4.2.2.
 
 ## Interfaces and dependencies
 
-The following interfaces must exist at the end of implementation:
+Rust function (PyO3-exposed):
 
-- Rust function in `rust/cuprum-rust/src/lib.rs`:
-  - `rust_consume_stream(reader_fd: int, buffer_size: int = 65536) -> str`.
-- Python shim in `cuprum/_streams_rs.py`:
-  - `rust_consume_stream(reader_fd: int, *, buffer_size: int = 65536) -> str`.
-- No new dependencies are permitted without escalation.
+```plaintext
+rust_consume_stream(
+    reader_fd: int,
+    buffer_size: int = 65536,
+    encoding: str = "utf-8",
+    errors: str = "replace",
+) -> str
+```
 
-## Revision note
+- Returns decoded stream content.
+- Raises `ValueError` for invalid buffer sizes or unsupported encoding/error
+  modes (if not pre-filtered by the Python dispatcher).
+- Raises `OSError` for I/O failures.
 
-Updated the status to COMPLETE, checked off progress entries, and recorded
-implementation outcomes plus validation results. Added surprises for missing
-tools encountered during formatting and testing. Remaining work is limited to
-future roadmap items outside 4.2.2.
+Python module exposure:
+
+- `cuprum._rust_backend_native` remains the native module name.
+- `cuprum._streams_rs` re-exports `rust_consume_stream()` and performs any
+  platform-specific file descriptor conversion.
+
+Dependencies:
+
+- No new Python or Rust dependencies expected; if a new crate is required,
+  stop and escalate per tolerances.
+
+## Revision note (required when editing an ExecPlan)
+
+Initial draft authored on 2026-01-31.
