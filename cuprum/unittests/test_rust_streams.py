@@ -159,7 +159,11 @@ def test_rust_pump_stream_ignores_broken_pipe(
     payload = b"x" * (64 * 1024)
     with _pipe_pair() as (in_read, in_write, out_read, out_write):
         _safe_close(out_read)
-        os.write(in_write, payload)
+        view = memoryview(payload)
+        while view:
+            written = os.write(in_write, view)
+            assert written > 0, "expected os.write to make progress"
+            view = view[written:]
         _safe_close(in_write)
 
         try:
