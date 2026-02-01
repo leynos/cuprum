@@ -144,9 +144,8 @@ restore_cmd = tar_extract(
 ```
 
 Relative paths require `allow_relative=True` on the relevant option objects
-(for example, `RsyncOptions`) or using
-`safe_path(..., allow_relative=True)` before passing the result into a
-builder.
+(for example, `RsyncOptions`) or using `safe_path(..., allow_relative=True)`
+before passing the result into a builder.
 
 ## Pipeline execution
 
@@ -964,6 +963,16 @@ The Rust extension now includes an internal pump function exposed as
 `cuprum._streams_rs.rust_pump_stream`. This private API is intended for
 Cuprum's internal pipeline dispatcher and may change without notice. Public
 command execution remains unchanged until the dispatcher integration lands.
+
+### Rust stream consume (internal)
+
+The Rust extension also exposes `cuprum._streams_rs.rust_consume_stream`, which
+reads a file descriptor and returns decoded text. This private API is intended
+for the internal stream dispatcher and may change without notice.
+
+The Rust consume helper supports UTF-8 decoding with `errors="replace"` only.
+If another encoding or error mode is requested, the function raises
+`ValueError`, and the dispatcher will route to the Python implementation.
 
 ### Building from source
 

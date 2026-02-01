@@ -48,6 +48,37 @@ def _pump_payload(
     return output, transferred
 
 
+def _consume_payload(
+    streams: ModuleType,
+    payload: bytes,
+    *,
+    buffer_size: int | None = None,
+    encoding: str | None = None,
+    errors: str | None = None,
+) -> str:
+    """Consume payload through the Rust stream and return decoded output."""
+    with contextlib.ExitStack() as stack:
+        read_fd, write_fd = os.pipe()
+        stack.callback(_safe_close, read_fd)
+        stack.callback(_safe_close, write_fd)
+        view = memoryview(payload)
+        while view:
+            written = os.write(write_fd, view)
+            assert written > 0, "expected os.write to make progress"
+            view = view[written:]
+        _safe_close(write_fd)
+
+        kwargs: dict[str, object] = {}
+        if buffer_size is not None:
+            kwargs["buffer_size"] = buffer_size
+        if encoding is not None:
+            kwargs["encoding"] = encoding
+        if errors is not None:
+            kwargs["errors"] = errors
+
+        return typ.cast("str", streams.rust_consume_stream(read_fd, **kwargs))
+
+
 @pytest.mark.parametrize(
     ("test_id", "payload", "buffer_size"),
     [
@@ -180,3 +211,69 @@ def test_rust_pump_stream_ignores_broken_pipe(
 
     assert isinstance(transferred, int), "expected transfer count to be integer"
     assert transferred <= len(payload), "expected transfer count to be bounded"
+
+
+@pytest.mark.parametrize(
+    ("test_id", "payload", "buffer_size"),
+    [
+        ("ascii_default", b"rust-consume-stream", None),
+        ("multibyte_split", b"snowman \xe2\x98\x83", 2),
+    ],
+    ids=["ascii_default", "multibyte_split"],
+)
+def test_rust_consume_stream_decodes_payload(
+    rust_streams: ModuleType,
+    test_id: str,
+    payload: bytes,
+    buffer_size: int | None,
+) -> None:
+    """Validate rust_consume_stream decodes UTF-8 payloads."""
+    output = _consume_payload(rust_streams, payload, buffer_size=buffer_size)
+    expected = payload.decode("utf-8", errors="replace")
+    assert output == expected, (
+        f"expected decoded output to match Python replace semantics ({test_id})"
+    )
+
+
+def test_rust_consume_stream_replaces_invalid_bytes(
+    rust_streams: ModuleType,
+) -> None:
+    """Ensure rust_consume_stream replaces invalid UTF-8 bytes."""
+    payload = b"valid-\xff\xfe-end"
+    output = _consume_payload(rust_streams, payload, buffer_size=3)
+    expected = payload.decode("utf-8", errors="replace")
+    assert output == expected, "expected invalid bytes to be replaced"
+
+
+def test_rust_consume_stream_replaces_incomplete_sequence(
+    rust_streams: ModuleType,
+) -> None:
+    """Ensure rust_consume_stream replaces incomplete UTF-8 sequences."""
+    payload = b"trail-\xe2\x98"
+    output = _consume_payload(rust_streams, payload, buffer_size=2)
+    expected = payload.decode("utf-8", errors="replace")
+    assert output == expected, "expected incomplete sequence to be replaced"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match_text"),
+    [
+        ({"buffer_size": 0}, "buffer_size"),
+        ({"encoding": "latin-1"}, "encoding"),
+        ({"errors": "strict"}, "errors"),
+    ],
+    ids=["buffer_size", "encoding", "errors"],
+)
+def test_rust_consume_stream_rejects_invalid_args(
+    rust_streams: ModuleType,
+    kwargs: dict[str, object],
+    match_text: str,
+) -> None:
+    """Verify rust_consume_stream rejects unsupported parameters."""
+    with contextlib.ExitStack() as stack:
+        read_fd, write_fd = os.pipe()
+        stack.callback(_safe_close, read_fd)
+        stack.callback(_safe_close, write_fd)
+        _safe_close(write_fd)
+        with pytest.raises(ValueError, match=match_text):
+            rust_streams.rust_consume_stream(read_fd, **kwargs)

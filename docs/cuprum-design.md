@@ -1481,12 +1481,11 @@ operations. Both pathways remain available and are treated as first-class:
 - Provides faster I/O interrupt handling than asyncio;
 - On Linux, leverages `splice()` for zero-copy between pipe file descriptors.
 
-The native Rust functions are exported from
-`cuprum._rust_backend_native`. A thin Python shim module
-`cuprum._streams_rs` re-exports the stream functions and performs any
-platform-specific file descriptor conversion (for example, translating
-Windows file descriptors into OS handles). This keeps the native module
-name stable while allowing Python-only adaptations.
+The native Rust functions are exported from `cuprum._rust_backend_native`. A
+thin Python shim module `cuprum._streams_rs` re-exports the stream functions
+and performs any platform-specific file descriptor conversion (for example,
+translating Windows file descriptors into OS handles). This keeps the native
+module name stable while allowing Python-only adaptations.
 
 The foundation release also introduces a minimal availability probe. The native
 module is published as `cuprum._rust_backend_native`, while the Python wrapper
@@ -1535,9 +1534,8 @@ flowchart TD
 
 ### 13.3 API Boundary
 
-The Rust extension exposes three functions via PyO3. As of 4.2.1,
-`rust_pump_stream` and `is_available` are implemented; `rust_consume_stream`
-lands in 4.2.2.
+The Rust extension exposes three functions via PyO3. As of 4.2.2,
+`rust_pump_stream`, `rust_consume_stream`, and `is_available` are implemented.
 
 ```python
 # cuprum/_streams_rs.pyi (type stubs)
@@ -1594,14 +1592,21 @@ def rust_consume_stream(
     buffer_size:
         Size of the internal read buffer in bytes.
     encoding:
-        Character encoding for decoding.
+        Character encoding for decoding. Only ``utf-8`` is supported.
     errors:
-        Error handling mode for decoding.
+        Error handling mode for decoding. Only ``replace`` is supported.
 
     Returns
     -------
     str
         Decoded stream content.
+
+    Raises
+    ------
+    ValueError
+        When unsupported encoding or error handling is requested.
+    OSError
+        When an I/O error occurs during reading.
 
     """
     ...
@@ -1611,6 +1616,11 @@ def is_available() -> bool:
     """Return True if the Rust extension is functional."""
     ...
 ```
+
+`rust_consume_stream` performs incremental UTF-8 decoding with a pending byte
+buffer so that chunk boundaries do not affect output. Invalid byte sequences
+are replaced with the Unicode replacement character (U+FFFD) to match
+`errors="replace"` semantics.
 
 The extension accepts raw file descriptors rather than asyncio stream objects.
 This enables operation outside the Python runtime whilst the dispatcher handles

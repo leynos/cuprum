@@ -58,6 +58,51 @@ fn rust_pump_stream(
     result.map_err(PyErr::from)
 }
 
+/// Consume a stream and decode it as UTF-8 with replacement semantics.
+///
+/// # Parameters
+/// - `reader_fd`: File descriptor to read from.
+/// - `buffer_size`: Size of the internal read buffer in bytes.
+/// - `encoding`: Character encoding for decoding (must be UTF-8).
+/// - `errors`: Error handling mode for decoding (must be "replace").
+///
+/// # Returns
+/// The decoded stream content.
+///
+/// # Errors
+/// Returns a Python `ValueError` for invalid arguments and `OSError` for
+/// I/O failures.
+#[pyfunction]
+#[pyo3(signature = (reader_fd, buffer_size = 65536, encoding = "utf-8", errors = "replace"))]
+#[must_use]
+fn rust_consume_stream(
+    py: Python<'_>,
+    reader_fd: i64,
+    buffer_size: usize,
+    encoding: &str,
+    errors: &str,
+) -> PyResult<String> {
+    if buffer_size == 0 {
+        return Err(PyValueError::new_err(
+            "buffer_size must be greater than zero",
+        ));
+    }
+    if encoding != "utf-8" {
+        return Err(PyValueError::new_err(
+            "encoding must be \"utf-8\" for the Rust stream backend",
+        ));
+    }
+    if errors != "replace" {
+        return Err(PyValueError::new_err(
+            "errors must be \"replace\" for the Rust stream backend",
+        ));
+    }
+
+    let reader_fd = convert_fd(reader_fd)?;
+    let result = py.detach(|| consume_stream(reader_fd, buffer_size));
+    result.map_err(PyErr::from)
+}
+
 #[cfg(unix)]
 #[must_use]
 fn convert_fd(value: i64) -> PyResult<PlatformFd> {
@@ -107,6 +152,18 @@ fn pump_stream(
     let result = pump_stream_files(&mut reader, &mut writer, buffer_size);
     // The caller owns the reader FD; avoid closing it here.
     // The writer FD is treated as consumed and closes on drop to signal EOF.
+    std::mem::forget(reader);
+    result
+}
+
+/// Consume bytes from a file descriptor and decode UTF-8 with replacement.
+fn consume_stream(
+    reader_fd: PlatformFd,
+    buffer_size: usize,
+) -> Result<String, io::Error> {
+    let mut reader = file_from_raw(reader_fd);
+    let result = consume_stream_files(&mut reader, buffer_size);
+    // The caller owns the reader FD; avoid closing it here.
     std::mem::forget(reader);
     result
 }
@@ -176,6 +233,70 @@ fn pump_stream_files(
     Ok(total_written)
 }
 
+fn consume_stream_files(
+    reader: &mut File,
+    buffer_size: usize,
+) -> Result<String, io::Error> {
+    let mut buffer = vec![0_u8; buffer_size];
+    let mut pending: Vec<u8> = Vec::new();
+    let mut output = String::new();
+
+    loop {
+        let read_len = reader.read(&mut buffer)?;
+        if read_len == 0 {
+            break;
+        }
+        pending.extend_from_slice(&buffer[..read_len]);
+        decode_utf8_replace(&mut pending, &mut output, false);
+    }
+
+    decode_utf8_replace(&mut pending, &mut output, true);
+
+    Ok(output)
+}
+
+fn decode_utf8_replace(
+    pending: &mut Vec<u8>,
+    output: &mut String,
+    final_chunk: bool,
+) {
+    loop {
+        match std::str::from_utf8(pending) {
+            Ok(valid) => {
+                output.push_str(valid);
+                pending.clear();
+                break;
+            }
+            Err(err) => {
+                let valid_up_to = err.valid_up_to();
+                if valid_up_to > 0 {
+                    let valid_prefix = std::str::from_utf8(&pending[..valid_up_to])
+                        .expect("valid prefix must be UTF-8");
+                    output.push_str(valid_prefix);
+                }
+                match err.error_len() {
+                    Some(error_len) => {
+                        output.push('\u{FFFD}');
+                        pending.drain(..valid_up_to + error_len);
+                        if pending.is_empty() {
+                            break;
+                        }
+                    }
+                    None => {
+                        if final_chunk {
+                            output.push('\u{FFFD}');
+                            pending.clear();
+                        } else if valid_up_to > 0 {
+                            pending.drain(..valid_up_to);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Python module definition for the optional Rust backend.
 ///
 /// # Errors
@@ -184,6 +305,7 @@ fn pump_stream_files(
 fn _rust_backend_native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(is_available, module)?)?;
     module.add_function(wrap_pyfunction!(rust_pump_stream, module)?)?;
+    module.add_function(wrap_pyfunction!(rust_consume_stream, module)?)?;
     module.add("__doc__", "Cuprum optional Rust backend.")?;
     module.add("__package__", "cuprum")?;
     module.add("__loader__", py.None())?;
