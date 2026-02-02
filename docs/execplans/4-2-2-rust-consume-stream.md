@@ -30,9 +30,8 @@ implementation, documentation updates, and validation succeed.
   requires escalation.
 - Rust `rust_consume_stream()` must match the output of
   `payload.decode("utf-8", errors="replace")` for the same byte stream.
-- Only UTF-8 with `errors="replace"` is supported in Rust; unsupported
-  encodings or error modes must raise `ValueError` (the dispatcher will route
-  to Python later).
+- The Rust consume helper always decodes UTF-8 with replacement semantics and
+  does not accept configurable encoding or error mode parameters.
 - The Rust implementation must release the Global Interpreter Lock (GIL)
   during blocking I/O and must not close the reader file descriptor owned by
   Python.
@@ -162,8 +161,7 @@ Add unit tests in `cuprum/unittests/test_rust_streams.py` that exercise
   `payload.decode("utf-8", errors="replace")`.
 - Payload ending with an incomplete multibyte sequence to confirm the final
   replacement behaviour matches Python's `errors="replace"` at EOF.
-- Validation errors: `buffer_size=0`, `encoding` not `"utf-8"`, and `errors`
-  not `"replace"` should raise `ValueError`.
+- Validation errors: `buffer_size=0` should raise `ValueError`.
 
 Add behavioural tests using pytest-bdd:
 
@@ -180,13 +178,11 @@ Stage C: implement Rust `rust_consume_stream()` and Python shim updates.
 In `rust/cuprum-rust/src/lib.rs`, add a new PyO3 `rust_consume_stream()`
 function with signature:
 
-- `rust_consume_stream(reader_fd: int, buffer_size: int = 65536,
-  encoding: str = "utf-8", errors: str = "replace") -> str`.
+- `rust_consume_stream(reader_fd: int, buffer_size: int = 65536) -> str`.
 
 Implementation notes:
 
-- Validate `buffer_size > 0`, `encoding == "utf-8"`, and
-  `errors == "replace"`; otherwise raise `ValueError`.
+- Validate `buffer_size > 0`; otherwise raise `ValueError`.
 - Convert the file descriptor with `convert_fd` and construct a `File` using
   `file_from_raw`. Treat the reader FD as borrowed and `std::mem::forget` the
   `File` to avoid closing it.
@@ -203,14 +199,14 @@ Implementation notes:
   - If `error_len` is `None`, preserve the trailing bytes (the incomplete
     sequence) in the pending buffer and wait for the next chunk.
 - At EOF, if pending bytes remain, decode them and append a single `\uFFFD`
-  to match `errors="replace"` semantics for incomplete sequences.
+  to match replacement semantics for incomplete sequences.
 - Map any `std::io::Error` to Python `OSError` via `PyErr::from`.
 
 In `cuprum/_streams_rs.py`, add a `rust_consume_stream()` wrapper mirroring
 `rust_pump_stream()`:
 
 - Convert file descriptors via `_convert_fd_for_platform`.
-- Pass through `buffer_size`, `encoding`, and `errors` keyword arguments.
+- Pass through the `buffer_size` keyword argument.
 - Extend `__all__` accordingly.
 
 Stage D: documentation and roadmap updates.
@@ -293,7 +289,7 @@ Behavioural acceptance criteria:
   UTF-8 and for payloads split across chunk boundaries.
 - A payload ending in an incomplete UTF-8 sequence yields a final replacement
   character, matching Python's `errors="replace"` behaviour.
-- Unsupported encodings or error modes raise `ValueError`.
+- Invalid buffer sizes (for example, `buffer_size=0`) raise `ValueError`.
 
 Quality criteria (what done means):
 
@@ -327,11 +323,9 @@ Keep the following evidence in logs when validating:
 The following interfaces must exist at the end of implementation:
 
 - Rust function in `rust/cuprum-rust/src/lib.rs`:
-  - `rust_consume_stream(reader_fd: int, buffer_size: int = 65536,
-    encoding: str = "utf-8", errors: str = "replace") -> str`.
+  - `rust_consume_stream(reader_fd: int, buffer_size: int = 65536) -> str`.
 - Python shim in `cuprum/_streams_rs.py`:
-  - `rust_consume_stream(reader_fd: int, *, buffer_size: int = 65536,
-    encoding: str = "utf-8", errors: str = "replace") -> str`.
+  - `rust_consume_stream(reader_fd: int, *, buffer_size: int = 65536) -> str`.
 - No new dependencies are permitted without escalation.
 
 ## Revision note

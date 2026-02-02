@@ -970,9 +970,9 @@ The Rust extension also exposes `cuprum._streams_rs.rust_consume_stream`, which
 reads a file descriptor and returns decoded text. This private API is intended
 for the internal stream dispatcher and may change without notice.
 
-The Rust consume helper supports UTF-8 decoding with `errors="replace"` only.
-If another encoding or error mode is requested, the function raises
-`ValueError`, and the dispatcher will route to the Python implementation.
+The Rust consume helper always decodes UTF-8 with replacement semantics for
+invalid sequences. Other encodings or error modes require the Python
+implementation.
 
 ### Building from source
 

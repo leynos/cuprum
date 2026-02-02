@@ -1580,8 +1580,6 @@ def rust_consume_stream(
     reader_fd: int,
     *,
     buffer_size: int = 65536,
-    encoding: str = "utf-8",
-    errors: str = "replace",
 ) -> str:
     """Consume a stream and return decoded output.
 
@@ -1591,22 +1589,11 @@ def rust_consume_stream(
         File descriptor to read from.
     buffer_size:
         Size of the internal read buffer in bytes.
-    encoding:
-        Character encoding for decoding. Only ``utf-8`` is supported.
-    errors:
-        Error handling mode for decoding. Only ``replace`` is supported.
 
     Returns
     -------
     str
         Decoded stream content.
-
-    Raises
-    ------
-    ValueError
-        When unsupported encoding or error handling is requested.
-    OSError
-        When an I/O error occurs during reading.
 
     """
     ...
@@ -1619,8 +1606,7 @@ def is_available() -> bool:
 
 `rust_consume_stream` performs incremental UTF-8 decoding with a pending byte
 buffer so that chunk boundaries do not affect output. Invalid byte sequences
-are replaced with the Unicode replacement character (U+FFFD) to match
-`errors="replace"` semantics.
+are replaced with the Unicode replacement character (U+FFFD).
 
 The extension accepts raw file descriptors rather than asyncio stream objects.
 This enables operation outside the Python runtime whilst the dispatcher handles
@@ -1724,9 +1710,9 @@ pathway. The following behaviours are only available via the Python backend:
   extension does not support this; when `echo_output=True`, the dispatcher
   routes to Python.
 
-- **Custom encodings:** The Rust extension supports UTF-8 with
-  `errors="replace"` semantics. Other encodings or error modes route to the
-  Python pathway.
+- **Custom encodings:** The Rust extension always decodes as UTF-8 with
+  replacement semantics. Other encodings or error modes require the Python
+  pathway.
 
 The dispatcher in `cuprum/_backend.py` inspects the stream configuration and
 automatically selects the Python pathway when any unsupported feature is

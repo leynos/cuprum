@@ -51,12 +51,24 @@ def _pump_payload(
 def _consume_payload(
     streams: ModuleType,
     payload: bytes,
-    *,
-    buffer_size: int | None = None,
-    encoding: str | None = None,
-    errors: str | None = None,
+    **kwargs: object,
 ) -> str:
-    """Consume payload through the Rust stream and return decoded output."""
+    """Consume payload through the Rust stream and return decoded output.
+
+    Parameters
+    ----------
+    streams : ModuleType
+        The Rust streams module fixture.
+    payload : bytes
+        Raw payload to send through the consume helper.
+    **kwargs : object
+        Additional keyword arguments forwarded to ``rust_consume_stream``.
+
+    Returns
+    -------
+    str
+        Decoded output from the Rust consume helper.
+    """
     with contextlib.ExitStack() as stack:
         read_fd, write_fd = os.pipe()
         stack.callback(_safe_close, read_fd)
@@ -67,14 +79,6 @@ def _consume_payload(
             assert written > 0, "expected os.write to make progress"
             view = view[written:]
         _safe_close(write_fd)
-
-        kwargs: dict[str, object] = {}
-        if buffer_size is not None:
-            kwargs["buffer_size"] = buffer_size
-        if encoding is not None:
-            kwargs["encoding"] = encoding
-        if errors is not None:
-            kwargs["errors"] = errors
 
         return typ.cast("str", streams.rust_consume_stream(read_fd, **kwargs))
 
@@ -255,25 +259,14 @@ def test_rust_consume_stream_replaces_incomplete_sequence(
     assert output == expected, "expected incomplete sequence to be replaced"
 
 
-@pytest.mark.parametrize(
-    ("kwargs", "match_text"),
-    [
-        ({"buffer_size": 0}, "buffer_size"),
-        ({"encoding": "latin-1"}, "encoding"),
-        ({"errors": "strict"}, "errors"),
-    ],
-    ids=["buffer_size", "encoding", "errors"],
-)
-def test_rust_consume_stream_rejects_invalid_args(
+def test_rust_consume_stream_rejects_invalid_buffer(
     rust_streams: ModuleType,
-    kwargs: dict[str, object],
-    match_text: str,
 ) -> None:
-    """Verify rust_consume_stream rejects unsupported parameters."""
+    """Verify rust_consume_stream rejects invalid buffer sizes."""
     with contextlib.ExitStack() as stack:
         read_fd, write_fd = os.pipe()
         stack.callback(_safe_close, read_fd)
         stack.callback(_safe_close, write_fd)
         _safe_close(write_fd)
-        with pytest.raises(ValueError, match=match_text):
-            rust_streams.rust_consume_stream(read_fd, **kwargs)
+        with pytest.raises(ValueError, match="buffer_size"):
+            rust_streams.rust_consume_stream(read_fd, buffer_size=0)

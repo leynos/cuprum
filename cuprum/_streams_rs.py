@@ -90,10 +90,11 @@ def rust_consume_stream(
     reader_fd: int,
     *,
     buffer_size: int = 65536,
-    encoding: str = "utf-8",
-    errors: str = "replace",
 ) -> str:
     """Consume bytes from a file descriptor using the Rust extension.
+
+    This helper always decodes UTF-8 and replaces invalid sequences with the
+    Unicode replacement character.
 
     Parameters
     ----------
@@ -102,10 +103,6 @@ def rust_consume_stream(
     buffer_size : int, optional
         Buffer size in bytes for each read cycle. Must be greater than zero.
         Defaults to ``65536`` (64 KiB).
-    encoding : str, optional
-        Encoding name; only ``utf-8`` is supported by the Rust backend.
-    errors : str, optional
-        Error handling mode; only ``replace`` is supported by the Rust backend.
 
     Returns
     -------
@@ -117,7 +114,7 @@ def rust_consume_stream(
     ImportError
         If the Rust backend native module cannot be imported.
     ValueError
-        If unsupported encoding or error handling is requested.
+        If ``buffer_size`` is not a positive integer.
     OSError
         If an I/O error occurs while reading.
     """
@@ -127,8 +124,6 @@ def rust_consume_stream(
         native.rust_consume_stream(
             _convert_fd_for_platform(reader_fd),
             buffer_size=buffer_size,
-            encoding=encoding,
-            errors=errors,
         ),
     )
 

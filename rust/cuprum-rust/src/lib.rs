@@ -60,11 +60,12 @@ fn rust_pump_stream(
 
 /// Consume a stream and decode it as UTF-8 with replacement semantics.
 ///
+/// This helper always uses UTF-8 and replaces invalid sequences with the
+/// Unicode replacement character.
+///
 /// # Parameters
 /// - `reader_fd`: File descriptor to read from.
 /// - `buffer_size`: Size of the internal read buffer in bytes.
-/// - `encoding`: Character encoding for decoding (must be UTF-8).
-/// - `errors`: Error handling mode for decoding (must be "replace").
 ///
 /// # Returns
 /// The decoded stream content.
@@ -73,28 +74,16 @@ fn rust_pump_stream(
 /// Returns a Python `ValueError` for invalid arguments and `OSError` for
 /// I/O failures.
 #[pyfunction]
-#[pyo3(signature = (reader_fd, buffer_size = 65536, encoding = "utf-8", errors = "replace"))]
+#[pyo3(signature = (reader_fd, buffer_size = 65536))]
 #[must_use]
 fn rust_consume_stream(
     py: Python<'_>,
     reader_fd: i64,
     buffer_size: usize,
-    encoding: &str,
-    errors: &str,
 ) -> PyResult<String> {
     if buffer_size == 0 {
         return Err(PyValueError::new_err(
             "buffer_size must be greater than zero",
-        ));
-    }
-    if encoding != "utf-8" {
-        return Err(PyValueError::new_err(
-            "encoding must be \"utf-8\" for the Rust stream backend",
-        ));
-    }
-    if errors != "replace" {
-        return Err(PyValueError::new_err(
-            "errors must be \"replace\" for the Rust stream backend",
         ));
     }
 
@@ -269,32 +258,60 @@ fn decode_utf8_replace(
             }
             Err(err) => {
                 let valid_up_to = err.valid_up_to();
-                if valid_up_to > 0 {
-                    let valid_prefix = std::str::from_utf8(&pending[..valid_up_to])
-                        .expect("valid prefix must be UTF-8");
-                    output.push_str(valid_prefix);
-                }
-                match err.error_len() {
-                    Some(error_len) => {
-                        output.push('\u{FFFD}');
-                        pending.drain(..valid_up_to + error_len);
-                        if pending.is_empty() {
-                            break;
-                        }
-                    }
-                    None => {
-                        if final_chunk {
-                            output.push('\u{FFFD}');
-                            pending.clear();
-                        } else if valid_up_to > 0 {
-                            pending.drain(..valid_up_to);
-                        }
-                        break;
-                    }
+                append_valid_prefix(pending, output, valid_up_to);
+                if !handle_utf8_error(
+                    pending,
+                    output,
+                    err.error_len(),
+                    valid_up_to,
+                    final_chunk,
+                ) {
+                    break;
                 }
             }
         }
     }
+}
+
+fn append_valid_prefix(pending: &[u8], output: &mut String, valid_up_to: usize) {
+    if valid_up_to == 0 {
+        return;
+    }
+    let valid_prefix = std::str::from_utf8(&pending[..valid_up_to])
+        .expect("valid prefix must be UTF-8");
+    output.push_str(valid_prefix);
+}
+
+fn handle_utf8_error(
+    pending: &mut Vec<u8>,
+    output: &mut String,
+    error_len: Option<usize>,
+    valid_up_to: usize,
+    final_chunk: bool,
+) -> bool {
+    match error_len {
+        Some(error_len) => {
+            output.push('\u{FFFD}');
+            pending.drain(..valid_up_to + error_len);
+            !pending.is_empty()
+        }
+        None => handle_incomplete_sequence(pending, output, valid_up_to, final_chunk),
+    }
+}
+
+fn handle_incomplete_sequence(
+    pending: &mut Vec<u8>,
+    output: &mut String,
+    valid_up_to: usize,
+    final_chunk: bool,
+) -> bool {
+    if final_chunk {
+        output.push('\u{FFFD}');
+        pending.clear();
+    } else if valid_up_to > 0 {
+        pending.drain(..valid_up_to);
+    }
+    false
 }
 
 /// Python module definition for the optional Rust backend.

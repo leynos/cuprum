@@ -21,6 +21,30 @@ if typ.TYPE_CHECKING:
     from types import ModuleType
 
 
+def _expose_rust_stream_function(
+    rust_streams: ModuleType,
+    function_name: str,
+) -> typ.Callable[..., typ.Any]:
+    """Return a named Rust stream function from the module.
+
+    Parameters
+    ----------
+    rust_streams : ModuleType
+        The Rust streams module fixture.
+    function_name : str
+        Name of the Rust stream function to expose.
+
+    Returns
+    -------
+    Callable[..., Any]
+        The requested Rust stream function.
+    """
+    return typ.cast(
+        "typ.Callable[..., typ.Any]",
+        getattr(rust_streams, function_name),
+    )
+
+
 @scenario(
     "../features/rust_streams.feature",
     "Rust pump stream transfers data between pipes",
@@ -69,7 +93,7 @@ def given_rust_pump(rust_streams: ModuleType) -> typ.Callable[[int, int], int]:
     Callable[[int, int], int]
         Function that pumps data between file descriptors.
     """
-    return rust_streams.rust_pump_stream
+    return _expose_rust_stream_function(rust_streams, "rust_pump_stream")
 
 
 @given("the Rust consume stream is available", target_fixture="rust_consume")
@@ -88,7 +112,7 @@ def given_rust_consume(
     Callable[[int], str]
         Function that consumes a stream from a file descriptor.
     """
-    return rust_streams.rust_consume_stream
+    return _expose_rust_stream_function(rust_streams, "rust_consume_stream")
 
 
 @when(
