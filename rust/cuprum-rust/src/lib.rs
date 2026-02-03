@@ -257,13 +257,11 @@ fn decode_utf8_replace(
                 break;
             }
             Err(err) => {
-                let valid_up_to = err.valid_up_to();
-                append_valid_prefix(pending, output, valid_up_to);
+                append_valid_prefix(pending, output, err.valid_up_to());
                 if !handle_utf8_error(
                     pending,
                     output,
-                    err.error_len(),
-                    valid_up_to,
+                    &err,
                     final_chunk,
                 ) {
                     break;
@@ -285,11 +283,11 @@ fn append_valid_prefix(pending: &[u8], output: &mut String, valid_up_to: usize) 
 fn handle_utf8_error(
     pending: &mut Vec<u8>,
     output: &mut String,
-    error_len: Option<usize>,
-    valid_up_to: usize,
+    err: &std::str::Utf8Error,
     final_chunk: bool,
 ) -> bool {
-    match error_len {
+    let valid_up_to = err.valid_up_to();
+    match err.error_len() {
         Some(error_len) => {
             output.push('\u{FFFD}');
             pending.drain(..valid_up_to + error_len);
