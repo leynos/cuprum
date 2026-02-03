@@ -45,11 +45,7 @@ fn rust_pump_stream(
     writer_fd: i64,
     buffer_size: usize,
 ) -> PyResult<u64> {
-    if buffer_size == 0 {
-        return Err(PyValueError::new_err(
-            "buffer_size must be greater than zero",
-        ));
-    }
+    validate_buffer_size(buffer_size)?;
 
     let reader_fd = convert_fd(reader_fd)?;
     let writer_fd = convert_fd(writer_fd)?;
@@ -81,11 +77,7 @@ fn rust_consume_stream(
     reader_fd: i64,
     buffer_size: usize,
 ) -> PyResult<String> {
-    if buffer_size == 0 {
-        return Err(PyValueError::new_err(
-            "buffer_size must be greater than zero",
-        ));
-    }
+    validate_buffer_size(buffer_size)?;
 
     let reader_fd = convert_fd(reader_fd)?;
     let result = py.detach(|| consume_stream(reader_fd, buffer_size));
@@ -113,6 +105,19 @@ fn convert_fd(value: i64) -> PyResult<PlatformFd> {
     let truncated = u32::try_from(handle_value)
         .map_err(|_| PyValueError::new_err("file handle out of range"))?;
     Ok(truncated as usize)
+}
+
+/// Validate that buffer_size is non-zero.
+///
+/// # Errors
+/// Returns `PyValueError` if buffer_size is zero.
+fn validate_buffer_size(buffer_size: usize) -> PyResult<()> {
+    if buffer_size == 0 {
+        return Err(PyValueError::new_err(
+            "buffer_size must be greater than zero",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
