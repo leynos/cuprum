@@ -47,8 +47,8 @@ fn rust_pump_stream(
 ) -> PyResult<u64> {
     let buffer_size = validate_buffer_size(buffer_size)?;
 
-    let reader_fd = convert_fd(reader_fd)?;
-    let writer_fd = convert_fd(writer_fd)?;
+    let reader_fd = ReaderFd(convert_fd(reader_fd)?);
+    let writer_fd = WriterFd(convert_fd(writer_fd)?);
 
     let result = py.detach(|| pump_stream(reader_fd, writer_fd, buffer_size));
     result.map_err(PyErr::from)
@@ -79,7 +79,7 @@ fn rust_consume_stream(
 ) -> PyResult<String> {
     let buffer_size = validate_buffer_size(buffer_size)?;
 
-    let reader_fd = convert_fd(reader_fd)?;
+    let reader_fd = ReaderFd(convert_fd(reader_fd)?);
     let result = py.detach(|| consume_stream(reader_fd, buffer_size));
     result.map_err(PyErr::from)
 }
@@ -111,15 +111,15 @@ fn convert_fd(value: i64) -> PyResult<PlatformFd> {
 ///
 /// # Errors
 /// Returns `PyValueError` if buffer_size is non-positive or out of range.
-fn validate_buffer_size(buffer_size: i64) -> PyResult<usize> {
+fn validate_buffer_size(buffer_size: i64) -> PyResult<BufferSize> {
     if buffer_size <= 0 {
         return Err(PyValueError::new_err(
             "buffer_size must be greater than zero",
         ));
     }
-    usize::try_from(buffer_size).map_err(|_| {
-        PyValueError::new_err("buffer_size is too large")
-    })
+    usize::try_from(buffer_size)
+        .map(BufferSize)
+        .map_err(|_| PyValueError::new_err("buffer_size is too large"))
 }
 
 #[cfg(unix)]
@@ -139,12 +139,12 @@ fn file_from_raw(handle: PlatformFd) -> File {
 /// The reader FD is borrowed and left open. The writer FD is treated as
 /// consumed and closes on drop to signal EOF downstream.
 fn pump_stream(
-    reader_fd: PlatformFd,
-    writer_fd: PlatformFd,
-    buffer_size: usize,
+    reader_fd: ReaderFd,
+    writer_fd: WriterFd,
+    buffer_size: BufferSize,
 ) -> Result<u64, io::Error> {
-    let mut reader = file_from_raw(reader_fd);
-    let mut writer = file_from_raw(writer_fd);
+    let mut reader = file_from_raw(reader_fd.0);
+    let mut writer = file_from_raw(writer_fd.0);
     let result = pump_stream_files(&mut reader, &mut writer, buffer_size);
     // The caller owns the reader FD; avoid closing it here.
     // The writer FD is treated as consumed and closes on drop to signal EOF.
@@ -154,10 +154,10 @@ fn pump_stream(
 
 /// Consume bytes from a file descriptor and decode UTF-8 with replacement.
 fn consume_stream(
-    reader_fd: PlatformFd,
-    buffer_size: usize,
+    reader_fd: ReaderFd,
+    buffer_size: BufferSize,
 ) -> Result<String, io::Error> {
-    let mut reader = file_from_raw(reader_fd);
+    let mut reader = file_from_raw(reader_fd.0);
     let result = consume_stream_files(&mut reader, buffer_size);
     // The caller owns the reader FD; avoid closing it here.
     std::mem::forget(reader);
@@ -169,6 +169,21 @@ type PlatformFd = i32;
 
 #[cfg(windows)]
 type PlatformFd = usize;
+
+#[derive(Clone, Copy, Debug)]
+struct ReaderFd(PlatformFd);
+
+#[derive(Clone, Copy, Debug)]
+struct WriterFd(PlatformFd);
+
+#[derive(Clone, Copy, Debug)]
+struct BufferSize(usize);
+
+impl BufferSize {
+    fn value(self) -> usize {
+        self.0
+    }
+}
 
 fn handle_write(writer: &mut File, chunk: &[u8]) -> Result<u64, io::Error> {
     writer.write_all(chunk)?;
@@ -206,9 +221,9 @@ fn handle_write_result(
 fn pump_stream_files(
     reader: &mut File,
     writer: &mut File,
-    buffer_size: usize,
+    buffer_size: BufferSize,
 ) -> Result<u64, io::Error> {
-    let mut buffer = vec![0_u8; buffer_size];
+    let mut buffer = vec![0_u8; buffer_size.value()];
     let mut total_written = 0_u64;
     let mut writer_open = true;
 
@@ -231,9 +246,9 @@ fn pump_stream_files(
 
 fn consume_stream_files(
     reader: &mut File,
-    buffer_size: usize,
+    buffer_size: BufferSize,
 ) -> Result<String, io::Error> {
-    let mut buffer = vec![0_u8; buffer_size];
+    let mut buffer = vec![0_u8; buffer_size.value()];
     let mut pending: Vec<u8> = Vec::new();
     let mut output = String::new();
 
@@ -316,7 +331,10 @@ fn handle_incomplete_sequence(
     if final_chunk {
         output.push('\u{FFFD}');
         pending.clear();
-    } else if valid_up_to > 0 {
+        return false;
+    }
+    if valid_up_to > 0 {
+        // Keep only the incomplete tail; drop already used prefix.
         pending.drain(..valid_up_to);
     }
     false

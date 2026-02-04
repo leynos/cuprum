@@ -238,7 +238,10 @@ def test_rust_consume_stream_decodes_payload(
     buffer_size: int | None,
 ) -> None:
     """Validate rust_consume_stream decodes UTF-8 payloads."""
-    output = _consume_payload(rust_streams, payload, buffer_size=buffer_size)
+    if buffer_size is None:
+        output = _consume_payload(rust_streams, payload)
+    else:
+        output = _consume_payload(rust_streams, payload, buffer_size=buffer_size)
     expected = payload.decode("utf-8", errors="replace")
     assert output == expected, (
         f"expected decoded output to match Python replace semantics ({test_id})"
