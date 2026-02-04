@@ -1608,6 +1608,78 @@ def is_available() -> bool:
 buffer so that chunk boundaries do not affect output. Invalid byte sequences
 are replaced with the Unicode replacement character (U+FFFD).
 
+For screen readers: The following sequence diagram shows the Python-to-Rust
+call flow for `rust_consume_stream`, including buffer validation, file
+handling, and incremental decoding.
+
+```mermaid
+sequenceDiagram
+    actor PyCaller
+    participant PyShim as cuprum__streams_rs
+    participant PyRust as cuprum__rust_backend_native
+    participant RustFn as rust_consume_stream
+    participant Impl as consume_stream
+    participant ImplFiles as consume_stream_files
+
+    PyCaller->>PyShim: rust_consume_stream(reader_fd, buffer_size)
+    PyShim->>PyRust: rust_consume_stream(converted_fd, buffer_size)
+
+    PyRust->>RustFn: call via PyO3
+    RustFn->>RustFn: validate_buffer_size(buffer_size)
+    RustFn->>RustFn: convert_fd(reader_fd)
+    RustFn->>Impl: detach and call consume_stream(reader_fd, buffer_size)
+    Note over RustFn,Impl: GIL released during I O
+
+    Impl->>Impl: file_from_raw(reader_fd)
+    Impl->>ImplFiles: consume_stream_files(&mut file, buffer_size)
+
+    loop read loop
+        ImplFiles->>ImplFiles: read(buffer)
+        ImplFiles-->>ImplFiles: pending.extend(buffer[..read_len])
+        ImplFiles->>ImplFiles: decode_utf8_replace(pending, output, final_chunk=false)
+    end
+
+    ImplFiles->>ImplFiles: decode_utf8_replace(pending, output, final_chunk=true)
+    ImplFiles-->>Impl: Ok(output_string)
+
+    Impl-->>RustFn: Ok(output_string)
+    RustFn-->>PyShim: Python str result
+    PyShim-->>PyCaller: decoded text
+```
+
+For screen readers: The following flowchart outlines the decision flow inside
+`decode_utf8_replace`, including how valid UTF-8 prefixes, invalid sequences,
+and incomplete trailing bytes are handled.
+
+```mermaid
+flowchart TD
+    A[Start decode_utf8_replace] --> B[Attempt from_utf8 on pending]
+    B -->|Ok| C[Append entire valid string to output]
+    C --> D[Clear pending]
+    D --> E[Stop loop]
+
+    B -->|Err Utf8Error| F[Get valid_up_to and error_len]
+    F --> G[append_valid_prefix using valid_up_to]
+
+    G --> H{error_len is Some}
+    H -->|Yes| I[Push replacement char U+FFFD to output]
+    I --> J[Drain valid_up_to + error_len bytes from pending]
+    J --> K{pending is empty}
+    K -->|Yes| E
+    K -->|No| B
+
+    H -->|No| L[Handle incomplete sequence]
+    L --> M{final_chunk is true}
+    M -->|Yes| N[Push replacement char U+FFFD]
+    N --> O[Clear pending]
+    O --> E
+
+    M -->|No| P{valid_up_to > 0}
+    P -->|Yes| Q[Drain valid_up_to bytes from pending]
+    Q --> E
+    P -->|No| E
+```
+
 The extension accepts raw file descriptors rather than asyncio stream objects.
 This enables operation outside the Python runtime whilst the dispatcher handles
 the translation between asyncio streams and file descriptors.
