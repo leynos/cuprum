@@ -1628,7 +1628,7 @@ sequenceDiagram
     RustFn->>RustFn: validate_buffer_size(buffer_size)
     RustFn->>RustFn: convert_fd(reader_fd)
     RustFn->>Impl: detach and call consume_stream(reader_fd, buffer_size)
-    Note over RustFn,Impl: GIL released during I O
+    Note over RustFn,Impl: GIL released during I/O
 
     Impl->>Impl: file_from_raw(reader_fd)
     Impl->>ImplFiles: consume_stream_files(&mut file, buffer_size)

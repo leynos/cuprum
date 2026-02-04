@@ -79,8 +79,14 @@ def _consume_payload(
             assert written > 0, "expected os.write to make progress"
             view = view[written:]
         _safe_close(write_fd)
+        forwarded_kwargs = dict(kwargs)
+        if forwarded_kwargs.get("buffer_size") is None:
+            forwarded_kwargs.pop("buffer_size", None)
 
-        return typ.cast("str", streams.rust_consume_stream(read_fd, **kwargs))
+        return typ.cast(
+            "str",
+            streams.rust_consume_stream(read_fd, **forwarded_kwargs),
+        )
 
 
 @pytest.mark.parametrize(
@@ -257,6 +263,31 @@ def test_rust_consume_stream_replaces_incomplete_sequence(
     output = _consume_payload(rust_streams, payload, buffer_size=2)
     expected = payload.decode("utf-8", errors="replace")
     assert output == expected, "expected incomplete sequence to be replaced"
+
+
+def test_rust_consume_stream_does_not_close_fd(
+    rust_streams: ModuleType,
+) -> None:
+    """Ensure rust_consume_stream does not close the underlying FD."""
+    read_fd, write_fd = os.pipe()
+    open_write_fd: int | None = write_fd
+    try:
+        os.write(write_fd, b"non-destructive")
+        _safe_close(write_fd)
+        open_write_fd = None
+        output = rust_streams.rust_consume_stream(read_fd)
+        assert output == "non-destructive"
+
+        try:
+            os.read(read_fd, 0)
+        except OSError as exc:
+            if exc.errno == errno.EBADF:
+                pytest.fail("rust_consume_stream must not close the file descriptor")
+            raise
+    finally:
+        if open_write_fd is not None:
+            _safe_close(open_write_fd)
+        _safe_close(read_fd)
 
 
 def test_rust_consume_stream_rejects_invalid_buffer(

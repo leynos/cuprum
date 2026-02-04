@@ -964,7 +964,7 @@ The Rust extension now includes an internal pump function exposed as
 Cuprum's internal pipeline dispatcher and may change without notice. Public
 command execution remains unchanged until the dispatcher integration lands.
 
-### Rust stream consume (internal)
+### Rust stream consumption (internal)
 
 The Rust extension also exposes `cuprum._streams_rs.rust_consume_stream`, which
 reads a file descriptor and returns decoded text. This private API is intended
@@ -973,6 +973,21 @@ for the internal stream dispatcher and may change without notice.
 The Rust consume helper always decodes UTF-8 with replacement semantics for
 invalid sequences. Other encodings or error modes require the Python
 implementation.
+
+Backend selection for stream operations is controlled by the
+`CUPRUM_STREAM_BACKEND` environment variable:
+
+- `auto` (default): use Rust when available, otherwise fall back to Python.
+- `rust`: force the Rust pathway and raise `ImportError` if the extension is
+  unavailable.
+- `python`: force the pure Python pathway.
+
+Choose the Rust backend for high-throughput workloads (for example,
+multi-megabyte outputs) where lower per-chunk overhead improves throughput. For
+small outputs or when custom encoding/error handling is required, prefer the
+Python implementation. Expect the most noticeable throughput gains on large
+streams; smaller payloads may see minimal differences, so measure on
+representative workloads.
 
 ### Building from source
 

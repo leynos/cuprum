@@ -109,7 +109,7 @@ def given_rust_consume(
 
     Returns
     -------
-    Callable[[int], str]
+    Callable[..., str]
         Function that consumes a stream from a file descriptor.
     """
     return _expose_rust_stream_function(rust_streams, "rust_consume_stream")
@@ -158,7 +158,7 @@ def when_consume_invalid_utf8(
 
     Parameters
     ----------
-    rust_consume : Callable[[int], str]
+    rust_consume : Callable[..., str]
         Rust consume function for decoding bytes.
 
     Returns
@@ -168,14 +168,16 @@ def when_consume_invalid_utf8(
     """
     payload = b"rust-consume-\xff\xfe"
     read_fd, write_fd = os.pipe()
+    open_write_fd: int | None = write_fd
     try:
         os.write(write_fd, payload)
         _safe_close(write_fd)
+        open_write_fd = None
         output = rust_consume(read_fd, buffer_size=2)
-        _safe_close(read_fd)
     finally:
         _safe_close(read_fd)
-        _safe_close(write_fd)
+        if open_write_fd is not None:
+            _safe_close(open_write_fd)
 
     return payload, output
 

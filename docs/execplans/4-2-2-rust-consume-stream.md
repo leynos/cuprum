@@ -56,7 +56,7 @@ implementation, documentation updates, and validation succeed.
   that include invalid bytes and boundary-split multibyte sequences.
 - Risk: reader file descriptor may be closed prematurely in Rust, breaking
   upstream process management. Severity: high Likelihood: low Mitigation: treat
-  the FD as borrowed and `std::mem::forget` the `File`.
+  the file descriptor (FD) as borrowed and `std::mem::forget` the `File`.
 - Risk: tests may be flaky if pipes are not closed or if writes are not
   drained. Severity: medium Likelihood: medium Mitigation: use existing
   `tests/helpers/stream_pipes.py` helpers and ensure pipes are closed in
@@ -224,12 +224,15 @@ long outputs.
 
 1. Inspect current implementations and tests:
 
-   rg -n "consume_stream" cuprum rust tests docs sed -n '1,220p'
-   cuprum/_streams.py sed -n '1,220p' cuprum/_streams_rs.py sed -n '1,260p'
-   rust/cuprum-rust/src/lib.rs sed -n '1,240p'
-   cuprum/unittests/test_rust_streams.py sed -n '1,220p'
-   tests/behaviour/test_rust_streams_behaviour.py sed -n '1,120p'
-   tests/features/rust_streams.feature
+   ```shell
+   rg -n "consume_stream" cuprum rust tests docs | sed -n '1,220p'
+   sed -n '1,220p' cuprum/_streams.py
+   sed -n '1,260p' cuprum/_streams_rs.py
+   sed -n '1,240p' rust/cuprum-rust/src/lib.rs
+   sed -n '1,220p' cuprum/unittests/test_rust_streams.py
+   sed -n '1,120p' tests/behaviour/test_rust_streams_behaviour.py
+   sed -n '1,200p' tests/features/rust_streams.feature
+   ```
 
 2. Add failing unit tests for `rust_consume_stream()` parity and errors.
 
@@ -238,40 +241,43 @@ long outputs.
 
 4. Run the new tests to confirm failure before implementation:
 
-   set -o pipefail pytest cuprum/unittests/test_rust_streams.py -k
-   rust_consume_stream \
-     2>&1 | tee /tmp/cuprum-test-rust-consume-unit.log
+   ```shell
+   set -o pipefail pytest cuprum/unittests/test_rust_streams.py -k \
+     rust_consume_stream 2>&1 | tee /tmp/cuprum-test-rust-consume-unit.log
 
-   set -o pipefail pytest tests/behaviour/test_rust_streams_behaviour.py -k
-   rust_consume_stream \
-     2>&1 | tee /tmp/cuprum-test-rust-consume-bdd.log
+   set -o pipefail pytest tests/behaviour/test_rust_streams_behaviour.py -k \
+     rust_consume_stream 2>&1 | tee /tmp/cuprum-test-rust-consume-bdd.log
+   ```
 
 5. Implement `rust_consume_stream()` in Rust and add the Python shim wrapper.
 
 6. Run targeted tests again to confirm they pass:
 
-   set -o pipefail pytest cuprum/unittests/test_rust_streams.py -k
-   rust_consume_stream \
-     2>&1 | tee /tmp/cuprum-test-rust-consume-unit.log
+   ```shell
+   set -o pipefail pytest cuprum/unittests/test_rust_streams.py -k \
+     rust_consume_stream 2>&1 | tee /tmp/cuprum-test-rust-consume-unit.log
 
-   set -o pipefail pytest tests/behaviour/test_rust_streams_behaviour.py -k
-   rust_consume_stream \
-     2>&1 | tee /tmp/cuprum-test-rust-consume-bdd.log
+   set -o pipefail pytest tests/behaviour/test_rust_streams_behaviour.py -k \
+     rust_consume_stream 2>&1 | tee /tmp/cuprum-test-rust-consume-bdd.log
+   ```
 
 7. Update documentation (`docs/cuprum-design.md`, `docs/users-guide.md`) and
    mark roadmap 4.2.2 as done.
 
 8. Run formatting and Markdown validation after docs changes:
 
+   ```shell
    set -o pipefail make fmt 2>&1 | tee /tmp/cuprum-make-fmt.log
 
-   set -o pipefail make markdownlint 2>&1 | tee
-   /tmp/cuprum-make-markdownlint.log
+   set -o pipefail make markdownlint 2>&1 | tee \
+     /tmp/cuprum-make-markdownlint.log
 
    set -o pipefail make nixie 2>&1 | tee /tmp/cuprum-make-nixie.log
+   ```
 
 9. Run quality gates (must all pass):
 
+   ```shell
    set -o pipefail make check-fmt 2>&1 | tee /tmp/cuprum-make-check-fmt.log
 
    set -o pipefail make lint 2>&1 | tee /tmp/cuprum-make-lint.log
@@ -279,6 +285,7 @@ long outputs.
    set -o pipefail make typecheck 2>&1 | tee /tmp/cuprum-make-typecheck.log
 
    set -o pipefail make test 2>&1 | tee /tmp/cuprum-make-test.log
+   ```
 
 ## Validation and acceptance
 
@@ -298,7 +305,7 @@ Quality criteria (what done means):
 - Formatting: `make check-fmt` passes after `make fmt` is applied.
 - Markdown: `make markdownlint` and `make nixie` pass after doc changes.
 
-Quality method (how we check):
+Quality method (validation approach):
 
 - Run the commands listed in "Concrete steps" using `set -o pipefail` and
   `tee` logs.

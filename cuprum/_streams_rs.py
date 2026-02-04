@@ -1,4 +1,4 @@
-"""Optional Rust-backed stream operations for high-throughput operations.
+"""Optional Rust-backed stream operations for high-throughput workloads.
 
 This module provides a thin wrapper around the optional Rust extension. Import
 or use it only when the Rust backend is installed.

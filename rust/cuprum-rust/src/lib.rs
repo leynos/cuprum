@@ -43,9 +43,9 @@ fn rust_pump_stream(
     py: Python<'_>,
     reader_fd: i64,
     writer_fd: i64,
-    buffer_size: usize,
+    buffer_size: i64,
 ) -> PyResult<u64> {
-    validate_buffer_size(buffer_size)?;
+    let buffer_size = validate_buffer_size(buffer_size)?;
 
     let reader_fd = convert_fd(reader_fd)?;
     let writer_fd = convert_fd(writer_fd)?;
@@ -75,9 +75,9 @@ fn rust_pump_stream(
 fn rust_consume_stream(
     py: Python<'_>,
     reader_fd: i64,
-    buffer_size: usize,
+    buffer_size: i64,
 ) -> PyResult<String> {
-    validate_buffer_size(buffer_size)?;
+    let buffer_size = validate_buffer_size(buffer_size)?;
 
     let reader_fd = convert_fd(reader_fd)?;
     let result = py.detach(|| consume_stream(reader_fd, buffer_size));
@@ -107,17 +107,19 @@ fn convert_fd(value: i64) -> PyResult<PlatformFd> {
     Ok(truncated as usize)
 }
 
-/// Validate that buffer_size is non-zero.
+/// Validate that buffer_size is positive and fits into a usize.
 ///
 /// # Errors
-/// Returns `PyValueError` if buffer_size is zero.
-fn validate_buffer_size(buffer_size: usize) -> PyResult<()> {
-    if buffer_size == 0 {
+/// Returns `PyValueError` if buffer_size is non-positive or out of range.
+fn validate_buffer_size(buffer_size: i64) -> PyResult<usize> {
+    if buffer_size <= 0 {
         return Err(PyValueError::new_err(
             "buffer_size must be greater than zero",
         ));
     }
-    Ok(())
+    usize::try_from(buffer_size).map_err(|_| {
+        PyValueError::new_err("buffer_size is too large")
+    })
 }
 
 #[cfg(unix)]
@@ -280,8 +282,11 @@ fn append_valid_prefix(pending: &[u8], output: &mut String, valid_up_to: usize) 
     if valid_up_to == 0 {
         return;
     }
-    let valid_prefix = std::str::from_utf8(&pending[..valid_up_to])
-        .expect("valid prefix must be UTF-8");
+    // SAFETY: `valid_up_to` comes from a `Utf8Error`, so this prefix is known
+    // to be valid UTF-8.
+    let valid_prefix = unsafe {
+        std::str::from_utf8_unchecked(&pending[..valid_up_to])
+    };
     output.push_str(valid_prefix);
 }
 
