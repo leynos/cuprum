@@ -185,6 +185,32 @@ impl BufferSize {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ValidPrefixLen(usize);
+
+impl ValidPrefixLen {
+    fn new(value: usize) -> Self {
+        Self(value)
+    }
+
+    fn value(self) -> usize {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FinalChunk(bool);
+
+impl FinalChunk {
+    fn new(value: bool) -> Self {
+        Self(value)
+    }
+
+    fn is_final(self) -> bool {
+        self.0
+    }
+}
+
 fn handle_write(writer: &mut File, chunk: &[u8]) -> Result<u64, io::Error> {
     writer.write_all(chunk)?;
     u64::try_from(chunk.len())
@@ -258,10 +284,10 @@ fn consume_stream_files(
             break;
         }
         pending.extend_from_slice(&buffer[..read_len]);
-        decode_utf8_replace(&mut pending, &mut output, false);
+        decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(false));
     }
 
-    decode_utf8_replace(&mut pending, &mut output, true);
+    decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(true));
 
     Ok(output)
 }
@@ -269,7 +295,7 @@ fn consume_stream_files(
 fn decode_utf8_replace(
     pending: &mut Vec<u8>,
     output: &mut String,
-    final_chunk: bool,
+    final_chunk: FinalChunk,
 ) {
     loop {
         match std::str::from_utf8(pending) {
@@ -279,7 +305,11 @@ fn decode_utf8_replace(
                 break;
             }
             Err(err) => {
-                append_valid_prefix(pending, output, err.valid_up_to());
+                append_valid_prefix(
+                    pending,
+                    output,
+                    ValidPrefixLen::new(err.valid_up_to()),
+                );
                 if !handle_utf8_error(
                     pending,
                     output,
@@ -293,14 +323,18 @@ fn decode_utf8_replace(
     }
 }
 
-fn append_valid_prefix(pending: &[u8], output: &mut String, valid_up_to: usize) {
-    if valid_up_to == 0 {
+fn append_valid_prefix(
+    pending: &[u8],
+    output: &mut String,
+    valid_up_to: ValidPrefixLen,
+) {
+    if valid_up_to.value() == 0 {
         return;
     }
     // SAFETY: `valid_up_to` comes from a `Utf8Error`, so this prefix is known
     // to be valid UTF-8.
     let valid_prefix = unsafe {
-        std::str::from_utf8_unchecked(&pending[..valid_up_to])
+        std::str::from_utf8_unchecked(&pending[..valid_up_to.value()])
     };
     output.push_str(valid_prefix);
 }
@@ -309,13 +343,13 @@ fn handle_utf8_error(
     pending: &mut Vec<u8>,
     output: &mut String,
     err: &std::str::Utf8Error,
-    final_chunk: bool,
+    final_chunk: FinalChunk,
 ) -> bool {
-    let valid_up_to = err.valid_up_to();
+    let valid_up_to = ValidPrefixLen::new(err.valid_up_to());
     match err.error_len() {
         Some(error_len) => {
             output.push('\u{FFFD}');
-            pending.drain(..valid_up_to + error_len);
+            pending.drain(..valid_up_to.value() + error_len);
             !pending.is_empty()
         }
         None => handle_incomplete_sequence(pending, output, valid_up_to, final_chunk),
@@ -325,17 +359,17 @@ fn handle_utf8_error(
 fn handle_incomplete_sequence(
     pending: &mut Vec<u8>,
     output: &mut String,
-    valid_up_to: usize,
-    final_chunk: bool,
+    valid_up_to: ValidPrefixLen,
+    final_chunk: FinalChunk,
 ) -> bool {
-    if final_chunk {
+    if final_chunk.is_final() {
         output.push('\u{FFFD}');
         pending.clear();
         return false;
     }
-    if valid_up_to > 0 {
+    if valid_up_to.value() > 0 {
         // Keep only the incomplete tail; drop already used prefix.
-        pending.drain(..valid_up_to);
+        pending.drain(..valid_up_to.value());
     }
     false
 }
