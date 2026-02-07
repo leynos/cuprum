@@ -1,10 +1,11 @@
-"""Unit tests for the Rust stream pump.
+"""Unit tests for the Rust stream pump and consumer.
 
-These tests validate the optional Rust-backed pump behaviour and error handling.
+These tests validate the optional Rust-backed pump and consume behaviour and
+error handling.
 
 Example
 -------
-pytest cuprum/unittests/test_rust_streams.py -k rust_pump_stream_transfers_bytes
+pytest cuprum/unittests/test_rust_streams.py
 """
 
 from __future__ import annotations

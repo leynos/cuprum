@@ -1,8 +1,7 @@
 //! Optional Rust extension for Cuprum stream operations.
 //!
-//! This crate exposes a minimal PyO3 module that allows Python to detect
-//! whether the Rust extension is available. The core stream operations are
-//! implemented later in the roadmap.
+//! This crate exposes a PyO3 module providing stream pump and consume
+//! helpers alongside an availability check for the Rust backend.
 
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -186,13 +185,9 @@ impl BufferSize {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ValidPrefixLen(usize);
+struct ValidUpTo(usize);
 
-impl ValidPrefixLen {
-    fn new(value: usize) -> Self {
-        Self(value)
-    }
-
+impl ValidUpTo {
     fn value(self) -> usize {
         self.0
     }
@@ -202,10 +197,6 @@ impl ValidPrefixLen {
 struct FinalChunk(bool);
 
 impl FinalChunk {
-    fn new(value: bool) -> Self {
-        Self(value)
-    }
-
     fn is_final(self) -> bool {
         self.0
     }
@@ -284,10 +275,10 @@ fn consume_stream_files(
             break;
         }
         pending.extend_from_slice(&buffer[..read_len]);
-        decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(false));
+        decode_utf8_replace(&mut pending, &mut output, FinalChunk(false));
     }
 
-    decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(true));
+    decode_utf8_replace(&mut pending, &mut output, FinalChunk(true));
 
     Ok(output)
 }
@@ -308,13 +299,13 @@ fn decode_utf8_replace(
                 append_valid_prefix(
                     pending,
                     output,
-                    ValidPrefixLen::new(err.valid_up_to()),
+                    ValidUpTo(err.valid_up_to()),
                 );
                 if !handle_utf8_error(
                     pending,
                     output,
                     &err,
-                    final_chunk,
+                    FinalChunk(final_chunk.is_final()),
                 ) {
                     break;
                 }
@@ -326,7 +317,7 @@ fn decode_utf8_replace(
 fn append_valid_prefix(
     pending: &[u8],
     output: &mut String,
-    valid_up_to: ValidPrefixLen,
+    valid_up_to: ValidUpTo,
 ) {
     if valid_up_to.value() == 0 {
         return;
@@ -345,21 +336,32 @@ fn handle_utf8_error(
     err: &std::str::Utf8Error,
     final_chunk: FinalChunk,
 ) -> bool {
-    let valid_up_to = ValidPrefixLen::new(err.valid_up_to());
+    let valid_up_to = err.valid_up_to();
+    let final_chunk = final_chunk.is_final();
     match err.error_len() {
         Some(error_len) => {
             output.push('\u{FFFD}');
-            pending.drain(..valid_up_to.value() + error_len);
+            // NOTE: `decode_utf8_replace` must call `append_valid_prefix`
+            // immediately before `handle_utf8_error`; this drain in
+            // `handle_utf8_error` skips the already-appended valid prefix plus
+            // the invalid sequence (valid_up_to + error_len) to avoid
+            // double-draining.
+            pending.drain(..valid_up_to + error_len);
             !pending.is_empty()
         }
-        None => handle_incomplete_sequence(pending, output, valid_up_to, final_chunk),
+        None => handle_incomplete_sequence(
+            pending,
+            output,
+            ValidUpTo(valid_up_to),
+            FinalChunk(final_chunk),
+        ),
     }
 }
 
 fn handle_incomplete_sequence(
     pending: &mut Vec<u8>,
     output: &mut String,
-    valid_up_to: ValidPrefixLen,
+    valid_up_to: ValidUpTo,
     final_chunk: FinalChunk,
 ) -> bool {
     if final_chunk.is_final() {
