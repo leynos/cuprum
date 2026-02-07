@@ -144,9 +144,8 @@ restore_cmd = tar_extract(
 ```
 
 Relative paths require `allow_relative=True` on the relevant option objects
-(for example, `RsyncOptions`) or using
-`safe_path(..., allow_relative=True)` before passing the result into a
-builder.
+(for example, `RsyncOptions`) or using `safe_path(..., allow_relative=True)`
+before passing the result into a builder.
 
 ## Pipeline execution
 
@@ -977,7 +976,13 @@ using `uv_build` without any Rust dependencies.
 
 ### CI build commands
 
-The continuous integration (CI) workflows use two routes:
+The continuous integration (CI) workflows run the following checks:
+
+- Type checking and tests run in a Python version matrix. Required rows use
+  Python 3.12, 3.13, and 3.14. The Python 3.15a row is experimental and allowed
+  to fail.
+- Formatting and lint checks run on Python 3.13.
+- Coverage upload (artifact + optional CodeScene upload) runs on Python 3.13.
 
 - Pure Python wheel:
 

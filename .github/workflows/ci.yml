@@ -8,9 +8,6 @@ on:
 jobs:
   lint-test:
     runs-on: ubuntu-latest
-    env:
-      CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
-      CODESCENE_CLI_SHA256: ${{ vars.CODESCENE_CLI_SHA256 }}
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -40,8 +37,71 @@ jobs:
       - name: Run ruff
         run: make lint
 
+  typecheck-test:
+    name: Typecheck and test (Python ${{ matrix.python-label }})
+    continue-on-error: ${{ matrix.experimental }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: '3.12'
+            python-label: '3.12'
+            allow-prereleases: false
+            experimental: false
+          - python-version: '3.13'
+            python-label: '3.13'
+            allow-prereleases: false
+            experimental: false
+          - python-version: '3.14'
+            python-label: '3.14'
+            allow-prereleases: false
+            experimental: false
+          - python-version: '3.15'
+            python-label: '3.15a'
+            allow-prereleases: true
+            experimental: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          allow-prereleases: ${{ matrix.allow-prereleases }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
       - name: Run typechecker
         run: make typecheck
+
+      - name: Run tests
+        run: make test
+
+  coverage:
+    runs-on: ubuntu-latest
+    needs:
+      - lint-test
+      - typecheck-test
+    env:
+      CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
+      CODESCENE_CLI_SHA256: ${{ vars.CODESCENE_CLI_SHA256 }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: Install code
+        run: make build
 
       - name: Run tests with coverage
         run: |
