@@ -189,13 +189,13 @@ def test_concurrency_limit_restricts_parallel_execution() -> None:
 
 def test_concurrency_none_allows_unlimited() -> None:
     """concurrency=None allows all commands to run in parallel."""
-    # Keep a relaxed upper bound so this remains stable under xdist/CI jitter
-    # while still proving the run is significantly below sequential timing.
+    # Keep the upper bound below sequential runtime (4 * 0.2s = 0.8s) while
+    # leaving headroom for xdist and scheduler jitter.
     _assert_concurrent_timing(
         num_commands=4,
         sleep_seconds=0.2,
         concurrency=None,
-        timing=_TimingExpectation(min_elapsed=0.0, max_elapsed=0.8),
+        timing=_TimingExpectation(min_elapsed=0.0, max_elapsed=0.7),
     )
 
 

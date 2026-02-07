@@ -144,7 +144,7 @@ restore_cmd = tar_extract(
 ```
 
 Relative paths require `allow_relative=True` on the relevant option objects
-(for example, `RsyncOptions`) or using `safe_path(..., allow_relative=True)`
+(for example, `RsyncOptions`) or use `safe_path(..., allow_relative=True)`
 before passing the result into a builder.
 
 ## Pipeline execution
