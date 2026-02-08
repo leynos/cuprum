@@ -1,4 +1,4 @@
-"""Optional Rust-backed stream operations for high-throughput pumps.
+"""Optional Rust-backed stream operations for high-throughput workloads.
 
 This module provides a thin wrapper around the optional Rust extension. Import
 or use it only when the Rust backend is installed.
@@ -6,6 +6,7 @@ or use it only when the Rust backend is installed.
 Example
 -------
 bytes_written = rust_pump_stream(reader_fd, writer_fd, buffer_size=65536)
+output = rust_consume_stream(reader_fd, buffer_size=65536)
 """
 
 from __future__ import annotations
@@ -85,4 +86,46 @@ def rust_pump_stream(
     )
 
 
-__all__ = ["rust_pump_stream"]
+def rust_consume_stream(
+    reader_fd: int,
+    *,
+    buffer_size: int = 65536,
+) -> str:
+    """Consume bytes from a file descriptor using the Rust extension.
+
+    This helper always decodes UTF-8 and replaces invalid sequences with the
+    Unicode replacement character.
+
+    Parameters
+    ----------
+    reader_fd : int
+        File descriptor to read from.
+    buffer_size : int, optional
+        Buffer size in bytes for each read cycle. Must be greater than zero.
+        Defaults to ``65536`` (64 KiB).
+
+    Returns
+    -------
+    str
+        Decoded output from the stream.
+
+    Raises
+    ------
+    ImportError
+        If the Rust backend native module cannot be imported.
+    ValueError
+        If ``buffer_size`` is not a positive integer.
+    OSError
+        If an I/O error occurs while reading.
+    """
+    native = _load_native()
+    return typ.cast(
+        "str",
+        native.rust_consume_stream(
+            _convert_fd_for_platform(reader_fd),
+            buffer_size=buffer_size,
+        ),
+    )
+
+
+__all__ = ["rust_consume_stream", "rust_pump_stream"]
