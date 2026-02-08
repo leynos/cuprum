@@ -15,6 +15,9 @@ use std::os::fd::FromRawFd;
 #[cfg(windows)]
 use std::os::windows::io::{FromRawHandle, RawHandle};
 
+#[cfg(target_os = "linux")]
+mod splice;
+
 /// Report whether the Rust extension is available.
 ///
 /// # Returns
@@ -236,6 +239,25 @@ fn handle_write_result(
 }
 
 fn pump_stream_files(
+    reader: &mut File,
+    writer: &mut File,
+    buffer_size: BufferSize,
+) -> Result<u64, io::Error> {
+    // On Linux, attempt zero-copy splice first.
+    #[cfg(target_os = "linux")]
+    if let Some(result) = splice::try_splice_pump(reader, writer, buffer_size.value()) {
+        return result;
+    }
+
+    // Fallback: read/write loop for non-Linux or unsupported FD types.
+    pump_stream_files_readwrite(reader, writer, buffer_size)
+}
+
+/// Read/write loop fallback for pumping bytes between file descriptors.
+///
+/// This is used when splice is not available (non-Linux) or when the file
+/// descriptors do not support splice (regular files, some sockets).
+fn pump_stream_files_readwrite(
     reader: &mut File,
     writer: &mut File,
     buffer_size: BufferSize,

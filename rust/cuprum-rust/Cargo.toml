@@ -13,5 +13,8 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.27.2", features = ["extension-module"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [lints]
 workspace = true

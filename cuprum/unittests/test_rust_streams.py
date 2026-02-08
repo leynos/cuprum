@@ -20,6 +20,7 @@ import pytest
 from tests.helpers.stream_pipes import _pipe_pair, _read_all, _safe_close
 
 if typ.TYPE_CHECKING:
+    from pathlib import Path
     from types import ModuleType
 
 
@@ -308,3 +309,108 @@ class TestRustConsumeStream:
             _safe_close(write_fd)
             with pytest.raises(ValueError, match="buffer_size"):
                 rust_streams.rust_consume_stream(read_fd, buffer_size=0)
+
+
+class TestSpliceOptimization:
+    """Tests for Linux splice() optimization and fallback behavior.
+
+    On Linux, rust_pump_stream uses splice() for zero-copy pipe-to-pipe
+    transfers. These tests verify that large transfers complete correctly
+    (exercising splice on Linux) and that fallback to read/write works
+    for unsupported file descriptor types.
+    """
+
+    @staticmethod
+    def test_large_pipe_transfer(
+        rust_streams: ModuleType,
+    ) -> None:
+        """Verify large pipe-to-pipe transfers complete correctly.
+
+        This test exercises the splice code path on Linux by transferring
+        a payload larger than the default buffer size. On non-Linux platforms,
+        the read/write fallback is used.
+
+        Parameters
+        ----------
+        rust_streams : ModuleType
+            The Rust streams module fixture.
+
+        Returns
+        -------
+        None
+        """
+        # 1 MB payload to exercise splice with multiple chunks
+        payload = bytes(range(256)) * (1024 * 1024 // 256)
+
+        output, transferred = _pump_payload(rust_streams, payload)
+
+        assert output == payload, "expected large payload to round-trip"
+        assert transferred == len(payload), "expected all bytes transferred"
+
+    @staticmethod
+    def test_file_to_pipe_fallback(
+        rust_streams: ModuleType,
+        tmp_path: Path,
+    ) -> None:
+        """Verify file-to-pipe transfers work using fallback.
+
+        On Linux, splice requires at least one pipe endpoint. This test uses
+        a regular file as the source, forcing the fallback to read/write.
+
+        Parameters
+        ----------
+        rust_streams : ModuleType
+            The Rust streams module fixture.
+        tmp_path : Path
+            Pytest temporary directory fixture.
+
+        Returns
+        -------
+        None
+        """
+        payload = b"file-to-pipe-fallback-test-payload"
+        test_file = tmp_path / "test_input.bin"
+        test_file.write_bytes(payload)
+
+        out_read, out_write = os.pipe()
+        try:
+            with test_file.open("rb") as f:
+                transferred = rust_streams.rust_pump_stream(f.fileno(), out_write)
+            _safe_close(out_write)
+            output = _read_all(out_read)
+        finally:
+            _safe_close(out_read)
+
+        assert output == payload, "expected file content to transfer to pipe"
+        assert transferred == len(payload), "expected all bytes transferred"
+
+    @staticmethod
+    def test_large_transfer_with_small_buffer(
+        rust_streams: ModuleType,
+    ) -> None:
+        """Verify large transfers work with small buffer sizes.
+
+        This test ensures that both splice and fallback paths handle
+        multiple iterations correctly when the buffer size is smaller
+        than the payload.
+
+        Parameters
+        ----------
+        rust_streams : ModuleType
+            The Rust streams module fixture.
+
+        Returns
+        -------
+        None
+        """
+        # 256 KB payload with 4 KB buffer
+        payload = bytes(range(256)) * 1024
+
+        output, transferred = _pump_payload(
+            rust_streams,
+            payload,
+            buffer_size=4096,
+        )
+
+        assert output == payload, "expected payload to round-trip with small buffer"
+        assert transferred == len(payload), "expected all bytes transferred"

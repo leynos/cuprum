@@ -11,3 +11,8 @@ Feature: Optional Rust stream operations
     Given the Rust consume stream is available
     When I consume a payload with invalid UTF-8
     Then the decoded output matches replacement semantics
+
+  Scenario: Rust pump stream handles large pipe transfers
+    Given the Rust pump stream is available
+    When I pump a large payload through the Rust stream
+    Then the output matches the large payload
