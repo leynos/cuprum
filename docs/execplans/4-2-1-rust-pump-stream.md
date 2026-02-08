@@ -13,13 +13,13 @@ PLANS.md is not present in this repository.
 Provide a Rust-backed `rust_pump_stream()` that transfers data between file
 descriptors outside the Global Interpreter Lock (GIL) with a configurable
 buffer (default 64 KB) and clean error propagation to Python exceptions. The
-new function must be fully
-covered by unit and behavioural tests, and documentation must reflect the Rust
-extension architecture, API boundary, fallback strategy, and performance
-characteristics. Success is visible when the new tests fail before the Rust
-function exists, pass after implementation, and all quality gates (`make
-check-fmt`, `make typecheck`, `make lint`, `make test`) succeed. The roadmap
-entry 4.2.1 should be marked done after completion.
+new function must be fully covered by unit and behavioural tests, and
+documentation must reflect the Rust extension architecture, API boundary,
+fallback strategy, and performance characteristics. Success is visible when the
+new tests fail before the Rust function exists, pass after implementation, and
+all quality gates (`make check-fmt`, `make typecheck`, `make lint`,
+`make test`) succeed. The roadmap entry 4.2.1 should be marked done after
+completion.
 
 ## Constraints
 
@@ -83,8 +83,8 @@ entry 4.2.1 should be marked done after completion.
 ## Surprises & discoveries
 
 - Observation: Qdrant notes store could not be reached (`qdrant-find` failed).
-  Evidence: tool returned "All connection attempts failed."
-  Impact: no prior notes available for this plan; proceed with local docs only.
+  Evidence: tool returned "All connection attempts failed." Impact: no prior
+  notes available for this plan; proceed with local docs only.
 - Observation: `make nixie` timed out with the default 10s command timeout.
   Evidence: command timed out during Mermaid validation before completion.
   Impact: reran with a longer timeout to confirm diagrams are valid.
@@ -207,28 +207,24 @@ long outputs.
 2. Add failing unit tests and run them.
 
     set -o pipefail
-    uv run pytest cuprum/unittests/test_rust_streams.py \
-      | tee /tmp/test-rust-streams-unit.txt
+    uv run pytest cuprum/unittests/test_rust_streams.py | tee /tmp/test-rust-streams-unit.txt
 
 3. Add failing behavioural tests and run them.
 
     set -o pipefail
     uv run pytest tests/behaviour/test_rust_streams_behaviour.py \
-      tests/features/rust_streams.feature \
-      | tee /tmp/test-rust-streams-bdd.txt
+      tests/features/rust_streams.feature | tee /tmp/test-rust-streams-bdd.txt
 
 4. Implement `rust_pump_stream()` in Rust and add any required Python shim.
 
 5. Re-run the new unit and behavioural tests.
 
     set -o pipefail
-    uv run pytest cuprum/unittests/test_rust_streams.py \
-      | tee /tmp/test-rust-streams-unit.txt
+    uv run pytest cuprum/unittests/test_rust_streams.py | tee /tmp/test-rust-streams-unit.txt
 
     set -o pipefail
     uv run pytest tests/behaviour/test_rust_streams_behaviour.py \
-      tests/features/rust_streams.feature \
-      | tee /tmp/test-rust-streams-bdd.txt
+      tests/features/rust_streams.feature | tee /tmp/test-rust-streams-bdd.txt
 
 6. Update documentation and roadmap, then run quality gates.
 

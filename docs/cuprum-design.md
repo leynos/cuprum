@@ -1481,12 +1481,11 @@ operations. Both pathways remain available and are treated as first-class:
 - Provides faster I/O interrupt handling than asyncio;
 - On Linux, leverages `splice()` for zero-copy between pipe file descriptors.
 
-The native Rust functions are exported from
-`cuprum._rust_backend_native`. A thin Python shim module
-`cuprum._streams_rs` re-exports the stream functions and performs any
-platform-specific file descriptor conversion (for example, translating
-Windows file descriptors into OS handles). This keeps the native module
-name stable while allowing Python-only adaptations.
+The native Rust functions are exported from `cuprum._rust_backend_native`. A
+thin Python shim module `cuprum._streams_rs` re-exports the stream functions
+and performs any platform-specific file descriptor conversion (for example,
+translating Windows file descriptors into OS handles). This keeps the native
+module name stable while allowing Python-only adaptations.
 
 The foundation release also introduces a minimal availability probe. The native
 module is published as `cuprum._rust_backend_native`, while the Python wrapper
@@ -1535,9 +1534,8 @@ flowchart TD
 
 ### 13.3 API Boundary
 
-The Rust extension exposes three functions via PyO3. As of 4.2.1,
-`rust_pump_stream` and `is_available` are implemented; `rust_consume_stream`
-lands in 4.2.2.
+The Rust extension exposes three functions via PyO3. As of 4.2.2,
+`rust_pump_stream`, `rust_consume_stream`, and `is_available` are implemented.
 
 ```python
 # cuprum/_streams_rs.pyi (type stubs)
@@ -1582,8 +1580,6 @@ def rust_consume_stream(
     reader_fd: int,
     *,
     buffer_size: int = 65536,
-    encoding: str = "utf-8",
-    errors: str = "replace",
 ) -> str:
     """Consume a stream and return decoded output.
 
@@ -1593,10 +1589,6 @@ def rust_consume_stream(
         File descriptor to read from.
     buffer_size:
         Size of the internal read buffer in bytes.
-    encoding:
-        Character encoding for decoding.
-    errors:
-        Error handling mode for decoding.
 
     Returns
     -------
@@ -1610,6 +1602,82 @@ def rust_consume_stream(
 def is_available() -> bool:
     """Return True if the Rust extension is functional."""
     ...
+```
+
+`rust_consume_stream` performs incremental UTF-8 decoding with a pending byte
+buffer so that chunk boundaries do not affect output. Invalid byte sequences
+are replaced with the Unicode replacement character (U+FFFD).
+
+For screen readers: The following sequence diagram shows the Python-to-Rust
+call flow for `rust_consume_stream`, including buffer validation, file
+handling, and incremental decoding.
+
+```mermaid
+sequenceDiagram
+    actor PyCaller
+    participant PyShim as cuprum__streams_rs
+    participant PyRust as cuprum__rust_backend_native
+    participant RustFn as rust_consume_stream
+    participant Impl as consume_stream
+    participant ImplFiles as consume_stream_files
+
+    PyCaller->>PyShim: rust_consume_stream(reader_fd, buffer_size)
+    PyShim->>PyRust: rust_consume_stream(converted_fd, buffer_size)
+
+    PyRust->>RustFn: call via PyO3
+    RustFn->>RustFn: validate_buffer_size(buffer_size)
+    RustFn->>RustFn: convert_fd(reader_fd)
+    RustFn->>Impl: detach and call consume_stream(reader_fd, buffer_size)
+    Note over RustFn,Impl: GIL released during I/O
+
+    Impl->>Impl: file_from_raw(reader_fd)
+    Impl->>ImplFiles: consume_stream_files(&mut file, buffer_size)
+
+    loop read loop
+        ImplFiles->>ImplFiles: read(buffer)
+        ImplFiles-->>ImplFiles: pending.extend(buffer[..read_len])
+        ImplFiles->>ImplFiles: decode_utf8_replace(pending, output, final_chunk=false)
+    end
+
+    ImplFiles->>ImplFiles: decode_utf8_replace(pending, output, final_chunk=true)
+    ImplFiles-->>Impl: Ok(output_string)
+
+    Impl-->>RustFn: Ok(output_string)
+    RustFn-->>PyShim: Python str result
+    PyShim-->>PyCaller: decoded text
+```
+
+For screen readers: The following flowchart outlines the decision flow inside
+`decode_utf8_replace`, including how valid UTF-8 prefixes, invalid sequences,
+and incomplete trailing bytes are handled.
+
+```mermaid
+flowchart TD
+    A[Start decode_utf8_replace] --> B[Attempt from_utf8 on pending]
+    B -->|Ok| C[Append entire valid string to output]
+    C --> D[Clear pending]
+    D --> E[Stop loop]
+
+    B -->|Err Utf8Error| F[Get valid_up_to and error_len]
+    F --> G[append_valid_prefix using valid_up_to]
+
+    G --> H{error_len is Some}
+    H -->|Yes| I[Push replacement char U+FFFD to output]
+    I --> J[Drain valid_up_to + error_len bytes from pending]
+    J --> K{pending is empty}
+    K -->|Yes| E
+    K -->|No| B
+
+    H -->|No| L[Handle incomplete sequence]
+    L --> M{final_chunk is true}
+    M -->|Yes| N[Push replacement char U+FFFD]
+    N --> O[Clear pending]
+    O --> E
+
+    M -->|No| P{valid_up_to > 0}
+    P -->|Yes| Q[Drain valid_up_to bytes from pending]
+    Q --> E
+    P -->|No| E
 ```
 
 The extension accepts raw file descriptors rather than asyncio stream objects.
@@ -1714,9 +1782,9 @@ pathway. The following behaviours are only available via the Python backend:
   extension does not support this; when `echo_output=True`, the dispatcher
   routes to Python.
 
-- **Custom encodings:** The Rust extension supports UTF-8 with
-  `errors="replace"` semantics. Other encodings or error modes route to the
-  Python pathway.
+- **Custom encodings:** The Rust extension always decodes as UTF-8 with
+  replacement semantics. Other encodings or error modes require the Python
+  pathway.
 
 The dispatcher in `cuprum/_backend.py` inspects the stream configuration and
 automatically selects the Python pathway when any unsupported feature is

@@ -134,7 +134,7 @@ scenarios whilst maintaining pure Python as a first-class pathway.
   buffer size (default 64 KB), and proper error propagation to Python
   exceptions.
   - [x] Add unit tests covering normal operation and error paths.
-- [ ] 4.2.2. Implement `rust_consume_stream()` with incremental UTF-8 decoding
+- [x] 4.2.2. Implement `rust_consume_stream()` with incremental UTF-8 decoding
   matching Python pathway behaviour for `errors="replace"` semantics; verify
   parity with edge-case tests.
 - [ ] 4.2.3. Add Linux-specific `splice()` code path with runtime detection;
