@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import os
+import threading
 import typing as typ
 
 import pytest
@@ -46,6 +47,57 @@ def _pump_payload(
 
         _safe_close(out_write)
         output = _read_all(out_read)
+
+    return output, transferred
+
+
+def _pump_payload_threaded(
+    streams: ModuleType,
+    payload: bytes,
+    *,
+    buffer_size: int | None = None,
+) -> tuple[bytes, int]:
+    """Pump payload through the Rust stream using a writer thread.
+
+    This variant uses a separate thread for writing to avoid deadlock when
+    the payload is larger than the pipe buffer (~64KB on Linux).
+
+    Parameters
+    ----------
+    streams : ModuleType
+        The Rust streams module.
+    payload : bytes
+        The payload to transfer.
+    buffer_size : int | None
+        Optional buffer size parameter.
+
+    Returns
+    -------
+    tuple[bytes, int]
+        The output bytes and transfer count.
+    """
+    with _pipe_pair() as (in_read, in_write, out_read, out_write):
+
+        def writer() -> None:
+            view = memoryview(payload)
+            while view:
+                written = os.write(in_write, view)
+                view = view[written:]
+            _safe_close(in_write)
+
+        write_thread = threading.Thread(target=writer)
+        write_thread.start()
+
+        try:
+            kwargs: dict[str, int] = {}
+            if buffer_size is not None:
+                kwargs["buffer_size"] = buffer_size
+            transferred = streams.rust_pump_stream(in_read, out_write, **kwargs)
+        finally:
+            _safe_close(out_write)
+
+        output = _read_all(out_read)
+        write_thread.join()
 
     return output, transferred
 
@@ -312,7 +364,7 @@ class TestRustConsumeStream:
 
 
 class TestSpliceOptimization:
-    """Tests for Linux splice() optimization and fallback behavior.
+    """Tests for Linux splice() optimization and fallback behaviour.
 
     On Linux, rust_pump_stream uses splice() for zero-copy pipe-to-pipe
     transfers. These tests verify that large transfers complete correctly
@@ -342,7 +394,7 @@ class TestSpliceOptimization:
         # 1 MB payload to exercise splice with multiple chunks
         payload = bytes(range(256)) * (1024 * 1024 // 256)
 
-        output, transferred = _pump_payload(rust_streams, payload)
+        output, transferred = _pump_payload_threaded(rust_streams, payload)
 
         assert output == payload, "expected large payload to round-trip"
         assert transferred == len(payload), "expected all bytes transferred"
@@ -372,14 +424,17 @@ class TestSpliceOptimization:
         test_file = tmp_path / "test_input.bin"
         test_file.write_bytes(payload)
 
-        out_read, out_write = os.pipe()
-        try:
+        with contextlib.ExitStack() as stack:
+            out_read, out_write = os.pipe()
+            stack.callback(_safe_close, out_read)
+            stack.callback(_safe_close, out_write)
+
             with test_file.open("rb") as f:
                 transferred = rust_streams.rust_pump_stream(f.fileno(), out_write)
             _safe_close(out_write)
+            stack.pop_all()  # Prevent double-close of out_write
+            stack.callback(_safe_close, out_read)
             output = _read_all(out_read)
-        finally:
-            _safe_close(out_read)
 
         assert output == payload, "expected file content to transfer to pipe"
         assert transferred == len(payload), "expected all bytes transferred"
@@ -406,7 +461,7 @@ class TestSpliceOptimization:
         # 256 KB payload with 4 KB buffer
         payload = bytes(range(256)) * 1024
 
-        output, transferred = _pump_payload(
+        output, transferred = _pump_payload_threaded(
             rust_streams,
             payload,
             buffer_size=4096,
@@ -414,3 +469,72 @@ class TestSpliceOptimization:
 
         assert output == payload, "expected payload to round-trip with small buffer"
         assert transferred == len(payload), "expected all bytes transferred"
+
+    @staticmethod
+    def test_broken_pipe_drains_reader(
+        rust_streams: ModuleType,
+    ) -> None:
+        """Verify BrokenPipe handling drains the reader to avoid upstream deadlock.
+
+        This test sets up a pipe-to-pipe transfer via rust_pump_stream, then
+        closes the consumer's read end to trigger a BrokenPipe/ConnectionReset
+        on the splice destination. The implementation is expected to:
+
+        - Return the number of bytes successfully written before the error.
+        - Drain the remaining data from the source pipe so that the upstream
+          writer does not block on a full pipe.
+
+        Parameters
+        ----------
+        rust_streams : ModuleType
+            The Rust streams module fixture.
+
+        Returns
+        -------
+        None
+        """
+        # Source pipe: writer -> rust_pump_stream (reads from src_read_fd)
+        src_read_fd, src_write_fd = os.pipe()
+        # Destination pipe: rust_pump_stream (writes to dst_write_fd) -> consumer
+        dst_read_fd, dst_write_fd = os.pipe()
+
+        total_bytes = 1024 * 1024  # 1 MiB
+
+        def writer() -> None:
+            try:
+                remaining = total_bytes
+                chunk = b"x" * 8192
+                while remaining > 0:
+                    to_write = min(len(chunk), remaining)
+                    os.write(src_write_fd, chunk[:to_write])
+                    remaining -= to_write
+            finally:
+                _safe_close(src_write_fd)
+
+        writer_thread = threading.Thread(target=writer)
+        writer_thread.start()
+
+        # Close the consumer's read end to trigger BrokenPipe on the writer.
+        _safe_close(dst_read_fd)
+
+        # rust_pump_stream should:
+        # - return promptly
+        # - report the number of bytes actually written
+        # - drain the remaining data from src_read_fd so the writer is not blocked
+        bytes_pumped = rust_streams.rust_pump_stream(
+            src_read_fd,
+            dst_write_fd,
+            buffer_size=64 * 1024,
+        )
+
+        _safe_close(src_read_fd)
+        _safe_close(dst_write_fd)
+
+        writer_thread.join(timeout=2.0)
+        assert not writer_thread.is_alive(), (
+            "writer blocked because splice did not drain the reader"
+        )
+
+        assert 0 <= bytes_pumped < total_bytes, (
+            "expected partial transfer count due to broken pipe"
+        )

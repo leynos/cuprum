@@ -1,10 +1,10 @@
-//! Linux-specific splice() optimization for zero-copy pipe transfers.
+//! Linux-specific `splice()` optimization for zero-copy pipe transfers.
 //!
 //! This module provides zero-copy data transfer between pipe file descriptors
 //! using the Linux `splice()` system call. When splice is not supported for the
 //! given file descriptors, the caller should fall back to a read/write loop.
 //!
-//! # Behavior
+//! # Behaviour
 //!
 //! The `try_splice_pump` function attempts to use splice for data transfer:
 //!
@@ -19,13 +19,15 @@ use std::fs::File;
 use std::io;
 use std::os::unix::io::AsRawFd;
 
+use crate::io_utils::is_nonfatal_write_error;
+
 /// Flag for splice: move pages instead of copying (advisory).
 const SPLICE_F_MOVE: libc::c_uint = 0x01;
 
 /// Flag for splice: more data will be sent (for TCP corking).
 const SPLICE_F_MORE: libc::c_uint = 0x04;
 
-/// Attempt to pump data using splice(). Returns None if splice is not supported.
+/// Attempt to pump data using `splice()`. Returns None if splice is not supported.
 ///
 /// # Parameters
 ///
@@ -51,8 +53,12 @@ pub(crate) fn try_splice_pump(
         Ok(0) => Some(Ok(0)), // EOF on first call
         Ok(n) => Some(splice_loop(reader_fd, writer_fd, chunk_size, n)),
         Err(e) if is_splice_unsupported(&e) => None, // Fall back to read/write
-        Err(e) if is_nonfatal_write_error(&e) => Some(Ok(0)), // Broken pipe
-        Err(e) => Some(Err(e)),                      // Fatal error
+        Err(e) if is_nonfatal_write_error(&e) => {
+            // Broken pipe on first call: drain reader to avoid upstream deadlock.
+            drain_reader(reader_fd, chunk_size);
+            Some(Ok(0))
+        }
+        Err(e) => Some(Err(e)), // Fatal error
     }
 }
 
@@ -109,7 +115,7 @@ fn splice_loop(
 
 /// Drain remaining data from reader after broken pipe.
 ///
-/// This matches the behavior of the read/write fallback: when the writer
+/// This matches the behaviour of the read/write fallback: when the writer
 /// breaks, we continue reading until EOF to ensure the upstream process
 /// does not block on a full pipe buffer.
 fn drain_reader(fd_in: libc::c_int, chunk_size: usize) {
@@ -132,18 +138,6 @@ fn drain_reader(fd_in: libc::c_int, chunk_size: usize) {
 fn is_splice_unsupported(err: &io::Error) -> bool {
     matches!(
         err.raw_os_error(),
-        Some(libc::EINVAL) | Some(libc::EBADF) | Some(libc::ESPIPE)
-    )
-}
-
-/// Check if error is a non-fatal write condition (broken pipe).
-///
-/// These errors indicate the write end closed, which is expected when
-/// downstream processes exit early. The implementation drains the reader
-/// and returns successfully rather than propagating the error.
-fn is_nonfatal_write_error(err: &io::Error) -> bool {
-    matches!(
-        err.kind(),
-        io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+        Some(libc::EINVAL | libc::EBADF | libc::ESPIPE)
     )
 }

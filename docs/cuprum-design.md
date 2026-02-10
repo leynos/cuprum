@@ -1838,7 +1838,8 @@ sequence:
    path at compile time. Non-Linux builds use only the read/write loop.
 
 2. **First splice attempt**: The first `splice()` call tests whether both file
-   descriptors support the operation. Unsupported FD types return `EINVAL`.
+   descriptors support the operation. Unsupported file descriptor (FD) types
+   return `EINVAL`.
 
 3. **Fallback decision**: If `splice()` returns `EINVAL`, `EBADF`, or `ESPIPE`,
    the extension falls back to the read/write loop for the remainder of the

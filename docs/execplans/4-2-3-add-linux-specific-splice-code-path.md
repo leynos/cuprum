@@ -31,11 +31,11 @@ Hard invariants that must hold throughout implementation:
 
 - **API stability**: The `rust_pump_stream(reader_fd, writer_fd, buffer_size)`
   signature must not change. Splice is an internal optimization.
-- **Behavioral parity**: Splice path must produce identical results to
+- **Behavioural parity**: Splice path must produce identical results to
   read/write path: same bytes transferred, same error handling for broken
   pipes, same return value semantics.
-- **GIL release**: All I/O operations must occur with the Python GIL released
-  (already achieved via `py.detach()`).
+- **Global Interpreter Lock (GIL) release**: All I/O operations must occur with
+  the Python GIL released (already achieved via `py.detach()`).
 - **Non-Linux platforms**: Windows and macOS builds must compile and work
   unchanged. Splice code must be gated with `#[cfg(target_os = "linux")]`.
 - **Error propagation**: I/O errors must propagate as `OSError` to Python.
@@ -93,7 +93,7 @@ Known uncertainties that might affect the plan:
 ## Surprises & Discoveries
 
 - Observation: Linting identified use of `typing.Any` for pytest `tmp_path`
-  fixture and use of builtin `open()` instead of `Path.open()`.
+  fixture and use of built-in `open()` instead of `Path.open()`.
   Evidence: `ruff check` reported ANN401 and PTH123 errors.
   Impact: Fixed by using proper `Path` type annotation and `Path.open()` method.
 
@@ -139,7 +139,7 @@ All quality gates passed:
 - `make markdownlint`: 0 errors
 - `make nixie`: All diagrams validated
 
-Files modified (8 total, within tolerance of 8):
+Files modified (9 total, within tolerance of 9):
 
 1. `rust/cuprum-rust/Cargo.toml` - Added libc dependency for Linux
 2. `rust/cuprum-rust/src/splice.rs` - New file: splice implementation
@@ -403,7 +403,7 @@ Expected: all gates pass.
 2. Verify splice is exercised on Linux by checking test coverage of splice path
 3. Verify fallback works by running file-to-pipe test
 
-**Behavioral acceptance:**
+**Behavioural acceptance:**
 
 - `rust_pump_stream` continues to work identically from Python caller's
   perspective

@@ -999,7 +999,7 @@ transfers.
 The optimization is transparent to users:
 
 - Automatically enabled on Linux when using pipe file descriptors
-- Falls back to read/write for unsupported FD types (files, some sockets)
+- Falls back to read/write for unsupported file descriptor types (files, some sockets)
 - No configuration required
 
 For maximum benefit, ensure pipeline stages use pipes (the default for
