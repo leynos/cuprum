@@ -129,15 +129,14 @@ fn drain_reader(fd_in: libc::c_int, chunk_size: usize) {
     }
 }
 
-/// Check if error indicates splice is not supported for these FDs.
+/// Check if error indicates splice is not supported for these file descriptors.
 ///
-/// These errors indicate the file descriptors do not support splice:
-/// - `EINVAL`: Invalid argument (FD type not supported)
-/// - `EBADF`: Bad file descriptor
-/// - `ESPIPE`: Illegal seek (sometimes returned for unseekable FDs)
+/// Only `EINVAL` triggers a fallback to read/write: it indicates the file
+/// descriptor type does not support splice (e.g., regular files, most sockets).
+///
+/// Other errors such as `EBADF` (bad file descriptor) or `ESPIPE` (illegal
+/// seek) are configuration or programming errors that should propagate to the
+/// caller rather than being masked by a fallback that will likely also fail.
 fn is_splice_unsupported(err: &io::Error) -> bool {
-    matches!(
-        err.raw_os_error(),
-        Some(libc::EINVAL | libc::EBADF | libc::ESPIPE)
-    )
+    err.raw_os_error() == Some(libc::EINVAL)
 }

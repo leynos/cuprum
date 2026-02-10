@@ -1841,9 +1841,9 @@ sequence:
    descriptors support the operation. Unsupported file descriptor (FD) types
    return `EINVAL`.
 
-3. **Fallback decision**: If `splice()` returns `EINVAL`, `EBADF`, or `ESPIPE`,
-   the extension falls back to the read/write loop for the remainder of the
-   transfer.
+3. **Fallback decision**: If `splice()` returns `EINVAL`, the extension falls
+   back to the read/write loop for the remainder of the transfer. Other errors
+   (e.g., `EBADF`, `ESPIPE`) are considered fatal and propagate to the caller.
 
 #### Supported File Descriptor Types
 
@@ -1869,10 +1869,8 @@ The implementation uses the following splice flags:
 The splice implementation handles errors as follows:
 
 - `EINVAL`: FD type not supported; fall back to read/write
-- `EBADF`: Bad file descriptor; fall back to read/write
-- `ESPIPE`: Illegal seek; fall back to read/write
 - `EPIPE` / `ECONNRESET`: Broken pipe; drain reader and return bytes written
-- Other errors: Propagate to caller as `OSError`
+- `EBADF` / `ESPIPE` / other errors: Propagate to caller as `OSError`
 
 ### 13.8 Build and Distribution
 

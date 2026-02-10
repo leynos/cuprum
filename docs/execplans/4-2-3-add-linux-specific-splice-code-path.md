@@ -234,7 +234,7 @@ Create new file `/home/user/project/rust/cuprum-rust/src/splice.rs`:
    Continue until EOF or error
 6. **`drain_reader(fd_in, chunk_size)`**: Drain remaining data after broken pipe
 7. **`is_splice_unsupported(err) -> bool`**: Check if error indicates splice
-   not supported (EINVAL, EBADF, ESPIPE)
+   not supported (EINVAL only; EBADF/ESPIPE propagate as fatal errors)
 8. **`is_nonfatal_write_error(err) -> bool`**: Check for broken pipe/connection
    reset
 
