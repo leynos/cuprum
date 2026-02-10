@@ -82,13 +82,10 @@ class TestSpliceOptimization:
         with contextlib.ExitStack() as stack:
             out_read, out_write = os.pipe()
             stack.callback(_safe_close, out_read)
-            stack.callback(_safe_close, out_write)
 
             with test_file.open("rb") as f:
                 transferred = rust_streams.rust_pump_stream(f.fileno(), out_write)
             _safe_close(out_write)
-            stack.pop_all()  # Prevent double-close of out_write
-            stack.callback(_safe_close, out_read)
             output = _read_all(out_read)
 
         assert output == payload, "expected file content to transfer to pipe"
