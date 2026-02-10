@@ -118,16 +118,10 @@ class TestSpliceOptimization:
         """Verify BrokenPipe handling drains the reader to avoid upstream deadlock."""
         total_bytes = 1024 * 1024  # 1 MiB
 
-        with contextlib.ExitStack() as stack:
-            # Source pipe: writer -> rust_pump_stream (reads from src_read_fd)
-            src_read_fd, src_write_fd = os.pipe()
-            stack.callback(_safe_close, src_read_fd)
-            stack.callback(_safe_close, src_write_fd)
-
-            # Destination pipe: rust_pump_stream (writes to dst_write_fd) -> consumer
-            dst_read_fd, dst_write_fd = os.pipe()
-            stack.callback(_safe_close, dst_read_fd)
-            stack.callback(_safe_close, dst_write_fd)
+        # Use _pipe_pair for resource management. The context manager creates:
+        # - src_read_fd, src_write_fd: source pipe (writer thread -> rust_pump_stream)
+        # - dst_read_fd, dst_write_fd: destination pipe (rust_pump_stream -> consumer)
+        with _pipe_pair() as (src_read_fd, src_write_fd, dst_read_fd, dst_write_fd):
 
             def writer() -> None:
                 try:
@@ -144,6 +138,8 @@ class TestSpliceOptimization:
             writer_thread.start()
 
             # Close the consumer's read end to trigger BrokenPipe on the writer.
+            # _pipe_pair will attempt to close this again at exit, but _safe_close
+            # handles double-close gracefully.
             _safe_close(dst_read_fd)
 
             # rust_pump_stream should:
