@@ -11,6 +11,7 @@ pytest tests/behaviour/test_rust_streams_behaviour.py -k rust_pump_stream_behavi
 from __future__ import annotations
 
 import os
+import threading
 import typing as typ
 
 from pytest_bdd import given, scenario, then, when
@@ -68,6 +69,26 @@ def test_rust_pump_stream_behaviour() -> None:
 )
 def test_rust_consume_stream_behaviour() -> None:
     """Validate the Rust consume stream behaviour.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+
+
+@scenario(
+    "../features/rust_streams.feature",
+    "Rust pump stream handles large pipe transfers",
+)
+def test_rust_pump_stream_large_transfer_behaviour() -> None:
+    """Validate the Rust pump stream handles large payloads.
+
+    This scenario exercises the splice code path on Linux by transferring
+    a payload larger than typical buffer sizes.
 
     Parameters
     ----------
@@ -217,3 +238,68 @@ def then_output_matches_replacement(
     payload, output = consumed_payload
     expected = payload.decode("utf-8", errors="replace")
     assert output == expected, "expected replacement semantics for invalid bytes"
+
+
+@when(
+    "I pump a large payload through the Rust stream",
+    target_fixture="large_pumped_payload",
+)
+def when_pump_large_payload(
+    rust_pump: typ.Callable[[int, int], int],
+) -> tuple[bytes, bytes, int]:
+    """Pump a large payload through pipes using the Rust function.
+
+    This exercises the splice code path on Linux by transferring a payload
+    larger than the default buffer size. On non-Linux platforms, the
+    read/write fallback is used.
+
+    Parameters
+    ----------
+    rust_pump : Callable[[int, int], int]
+        Rust pump function for transferring bytes.
+
+    Returns
+    -------
+    tuple[bytes, bytes, int]
+        The input payload, the output collected from the pipe, and bytes pumped.
+    """
+    # 1 MB payload to exercise splice with multiple chunks
+    payload = bytes(range(256)) * (1024 * 1024 // 256)
+    with _pipe_pair() as (in_read, in_write, out_read, out_write):
+        # Write in a separate thread to avoid deadlock on full pipe buffer
+
+        def writer() -> None:
+            view = memoryview(payload)
+            while view:
+                written = os.write(in_write, view)
+                view = view[written:]
+            _safe_close(in_write)
+
+        write_thread = threading.Thread(target=writer)
+        write_thread.start()
+
+        pumped_bytes = rust_pump(in_read, out_write)
+
+        _safe_close(out_write)
+        output = _read_all(out_read)
+        write_thread.join()
+
+    return payload, output, pumped_bytes
+
+
+@then("the output matches the large payload")
+def then_large_payload_matches(large_pumped_payload: tuple[bytes, bytes, int]) -> None:
+    """Assert the output matches the large input payload.
+
+    Parameters
+    ----------
+    large_pumped_payload : tuple[bytes, bytes, int]
+        The input payload, the output captured from the pipe, and bytes pumped.
+
+    Returns
+    -------
+    None
+    """
+    payload, output, pumped_bytes = large_pumped_payload
+    assert output == payload, "expected output to match the large pumped payload"
+    assert pumped_bytes == len(payload), "expected pumped byte count to match payload"

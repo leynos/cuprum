@@ -4,7 +4,7 @@
 //! helpers alongside an availability check for the Rust backend.
 
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -14,6 +14,14 @@ use std::os::fd::FromRawFd;
 
 #[cfg(windows)]
 use std::os::windows::io::{FromRawHandle, RawHandle};
+
+mod io_utils;
+#[cfg(target_os = "linux")]
+mod splice;
+mod utf8;
+
+use io_utils::handle_write_result;
+use utf8::{FinalChunk, decode_utf8_replace};
 
 /// Report whether the Rust extension is available.
 ///
@@ -71,11 +79,7 @@ fn rust_pump_stream(
 #[pyfunction]
 #[pyo3(signature = (reader_fd, buffer_size = 65536))]
 #[must_use]
-fn rust_consume_stream(
-    py: Python<'_>,
-    reader_fd: i64,
-    buffer_size: i64,
-) -> PyResult<String> {
+fn rust_consume_stream(py: Python<'_>, reader_fd: i64, buffer_size: i64) -> PyResult<String> {
     let buffer_size = validate_buffer_size(buffer_size)?;
 
     let reader_fd = ReaderFd(convert_fd(reader_fd)?);
@@ -86,10 +90,12 @@ fn rust_consume_stream(
 #[cfg(unix)]
 #[must_use]
 fn convert_fd(value: i64) -> PyResult<PlatformFd> {
-    let fd = i32::try_from(value)
-        .map_err(|_| PyValueError::new_err("file descriptor out of range"))?;
+    let fd =
+        i32::try_from(value).map_err(|_| PyValueError::new_err("file descriptor out of range"))?;
     if fd < 0 {
-        return Err(PyValueError::new_err("file descriptor must be non-negative"));
+        return Err(PyValueError::new_err(
+            "file descriptor must be non-negative",
+        ));
     }
     Ok(fd)
 }
@@ -152,10 +158,7 @@ fn pump_stream(
 }
 
 /// Consume bytes from a file descriptor and decode UTF-8 with replacement.
-fn consume_stream(
-    reader_fd: ReaderFd,
-    buffer_size: BufferSize,
-) -> Result<String, io::Error> {
+fn consume_stream(reader_fd: ReaderFd, buffer_size: BufferSize) -> Result<String, io::Error> {
     let mut reader = file_from_raw(reader_fd.0);
     let result = consume_stream_files(&mut reader, buffer_size);
     // The caller owns the reader FD; avoid closing it here.
@@ -184,58 +187,26 @@ impl BufferSize {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct ValidUpTo(usize);
-
-impl ValidUpTo {
-    fn value(self) -> usize {
-        self.0
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct FinalChunk(bool);
-
-impl FinalChunk {
-    fn is_final(self) -> bool {
-        self.0
-    }
-}
-
-fn handle_write(writer: &mut File, chunk: &[u8]) -> Result<u64, io::Error> {
-    writer.write_all(chunk)?;
-    u64::try_from(chunk.len())
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "write length overflow"))
-}
-
-fn is_nonfatal_write_error(err: &io::Error) -> bool {
-    matches!(
-        err.kind(),
-        io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
-    )
-}
-
-fn handle_write_result(
-    writer: &mut File,
-    chunk: &[u8],
-    total_written: &mut u64,
-) -> Result<bool, io::Error> {
-    match handle_write(writer, chunk) {
-        Ok(bytes) => {
-            *total_written = total_written.saturating_add(bytes);
-            Ok(true)
-        }
-        Err(err) => {
-            if is_nonfatal_write_error(&err) {
-                Ok(false)
-            } else {
-                Err(err)
-            }
-        }
-    }
-}
-
 fn pump_stream_files(
+    reader: &mut File,
+    writer: &mut File,
+    buffer_size: BufferSize,
+) -> Result<u64, io::Error> {
+    // On Linux, attempt zero-copy splice first.
+    #[cfg(target_os = "linux")]
+    if let Some(result) = splice::try_splice_pump(reader, writer, buffer_size.value()) {
+        return result;
+    }
+
+    // Fallback: read/write loop for non-Linux or unsupported FD types.
+    pump_stream_files_readwrite(reader, writer, buffer_size)
+}
+
+/// Read/write loop fallback for pumping bytes between file descriptors.
+///
+/// This is used when splice is not available (non-Linux) or when the file
+/// descriptors do not support splice (regular files, some sockets).
+fn pump_stream_files_readwrite(
     reader: &mut File,
     writer: &mut File,
     buffer_size: BufferSize,
@@ -261,10 +232,7 @@ fn pump_stream_files(
     Ok(total_written)
 }
 
-fn consume_stream_files(
-    reader: &mut File,
-    buffer_size: BufferSize,
-) -> Result<String, io::Error> {
+fn consume_stream_files(reader: &mut File, buffer_size: BufferSize) -> Result<String, io::Error> {
     let mut buffer = vec![0_u8; buffer_size.value()];
     let mut pending: Vec<u8> = Vec::new();
     let mut output = String::new();
@@ -275,105 +243,12 @@ fn consume_stream_files(
             break;
         }
         pending.extend_from_slice(&buffer[..read_len]);
-        decode_utf8_replace(&mut pending, &mut output, FinalChunk(false));
+        decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(false));
     }
 
-    decode_utf8_replace(&mut pending, &mut output, FinalChunk(true));
+    decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(true));
 
     Ok(output)
-}
-
-fn decode_utf8_replace(
-    pending: &mut Vec<u8>,
-    output: &mut String,
-    final_chunk: FinalChunk,
-) {
-    loop {
-        match std::str::from_utf8(pending) {
-            Ok(valid) => {
-                output.push_str(valid);
-                pending.clear();
-                break;
-            }
-            Err(err) => {
-                append_valid_prefix(
-                    pending,
-                    output,
-                    ValidUpTo(err.valid_up_to()),
-                );
-                if !handle_utf8_error(
-                    pending,
-                    output,
-                    &err,
-                    FinalChunk(final_chunk.is_final()),
-                ) {
-                    break;
-                }
-            }
-        }
-    }
-}
-
-fn append_valid_prefix(
-    pending: &[u8],
-    output: &mut String,
-    valid_up_to: ValidUpTo,
-) {
-    if valid_up_to.value() == 0 {
-        return;
-    }
-    // SAFETY: `valid_up_to` comes from a `Utf8Error`, so this prefix is known
-    // to be valid UTF-8.
-    let valid_prefix = unsafe {
-        std::str::from_utf8_unchecked(&pending[..valid_up_to.value()])
-    };
-    output.push_str(valid_prefix);
-}
-
-fn handle_utf8_error(
-    pending: &mut Vec<u8>,
-    output: &mut String,
-    err: &std::str::Utf8Error,
-    final_chunk: FinalChunk,
-) -> bool {
-    let valid_up_to = err.valid_up_to();
-    let final_chunk = final_chunk.is_final();
-    match err.error_len() {
-        Some(error_len) => {
-            output.push('\u{FFFD}');
-            // NOTE: `decode_utf8_replace` must call `append_valid_prefix`
-            // immediately before `handle_utf8_error`; this drain in
-            // `handle_utf8_error` skips the already-appended valid prefix plus
-            // the invalid sequence (valid_up_to + error_len) to avoid
-            // double-draining.
-            pending.drain(..valid_up_to + error_len);
-            !pending.is_empty()
-        }
-        None => handle_incomplete_sequence(
-            pending,
-            output,
-            ValidUpTo(valid_up_to),
-            FinalChunk(final_chunk),
-        ),
-    }
-}
-
-fn handle_incomplete_sequence(
-    pending: &mut Vec<u8>,
-    output: &mut String,
-    valid_up_to: ValidUpTo,
-    final_chunk: FinalChunk,
-) -> bool {
-    if final_chunk.is_final() {
-        output.push('\u{FFFD}');
-        pending.clear();
-        return false;
-    }
-    if valid_up_to.value() > 0 {
-        // Keep only the incomplete tail; drop already used prefix.
-        pending.drain(..valid_up_to.value());
-    }
-    false
 }
 
 /// Python module definition for the optional Rust backend.

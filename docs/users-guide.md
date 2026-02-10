@@ -989,6 +989,23 @@ Python implementation. Expect the most noticeable throughput gains on large
 streams; smaller payloads may see minimal differences, so measure on
 representative workloads.
 
+### Linux splice() optimization
+
+On Linux, the Rust extension automatically uses the `splice()` system call for
+pipe-to-pipe transfers. This provides zero-copy data movement entirely within
+the kernel, offering significant throughput improvements for large pipeline
+transfers.
+
+The optimization is transparent to users:
+
+- Automatically enabled on Linux when using pipe file descriptors
+- Falls back to read/write for unsupported file descriptor types (files, some
+  sockets)
+- No configuration required
+
+For maximum benefit, ensure pipeline stages use pipes (the default for
+`Pipeline` execution) rather than temporary files.
+
 ### Building from source
 
 For development builds, run `maturin develop` from the project root after

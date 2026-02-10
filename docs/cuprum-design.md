@@ -1829,9 +1829,48 @@ transfer between pipe file descriptors. This optimization:
 - reduces memory bandwidth requirements;
 - provides the greatest speedup for large pipeline transfers.
 
-The extension detects splice availability at runtime and falls back to
-read/write loops on other platforms or when the file descriptors do not support
-splice.
+#### Runtime Detection
+
+The extension detects splice availability at runtime through the following
+sequence:
+
+1. **Platform check**: `#[cfg(target_os = "linux")]` gates the splice code
+   path at compile time. Non-Linux builds use only the read/write loop.
+
+2. **First splice attempt**: The first `splice()` call tests whether both file
+   descriptors support the operation. Unsupported file descriptor (FD) types
+   return `EINVAL`.
+
+3. **Fallback decision**: If `splice()` returns `EINVAL`, the extension falls
+   back to the read/write loop for the remainder of the transfer. Other errors
+   (e.g., `EBADF`, `ESPIPE`) are considered fatal and propagate to the caller.
+
+#### Supported File Descriptor Types
+
+| Source FD | Destination FD | Splice Support     |
+| --------- | -------------- | ------------------ |
+| Pipe      | Pipe           | Yes (optimal)      |
+| Pipe      | Socket         | Platform-dependent |
+| File      | Pipe           | No (fallback)      |
+| File      | File           | No (fallback)      |
+
+For maximum benefit, ensure pipeline stages use pipes (the default for
+`Pipeline` execution) rather than temporary files.
+
+#### Splice Flags
+
+The implementation uses the following splice flags:
+
+- `SPLICE_F_MOVE` (0x01): Advisory hint to move pages instead of copying.
+- `SPLICE_F_MORE` (0x04): Hint that more data will follow (for TCP corking).
+
+#### Error Handling
+
+The splice implementation handles errors as follows:
+
+- `EINVAL`: FD type not supported; fall back to read/write
+- `EPIPE` / `ECONNRESET`: Broken pipe; drain reader and return bytes written
+- `EBADF` / `ESPIPE` / other errors: Propagate to caller as `OSError`
 
 ### 13.8 Build and Distribution
 
