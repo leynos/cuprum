@@ -982,6 +982,10 @@ Backend selection for stream operations is controlled by the
   unavailable.
 - `python`: force the pure Python pathway.
 
+The backend is resolved once on first use and the result is cached for the
+lifetime of the process. Changing the environment variable after the first
+resolution has no effect.
+
 Choose the Rust backend for high-throughput workloads (for example,
 multi-megabyte outputs) where lower per-chunk overhead improves throughput. For
 small outputs or when custom encoding/error handling is required, prefer the

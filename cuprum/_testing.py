@@ -10,6 +10,7 @@ depend on incidental re-exports from public modules like ``cuprum.sh``.
 
 from __future__ import annotations
 
+from cuprum._backend import _check_rust_available
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
     _run_before_hooks,
@@ -33,6 +34,7 @@ from cuprum._streams import (
 from cuprum.sh import _resolve_timeout
 
 _EXPORTS = {
+    "_check_rust_available": _check_rust_available,
     "_MIN_PIPELINE_STAGES": _MIN_PIPELINE_STAGES,
     "_merge_env": _merge_env,
     "_PipelineWaitResult": _PipelineWaitResult,
