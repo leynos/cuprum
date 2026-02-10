@@ -1848,7 +1848,7 @@ sequence:
 #### Supported File Descriptor Types
 
 | Source FD | Destination FD | Splice Support     |
-|-----------|----------------|--------------------|
+| --------- | -------------- | ------------------ |
 | Pipe      | Pipe           | Yes (optimal)      |
 | Pipe      | Socket         | Platform-dependent |
 | File      | Pipe           | No (fallback)      |

@@ -1,4 +1,4 @@
-"""Unit tests for Linux splice() optimization in the Rust stream pump.
+"""Unit tests for Linux splice() optimisation in the Rust stream pump.
 
 These tests verify that the splice code path works correctly on Linux and
 that fallback to read/write works for unsupported file descriptor types.
@@ -41,13 +41,11 @@ def _pump_payload_threaded(
         write_thread = threading.Thread(target=writer)
         write_thread.start()
 
-        try:
-            kwargs: dict[str, int] = {}
-            if buffer_size is not None:
-                kwargs["buffer_size"] = buffer_size
-            transferred = streams.rust_pump_stream(in_read, out_write, **kwargs)
-        finally:
-            _safe_close(out_write)
+        kwargs: dict[str, int] = {}
+        if buffer_size is not None:
+            kwargs["buffer_size"] = buffer_size
+        transferred = streams.rust_pump_stream(in_read, out_write, **kwargs)
+        _safe_close(out_write)
 
         output = _read_all(out_read)
         write_thread.join()
@@ -56,13 +54,7 @@ def _pump_payload_threaded(
 
 
 class TestSpliceOptimization:
-    """Tests for Linux splice() optimization and fallback behaviour.
-
-    On Linux, rust_pump_stream uses splice() for zero-copy pipe-to-pipe
-    transfers. These tests verify that large transfers complete correctly
-    (exercising splice on Linux) and that fallback to read/write works
-    for unsupported file descriptor types.
-    """
+    """Tests for Linux splice() optimisation and fallback behaviour."""
 
     @staticmethod
     def test_large_pipe_transfer(
@@ -124,48 +116,51 @@ class TestSpliceOptimization:
         rust_streams: ModuleType,
     ) -> None:
         """Verify BrokenPipe handling drains the reader to avoid upstream deadlock."""
-        # Source pipe: writer -> rust_pump_stream (reads from src_read_fd)
-        src_read_fd, src_write_fd = os.pipe()
-        # Destination pipe: rust_pump_stream (writes to dst_write_fd) -> consumer
-        dst_read_fd, dst_write_fd = os.pipe()
-
         total_bytes = 1024 * 1024  # 1 MiB
 
-        def writer() -> None:
-            try:
-                remaining = total_bytes
-                chunk = b"x" * 8192
-                while remaining > 0:
-                    to_write = min(len(chunk), remaining)
-                    os.write(src_write_fd, chunk[:to_write])
-                    remaining -= to_write
-            finally:
-                _safe_close(src_write_fd)
+        with contextlib.ExitStack() as stack:
+            # Source pipe: writer -> rust_pump_stream (reads from src_read_fd)
+            src_read_fd, src_write_fd = os.pipe()
+            stack.callback(_safe_close, src_read_fd)
+            stack.callback(_safe_close, src_write_fd)
 
-        writer_thread = threading.Thread(target=writer)
-        writer_thread.start()
+            # Destination pipe: rust_pump_stream (writes to dst_write_fd) -> consumer
+            dst_read_fd, dst_write_fd = os.pipe()
+            stack.callback(_safe_close, dst_read_fd)
+            stack.callback(_safe_close, dst_write_fd)
 
-        # Close the consumer's read end to trigger BrokenPipe on the writer.
-        _safe_close(dst_read_fd)
+            def writer() -> None:
+                try:
+                    remaining = total_bytes
+                    chunk = b"x" * 8192
+                    while remaining > 0:
+                        to_write = min(len(chunk), remaining)
+                        os.write(src_write_fd, chunk[:to_write])
+                        remaining -= to_write
+                finally:
+                    _safe_close(src_write_fd)
 
-        # rust_pump_stream should:
-        # - return promptly
-        # - report the number of bytes actually written
-        # - drain the remaining data from src_read_fd so the writer is not blocked
-        bytes_pumped = rust_streams.rust_pump_stream(
-            src_read_fd,
-            dst_write_fd,
-            buffer_size=64 * 1024,
-        )
+            writer_thread = threading.Thread(target=writer)
+            writer_thread.start()
 
-        _safe_close(src_read_fd)
-        _safe_close(dst_write_fd)
+            # Close the consumer's read end to trigger BrokenPipe on the writer.
+            _safe_close(dst_read_fd)
 
-        writer_thread.join(timeout=2.0)
-        assert not writer_thread.is_alive(), (
-            "writer blocked because splice did not drain the reader"
-        )
+            # rust_pump_stream should:
+            # - return promptly
+            # - report the number of bytes actually written
+            # - drain the remaining data from src_read_fd so the writer is not blocked
+            bytes_pumped = rust_streams.rust_pump_stream(
+                src_read_fd,
+                dst_write_fd,
+                buffer_size=64 * 1024,
+            )
 
-        assert 0 <= bytes_pumped < total_bytes, (
-            "expected partial transfer count due to broken pipe"
-        )
+            writer_thread.join(timeout=2.0)
+            assert not writer_thread.is_alive(), (
+                "writer blocked because splice did not drain the reader"
+            )
+
+            assert 0 <= bytes_pumped < total_bytes, (
+                "expected partial transfer count due to broken pipe"
+            )

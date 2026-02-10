@@ -16,8 +16,8 @@ will bypass userspace entirely, reducing memory bandwidth and improving
 throughput for large pipeline operations. Non-Linux platforms and unsupported
 file descriptor types will continue using the existing read/write loop.
 
-Users observe no API changes; the optimization is internal to `rust_pump_stream`.
-Success is measured by:
+Users observe no API changes; the optimisation is internal to
+`rust_pump_stream`. Success is measured by:
 
 1. All existing tests continue to pass
 2. New splice-specific tests pass on Linux
@@ -30,7 +30,7 @@ Success is measured by:
 Hard invariants that must hold throughout implementation:
 
 - **API stability**: The `rust_pump_stream(reader_fd, writer_fd, buffer_size)`
-  signature must not change. Splice is an internal optimization.
+  signature must not change. Splice is an internal optimisation.
 - **Behavioural parity**: Splice path must produce identical results to
   read/write path: same bytes transferred, same error handling for broken
   pipes, same return value semantics.
@@ -42,7 +42,7 @@ Hard invariants that must hold throughout implementation:
   Broken pipe and connection reset must be handled gracefully (drain reader,
   return bytes written).
 - **Paths not to modify**: `cuprum/_streams_rs.py` (Python shim) requires no
-  changes; the optimization is Rust-internal.
+  changes; the optimisation is Rust-internal.
 
 ## Tolerances (exception triggers)
 
@@ -86,16 +86,17 @@ Known uncertainties that might affect the plan:
 - [x] (2026-02-08) Stage C: Integrate splice into lib.rs with fallback
 - [x] (2026-02-08) Stage D: Add unit tests for splice behaviour
 - [x] (2026-02-08) Stage E: Add behavioural tests (pytest-bdd feature scenarios)
-- [x] (2026-02-08) Stage F: Update documentation (cuprum-design.md, users-guide.md)
+- [x] (2026-02-08) Stage F: Update documentation (cuprum-design.md,
+      users-guide.md)
 - [x] (2026-02-08) Stage G: Mark roadmap item 4.2.3 as complete
 - [x] (2026-02-08) Stage H: Run full quality gate suite and verify
 
 ## Surprises & Discoveries
 
 - Observation: Linting identified use of `typing.Any` for pytest `tmp_path`
-  fixture and use of built-in `open()` instead of `Path.open()`.
-  Evidence: `ruff check` reported ANN401 and PTH123 errors.
-  Impact: Fixed by using proper `Path` type annotation and `Path.open()` method.
+  fixture and use of built-in `open()` instead of `Path.open()`. Evidence:
+  `ruff check` reported ANN401 and PTH123 errors. Impact: Fixed by using proper
+  `Path` type annotation and `Path.open()` method.
 
 ## Decision Log
 
@@ -126,7 +127,8 @@ Implementation completed successfully:
 - Integrated splice into `pump_stream_files()` with automatic fallback
 - Added unit tests for large pipe transfers and file-to-pipe fallback
 - Added pytest-bdd behavioural test for large payload transfers
-- Updated documentation in `cuprum-design.md` (Section 13.7) and `users-guide.md`
+- Updated documentation in `cuprum-design.md` (Section 13.7) and
+  `users-guide.md`
 - Marked roadmap item 4.2.3 as complete
 
 All quality gates passed:
@@ -176,8 +178,9 @@ Key directories:
 
 ### Current implementation
 
-The Rust extension exposes `rust_pump_stream(reader_fd, writer_fd, buffer_size)`
-which transfers bytes between file descriptors with the GIL released.
+The Rust extension exposes
+`rust_pump_stream(reader_fd, writer_fd, buffer_size)` which transfers bytes
+between file descriptors with the GIL released.
 
 File: `/home/user/project/rust/cuprum-rust/src/lib.rs`
 
@@ -197,8 +200,10 @@ broken pipe gracefully by draining the reader.
 Linux `splice()` transfers data between two file descriptors where at least one
 is a pipe, entirely within kernel space (zero-copy). Signature:
 
-    ssize_t splice(int fd_in, off64_t *off_in, int fd_out, off64_t *off_out,
-                   size_t len, unsigned int flags);
+```c
+ssize_t splice(int fd_in, off64_t *off_in, int fd_out, off64_t *off_out,
+               size_t len, unsigned int flags);
+```
 
 Key behaviours:
 
@@ -215,8 +220,10 @@ Key behaviours:
 Modify `/home/user/project/rust/cuprum-rust/Cargo.toml` to add libc as a
 Linux-only dependency:
 
-    [target.'cfg(target_os = "linux")'.dependencies]
-    libc = "0.2"
+```toml
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+```
 
 ### Stage B: Create splice module
 
@@ -224,7 +231,8 @@ Create new file `/home/user/project/rust/cuprum-rust/src/splice.rs`:
 
 1. **Module documentation**: Explain purpose and fallback behaviour
 2. **Constants**: SPLICE_F_MOVE (0x01), SPLICE_F_MORE (0x04)
-3. **`try_splice_pump(reader, writer, chunk_size) -> Option<Result<u64, Error>>`**:
+3. **`try_splice_pump(reader, writer, chunk_size) -> Option<Result<u64, Error>>`
+   **:
    - Returns `Some(Ok(bytes))` on success
    - Returns `Some(Err(e))` on fatal error
    - Returns `None` when splice unsupported (caller should use read/write)
@@ -244,18 +252,22 @@ Modify `/home/user/project/rust/cuprum-rust/src/lib.rs`:
 
 1. Add conditional module declaration:
 
-       #[cfg(target_os = "linux")]
-       mod splice;
+   ```rust
+   #[cfg(target_os = "linux")]
+   mod splice;
+   ```
 
 2. Modify `pump_stream_files()` to try splice first on Linux:
 
-       fn pump_stream_files(...) -> Result<u64, io::Error> {
-           #[cfg(target_os = "linux")]
-           if let Some(result) = splice::try_splice_pump(reader, writer, buffer_size.value()) {
-               return result;
-           }
-           pump_stream_files_readwrite(reader, writer, buffer_size)
+   ```rust
+   fn pump_stream_files(...) -> Result<u64, io::Error> {
+       #[cfg(target_os = "linux")]
+       if let Some(result) = splice::try_splice_pump(reader, writer, buffer_size.value()) {
+           return result;
        }
+       pump_stream_files_readwrite(reader, writer, buffer_size)
+   }
+   ```
 
 3. Rename existing implementation to `pump_stream_files_readwrite()`
 
@@ -274,10 +286,12 @@ Extend `/home/user/project/cuprum/unittests/test_rust_streams.py`:
 
 Update `/home/user/project/tests/features/rust_streams.feature`:
 
-    Scenario: Rust pump stream handles large pipe transfers
-      Given the Rust pump stream is available
-      When I pump a large payload through the Rust stream
-      Then the output matches the large payload
+```gherkin
+Scenario: Rust pump stream handles large pipe transfers
+  Given the Rust pump stream is available
+  When I pump a large payload through the Rust stream
+  Then the output matches the large payload
+```
 
 Update `/home/user/project/tests/behaviour/test_rust_streams_behaviour.py`:
 
@@ -295,23 +309,27 @@ Update `/home/user/project/docs/cuprum-design.md` Section 13.7:
 
 Update `/home/user/project/docs/users-guide.md`:
 
-- Add brief section explaining Linux splice optimization is automatic
+- Add brief section explaining Linux splice optimisation is automatic
 - Note that pipe-to-pipe transfers benefit most
 
 ### Stage G: Update roadmap
 
 Mark `/home/user/project/docs/roadmap.md` item 4.2.3 as complete:
 
-    - [x] 4.2.3. Add Linux-specific `splice()` code path...
+```markdown
+- [x] 4.2.3. Add Linux-specific `splice()` code path…
+```
 
 ### Stage H: Quality verification
 
 Run full quality gate suite:
 
-    make check-fmt    # Formatting (Python and Rust)
-    make typecheck    # Python type checking
-    make lint         # Linting (Python and Rust)
-    make test         # All tests
+```bash
+make check-fmt    # Formatting (Python and Rust)
+make typecheck    # Python type checking
+make lint         # Linting (Python and Rust)
+make test         # All tests
+```
 
 ## Concrete steps
 
@@ -320,12 +338,16 @@ All commands run from `/home/user/project` unless noted.
 **Step A: Add libc dependency.** Edit `rust/cuprum-rust/Cargo.toml`, add after
 `[dependencies]`:
 
-    [target.'cfg(target_os = "linux")'.dependencies]
-    libc = "0.2"
+```toml
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+```
 
 Verify with:
 
-    cd rust && cargo check
+```bash
+cd rust && cargo check
+```
 
 Expected: compilation succeeds, no errors.
 
@@ -334,7 +356,9 @@ splice implementation.
 
 Verify with:
 
-    cd rust && cargo check
+```bash
+cd rust && cargo check
+```
 
 Expected: compilation succeeds on Linux and non-Linux targets.
 
@@ -343,7 +367,9 @@ module and dispatch logic.
 
 Verify with:
 
-    cd rust && cargo test
+```bash
+cd rust && cargo test
+```
 
 Expected: all existing tests pass.
 
@@ -352,7 +378,9 @@ Expected: all existing tests pass.
 
 Verify with:
 
-    make test
+```bash
+make test
+```
 
 Expected: new tests pass; existing tests unchanged.
 
@@ -360,7 +388,9 @@ Expected: new tests pass; existing tests unchanged.
 
 Verify with:
 
-    make test
+```bash
+make test
+```
 
 Expected: new scenarios pass.
 
@@ -369,8 +399,10 @@ Expected: new scenarios pass.
 
 Verify with:
 
-    make markdownlint
-    make nixie
+```bash
+make markdownlint
+make nixie
+```
 
 Expected: no markdown or diagram errors.
 
@@ -380,11 +412,13 @@ Expected: no markdown or diagram errors.
 
 Run complete quality gate suite:
 
-    set -o pipefail
-    make check-fmt 2>&1 | tee /tmp/check-fmt.log
-    make typecheck 2>&1 | tee /tmp/typecheck.log
-    make lint 2>&1 | tee /tmp/lint.log
-    make test 2>&1 | tee /tmp/test.log
+```bash
+set -o pipefail
+make check-fmt 2>&1 | tee /tmp/check-fmt.log
+make typecheck 2>&1 | tee /tmp/typecheck.log
+make lint 2>&1 | tee /tmp/lint.log
+make test 2>&1 | tee /tmp/test.log
+```
 
 Expected: all gates pass.
 
@@ -452,11 +486,13 @@ No special rollback needed; git provides recovery via `git checkout`.
 
 ### New Rust module: splice.rs
 
-    pub(crate) fn try_splice_pump(
-        reader: &File,
-        writer: &File,
-        chunk_size: usize,
-    ) -> Option<Result<u64, io::Error>>
+```rust
+pub(crate) fn try_splice_pump(
+    reader: &File,
+    writer: &File,
+    chunk_size: usize,
+) -> Option<Result<u64, io::Error>>
+```
 
 ### Dependencies
 
