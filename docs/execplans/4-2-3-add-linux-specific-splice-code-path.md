@@ -1,4 +1,4 @@
-# Add Linux-specific splice() Code Path (4.2.3)
+# Add Linux-specific splice() code path (4.2.3)
 
 This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`, and
@@ -55,7 +55,7 @@ Thresholds that trigger escalation when breached:
   Any other new crate requires escalation.
 - **Iterations**: If tests still fail after 3 fix attempts, stop and escalate.
 - **Ambiguity**: If `splice()` error handling semantics conflict with existing
-  behavior, stop and document options.
+  behaviour, stop and document options.
 
 ## Risks
 
@@ -84,8 +84,8 @@ Known uncertainties that might affect the plan:
 - [x] (2026-02-08) Stage A: Add libc dependency to Cargo.toml for Linux target
 - [x] (2026-02-08) Stage B: Create splice.rs module with splice implementation
 - [x] (2026-02-08) Stage C: Integrate splice into lib.rs with fallback
-- [x] (2026-02-08) Stage D: Add unit tests for splice behavior
-- [x] (2026-02-08) Stage E: Add behavioral tests (pytest-bdd feature scenarios)
+- [x] (2026-02-08) Stage D: Add unit tests for splice behaviour
+- [x] (2026-02-08) Stage E: Add behavioural tests (pytest-bdd feature scenarios)
 - [x] (2026-02-08) Stage F: Update documentation (cuprum-design.md, users-guide.md)
 - [x] (2026-02-08) Stage G: Mark roadmap item 4.2.3 as complete
 - [x] (2026-02-08) Stage H: Run full quality gate suite and verify
@@ -125,7 +125,7 @@ Implementation completed successfully:
 - Created `splice.rs` module with zero-copy transfer implementation
 - Integrated splice into `pump_stream_files()` with automatic fallback
 - Added unit tests for large pipe transfers and file-to-pipe fallback
-- Added pytest-bdd behavioral test for large payload transfers
+- Added pytest-bdd behavioural test for large payload transfers
 - Updated documentation in `cuprum-design.md` (Section 13.7) and `users-guide.md`
 - Marked roadmap item 4.2.3 as complete
 
@@ -169,7 +169,7 @@ Key directories:
 - `rust/cuprum-rust/src/` - Rust extension source
 - `cuprum/` - Python package
 - `cuprum/unittests/` - Python unit tests
-- `tests/behaviour/` - pytest-bdd behavioral tests
+- `tests/behaviour/` - pytest-bdd behavioural tests
 - `tests/features/` - Gherkin feature files
 - `tests/helpers/` - Test utilities
 - `docs/` - Documentation
@@ -200,7 +200,7 @@ is a pipe, entirely within kernel space (zero-copy). Signature:
     ssize_t splice(int fd_in, off64_t *off_in, int fd_out, off64_t *off_out,
                    size_t len, unsigned int flags);
 
-Key behaviors:
+Key behaviours:
 
 - Returns bytes transferred, or -1 on error
 - EINVAL if FDs don't support splice
@@ -222,7 +222,7 @@ Linux-only dependency:
 
 Create new file `/home/user/project/rust/cuprum-rust/src/splice.rs`:
 
-1. **Module documentation**: Explain purpose and fallback behavior
+1. **Module documentation**: Explain purpose and fallback behaviour
 2. **Constants**: SPLICE_F_MOVE (0x01), SPLICE_F_MORE (0x04)
 3. **`try_splice_pump(reader, writer, chunk_size) -> Option<Result<u64, Error>>`**:
    - Returns `Some(Ok(bytes))` on success
@@ -270,7 +270,7 @@ Extend `/home/user/project/cuprum/unittests/test_rust_streams.py`:
 3. Use existing `_pump_payload` helper pattern
 4. Add `is_linux()` helper for conditional skip markers
 
-### Stage E: Add behavioral tests
+### Stage E: Add behavioural tests
 
 Update `/home/user/project/tests/features/rust_streams.feature`:
 
@@ -356,7 +356,7 @@ Verify with:
 
 Expected: new tests pass; existing tests unchanged.
 
-**Step E: Add behavioral tests.** Update feature file and behavior tests.
+**Step E: Add behavioural tests.** Update feature file and behaviour tests.
 
 Verify with:
 
@@ -435,7 +435,7 @@ No special rollback needed; git provides recovery via `git checkout`.
 2. `rust/cuprum-rust/src/splice.rs` - New file: splice implementation
 3. `rust/cuprum-rust/src/lib.rs` - Integrate splice with fallback
 4. `cuprum/unittests/test_rust_streams.py` - Add splice unit tests
-5. `tests/features/rust_streams.feature` - Add behavioral scenarios
+5. `tests/features/rust_streams.feature` - Add behavioural scenarios
 6. `tests/behaviour/test_rust_streams_behaviour.py` - Add step implementations
 7. `docs/cuprum-design.md` - Expand Section 13.7
 8. `docs/users-guide.md` - Add splice documentation
@@ -446,7 +446,7 @@ No special rollback needed; git provides recovery via `git checkout`.
 - Platform conditionals: See `#[cfg(unix)]` and `#[cfg(windows)]` in lib.rs
 - Test fixtures: `rust_streams` fixture in conftest.py
 - Test helpers: `_pipe_pair`, `_read_all`, `_safe_close` in stream_pipes.py
-- Behavioral tests: Existing scenarios in rust_streams.feature
+- Behavioural tests: Existing scenarios in rust_streams.feature
 
 ## Interfaces and dependencies
 
