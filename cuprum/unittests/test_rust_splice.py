@@ -1,4 +1,4 @@
-"""Unit tests for Linux splice() optimisation in the Rust stream pump.
+"""Unit tests for Linux splice() optimization in the Rust stream pump.
 
 These tests verify that the splice code path works correctly on Linux and
 that fallback to read/write works for unsupported file descriptor types.
@@ -121,15 +121,14 @@ class TestSpliceOptimization:
         with _pipe_pair() as (src_read_fd, src_write_fd, dst_read_fd, dst_write_fd):
 
             def writer() -> None:
-                try:
+                with contextlib.ExitStack() as stack:
+                    stack.callback(_safe_close, src_write_fd)
                     remaining = total_bytes
                     chunk = b"x" * 8192
                     while remaining > 0:
                         to_write = min(len(chunk), remaining)
                         os.write(src_write_fd, chunk[:to_write])
                         remaining -= to_write
-                finally:
-                    _safe_close(src_write_fd)
 
             writer_thread = threading.Thread(target=writer)
             writer_thread.start()
