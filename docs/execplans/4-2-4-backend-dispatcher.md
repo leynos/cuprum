@@ -83,7 +83,7 @@ Hard invariants that must hold throughout implementation:
   - Severity: low
   - Likelihood: medium
   - Mitigation: `_read_backend_env()` strips and lowercases the value; raises
-    `ValueError` for unrecognised values. ✅ Resolved.
+    `ValueError` for unrecognized values. ✅ Resolved.
 
 - **Risk**: Tests that monkeypatch `os.environ` may interact with cached
   results.
@@ -275,7 +275,7 @@ Create a new module at `cuprum/_backend.py` containing:
 
 2. **`_read_backend_env() -> StreamBackend`** — reads `CUPRUM_STREAM_BACKEND`
    from `os.environ`, strips whitespace, lowercases, defaults to `"auto"`.
-   Raises `ValueError` for unrecognised values with a message listing valid
+   Raises `ValueError` for unrecognized values with a message listing valid
    options.
 
 3. **`_check_rust_available() -> bool`** — wraps

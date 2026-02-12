@@ -138,7 +138,7 @@ def test_forced_python_returns_python_without_probing(
 def test_invalid_env_var_raises_value_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An unrecognised env var value raises ValueError."""
+    """An unrecognized env var value raises ValueError."""
     monkeypatch.setenv(_ENV_VAR, "turbo")
     monkeypatch.setattr(_rust_backend, "is_available", lambda: False)
 

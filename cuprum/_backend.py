@@ -54,7 +54,7 @@ def _read_backend_env() -> StreamBackend:
     Raises
     ------
     ValueError
-        If the environment variable contains an unrecognised value.
+        If the environment variable contains an unrecognized value.
     """
     raw = os.environ.get(_ENV_VAR, "").strip().lower()
     if not raw:
@@ -113,7 +113,7 @@ def get_stream_backend() -> StreamBackend:
         If the backend is forced to ``rust`` but the Rust extension is
         unavailable.
     ValueError
-        If ``CUPRUM_STREAM_BACKEND`` contains an unrecognised value.
+        If ``CUPRUM_STREAM_BACKEND`` contains an unrecognized value.
 
     Notes
     -----
