@@ -17,8 +17,9 @@ _ENV_VAR = "CUPRUM_STREAM_BACKEND"
 
 @pytest.fixture(autouse=True)
 def _clear_backend_cache() -> None:
-    """Clear the cached availability result between scenarios."""
+    """Clear the cached availability and backend results between scenarios."""
     _check_rust_available.cache_clear()
+    get_stream_backend.cache_clear()
 
 
 # -- Scenarios ----------------------------------------------------------------
@@ -112,7 +113,9 @@ def then_resolved_backend(
     expected: str,
 ) -> None:
     """Assert the resolved backend matches the expected value."""
-    assert resolved_backend == StreamBackend(expected)
+    assert resolved_backend == StreamBackend(expected), (
+        f"expected {expected}, got {resolved_backend.value}"
+    )
 
 
 @then("an ImportError is raised")

@@ -2,8 +2,8 @@
 
 Resolves which stream backend (Rust or pure Python) to use at runtime based
 on the ``CUPRUM_STREAM_BACKEND`` environment variable and the availability of
-the optional Rust extension.  The availability check result is cached for
-the lifetime of the process.
+the optional Rust extension.  The resolved backend is cached for the lifetime
+of the process.
 
 Example
 -------
@@ -37,12 +37,9 @@ class StreamBackend(enum.StrEnum):
         Force the pure Python backend.
     """
 
-    AUTO = enum.auto()
-    RUST = enum.auto()
-    PYTHON = enum.auto()
-
-
-_VALID_VALUES = frozenset(StreamBackend)
+    AUTO = "auto"
+    RUST = "rust"
+    PYTHON = "python"
 
 
 def _read_backend_env() -> StreamBackend:
@@ -89,6 +86,7 @@ def _check_rust_available() -> bool:
     return _rust_backend.is_available()
 
 
+@functools.lru_cache(maxsize=1)
 def get_stream_backend() -> StreamBackend:
     """Resolve the active stream backend.
 
@@ -116,25 +114,34 @@ def get_stream_backend() -> StreamBackend:
         unavailable.
     ValueError
         If ``CUPRUM_STREAM_BACKEND`` contains an unrecognised value.
+
+    Notes
+    -----
+    The resolved backend is cached for the lifetime of the process.  Call
+    ``get_stream_backend.cache_clear()`` (and
+    ``_check_rust_available.cache_clear()``) to force re-resolution (useful
+    in tests).
     """
     requested = _read_backend_env()
 
-    if requested is StreamBackend.PYTHON:
-        return StreamBackend.PYTHON
-
-    if requested is StreamBackend.RUST:
-        if _check_rust_available():
-            return StreamBackend.RUST
-        msg = (
-            f"Rust stream backend requested via {_ENV_VAR}=rust "
-            "but the Rust extension is not available"
-        )
-        raise ImportError(msg)
-
-    # AUTO: prefer Rust when available, otherwise Python.
-    if _check_rust_available():
-        return StreamBackend.RUST
-    return StreamBackend.PYTHON
+    match requested:
+        case StreamBackend.PYTHON:
+            return StreamBackend.PYTHON
+        case StreamBackend.RUST:
+            if _check_rust_available():
+                return StreamBackend.RUST
+            msg = (
+                f"Rust stream backend requested via {_ENV_VAR}=rust "
+                "but the Rust extension is not available"
+            )
+            raise ImportError(msg)
+        case StreamBackend.AUTO:
+            try:
+                if _check_rust_available():
+                    return StreamBackend.RUST
+            except ImportError:
+                pass
+            return StreamBackend.PYTHON
 
 
 __all__ = ["StreamBackend", "get_stream_backend"]

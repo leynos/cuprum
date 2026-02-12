@@ -12,7 +12,7 @@ PLANS.md is not present in this repository.
 
 Cuprum provides optional Rust-backed stream operations (`rust_pump_stream`,
 `rust_consume_stream`) alongside pure Python equivalents (`_pump_stream`,
-`_consume_stream`). Currently these two pathways exist independently with no
+`_consume_stream`). Currently, these two pathways exist independently with no
 mechanism to select between them at runtime. After this change, a new internal
 dispatcher module (`cuprum/_backend.py`) will resolve which backend to use
 based on the `CUPRUM_STREAM_BACKEND` environment variable and the availability
@@ -38,8 +38,8 @@ Hard invariants that must hold throughout implementation:
 
 - **No execution pipeline changes**: This task creates only the dispatcher
   module. It must not modify `_subprocess_execution.py`,
-  `_pipeline_streams.py`, `_pipeline_internals.py`, `_process_lifecycle.py`,
-  or `sh.py`. Integration is a separate task.
+  `_pipeline_streams.py`, `_pipeline_internals.py`, `_process_lifecycle.py`, or
+  `sh.py`. Integration is a separate task.
 - **No changes to existing modules**: `_rust_backend.py`, `_streams_rs.py`,
   `_streams.py`, and `rust.py` must not be modified. The dispatcher uses
   `_rust_backend.is_available()` as-is.
@@ -48,8 +48,8 @@ Hard invariants that must hold throughout implementation:
   underscore).
 - **Python 3.12+ compatibility**: Use `enum.StrEnum` (available since 3.11).
 - **Strict linting**: All code must satisfy the Ruff rule set in
-  `pyproject.toml` (including D, ANN, N, FBT rules), Pyright strict mode,
-  and `make check-fmt`.
+  `pyproject.toml` (including D, ANN, N, FBT rules), Pyright strict mode, and
+  `make check-fmt`.
 - **NumPy docstrings**: All public and private functions require NumPy-style
   docstrings per project convention.
 - **Test conventions**: Unit tests in `cuprum/unittests/`, behavioural tests
@@ -72,8 +72,7 @@ Hard invariants that must hold throughout implementation:
 ## Risks
 
 - **Risk**: The `_rust_backend.is_available()` function does not cache its
-  result. The dispatcher must cache independently without modifying that
-  module.
+  result. The dispatcher must cache independently without modifying that module.
   - Severity: low
   - Likelihood: certain (by design — caching is a stated requirement)
   - Mitigation: Used `functools.lru_cache(maxsize=1)` on
@@ -99,7 +98,8 @@ Hard invariants that must hold throughout implementation:
       enum and `get_stream_backend()` dispatcher
 - [x] (2026-02-10) Stage B: Add unit tests in
       `cuprum/unittests/test_backend.py`
-- [x] (2026-02-10) Stage C: Add BDD feature file and behavioural tests
+- [x] (2026-02-10) Stage C: Add behaviour-driven development (BDD) feature
+      file and behavioural tests
 - [x] (2026-02-10) Stage D: Update `cuprum/_testing.py` with cache reset
       helper
 - [x] (2026-02-10) Stage E: Update documentation (`docs/users-guide.md`)
@@ -110,10 +110,9 @@ Hard invariants that must hold throughout implementation:
 ## Surprises & discoveries
 
 - Observation: Ruff D401 requires imperative mood in docstring first lines.
-  The initial docstring "Cached wrapper around..." was flagged. Evidence:
-  `ruff check` reported D401 error on `_check_rust_available`. Impact: Fixed
-  by rewording to "Return whether the Rust extension is available, with
-  caching."
+  The initial docstring "Cached wrapper around…" was flagged. Evidence:
+  `ruff check` reported D401 error on `_check_rust_available`. Impact: Fixed by
+  rewording to "Return whether the Rust extension is available, with caching."
 
 - Observation: Ruff reformatted the multi-line error message string in
   `_read_backend_env()` to a single line. Evidence: `ruff format --check`
@@ -280,8 +279,8 @@ Create a new module at `cuprum/_backend.py` containing:
    options.
 
 3. **`_check_rust_available() -> bool`** — wraps
-   `_rust_backend.is_available()` with `@functools.lru_cache(maxsize=1)`.
-   This is the cached availability probe.
+   `_rust_backend.is_available()` with `@functools.lru_cache(maxsize=1)`. This
+   is the cached availability probe.
 
 4. **`get_stream_backend() -> StreamBackend`** — the main dispatcher function.
    Reads the env var via `_read_backend_env()`, then:
@@ -325,8 +324,8 @@ Create `cuprum/unittests/test_backend.py` with the following test cases:
    `"PYTHON"`, assert each resolves correctly.
 
 8. `test_availability_is_cached` — call `get_stream_backend()` twice,
-   verify `_rust_backend.is_available` is called only once (via call
-   count on monkeypatch).
+   verify `_rust_backend.is_available` is called only once (via call count on
+   monkeypatch).
 
 9. `test_cache_clear_allows_recheck` — call dispatcher, clear cache via
    `_check_rust_available.cache_clear()`, change availability, call again,
@@ -351,19 +350,22 @@ Create `tests/features/backend_dispatcher.feature`:
       Scenario: Auto mode selects Python when Rust is unavailable
         Given the Rust extension is not available
         And the stream backend environment variable is unset
-        When I resolve the stream backend
+        When the stream backend is resolved
         Then the resolved backend is python
 
       Scenario: Forced Rust mode raises when extension is unavailable
         Given the Rust extension is not available
         And the stream backend is forced to rust
-        When I attempt to resolve the stream backend
+        When an attempt is made to resolve the stream backend
         Then an ImportError is raised
 
       Scenario: Forced Python mode always selects Python
         Given the stream backend is forced to python
-        When I resolve the stream backend
+        When the stream backend is resolved
         Then the resolved backend is python
+
+Note: The actual feature file retains "When I …" phrasing to match existing
+project Gherkin conventions (all other feature files use first-person steps).
 
 Create `tests/behaviour/test_backend_dispatcher_behaviour.py` with `@scenario`
 decorators and step implementations. Steps monkeypatch
@@ -380,9 +382,9 @@ pattern where `_testing.py` re-exports internal helpers for test use.
 ### Stage E: Update documentation
 
 Update `docs/users-guide.md` in the "Performance extensions" section. The
-existing text (lines 977–990) already documents the env var. Added a brief
-note that the selection is cached for the process lifetime (one additional
-sentence after the env var description).
+existing text (lines 977–990) already documents the env var. Added a brief note
+that the selection is cached for the process lifetime (one additional sentence
+after the env var description).
 
 ### Stage F: Update roadmap
 
@@ -440,8 +442,8 @@ Verify with:
 
 Expected: type checker passes.
 
-**Step E: Update documentation.** Edit `docs/users-guide.md` to add the
-caching note.
+**Step E: Update documentation.** Edit `docs/users-guide.md` to add the caching
+note.
 
 Verify with:
 
@@ -472,7 +474,7 @@ Expected: all gates pass.
 - Documentation: `make markdownlint` passes. Roadmap item 4.2.4 is marked
   done.
 
-**Quality method (how we check):**
+**Quality method (how verification is performed):**
 
 1. Run `make check-fmt && make typecheck && make lint && make test`
 2. Verify `get_stream_backend()` returns `StreamBackend.PYTHON` when Rust
