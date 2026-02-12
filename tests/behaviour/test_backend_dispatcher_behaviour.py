@@ -2,24 +2,17 @@
 
 from __future__ import annotations
 
-import pytest
+import typing as typ
+
 from pytest_bdd import given, parsers, scenario, then, when
 
 from cuprum import _rust_backend
-from cuprum._backend import (
-    StreamBackend,
-    _check_rust_available,
-    get_stream_backend,
-)
+from cuprum._backend import StreamBackend, get_stream_backend
+
+if typ.TYPE_CHECKING:
+    import pytest
 
 _ENV_VAR = "CUPRUM_STREAM_BACKEND"
-
-
-@pytest.fixture(autouse=True)
-def _clear_backend_cache() -> None:
-    """Clear the cached availability and backend results between scenarios."""
-    _check_rust_available.cache_clear()
-    get_stream_backend.cache_clear()
 
 
 # -- Scenarios ----------------------------------------------------------------

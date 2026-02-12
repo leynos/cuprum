@@ -14,13 +14,6 @@ from cuprum._backend import (
 _ENV_VAR = "CUPRUM_STREAM_BACKEND"
 
 
-@pytest.fixture(autouse=True)
-def _clear_backend_cache() -> None:
-    """Clear the cached availability and backend results between tests."""
-    _check_rust_available.cache_clear()
-    get_stream_backend.cache_clear()
-
-
 # -- StreamBackend enum -------------------------------------------------------
 
 
@@ -146,15 +139,25 @@ def test_invalid_env_var_raises_value_error(
         get_stream_backend()
 
 
+@pytest.mark.parametrize(
+    ("rust_available", "expected"),
+    [
+        (False, StreamBackend.PYTHON),
+        (True, StreamBackend.RUST),
+    ],
+    ids=["rust-unavailable", "rust-available"],
+)
 def test_empty_env_var_uses_auto_mode(
     monkeypatch: pytest.MonkeyPatch,
+    rust_available: bool,  # noqa: FBT001
+    expected: StreamBackend,
 ) -> None:
     """An explicit empty env var value behaves like auto mode."""
     monkeypatch.setenv(_ENV_VAR, "")
-    monkeypatch.setattr(_rust_backend, "is_available", lambda: False)
+    monkeypatch.setattr(_rust_backend, "is_available", lambda: rust_available)
 
-    assert get_stream_backend() is StreamBackend.PYTHON, (
-        "empty env var should behave like auto mode (fall back to Python)"
+    assert get_stream_backend() is expected, (
+        f"empty env var should behave like auto mode (expected {expected!r})"
     )
 
 

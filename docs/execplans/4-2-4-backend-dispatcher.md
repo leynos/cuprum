@@ -337,7 +337,7 @@ Create `cuprum/unittests/test_backend.py` with the following test cases:
 Each test clears the `_check_rust_available` cache in an autouse fixture to
 prevent cross-test pollution.
 
-### Stage C: Add BDD feature file and behavioural tests
+### Stage C: Add behaviour-driven development (BDD) feature file and behavioural tests
 
 Create `tests/features/backend_dispatcher.feature`:
 
