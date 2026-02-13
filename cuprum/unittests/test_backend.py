@@ -140,19 +140,20 @@ def test_invalid_env_var_raises_value_error(
 
 
 @pytest.mark.parametrize(
-    ("rust_available", "expected"),
+    ("rust_available_str", "expected"),
     [
-        (False, StreamBackend.PYTHON),
-        (True, StreamBackend.RUST),
+        ("false", StreamBackend.PYTHON),
+        ("true", StreamBackend.RUST),
     ],
     ids=["rust-unavailable", "rust-available"],
 )
 def test_empty_env_var_uses_auto_mode(
     monkeypatch: pytest.MonkeyPatch,
-    rust_available: bool,  # noqa: FBT001
+    rust_available_str: str,
     expected: StreamBackend,
 ) -> None:
     """An explicit empty env var value behaves like auto mode."""
+    rust_available = rust_available_str == "true"
     monkeypatch.setenv(_ENV_VAR, "")
     monkeypatch.setattr(_rust_backend, "is_available", lambda: rust_available)
 
