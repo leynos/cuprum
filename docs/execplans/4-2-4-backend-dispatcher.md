@@ -350,22 +350,19 @@ Create `tests/features/backend_dispatcher.feature`:
       Scenario: Auto mode selects Python when Rust is unavailable
         Given the Rust extension is not available
         And the stream backend environment variable is unset
-        When the stream backend is resolved
+        When I resolve the stream backend
         Then the resolved backend is python
 
       Scenario: Forced Rust mode raises when extension is unavailable
         Given the Rust extension is not available
         And the stream backend is forced to rust
-        When an attempt is made to resolve the stream backend
+        When I attempt to resolve the stream backend
         Then an ImportError is raised
 
       Scenario: Forced Python mode always selects Python
         Given the stream backend is forced to python
-        When the stream backend is resolved
+        When I resolve the stream backend
         Then the resolved backend is python
-
-Note: The actual feature file retains "When I …" phrasing to match existing
-project Gherkin conventions (all other feature files use first-person steps).
 
 Create `tests/behaviour/test_backend_dispatcher_behaviour.py` with `@scenario`
 decorators and step implementations. Steps monkeypatch
