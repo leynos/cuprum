@@ -9,6 +9,8 @@ import sys
 import typing as typ
 from pathlib import Path
 
+import pytest
+
 from cuprum import sh
 from cuprum.adapters.logging_adapter import (
     JsonLoggingFormatter,
@@ -25,9 +27,6 @@ from cuprum.adapters.tracing_adapter import (
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
 from cuprum.context import ScopeConfig, scoped
 from cuprum.program import Program
-
-if typ.TYPE_CHECKING:
-    import pytest
 
 
 def _python_builder(
@@ -180,7 +179,7 @@ class TestMetricsHook:
         with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
-        assert metrics.counters.get("cuprum_executions_total") == 1.0
+        assert metrics.counters.get("cuprum_executions_total") == pytest.approx(1.0)
 
     def test_counts_output_lines(self) -> None:
         """Hook counts stdout and stderr lines."""
@@ -203,8 +202,8 @@ class TestMetricsHook:
         with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
-        assert metrics.counters.get("cuprum_stdout_lines_total") == 2.0
-        assert metrics.counters.get("cuprum_stderr_lines_total") == 1.0
+        assert metrics.counters.get("cuprum_stdout_lines_total") == pytest.approx(2.0)
+        assert metrics.counters.get("cuprum_stderr_lines_total") == pytest.approx(1.0)
 
     def test_records_duration_histogram(self) -> None:
         """Hook records execution duration in histogram."""
@@ -232,7 +231,7 @@ class TestMetricsHook:
         with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
-        assert metrics.counters.get("cuprum_failures_total") == 1.0
+        assert metrics.counters.get("cuprum_failures_total") == pytest.approx(1.0)
 
     def test_factory_function_returns_hook(self) -> None:
         """metrics_hook() factory returns a valid ExecHook."""
@@ -245,7 +244,7 @@ class TestMetricsHook:
         with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
-        assert metrics.counters.get("cuprum_executions_total") == 1.0
+        assert metrics.counters.get("cuprum_executions_total") == pytest.approx(1.0)
 
     def test_inmemory_metrics_reset(self) -> None:
         """InMemoryMetrics.reset() clears all metrics."""
@@ -253,7 +252,7 @@ class TestMetricsHook:
         metrics.inc_counter("test", 1.0, {})
         metrics.observe_histogram("test_hist", 0.5, {})
 
-        assert metrics.counters.get("test") == 1.0
+        assert metrics.counters.get("test") == pytest.approx(1.0)
         assert len(metrics.histograms.get("test_hist", [])) == 1
 
         metrics.reset()

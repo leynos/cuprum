@@ -16,7 +16,7 @@ def test_execution_context_timeout_none_falls_through_to_scoped() -> None:
     """ExecutionContext(timeout=None) should use scoped default."""
     with sh.scoped(ScopeConfig(timeout=3.0)):
         ctx = ExecutionContext(timeout=None)
-        assert _resolve_timeout(timeout=None, context=ctx) == 3.0
+        assert _resolve_timeout(timeout=None, context=ctx) == pytest.approx(3.0)
 
 
 @pytest.mark.parametrize(

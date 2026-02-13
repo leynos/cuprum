@@ -201,7 +201,7 @@ def test_timeout_raises_timeout_expired(
     with pytest.raises(TimeoutExpired, match=r"timed out") as exc_info:
         execute(command, {"timeout": 0.1, "capture": False})
 
-    assert exc_info.value.timeout == 0.1
+    assert exc_info.value.timeout == pytest.approx(0.1)
     assert exc_info.value.stdout is None
     assert exc_info.value.stderr is None
 

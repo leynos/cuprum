@@ -217,7 +217,7 @@ def test_pipeline_timeout_raises_timeout_expired() -> None:
     ):
         pipeline.run_sync(timeout=0.2, capture=False)
 
-    assert exc_info.value.timeout == 0.2
+    assert exc_info.value.timeout == pytest.approx(0.2)
     assert exc_info.value.output is None
     assert exc_info.value.stderr is None
 
