@@ -294,7 +294,7 @@ def then_extra_fields_present(
 def then_counter_incremented(behaviour_state: dict[str, object]) -> None:
     """Verify execution counter was incremented."""
     metrics = typ.cast("InMemoryMetrics", behaviour_state["metrics"])
-    assert metrics.counters.get("cuprum_executions_total") == 1.0, (
+    assert metrics.counters.get("cuprum_executions_total") == pytest.approx(1.0), (
         "Execution counter should be 1.0"
     )
 
@@ -312,7 +312,7 @@ def then_histogram_observation(behaviour_state: dict[str, object]) -> None:
 def then_failure_counter_incremented(behaviour_state: dict[str, object]) -> None:
     """Verify failure counter was incremented."""
     metrics = typ.cast("InMemoryMetrics", behaviour_state["metrics"])
-    assert metrics.counters.get("cuprum_failures_total") == 1.0, (
+    assert metrics.counters.get("cuprum_failures_total") == pytest.approx(1.0), (
         "Failure counter should be 1.0"
     )
 

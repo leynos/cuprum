@@ -140,7 +140,7 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 - [x] 4.2.3. Add Linux-specific `splice()` code path with runtime detection;
   fall back to read/write loop on unsupported platforms or file descriptor
   types.
-- [ ] 4.2.4. Create `cuprum/_backend.py` dispatcher with
+- [x] 4.2.4. Create `cuprum/_backend.py` dispatcher with
   `CUPRUM_STREAM_BACKEND` environment variable support (`auto`, `rust`,
   `python`); cache availability check results for performance.
 
