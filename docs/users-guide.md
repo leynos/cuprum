@@ -986,12 +986,19 @@ The backend is resolved once on first use and the result is cached for the
 lifetime of the process. Changing the environment variable after the first
 resolution has no effect.
 
+The backend selection is active for inter-stage stream pumping in
+pipelines. When the Rust backend is selected, data transfer between
+pipeline stages uses the Rust extension outside the GIL via
+`loop.run_in_executor()`. Stream consumption (stdout/stderr capture)
+currently always uses the Python pathway regardless of the backend
+setting; this ensures line callbacks and echo features remain available.
+
 Choose the Rust backend for high-throughput workloads (for example,
-multi-megabyte outputs) where lower per-chunk overhead improves throughput. For
-small outputs or when custom encoding/error handling is required, prefer the
-Python implementation. Expect the most noticeable throughput gains on large
-streams; smaller payloads may see minimal differences, so measure on
-representative workloads.
+multi-megabyte outputs) where lower per-chunk overhead improves throughput.
+For small outputs or when custom encoding/error handling is required,
+prefer the Python implementation. Expect the most noticeable throughput
+gains on large streams; smaller payloads may see minimal differences, so
+measure on representative workloads.
 
 ### Linux splice() optimization
 

@@ -7,7 +7,13 @@ import dataclasses as dc
 import sys
 import typing as typ
 
-from cuprum._streams import _consume_stream, _pump_stream, _StreamConfig
+from cuprum._backend import StreamBackend, get_stream_backend
+from cuprum._streams import (
+    _close_stream_writer,
+    _consume_stream,
+    _pump_stream,
+    _StreamConfig,
+)
 
 if typ.TYPE_CHECKING:
     from cuprum._pipeline_internals import _StageObservation
@@ -155,13 +161,102 @@ def _create_stage_capture_tasks(
     return stderr_task, stdout_task
 
 
+def _fd_from_transport(transport: object | None) -> int | None:
+    """Extract a raw file descriptor from an asyncio transport.
+
+    Walks the chain ``transport.get_extra_info('pipe').fileno()`` and
+    returns the integer file descriptor, or ``None`` when any step in the
+    chain is unavailable or raises.
+
+    Returns
+    -------
+    int or None
+        The file descriptor, or ``None`` on failure.
+    """
+    get_extra = getattr(transport, "get_extra_info", None)
+    if get_extra is None:
+        return None
+    pipe: object | None = get_extra("pipe")
+    fileno = getattr(pipe, "fileno", None) if pipe is not None else None
+    if fileno is None:
+        return None
+    try:
+        return int(fileno())
+    except (OSError, ValueError):
+        return None
+
+
+def _extract_reader_fd(reader: asyncio.StreamReader | None) -> int | None:
+    """Extract the raw file descriptor from an asyncio StreamReader.
+
+    Returns
+    -------
+    int or None
+        The underlying file descriptor, or ``None`` when the reader is
+        ``None`` or the transport does not expose a pipe object.
+    """
+    if reader is None:
+        return None
+    return _fd_from_transport(getattr(reader, "_transport", None))
+
+
+def _extract_writer_fd(writer: asyncio.StreamWriter | None) -> int | None:
+    """Extract the raw file descriptor from an asyncio StreamWriter.
+
+    Returns
+    -------
+    int or None
+        The underlying file descriptor, or ``None`` when the writer is
+        ``None`` or the transport does not expose a pipe object.
+    """
+    if writer is None:
+        return None
+    return _fd_from_transport(writer.transport)
+
+
+async def _pump_stream_dispatch(
+    reader: asyncio.StreamReader | None,
+    writer: asyncio.StreamWriter | None,
+) -> None:
+    """Route inter-stage pump to the Rust or Python implementation.
+
+    When the resolved backend is ``RUST`` and both file descriptors are
+    extractable from the asyncio transports, the Rust extension runs outside
+    the GIL via ``loop.run_in_executor()``.  Otherwise the pure Python
+    ``_pump_stream`` is used.
+    """
+    if reader is None:
+        await _pump_stream(reader, writer)
+        return
+
+    backend = get_stream_backend()
+    if backend is StreamBackend.RUST:
+        reader_fd = _extract_reader_fd(reader)
+        writer_fd = _extract_writer_fd(writer)
+        if reader_fd is not None and writer_fd is not None:
+            from cuprum._streams_rs import rust_pump_stream
+
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                rust_pump_stream,
+                reader_fd,
+                writer_fd,
+            )
+            # Drain any residual data the event loop buffered before closing.
+            await _close_stream_writer(writer)
+            return
+
+    await _pump_stream(reader, writer)
+
+
 def _create_pipe_tasks(
     processes: list[asyncio.subprocess.Process],
 ) -> list[asyncio.Task[None]]:
     """Create streaming tasks between adjacent pipeline stages."""
     return [
         asyncio.create_task(
-            _pump_stream(
+            _pump_stream_dispatch(
                 processes[idx].stdout,
                 processes[idx + 1].stdin,
             ),

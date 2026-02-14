@@ -177,7 +177,7 @@ def _run_test_pipeline(
         return pipeline.run_sync()
 
 
-def test_pipeline_run_streams_stdout_between_stages() -> None:
+def test_pipeline_run_streams_stdout_between_stages(stream_backend: str) -> None:
     """Pipeline.run_sync streams stdout into the next stage stdin."""
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
@@ -201,7 +201,7 @@ def test_pipeline_run_streams_stdout_between_stages() -> None:
     assert result.stages[1].pid > 0
 
 
-def test_pipeline_timeout_raises_timeout_expired() -> None:
+def test_pipeline_timeout_raises_timeout_expired(stream_backend: str) -> None:
     """Pipeline timeouts raise TimeoutExpired and respect capture flags."""
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
@@ -240,6 +240,7 @@ def test_pipeline_timeout_raises_timeout_expired() -> None:
     ],
 )
 def test_pipeline_run_sync_failure_semantics(
+    stream_backend: str,
     stage_codes: list[int],
     *,
     expect_ok: bool,
