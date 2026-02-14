@@ -186,6 +186,29 @@ def _fd_from_transport(transport: object | None) -> int | None:
         return None
 
 
+def _extract_stream_fd(
+    stream: asyncio.StreamReader | asyncio.StreamWriter | None,
+) -> int | None:
+    """Extract a raw file descriptor from an asyncio stream object.
+
+    Looks for the underlying transport via the public ``transport``
+    attribute first (``StreamWriter``), then falls back to the private
+    ``_transport`` attribute (``StreamReader``).
+
+    Returns
+    -------
+    int or None
+        The file descriptor, or ``None`` when the stream is ``None`` or
+        the transport does not expose a pipe object.
+    """
+    if stream is None:
+        return None
+    transport = getattr(stream, "transport", None)
+    if transport is None:
+        transport = getattr(stream, "_transport", None)
+    return _fd_from_transport(transport)
+
+
 def _extract_reader_fd(reader: asyncio.StreamReader | None) -> int | None:
     """Extract the raw file descriptor from an asyncio StreamReader.
 
@@ -195,9 +218,7 @@ def _extract_reader_fd(reader: asyncio.StreamReader | None) -> int | None:
         The underlying file descriptor, or ``None`` when the reader is
         ``None`` or the transport does not expose a pipe object.
     """
-    if reader is None:
-        return None
-    return _fd_from_transport(getattr(reader, "_transport", None))
+    return _extract_stream_fd(reader)
 
 
 def _extract_writer_fd(writer: asyncio.StreamWriter | None) -> int | None:
@@ -209,9 +230,7 @@ def _extract_writer_fd(writer: asyncio.StreamWriter | None) -> int | None:
         The underlying file descriptor, or ``None`` when the writer is
         ``None`` or the transport does not expose a pipe object.
     """
-    if writer is None:
-        return None
-    return _fd_from_transport(writer.transport)
+    return _extract_stream_fd(writer)
 
 
 async def _pump_stream_dispatch(
