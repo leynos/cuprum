@@ -16,7 +16,7 @@ from cuprum._pipeline_internals import (
     _run_before_hooks,
     _run_pipeline,
 )
-from cuprum._pipeline_streams import _prepare_pipeline_config
+from cuprum._pipeline_streams import _prepare_pipeline_config, _pump_stream_dispatch
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
 from cuprum._process_lifecycle import (
     _merge_env,
@@ -39,6 +39,7 @@ _EXPORTS = {
     "_merge_env": _merge_env,
     "_PipelineWaitResult": _PipelineWaitResult,
     "_prepare_pipeline_config": _prepare_pipeline_config,
+    "_pump_stream_dispatch": _pump_stream_dispatch,
     "_run_before_hooks": _run_before_hooks,
     "_run_pipeline": _run_pipeline,
     "_spawn_pipeline_processes": _spawn_pipeline_processes,

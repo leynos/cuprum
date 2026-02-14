@@ -146,7 +146,7 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 
 ### 4.3. Test infrastructure
 
-- [ ] 4.3.1. Parametrise existing stream unit tests (`test_pipeline.py`) to run
+- [x] 4.3.1. Parametrise existing stream unit tests (`test_pipeline.py`) to run
   against both Python and Rust pathways using a `stream_backend` fixture; skip
   Rust tests when the extension is unavailable.
 - [ ] 4.3.2. Add behavioural parity tests verifying identical output for edge

@@ -47,6 +47,47 @@ def fixture_rust_streams() -> ModuleType:
     return _streams_rs
 
 
+@pytest.fixture(
+    params=[
+        pytest.param("python", id="python-backend"),
+        pytest.param(
+            "rust",
+            id="rust-backend",
+            marks=pytest.mark.skipif(
+                not _rust_backend.is_available(),
+                reason="Rust extension is not installed",
+            ),
+        ),
+    ],
+)
+def stream_backend(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> str:
+    """Parametrise tests to run against both stream backends.
+
+    Sets the ``CUPRUM_STREAM_BACKEND`` environment variable so the
+    dispatcher routes inter-stage pumping to the requested backend.
+    The Rust variant is automatically skipped when the extension is
+    unavailable.
+
+    Parameters
+    ----------
+    request : pytest.FixtureRequest
+        Pytest request providing the parametrised backend value.
+    monkeypatch : pytest.MonkeyPatch
+        Pytest monkeypatch for environment variable isolation.
+
+    Returns
+    -------
+    str
+        The backend identifier (``"python"`` or ``"rust"``).
+    """
+    backend: str = request.param
+    monkeypatch.setenv("CUPRUM_STREAM_BACKEND", backend)
+    return backend
+
+
 @pytest.fixture(autouse=True)
 def _clear_backend_cache() -> None:
     """Clear the cached backend dispatcher results between tests.
