@@ -21,7 +21,7 @@ if typ.TYPE_CHECKING:
 
 
 @pytest.fixture
-def _require_rust() -> None:
+def requires_rust_backend() -> None:
     """Skip the test at setup time when the Rust extension is unavailable."""
     if not _rust_backend.is_available():
         pytest.skip("Rust extension is not installed")
@@ -38,7 +38,7 @@ def test_pipeline_python_backend() -> None:
     """Pipeline produces correct output with the Python backend."""
 
 
-@pytest.mark.usefixtures("_require_rust")
+@pytest.mark.usefixtures("requires_rust_backend")
 @scenario(
     "../features/stream_backend_pipeline.feature",
     "Pipeline streams output using the Rust backend",

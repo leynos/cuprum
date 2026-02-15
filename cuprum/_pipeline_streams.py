@@ -205,13 +205,14 @@ async def _drain_reader_buffer(
 ) -> None:
     """Flush bytes already buffered in *reader* to *writer*."""
     buffered: bytearray | None = getattr(reader, "_buffer", None)
-    if not buffered or writer is None:
+    if not buffered:
         return
-    try:
-        writer.write(bytes(buffered))
-        await writer.drain()
-    except (BrokenPipeError, ConnectionResetError):
-        pass
+    if writer is not None:
+        try:
+            writer.write(bytes(buffered))
+            await writer.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
     # Clear unconditionally so the Rust pump does not re-read stale data.
     buffered.clear()
 
