@@ -20,6 +20,13 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import PipelineResult
 
 
+@pytest.fixture
+def _require_rust() -> None:
+    """Skip the test at setup time when the Rust extension is unavailable."""
+    if not _rust_backend.is_available():
+        pytest.skip("Rust extension is not installed")
+
+
 # -- Scenarios ----------------------------------------------------------------
 
 
@@ -31,10 +38,7 @@ def test_pipeline_python_backend() -> None:
     """Pipeline produces correct output with the Python backend."""
 
 
-@pytest.mark.skipif(
-    not _rust_backend.is_available(),
-    reason="Rust extension is not installed",
-)
+@pytest.mark.usefixtures("_require_rust")
 @scenario(
     "../features/stream_backend_pipeline.feature",
     "Pipeline streams output using the Rust backend",

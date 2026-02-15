@@ -163,17 +163,7 @@ def _create_stage_capture_tasks(
 
 
 def _fd_from_transport(transport: object | None) -> int | None:
-    """Extract a raw file descriptor from an asyncio transport.
-
-    Walks the chain ``transport.get_extra_info('pipe').fileno()`` and
-    returns the integer file descriptor, or ``None`` when any step in the
-    chain is unavailable or raises.
-
-    Returns
-    -------
-    int or None
-        The file descriptor, or ``None`` on failure.
-    """
+    """Extract a raw FD via ``transport.get_extra_info('pipe').fileno()``."""
     get_extra = getattr(transport, "get_extra_info", None)
     if get_extra is None:
         return None
@@ -190,18 +180,7 @@ def _fd_from_transport(transport: object | None) -> int | None:
 def _extract_stream_fd(
     stream: asyncio.StreamReader | asyncio.StreamWriter | None,
 ) -> int | None:
-    """Extract a raw file descriptor from an asyncio stream object.
-
-    Looks for the underlying transport via the public ``transport``
-    attribute first (``StreamWriter``), then falls back to the private
-    ``_transport`` attribute (``StreamReader``).
-
-    Returns
-    -------
-    int or None
-        The file descriptor, or ``None`` when the stream is ``None`` or
-        the transport does not expose a pipe object.
-    """
+    """Extract a raw FD from an asyncio stream via its transport."""
     if stream is None:
         return None
     transport = getattr(stream, "transport", None)
@@ -211,26 +190,12 @@ def _extract_stream_fd(
 
 
 def _extract_reader_fd(reader: asyncio.StreamReader | None) -> int | None:
-    """Extract the raw file descriptor from an asyncio StreamReader.
-
-    Returns
-    -------
-    int or None
-        The underlying file descriptor, or ``None`` when the reader is
-        ``None`` or the transport does not expose a pipe object.
-    """
+    """Extract the raw FD from an asyncio ``StreamReader``."""
     return _extract_stream_fd(reader)
 
 
 def _extract_writer_fd(writer: asyncio.StreamWriter | None) -> int | None:
-    """Extract the raw file descriptor from an asyncio StreamWriter.
-
-    Returns
-    -------
-    int or None
-        The underlying file descriptor, or ``None`` when the writer is
-        ``None`` or the transport does not expose a pipe object.
-    """
+    """Extract the raw FD from an asyncio ``StreamWriter``."""
     return _extract_stream_fd(writer)
 
 
@@ -238,26 +203,16 @@ async def _drain_reader_buffer(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter | None,
 ) -> None:
-    """Flush bytes already buffered in *reader* to *writer*.
-
-    When the Rust pump takes over the raw file descriptor it bypasses the
-    asyncio ``StreamReader`` internal buffer.  Any data that asyncio has
-    already read from the OS but not yet consumed would be silently lost.
-    Calling this helper before the Rust pump ensures those bytes are
-    forwarded to the writer first.
-
-    Parameters
-    ----------
-    reader : asyncio.StreamReader
-        The stream reader whose internal buffer may contain pre-read data.
-    writer : asyncio.StreamWriter or None
-        The destination writer.  If ``None`` no data is written.
-    """
+    """Flush bytes already buffered in *reader* to *writer*."""
     buffered: bytearray | None = getattr(reader, "_buffer", None)
     if not buffered or writer is None:
         return
-    writer.write(bytes(buffered))
-    await writer.drain()
+    try:
+        writer.write(bytes(buffered))
+        await writer.drain()
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+    # Clear unconditionally so the Rust pump does not re-read stale data.
     buffered.clear()
 
 
@@ -265,13 +220,7 @@ async def _pump_stream_dispatch(
     reader: asyncio.StreamReader | None,
     writer: asyncio.StreamWriter | None,
 ) -> None:
-    """Route inter-stage pump to the Rust or Python implementation.
-
-    When the resolved backend is ``RUST`` and both file descriptors are
-    extractable from the asyncio transports, the Rust extension runs outside
-    the GIL via ``loop.run_in_executor()``.  Otherwise the pure Python
-    ``_pump_stream`` is used.
-    """
+    """Route inter-stage pump to the Rust or Python implementation."""
     if reader is None:
         await _pump_stream(reader, writer)
         return
