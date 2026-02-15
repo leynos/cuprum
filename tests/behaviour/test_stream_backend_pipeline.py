@@ -13,6 +13,7 @@ from pytest_bdd import given, parsers, scenario, then, when
 
 from cuprum import ECHO, ScopeConfig, _rust_backend, scoped, sh
 from cuprum._backend import _check_rust_available, get_stream_backend
+from cuprum.program import Program
 from tests.helpers.catalogue import combine_programs_into_catalogue, python_catalogue
 
 if typ.TYPE_CHECKING:
@@ -85,7 +86,7 @@ def given_stream_backend(
     "a simple two stage uppercase pipeline",
     target_fixture="pipeline_under_test",
 )
-def given_uppercase_pipeline() -> tuple[sh.Pipeline, frozenset[typ.Any]]:
+def given_uppercase_pipeline() -> tuple[sh.Pipeline, frozenset[Program]]:
     """Create a two stage pipeline that uppercases its input.
 
     Returns
@@ -118,7 +119,7 @@ def given_uppercase_pipeline() -> tuple[sh.Pipeline, frozenset[typ.Any]]:
     target_fixture="pipeline_result",
 )
 def when_run_sync(
-    pipeline_under_test: tuple[sh.Pipeline, frozenset[typ.Any]],
+    pipeline_under_test: tuple[sh.Pipeline, frozenset[Program]],
 ) -> PipelineResult:
     """Execute the pipeline via ``run_sync()``.
 

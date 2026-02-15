@@ -64,7 +64,7 @@ def stream_backend(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
 ) -> str:
-    """Parametrise tests to run against both stream backends.
+    """Parametrize tests to run against both stream backends.
 
     Sets the ``CUPRUM_STREAM_BACKEND`` environment variable so the
     dispatcher routes inter-stage pumping to the requested backend.
@@ -74,7 +74,7 @@ def stream_backend(
     Parameters
     ----------
     request : pytest.FixtureRequest
-        Pytest request providing the parametrised backend value.
+        Pytest request providing the parametrized backend value.
     monkeypatch : pytest.MonkeyPatch
         Pytest monkeypatch for environment variable isolation.
 

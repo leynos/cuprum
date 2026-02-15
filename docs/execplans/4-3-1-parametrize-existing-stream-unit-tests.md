@@ -1,4 +1,4 @@
-# Parametrise existing stream unit tests (4.3.1)
+# Parametrize existing stream unit tests (4.3.1)
 
 This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`, and
@@ -19,14 +19,14 @@ pipeline execution code. After this change:
    (`_pipeline_streams.py`) so that `_create_pipe_tasks` routes through a new
    `_pump_stream_dispatch` function that selects the Rust or Python pump
    implementation at runtime.
-2. Existing end-to-end pipeline tests in `test_pipeline.py` are parametrised
+2. Existing end-to-end pipeline tests in `test_pipeline.py` are parametrized
    via a `stream_backend` fixture to run against both Python and Rust
    pathways, with Rust tests skipped when the extension is unavailable.
 3. BDD scenarios verify pipeline correctness under explicit backend selection.
 
 A user can observe success by:
 
-1. Running `make test` — parametrised tests execute twice (once per backend),
+1. Running `make test` — parametrized tests execute twice (once per backend),
    with Rust variants skipped when the extension is not built.
 2. Setting `CUPRUM_STREAM_BACKEND=python` — the pipeline uses the pure Python
    pump for inter-stage data transfer.
@@ -93,9 +93,9 @@ Hard invariants that must hold throughout implementation:
 - **Risk**: The `_clear_backend_cache` autouse fixture must clear caches
   before the `stream_backend` fixture sets the env var.
   - Severity: low
-  - Likelihood: low (autouse fixtures run before parametrised fixtures)
+  - Likelihood: low (autouse fixtures run before parametrized fixtures)
   - Mitigation: Verified fixture ordering; the autouse fixture clears caches
-    at the start of each test, and the parametrised fixture sets the env var
+    at the start of each test, and the parametrized fixture sets the env var
     afterwards. The dispatcher re-reads the env var on next call since the
     cache was cleared.
 
@@ -105,7 +105,7 @@ Hard invariants that must hold throughout implementation:
   `_pipeline_streams.py`
 - [x] (2026-02-14) Stage B: Create `stream_backend` pytest fixture in
   `conftest.py`
-- [x] (2026-02-14) Stage C: Parametrise end-to-end pipeline tests in
+- [x] (2026-02-14) Stage C: Parametrize end-to-end pipeline tests in
   `test_pipeline.py`
 - [x] (2026-02-14) Stage D: Add BDD feature file and step implementations
 - [x] (2026-02-14) Stage E: Update `cuprum/_testing.py` with re-exports
@@ -147,9 +147,9 @@ Hard invariants that must hold throughout implementation:
 - **Decision**: Keep stub-based pump tests Python-only
   - Rationale: `_StubPumpReader`/`_StubPumpWriter` implement asyncio
     `StreamReader`/`StreamWriter` interfaces. The Rust pathway operates on
-    raw file descriptors. Parametrising these tests would require entirely
+    raw file descriptors. Parametrizing these tests would require entirely
     different stubs (OS pipes), which already exist in `test_rust_streams.py`.
-    The end-to-end parametrised tests provide Rust coverage.
+    The end-to-end parametrized tests provide Rust coverage.
   - Date: 2026-02-14
 
 - **Decision**: Use `pytest.mark.skipif` on the Rust fixture parameter
@@ -178,9 +178,9 @@ Implementation completed successfully:
 - Wired `_pump_stream_dispatch` into `cuprum/_pipeline_streams.py` with
   `_fd_from_transport`, `_extract_reader_fd`, and `_extract_writer_fd`
   helpers following the design doc Section 13.6 integration pattern
-- Added `stream_backend` parametrised fixture to `conftest.py` with
+- Added `stream_backend` parametrized fixture to `conftest.py` with
   `pytest.mark.skipif` for Rust availability
-- Parametrised 3 end-to-end pipeline tests (6 test variants: 3 Python +
+- Parametrized 3 end-to-end pipeline tests (6 test variants: 3 Python +
   3 Rust, with Rust skipped when unavailable)
 - Added 3 BDD scenarios verifying pipeline output under Python, Rust, and
   auto backend selection
@@ -200,9 +200,9 @@ All quality gates passed:
 Files modified (8 total, within tolerance of 10):
 
 1. `cuprum/_pipeline_streams.py` — Added dispatch function and FD extractors
-2. `cuprum/unittests/test_pipeline.py` — Parametrised 3 tests with
+2. `cuprum/unittests/test_pipeline.py` — Parametrized 3 tests with
    `stream_backend`
-3. `conftest.py` — Added `stream_backend` parametrised fixture
+3. `conftest.py` — Added `stream_backend` parametrized fixture
 4. `cuprum/_testing.py` — Added `_pump_stream_dispatch` re-export
 5. `docs/users-guide.md` — Added dispatcher wiring note
 6. `docs/roadmap.md` — Marked 4.3.1 complete
@@ -307,7 +307,7 @@ Modify `_create_pipe_tasks()` to call `_pump_stream_dispatch` instead of
 
 ### Stage B: Create `stream_backend` pytest fixture
 
-Add a parametrised fixture to the root `conftest.py`:
+Add a parametrized fixture to the root `conftest.py`:
 
     @pytest.fixture(
         params=[
@@ -333,7 +333,7 @@ Add a parametrised fixture to the root `conftest.py`:
 The existing `_clear_backend_cache` autouse fixture already clears the
 dispatcher's LRU caches between tests.
 
-### Stage C: Parametrise end-to-end pipeline tests
+### Stage C: Parametrize end-to-end pipeline tests
 
 Add the `stream_backend` fixture parameter to these three tests in
 `cuprum/unittests/test_pipeline.py`:
@@ -408,7 +408,7 @@ Verify with:
 
     make test
 
-**Step C: Parametrise tests.** Add `stream_backend` parameter to 3 tests
+**Step C: Parametrize tests.** Add `stream_backend` parameter to 3 tests
 in `test_pipeline.py`.
 
 Verify with:
@@ -445,7 +445,7 @@ Verify with:
 
 **Quality criteria (what "done" means):**
 
-- Tests: All existing tests pass. Parametrised tests run both backends (Rust
+- Tests: All existing tests pass. Parametrized tests run both backends (Rust
   skipped when unavailable). New BDD scenarios pass. Run with `make test`.
 - Lint/typecheck: `make lint` and `make typecheck` report no errors.
 - Format: `make check-fmt` reports no differences.
@@ -454,7 +454,7 @@ Verify with:
 **Quality method (how verification is performed):**
 
 1. Run `make check-fmt && make typecheck && make lint && make test`
-2. Verify parametrised test output shows `[python-backend]` and
+2. Verify parametrized test output shows `[python-backend]` and
    `[rust-backend]` variants (Rust skipped if unavailable)
 3. Verify `CUPRUM_STREAM_BACKEND=python` forces Python pathway
 4. Verify BDD scenarios pass
@@ -490,7 +490,7 @@ failed step. No special rollback needed; git provides recovery.
 ### Key files modified
 
 1. `cuprum/_pipeline_streams.py` — Added dispatch function and FD extractors
-2. `cuprum/unittests/test_pipeline.py` — Parametrised 3 tests
+2. `cuprum/unittests/test_pipeline.py` — Parametrized 3 tests
 3. `conftest.py` — Added `stream_backend` fixture
 4. `cuprum/_testing.py` — Added re-exports
 5. `docs/users-guide.md` — Noted dispatcher wiring
@@ -499,7 +499,7 @@ failed step. No special rollback needed; git provides recovery.
 ### Existing patterns reused
 
 - `get_stream_backend()` at `cuprum/_backend.py:90`
-- `StreamBackend` enum at `cuprum/_backend.py:27`
+- `StreamBackend` at `cuprum/_backend.py:27`
 - `_pump_stream()` at `cuprum/_streams.py:112`
 - `_close_stream_writer()` at `cuprum/_streams.py:152`
 - `rust_pump_stream()` at `cuprum/_streams_rs.py:47`
@@ -539,7 +539,7 @@ failed step. No special rollback needed; git provides recovery.
         request: pytest.FixtureRequest,
         monkeypatch: pytest.MonkeyPatch,
     ) -> str:
-        """Parametrise tests to run against both stream backends."""
+        """Parametrize tests to run against both stream backends."""
 
 ### Dependencies
 
