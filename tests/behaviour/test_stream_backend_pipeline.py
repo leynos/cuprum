@@ -13,10 +13,10 @@ from pytest_bdd import given, parsers, scenario, then, when
 
 from cuprum import ECHO, ScopeConfig, _rust_backend, scoped, sh
 from cuprum._backend import _check_rust_available, get_stream_backend
-from cuprum.program import Program
 from tests.helpers.catalogue import combine_programs_into_catalogue, python_catalogue
 
 if typ.TYPE_CHECKING:
+    from cuprum.program import Program
     from cuprum.sh import PipelineResult
 
 
@@ -150,7 +150,9 @@ def then_stdout_uppercased(pipeline_result: PipelineResult) -> None:
     pipeline_result : PipelineResult
         The result from pipeline execution.
     """
-    assert pipeline_result.stdout == "HELLO"
+    assert pipeline_result.stdout == "HELLO", (
+        f"expected uppercased output 'HELLO', got {pipeline_result.stdout!r}"
+    )
 
 
 @then("all stages exit successfully")
@@ -162,5 +164,7 @@ def then_all_stages_ok(pipeline_result: PipelineResult) -> None:
     pipeline_result : PipelineResult
         The result from pipeline execution.
     """
-    assert pipeline_result.ok is True
-    assert all(stage.exit_code == 0 for stage in pipeline_result.stages)
+    assert pipeline_result.ok is True, "pipeline result should indicate success"
+    assert all(stage.exit_code == 0 for stage in pipeline_result.stages), (
+        "every stage should exit with code 0"
+    )

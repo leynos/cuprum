@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses as dc
 import sys
 import typing as typ
@@ -182,7 +183,7 @@ def _fd_from_transport(transport: object | None) -> int | None:
         return None
     try:
         return int(fileno())
-    except (OSError, ValueError):
+    except (OSError, ValueError, TypeError, AttributeError):
         return None
 
 
@@ -233,6 +234,33 @@ def _extract_writer_fd(writer: asyncio.StreamWriter | None) -> int | None:
     return _extract_stream_fd(writer)
 
 
+async def _drain_reader_buffer(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter | None,
+) -> None:
+    """Flush bytes already buffered in *reader* to *writer*.
+
+    When the Rust pump takes over the raw file descriptor it bypasses the
+    asyncio ``StreamReader`` internal buffer.  Any data that asyncio has
+    already read from the OS but not yet consumed would be silently lost.
+    Calling this helper before the Rust pump ensures those bytes are
+    forwarded to the writer first.
+
+    Parameters
+    ----------
+    reader : asyncio.StreamReader
+        The stream reader whose internal buffer may contain pre-read data.
+    writer : asyncio.StreamWriter or None
+        The destination writer.  If ``None`` no data is written.
+    """
+    buffered: bytearray | None = getattr(reader, "_buffer", None)
+    if not buffered or writer is None:
+        return
+    writer.write(bytes(buffered))
+    await writer.drain()
+    buffered.clear()
+
+
 async def _pump_stream_dispatch(
     reader: asyncio.StreamReader | None,
     writer: asyncio.StreamWriter | None,
@@ -253,6 +281,10 @@ async def _pump_stream_dispatch(
         reader_fd = _extract_reader_fd(reader)
         writer_fd = _extract_writer_fd(writer)
         if reader_fd is not None and writer_fd is not None:
+            # Flush any bytes asyncio already buffered in the StreamReader
+            # before the Rust pump takes over the raw file descriptor.
+            await _drain_reader_buffer(reader, writer)
+
             from cuprum._streams_rs import rust_pump_stream
 
             loop = asyncio.get_running_loop()
@@ -262,8 +294,11 @@ async def _pump_stream_dispatch(
                 reader_fd,
                 writer_fd,
             )
-            # Drain any residual data the event loop buffered before closing.
-            await _close_stream_writer(writer)
+            # The Rust pump closes the writer FD on return (drop semantics).
+            # Suppress OSError so the asyncio transport close does not raise
+            # EBADF when the descriptor is already gone.
+            with contextlib.suppress(OSError):
+                await _close_stream_writer(writer)
             return
 
     await _pump_stream(reader, writer)
