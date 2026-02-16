@@ -204,6 +204,11 @@ async def _drain_reader_buffer(
     writer: asyncio.StreamWriter | None,
 ) -> None:
     """Flush bytes already buffered in *reader* to *writer*."""
+    # StreamReader._buffer is a CPython-private bytearray populated by the
+    # event loop before our coroutine is scheduled.  The Rust pump reads from
+    # the raw FD and would skip those bytes, so we flush them here first.
+    # getattr gracefully degrades to a no-op if the attribute is absent (e.g.
+    # on PyPy or future CPython versions that rename or remove _buffer).
     buffered: bytearray | None = getattr(reader, "_buffer", None)
     if not buffered:
         return
