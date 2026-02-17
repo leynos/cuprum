@@ -95,7 +95,7 @@ def given_uppercase_pipeline() -> tuple[sh.Pipeline, frozenset[Program]]:
 
     Returns
     -------
-    tuple[Pipeline, frozenset[Program]]
+    tuple[sh.Pipeline, frozenset[Program]]
         The pipeline and the allowlist of programs required.
     """
     _, python_program = python_catalogue()
@@ -129,7 +129,7 @@ def when_run_sync(
 
     Parameters
     ----------
-    pipeline_under_test : tuple[Pipeline, frozenset[Program]]
+    pipeline_under_test : tuple[sh.Pipeline, frozenset[Program]]
         The pipeline and its required allowlist.
 
     Returns
