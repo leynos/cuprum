@@ -11,17 +11,17 @@ Status: COMPLETE
 Cuprum provides optional Rust-backed stream operations (`rust_pump_stream`,
 `rust_consume_stream`) alongside pure Python equivalents (`_pump_stream`,
 `_consume_stream`). The backend dispatcher (`cuprum/_backend.py`, built in
-4.2.4) resolves which backend to use at runtime via the
-`CUPRUM_STREAM_BACKEND` environment variable, but is not yet wired into the
-pipeline execution code. After this change:
+4.2.4) resolves which backend to use at runtime via the `CUPRUM_STREAM_BACKEND`
+environment variable, but is not yet wired into the pipeline execution code.
+After this change:
 
 1. The dispatcher is wired into inter-stage stream pumping
    (`_pipeline_streams.py`) so that `_create_pipe_tasks` routes through a new
    `_pump_stream_dispatch` function that selects the Rust or Python pump
    implementation at runtime.
 2. Existing end-to-end pipeline tests in `test_pipeline.py` are parametrized
-   via a `stream_backend` fixture to run against both Python and Rust
-   pathways, with Rust tests skipped when the extension is unavailable.
+   via a `stream_backend` fixture to run against both Python and Rust pathways,
+   with Rust tests skipped when the extension is unavailable.
 3. BDD scenarios verify pipeline correctness under explicit backend selection.
 
 A user can observe success by:
@@ -40,9 +40,8 @@ A user can observe success by:
 Hard invariants that must hold throughout implementation:
 
 - **Pump dispatch only**: This task wires the dispatcher into `_pump_stream`
-  only. `_consume_stream` dispatch is deferred — the Rust consume path does
-  not support `on_line` callbacks or `echo_output`, per the design doc
-  Section 13.5.
+  only. `_consume_stream` dispatch is deferred — the Rust consume path does not
+  support `on_line` callbacks or `echo_output`, per the design doc Section 13.5.
 - **Graceful fallback**: When file descriptor extraction from asyncio
   transports fails (e.g. mock transports in tests), the dispatcher must fall
   back to the Python pathway silently. No `RuntimeError` or `OSError` may
@@ -116,16 +115,16 @@ Hard invariants that must hold throughout implementation:
 ## Surprises & discoveries
 
 - Observation: Ruff PLR0911 limits return statements to 6 per function. The
-  initial `_extract_reader_fd` had 7 returns due to multiple guard-clause
-  early exits. Evidence: `ruff check` reported PLR0911. Impact: Extracted a
-  shared `_fd_from_transport` helper that walks the
+  initial `_extract_reader_fd` had 7 returns due to multiple guard-clause early
+  exits. Evidence: `ruff check` reported PLR0911. Impact: Extracted a shared
+  `_fd_from_transport` helper that walks the
   `transport.get_extra_info('pipe').fileno()` chain, reducing both FD
   extractors to two returns each.
 
 - Observation: The markdown linter enforces indented code blocks (MD046) in
   execution plan documents, not fenced code blocks. Evidence:
-  `make markdownlint` flagged four fenced blocks. Impact: Converted all
-  fenced blocks to indented style.
+  `make markdownlint` flagged four fenced blocks. Impact: Converted all fenced
+  blocks to indented style.
 
 ## Decision log
 
@@ -176,8 +175,8 @@ Hard invariants that must hold throughout implementation:
 Implementation completed successfully:
 
 - Wired `_pump_stream_dispatch` into `cuprum/_pipeline_streams.py` with
-  `_fd_from_transport`, `_extract_reader_fd`, and `_extract_writer_fd`
-  helpers following the design doc Section 13.6 integration pattern
+  `_fd_from_transport`, `_extract_reader_fd`, and `_extract_writer_fd` helpers
+  following the design doc Section 13.6 integration pattern
 - Added `stream_backend` parametrized fixture to `conftest.py` with
   `pytest.mark.skipif` for Rust availability
 - Parametrized 3 end-to-end pipeline tests (6 test variants: 3 Python +
@@ -214,8 +213,8 @@ Lessons learned:
 - Ruff PLR0911 (max return statements) catches guard-clause-heavy helper
   functions — extract shared traversal logic to stay under the limit
 - The `_fd_from_transport` pattern (walking
-  `transport → get_extra_info('pipe') → fileno()`) is robust against
-  missing attributes at any level when using `getattr` with `None` defaults
+  `transport → get_extra_info('pipe') → fileno()`) is robust against missing
+  attributes at any level when using `getattr` with `None` defaults
 - Markdown linter for this project requires indented code blocks, not fenced
 
 ## Context and orientation
@@ -287,12 +286,11 @@ Add three new functions to `cuprum/_pipeline_streams.py`:
 
 1. **`_extract_reader_fd(reader) -> int | None`** — extract the raw file
    descriptor from an `asyncio.StreamReader` by accessing the underlying
-   transport's pipe object. Returns `None` if extraction fails for any
-   reason.
+   transport's pipe object. Returns `None` if extraction fails for any reason.
 
 2. **`_extract_writer_fd(writer) -> int | None`** — extract the raw file
-   descriptor from an `asyncio.StreamWriter` via its transport. Returns
-   `None` if extraction fails.
+   descriptor from an `asyncio.StreamWriter` via its transport. Returns `None`
+   if extraction fails.
 
 3. **`_pump_stream_dispatch(reader, writer) -> None`** — async dispatch
    function following the design doc Section 13.6 pseudocode:
@@ -367,8 +365,8 @@ implementations reusing the existing pipeline test infrastructure.
 
 ### Stage E: Update `cuprum/_testing.py`
 
-Add re-exports for `_pump_stream_dispatch` so that future tests can access
-the dispatch function through the test-only surface.
+Add re-exports for `_pump_stream_dispatch` so that future tests can access the
+dispatch function through the test-only surface.
 
 ### Stage F: Update documentation
 
@@ -394,22 +392,21 @@ All commands run from `/home/user/project` unless noted.
 
 **Step A: Wire the dispatch function.** Add `_extract_reader_fd`,
 `_extract_writer_fd`, and `_pump_stream_dispatch` to
-`cuprum/_pipeline_streams.py`. Modify `_create_pipe_tasks` to use the
-dispatch function.
+`cuprum/_pipeline_streams.py`. Modify `_create_pipe_tasks` to use the dispatch
+function.
 
 Verify with:
 
     python -c "from cuprum._pipeline_streams import _pump_stream_dispatch; print('ok')"
 
-**Step B: Create the fixture.** Add `stream_backend` to
-`conftest.py`.
+**Step B: Create the fixture.** Add `stream_backend` to `conftest.py`.
 
 Verify with:
 
     make test
 
-**Step C: Parametrize tests.** Add `stream_backend` parameter to 3 tests
-in `test_pipeline.py`.
+**Step C: Parametrize tests.** Add `stream_backend` parameter to 3 tests in
+`test_pipeline.py`.
 
 Verify with:
 
@@ -534,7 +531,7 @@ failed step. No special rollback needed; git provides recovery.
 
 ### New fixture in `conftest.py`
 
-    @pytest.fixture(params=[...])
+    @pytest.fixture(params=[…])
     def stream_backend(
         request: pytest.FixtureRequest,
         monkeypatch: pytest.MonkeyPatch,
