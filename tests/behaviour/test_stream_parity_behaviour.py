@@ -201,18 +201,31 @@ def when_run_sync(
 # -- Then steps ---------------------------------------------------------------
 
 
-@then("the stdout is empty")
-def then_stdout_empty(pipeline_result: PipelineResult) -> None:
-    """Assert that pipeline stdout is an empty string.
+def _assert_stdout_matches(
+    pipeline_result: PipelineResult,
+    expected: str,
+    description: str,
+) -> None:
+    """Assert that pipeline stdout matches the expected value.
 
     Parameters
     ----------
     pipeline_result : PipelineResult
         The result from pipeline execution.
+    expected : str
+        The expected stdout content.
+    description : str
+        Human-readable description of the payload for error messages.
     """
-    assert pipeline_result.stdout == "", (
-        f"expected empty stdout, got {pipeline_result.stdout!r}"
+    assert pipeline_result.stdout == expected, (
+        f"expected {description} to survive pipeline intact"
     )
+
+
+@then("the stdout is empty")
+def then_stdout_empty(pipeline_result: PipelineResult) -> None:
+    """Assert that pipeline stdout is an empty string."""
+    _assert_stdout_matches(pipeline_result, "", "empty stdout")
 
 
 @then("the pipeline succeeded")
@@ -232,16 +245,8 @@ def then_pipeline_ok(pipeline_result: PipelineResult) -> None:
 
 @then("the stdout matches the expected UTF-8 payload")
 def then_stdout_utf8(pipeline_result: PipelineResult) -> None:
-    """Assert that pipeline stdout matches the UTF-8 stress payload.
-
-    Parameters
-    ----------
-    pipeline_result : PipelineResult
-        The result from pipeline execution.
-    """
-    assert pipeline_result.stdout == _UTF8_PAYLOAD, (
-        "expected UTF-8 payload to survive pipeline intact"
-    )
+    """Assert that pipeline stdout matches the UTF-8 stress payload."""
+    _assert_stdout_matches(pipeline_result, _UTF8_PAYLOAD, "UTF-8 payload")
 
 
 @then("the pipeline completed without hanging")
@@ -264,13 +269,5 @@ def then_no_hang(pipeline_result: PipelineResult) -> None:
 
 @then("the stdout matches the expected large payload")
 def then_stdout_large(pipeline_result: PipelineResult) -> None:
-    """Assert that pipeline stdout matches the 1 MB payload.
-
-    Parameters
-    ----------
-    pipeline_result : PipelineResult
-        The result from pipeline execution.
-    """
-    assert pipeline_result.stdout == _LARGE_PAYLOAD, (
-        "expected 1 MB payload to survive pipeline intact"
-    )
+    """Assert that pipeline stdout matches the 1 MB payload."""
+    _assert_stdout_matches(pipeline_result, _LARGE_PAYLOAD, "1 MB payload")

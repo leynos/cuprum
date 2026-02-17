@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import typing as typ
 
+import pytest
+
 from cuprum import sh
 from tests.helpers.parity import (
     parity_catalogue,
@@ -75,66 +77,49 @@ def test_empty_pipeline_produces_empty_stdout(
     assert all(s.exit_code == 0 for s in result.stages)
 
 
-def test_utf8_two_byte_chars_survive_pipeline(
+@pytest.mark.parametrize(
+    ("char", "count", "description"),
+    [
+        pytest.param(
+            "\u00e9",
+            5000,
+            "2-byte UTF-8 characters (Latin accented)",
+            id="utf8-2byte",
+        ),
+        pytest.param(
+            "\u2603",
+            3000,
+            "3-byte UTF-8 characters (snowman)",
+            id="utf8-3byte",
+        ),
+        pytest.param(
+            "\U0001f600",
+            2500,
+            "4-byte UTF-8 characters (emoji)",
+            id="utf8-4byte",
+        ),
+    ],
+)
+def test_utf8_chars_survive_pipeline(
     stream_backend: str,
+    char: str,
+    count: int,
+    description: str,
 ) -> None:
-    """Pipeline preserves 2-byte UTF-8 characters (Latin accented).
+    """Pipeline preserves {description}.
 
     Parameters
     ----------
     stream_backend : str
         The active stream backend (injected by fixture).
+    char : str
+        The Unicode character to repeat.
+    count : int
+        Number of repetitions.
+    description : str
+        Human-readable description of the character class.
     """
-    # 5000 repetitions of e-acute (2 bytes each) = 10 KB.
-    payload = "\u00e9" * 5000
-    script = (
-        "import sys; "
-        f"sys.stdout.buffer.write({payload!r}.encode('utf-8')); "
-        "sys.stdout.buffer.flush()"
-    )
-    pipeline, allowlist = _build_pipeline(script)
-    result = run_parity_pipeline(pipeline, allowlist)
-
-    assert result.stdout == payload
-    assert result.ok is True
-
-
-def test_utf8_three_byte_chars_survive_pipeline(
-    stream_backend: str,
-) -> None:
-    """Pipeline preserves 3-byte UTF-8 characters (snowman).
-
-    Parameters
-    ----------
-    stream_backend : str
-        The active stream backend (injected by fixture).
-    """
-    # 3000 snowmen (3 bytes each) = 9 KB, exceeding _READ_SIZE.
-    payload = "\u2603" * 3000
-    script = (
-        "import sys; "
-        f"sys.stdout.buffer.write({payload!r}.encode('utf-8')); "
-        "sys.stdout.buffer.flush()"
-    )
-    pipeline, allowlist = _build_pipeline(script)
-    result = run_parity_pipeline(pipeline, allowlist)
-
-    assert result.stdout == payload
-    assert result.ok is True
-
-
-def test_utf8_four_byte_chars_survive_pipeline(
-    stream_backend: str,
-) -> None:
-    """Pipeline preserves 4-byte UTF-8 characters (emoji).
-
-    Parameters
-    ----------
-    stream_backend : str
-        The active stream backend (injected by fixture).
-    """
-    # 2500 grinning face emoji (4 bytes each) = 10 KB.
-    payload = "\U0001f600" * 2500
+    payload = char * count
     script = (
         "import sys; "
         f"sys.stdout.buffer.write({payload!r}.encode('utf-8')); "
@@ -200,47 +185,31 @@ def test_broken_pipe_downstream_early_exit(
     assert len(result.stages) == 2
 
 
-def test_backpressure_large_payload_three_stages(
+@pytest.mark.parametrize(
+    "stages",
+    [pytest.param(2, id="two-stages"), pytest.param(3, id="three-stages")],
+)
+def test_backpressure_large_payload(
     stream_backend: str,
+    stages: int,
 ) -> None:
-    """Three-stage pipeline preserves a 1 MB payload.
+    """Pipeline with {stages} stages preserves a 1 MB payload.
 
     Parameters
     ----------
     stream_backend : str
         The active stream backend (injected by fixture).
+    stages : int
+        Number of pipeline stages to use.
     """
     size = 1024 * 1024
     # Generate payload inside the subprocess to stay within the OS
     # command-line length limit.
     script = f"import sys; sys.stdout.write('x' * {size})"
-    pipeline, allowlist = _build_pipeline(script, stages=3)
+    pipeline, allowlist = _build_pipeline(script, stages=stages)
     result = run_parity_pipeline(pipeline, allowlist)
 
     assert result.stdout == "x" * size
     assert result.ok is True
-    assert len(result.stages) == 3
-    assert all(s.exit_code == 0 for s in result.stages)
-
-
-def test_backpressure_large_payload_two_stages(
-    stream_backend: str,
-) -> None:
-    """Two-stage pipeline preserves a 1 MB payload.
-
-    Parameters
-    ----------
-    stream_backend : str
-        The active stream backend (injected by fixture).
-    """
-    size = 1024 * 1024
-    # Generate payload inside the subprocess to stay within the OS
-    # command-line length limit.
-    script = f"import sys; sys.stdout.write('x' * {size})"
-    pipeline, allowlist = _build_pipeline(script)
-    result = run_parity_pipeline(pipeline, allowlist)
-
-    assert result.stdout == "x" * size
-    assert result.ok is True
-    assert len(result.stages) == 2
+    assert len(result.stages) == stages
     assert all(s.exit_code == 0 for s in result.stages)

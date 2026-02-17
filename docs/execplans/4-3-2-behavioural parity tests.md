@@ -127,12 +127,11 @@ Hard invariants that must hold throughout implementation:
   arguments. UTF-8 payloads (under 21 KB) were unaffected.
 
 - Observation: pytest requires unique basenames for test modules across
-  the entire project. Having both
-  `cuprum/unittests/test_stream_parity.py` and
-  `tests/behaviour/test_stream_parity.py` caused an import collision
-  error. Evidence: `make test` reported import file mismatch. Impact:
-  Renamed the BDD test file to `test_stream_parity_behaviour.py`
-  following the existing naming convention (`test_*_behaviour.py`).
+  the entire project. Having both `cuprum/unittests/test_stream_parity.py` and
+  `tests/behaviour/test_stream_parity.py` caused an import collision error.
+  Evidence: `make test` reported import file mismatch. Impact: Renamed the BDD
+  test file to `test_stream_parity_behaviour.py` following the existing naming
+  convention (`test_*_behaviour.py`).
 
 ## Decision log
 
