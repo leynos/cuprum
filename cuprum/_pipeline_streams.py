@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses as dc
 import sys
 import typing as typ
 
-from cuprum._streams import _consume_stream, _pump_stream, _StreamConfig
+from cuprum._backend import StreamBackend, get_stream_backend
+from cuprum._streams import (
+    _close_stream_writer,
+    _consume_stream,
+    _pump_stream,
+    _StreamConfig,
+)
 
 if typ.TYPE_CHECKING:
     from cuprum._pipeline_internals import _StageObservation
@@ -155,13 +162,110 @@ def _create_stage_capture_tasks(
     return stderr_task, stdout_task
 
 
+def _fd_from_transport(transport: object | None) -> int | None:
+    """Extract a raw FD via ``transport.get_extra_info('pipe').fileno()``."""
+    get_extra = getattr(transport, "get_extra_info", None)
+    if get_extra is None:
+        return None
+    pipe: object | None = get_extra("pipe")
+    fileno = getattr(pipe, "fileno", None) if pipe is not None else None
+    if fileno is None:
+        return None
+    try:
+        return int(fileno())
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def _extract_stream_fd(
+    stream: asyncio.StreamReader | asyncio.StreamWriter | None,
+) -> int | None:
+    """Extract a raw FD from an asyncio stream via its transport."""
+    if stream is None:
+        return None
+    transport = getattr(stream, "transport", None)
+    if transport is None:
+        transport = getattr(stream, "_transport", None)
+    return _fd_from_transport(transport)
+
+
+def _extract_reader_fd(reader: asyncio.StreamReader | None) -> int | None:
+    """Extract the raw FD from an asyncio ``StreamReader``."""
+    return _extract_stream_fd(reader)
+
+
+def _extract_writer_fd(writer: asyncio.StreamWriter | None) -> int | None:
+    """Extract the raw FD from an asyncio ``StreamWriter``."""
+    return _extract_stream_fd(writer)
+
+
+async def _drain_reader_buffer(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter | None,
+) -> None:
+    """Flush bytes already buffered in *reader* to *writer*."""
+    # StreamReader._buffer is a CPython-private bytearray populated by the
+    # event loop before our coroutine is scheduled.  The Rust pump reads from
+    # the raw FD and would skip those bytes, so we flush them here first.
+    # getattr gracefully degrades to a no-op if the attribute is absent (e.g.
+    # on PyPy or future CPython versions that rename or remove _buffer).
+    buffered: bytearray | None = getattr(reader, "_buffer", None)
+    if not buffered:
+        return
+    if writer is not None:
+        try:
+            writer.write(bytes(buffered))
+            await writer.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+    # Clear unconditionally so the Rust pump does not re-read stale data.
+    buffered.clear()
+
+
+async def _pump_stream_dispatch(
+    reader: asyncio.StreamReader | None,
+    writer: asyncio.StreamWriter | None,
+) -> None:
+    """Route inter-stage pump to the Rust or Python implementation."""
+    if reader is None:
+        await _pump_stream(reader, writer)
+        return
+
+    backend = get_stream_backend()
+    if backend is StreamBackend.RUST:
+        reader_fd = _extract_reader_fd(reader)
+        writer_fd = _extract_writer_fd(writer)
+        if reader_fd is not None and writer_fd is not None:
+            # Flush any bytes asyncio already buffered in the StreamReader
+            # before the Rust pump takes over the raw file descriptor.
+            await _drain_reader_buffer(reader, writer)
+
+            from cuprum._streams_rs import rust_pump_stream
+
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                rust_pump_stream,
+                reader_fd,
+                writer_fd,
+            )
+            # The Rust pump closes the writer FD on return (drop semantics).
+            # Suppress OSError so the asyncio transport close does not raise
+            # EBADF when the descriptor is already gone.
+            with contextlib.suppress(OSError):
+                await _close_stream_writer(writer)
+            return
+
+    await _pump_stream(reader, writer)
+
+
 def _create_pipe_tasks(
     processes: list[asyncio.subprocess.Process],
 ) -> list[asyncio.Task[None]]:
     """Create streaming tasks between adjacent pipeline stages."""
     return [
         asyncio.create_task(
-            _pump_stream(
+            _pump_stream_dispatch(
                 processes[idx].stdout,
                 processes[idx + 1].stdin,
             ),
