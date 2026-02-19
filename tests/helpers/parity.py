@@ -91,9 +91,7 @@ def utf8_stress_payload(n_chars: int = 32768) -> str:
         A string containing a mix of 1, 2, 3, and 4-byte UTF-8
         characters.
     """
-    # S311 suppressed: not security-sensitive — deterministic seed
-    # for test reproducibility only.
-    rng = random.Random(_SEED)  # noqa: S311
+    rng = random.Random(_SEED)  # noqa: S311 — not security-sensitive; deterministic test seed
     chars: list[str] = []
     for i in range(n_chars):
         pool = _POOLS[i % len(_POOLS)]
