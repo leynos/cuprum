@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import typing as typ
 
+import pytest
 from pytest_bdd import given, scenario, then, when
 
 from cuprum import sh
@@ -22,10 +23,31 @@ if typ.TYPE_CHECKING:
     from cuprum.program import Program
     from cuprum.sh import Pipeline, PipelineResult
 
-# Deterministic payloads computed once at import time.
-_UTF8_PAYLOAD = utf8_stress_payload()
 _LARGE_PAYLOAD_SIZE = 1024 * 1024
-_LARGE_PAYLOAD = "x" * _LARGE_PAYLOAD_SIZE
+
+
+@pytest.fixture(scope="session")
+def utf8_payload() -> str:
+    """Session-scoped UTF-8 stress payload.
+
+    Returns
+    -------
+    str
+        Deterministic multi-byte UTF-8 string exceeding 80 KB encoded.
+    """
+    return utf8_stress_payload()
+
+
+@pytest.fixture(scope="session")
+def large_payload() -> str:
+    """Session-scoped 1 MB payload of repeated ``x`` characters.
+
+    Returns
+    -------
+    str
+        A string of 1,048,576 ``x`` characters.
+    """
+    return "x" * _LARGE_PAYLOAD_SIZE
 
 
 # -- Scenarios ----------------------------------------------------------------
@@ -36,7 +58,13 @@ _LARGE_PAYLOAD = "x" * _LARGE_PAYLOAD_SIZE
     "Empty stream produces identical output across backends",
 )
 def test_empty_stream_parity(stream_backend: str) -> None:
-    """Empty stream produces identical output across backends."""
+    """Empty stream produces identical output across backends.
+
+    Parameters
+    ----------
+    stream_backend : str
+        The active stream backend (injected by fixture).
+    """
 
 
 @scenario(
@@ -44,7 +72,13 @@ def test_empty_stream_parity(stream_backend: str) -> None:
     "Multi-byte UTF-8 survives pipeline across backends",
 )
 def test_utf8_parity(stream_backend: str) -> None:
-    """Multi-byte UTF-8 survives pipeline across backends."""
+    """Multi-byte UTF-8 survives pipeline across backends.
+
+    Parameters
+    ----------
+    stream_backend : str
+        The active stream backend (injected by fixture).
+    """
 
 
 @scenario(
@@ -52,7 +86,13 @@ def test_utf8_parity(stream_backend: str) -> None:
     "Broken pipe is handled gracefully across backends",
 )
 def test_broken_pipe_parity(stream_backend: str) -> None:
-    """Broken pipe is handled gracefully across backends."""
+    """Broken pipe is handled gracefully across backends.
+
+    Parameters
+    ----------
+    stream_backend : str
+        The active stream backend (injected by fixture).
+    """
 
 
 @scenario(
@@ -60,7 +100,13 @@ def test_broken_pipe_parity(stream_backend: str) -> None:
     "Large payload survives backpressure across backends",
 )
 def test_backpressure_parity(stream_backend: str) -> None:
-    """Large payload survives backpressure across backends."""
+    """Large payload survives backpressure across backends.
+
+    Parameters
+    ----------
+    stream_backend : str
+        The active stream backend (injected by fixture).
+    """
 
 
 # -- Given steps --------------------------------------------------------------
@@ -91,8 +137,15 @@ def given_empty_stream() -> tuple[Pipeline, frozenset[Program]]:
     "a pipeline producing multi-byte UTF-8 data",
     target_fixture="parity_pipeline",
 )
-def given_utf8_pipeline() -> tuple[Pipeline, frozenset[Program]]:
+def given_utf8_pipeline(
+    utf8_payload: str,
+) -> tuple[Pipeline, frozenset[Program]]:
     """Build a pipeline that emits multi-byte UTF-8 data.
+
+    Parameters
+    ----------
+    utf8_payload : str
+        Session-scoped UTF-8 stress payload fixture.
 
     Returns
     -------
@@ -107,7 +160,7 @@ def given_utf8_pipeline() -> tuple[Pipeline, frozenset[Program]]:
     # buffering/encoding layer adding any transformations.
     script = (
         "import sys; "
-        f"sys.stdout.buffer.write({_UTF8_PAYLOAD!r}.encode('utf-8')); "
+        f"sys.stdout.buffer.write({utf8_payload!r}.encode('utf-8')); "
         "sys.stdout.buffer.flush()"
     )
     pipeline = python_cmd("-c", script) | cat_cmd()
@@ -224,7 +277,13 @@ def _assert_stdout_matches(
 
 @then("the stdout is empty")
 def then_stdout_empty(pipeline_result: PipelineResult) -> None:
-    """Assert that pipeline stdout is an empty string."""
+    """Assert that pipeline stdout is an empty string.
+
+    Parameters
+    ----------
+    pipeline_result : PipelineResult
+        The result from pipeline execution.
+    """
     _assert_stdout_matches(pipeline_result, "", "empty stdout")
 
 
@@ -244,9 +303,20 @@ def then_pipeline_ok(pipeline_result: PipelineResult) -> None:
 
 
 @then("the stdout matches the expected UTF-8 payload")
-def then_stdout_utf8(pipeline_result: PipelineResult) -> None:
-    """Assert that pipeline stdout matches the UTF-8 stress payload."""
-    _assert_stdout_matches(pipeline_result, _UTF8_PAYLOAD, "UTF-8 payload")
+def then_stdout_utf8(
+    pipeline_result: PipelineResult,
+    utf8_payload: str,
+) -> None:
+    """Assert that pipeline stdout matches the UTF-8 stress payload.
+
+    Parameters
+    ----------
+    pipeline_result : PipelineResult
+        The result from pipeline execution.
+    utf8_payload : str
+        Session-scoped UTF-8 stress payload fixture.
+    """
+    _assert_stdout_matches(pipeline_result, utf8_payload, "UTF-8 payload")
 
 
 @then("the pipeline completed without hanging")
@@ -267,7 +337,33 @@ def then_no_hang(pipeline_result: PipelineResult) -> None:
     assert len(pipeline_result.stages) >= 2, "pipeline should have at least two stages"
 
 
+@then("the downstream stdout matches the first 10 bytes")
+def then_stdout_first_10(pipeline_result: PipelineResult) -> None:
+    """Assert that pipeline stdout contains the first 10 bytes from upstream.
+
+    The downstream reads exactly 10 bytes from the upstream's 64 KB
+    output before exiting.
+
+    Parameters
+    ----------
+    pipeline_result : PipelineResult
+        The result from pipeline execution.
+    """
+    _assert_stdout_matches(pipeline_result, "A" * 10, "broken-pipe first 10 bytes")
+
+
 @then("the stdout matches the expected large payload")
-def then_stdout_large(pipeline_result: PipelineResult) -> None:
-    """Assert that pipeline stdout matches the 1 MB payload."""
-    _assert_stdout_matches(pipeline_result, _LARGE_PAYLOAD, "1 MB payload")
+def then_stdout_large(
+    pipeline_result: PipelineResult,
+    large_payload: str,
+) -> None:
+    """Assert that pipeline stdout matches the 1 MB payload.
+
+    Parameters
+    ----------
+    pipeline_result : PipelineResult
+        The result from pipeline execution.
+    large_payload : str
+        Session-scoped 1 MB payload fixture.
+    """
+    _assert_stdout_matches(pipeline_result, large_payload, "1 MB payload")

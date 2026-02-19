@@ -24,10 +24,11 @@ through end-to-end pipeline execution with backend selection via the
 
 After this change, a developer can:
 
-1. Run `make test` and observe new BDD scenarios (in
-   `tests/behaviour/test_stream_parity.py`) and unit tests (in
-   `cuprum/unittests/test_stream_parity.py`) that execute identical edge-case
-   scenarios through end-to-end pipeline execution under both backends.
+1. Run `make test` and observe new behaviour-driven development (BDD)
+   scenarios (in `tests/behaviour/test_stream_parity_behaviour.py`) and unit
+   tests (in `cuprum/unittests/test_stream_parity.py`) that execute identical
+   edge-case scenarios through end-to-end pipeline execution under both
+   backends.
 2. Confirm that both backends produce identical `PipelineResult.stdout`,
    `PipelineResult.ok`, and per-stage exit codes for every edge case.
 3. Read updated documentation in `docs/users-guide.md` describing the
@@ -128,10 +129,10 @@ Hard invariants that must hold throughout implementation:
 
 - Observation: pytest requires unique basenames for test modules across
   the entire project. Having both `cuprum/unittests/test_stream_parity.py` and
-  `tests/behaviour/test_stream_parity.py` caused an import collision error.
-  Evidence: `make test` reported import file mismatch. Impact: Renamed the BDD
-  test file to `test_stream_parity_behaviour.py` following the existing naming
-  convention (`test_*_behaviour.py`).
+  `tests/behaviour/test_stream_parity_behaviour.py` caused an import collision
+  error. Evidence: `make test` reported import file mismatch. Impact: Renamed
+  the BDD test file to `test_stream_parity_behaviour.py` following the existing
+  naming convention (`test_*_behaviour.py`).
 
 ## Decision log
 
@@ -172,7 +173,7 @@ Hard invariants that must hold throughout implementation:
 
 - **Decision**: UTF-8 stress payload uses a deterministic generator with
   fixed seed cycling through 1, 2, 3, and 4-byte characters
-  - Rationale: Reproducible across runs. Encoded size exceeds 32 KB to
+  - Rationale: Reproducible across runs. Encoded size exceeds 80 KB to
     guarantee chunk boundary splits in both the Python path (4096-byte reads)
     and Rust path (65536-byte reads).
   - Date: 2026-02-17
@@ -304,15 +305,15 @@ Create `tests/helpers/parity.py` with shared infrastructure:
 
 - `parity_catalogue()` -- builds catalogue with Python + cat + echo
 - `run_parity_pipeline(pipeline, allowlist)` -- runs within scoped config
-- `utf8_stress_payload(n_chars=8192)` -- deterministic multi-byte UTF-8
+- `utf8_stress_payload(n_chars=32768)` -- deterministic multi-byte UTF-8
   string using fixed seed `random.Random(20260217)`, cycling through 1, 2, 3,
-  and 4-byte characters, encoded size exceeding 32 KB
+  and 4-byte characters, encoded size exceeding 80 KB
 
 ### Stage D: Implement BDD step definitions
 
-Create `tests/behaviour/test_stream_parity.py` with `@scenario` decorators and
-`@given/@when/@then` step implementations. Each test function accepts the
-`stream_backend` fixture. Edge case implementations:
+Create `tests/behaviour/test_stream_parity_behaviour.py` with `@scenario`
+decorators and `@given/@when/@then` step implementations. Each test function
+accepts the `stream_backend` fixture. Edge case implementations:
 
 - **Empty**: `python -c "pass"` | `cat`
 - **UTF-8**: Python script writing `utf8_stress_payload()` | `cat`
@@ -346,7 +347,8 @@ All commands run from `/home/user/project`.
 
 **Step C1: Create parity helpers.** Write `tests/helpers/parity.py`.
 
-**Step D1: Create BDD steps.** Write `tests/behaviour/test_stream_parity.py`.
+**Step D1: Create BDD steps.** Write
+`tests/behaviour/test_stream_parity_behaviour.py`.
 
 **Step E1: Create unit tests.** Write `cuprum/unittests/test_stream_parity.py`.
 
@@ -395,7 +397,7 @@ prevents cross-test pollution.
 ### Files to create (4)
 
 1. `tests/features/stream_parity.feature` -- BDD feature file
-2. `tests/behaviour/test_stream_parity.py` -- BDD step implementations
+2. `tests/behaviour/test_stream_parity_behaviour.py` -- BDD step implementations
 3. `tests/helpers/parity.py` -- Shared parity test helpers
 4. `cuprum/unittests/test_stream_parity.py` -- Unit tests
 
@@ -437,7 +439,7 @@ prevents cross-test pollution.
     ) -> PipelineResult:
         """Execute a pipeline within a scoped allowlist."""
 
-    def utf8_stress_payload(n_chars: int = 8192) -> str:
+    def utf8_stress_payload(n_chars: int = 32768) -> str:
         """Generate a deterministic multi-byte UTF-8 stress payload."""
 
 ### Dependencies

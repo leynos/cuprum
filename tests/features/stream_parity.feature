@@ -19,6 +19,7 @@ Feature: Stream backend parity for edge cases
     Given a pipeline with an early-exiting downstream
     When I run the parity pipeline synchronously
     Then the pipeline completed without hanging
+    And the downstream stdout matches the first 10 bytes
 
   Scenario: Large payload survives backpressure across backends
     Given a three stage pipeline with a one megabyte payload

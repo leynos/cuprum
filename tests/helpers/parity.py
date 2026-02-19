@@ -71,19 +71,19 @@ def run_parity_pipeline(
         return pipeline.run_sync()
 
 
-def utf8_stress_payload(n_chars: int = 8192) -> str:
+def utf8_stress_payload(n_chars: int = 32768) -> str:
     """Generate a deterministic multi-byte UTF-8 stress payload.
 
     Cycles through 1-byte ASCII, 2-byte Latin, 3-byte symbols, and
     4-byte emoji characters in round-robin order. Uses a fixed seed
     for reproducibility. The resulting string encodes to more than
-    32 KB of UTF-8, ensuring chunk boundary splits in both the Python
-    path (4096-byte reads) and Rust path (65536-byte reads).
+    80 KB of UTF-8, ensuring chunk boundary splits in both the Python
+    path (4096-byte reads) and the Rust path (65536-byte reads).
 
     Parameters
     ----------
     n_chars : int
-        Number of characters to generate. Defaults to ``8192``.
+        Number of characters to generate. Defaults to ``32768``.
 
     Returns
     -------
@@ -91,6 +91,8 @@ def utf8_stress_payload(n_chars: int = 8192) -> str:
         A string containing a mix of 1, 2, 3, and 4-byte UTF-8
         characters.
     """
+    # S311 suppressed: not security-sensitive — deterministic seed
+    # for test reproducibility only.
     rng = random.Random(_SEED)  # noqa: S311
     chars: list[str] = []
     for i in range(n_chars):
