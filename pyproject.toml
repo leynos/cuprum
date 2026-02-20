@@ -47,7 +47,9 @@ select = [
     "TID",      # Some good import practices
     "TC",       # Enforce importing certain types in a TYPE_CHECKING block
     "PTH",      # Use pathlib instead of os.path
-    "TD",       # Be diligent with TODO comments
+    # "TD" lints disabled: they require author/issue links on FIXME/TODO tags,
+    # which contradicts the project convention of bare FIXME: on noqa comments.
+    # "TD",
     "A",        # detect shadowed builtins
     "BLE",      # disallow catch-all exceptions
     "S",        # disallow things like "exec"; also restricts "assert" but I just NOQA it when I really need it
