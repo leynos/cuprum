@@ -198,6 +198,12 @@ class TestStreamParity:
         assert result.stdout == "A" * 10, (
             "downstream should have captured the first 10 bytes from upstream"
         )
+        assert result.ok is True, (
+            "pipeline should complete successfully despite broken pipe"
+        )
+        assert all(s.exit_code in {0, 141} for s in result.stages), (
+            "stages should exit cleanly or with SIGPIPE (141)"
+        )
 
     @pytest.mark.parametrize(
         "stages",
