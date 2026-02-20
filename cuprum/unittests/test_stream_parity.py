@@ -116,7 +116,7 @@ class TestStreamParity:
         count: int,
         description: str,
     ) -> None:
-        """Pipeline preserves {description}.
+        """Pipeline preserves specific UTF-8 character classes.
 
         Parameters
         ----------
@@ -214,7 +214,7 @@ class TestStreamParity:
         stream_backend: str,
         stages: int,
     ) -> None:
-        """Pipeline with {stages} stages preserves a 1 MB payload.
+        """Pipeline preserves a 1 MB payload under backpressure.
 
         Parameters
         ----------
