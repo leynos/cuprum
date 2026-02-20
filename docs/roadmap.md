@@ -149,7 +149,7 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 - [x] 4.3.1. Parametrize existing stream unit tests (`test_pipeline.py`) to run
   against both Python and Rust pathways using a `stream_backend` fixture; skip
   Rust tests when the extension is unavailable.
-- [ ] 4.3.2. Add behavioural parity tests verifying identical output for edge
+- [x] 4.3.2. Add behavioural parity tests verifying identical output for edge
   cases: empty streams, partial UTF-8 sequences at chunk boundaries, broken
   pipes, and backpressure scenarios.
 - [ ] 4.3.3. Create integration tests for pathway selection logic including
