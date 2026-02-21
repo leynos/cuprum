@@ -146,6 +146,27 @@ def given_fd_extraction_fails(
     return call_counter
 
 
+def _make_echo_python_pipeline(
+    python_code: str,
+) -> tuple[sh.Pipeline, frozenset[Program]]:
+    """Build the shared echo-to-python pipeline for backend selection tests."""
+    _, python_program = python_catalogue()
+    catalogue = combine_programs_into_catalogue(
+        ECHO,
+        python_program,
+        project_name="backend-pipeline-tests",
+    )
+    echo = sh.make(ECHO, catalogue=catalogue)
+    python = sh.make(python_program, catalogue=catalogue)
+
+    pipeline = echo("-n", "hello") | python(
+        "-c",
+        python_code,
+    )
+    allowlist = frozenset([ECHO, python_program])
+    return pipeline, allowlist
+
+
 @given(
     "a simple two stage uppercase pipeline",
     target_fixture="pipeline_under_test",
@@ -158,21 +179,9 @@ def given_uppercase_pipeline() -> tuple[sh.Pipeline, frozenset[Program]]:
     tuple[sh.Pipeline, frozenset[Program]]
         The pipeline and the allowlist of programs required.
     """
-    _, python_program = python_catalogue()
-    catalogue = combine_programs_into_catalogue(
-        ECHO,
-        python_program,
-        project_name="backend-pipeline-tests",
-    )
-    echo = sh.make(ECHO, catalogue=catalogue)
-    python = sh.make(python_program, catalogue=catalogue)
-
-    pipeline = echo("-n", "hello") | python(
-        "-c",
+    return _make_echo_python_pipeline(
         "import sys; sys.stdout.write(sys.stdin.read().upper())",
     )
-    allowlist = frozenset([ECHO, python_program])
-    return pipeline, allowlist
 
 
 @given(
@@ -187,21 +196,9 @@ def given_short_lived_downstream_pipeline() -> tuple[sh.Pipeline, frozenset[Prog
     tuple[sh.Pipeline, frozenset[Program]]
         The pipeline and the allowlist of programs required.
     """
-    _, python_program = python_catalogue()
-    catalogue = combine_programs_into_catalogue(
-        ECHO,
-        python_program,
-        project_name="backend-pipeline-tests",
-    )
-    echo = sh.make(ECHO, catalogue=catalogue)
-    python = sh.make(python_program, catalogue=catalogue)
-
-    pipeline = echo("-n", "hello") | python(
-        "-c",
+    return _make_echo_python_pipeline(
         "import sys; sys.stdout.write('OK')",
     )
-    allowlist = frozenset([ECHO, python_program])
-    return pipeline, allowlist
 
 
 # -- When steps ---------------------------------------------------------------
