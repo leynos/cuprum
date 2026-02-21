@@ -4,7 +4,7 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`, and
 `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
-Status: DRAFT
+Status: COMPLETE
 
 Roadmap reference: `docs/roadmap.md` item `4.3.3`.
 
@@ -83,12 +83,13 @@ and roadmap item `4.3.3` is marked done.
 ## Progress
 
 - [x] (2026-02-20) Draft ExecPlan for roadmap item 4.3.3.
-- [ ] Stage A: Confirm acceptance criteria against existing test coverage.
-- [ ] Stage B: Add failing behavioural and unit tests for pathway selection.
-- [ ] Stage C: Implement minimal fixes (if required) and make tests pass.
-- [ ] Stage D: Update design doc and users guide with confirmed behaviour.
-- [ ] Stage E: Mark roadmap item 4.3.3 done.
-- [ ] Stage F: Run full quality gates and record evidence.
+- [x] (2026-02-21) Stage A: Confirmed acceptance criteria and existing gaps.
+- [x] (2026-02-21) Stage B: Added behavioural and unit pathway-selection tests.
+- [x] (2026-02-21) Stage C: Adjusted failing behavioural case to avoid a
+  deadlocking fixture pipeline in forced-rust-unavailable mode.
+- [x] (2026-02-21) Stage D: Updated design doc and users guide semantics.
+- [x] (2026-02-21) Stage E: Marked roadmap item 4.3.3 as done.
+- [x] (2026-02-21) Stage F: Ran full quality gates and recorded results.
 
 ## Surprises & Discoveries
 
@@ -102,6 +103,13 @@ and roadmap item `4.3.3` is marked done.
   Evidence: `_clear_backend_cache` clears both caches before each test.
   Impact: new tests should rely on this fixture where possible and only add
   explicit cache clears in self-contained BDD steps.
+
+- Observation: forcing unavailable Rust in a pipeline where the downstream
+  blocks on stdin caused a pytest-timeout during integration testing.
+  Evidence: `test_pipeline_forced_rust_unavailable_error` initially timed out
+  at 30 seconds when using the uppercase downstream stage.
+  Impact: the behavioural scenario now uses a short-lived downstream process so
+  the pipe-task `ImportError` can surface deterministically.
 
 ## Decision Log
 
@@ -121,14 +129,42 @@ and roadmap item `4.3.3` is marked done.
   Rationale: user explicitly requested this filename.
   Date/Author: 2026-02-20 / Codex.
 
+- Decision: extend the existing backend pipeline behavioural suite instead of
+  creating a separate pathway-selection feature file.
+  Rationale: this keeps all pipeline-backend integration scenarios in one
+  place and avoids duplicate step plumbing.
+  Date/Author: 2026-02-21 / Codex.
+
 ## Outcomes & Retrospective
 
-Not started yet. This section will be completed after implementation with:
+Completed with test-first changes and no public API modifications.
 
-- final file list and net scope;
-- quality-gate evidence;
-- any divergences discovered between design intent and runtime behaviour;
-- lessons for remaining roadmap items (`4.3.4+`).
+Outcome summary:
+
+- Added unit integration coverage for `_pump_stream_dispatch` pathway
+  selection, forced fallback, and forced-rust-unavailable error handling.
+- Extended behavioural pipeline backend scenarios to cover forced fallback and
+  `ImportError` propagation when Rust is forced but unavailable.
+- Updated `docs/cuprum-design.md` and `docs/users-guide.md` with explicit
+  forced-fallback and strict forced-rust semantics.
+- Marked roadmap item `4.3.3` complete in `docs/roadmap.md`.
+
+Quality-gate evidence:
+
+- `make check-fmt`: pass.
+- `make typecheck`: pass.
+- `make lint`: pass.
+- `make test`: pass (`299 passed, 38 skipped`).
+- `make markdownlint`: pass.
+- `make nixie`: pass.
+
+Lessons learned:
+
+- Integration tests for pipe-task failures should avoid downstream commands that
+  block indefinitely on stdin when testing error propagation from the pump
+  dispatch path.
+- Cache-clearing fixtures are essential for deterministic backend-selection
+  behaviour across test processes.
 
 ## Context and orientation
 
@@ -144,15 +180,14 @@ Relevant current files and behaviours:
   unit level.
 - `tests/behaviour/test_backend_dispatcher_behaviour.py` validates dispatcher
   behaviour via BDD but does not execute pipeline pumping.
-- `tests/behaviour/test_stream_backend_pipeline.py` validates baseline pipeline
-  output across backend values but does not assert forced fallback path or
-  unavailable-Rust failure semantics at pipeline execution boundary.
+- `tests/behaviour/test_stream_backend_pipeline.py` now validates baseline
+  backend selection plus forced fallback and unavailable-Rust failure semantics
+  at the pipeline execution boundary.
 
-Gap to close for 4.3.3:
+Gap status for 4.3.3:
 
-- integration tests that explicitly validate environment overrides, forced
-  fallback behaviour, and `ImportError` propagation when Rust is forced but not
-  available.
+- Closed: integration tests now validate environment overrides, forced fallback
+  behaviour, and `ImportError` propagation when Rust is forced but unavailable.
 
 ## Plan of work
 
@@ -190,8 +225,8 @@ Each stage ends with validation; do not proceed if the current stage fails.
 1. Create behavioural integration coverage.
 
    Files:
-   `tests/features/stream_pathway_selection.feature`
-   `tests/behaviour/test_stream_pathway_selection_behaviour.py`
+   `tests/features/stream_backend_pipeline.feature`
+   `tests/behaviour/test_stream_backend_pipeline.py`
 
    Scenarios to add:
    - environment override to `python` routes pipeline execution through Python
@@ -215,9 +250,11 @@ Each stage ends with validation; do not proceed if the current stage fails.
 3. Run targeted tests and confirm fail-first behaviour.
 
        set -o pipefail
-       pytest cuprum/unittests/test_pipeline_stream_backend_selection.py -q \
+       UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run pytest -q \
+         cuprum/unittests/test_pipeline_stream_backend_selection.py \
          2>&1 | tee /tmp/4-3-3-targeted-unit-pre.log
-       pytest tests/behaviour/test_stream_pathway_selection_behaviour.py -q \
+       UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run pytest -q \
+         tests/behaviour/test_stream_backend_pipeline.py \
          2>&1 | tee /tmp/4-3-3-targeted-bdd-pre.log
 
    Expected before implementation:
@@ -233,9 +270,11 @@ Each stage ends with validation; do not proceed if the current stage fails.
 5. Re-run targeted tests until green.
 
        set -o pipefail
-       pytest cuprum/unittests/test_pipeline_stream_backend_selection.py -q \
+       UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run pytest -q \
+         cuprum/unittests/test_pipeline_stream_backend_selection.py \
          2>&1 | tee /tmp/4-3-3-targeted-unit-post.log
-       pytest tests/behaviour/test_stream_pathway_selection_behaviour.py -q \
+       UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run pytest -q \
+         tests/behaviour/test_stream_backend_pipeline.py \
          2>&1 | tee /tmp/4-3-3-targeted-bdd-post.log
 
    Expected after implementation:
@@ -310,8 +349,8 @@ Quality criteria (what done means):
 Expected files to create or modify:
 
 - `docs/execplans/4-3-2-pathway-selection-integration-tests.md`
-- `tests/features/stream_pathway_selection.feature`
-- `tests/behaviour/test_stream_pathway_selection_behaviour.py`
+- `tests/features/stream_backend_pipeline.feature`
+- `tests/behaviour/test_stream_backend_pipeline.py`
 - `cuprum/unittests/test_pipeline_stream_backend_selection.py`
 - `docs/cuprum-design.md`
 - `docs/users-guide.md`
@@ -335,3 +374,10 @@ Use existing interfaces and modules only:
 - `pytest-bdd` scenario framework already used in `tests/behaviour/`.
 
 Do not introduce new dependencies or new public APIs for this roadmap item.
+
+Revision note (2026-02-21):
+
+- Updated status from `DRAFT` to `COMPLETE`.
+- Recorded actual implementation details (files, test commands, and outcomes),
+  including the behavioural timeout discovery and its mitigation.
+- Marked all progress stages complete and added final quality-gate evidence.

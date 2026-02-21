@@ -1703,11 +1703,21 @@ Cuprum selects the stream backend at runtime using the following precedence:
    - Call `is_available()` to verify functionality;
    - Cache the result for subsequent operations.
 
+3. **Pipeline pump feasibility check (dispatch-time):**
+   - For inter-stage pumping, Rust requires extractable raw file descriptors
+     for both reader and writer transports;
+   - if extraction fails for either side, dispatch falls back to Python
+     `_pump_stream()` for that transfer.
+
 This strategy ensures:
 
 - existing pure Python installations continue to work unchanged;
 - users can opt into or out of the Rust pathway explicitly;
 - Continuous Integration (CI) can test both pathways in isolation.
+
+Forced Rust mode remains strict: when `CUPRUM_STREAM_BACKEND=rust` and the
+extension is unavailable, backend resolution raises `ImportError` and execution
+fails fast rather than silently falling back.
 
 For screen readers: The following flowchart illustrates the backend selection
 algorithm, showing how the environment variable and availability checks
@@ -1900,7 +1910,9 @@ Both pathways are tested as first-class implementations:
 - behavioural parity tests verify identical output for edge cases (empty
   streams, partial UTF-8, broken pipes);
 - property-based tests (hypothesis) verify stream content preservation;
-- integration tests exercise pathway selection logic.
+- integration tests exercise pathway selection logic, including environment
+  overrides, forced fallback when Rust FDs are unavailable, and `ImportError`
+  propagation when Rust is explicitly requested but unavailable.
 
 CI includes benchmark jobs that compare Python and Rust pathway throughput,
 failing if the Rust pathway regresses beyond a defined threshold.

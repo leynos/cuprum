@@ -993,6 +993,15 @@ consumption (stdout/stderr capture) currently always uses the Python pathway
 regardless of the backend setting; this ensures line callbacks and echo
 features remain available.
 
+Pipeline pumping applies an additional safety guard: if Rust is selected but
+Cuprum cannot extract raw file descriptors from asyncio transports for a
+specific transfer, it falls back to the Python pump for that transfer. This
+fallback is automatic and transparent to callers.
+
+Forced Rust mode is intentionally strict. If
+`CUPRUM_STREAM_BACKEND=rust` is set and the Rust extension is unavailable,
+pipeline execution raises `ImportError` instead of silently falling back.
+
 Choose the Rust backend for high-throughput workloads (for example,
 multi-megabyte outputs) where lower per-chunk overhead improves throughput. For
 small outputs or when custom encoding/error handling is required, prefer the
