@@ -152,7 +152,7 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 - [x] 4.3.2. Add behavioural parity tests verifying identical output for edge
   cases: empty streams, partial UTF-8 sequences at chunk boundaries, broken
   pipes, and backpressure scenarios.
-- [ ] 4.3.3. Create integration tests for pathway selection logic including
+- [x] 4.3.3. Create integration tests for pathway selection logic including
   environment variable overrides, forced fallback, and error handling when Rust
   is requested but unavailable.
 - [ ] 4.3.4. Add property-based tests using hypothesis for stream content

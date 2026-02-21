@@ -22,3 +22,20 @@ Feature: Pipeline execution with stream backend selection
     When I run the pipeline synchronously
     Then the pipeline stdout is the uppercased input
     And all stages exit successfully
+
+  Scenario: Pipeline falls back to Python pumping when Rust cannot use FDs
+    Given the stream backend is set to rust
+    And the Rust extension is reported as available
+    And inter-stage file descriptor extraction fails
+    And a simple two stage uppercase pipeline
+    When I run the pipeline synchronously
+    Then the pipeline stdout is the uppercased input
+    And all stages exit successfully
+    And the Python pump fallback is used
+
+  Scenario: Pipeline raises when Rust is forced but unavailable
+    Given the stream backend is set to rust
+    And the Rust extension is not available for pipeline execution
+    And a pipeline with an immediately exiting downstream stage
+    When I attempt to run the pipeline synchronously
+    Then an ImportError is raised during pipeline execution
