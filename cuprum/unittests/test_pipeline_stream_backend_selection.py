@@ -13,6 +13,17 @@ import pytest
 
 from cuprum import _pipeline_streams, _rust_backend
 
+pytestmark = pytest.mark.usefixtures("clear_backend_caches")
+
+
+@pytest.fixture
+def clear_backend_caches() -> None:
+    """Clear backend-selection caches before each test."""
+    from cuprum import _backend
+
+    _backend._check_rust_available.cache_clear()
+    _backend.get_stream_backend.cache_clear()
+
 
 def test_dispatch_uses_python_when_forced(
     monkeypatch: pytest.MonkeyPatch,
