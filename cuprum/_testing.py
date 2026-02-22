@@ -10,6 +10,8 @@ depend on incidental re-exports from public modules like ``cuprum.sh``.
 
 from __future__ import annotations
 
+import typing as typ
+
 from cuprum._backend import _check_rust_available
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
@@ -33,7 +35,47 @@ from cuprum._streams import (
 )
 from cuprum.sh import _resolve_timeout
 
+if typ.TYPE_CHECKING:
+    import asyncio
+
+    import pytest
+
+
+def force_python_pump_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, int]:
+    """Force dispatch fallback to the Python pump and count fallback calls.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to patch stream-dispatch internals for the active test.
+
+    Returns
+    -------
+    dict[str, int]
+        Mutable counter updated each time the Python pump fallback runs.
+    """
+    from cuprum import _pipeline_streams
+
+    original_pump = _pipeline_streams._pump_stream
+    call_counter = {"calls": 0}
+
+    async def counted_pump(
+        reader: asyncio.StreamReader | None,
+        writer: asyncio.StreamWriter | None,
+    ) -> None:
+        call_counter["calls"] += 1
+        await original_pump(reader, writer)
+
+    monkeypatch.setattr(_pipeline_streams, "_extract_reader_fd", lambda _: None)
+    monkeypatch.setattr(_pipeline_streams, "_extract_writer_fd", lambda _: None)
+    monkeypatch.setattr(_pipeline_streams, "_pump_stream", counted_pump)
+    return call_counter
+
+
 _EXPORTS = {
+    "force_python_pump_fallback": force_python_pump_fallback,
     "_check_rust_available": _check_rust_available,
     "_MIN_PIPELINE_STAGES": _MIN_PIPELINE_STAGES,
     "_merge_env": _merge_env,

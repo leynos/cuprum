@@ -6,14 +6,14 @@ of which stream backend (Python or Rust) handles inter-stage data pumping.
 
 from __future__ import annotations
 
-import asyncio
 import typing as typ
 
 import pytest
 from pytest_bdd import given, parsers, scenario, then, when
 
-from cuprum import ECHO, ScopeConfig, _pipeline_streams, _rust_backend, scoped, sh
+from cuprum import ECHO, ScopeConfig, _rust_backend, scoped, sh
 from cuprum._backend import _check_rust_available, get_stream_backend
+from cuprum._testing import force_python_pump_fallback
 from tests.helpers.catalogue import combine_programs_into_catalogue, python_catalogue
 
 if typ.TYPE_CHECKING:
@@ -145,28 +145,14 @@ def given_fd_extraction_fails(
     Parameters
     ----------
     monkeypatch : pytest.MonkeyPatch
-        Pytest monkeypatch used to override FD extraction and pump functions.
+        Pytest monkeypatch used by the shared fallback test utility.
 
     Returns
     -------
     dict[str, int]
         Mutable call counter updated when the Python fallback pump executes.
     """
-    original_pump = _pipeline_streams._pump_stream
-    call_counter = {"calls": 0}
-
-    async def counted_pump(
-        reader: asyncio.StreamReader | None,
-        writer: asyncio.StreamWriter | None,
-    ) -> None:
-        await asyncio.sleep(0)
-        call_counter["calls"] += 1
-        await original_pump(reader, writer)
-
-    monkeypatch.setattr(_pipeline_streams, "_extract_reader_fd", lambda _: None)
-    monkeypatch.setattr(_pipeline_streams, "_extract_writer_fd", lambda _: None)
-    monkeypatch.setattr(_pipeline_streams, "_pump_stream", counted_pump)
-    return call_counter
+    return force_python_pump_fallback(monkeypatch)
 
 
 def _make_echo_python_pipeline(
