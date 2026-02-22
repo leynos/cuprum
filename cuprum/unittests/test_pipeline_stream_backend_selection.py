@@ -69,17 +69,23 @@ def test_dispatch_falls_back_to_python_when_rust_fd_extraction_fails(
     """
     monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
     monkeypatch.setattr(_rust_backend, "is_available", lambda: True)
-    monkeypatch.setattr(_pipeline_streams, "_extract_reader_fd", lambda _: None)
-    monkeypatch.setattr(_pipeline_streams, "_extract_writer_fd", lambda _: None)
+    calls = {"reader_fd": 0, "writer_fd": 0, "pump": 0}
 
-    called = {"pump": 0}
+    def missing_reader_fd(_: object) -> None:
+        calls["reader_fd"] += 1
+
+    def missing_writer_fd(_: object) -> None:
+        calls["writer_fd"] += 1
+
+    monkeypatch.setattr(_pipeline_streams, "_extract_reader_fd", missing_reader_fd)
+    monkeypatch.setattr(_pipeline_streams, "_extract_writer_fd", missing_writer_fd)
 
     async def fake_pump(
         reader: asyncio.StreamReader | None,
         writer: asyncio.StreamWriter | None,
     ) -> None:
         await asyncio.sleep(0)
-        called["pump"] += 1
+        calls["pump"] += 1
 
     monkeypatch.setattr(_pipeline_streams, "_pump_stream", fake_pump)
 
@@ -87,7 +93,9 @@ def test_dispatch_falls_back_to_python_when_rust_fd_extraction_fails(
     writer = typ.cast("asyncio.StreamWriter", object())
     asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
 
-    assert called["pump"] == 1, (
+    assert calls["reader_fd"] == 1, "expected Rust reader FD extraction to be attempted"
+    assert calls["writer_fd"] == 1, "expected Rust writer FD extraction to be attempted"
+    assert calls["pump"] == 1, (
         "expected Python pump fallback when Rust backend cannot extract FDs"
     )
 

@@ -6,6 +6,7 @@ of which stream backend (Python or Rust) handles inter-stage data pumping.
 
 from __future__ import annotations
 
+import asyncio
 import typing as typ
 
 import pytest
@@ -16,8 +17,6 @@ from cuprum._backend import _check_rust_available, get_stream_backend
 from tests.helpers.catalogue import combine_programs_into_catalogue, python_catalogue
 
 if typ.TYPE_CHECKING:
-    import asyncio
-
     from cuprum.program import Program
     from cuprum.sh import PipelineResult
 
@@ -106,7 +105,13 @@ def given_stream_backend(
 
 @given("the Rust extension is reported as available")
 def given_rust_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force the Rust availability probe to return True."""
+    """Force the Rust availability probe to return True.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest monkeypatch for replacing the availability probe.
+    """
     _check_rust_available.cache_clear()
     get_stream_backend.cache_clear()
     monkeypatch.setattr(_rust_backend, "is_available", lambda: True)
@@ -116,7 +121,13 @@ def given_rust_available(monkeypatch: pytest.MonkeyPatch) -> None:
     "the Rust extension is not available for pipeline execution",
 )
 def given_rust_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force the Rust availability probe to return False."""
+    """Force the Rust availability probe to return False.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest monkeypatch for replacing the availability probe.
+    """
     _check_rust_available.cache_clear()
     get_stream_backend.cache_clear()
     monkeypatch.setattr(_rust_backend, "is_available", lambda: False)
@@ -129,7 +140,18 @@ def given_rust_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
 def given_fd_extraction_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> dict[str, int]:
-    """Force FD extraction to fail so dispatch falls back to Python pumping."""
+    """Force FD extraction to fail so dispatch falls back to Python pumping.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest monkeypatch used to override FD extraction and pump functions.
+
+    Returns
+    -------
+    dict[str, int]
+        Mutable call counter updated when the Python fallback pump executes.
+    """
     original_pump = _pipeline_streams._pump_stream
     call_counter = {"calls": 0}
 
@@ -137,6 +159,7 @@ def given_fd_extraction_fails(
         reader: asyncio.StreamReader | None,
         writer: asyncio.StreamWriter | None,
     ) -> None:
+        await asyncio.sleep(0)
         call_counter["calls"] += 1
         await original_pump(reader, writer)
 
@@ -234,15 +257,26 @@ def when_run_sync(
 )
 def when_attempt_run_sync(
     pipeline_under_test: tuple[sh.Pipeline, frozenset[Program]],
-) -> BaseException | None:
-    """Execute ``run_sync()`` and capture any raised exception."""
+) -> ImportError:
+    """Execute ``run_sync()`` and capture the forced-rust import failure.
+
+    Parameters
+    ----------
+    pipeline_under_test : tuple[sh.Pipeline, frozenset[Program]]
+        The pipeline and its required allowlist.
+
+    Returns
+    -------
+    ImportError
+        The ImportError raised when forced Rust is unavailable.
+    """
     pipeline, allowlist = pipeline_under_test
-    with scoped(ScopeConfig(allowlist=allowlist)):
-        try:
-            pipeline.run_sync()
-        except ImportError as exc:
-            return exc
-    return None
+    with (
+        scoped(ScopeConfig(allowlist=allowlist)),
+        pytest.raises(ImportError, match="CUPRUM_STREAM_BACKEND") as exc_info,
+    ):
+        pipeline.run_sync()
+    return exc_info.value
 
 
 # -- Then steps ---------------------------------------------------------------
@@ -279,18 +313,27 @@ def then_all_stages_ok(pipeline_result: PipelineResult) -> None:
 
 @then("the Python pump fallback is used")
 def then_python_fallback_used(python_pump_fallback_counter: dict[str, int]) -> None:
-    """Assert that the Python pump path was exercised."""
+    """Assert that the Python pump path was exercised.
+
+    Parameters
+    ----------
+    python_pump_fallback_counter : dict[str, int]
+        Counter dictionary populated by the fallback setup step.
+    """
     assert python_pump_fallback_counter["calls"] > 0, (
         "expected Python pump fallback to be used at least once"
     )
 
 
 @then("an ImportError is raised during pipeline execution")
-def then_pipeline_import_error_raised(pipeline_error: BaseException | None) -> None:
-    """Assert that forcing unavailable Rust raises ImportError."""
-    assert isinstance(pipeline_error, ImportError), (
-        f"expected ImportError, got {type(pipeline_error).__name__}: {pipeline_error}"
-    )
+def then_pipeline_import_error_raised(pipeline_error: ImportError) -> None:
+    """Assert that forcing unavailable Rust raises ImportError.
+
+    Parameters
+    ----------
+    pipeline_error : ImportError
+        ImportError captured during attempted pipeline execution.
+    """
     assert "CUPRUM_STREAM_BACKEND" in str(pipeline_error), (
         "expected ImportError to mention backend environment variable"
     )
