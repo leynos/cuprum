@@ -11,133 +11,150 @@ import typing as typ
 
 import pytest
 
-from cuprum import _pipeline_streams, _rust_backend
+from cuprum import _pipeline_streams
+from cuprum._testing import (
+    configure_pump_stream_dispatch_for_testing,
+    reset_pump_stream_dispatch_for_testing,
+    set_rust_availability_for_testing,
+)
 
 pytestmark = pytest.mark.usefixtures("clear_backend_caches")
 
 
 @pytest.fixture
-def clear_backend_caches() -> None:
-    """Clear backend-selection caches before each test."""
+def clear_backend_caches() -> typ.Iterator[None]:
+    """Clear and restore backend-selection test hooks for each test."""
     from cuprum import _backend
 
+    set_rust_availability_for_testing(is_available=None)
+    reset_pump_stream_dispatch_for_testing()
+    _backend._check_rust_available.cache_clear()
+    _backend.get_stream_backend.cache_clear()
+    yield
+    set_rust_availability_for_testing(is_available=None)
+    reset_pump_stream_dispatch_for_testing()
     _backend._check_rust_available.cache_clear()
     _backend.get_stream_backend.cache_clear()
 
 
-def test_dispatch_uses_python_when_forced(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Forced Python backend routes dispatch directly to Python pump.
+class TestPumpStreamDispatch:
+    """Unit integration tests for ``_pump_stream_dispatch`` selection paths."""
 
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Fixture used to override environment and internal helpers.
-    """
-    monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "python")
-    called = {"pump": 0}
-
-    async def fake_pump(
-        reader: asyncio.StreamReader | None,
-        writer: asyncio.StreamWriter | None,
+    def test_dispatch_uses_python_when_forced(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        await asyncio.sleep(0)
-        called["pump"] += 1
+        """Forced Python backend routes dispatch directly to Python pump.
 
-    def unexpected_fd_extraction(_: object) -> int:
-        msg = "FD extraction should not be called in forced Python mode"
-        raise AssertionError(msg)
+        Parameters
+        ----------
+        monkeypatch : pytest.MonkeyPatch
+            Fixture used to override environment variables.
+        """
+        _ = self
+        monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "python")
+        calls = {"rust_fd_path_attempts": 0, "python_pump": 0}
 
-    monkeypatch.setattr(_pipeline_streams, "_pump_stream", fake_pump)
-    monkeypatch.setattr(
-        _pipeline_streams,
-        "_extract_reader_fd",
-        unexpected_fd_extraction,
-    )
-    monkeypatch.setattr(
-        _pipeline_streams,
-        "_extract_writer_fd",
-        unexpected_fd_extraction,
-    )
+        async def fake_pump(
+            reader: asyncio.StreamReader | None,
+            writer: asyncio.StreamWriter | None,
+        ) -> None:
+            await asyncio.sleep(0)
+            calls["python_pump"] += 1
 
-    reader = typ.cast("asyncio.StreamReader", object())
-    writer = typ.cast("asyncio.StreamWriter", object())
-    asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
+        def on_rust_fd_path_attempt() -> None:
+            calls["rust_fd_path_attempts"] += 1
 
-    assert called["pump"] == 1, "expected Python pump to handle forced python mode"
+        configure_pump_stream_dispatch_for_testing(
+            on_rust_fd_path_attempt=on_rust_fd_path_attempt,
+            python_pump=fake_pump,
+        )
 
-
-def test_dispatch_falls_back_to_python_when_rust_fd_extraction_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Forced Rust mode falls back to Python when FD extraction fails.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Fixture used to override environment and internal helpers.
-    """
-    monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
-    monkeypatch.setattr(_rust_backend, "is_available", lambda: True)
-    calls = {"reader_fd": 0, "writer_fd": 0, "pump": 0}
-
-    def missing_reader_fd(_: object) -> None:
-        calls["reader_fd"] += 1
-
-    def missing_writer_fd(_: object) -> None:
-        calls["writer_fd"] += 1
-
-    monkeypatch.setattr(_pipeline_streams, "_extract_reader_fd", missing_reader_fd)
-    monkeypatch.setattr(_pipeline_streams, "_extract_writer_fd", missing_writer_fd)
-
-    async def fake_pump(
-        reader: asyncio.StreamReader | None,
-        writer: asyncio.StreamWriter | None,
-    ) -> None:
-        await asyncio.sleep(0)
-        calls["pump"] += 1
-
-    monkeypatch.setattr(_pipeline_streams, "_pump_stream", fake_pump)
-
-    reader = typ.cast("asyncio.StreamReader", object())
-    writer = typ.cast("asyncio.StreamWriter", object())
-    asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
-
-    assert calls["reader_fd"] == 1, "expected Rust reader FD extraction to be attempted"
-    assert calls["writer_fd"] == 1, "expected Rust writer FD extraction to be attempted"
-    assert calls["pump"] == 1, (
-        "expected Python pump fallback when Rust backend cannot extract FDs"
-    )
-
-
-def test_dispatch_raises_import_error_when_rust_forced_but_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Forced Rust mode surfaces ImportError when extension is unavailable.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Fixture used to override environment and internal helpers.
-    """
-    monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
-    monkeypatch.setattr(_rust_backend, "is_available", lambda: False)
-
-    called = {"pump": 0}
-
-    async def fake_pump(
-        reader: asyncio.StreamReader | None,
-        writer: asyncio.StreamWriter | None,
-    ) -> None:
-        await asyncio.sleep(0)
-        called["pump"] += 1
-
-    monkeypatch.setattr(_pipeline_streams, "_pump_stream", fake_pump)
-
-    reader = typ.cast("asyncio.StreamReader", object())
-    writer = typ.cast("asyncio.StreamWriter", object())
-    with pytest.raises(ImportError, match="CUPRUM_STREAM_BACKEND"):
+        reader = typ.cast("asyncio.StreamReader", object())
+        writer = typ.cast("asyncio.StreamWriter", object())
         asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
 
-    assert called["pump"] == 0, "Python pump should not run when forced Rust is missing"
+        assert calls["rust_fd_path_attempts"] == 0, (
+            "did not expect Rust FD extraction attempt in forced Python mode"
+        )
+        assert calls["python_pump"] == 1, (
+            "expected Python pump to handle forced Python mode"
+        )
+
+    def test_dispatch_falls_back_to_python_when_rust_fd_extraction_fails(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Forced Rust mode falls back to Python when FD extraction fails.
+
+        Parameters
+        ----------
+        monkeypatch : pytest.MonkeyPatch
+            Fixture used to override environment variables.
+        """
+        _ = self
+        monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
+        set_rust_availability_for_testing(is_available=True)
+        calls = {"rust_fd_path_attempts": 0, "python_pump": 0}
+
+        async def fake_pump(
+            reader: asyncio.StreamReader | None,
+            writer: asyncio.StreamWriter | None,
+        ) -> None:
+            await asyncio.sleep(0)
+            calls["python_pump"] += 1
+
+        def on_rust_fd_path_attempt() -> None:
+            calls["rust_fd_path_attempts"] += 1
+
+        configure_pump_stream_dispatch_for_testing(
+            force_fd_extraction_failure=True,
+            on_rust_fd_path_attempt=on_rust_fd_path_attempt,
+            python_pump=fake_pump,
+        )
+
+        reader = typ.cast("asyncio.StreamReader", object())
+        writer = typ.cast("asyncio.StreamWriter", object())
+        asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
+
+        assert calls["rust_fd_path_attempts"] == 1, (
+            "expected Rust FD extraction path to be attempted once"
+        )
+        assert calls["python_pump"] == 1, (
+            "expected Python pump fallback when Rust FD extraction is unavailable"
+        )
+
+    def test_dispatch_raises_import_error_when_rust_forced_but_unavailable(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Forced Rust mode surfaces ImportError when extension is unavailable.
+
+        Parameters
+        ----------
+        monkeypatch : pytest.MonkeyPatch
+            Fixture used to override environment variables.
+        """
+        _ = self
+        monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
+        set_rust_availability_for_testing(is_available=False)
+
+        calls = {"python_pump": 0}
+
+        async def fake_pump(
+            reader: asyncio.StreamReader | None,
+            writer: asyncio.StreamWriter | None,
+        ) -> None:
+            await asyncio.sleep(0)
+            calls["python_pump"] += 1
+
+        configure_pump_stream_dispatch_for_testing(python_pump=fake_pump)
+
+        reader = typ.cast("asyncio.StreamReader", object())
+        writer = typ.cast("asyncio.StreamWriter", object())
+        with pytest.raises(ImportError, match="CUPRUM_STREAM_BACKEND"):
+            asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
+
+        assert calls["python_pump"] == 0, (
+            "Python pump should not run when forced Rust is unavailable"
+        )

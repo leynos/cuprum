@@ -13,7 +13,11 @@ from pytest_bdd import given, parsers, scenario, then, when
 
 from cuprum import ECHO, ScopeConfig, _rust_backend, scoped, sh
 from cuprum._backend import _check_rust_available, get_stream_backend
-from cuprum._testing import force_python_pump_fallback
+from cuprum._testing import (
+    force_python_pump_fallback,
+    reset_pump_stream_dispatch_for_testing,
+    set_rust_availability_for_testing,
+)
 from tests.helpers.catalogue import combine_programs_into_catalogue, python_catalogue
 
 if typ.TYPE_CHECKING:
@@ -26,6 +30,20 @@ def requires_rust_backend() -> None:
     """Skip the test at setup time when the Rust extension is unavailable."""
     if not _rust_backend.is_available():
         pytest.skip("Rust extension is not installed")
+
+
+@pytest.fixture(autouse=True)
+def reset_stream_dispatch_test_hooks() -> typ.Iterator[None]:
+    """Reset stream-dispatch test hooks before and after each scenario."""
+    set_rust_availability_for_testing(is_available=None)
+    reset_pump_stream_dispatch_for_testing()
+    _check_rust_available.cache_clear()
+    get_stream_backend.cache_clear()
+    yield
+    set_rust_availability_for_testing(is_available=None)
+    reset_pump_stream_dispatch_for_testing()
+    _check_rust_available.cache_clear()
+    get_stream_backend.cache_clear()
 
 
 # -- Scenarios ----------------------------------------------------------------
@@ -104,33 +122,17 @@ def given_stream_backend(
 
 
 @given("the Rust extension is reported as available")
-def given_rust_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force the Rust availability probe to return True.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Pytest monkeypatch for replacing the availability probe.
-    """
-    _check_rust_available.cache_clear()
-    get_stream_backend.cache_clear()
-    monkeypatch.setattr(_rust_backend, "is_available", lambda: True)
+def given_rust_available() -> None:
+    """Force the Rust availability probe to return True."""
+    set_rust_availability_for_testing(is_available=True)
 
 
 @given(
     "the Rust extension is not available for pipeline execution",
 )
-def given_rust_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force the Rust availability probe to return False.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Pytest monkeypatch for replacing the availability probe.
-    """
-    _check_rust_available.cache_clear()
-    get_stream_backend.cache_clear()
-    monkeypatch.setattr(_rust_backend, "is_available", lambda: False)
+def given_rust_unavailable() -> None:
+    """Force the Rust availability probe to return False."""
+    set_rust_availability_for_testing(is_available=False)
 
 
 @given(

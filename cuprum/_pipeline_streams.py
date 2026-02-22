@@ -21,6 +21,49 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import ExecutionContext
 
 
+@dc.dataclass(slots=True)
+class _PumpStreamDispatchTestHooks:
+    """Test-only overrides for stream dispatch."""
+
+    force_fd_extraction_failure: bool = False
+    on_rust_fd_path_attempt: typ.Callable[[], None] | None = None
+    python_pump: (
+        typ.Callable[
+            [asyncio.StreamReader | None, asyncio.StreamWriter | None],
+            typ.Awaitable[None],
+        ]
+        | None
+    ) = None
+
+
+_PUMP_STREAM_DISPATCH_TEST_HOOKS = _PumpStreamDispatchTestHooks()
+
+
+def configure_pump_stream_dispatch_for_testing(
+    *,
+    force_fd_extraction_failure: bool = False,
+    on_rust_fd_path_attempt: typ.Callable[[], None] | None = None,
+    python_pump: (
+        typ.Callable[
+            [asyncio.StreamReader | None, asyncio.StreamWriter | None],
+            typ.Awaitable[None],
+        ]
+        | None
+    ) = None,
+) -> None:
+    """Configure explicit test hooks for ``_pump_stream_dispatch``."""
+    _PUMP_STREAM_DISPATCH_TEST_HOOKS.force_fd_extraction_failure = (
+        force_fd_extraction_failure
+    )
+    _PUMP_STREAM_DISPATCH_TEST_HOOKS.on_rust_fd_path_attempt = on_rust_fd_path_attempt
+    _PUMP_STREAM_DISPATCH_TEST_HOOKS.python_pump = python_pump
+
+
+def reset_pump_stream_dispatch_for_testing() -> None:
+    """Reset ``_pump_stream_dispatch`` test hooks to defaults."""
+    configure_pump_stream_dispatch_for_testing()
+
+
 @dc.dataclass(frozen=True, slots=True)
 class _PipelineRunConfig:
     ctx: ExecutionContext
@@ -222,19 +265,40 @@ async def _drain_reader_buffer(
     buffered.clear()
 
 
+async def _run_python_pump(
+    reader: asyncio.StreamReader | None,
+    writer: asyncio.StreamWriter | None,
+) -> None:
+    """Run the configured Python pump implementation."""
+    python_pump = _PUMP_STREAM_DISPATCH_TEST_HOOKS.python_pump
+    if python_pump is not None:
+        await python_pump(reader, writer)
+        return
+    await _pump_stream(reader, writer)
+
+
 async def _pump_stream_dispatch(
     reader: asyncio.StreamReader | None,
     writer: asyncio.StreamWriter | None,
 ) -> None:
     """Route inter-stage pump to the Rust or Python implementation."""
     if reader is None:
-        await _pump_stream(reader, writer)
+        await _run_python_pump(reader, writer)
         return
 
     backend = get_stream_backend()
     if backend is StreamBackend.RUST:
-        reader_fd = _extract_reader_fd(reader)
-        writer_fd = _extract_writer_fd(writer)
+        rust_fd_attempt_hook = _PUMP_STREAM_DISPATCH_TEST_HOOKS.on_rust_fd_path_attempt
+        if rust_fd_attempt_hook is not None:
+            rust_fd_attempt_hook()
+
+        if _PUMP_STREAM_DISPATCH_TEST_HOOKS.force_fd_extraction_failure:
+            reader_fd = None
+            writer_fd = None
+        else:
+            reader_fd = _extract_reader_fd(reader)
+            writer_fd = _extract_writer_fd(writer)
+
         if reader_fd is not None and writer_fd is not None:
             # Flush any bytes asyncio already buffered in the StreamReader
             # before the Rust pump takes over the raw file descriptor.
@@ -256,7 +320,7 @@ async def _pump_stream_dispatch(
                 await _close_stream_writer(writer)
             return
 
-    await _pump_stream(reader, writer)
+    await _run_python_pump(reader, writer)
 
 
 def _create_pipe_tasks(
