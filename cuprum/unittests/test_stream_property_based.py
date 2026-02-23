@@ -7,27 +7,21 @@ the downstream stage receives identical bytes by comparing hexadecimal output.
 
 from __future__ import annotations
 
-import typing as typ
-
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from cuprum import sh
+from cuprum._streams import _READ_SIZE
 from tests.helpers.parity import (
+    build_property_pipeline_case,
     chunk_sizes_from_cut_points,
-    chunked_writer_script,
-    hex_sink_script,
-    parity_catalogue,
-    payload_to_base64,
     run_parity_pipeline,
 )
 
-if typ.TYPE_CHECKING:
-    from cuprum.program import Program
-    from cuprum.sh import Pipeline
-
 _GENERAL_MAX_EXAMPLES = 12
 _BOUNDARY_MAX_EXAMPLES = 6
+_BOUNDARY_DELTA = 512
+_BOUNDARY_MIN_SIZE = _READ_SIZE - _BOUNDARY_DELTA
+_BOUNDARY_MAX_SIZE = _READ_SIZE + _BOUNDARY_DELTA
 
 
 @st.composite
@@ -74,40 +68,6 @@ def payload_and_chunk_sizes(
     return payload, chunk_sizes_from_cut_points(payload_size, cut_points)
 
 
-def _build_property_pipeline(
-    payload: bytes,
-    chunk_sizes: tuple[int, ...],
-) -> tuple[Pipeline, frozenset[Program], str]:
-    """Build the writer-to-hex pipeline for property tests.
-
-    Parameters
-    ----------
-    payload : bytes
-        Source bytes written by the upstream stage.
-    chunk_sizes : tuple[int, ...]
-        Chunk sizes used by the upstream writer.
-
-    Returns
-    -------
-    tuple[Pipeline, frozenset[Program], str]
-        Pipeline, execution allowlist, and expected lowercase hex output.
-    """
-    catalogue, python_prog, _, _ = parity_catalogue()
-    python_cmd = sh.make(python_prog, catalogue=catalogue)
-
-    chunk_spec = ",".join(str(value) for value in chunk_sizes)
-    upstream = python_cmd(
-        "-c",
-        chunked_writer_script(),
-        payload_to_base64(payload),
-        chunk_spec,
-    )
-    downstream = python_cmd("-c", hex_sink_script())
-    pipeline = upstream | downstream
-    allowlist = frozenset([python_prog])
-    return pipeline, allowlist, payload.hex()
-
-
 @settings(
     max_examples=_GENERAL_MAX_EXAMPLES,
     deadline=None,
@@ -129,11 +89,11 @@ def test_stream_preserves_random_payloads_across_random_chunk_boundaries(
         Random payload and random chunk partition.
     """
     payload, chunk_sizes = case
-    pipeline, allowlist, expected_hex = _build_property_pipeline(payload, chunk_sizes)
-    result = run_parity_pipeline(pipeline, allowlist)
+    property_case = build_property_pipeline_case(payload, chunk_sizes)
+    result = run_parity_pipeline(property_case.pipeline, property_case.allowlist)
 
     assert result.ok is True
-    assert result.stdout == expected_hex
+    assert result.stdout == property_case.expected_hex
     assert len(result.stages) == 2
     assert all(stage.exit_code == 0 for stage in result.stages)
 
@@ -144,7 +104,13 @@ def test_stream_preserves_random_payloads_across_random_chunk_boundaries(
     derandomize=True,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
-@given(case=payload_and_chunk_sizes(min_size=3584, max_size=4608, max_cuts=16))
+@given(
+    case=payload_and_chunk_sizes(
+        min_size=_BOUNDARY_MIN_SIZE,
+        max_size=_BOUNDARY_MAX_SIZE,
+        max_cuts=16,
+    ),
+)
 def test_stream_preserves_random_payloads_around_python_read_size_boundary(
     stream_backend: str,
     case: tuple[bytes, tuple[int, ...]],
@@ -159,10 +125,10 @@ def test_stream_preserves_random_payloads_around_python_read_size_boundary(
         Random payload and random chunk partition.
     """
     payload, chunk_sizes = case
-    pipeline, allowlist, expected_hex = _build_property_pipeline(payload, chunk_sizes)
-    result = run_parity_pipeline(pipeline, allowlist)
+    property_case = build_property_pipeline_case(payload, chunk_sizes)
+    result = run_parity_pipeline(property_case.pipeline, property_case.allowlist)
 
     assert result.ok is True
-    assert result.stdout == expected_hex
+    assert result.stdout == property_case.expected_hex
     assert len(result.stages) == 2
     assert all(stage.exit_code == 0 for stage in result.stages)

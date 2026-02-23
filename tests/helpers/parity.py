@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import base64
+import dataclasses as dc
 import random
 import typing as typ
 
-from cuprum import ECHO, ScopeConfig, scoped
+from cuprum import ECHO, ScopeConfig, scoped, sh
 from tests.helpers.catalogue import (
     cat_program,
     combine_programs_into_catalogue,
@@ -28,6 +29,16 @@ _TWO_BYTE = "\u00e9\u00fc\u00f1\u00e4\u00f6\u00df\u00e8\u00ea"
 _THREE_BYTE = "\u2603\u2665\u266b\u2602\u263a\u2605\u2764\u2744"
 _FOUR_BYTE = "\U0001f600\U0001f4a9\U0001f680\U0001f308\U0001f525"
 _POOLS = (_ONE_BYTE, _TWO_BYTE, _THREE_BYTE, _FOUR_BYTE)
+
+
+@dc.dataclass(frozen=True, slots=True)
+class PropertyPipelineCase:
+    """Shared pipeline case for property-preservation tests."""
+
+    pipeline: Pipeline
+    allowlist: frozenset[Program]
+    expected_hex: str
+    chunk_count: int
 
 
 def parity_catalogue() -> tuple[ProgramCatalogue, Program, Program, Program]:
@@ -220,3 +231,40 @@ def payload_to_base64(payload: bytes) -> str:
 def hex_sink_script() -> str:
     """Return Python code that reads stdin bytes and prints lowercase hex."""
     return "import sys; data = sys.stdin.buffer.read(); sys.stdout.write(data.hex())"
+
+
+def build_property_pipeline_case(
+    payload: bytes,
+    chunk_sizes: tuple[int, ...],
+) -> PropertyPipelineCase:
+    """Build the shared writer-to-hex pipeline case.
+
+    Parameters
+    ----------
+    payload : bytes
+        Source bytes written by the upstream stage.
+    chunk_sizes : tuple[int, ...]
+        Chunk sizes used by the upstream writer.
+
+    Returns
+    -------
+    PropertyPipelineCase
+        Pipeline, allowlist, expected hex output, and chunk-count metadata.
+    """
+    catalogue, python_prog, _, _ = parity_catalogue()
+    python_cmd = sh.make(python_prog, catalogue=catalogue)
+
+    chunk_spec = ",".join(str(value) for value in chunk_sizes)
+    pipeline = python_cmd(
+        "-c",
+        chunked_writer_script(),
+        payload_to_base64(payload),
+        chunk_spec,
+    ) | python_cmd("-c", hex_sink_script())
+
+    return PropertyPipelineCase(
+        pipeline=pipeline,
+        allowlist=frozenset([python_prog]),
+        expected_hex=payload.hex(),
+        chunk_count=len(chunk_sizes),
+    )

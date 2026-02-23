@@ -2,60 +2,19 @@
 
 from __future__ import annotations
 
-import dataclasses
 import typing as typ
 
 from pytest_bdd import given, parsers, scenario, then, when
 
-from cuprum import sh
 from tests.helpers.parity import (
-    chunked_writer_script,
+    PropertyPipelineCase,
+    build_property_pipeline_case,
     deterministic_property_case,
-    hex_sink_script,
-    parity_catalogue,
-    payload_to_base64,
     run_parity_pipeline,
 )
 
 if typ.TYPE_CHECKING:
-    from cuprum.program import Program
-    from cuprum.sh import Pipeline, PipelineResult
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class PropertyScenario:
-    """Deterministic stream property test case."""
-
-    pipeline: Pipeline
-    allowlist: frozenset[Program]
-    expected_hex: str
-    chunk_count: int
-
-
-def _build_property_scenario(
-    *,
-    seed: int,
-    size: int,
-) -> PropertyScenario:
-    """Create a deterministic property scenario from a seed and payload size."""
-    payload, chunk_sizes = deterministic_property_case(seed=seed, payload_size=size)
-    catalogue, python_prog, _, _ = parity_catalogue()
-    python_cmd = sh.make(python_prog, catalogue=catalogue)
-
-    chunk_spec = ",".join(str(value) for value in chunk_sizes)
-    pipeline = python_cmd(
-        "-c",
-        chunked_writer_script(),
-        payload_to_base64(payload),
-        chunk_spec,
-    ) | python_cmd("-c", hex_sink_script())
-
-    return PropertyScenario(
-        pipeline=pipeline,
-        allowlist=frozenset([python_prog]),
-        expected_hex=payload.hex(),
-        chunk_count=len(chunk_sizes),
-    )
+    from cuprum.sh import PipelineResult
 
 
 @scenario(
@@ -81,7 +40,7 @@ def test_stream_property_preservation(stream_backend: str) -> None:
 def given_deterministic_payload(
     seed: int,
     size: int,
-) -> PropertyScenario:
+) -> PropertyPipelineCase:
     """Build a deterministic random payload pipeline case.
 
     Parameters
@@ -93,10 +52,11 @@ def given_deterministic_payload(
 
     Returns
     -------
-    PropertyScenario
+    PropertyPipelineCase
         Pipeline configuration and expected output for assertions.
     """
-    return _build_property_scenario(seed=seed, size=size)
+    payload, chunk_sizes = deterministic_property_case(seed=seed, payload_size=size)
+    return build_property_pipeline_case(payload, chunk_sizes)
 
 
 @when(
@@ -104,13 +64,13 @@ def given_deterministic_payload(
     target_fixture="pipeline_result",
 )
 def when_run_property_pipeline(
-    property_scenario: PropertyScenario,
+    property_scenario: PropertyPipelineCase,
 ) -> PipelineResult:
     """Execute the deterministic stream property pipeline.
 
     Parameters
     ----------
-    property_scenario : PropertyScenario
+    property_scenario : PropertyPipelineCase
         Scenario data created in the Given step.
 
     Returns
@@ -126,14 +86,14 @@ def when_run_property_pipeline(
 
 @then("the stream property output matches the expected hex payload")
 def then_hex_matches(
-    property_scenario: PropertyScenario,
+    property_scenario: PropertyPipelineCase,
     pipeline_result: PipelineResult,
 ) -> None:
     """Assert that downstream output preserves the original payload bytes.
 
     Parameters
     ----------
-    property_scenario : PropertyScenario
+    property_scenario : PropertyPipelineCase
         Scenario data containing the expected hex payload.
     pipeline_result : PipelineResult
         Actual execution result.

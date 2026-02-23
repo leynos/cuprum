@@ -1909,7 +1909,7 @@ Both pathways are tested as first-class implementations:
 - all stream-related tests are parametrized to run against both backends;
 - behavioural parity tests verify identical output for edge cases (empty
   streams, partial UTF-8, broken pipes);
-- property-based tests (hypothesis) verify byte-preservation across randomized
+- property-based tests (Hypothesis) verify byte-preservation across randomized
   payloads and randomized chunk boundaries by asserting deterministic hex
   output through real pipeline execution under both backends;
 - integration tests exercise pathway selection logic, including environment
