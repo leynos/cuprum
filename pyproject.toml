@@ -16,6 +16,7 @@ Repository = "https://github.com/leynos/cuprum"
 
 [dependency-groups]
 dev = [
+    "hypothesis",
     "pytest",
     "pytest-bdd",
     "ruff",

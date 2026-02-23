@@ -4,7 +4,7 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`, and
 `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
-Status: DRAFT
+Status: COMPLETE
 
 Roadmap reference: `docs/roadmap.md` item `4.3.4`.
 
@@ -73,68 +73,116 @@ Hard invariants that must hold throughout implementation:
 ## Risks
 
 - Risk: Property-based tests can be flaky or slow if strategies are too broad.
-  Severity: medium
-  Likelihood: medium
-  Mitigation: bound payload sizes and hypothesis settings (`max_examples`,
-  health checks, and deadline controls) to keep runtime deterministic.
+  Severity: medium Likelihood: medium Mitigation: bound payload sizes and
+  hypothesis settings (`max_examples`, health checks, and deadline controls) to
+  keep runtime deterministic.
 
 - Risk: Command-line argument length limits may be exceeded if random payloads
-  are embedded directly in Python `-c` strings.
-  Severity: medium
-  Likelihood: medium
-  Mitigation: encode payloads safely (for example, base64) and cap payload
-  size; where needed, generate large data inside subprocess code.
+  are embedded directly in Python `-c` strings. Severity: medium Likelihood:
+  medium Mitigation: encode payloads safely (for example, base64) and cap
+  payload size; where needed, generate large data inside subprocess code.
 
 - Risk: Random chunk boundaries might not actually cross meaningful boundary
-  points when generated naively.
-  Severity: medium
-  Likelihood: medium
+  points when generated naively. Severity: medium Likelihood: medium
   Mitigation: derive chunk-size partitions from generated cut points so every
   example intentionally splits payload bytes in varied positions.
 
 ## Progress
 
 - [x] (2026-02-23 12:51Z) Drafted ExecPlan for roadmap item `4.3.4`.
-- [ ] Stage A: Confirm exact invariants and test insertion points.
-- [ ] Stage B: Add fail-first unit and behavioural tests.
-- [ ] Stage C: Add minimal implementation/support changes.
-- [ ] Stage D: Update documentation and roadmap item.
-- [ ] Stage E: Run all required quality gates and record evidence.
+- [x] (2026-02-23 16:50Z) Stage A: Confirmed invariant and insertion points.
+- [x] (2026-02-23 16:50Z) Stage B: Added fail-first unit and behavioural tests
+  and captured expected `ModuleNotFoundError` for Hypothesis.
+- [x] (2026-02-23 16:50Z) Stage C: Added `hypothesis` dev dependency, lockfile
+  update via `make build`, and helper support code.
+- [x] (2026-02-23 16:50Z) Stage D: Updated design docs, users guide, and
+  roadmap entry `4.3.4`.
+- [x] (2026-02-23 16:52Z) Stage E: Full quality gates passed and evidence
+  captured in `/tmp/4-3-4-*.log`.
 
 ## Surprises & discoveries
 
 - Observation: `docs/cuprum-design.md` Section 13.9 already states that
   property-based tests verify stream content preservation, but no Hypothesis
-  tests currently exist in the codebase.
-  Evidence: `rg -n "hypothesis|from hypothesis|strategies as st" .` returns no
-  Hypothesis imports in test modules.
-  Impact: this task closes a design/implementation drift and should update the
-  design doc with concrete test scope and file references.
+  tests currently exist in the codebase. Evidence:
+  `rg -n "hypothesis|from hypothesis|strategies as st" .` returns no Hypothesis
+  imports in test modules. Impact: this task closes a design/implementation
+  drift and should update the design doc with concrete test scope and file
+  references.
+
+- Observation: Hypothesis raised `FailedHealthCheck` for the
+  function-scoped `stream_backend` fixture in property tests. Evidence:
+  targeted post-change run failed with `HealthCheck.function_scoped_fixture`.
+  Impact: property tests now explicitly suppress that health check in
+  `@settings(...)` because backend parametrisation is intentional for this
+  suite.
+
+- Observation: the generated writer script was invalid when the loop was
+  encoded as a single inline statement chain. Evidence:
+  `compile(chunked_writer_script(), "<script>", "exec")` raised `SyntaxError`
+  and BDD scenarios produced empty output with pipeline stage termination.
+  Impact: `chunked_writer_script()` now emits newline-joined Python code with a
+  valid `for` block.
 
 ## Decision log
 
 - Decision: use byte-preservation as the primary invariant for property-based
   tests, with pipeline output normalized through a deterministic representation
-  (for example, hex output).
-  Rationale: byte-preservation avoids false negatives from text-decoding
-  behaviour and directly validates transport integrity across chunk boundaries.
-  Date/Author: 2026-02-23 / Codex.
+  (for example, hex output). Rationale: byte-preservation avoids false
+  negatives from text-decoding behaviour and directly validates transport
+  integrity across chunk boundaries. Date/Author: 2026-02-23 / Codex.
 
 - Decision: include a separate deterministic BDD layer in addition to
-  Hypothesis-driven unit tests.
-  Rationale: project policy requires behavioural tests for new functionality,
-  while BDD scenarios should remain stable and readable rather than fully
-  stochastic.
-  Date/Author: 2026-02-23 / Codex.
+  Hypothesis-driven unit tests. Rationale: project policy requires behavioural
+  tests for new functionality, while BDD scenarios should remain stable and
+  readable rather than fully stochastic. Date/Author: 2026-02-23 / Codex.
+
+- Decision: encode payload bytes as base64 input to subprocess scripts and
+  assert deterministic lowercase hex output at the sink stage. Rationale: this
+  avoids command-line argument encoding ambiguity and validates
+  byte-preservation directly, independent of stdout text decoding. Date/Author:
+  2026-02-23 / Codex.
+
+- Decision: suppress `HealthCheck.function_scoped_fixture` for Hypothesis tests
+  using the `stream_backend` fixture. Rationale: backend parametrisation is
+  required by roadmap scope and stable in this suite; fixtures intentionally do
+  not reset between generated examples. Date/Author: 2026-02-23 / Codex.
 
 ## Outcomes & retrospective
 
-Pending implementation. This section will be updated with:
+Completed implementation for roadmap item `4.3.4`.
 
-- what shipped;
-- exact files changed;
-- quality-gate results;
-- lessons learned from property strategy tuning.
+What shipped:
+
+- New property-based unit tests in
+  `cuprum/unittests/test_stream_property_based.py` using Hypothesis strategies
+  for randomized payloads and randomized chunk boundaries.
+- New behavioural coverage in
+  `tests/features/stream_property_preservation.feature` and
+  `tests/behaviour/test_stream_property_preservation_behaviour.py` using
+  deterministic randomized cases for consumer-visible pipeline verification.
+- Shared helper extensions in `tests/helpers/parity.py` for chunk partitioning,
+  deterministic case generation, and reusable script generation.
+- Dev dependency update in `pyproject.toml` with lockfile refresh in `uv.lock`.
+- Documentation updates in `docs/cuprum-design.md` and `docs/users-guide.md`.
+- Roadmap item marked complete in `docs/roadmap.md`.
+
+Quality-gate evidence:
+
+- `make check-fmt`: pass.
+- `make typecheck`: pass.
+- `make lint`: pass.
+- `make test`: pass (`304 passed, 42 skipped`).
+- `make markdownlint`: pass.
+- `make nixie`: pass.
+
+Lessons learned:
+
+- Hypothesis plus function-scoped backend fixtures requires explicit
+  `HealthCheck.function_scoped_fixture` suppression when fixture reuse is
+  intentional.
+- Generated Python snippets should be newline-based for control-flow blocks;
+  inline semicolon chaining is error-prone for loops.
 
 ## Context and orientation
 
@@ -143,8 +191,8 @@ Current relevant state:
 - `conftest.py` provides `stream_backend` parametrization and cache clearing for
   backend resolution.
 - `cuprum/unittests/test_stream_parity.py` and
-  `tests/behaviour/test_stream_parity_behaviour.py` provide example-based parity
-  coverage, not property-based generation.
+  `tests/behaviour/test_stream_parity_behaviour.py` provide example-based
+  parity coverage, not property-based generation.
 - `tests/helpers/parity.py` already contains reusable parity utilities and is
   the natural place for chunk-partition helpers shared by unit and BDD tests.
 - `pyproject.toml` dev dependencies currently do not include `hypothesis`.
@@ -175,8 +223,8 @@ supporting implementation updates and record initial failures.
 Stage C: add minimal supporting implementation.
 
 Add Hypothesis dev dependency and any helper functions required to construct
-chunk-boundary write plans safely. If property tests expose a production defect,
-apply the smallest possible fix and document why in `Decision Log`.
+chunk-boundary write plans safely. If property tests expose a production
+defect, apply the smallest possible fix and document why in `Decision Log`.
 
 Stage D: documentation and roadmap updates.
 
@@ -191,8 +239,7 @@ Run required quality gates and capture log evidence.
 
 1. Add test scaffolding first (fail-first workflow).
 
-   Planned files:
-   `cuprum/unittests/test_stream_property_based.py`
+   Planned files: `cuprum/unittests/test_stream_property_based.py`
    `tests/features/stream_property_preservation.feature`
    `tests/behaviour/test_stream_property_preservation_behaviour.py`
    `tests/helpers/parity.py` (helper additions only)
@@ -216,17 +263,17 @@ Run required quality gates and capture log evidence.
 
    Expected before dependency/support updates:
 
-       ERROR ... ModuleNotFoundError: No module named 'hypothesis'
+       ERROR … ModuleNotFoundError: No module named 'hypothesis'
 
    If dependency is present already, expected pre-run should still fail because
-   new assertions are intentionally written before helper/implementation updates.
+   new assertions are intentionally written before helper/implementation
+   updates.
 
 3. Add or update support code with minimal scope.
 
-   Planned files:
-   `pyproject.toml` (dev dependency: `hypothesis`)
-   `uv.lock` (lockfile refresh)
-   `tests/helpers/parity.py` (shared chunk-plan/script helpers)
+   Planned files: `pyproject.toml` (dev dependency: `hypothesis`) `uv.lock`
+   (lockfile refresh) `tests/helpers/parity.py` (shared chunk-plan/script
+   helpers)
 
 4. Re-run targeted tests until green.
 
@@ -238,9 +285,7 @@ Run required quality gates and capture log evidence.
 
 5. Update documentation and roadmap.
 
-   Planned files:
-   `docs/cuprum-design.md`
-   `docs/users-guide.md`
+   Planned files: `docs/cuprum-design.md` `docs/users-guide.md`
    `docs/roadmap.md`
 
    Documentation updates must include:
@@ -316,3 +361,11 @@ Dependency policy for this task:
 
 - Add `hypothesis` as a dev dependency only.
 - No runtime dependency changes.
+
+Revision note (2026-02-23):
+
+- Updated status from `DRAFT` to `IN PROGRESS` and then `COMPLETE`.
+- Recorded implementation progress, discovered issues, decisions, and final
+  outcomes with quality-gate results.
+- Captured targeted fail-first evidence (`ModuleNotFoundError`) and final
+  passing evidence (`304 passed, 42 skipped`).

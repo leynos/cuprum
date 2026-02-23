@@ -155,7 +155,7 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 - [x] 4.3.3. Create integration tests for pathway selection logic including
   environment variable overrides, forced fallback, and error handling when Rust
   is requested but unavailable.
-- [ ] 4.3.4. Add property-based tests using hypothesis for stream content
+- [x] 4.3.4. Add property-based tests using hypothesis for stream content
   preservation across random payloads and chunk boundaries.
 
 ### 4.4. Benchmarking CI
