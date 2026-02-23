@@ -22,6 +22,7 @@ import os
 from cuprum import _rust_backend
 
 _ENV_VAR = "CUPRUM_STREAM_BACKEND"
+_RUST_AVAILABILITY_FOR_TESTING: bool | None = None
 
 
 class StreamBackend(enum.StrEnum):
@@ -83,7 +84,27 @@ def _check_rust_available() -> bool:
     ``_check_rust_available.cache_clear()`` to force a re-check (useful in
     tests).
     """
+    if _RUST_AVAILABILITY_FOR_TESTING is not None:
+        return _RUST_AVAILABILITY_FOR_TESTING
     return _rust_backend.is_available()
+
+
+def set_rust_availability_for_testing(
+    *,
+    is_available: bool | None,
+) -> None:
+    """Override Rust availability checks for tests.
+
+    Parameters
+    ----------
+    is_available : bool | None
+        ``True`` forces Rust-available behaviour, ``False`` forces
+        unavailable behaviour, and ``None`` restores normal probing.
+    """
+    global _RUST_AVAILABILITY_FOR_TESTING
+    _RUST_AVAILABILITY_FOR_TESTING = is_available
+    _check_rust_available.cache_clear()
+    get_stream_backend.cache_clear()
 
 
 @functools.lru_cache(maxsize=1)

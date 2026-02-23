@@ -10,13 +10,20 @@ depend on incidental re-exports from public modules like ``cuprum.sh``.
 
 from __future__ import annotations
 
-from cuprum._backend import _check_rust_available
+import typing as typ
+
+from cuprum._backend import _check_rust_available, set_rust_availability_for_testing
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
     _run_before_hooks,
     _run_pipeline,
 )
-from cuprum._pipeline_streams import _prepare_pipeline_config, _pump_stream_dispatch
+from cuprum._pipeline_streams import (
+    _prepare_pipeline_config,
+    _pump_stream_dispatch,
+    configure_pump_stream_dispatch_for_testing,
+    reset_pump_stream_dispatch_for_testing,
+)
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
 from cuprum._process_lifecycle import (
     _merge_env,
@@ -33,7 +40,50 @@ from cuprum._streams import (
 )
 from cuprum.sh import _resolve_timeout
 
+if typ.TYPE_CHECKING:
+    import asyncio
+
+    import pytest
+
+
+def force_python_pump_fallback(
+    _monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, int]:
+    """Force dispatch fallback to the Python pump and count fallback calls.
+
+    Parameters
+    ----------
+    _monkeypatch : pytest.MonkeyPatch
+        Unused fixture parameter kept for backwards-compatible call sites.
+
+    Returns
+    -------
+    dict[str, int]
+        Mutable counter updated each time the Python pump fallback runs.
+    """
+    call_counter = {"calls": 0}
+
+    async def counted_pump(
+        reader: asyncio.StreamReader | None,
+        writer: asyncio.StreamWriter | None,
+    ) -> None:
+        call_counter["calls"] += 1
+        await _pump_stream(reader, writer)
+
+    configure_pump_stream_dispatch_for_testing(
+        force_fd_extraction_failure=True,
+        python_pump=counted_pump,
+    )
+    return call_counter
+
+
 _EXPORTS = {
+    "configure_pump_stream_dispatch_for_testing": (
+        configure_pump_stream_dispatch_for_testing
+    ),
+    "force_python_pump_fallback": force_python_pump_fallback,
+    "reset_pump_stream_dispatch_for_testing": reset_pump_stream_dispatch_for_testing,
+    "set_rust_availability_for_testing": set_rust_availability_for_testing,
     "_check_rust_available": _check_rust_available,
     "_MIN_PIPELINE_STAGES": _MIN_PIPELINE_STAGES,
     "_merge_env": _merge_env,
