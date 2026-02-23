@@ -114,7 +114,7 @@ Hard invariants that must hold throughout implementation:
 ## Decision log
 
 - Decision: use byte-preservation as the primary invariant for property-based
-  tests, with pipeline output normalised through a deterministic representation
+  tests, with pipeline output normalized through a deterministic representation
   (for example, hex output).
   Rationale: byte-preservation avoids false negatives from text-decoding
   behaviour and directly validates transport integrity across chunk boundaries.
@@ -140,7 +140,7 @@ Pending implementation. This section will be updated with:
 
 Current relevant state:
 
-- `conftest.py` provides `stream_backend` parametrisation and cache clearing for
+- `conftest.py` provides `stream_backend` parametrization and cache clearing for
   backend resolution.
 - `cuprum/unittests/test_stream_parity.py` and
   `tests/behaviour/test_stream_parity_behaviour.py` provide example-based parity
@@ -169,7 +169,7 @@ bug. Go/no-go: proceed only once the invariant and file map are explicit.
 Stage B: add tests first and confirm fail-first behaviour.
 
 Add a new property-based unit test module, plus BDD scenarios and step
-definitions for deterministic randomised cases. Run targeted tests before any
+definitions for deterministic randomized cases. Run targeted tests before any
 supporting implementation updates and record initial failures.
 
 Stage C: add minimal supporting implementation.
