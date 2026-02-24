@@ -121,7 +121,7 @@ def test_stream_preserves_random_payloads_around_python_read_size_boundary(
     stream_backend: str,
     case: tuple[bytes, tuple[int, ...]],
 ) -> None:
-    """Property: random payloads around 4 KB are preserved across chunk splits.
+    """Property: payloads around _READ_SIZE (+/- _BOUNDARY_DELTA) are preserved.
 
     Parameters
     ----------
