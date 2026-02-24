@@ -26,7 +26,7 @@ if typ.TYPE_CHECKING:
 _GENERAL_MAX_EXAMPLES = 12
 _BOUNDARY_MAX_EXAMPLES = 6
 _BOUNDARY_DELTA = 512
-_BOUNDARY_MIN_SIZE = _READ_SIZE - _BOUNDARY_DELTA
+_BOUNDARY_MIN_SIZE = max(0, _READ_SIZE - _BOUNDARY_DELTA)
 _BOUNDARY_MAX_SIZE = _READ_SIZE + _BOUNDARY_DELTA
 
 
@@ -38,24 +38,7 @@ def _payload_and_chunk_sizes(
     max_size: int,
     max_cuts: int,
 ) -> tuple[bytes, tuple[int, ...]]:
-    """Generate random payload bytes and random chunk partitions.
-
-    Parameters
-    ----------
-    draw : st.DrawFn
-        Hypothesis draw function used by ``@st.composite``.
-    min_size : int
-        Minimum payload size in bytes.
-    max_size : int
-        Maximum payload size in bytes.
-    max_cuts : int
-        Maximum number of cut points used to partition the payload.
-
-    Returns
-    -------
-    tuple[bytes, tuple[int, ...]]
-        Random payload bytes and a tuple of chunk sizes.
-    """
+    """Generate random payload bytes and chunk sizes for tests."""
     payload = draw(st.binary(min_size=min_size, max_size=max_size))
     payload_size = len(payload)
 
@@ -66,7 +49,7 @@ def _payload_and_chunk_sizes(
         return payload, (payload_size,)
 
     cut_ceiling = min(max_cuts, payload_size - 1)
-    cut_points = draw(
+    cut_points: tuple[int, ...] = draw(
         st.lists(
             st.integers(min_value=1, max_value=payload_size - 1),
             min_size=1,
