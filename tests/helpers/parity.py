@@ -33,7 +33,19 @@ _POOLS = (_ONE_BYTE, _TWO_BYTE, _THREE_BYTE, _FOUR_BYTE)
 
 @dc.dataclass(frozen=True, slots=True)
 class PropertyPipelineCase:
-    """Shared pipeline case for property-preservation tests."""
+    """Shared pipeline case for property-preservation tests.
+
+    Attributes
+    ----------
+    pipeline : Pipeline
+        Two-stage writer-to-hex pipeline used for property assertions.
+    allowlist : frozenset[Program]
+        Program allowlist required for scoped execution.
+    expected_hex : str
+        Expected downstream hexadecimal representation of payload bytes.
+    chunk_count : int
+        Number of configured upstream write chunks.
+    """
 
     pipeline: Pipeline
     allowlist: frozenset[Program]
@@ -181,7 +193,7 @@ def deterministic_property_case(
         msg = f"max_cuts must be non-negative, got {max_cuts}"
         raise ValueError(msg)
 
-    rng = random.Random(seed)  # noqa: S311 — deterministic test data only
+    rng = random.Random(seed)  # noqa: S311  # FIXME: deterministic test-data RNG, not for security use
     payload = rng.randbytes(payload_size)
 
     if payload_size <= 1 or max_cuts == 0:

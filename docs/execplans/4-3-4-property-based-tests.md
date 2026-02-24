@@ -95,7 +95,7 @@ Hard invariants that must hold throughout implementation:
   and captured expected `ModuleNotFoundError` for Hypothesis.
 - [x] (2026-02-23 16:50Z) Stage C: Added `hypothesis` dev dependency, lockfile
   update via `make build`, and helper support code.
-- [x] (2026-02-23 16:50Z) Stage D: Updated design docs, users guide, and
+- [x] (2026-02-23 16:50Z) Stage D: Updated design docs, user's guide, and
   roadmap entry `4.3.4`.
 - [x] (2026-02-23 16:52Z) Stage E: Full quality gates passed and evidence
   captured in `/tmp/4-3-4-*.log`.
@@ -188,9 +188,8 @@ Lessons learned:
 
 Current relevant state:
 
-- `conftest.py` provides `stream_backend` parameterization and cache clearing
-  for
-  backend resolution.
+- `conftest.py` provides `stream_backend` parameterization
+  and cache clearing for backend resolution.
 - `cuprum/unittests/test_stream_parity.py` and
   `tests/behaviour/test_stream_parity_behaviour.py` provide example-based
   parity coverage, not property-based generation.

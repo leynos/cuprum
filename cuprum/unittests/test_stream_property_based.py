@@ -95,10 +95,16 @@ def test_stream_preserves_random_payloads_across_random_chunk_boundaries(
     property_case = build_property_pipeline_case(payload, chunk_sizes)
     result = run_parity_pipeline(property_case.pipeline, property_case.allowlist)
 
-    assert result.ok is True
-    assert result.stdout == property_case.expected_hex
-    assert len(result.stages) == 2
-    assert all(stage.exit_code == 0 for stage in result.stages)
+    assert result.ok is True, f"expected result.ok to be True but got {result.ok}"
+    assert result.stdout == property_case.expected_hex, (
+        f"stdout mismatch: expected {property_case.expected_hex!r} but got "
+        f"{result.stdout!r}"
+    )
+    assert len(result.stages) == 2, f"expected 2 stages but got {len(result.stages)}"
+    assert all(stage.exit_code == 0 for stage in result.stages), (
+        "one or more stages had non-zero exit_code: "
+        f"{[stage.exit_code for stage in result.stages]}"
+    )
 
 
 @settings(
@@ -131,7 +137,13 @@ def test_stream_preserves_random_payloads_around_python_read_size_boundary(
     property_case = build_property_pipeline_case(payload, chunk_sizes)
     result = run_parity_pipeline(property_case.pipeline, property_case.allowlist)
 
-    assert result.ok is True
-    assert result.stdout == property_case.expected_hex
-    assert len(result.stages) == 2
-    assert all(stage.exit_code == 0 for stage in result.stages)
+    assert result.ok is True, f"expected result.ok to be True but got {result.ok}"
+    assert result.stdout == property_case.expected_hex, (
+        f"stdout mismatch: expected {property_case.expected_hex!r} but got "
+        f"{result.stdout!r}"
+    )
+    assert len(result.stages) == 2, f"expected 2 stages but got {len(result.stages)}"
+    assert all(stage.exit_code == 0 for stage in result.stages), (
+        "one or more stages had non-zero exit_code: "
+        f"{[stage.exit_code for stage in result.stages]}"
+    )

@@ -56,7 +56,12 @@ def given_deterministic_payload(
         Pipeline configuration and expected output for assertions.
     """
     payload, chunk_sizes = deterministic_property_case(seed=seed, payload_size=size)
-    return build_property_pipeline_case(payload, chunk_sizes)
+    property_scenario = build_property_pipeline_case(payload, chunk_sizes)
+    assert property_scenario.chunk_count >= 2, (
+        "Expected at least 2 chunks in property scenario; "
+        f"got chunk_count={property_scenario.chunk_count}"
+    )
+    return property_scenario
 
 
 @when(
@@ -98,10 +103,6 @@ def then_hex_matches(
     pipeline_result : PipelineResult
         Actual execution result.
     """
-    assert property_scenario.chunk_count >= 2, (
-        "Expected at least 2 chunks in property scenario; "
-        f"got chunk_count={property_scenario.chunk_count}"
-    )
     assert pipeline_result.stdout == property_scenario.expected_hex, (
         "Expected pipeline stdout to match hex-encoded source payload; "
         f"got stdout={pipeline_result.stdout!r}"
