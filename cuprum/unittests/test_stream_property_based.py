@@ -7,15 +7,21 @@ the downstream stage receives identical bytes by comparing hexadecimal output.
 
 from __future__ import annotations
 
+import typing as typ
+
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from cuprum._streams import _READ_SIZE
+from cuprum._testing import _READ_SIZE
 from tests.helpers.parity import (
+    PropertyPipelineCase,
     build_property_pipeline_case,
     chunk_sizes_from_cut_points,
     run_parity_pipeline,
 )
+
+if typ.TYPE_CHECKING:
+    from cuprum.sh import PipelineResult
 
 _GENERAL_MAX_EXAMPLES = 12
 _BOUNDARY_MAX_EXAMPLES = 6
@@ -25,7 +31,7 @@ _BOUNDARY_MAX_SIZE = _READ_SIZE + _BOUNDARY_DELTA
 
 
 @st.composite
-def payload_and_chunk_sizes(
+def _payload_and_chunk_sizes(
     draw: st.DrawFn,
     *,
     min_size: int,
@@ -71,13 +77,30 @@ def payload_and_chunk_sizes(
     return payload, chunk_sizes_from_cut_points(payload_size, cut_points)
 
 
+def _assert_pipeline_result(
+    result: PipelineResult,
+    property_case: PropertyPipelineCase,
+) -> None:
+    """Assert shared success invariants for property-based stream pipelines."""
+    assert result.ok is True, f"expected result.ok to be True but got {result.ok}"
+    assert result.stdout == property_case.expected_hex, (
+        f"stdout mismatch: expected {property_case.expected_hex!r} but got "
+        f"{result.stdout!r}"
+    )
+    assert len(result.stages) == 2, f"expected 2 stages but got {len(result.stages)}"
+    assert all(stage.exit_code == 0 for stage in result.stages), (
+        "one or more stages had non-zero exit_code: "
+        f"{[stage.exit_code for stage in result.stages]}"
+    )
+
+
 @settings(
     max_examples=_GENERAL_MAX_EXAMPLES,
     deadline=None,
     derandomize=True,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
-@given(case=payload_and_chunk_sizes(min_size=0, max_size=1024, max_cuts=8))
+@given(case=_payload_and_chunk_sizes(min_size=0, max_size=1024, max_cuts=8))
 def test_stream_preserves_random_payloads_across_random_chunk_boundaries(
     stream_backend: str,
     case: tuple[bytes, tuple[int, ...]],
@@ -95,16 +118,7 @@ def test_stream_preserves_random_payloads_across_random_chunk_boundaries(
     property_case = build_property_pipeline_case(payload, chunk_sizes)
     result = run_parity_pipeline(property_case.pipeline, property_case.allowlist)
 
-    assert result.ok is True, f"expected result.ok to be True but got {result.ok}"
-    assert result.stdout == property_case.expected_hex, (
-        f"stdout mismatch: expected {property_case.expected_hex!r} but got "
-        f"{result.stdout!r}"
-    )
-    assert len(result.stages) == 2, f"expected 2 stages but got {len(result.stages)}"
-    assert all(stage.exit_code == 0 for stage in result.stages), (
-        "one or more stages had non-zero exit_code: "
-        f"{[stage.exit_code for stage in result.stages]}"
-    )
+    _assert_pipeline_result(result, property_case)
 
 
 @settings(
@@ -114,7 +128,7 @@ def test_stream_preserves_random_payloads_across_random_chunk_boundaries(
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 @given(
-    case=payload_and_chunk_sizes(
+    case=_payload_and_chunk_sizes(
         min_size=_BOUNDARY_MIN_SIZE,
         max_size=_BOUNDARY_MAX_SIZE,
         max_cuts=16,
@@ -137,13 +151,4 @@ def test_stream_preserves_random_payloads_around_python_read_size_boundary(
     property_case = build_property_pipeline_case(payload, chunk_sizes)
     result = run_parity_pipeline(property_case.pipeline, property_case.allowlist)
 
-    assert result.ok is True, f"expected result.ok to be True but got {result.ok}"
-    assert result.stdout == property_case.expected_hex, (
-        f"stdout mismatch: expected {property_case.expected_hex!r} but got "
-        f"{result.stdout!r}"
-    )
-    assert len(result.stages) == 2, f"expected 2 stages but got {len(result.stages)}"
-    assert all(stage.exit_code == 0 for stage in result.stages), (
-        "one or more stages had non-zero exit_code: "
-        f"{[stage.exit_code for stage in result.stages]}"
-    )
+    _assert_pipeline_result(result, property_case)
