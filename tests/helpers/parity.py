@@ -185,7 +185,7 @@ def deterministic_property_case(
     payload = rng.randbytes(payload_size)
 
     if payload_size <= 1 or max_cuts == 0:
-        return payload, (payload_size,) if payload_size == 1 else ()
+        return payload, (payload_size,) if payload_size > 0 else ()
 
     upper_bound = min(max_cuts, payload_size - 1)
     cut_count = rng.randint(1, upper_bound)

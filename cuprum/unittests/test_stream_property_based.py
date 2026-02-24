@@ -53,8 +53,11 @@ def payload_and_chunk_sizes(
     payload = draw(st.binary(min_size=min_size, max_size=max_size))
     payload_size = len(payload)
 
-    if payload_size <= 1 or max_cuts == 0:
-        return payload, (payload_size,) if payload_size == 1 else ()
+    if payload_size <= 1:
+        return payload, (payload_size,) if payload_size > 0 else ()
+
+    if max_cuts == 0:
+        return payload, (payload_size,)
 
     cut_ceiling = min(max_cuts, payload_size - 1)
     cut_points = draw(
@@ -84,7 +87,7 @@ def test_stream_preserves_random_payloads_across_random_chunk_boundaries(
     Parameters
     ----------
     stream_backend : str
-        Active stream backend from fixture parametrisation.
+        Active stream backend from fixture parameterization.
     case : tuple[bytes, tuple[int, ...]]
         Random payload and random chunk partition.
     """
@@ -120,7 +123,7 @@ def test_stream_preserves_random_payloads_around_python_read_size_boundary(
     Parameters
     ----------
     stream_backend : str
-        Active stream backend from fixture parametrisation.
+        Active stream backend from fixture parameterization.
     case : tuple[bytes, tuple[int, ...]]
         Random payload and random chunk partition.
     """

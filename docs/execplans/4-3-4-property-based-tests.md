@@ -45,7 +45,7 @@ Hard invariants that must hold throughout implementation:
   - behavioural tests using `pytest-bdd` in `tests/behaviour/` and
     `tests/features/`.
 - Limit production-code changes unless tests reveal a real bug. This task is
-  expected to be test and documentation heavy.
+  expected to be test- and documentation-heavy.
 - Keep public APIs stable (`cuprum/__init__.py` exports and user-facing
   command/pipeline interfaces unchanged).
 - Do not add runtime dependencies. A dev dependency on `hypothesis` is allowed
@@ -114,7 +114,7 @@ Hard invariants that must hold throughout implementation:
   function-scoped `stream_backend` fixture in property tests. Evidence:
   targeted post-change run failed with `HealthCheck.function_scoped_fixture`.
   Impact: property tests now explicitly suppress that health check in
-  `@settings(...)` because backend parametrisation is intentional for this
+  `@settings(...)` because backend parameterization is intentional for this
   suite.
 
 - Observation: the generated writer script was invalid when the loop was
@@ -144,7 +144,7 @@ Hard invariants that must hold throughout implementation:
   2026-02-23 / Codex.
 
 - Decision: suppress `HealthCheck.function_scoped_fixture` for Hypothesis tests
-  using the `stream_backend` fixture. Rationale: backend parametrisation is
+  using the `stream_backend` fixture. Rationale: backend parameterization is
   required by roadmap scope and stable in this suite; fixtures intentionally do
   not reset between generated examples. Date/Author: 2026-02-23 / Codex.
 
@@ -188,7 +188,8 @@ Lessons learned:
 
 Current relevant state:
 
-- `conftest.py` provides `stream_backend` parametrization and cache clearing for
+- `conftest.py` provides `stream_backend` parameterization and cache clearing
+  for
   backend resolution.
 - `cuprum/unittests/test_stream_parity.py` and
   `tests/behaviour/test_stream_parity_behaviour.py` provide example-based

@@ -98,8 +98,14 @@ def then_hex_matches(
     pipeline_result : PipelineResult
         Actual execution result.
     """
-    assert property_scenario.chunk_count >= 2
-    assert pipeline_result.stdout == property_scenario.expected_hex
+    assert property_scenario.chunk_count >= 2, (
+        "Expected at least 2 chunks in property scenario; "
+        f"got chunk_count={property_scenario.chunk_count}"
+    )
+    assert pipeline_result.stdout == property_scenario.expected_hex, (
+        "Expected pipeline stdout to match hex-encoded source payload; "
+        f"got stdout={pipeline_result.stdout!r}"
+    )
 
 
 @then("the pipeline completes successfully")
@@ -113,6 +119,12 @@ def then_pipeline_succeeds(
     pipeline_result : PipelineResult
         Actual execution result.
     """
-    assert pipeline_result.ok is True
-    assert len(pipeline_result.stages) == 2
-    assert all(stage.exit_code == 0 for stage in pipeline_result.stages)
+    assert pipeline_result.ok is True, "Expected pipeline result to be successful"
+    assert len(pipeline_result.stages) == 2, (
+        "Expected exactly 2 pipeline stages; "
+        f"got stage_count={len(pipeline_result.stages)}"
+    )
+    assert all(stage.exit_code == 0 for stage in pipeline_result.stages), (
+        "Expected all pipeline stages to exit with code 0; "
+        f"got exit_codes={[stage.exit_code for stage in pipeline_result.stages]}"
+    )
