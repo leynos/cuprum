@@ -998,9 +998,9 @@ Cuprum cannot extract raw file descriptors from asyncio transports for a
 specific transfer, it falls back to the Python pump for that transfer. This
 fallback is automatic and transparent to callers.
 
-Forced Rust mode is intentionally strict. If
-`CUPRUM_STREAM_BACKEND=rust` is set and the Rust extension is unavailable,
-pipeline execution raises `ImportError` instead of silently falling back.
+Forced Rust mode is intentionally strict. If `CUPRUM_STREAM_BACKEND=rust` is
+set and the Rust extension is unavailable, pipeline execution raises
+`ImportError` instead of silently falling back.
 
 Choose the Rust backend for high-throughput workloads (for example,
 multi-megabyte outputs) where lower per-chunk overhead improves throughput. For
@@ -1015,6 +1015,12 @@ downstream stage exits before the upstream finishes), and backpressure under
 large payloads. The test suite verifies that pipeline output is identical
 regardless of which backend is active, so switching between backends does not
 change observable behaviour.
+
+The stream test suite also includes property-based coverage using Hypothesis.
+These tests generate randomized payload bytes and randomized chunk boundaries,
+run them through real pipelines, and assert byte-preservation by comparing
+deterministic hexadecimal output. This provides broad regression coverage for
+content integrity across both Python and Rust pumping pathways.
 
 ### Linux splice() optimization
 
