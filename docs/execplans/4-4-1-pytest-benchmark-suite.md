@@ -5,7 +5,7 @@ This ExecPlan (execution plan) is a living document. The sections
 `Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work
 proceeds.
 
-Status: DRAFT
+Status: COMPLETE
 
 Roadmap reference: `docs/roadmap.md` item `4.4.1`.
 
@@ -99,11 +99,16 @@ This task is complete only when:
 ## Progress
 
 - [x] (2026-02-25) Drafted ExecPlan for roadmap item `4.4.1`.
-- [ ] Stage A: define benchmark interface and add fail-first tests.
-- [ ] Stage B: implement `pytest-benchmark` microbenchmark suite.
-- [ ] Stage C: implement `hyperfine` end-to-end harness.
-- [ ] Stage D: update docs and roadmap completion state.
-- [ ] Stage E: run full quality gates and capture logs.
+- [x] (2026-02-25) Stage A: added fail-first unit and behavioural tests and
+  captured the expected import error before implementation.
+- [x] (2026-02-25) Stage B: implemented `pytest-benchmark` microbenchmark suite
+  and `make benchmark-micro`.
+- [x] (2026-02-25) Stage C: implemented `hyperfine` throughput runner, worker,
+  and `make benchmark-e2e`.
+- [x] (2026-02-25) Stage D: updated `docs/cuprum-design.md`,
+  `docs/users-guide.md`, and marked roadmap item `4.4.1` done.
+- [x] (2026-02-25) Stage E: completed full quality gates and Markdown/diagram
+  checks.
 
 ## Surprises & discoveries
 
@@ -120,6 +125,12 @@ This task is complete only when:
   consume throughput benchmarks must document exactly what is being measured
   and avoid implying Rust consume-path dispatch that does not exist.
 
+- Observation: Ruff/typing rules in this repository are strict for benchmark
+  files too (`S404`, `PLR0913`, `ANN401`, and import-convention rules).
+  Evidence: first `make lint` run failed on new benchmark modules. Impact:
+  benchmark modules were refactored/annotated to meet production lint standards
+  rather than relying on broad ignores.
+
 ## Decision log
 
 - Decision: keep this implementation limited to benchmark suite creation and
@@ -133,17 +144,49 @@ This task is complete only when:
   preserves normal developer feedback speed while still shipping a reproducible
   benchmark suite. Date/Author: 2026-02-25 / Codex.
 
+- Decision: gate benchmark pytest module execution behind
+  `CUPRUM_RUN_BENCHMARKS=1`. Rationale: keeps normal `make test` deterministic
+  and fast while still allowing benchmark collection in dedicated targets.
+  Date/Author: 2026-02-25 / Codex.
+
+- Decision: add a `--dry-run` mode to the `hyperfine` runner that writes plan
+  JSON without executing benchmarks. Rationale: enables fast behavioural tests
+  and predictable CI smoke checks without hardware-dependent timing variance.
+  Date/Author: 2026-02-25 / Codex.
+
 ## Outcomes & retrospective
 
-Pending implementation.
+Completed implementation for roadmap item `4.4.1`.
 
-Target outcome summary:
+Delivered:
 
-- A benchmark suite exists for microbenchmarks (`pytest-benchmark`) and
-  end-to-end throughput (`hyperfine`).
-- The suite is covered by unit and behavioural tests for benchmark orchestration
-  and user-visible invocation behaviour.
-- Documentation and roadmap are updated, and all quality gates pass.
+- `pytest-benchmark` microbenchmarks for pump latency and consume throughput in
+  `benchmarks/test_stream_microbenchmarks.py`.
+- `hyperfine` end-to-end throughput runner and worker:
+  `benchmarks/pipeline_throughput.py` and `benchmarks/pipeline_worker.py`.
+- Benchmark orchestration unit and behavioural tests:
+  `cuprum/unittests/test_benchmark_suite.py`,
+  `tests/features/benchmark_suite.feature`,
+  `tests/behaviour/test_benchmark_suite_behaviour.py`.
+- Make targets `benchmark-micro` and `benchmark-e2e`.
+- Dev dependency update for `pytest-benchmark`.
+- Documentation updates in design and users guide, and roadmap item `4.4.1`
+  marked done.
+
+Quality and validation summary:
+
+- Red phase: targeted tests failed with `ModuleNotFoundError: benchmarks`.
+- Green phase: targeted benchmark-suite tests passed (`6 passed`).
+- Microbench command passed and emitted JSON artefact.
+- Throughput runner passed in dry-run and real smoke modes, emitting JSON
+  artefacts.
+- Final gates passed:
+  - `make check-fmt`
+  - `make typecheck`
+  - `make lint`
+  - `make test`
+  - `make markdownlint`
+  - `make nixie`
 
 ## Context and orientation
 
@@ -169,10 +212,10 @@ Relevant repository areas:
 
 Gap summary:
 
-- No `pytest-benchmark` dependency is currently configured.
-- No benchmark-oriented pytest module exists.
-- No `hyperfine` orchestration script exists.
-- No behavioural/unit test surface exists for benchmark command workflows.
+- Closed:
+  - `pytest-benchmark` is configured in dev dependencies.
+  - benchmark pytest module and hyperfine runner are implemented.
+  - unit and behavioural benchmark workflow tests exist.
 
 ## Plan of work
 
@@ -255,7 +298,6 @@ modules/functions.
 
    - `benchmarks/test_stream_microbenchmarks.py` (uses `pytest-benchmark`)
    - `benchmarks/pipeline_throughput.py` (`hyperfine` orchestration CLI)
-   - `tests/helpers/benchmarks.py` (shared deterministic benchmark fixtures)
    - `pyproject.toml` (add dev dependency `pytest-benchmark`)
    - `Makefile` (add explicit benchmark target(s), not part of default `test`)
 
@@ -373,24 +415,28 @@ Prescriptive interfaces for this milestone:
 
 - Dev dependency:
   - `pytest-benchmark` in `[dependency-groups].dev` in `pyproject.toml`.
-- Benchmark helper module (planned):
-  - `tests/helpers/benchmarks.py`
-  - defines scenario records and command builders for reuse by unit tests,
-    behavioural tests, and benchmark runners.
-- Hyperfine runner script (planned):
+- Hyperfine runner script:
   - `benchmarks/pipeline_throughput.py`
-  - accepts `--smoke` and `--output` to support deterministic behavioural tests
-    and normal benchmark runs.
-- Microbenchmark module (planned):
+  - accepts `--smoke`, `--output`, and `--dry-run`.
+- Throughput worker script:
+  - `benchmarks/pipeline_worker.py`
+  - executes a configurable multi-stage pipeline for one scenario.
+- Microbenchmark module:
   - `benchmarks/test_stream_microbenchmarks.py`
   - uses `pytest-benchmark` fixture for pump latency and consume throughput
     cases.
-- Make targets (planned):
+- Make targets:
   - `make benchmark-micro`
   - `make benchmark-e2e`
   - both opt-in and separate from `make test`.
 
 ## Revision note
 
-Initial draft created for roadmap item `4.4.1`, defining bounded scope,
-test-first stages, and quality-gate evidence requirements.
+Updated from draft to complete implementation state. Changes:
+
+- recorded completed stages, design decisions, outcomes, and validation
+  evidence;
+- updated interface section to reflect final shipped files and commands.
+Impact on remaining work:
+- roadmap item `4.4.1` is complete; follow-on CI gating/reporting items remain
+  under `4.4.3` and `4.4.4`.

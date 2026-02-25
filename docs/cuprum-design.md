@@ -1915,9 +1915,25 @@ Both pathways are tested as first-class implementations:
 - integration tests exercise pathway selection logic, including environment
   overrides, forced fallback when Rust FDs are unavailable, and `ImportError`
   propagation when Rust is explicitly requested but unavailable.
+- microbenchmarks use `pytest-benchmark` in
+  `benchmarks/test_stream_microbenchmarks.py` to track:
+  - pump latency (small payload, pipeline pump path), and
+  - consume throughput (captured stdout throughput).
+- end-to-end throughput uses `hyperfine` through
+  `benchmarks/pipeline_throughput.py`, which drives
+  `benchmarks/pipeline_worker.py` for scenario execution and emits JSON output.
 
 CI includes benchmark jobs that compare Python and Rust pathway throughput,
 failing if the Rust pathway regresses beyond a defined threshold.
+
+Benchmark execution is opt-in for normal development loops. `make test` skips
+the benchmark pytest module by default, while dedicated commands run benchmarks:
+
+- `make benchmark-micro` for `pytest-benchmark` JSON artefacts;
+- `make benchmark-e2e` for `hyperfine` throughput JSON artefacts.
+
+The throughput runner also supports `--dry-run` for deterministic plan JSON
+generation without invoking `hyperfine`, used by behavioural smoke tests.
 
 See ADR-001 (`docs/adr-001-rust-extension.md`) for detailed design decisions
 and alternatives considered.

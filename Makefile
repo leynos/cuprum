@@ -6,7 +6,8 @@ VENV_TOOLS = pytest
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
 
 .PHONY: help all clean build build-release lint fmt check-fmt \
-        markdownlint nixie test typecheck $(TOOLS) $(VENV_TOOLS)
+        markdownlint nixie test typecheck benchmark-micro benchmark-e2e \
+        $(TOOLS) $(VENV_TOOLS)
 
 .DEFAULT_GOAL := all
 
@@ -79,6 +80,17 @@ nixie: ## Validate Mermaid diagrams
 
 test: build uv $(VENV_TOOLS) ## Run tests
 	$(UV_ENV) uv run pytest -v -n auto
+
+benchmark-micro: build uv ## Run pytest-benchmark microbenchmarks
+	mkdir -p dist/benchmarks
+	$(UV_ENV) CUPRUM_RUN_BENCHMARKS=1 uv run pytest -q \
+	  benchmarks/test_stream_microbenchmarks.py \
+	  --benchmark-json=dist/benchmarks/microbenchmarks.json
+
+benchmark-e2e: build uv ## Run hyperfine end-to-end throughput benchmark
+	mkdir -p dist/benchmarks
+	$(UV_ENV) uv run python benchmarks/pipeline_throughput.py \
+	  --output dist/benchmarks/pipeline-throughput.json
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | \

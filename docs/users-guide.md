@@ -1022,6 +1022,51 @@ run them through real pipelines, and assert byte-preservation by comparing
 deterministic hexadecimal output. This provides broad regression coverage for
 content integrity across both Python and Rust pumping pathways.
 
+### Benchmark suite
+
+Cuprum includes an opt-in benchmark suite for stream-performance tracking.
+Benchmark modules are intentionally excluded from normal `make test` runs
+unless `CUPRUM_RUN_BENCHMARKS=1` is set.
+
+Run microbenchmarks (pytest-benchmark):
+
+```bash
+make benchmark-micro
+```
+
+This executes `benchmarks/test_stream_microbenchmarks.py` and writes benchmark
+results to `dist/benchmarks/microbenchmarks.json`.
+
+Run end-to-end throughput benchmarks (hyperfine):
+
+```bash
+make benchmark-e2e
+```
+
+This executes `benchmarks/pipeline_throughput.py` and writes throughput results
+to `dist/benchmarks/pipeline-throughput.json`.
+
+Generate a dry-run benchmark plan without executing hyperfine:
+
+```bash
+UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+  benchmarks/pipeline_throughput.py \
+  --smoke \
+  --dry-run \
+  --output /tmp/pipeline-throughput-plan.json
+```
+
+Dry-run output includes scenario metadata, command lines, and whether the Rust
+extension is available in the current environment.
+
+Interpretation notes:
+
+- pump-latency microbenchmarks reflect inter-stage pipeline transfer overhead;
+- consume-throughput microbenchmarks reflect captured stdout read/decode
+  throughput (currently Python consume path);
+- end-to-end hyperfine runs measure full worker-pipeline runtime and include a
+  Rust scenario only when the Rust extension is available.
+
 ### Linux splice() optimization
 
 On Linux, the Rust extension automatically uses the `splice()` system call for

@@ -160,7 +160,7 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 
 ### 4.4. Benchmarking CI
 
-- [ ] 4.4.1. Create a benchmark suite using `pytest-benchmark` for
+- [x] 4.4.1. Create a benchmark suite using `pytest-benchmark` for
   microbenchmarks (pump latency, consume throughput) and `hyperfine` for
   end-to-end pipeline throughput measurement.
 - [ ] 4.4.2. Define benchmark scenarios: small (1 KB), medium (1 MB), large
