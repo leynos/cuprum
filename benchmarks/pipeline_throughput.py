@@ -141,9 +141,8 @@ def build_hyperfine_command(  # noqa: PLR0913
         msg = "at least one benchmark scenario is required"
         raise ValueError(msg)
 
-    hyperfine = _resolve_executable(hyperfine_bin)
     command = [
-        hyperfine,
+        hyperfine_bin,
         "--export-json",
         str(output_path),
         "--warmup",
@@ -215,6 +214,7 @@ def run_pipeline_benchmarks(  # noqa: PLR0913
             rust_available=rust_available,
         )
     else:
+        command[0] = _resolve_executable(command[0])
         output_path.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(command, check=True)  # noqa: S603  # command built from fixed executable + controlled args
 
