@@ -5,6 +5,7 @@ from __future__ import annotations
 import pathlib as pth
 
 from benchmarks.pipeline_throughput import (
+    PipelineBenchmarkConfig,
     PipelineBenchmarkScenario,
     build_hyperfine_command,
     default_pipeline_scenarios,
@@ -52,13 +53,14 @@ def test_build_hyperfine_command_contains_export_runs_and_warmup(
             with_line_callbacks=False,
         ),
     )
-    command = build_hyperfine_command(
-        scenarios=scenarios,
+    config = PipelineBenchmarkConfig(
         output_path=tmp_path / "bench.json",
         worker_path=pth.Path("benchmarks/pipeline_worker.py"),
+        scenarios=scenarios,
         warmup=1,
         runs=2,
     )
+    command = build_hyperfine_command(config=config)
 
     assert command[0].endswith("hyperfine")
     assert "--export-json" in command
@@ -79,15 +81,15 @@ def test_run_pipeline_benchmarks_dry_run_writes_json(tmp_path: pth.Path) -> None
             with_line_callbacks=False,
         ),
     )
-
-    result = run_pipeline_benchmarks(
+    config = PipelineBenchmarkConfig(
         output_path=output_path,
-        scenarios=scenarios,
         worker_path=pth.Path("benchmarks/pipeline_worker.py"),
+        scenarios=scenarios,
         dry_run=True,
         warmup=1,
         runs=2,
     )
+    result = run_pipeline_benchmarks(config=config)
 
     assert result.dry_run is True
     assert output_path.is_file()

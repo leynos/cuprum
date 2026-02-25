@@ -39,6 +39,38 @@ class PipelineBenchmarkScenario:
 
 
 @dc.dataclass(frozen=True, slots=True)
+class HyperfineConfig:
+    """Configuration for hyperfine invocation parameters."""
+
+    warmup: int
+    runs: int
+    hyperfine_bin: str = "hyperfine"
+
+    def __post_init__(self) -> None:
+        """Validate hyperfine invocation configuration."""
+        if self.warmup < 0:
+            msg = f"warmup must be >= 0, got {self.warmup}"
+            raise ValueError(msg)
+        if self.runs < 1:
+            msg = f"runs must be >= 1, got {self.runs}"
+            raise ValueError(msg)
+
+
+@dc.dataclass(frozen=True, slots=True)
+class PipelineBenchmarkConfig:
+    """Configuration for running pipeline benchmarks."""
+
+    output_path: pth.Path
+    worker_path: pth.Path
+    scenarios: tuple[PipelineBenchmarkScenario, ...]
+    warmup: int
+    runs: int
+    hyperfine_bin: str = "hyperfine"
+    dry_run: bool = False
+    rust_available: bool = False
+
+
+@dc.dataclass(frozen=True, slots=True)
 class PipelineBenchmarkRunResult:
     """Result metadata for a benchmark CLI invocation."""
 
@@ -121,39 +153,30 @@ def _resolve_executable(name: str) -> str:
     return resolved
 
 
-def build_hyperfine_command(  # noqa: PLR0913
-    *,
-    scenarios: typ.Sequence[PipelineBenchmarkScenario],
-    output_path: pth.Path,
-    worker_path: pth.Path,
-    warmup: int,
-    runs: int,
-    hyperfine_bin: str = "hyperfine",
-) -> list[str]:
+def build_hyperfine_command(*, config: PipelineBenchmarkConfig) -> list[str]:
     """Construct the hyperfine command from benchmark scenarios."""
-    if warmup < 0:
-        msg = f"warmup must be >= 0, got {warmup}"
-        raise ValueError(msg)
-    if runs < 1:
-        msg = f"runs must be >= 1, got {runs}"
-        raise ValueError(msg)
-    if not scenarios:
+    hyperfine_config = HyperfineConfig(
+        warmup=config.warmup,
+        runs=config.runs,
+        hyperfine_bin=config.hyperfine_bin,
+    )
+    if not config.scenarios:
         msg = "at least one benchmark scenario is required"
         raise ValueError(msg)
 
     command = [
-        hyperfine_bin,
+        hyperfine_config.hyperfine_bin,
         "--export-json",
-        str(output_path),
+        str(config.output_path),
         "--warmup",
-        str(warmup),
+        str(hyperfine_config.warmup),
         "--runs",
-        str(runs),
+        str(hyperfine_config.runs),
     ]
-    for scenario in scenarios:
+    for scenario in config.scenarios:
         worker_command = _build_worker_command(
             scenario=scenario,
-            worker_path=worker_path,
+            worker_path=config.worker_path,
         )
         command.append(
             render_prefixed_command(
@@ -185,45 +208,30 @@ def _write_dry_run_payload(
     )
 
 
-def run_pipeline_benchmarks(  # noqa: PLR0913
-    *,
-    output_path: pth.Path,
-    scenarios: typ.Sequence[PipelineBenchmarkScenario],
-    worker_path: pth.Path,
-    dry_run: bool,
-    warmup: int,
-    runs: int,
-    hyperfine_bin: str = "hyperfine",
-    rust_available: bool = False,
+def run_pipeline_benchmarks(
+    *, config: PipelineBenchmarkConfig
 ) -> PipelineBenchmarkRunResult:
     """Run hyperfine benchmarks or emit a dry-run plan JSON."""
-    command = build_hyperfine_command(
-        scenarios=scenarios,
-        output_path=output_path,
-        worker_path=worker_path,
-        warmup=warmup,
-        runs=runs,
-        hyperfine_bin=hyperfine_bin,
-    )
+    command = build_hyperfine_command(config=config)
 
-    if dry_run:
+    if config.dry_run:
         _write_dry_run_payload(
-            output_path=output_path,
+            output_path=config.output_path,
             command=command,
-            scenarios=scenarios,
-            rust_available=rust_available,
+            scenarios=config.scenarios,
+            rust_available=config.rust_available,
         )
     else:
         command[0] = _resolve_executable(command[0])
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        config.output_path.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(command, check=True)  # noqa: S603  # command built from fixed executable + controlled args
 
     return PipelineBenchmarkRunResult(
-        dry_run=dry_run,
+        dry_run=config.dry_run,
         command=tuple(command),
-        output_path=output_path,
-        rust_available=rust_available,
-        scenarios=tuple(scenarios),
+        output_path=config.output_path,
+        rust_available=config.rust_available,
+        scenarios=config.scenarios,
     )
 
 
@@ -271,15 +279,16 @@ def main() -> int:
     )
     worker_path = pth.Path(__file__).with_name("pipeline_worker.py")
 
-    run_pipeline_benchmarks(
+    config = PipelineBenchmarkConfig(
         output_path=args.output,
-        scenarios=scenarios,
         worker_path=worker_path,
-        dry_run=args.dry_run,
+        scenarios=scenarios,
         warmup=args.warmup,
         runs=args.runs,
+        dry_run=args.dry_run,
         rust_available=rust_available,
     )
+    run_pipeline_benchmarks(config=config)
     return 0
 
 
