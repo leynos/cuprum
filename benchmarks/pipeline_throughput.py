@@ -1,4 +1,34 @@
-"""Run end-to-end pipeline throughput benchmarks with hyperfine."""
+"""Benchmark end-to-end pipeline throughput with hyperfine.
+
+This module defines benchmark scenarios, command rendering helpers, and a CLI
+for running or dry-running pipeline throughput measurements.
+
+Utility
+-------
+The runner can:
+
+- construct a scenario matrix for Python and optional Rust backends;
+- render environment-prefixed worker commands for hyperfine; and
+- execute hyperfine or emit a dry-run JSON plan for CI validation.
+
+Usage
+-----
+Use the CLI directly or call the helpers from tests and automation.
+
+Examples
+--------
+Run a smoke dry-run plan:
+
+>>> # doctest: +SKIP
+>>> main_args = [
+...     "python",
+...     "benchmarks/pipeline_throughput.py",
+...     "--smoke",
+...     "--dry-run",
+...     "--output",
+...     "dist/benchmarks/pipeline-throughput-plan.json",
+... ]
+"""
 
 from __future__ import annotations
 
@@ -16,12 +46,26 @@ from cuprum import is_rust_available
 _SMOKE_PAYLOAD_BYTES = 1024
 _DEFAULT_PAYLOAD_BYTES = 1024 * 1024
 _VALID_BACKENDS = {"python", "rust"}
+_MIN_PIPELINE_STAGES = 2
 
 BackendName = typ.Literal["python", "rust"]
 
 
 class PipelineBenchmarkScenarioDict(typ.TypedDict):
-    """JSON-serialisable shape for benchmark scenarios."""
+    """Represent the serialisable shape for a benchmark scenario.
+
+    Examples
+    --------
+    >>> PipelineBenchmarkScenarioDict(
+    ...     name="pipeline-python",
+    ...     backend="python",
+    ...     payload_bytes=1024,
+    ...     stages=3,
+    ...     with_line_callbacks=False,
+    ... )
+    {'name': 'pipeline-python', 'backend': 'python', 'payload_bytes': 1024, \
+'stages': 3, 'with_line_callbacks': False}
+    """
 
     name: str
     backend: BackendName
@@ -32,7 +76,39 @@ class PipelineBenchmarkScenarioDict(typ.TypedDict):
 
 @dc.dataclass(frozen=True, slots=True)
 class PipelineBenchmarkScenario:
-    """Configuration for one hyperfine command scenario."""
+    """Configure one hyperfine benchmark scenario.
+
+    Parameters
+    ----------
+    name:
+        Human-readable scenario name used in benchmark output.
+    backend:
+        Stream backend to benchmark (`"python"` or `"rust"`).
+    payload_bytes:
+        Size of payload written into the benchmarked pipeline.
+    stages:
+        Number of pipeline stages executed by the worker.
+    with_line_callbacks:
+        Whether to enable line callback overhead in the worker.
+
+    Raises
+    ------
+    ValueError
+        If ``name`` is empty, ``payload_bytes`` is non-positive, ``stages`` is
+        less than two, or ``backend`` is not supported.
+
+    Examples
+    --------
+    >>> PipelineBenchmarkScenario(
+    ...     name="pipeline-python",
+    ...     backend="python",
+    ...     payload_bytes=1024,
+    ...     stages=3,
+    ...     with_line_callbacks=False,
+    ... )
+    PipelineBenchmarkScenario(name='pipeline-python', backend='python', \
+payload_bytes=1024, stages=3, with_line_callbacks=False)
+    """
 
     name: str
     backend: BackendName
@@ -42,6 +118,20 @@ class PipelineBenchmarkScenario:
 
     def __post_init__(self) -> None:
         """Validate scenario values that are critical for execution."""
+        if not isinstance(self.name, str) or not self.name.strip():
+            msg = "name must be a non-empty string"
+            raise ValueError(msg)
+
+        payload_bytes = _validate_int(self.payload_bytes, name="payload_bytes")
+        if payload_bytes <= 0:
+            msg = f"payload_bytes must be > 0, got {payload_bytes}"
+            raise ValueError(msg)
+
+        stages = _validate_int(self.stages, name="stages")
+        if stages < _MIN_PIPELINE_STAGES:
+            msg = f"stages must be >= {_MIN_PIPELINE_STAGES}, got {stages}"
+            raise ValueError(msg)
+
         if self.backend not in _VALID_BACKENDS:
             msg = (
                 f"backend must be one of {sorted(_VALID_BACKENDS)}, "
@@ -50,7 +140,25 @@ class PipelineBenchmarkScenario:
             raise ValueError(msg)
 
     def as_dict(self) -> PipelineBenchmarkScenarioDict:
-        """Return a JSON-serialisable representation."""
+        """Convert the scenario into a JSON-serialisable mapping.
+
+        Returns
+        -------
+        PipelineBenchmarkScenarioDict
+            Scenario fields ready for JSON encoding.
+
+        Examples
+        --------
+        >>> PipelineBenchmarkScenario(
+        ...     name="pipeline-python",
+        ...     backend="python",
+        ...     payload_bytes=1024,
+        ...     stages=3,
+        ...     with_line_callbacks=False,
+        ... ).as_dict()
+        {'name': 'pipeline-python', 'backend': 'python', 'payload_bytes': 1024, \
+'stages': 3, 'with_line_callbacks': False}
+        """
         return {
             "name": self.name,
             "backend": self.backend,
@@ -62,7 +170,29 @@ class PipelineBenchmarkScenario:
 
 @dc.dataclass(frozen=True, slots=True)
 class HyperfineConfig:
-    """Configuration for hyperfine invocation parameters."""
+    """Configure hyperfine-specific iteration settings.
+
+    Parameters
+    ----------
+    warmup:
+        Number of warmup iterations per command.
+    runs:
+        Number of measured iterations per command.
+    hyperfine_bin:
+        Executable name or path used to invoke hyperfine.
+
+    Raises
+    ------
+    TypeError
+        If ``warmup`` or ``runs`` are not integers.
+    ValueError
+        If ``warmup`` is negative or ``runs`` is less than one.
+
+    Examples
+    --------
+    >>> HyperfineConfig(warmup=1, runs=3)
+    HyperfineConfig(warmup=1, runs=3, hyperfine_bin='hyperfine')
+    """
 
     warmup: int
     runs: int
@@ -112,7 +242,47 @@ def _validate_hyperfine_iterations(*, warmup: object, runs: object) -> None:
 
 @dc.dataclass(frozen=True, slots=True)
 class PipelineBenchmarkConfig:
-    """Configuration for running pipeline benchmarks."""
+    """Configure a full pipeline benchmark run.
+
+    Parameters
+    ----------
+    output_path:
+        Output path for hyperfine JSON or dry-run plan JSON.
+    worker_path:
+        Path to ``benchmarks/pipeline_worker.py``.
+    scenarios:
+        Benchmark scenarios that are converted into hyperfine commands.
+    warmup:
+        Warmup iteration count for hyperfine.
+    runs:
+        Measured iteration count for hyperfine.
+    hyperfine_bin:
+        Executable name or path for hyperfine.
+    uv_bin:
+        Executable name or path for the ``uv`` launcher.
+    dry_run:
+        Whether to emit plan JSON without invoking hyperfine.
+    rust_available:
+        Whether Rust backend support is available in the current environment.
+
+    Raises
+    ------
+    TypeError
+        If boolean settings are not booleans.
+    ValueError
+        If configured executable names are empty.
+
+    Examples
+    --------
+    >>> PipelineBenchmarkConfig(
+    ...     output_path=pth.Path("dist/benchmarks/pipeline-throughput.json"),
+    ...     worker_path=pth.Path("benchmarks/pipeline_worker.py"),
+    ...     scenarios=(),
+    ...     warmup=1,
+    ...     runs=3,
+    ... )
+    PipelineBenchmarkConfig(...)
+    """
 
     output_path: pth.Path
     worker_path: pth.Path
@@ -135,7 +305,33 @@ class PipelineBenchmarkConfig:
 
 @dc.dataclass(frozen=True, slots=True)
 class PipelineBenchmarkRunResult:
-    """Result metadata for a benchmark CLI invocation."""
+    """Represent metadata produced by a benchmark run call.
+
+    Parameters
+    ----------
+    dry_run:
+        Whether execution was run in dry-run mode.
+    command:
+        Final command vector passed to hyperfine, or planned in dry-run mode.
+    output_path:
+        Path where benchmark JSON output or dry-run plan is written.
+    rust_available:
+        Rust extension availability recorded at execution time.
+    scenarios:
+        Scenario tuple used to build benchmark commands.
+
+    Examples
+    --------
+    >>> PipelineBenchmarkRunResult(
+    ...     dry_run=True,
+    ...     command=("hyperfine",),
+    ...     output_path=pth.Path("bench.json"),
+    ...     rust_available=False,
+    ...     scenarios=(),
+    ... )
+    PipelineBenchmarkRunResult(dry_run=True, command=('hyperfine',), \
+output_path=PosixPath('bench.json'), rust_available=False, scenarios=())
+    """
 
     dry_run: bool
     command: tuple[str, ...]
@@ -149,7 +345,26 @@ def default_pipeline_scenarios(
     smoke: bool,
     include_rust: bool,
 ) -> tuple[PipelineBenchmarkScenario, ...]:
-    """Build the default scenario matrix for throughput benchmarks."""
+    """Build the default benchmark scenario matrix.
+
+    Parameters
+    ----------
+    smoke:
+        When ``True``, use reduced payload size for quick validation runs.
+    include_rust:
+        When ``True``, include a Rust backend scenario.
+
+    Returns
+    -------
+    tuple[PipelineBenchmarkScenario, ...]
+        Ordered scenario tuple with a Python baseline and optional Rust case.
+
+    Examples
+    --------
+    >>> scenarios = default_pipeline_scenarios(smoke=True, include_rust=False)
+    >>> [scenario.backend for scenario in scenarios]
+    ['python']
+    """
     payload_bytes = _SMOKE_PAYLOAD_BYTES if smoke else _DEFAULT_PAYLOAD_BYTES
     scenarios: list[PipelineBenchmarkScenario] = [
         PipelineBenchmarkScenario(
@@ -178,7 +393,25 @@ def render_prefixed_command(
     command: typ.Sequence[str],
     env: typ.Mapping[str, str],
 ) -> str:
-    """Render an env-prefixed shell command for hyperfine."""
+    """Render a shell command with deterministic environment prefixes.
+
+    Parameters
+    ----------
+    command:
+        Tokenised command to render with shell quoting.
+    env:
+        Environment variables prefixed in sorted key order.
+
+    Returns
+    -------
+    str
+        Rendered command string suitable for hyperfine command arguments.
+
+    Examples
+    --------
+    >>> render_prefixed_command(command=["echo", "hello world"], env={"A": "1"})
+    "A=1 echo 'hello world'"
+    """
     env_tokens = [f"{key}={shlex.quote(value)}" for key, value in sorted(env.items())]
     command_text = shlex.join(list(command))
     if not env_tokens:
@@ -218,7 +451,43 @@ def _resolve_executable(name: str) -> str:
 
 
 def build_hyperfine_command(*, config: PipelineBenchmarkConfig) -> list[str]:
-    """Construct the hyperfine command from benchmark scenarios."""
+    """Construct a hyperfine command vector for configured scenarios.
+
+    Parameters
+    ----------
+    config:
+        Pipeline benchmark configuration used to build command arguments.
+
+    Returns
+    -------
+    list[str]
+        Hyperfine command vector with one rendered worker command per scenario.
+
+    Raises
+    ------
+    ValueError
+        If no scenarios are configured.
+
+    Examples
+    --------
+    >>> cfg = PipelineBenchmarkConfig(
+    ...     output_path=pth.Path("bench.json"),
+    ...     worker_path=pth.Path("benchmarks/pipeline_worker.py"),
+    ...     scenarios=(
+    ...         PipelineBenchmarkScenario(
+    ...             name="pipeline-python",
+    ...             backend="python",
+    ...             payload_bytes=1024,
+    ...             stages=3,
+    ...             with_line_callbacks=False,
+    ...         ),
+    ...     ),
+    ...     warmup=1,
+    ...     runs=3,
+    ... )
+    >>> build_hyperfine_command(config=cfg)[0]
+    'hyperfine'
+    """
     hyperfine_config = HyperfineConfig(
         warmup=config.warmup,
         runs=config.runs,
@@ -276,7 +545,49 @@ def _write_dry_run_payload(
 def run_pipeline_benchmarks(
     *, config: PipelineBenchmarkConfig
 ) -> PipelineBenchmarkRunResult:
-    """Run hyperfine benchmarks or emit a dry-run plan JSON."""
+    """Execute pipeline benchmarks or write a dry-run benchmark plan.
+
+    Parameters
+    ----------
+    config:
+        Full benchmark configuration controlling command rendering and
+        execution mode.
+
+    Returns
+    -------
+    PipelineBenchmarkRunResult
+        Metadata describing the benchmark command, output location, and
+        scenario set.
+
+    Raises
+    ------
+    FileNotFoundError
+        If required executables cannot be resolved on ``PATH`` in non-dry-run
+        mode.
+    subprocess.CalledProcessError
+        If hyperfine exits with a non-zero status.
+
+    Examples
+    --------
+    >>> cfg = PipelineBenchmarkConfig(
+    ...     output_path=pth.Path("bench.json"),
+    ...     worker_path=pth.Path("benchmarks/pipeline_worker.py"),
+    ...     scenarios=(
+    ...         PipelineBenchmarkScenario(
+    ...             name="pipeline-python",
+    ...             backend="python",
+    ...             payload_bytes=1024,
+    ...             stages=3,
+    ...             with_line_callbacks=False,
+    ...         ),
+    ...     ),
+    ...     warmup=1,
+    ...     runs=2,
+    ...     dry_run=True,
+    ... )
+    >>> run_pipeline_benchmarks(config=cfg).dry_run
+    True
+    """
     if config.dry_run:
         command_config = config
     else:
@@ -347,7 +658,25 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    """Entry point for the pipeline throughput benchmark CLI."""
+    """Run the benchmark CLI entry point.
+
+    Returns
+    -------
+    int
+        Process exit code, where ``0`` indicates success.
+
+    Raises
+    ------
+    FileNotFoundError
+        If required executables are missing in non-dry-run mode.
+    subprocess.CalledProcessError
+        If benchmark execution fails.
+
+    Examples
+    --------
+    >>> # doctest: +SKIP
+    >>> raise SystemExit(main())
+    """
     args = _parse_args()
     rust_available = is_rust_available()
     scenarios = default_pipeline_scenarios(

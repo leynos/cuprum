@@ -86,6 +86,42 @@ def test_pipeline_benchmark_scenario_rejects_invalid_backend() -> None:
         )
 
 
+def test_pipeline_benchmark_scenario_rejects_empty_name() -> None:
+    """Scenario name must be a non-empty string."""
+    with pytest.raises(ValueError, match="name must be a non-empty string"):
+        PipelineBenchmarkScenario(
+            name="",
+            backend="python",
+            payload_bytes=1024,
+            stages=2,
+            with_line_callbacks=False,
+        )
+
+
+def test_pipeline_benchmark_scenario_rejects_non_positive_payload_bytes() -> None:
+    """Scenario payload_bytes must be positive."""
+    with pytest.raises(ValueError, match="payload_bytes must be > 0"):
+        PipelineBenchmarkScenario(
+            name="pipeline-python",
+            backend="python",
+            payload_bytes=0,
+            stages=2,
+            with_line_callbacks=False,
+        )
+
+
+def test_pipeline_benchmark_scenario_rejects_too_few_stages() -> None:
+    """Scenario stages must represent at least a two-stage pipeline."""
+    with pytest.raises(ValueError, match="stages must be >= 2"):
+        PipelineBenchmarkScenario(
+            name="pipeline-python",
+            backend="python",
+            payload_bytes=1024,
+            stages=1,
+            with_line_callbacks=False,
+        )
+
+
 def test_build_hyperfine_command_requires_at_least_one_scenario(
     tmp_path: pth.Path,
 ) -> None:
