@@ -5,11 +5,15 @@ from __future__ import annotations
 import collections.abc as cabc
 import os
 import sys
+import typing as typ
 
 import pytest
 
 from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
 from tests.helpers.parity import parity_catalogue, run_parity_pipeline
+
+if typ.TYPE_CHECKING:
+    from cuprum.sh import PipelineResult
 
 if os.environ.get("CUPRUM_RUN_BENCHMARKS") != "1":
     pytest.skip(
@@ -17,7 +21,10 @@ if os.environ.get("CUPRUM_RUN_BENCHMARKS") != "1":
         allow_module_level=True,
     )
 
-type _StrBenchmark = cabc.Callable[[cabc.Callable[[], str]], str]
+type _PipelineResultBenchmark = cabc.Callable[
+    [cabc.Callable[[], PipelineResult]],
+    PipelineResult,
+]
 type _IntBenchmark = cabc.Callable[[cabc.Callable[[], int]], int]
 
 
@@ -62,19 +69,18 @@ def _consume_command(
 
 @pytest.mark.benchmark(group="pump-latency")
 def test_benchmark_pump_latency(
-    benchmark: _StrBenchmark,
-    stream_backend: str,
+    benchmark: _PipelineResultBenchmark,
 ) -> None:
     """Benchmark small-payload pipeline pump latency."""
     pipeline, allowlist, expected = _pump_pipeline(payload_bytes=1024)
 
-    def run_once() -> str:
-        result = run_parity_pipeline(pipeline, allowlist)
-        assert result.ok
-        assert result.stdout is not None
-        return result.stdout
+    def run_once() -> PipelineResult:
+        return run_parity_pipeline(pipeline, allowlist)
 
-    output = benchmark(run_once)
+    result = benchmark(run_once)
+    assert result.ok
+    assert result.stdout is not None
+    output = result.stdout
     assert output == expected
 
 

@@ -15,6 +15,19 @@ from cuprum import is_rust_available
 
 _SMOKE_PAYLOAD_BYTES = 1024
 _DEFAULT_PAYLOAD_BYTES = 1024 * 1024
+_VALID_BACKENDS = {"python", "rust"}
+
+BackendName = typ.Literal["python", "rust"]
+
+
+class PipelineBenchmarkScenarioDict(typ.TypedDict):
+    """JSON-serialisable shape for benchmark scenarios."""
+
+    name: str
+    backend: BackendName
+    payload_bytes: int
+    stages: int
+    with_line_callbacks: bool
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -22,12 +35,21 @@ class PipelineBenchmarkScenario:
     """Configuration for one hyperfine command scenario."""
 
     name: str
-    backend: str
+    backend: BackendName
     payload_bytes: int
     stages: int
     with_line_callbacks: bool
 
-    def as_dict(self) -> dict[str, typ.Any]:
+    def __post_init__(self) -> None:
+        """Validate scenario values that are critical for execution."""
+        if self.backend not in _VALID_BACKENDS:
+            msg = (
+                f"backend must be one of {sorted(_VALID_BACKENDS)}, "
+                f"got {self.backend!r}"
+            )
+            raise ValueError(msg)
+
+    def as_dict(self) -> PipelineBenchmarkScenarioDict:
         """Return a JSON-serialisable representation."""
         return {
             "name": self.name,
@@ -66,6 +88,7 @@ class PipelineBenchmarkConfig:
     warmup: int
     runs: int
     hyperfine_bin: str = "hyperfine"
+    uv_bin: str = "uv"
     dry_run: bool = False
     rust_available: bool = False
 
@@ -127,10 +150,11 @@ def _build_worker_command(
     *,
     scenario: PipelineBenchmarkScenario,
     worker_path: pth.Path,
+    uv_bin: str,
 ) -> list[str]:
     """Build the worker invocation for one benchmark scenario."""
     command = [
-        "uv",
+        uv_bin,
         "run",
         "python",
         str(worker_path),
@@ -177,6 +201,7 @@ def build_hyperfine_command(*, config: PipelineBenchmarkConfig) -> list[str]:
         worker_command = _build_worker_command(
             scenario=scenario,
             worker_path=config.worker_path,
+            uv_bin=config.uv_bin,
         )
         command.append(
             render_prefixed_command(
@@ -212,7 +237,15 @@ def run_pipeline_benchmarks(
     *, config: PipelineBenchmarkConfig
 ) -> PipelineBenchmarkRunResult:
     """Run hyperfine benchmarks or emit a dry-run plan JSON."""
-    command = build_hyperfine_command(config=config)
+    if config.dry_run:
+        command_config = config
+    else:
+        command_config = dc.replace(
+            config,
+            uv_bin=_resolve_executable(config.uv_bin),
+        )
+
+    command = build_hyperfine_command(config=command_config)
 
     if config.dry_run:
         _write_dry_run_payload(

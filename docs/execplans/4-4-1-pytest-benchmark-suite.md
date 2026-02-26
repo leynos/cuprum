@@ -83,7 +83,7 @@ This task is complete only when:
   keep real benchmarks opt-in.
 
 - Risk: `hyperfine` command composition may drift across platforms.
-  Severity: medium. Likelihood: medium. Mitigation: centralise command
+  Severity: medium. Likelihood: medium. Mitigation: centralize command
   construction in one Python module, and test command generation directly.
 
 - Risk: Benchmarking only one pathway would violate the design requirement that

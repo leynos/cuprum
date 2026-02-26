@@ -1063,7 +1063,7 @@ Interpretation notes:
 
 - pump-latency microbenchmarks reflect inter-stage pipeline transfer overhead;
 - consume-throughput microbenchmarks reflect captured stdout read/decode
-  throughput (currently Python consume path);
+  throughput (currently the Python consume path);
 - end-to-end hyperfine runs measure full worker-pipeline runtime and include a
   Rust scenario only when the Rust extension is available.
 

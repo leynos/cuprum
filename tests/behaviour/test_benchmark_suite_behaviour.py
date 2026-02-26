@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import subprocess  # noqa: S404  # behavioural test intentionally invokes CLI process
+import sys
 import typing as typ
+
+import pytest
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -35,23 +38,34 @@ def when_generate_plans(
 ) -> dict[str, object]:
     """Run the benchmark CLI in dry-run mode and parse JSON output."""
     command = [
-        "uv",
-        "run",
-        "python",
+        sys.executable,
         "benchmarks/pipeline_throughput.py",
         "--smoke",
         "--dry-run",
         "--output",
         str(benchmark_output_path),
     ]
-    subprocess.run(command, check=True, capture_output=True, text=True)  # noqa: S603  # command is fixed test input
+    try:
+        subprocess.run(  # noqa: S603  # command is fixed test input
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail(
+            f"benchmark dry-run command timed out after 30s: {exc.cmd!r}",
+        )
     return json.loads(benchmark_output_path.read_text(encoding="utf-8"))
 
 
 @then("the benchmark plan file exists")
 def then_plan_exists(benchmark_output_path: pth.Path) -> None:
     """Assert that the benchmark runner wrote a JSON plan file."""
-    assert benchmark_output_path.is_file()
+    assert benchmark_output_path.is_file(), (
+        "expected benchmark_output_path to be a file but it does not exist"
+    )
 
 
 @then("the plan includes a Python backend scenario")
@@ -67,3 +81,48 @@ def then_rust_availability_recorded(
 ) -> None:
     """Assert that the output payload contains Rust availability metadata."""
     assert "rust_available" in benchmark_plan_payload
+    assert isinstance(benchmark_plan_payload["rust_available"], bool)
+
+
+@then("the benchmark plan indicates a dry run")
+def then_benchmark_plan_indicates_dry_run(
+    benchmark_plan_payload: dict[str, object],
+) -> None:
+    """Assert that the benchmark plan was generated in dry-run mode."""
+    assert benchmark_plan_payload.get("dry_run") is True
+
+
+@then("the benchmark plan contains valid scenarios")
+def then_benchmark_plan_contains_valid_scenarios(
+    benchmark_plan_payload: dict[str, object],
+) -> None:
+    """Assert that the benchmark plan contains well-formed scenarios."""
+    scenarios = benchmark_plan_payload.get("scenarios")
+    assert isinstance(scenarios, list)
+    assert scenarios, "expected at least one scenario in benchmark plan"
+
+    required_keys = {
+        "name",
+        "backend",
+        "payload_bytes",
+        "stages",
+        "with_line_callbacks",
+    }
+
+    for scenario_payload in scenarios:
+        assert isinstance(scenario_payload, dict)
+        assert required_keys.issubset(scenario_payload.keys())
+
+
+@then("the benchmark plan includes a valid command")
+def then_benchmark_plan_includes_valid_command(
+    benchmark_plan_payload: dict[str, object],
+) -> None:
+    """Assert that the benchmark plan includes an executable command."""
+    command = benchmark_plan_payload.get("command")
+    assert isinstance(command, list)
+    assert command, "expected non-empty command list in benchmark plan"
+
+    for argument in command:
+        assert isinstance(argument, str)
+        assert argument, "command arguments must be non-empty strings"

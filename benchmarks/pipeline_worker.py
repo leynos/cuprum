@@ -19,6 +19,15 @@ class PipelineWorkerConfig:
     stages: int
     with_line_callbacks: bool
 
+    def __post_init__(self) -> None:
+        """Validate worker invariants for direct callers and CLI usage."""
+        if self.payload_bytes < 1:
+            msg = f"payload-bytes must be >= 1, got {self.payload_bytes}"
+            raise ValueError(msg)
+        if self.stages < _MIN_PIPELINE_STAGES:
+            msg = f"stages must be >= {_MIN_PIPELINE_STAGES}, got {self.stages}"
+            raise ValueError(msg)
+
 
 def _parse_args() -> PipelineWorkerConfig:
     """Parse command-line arguments for pipeline throughput worker."""
@@ -44,13 +53,6 @@ def _parse_args() -> PipelineWorkerConfig:
         ),
     )
     args = parser.parse_args()
-
-    if args.payload_bytes < 1:
-        msg = f"payload-bytes must be >= 1, got {args.payload_bytes}"
-        raise ValueError(msg)
-    if args.stages < _MIN_PIPELINE_STAGES:
-        msg = f"stages must be >= {_MIN_PIPELINE_STAGES}, got {args.stages}"
-        raise ValueError(msg)
 
     return PipelineWorkerConfig(
         payload_bytes=args.payload_bytes,
