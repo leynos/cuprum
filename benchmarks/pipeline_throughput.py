@@ -70,12 +70,7 @@ class HyperfineConfig:
 
     def __post_init__(self) -> None:
         """Validate hyperfine invocation configuration."""
-        if self.warmup < 0:
-            msg = f"warmup must be >= 0, got {self.warmup}"
-            raise ValueError(msg)
-        if self.runs < 1:
-            msg = f"runs must be >= 1, got {self.runs}"
-            raise ValueError(msg)
+        _validate_hyperfine_iterations(warmup=self.warmup, runs=self.runs)
 
 
 def _validate_int(value: object, *, name: str) -> int:
@@ -102,6 +97,19 @@ def _validate_non_empty_string(value: object, *, name: str) -> str:
     return value
 
 
+def _validate_hyperfine_iterations(*, warmup: object, runs: object) -> None:
+    """Validate hyperfine warmup and run counts."""
+    validated_warmup = _validate_int(warmup, name="warmup")
+    if validated_warmup < 0:
+        msg = f"warmup must be >= 0, got {validated_warmup}"
+        raise ValueError(msg)
+
+    validated_runs = _validate_int(runs, name="runs")
+    if validated_runs < 1:
+        msg = f"runs must be >= 1, got {validated_runs}"
+        raise ValueError(msg)
+
+
 @dc.dataclass(frozen=True, slots=True)
 class PipelineBenchmarkConfig:
     """Configuration for running pipeline benchmarks."""
@@ -118,16 +126,7 @@ class PipelineBenchmarkConfig:
 
     def __post_init__(self) -> None:
         """Validate benchmark configuration values."""
-        warmup = _validate_int(self.warmup, name="warmup")
-        if warmup < 0:
-            msg = f"warmup must be >= 0, got {warmup}"
-            raise ValueError(msg)
-
-        runs = _validate_int(self.runs, name="runs")
-        if runs < 1:
-            msg = f"runs must be >= 1, got {runs}"
-            raise ValueError(msg)
-
+        _validate_hyperfine_iterations(warmup=self.warmup, runs=self.runs)
         _validate_non_empty_string(self.hyperfine_bin, name="hyperfine_bin")
         _validate_non_empty_string(self.uv_bin, name="uv_bin")
         _validate_bool(self.dry_run, name="dry_run")
