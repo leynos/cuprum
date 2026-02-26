@@ -78,6 +78,30 @@ class HyperfineConfig:
             raise ValueError(msg)
 
 
+def _validate_int(value: object, *, name: str) -> int:
+    """Validate integer values and reject booleans."""
+    if not isinstance(value, int) or isinstance(value, bool):
+        msg = f"{name} must be an int, got {type(value).__name__}"
+        raise TypeError(msg)
+    return value
+
+
+def _validate_bool(value: object, *, name: str) -> bool:
+    """Validate boolean values."""
+    if not isinstance(value, bool):
+        msg = f"{name} must be a bool, got {type(value).__name__}"
+        raise TypeError(msg)
+    return value
+
+
+def _validate_non_empty_string(value: object, *, name: str) -> str:
+    """Validate non-empty string values."""
+    if not isinstance(value, str) or not value.strip():
+        msg = f"{name} must be a non-empty string"
+        raise ValueError(msg)
+    return value
+
+
 @dc.dataclass(frozen=True, slots=True)
 class PipelineBenchmarkConfig:
     """Configuration for running pipeline benchmarks."""
@@ -91,6 +115,23 @@ class PipelineBenchmarkConfig:
     uv_bin: str = "uv"
     dry_run: bool = False
     rust_available: bool = False
+
+    def __post_init__(self) -> None:
+        """Validate benchmark configuration values."""
+        warmup = _validate_int(self.warmup, name="warmup")
+        if warmup < 0:
+            msg = f"warmup must be >= 0, got {warmup}"
+            raise ValueError(msg)
+
+        runs = _validate_int(self.runs, name="runs")
+        if runs < 1:
+            msg = f"runs must be >= 1, got {runs}"
+            raise ValueError(msg)
+
+        _validate_non_empty_string(self.hyperfine_bin, name="hyperfine_bin")
+        _validate_non_empty_string(self.uv_bin, name="uv_bin")
+        _validate_bool(self.dry_run, name="dry_run")
+        _validate_bool(self.rust_available, name="rust_available")
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -257,7 +298,11 @@ def run_pipeline_benchmarks(
     else:
         command[0] = _resolve_executable(command[0])
         config.output_path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(command, check=True)  # noqa: S603  # command built from fixed executable + controlled args
+        subprocess.run(  # noqa: S603  # command built from fixed executable + controlled args
+            command,
+            check=True,
+            timeout=1800,
+        )
 
     return PipelineBenchmarkRunResult(
         dry_run=config.dry_run,

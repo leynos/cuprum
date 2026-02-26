@@ -170,7 +170,7 @@ Delivered:
   `tests/behaviour/test_benchmark_suite_behaviour.py`.
 - Make targets `benchmark-micro` and `benchmark-e2e`.
 - Dev dependency update for `pytest-benchmark`.
-- Documentation updates in design and users guide, and roadmap item `4.4.1`
+- Documentation updates in design and users' guide, and roadmap item `4.4.1`
   marked done.
 
 Quality and validation summary:

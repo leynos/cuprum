@@ -72,7 +72,9 @@ def then_plan_exists(benchmark_output_path: pth.Path) -> None:
 def then_python_scenario_exists(benchmark_plan_payload: dict[str, object]) -> None:
     """At least one plan entry targets the Python backend."""
     scenarios = typ.cast("list[dict[str, object]]", benchmark_plan_payload["scenarios"])
-    assert any(scenario["backend"] == "python" for scenario in scenarios)
+    assert any(scenario["backend"] == "python" for scenario in scenarios), (
+        "expected at least one scenario targeting the python backend"
+    )
 
 
 @then("the plan records Rust availability")
@@ -80,8 +82,12 @@ def then_rust_availability_recorded(
     benchmark_plan_payload: dict[str, object],
 ) -> None:
     """Assert that the output payload contains Rust availability metadata."""
-    assert "rust_available" in benchmark_plan_payload
-    assert isinstance(benchmark_plan_payload["rust_available"], bool)
+    assert "rust_available" in benchmark_plan_payload, (
+        "expected benchmark plan payload to include rust_available key"
+    )
+    assert isinstance(benchmark_plan_payload["rust_available"], bool), (
+        "expected benchmark plan payload rust_available value to be a boolean"
+    )
 
 
 @then("the benchmark plan indicates a dry run")
@@ -89,7 +95,9 @@ def then_benchmark_plan_indicates_dry_run(
     benchmark_plan_payload: dict[str, object],
 ) -> None:
     """Assert that the benchmark plan was generated in dry-run mode."""
-    assert benchmark_plan_payload.get("dry_run") is True
+    assert benchmark_plan_payload.get("dry_run") is True, (
+        "expected benchmark plan dry_run flag to be True"
+    )
 
 
 @then("the benchmark plan contains valid scenarios")
@@ -98,7 +106,7 @@ def then_benchmark_plan_contains_valid_scenarios(
 ) -> None:
     """Assert that the benchmark plan contains well-formed scenarios."""
     scenarios = benchmark_plan_payload.get("scenarios")
-    assert isinstance(scenarios, list)
+    assert isinstance(scenarios, list), "expected benchmark plan scenarios to be a list"
     assert scenarios, "expected at least one scenario in benchmark plan"
 
     required_keys = {
@@ -110,8 +118,12 @@ def then_benchmark_plan_contains_valid_scenarios(
     }
 
     for scenario_payload in scenarios:
-        assert isinstance(scenario_payload, dict)
-        assert required_keys.issubset(scenario_payload.keys())
+        assert isinstance(scenario_payload, dict), (
+            "expected each benchmark plan scenario to be a dict"
+        )
+        assert required_keys.issubset(scenario_payload.keys()), (
+            "expected each benchmark plan scenario to include required keys"
+        )
 
 
 @then("the benchmark plan includes a valid command")
@@ -120,9 +132,11 @@ def then_benchmark_plan_includes_valid_command(
 ) -> None:
     """Assert that the benchmark plan includes an executable command."""
     command = benchmark_plan_payload.get("command")
-    assert isinstance(command, list)
+    assert isinstance(command, list), "expected benchmark plan command to be a list"
     assert command, "expected non-empty command list in benchmark plan"
 
     for argument in command:
-        assert isinstance(argument, str)
+        assert isinstance(argument, str), (
+            "expected each benchmark plan command argument to be a string"
+        )
         assert argument, "command arguments must be non-empty strings"

@@ -22,14 +22,19 @@ def test_default_pipeline_scenarios_include_python_backend() -> None:
     """The default matrix always includes a Python backend scenario."""
     scenarios = default_pipeline_scenarios(smoke=True, include_rust=True)
 
-    assert any(s.backend == "python" for s in scenarios)
+    assert any(s.backend == "python" for s in scenarios), (
+        "expected python backend in default pipeline scenarios when "
+        "smoke=True and include_rust=True"
+    )
 
 
 def test_default_pipeline_scenarios_gate_rust_backend() -> None:
     """Rust scenarios are omitted when ``include_rust`` is ``False``."""
     scenarios = default_pipeline_scenarios(smoke=True, include_rust=False)
 
-    assert all(s.backend != "rust" for s in scenarios)
+    assert all(s.backend != "rust" for s in scenarios), (
+        "expected rust backend to be omitted when include_rust=False"
+    )
 
 
 def test_render_prefixed_command_prefixes_env_and_quotes_tokens() -> None:
@@ -40,8 +45,10 @@ def test_render_prefixed_command_prefixes_env_and_quotes_tokens() -> None:
         env={"CUPRUM_STREAM_BACKEND": "python"},
     )
 
-    assert rendered.startswith("CUPRUM_STREAM_BACKEND=python ")
-    assert "'a b'" in rendered
+    assert rendered.startswith("CUPRUM_STREAM_BACKEND=python "), (
+        "expected rendered command to include CUPRUM_STREAM_BACKEND prefix"
+    )
+    assert "'a b'" in rendered, "expected rendered command to quote spaced token"
 
 
 def test_render_prefixed_command_with_empty_env_returns_raw_command() -> None:
@@ -50,7 +57,9 @@ def test_render_prefixed_command_with_empty_env_returns_raw_command() -> None:
 
     rendered = render_prefixed_command(command=command, env={})
 
-    assert rendered == "uv run python benchmarks/pipeline_worker.py"
+    assert rendered == "uv run python benchmarks/pipeline_worker.py", (
+        "expected rendered command to equal raw command when env is empty"
+    )
 
 
 def test_hyperfine_config_rejects_negative_warmup() -> None:
@@ -115,11 +124,15 @@ def test_build_hyperfine_command_contains_export_runs_and_warmup(
     )
     command = build_hyperfine_command(config=config)
 
-    assert command[0].endswith("hyperfine")
-    assert "--export-json" in command
-    assert "--warmup" in command
-    assert "--runs" in command
-    assert any("CUPRUM_STREAM_BACKEND=python" in token for token in command)
+    assert command[0].endswith("hyperfine"), (
+        "expected hyperfine executable to be the command prefix"
+    )
+    assert "--export-json" in command, "expected hyperfine command to export JSON"
+    assert "--warmup" in command, "expected hyperfine command to include warmup"
+    assert "--runs" in command, "expected hyperfine command to include runs"
+    assert any("CUPRUM_STREAM_BACKEND=python" in token for token in command), (
+        "expected at least one hyperfine scenario command to target python backend"
+    )
 
 
 def test_run_pipeline_benchmarks_dry_run_writes_json(tmp_path: pth.Path) -> None:
@@ -144,25 +157,33 @@ def test_run_pipeline_benchmarks_dry_run_writes_json(tmp_path: pth.Path) -> None
     )
     result = run_pipeline_benchmarks(config=config)
 
-    assert result.dry_run is True
-    assert output_path.is_file()
+    assert result.dry_run is True, "expected run result to indicate dry-run mode"
+    assert output_path.is_file(), "expected dry-run output JSON file to be written"
     payload = json.loads(output_path.read_text(encoding="utf-8"))
 
-    assert payload["dry_run"] is True
-    assert "rust_available" in payload
-    assert isinstance(payload["rust_available"], bool)
+    assert payload["dry_run"] is True, "expected payload dry_run flag to be True"
+    assert "rust_available" in payload, (
+        "expected payload to include rust_available metadata"
+    )
+    assert isinstance(payload["rust_available"], bool), (
+        "expected payload rust_available to be a boolean"
+    )
 
     scenarios_payload = payload["scenarios"]
-    assert isinstance(scenarios_payload, list)
-    assert scenarios_payload
+    assert isinstance(scenarios_payload, list), (
+        "expected payload scenarios to be a list"
+    )
+    assert scenarios_payload, "expected payload scenarios list to be non-empty"
     assert any(
         isinstance(scenario, dict)
         and scenario.get("backend") == "python"
         and scenario.get("name") == "pipeline-python"
         for scenario in scenarios_payload
-    )
+    ), "expected payload scenarios to include named python scenario"
 
     command_payload = payload["command"]
-    assert isinstance(command_payload, list)
-    assert command_payload
-    assert all(isinstance(argument, str) for argument in command_payload)
+    assert isinstance(command_payload, list), "expected payload command to be a list"
+    assert command_payload, "expected payload command list to be non-empty"
+    assert all(isinstance(argument, str) for argument in command_payload), (
+        "expected all payload command entries to be strings"
+    )
