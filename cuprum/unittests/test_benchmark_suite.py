@@ -75,6 +75,39 @@ def test_hyperfine_config_rejects_non_positive_runs() -> None:
         HyperfineConfig(warmup=0, runs=0)
 
 
+def test_pipeline_benchmark_config_coerces_string_paths() -> None:
+    """Config path fields accept strings and are normalized to ``Path``."""
+    config = PipelineBenchmarkConfig(
+        output_path="dist/benchmarks/bench.json",  # type: ignore[arg-type]
+        worker_path="benchmarks/pipeline_worker.py",  # type: ignore[arg-type]
+        scenarios=(),
+        warmup=0,
+        runs=1,
+    )
+
+    assert isinstance(config.output_path, pth.Path), (
+        "expected output_path to be normalized to pathlib.Path"
+    )
+    assert isinstance(config.worker_path, pth.Path), (
+        "expected worker_path to be normalized to pathlib.Path"
+    )
+
+
+def test_pipeline_benchmark_config_rejects_non_pathlike_output_path() -> None:
+    """Non-path-like values for output_path raise a clear TypeError."""
+    with pytest.raises(
+        TypeError,
+        match=r"output_path must be a pathlib\.Path or path-like value",
+    ):
+        PipelineBenchmarkConfig(
+            output_path=123,  # type: ignore[arg-type]
+            worker_path=pth.Path("benchmarks/pipeline_worker.py"),
+            scenarios=(),
+            warmup=0,
+            runs=1,
+        )
+
+
 @pytest.mark.parametrize(
     ("kwargs", "error_match"),
     [

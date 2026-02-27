@@ -31,10 +31,8 @@ their ``__post_init__`` methods to enforce expected types and value ranges.
 from __future__ import annotations
 
 import dataclasses as dc
+import pathlib as pth
 import typing as typ
-
-if typ.TYPE_CHECKING:
-    import pathlib as pth
 
 _VALID_BACKENDS = {"python", "rust"}
 _MIN_PIPELINE_STAGES = 2
@@ -204,6 +202,20 @@ def _validate_non_empty_string(value: object, *, name: str) -> str:
     return value
 
 
+def _validate_path(value: object, *, name: str) -> pth.Path:
+    """Validate path-like values and normalise them as ``pathlib.Path``."""
+    if isinstance(value, pth.Path):
+        return value
+    try:
+        return pth.Path(typ.cast("typ.Any", value))
+    except TypeError as exc:
+        msg = (
+            f"{name} must be a pathlib.Path or path-like value, "
+            f"got {type(value).__name__}"
+        )
+        raise TypeError(msg) from exc
+
+
 def _validate_hyperfine_iterations(*, warmup: object, runs: object) -> None:
     """Validate hyperfine warmup and run counts."""
     validated_warmup = _validate_int(warmup, name="warmup")
@@ -307,6 +319,16 @@ class PipelineBenchmarkConfig:
 
     def __post_init__(self) -> None:
         """Validate benchmark configuration values."""
+        object.__setattr__(
+            self,
+            "output_path",
+            _validate_path(self.output_path, name="output_path"),
+        )
+        object.__setattr__(
+            self,
+            "worker_path",
+            _validate_path(self.worker_path, name="worker_path"),
+        )
         _validate_hyperfine_iterations(warmup=self.warmup, runs=self.runs)
         _validate_non_empty_string(self.hyperfine_bin, name="hyperfine_bin")
         _validate_non_empty_string(self.uv_bin, name="uv_bin")
