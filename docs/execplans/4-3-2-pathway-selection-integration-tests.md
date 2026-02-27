@@ -10,11 +10,11 @@ Roadmap reference: `docs/roadmap.md` item `4.3.3`.
 
 ## Purpose / big picture
 
-Cuprum already has backend dispatcher unit tests and pipeline backend behavioural
-coverage, but the roadmap item `4.3.3` asks for integration tests that prove
-pathway selection behaviour end to end, including environment overrides,
-forced fallback, and error handling when Rust is explicitly requested but not
-available.
+Cuprum already has backend dispatcher unit tests and pipeline backend
+behavioural coverage, but the roadmap item `4.3.3` asks for integration tests
+that prove pathway selection behaviour end to end, including environment
+overrides, forced fallback, and error handling when Rust is explicitly
+requested but not available.
 
 After this work, maintainers can run the test suite and see explicit proof that:
 
@@ -24,8 +24,8 @@ After this work, maintainers can run the test suite and see explicit proof that:
   time.
 
 This task is done only when unit tests (`pytest`) and behavioural tests
-(`pytest-bdd`) cover these cases, required docs are updated, quality gates pass,
-and roadmap item `4.3.3` is marked done.
+(`pytest-bdd`) cover these cases, required docs are updated, quality gates
+pass, and roadmap item `4.3.3` is marked done.
 
 ## Constraints
 
@@ -60,25 +60,18 @@ and roadmap item `4.3.3` is marked done.
 ## Risks
 
 - Risk: Rust availability differs by environment, which can make integration
-  assertions flaky.
-  Severity: medium.
-  Likelihood: medium.
-  Mitigation: use monkeypatch-based availability control for deterministic
-  scenarios; keep explicit skip markers only where runtime native code is truly
-  required.
+  assertions flaky. Severity: medium. Likelihood: medium. Mitigation: use
+  monkeypatch-based availability control for deterministic scenarios; keep
+  explicit skip markers only where runtime native code is truly required.
 
 - Risk: backend caches can hide pathway-selection regressions.
-  Severity: high.
-  Likelihood: medium.
-  Mitigation: clear dispatcher caches in fixtures or per-test setup before each
-  scenario.
+  Severity: high. Likelihood: medium. Mitigation: clear dispatcher caches in
+  fixtures or per-test setup before each scenario.
 
 - Risk: forced fallback scenario may require patching private helpers in
-  `cuprum/_pipeline_streams.py`, which can be brittle.
-  Severity: medium.
-  Likelihood: medium.
-  Mitigation: patch only stable, narrow helper boundaries and assert behaviour,
-  not implementation details.
+  `cuprum/_pipeline_streams.py`, which can be brittle. Severity: medium.
+  Likelihood: medium. Mitigation: patch only stable, narrow helper boundaries
+  and assert behaviour, not implementation details.
 
 ## Progress
 
@@ -95,45 +88,42 @@ and roadmap item `4.3.3` is marked done.
 
 - Observation: `cuprum/unittests/test_backend.py` already covers dispatcher
   logic in isolation, but not pipeline-level selection and fallback execution.
-  Evidence: current tests call `get_stream_backend()` directly.
-  Impact: this task should focus on integration-level behaviour, not duplicate
-  dispatcher unit assertions.
+  Evidence: current tests call `get_stream_backend()` directly. Impact: this
+  task should focus on integration-level behaviour, not duplicate dispatcher
+  unit assertions.
 
 - Observation: `conftest.py` already includes an autouse cache-clearing fixture.
-  Evidence: `_clear_backend_cache` clears both caches before each test.
-  Impact: new tests should rely on this fixture where possible and only add
-  explicit cache clears in self-contained BDD steps.
+  Evidence: `_clear_backend_cache` clears both caches before each test. Impact:
+  new tests should rely on this fixture where possible and only add explicit
+  cache clears in self-contained BDD steps.
 
 - Observation: forcing unavailable Rust in a pipeline where the downstream
-  blocks on stdin caused a pytest-timeout during integration testing.
-  Evidence: `test_pipeline_forced_rust_unavailable_error` initially timed out
-  at 30 seconds when using the uppercase downstream stage.
-  Impact: the behavioural scenario now uses a short-lived downstream process so
-  the pipe-task `ImportError` can surface deterministically.
+  blocks on stdin caused a pytest-timeout during integration testing. Evidence:
+  `test_pipeline_forced_rust_unavailable_error` initially timed out at 30
+  seconds when using the uppercase downstream stage. Impact: the behavioural
+  scenario now uses a short-lived downstream process so the pipe-task
+  `ImportError` can surface deterministically.
 
 ## Decision Log
 
 - Decision: create dedicated pathway-selection integration coverage at the
-  pipeline dispatch layer, not by extending only dispatcher tests.
-  Rationale: roadmap item 4.3.3 explicitly targets integration behaviour.
-  Date/Author: 2026-02-20 / Codex.
+  pipeline dispatch layer, not by extending only dispatcher tests. Rationale:
+  roadmap item 4.3.3 explicitly targets integration behaviour. Date/Author:
+  2026-02-20 / Codex.
 
 - Decision: include both pytest unit tests and pytest-bdd behavioural scenarios
-  for the same feature area.
-  Rationale: project policy requires both test styles for new functionality.
-  Date/Author: 2026-02-20 / Codex.
+  for the same feature area. Rationale: project policy requires both test
+  styles for new functionality. Date/Author: 2026-02-20 / Codex.
 
 - Decision: treat roadmap numbering and filename mismatch as intentional for
   this task (`4.3.3` content in file
-  `4-3-2-pathway-selection-integration-tests.md`).
-  Rationale: user explicitly requested this filename.
-  Date/Author: 2026-02-20 / Codex.
+  `4-3-2-pathway-selection-integration-tests.md`). Rationale: user explicitly
+  requested this filename. Date/Author: 2026-02-20 / Codex.
 
 - Decision: extend the existing backend pipeline behavioural suite instead of
-  creating a separate pathway-selection feature file.
-  Rationale: this keeps all pipeline-backend integration scenarios in one
-  place and avoids duplicate step plumbing.
-  Date/Author: 2026-02-21 / Codex.
+  creating a separate pathway-selection feature file. Rationale: this keeps all
+  pipeline-backend integration scenarios in one place and avoids duplicate step
+  plumbing. Date/Author: 2026-02-21 / Codex.
 
 ## Outcomes & Retrospective
 
@@ -209,8 +199,8 @@ code changes.
 Stage C: implement minimal code updates only if tests reveal gaps.
 
 Prefer fixture and test-step adjustments over production edits. If production
-changes are required, keep them minimal and local to dispatch integration logic.
-Re-run targeted tests until all newly added tests pass.
+changes are required, keep them minimal and local to dispatch integration
+logic. Re-run targeted tests until all newly added tests pass.
 
 Stage D: harden documentation and close roadmap item.
 
@@ -224,8 +214,7 @@ Each stage ends with validation; do not proceed if the current stage fails.
 
 1. Create behavioural integration coverage.
 
-   Files:
-   `tests/features/stream_backend_pipeline.feature`
+   Files: `tests/features/stream_backend_pipeline.feature`
    `tests/behaviour/test_stream_backend_pipeline.py`
 
    Scenarios to add:
@@ -238,8 +227,7 @@ Each stage ends with validation; do not proceed if the current stage fails.
 
 2. Create unit integration coverage for dispatch branch behaviour.
 
-   File:
-   `cuprum/unittests/test_pipeline_stream_backend_selection.py`
+   File: `cuprum/unittests/test_pipeline_stream_backend_selection.py`
 
    Focus assertions:
    - `StreamBackend.PYTHON` path always uses `_pump_stream`;
@@ -259,13 +247,12 @@ Each stage ends with validation; do not proceed if the current stage fails.
 
    Expected before implementation:
 
-       FAILED ...
+       FAILED …
 
 4. Implement minimal fixes (if tests fail for real behavioural gaps).
 
-   Possible edit targets (only if needed):
-   `cuprum/_pipeline_streams.py`, `conftest.py`,
-   `tests/helpers/catalogue.py`.
+   Possible edit targets (only if needed): `cuprum/_pipeline_streams.py`,
+   `conftest.py`, `tests/helpers/catalogue.py`.
 
 5. Re-run targeted tests until green.
 
@@ -279,13 +266,11 @@ Each stage ends with validation; do not proceed if the current stage fails.
 
    Expected after implementation:
 
-       ... passed
+       … passed
 
 6. Update documentation for design decisions and user behaviour.
 
-   Files:
-   `docs/cuprum-design.md`
-   `docs/users-guide.md`
+   Files: `docs/cuprum-design.md` `docs/users-guide.md`
 
    Required content:
    - explicit statement of forced fallback semantics at pipeline dispatch;
@@ -294,8 +279,7 @@ Each stage ends with validation; do not proceed if the current stage fails.
 
 7. Mark roadmap item complete.
 
-   File:
-   `docs/roadmap.md`
+   File: `docs/roadmap.md`
 
    Change:
    - switch `4.3.3` from `[ ]` to `[x]`.

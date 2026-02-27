@@ -18,6 +18,7 @@ Repository = "https://github.com/leynos/cuprum"
 dev = [
     "hypothesis",
     "pytest",
+    "pytest-benchmark",
     "pytest-bdd",
     "ruff",
     "pyright",
