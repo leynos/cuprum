@@ -1,14 +1,43 @@
-"""Shared benchmark dataclasses, typed dictionaries, and validators."""
+"""Shared benchmark dataclasses, TypedDicts, and validation helpers.
+
+This module centralizes benchmark-facing data contracts used by throughput
+command construction and dry-run payload generation. It defines immutable
+dataclasses for scenario/config/result values and a TypedDict for serializable
+scenario payloads.
+
+Utility
+-------
+Use these symbols when constructing benchmark plans in application code or
+tests, and rely on their ``__post_init__`` methods for fail-fast validation of
+core invariants (for example: non-empty names, positive payload sizes, and
+valid iteration counts).
+
+Examples
+--------
+>>> from benchmarks._benchmark_types import HyperfineConfig, PipelineBenchmarkScenario
+>>> scenario = PipelineBenchmarkScenario(
+...     name="pipeline-python",
+...     backend="python",
+...     payload_bytes=1024,
+...     stages=3,
+...     with_line_callbacks=False,
+... )
+>>> config = HyperfineConfig(warmup=1, runs=3)
+
+Validation helpers are defined alongside these dataclasses and are used by
+their ``__post_init__`` methods to enforce expected types and value ranges.
+"""
 
 from __future__ import annotations
 
 import dataclasses as dc
-import pathlib as pth
 import typing as typ
+
+if typ.TYPE_CHECKING:
+    import pathlib as pth
 
 _VALID_BACKENDS = {"python", "rust"}
 _MIN_PIPELINE_STAGES = 2
-_PATH_CLASS = pth.Path
 
 BackendName = typ.Literal["python", "rust"]
 
@@ -80,26 +109,11 @@ payload_bytes=1024, stages=3, with_line_callbacks=False)
 
     def __post_init__(self) -> None:
         """Validate scenario values that are critical for execution."""
-        if not isinstance(self.name, str) or not self.name.strip():
-            msg = "name must be a non-empty string"
-            raise ValueError(msg)
-
-        payload_bytes = _validate_int(self.payload_bytes, name="payload_bytes")
-        if payload_bytes <= 0:
-            msg = f"payload_bytes must be > 0, got {payload_bytes}"
-            raise ValueError(msg)
-
-        stages = _validate_int(self.stages, name="stages")
-        if stages < _MIN_PIPELINE_STAGES:
-            msg = f"stages must be >= {_MIN_PIPELINE_STAGES}, got {stages}"
-            raise ValueError(msg)
-
-        if self.backend not in _VALID_BACKENDS:
-            msg = (
-                f"backend must be one of {sorted(_VALID_BACKENDS)}, "
-                f"got {self.backend!r}"
-            )
-            raise ValueError(msg)
+        _validate_scenario_name(self.name)
+        _validate_payload_bytes(self.payload_bytes)
+        _validate_stages(self.stages)
+        _validate_bool(self.with_line_callbacks, name="with_line_callbacks")
+        _validate_backend(self.backend)
 
     def as_dict(self) -> PipelineBenchmarkScenarioDict:
         """Convert the scenario into a JSON-serialisable mapping.
@@ -162,6 +176,7 @@ class HyperfineConfig:
 
     def __post_init__(self) -> None:
         """Validate hyperfine invocation configuration."""
+        _validate_non_empty_string(self.hyperfine_bin, name="hyperfine_bin")
         _validate_hyperfine_iterations(warmup=self.warmup, runs=self.runs)
 
 
@@ -200,6 +215,40 @@ def _validate_hyperfine_iterations(*, warmup: object, runs: object) -> None:
     if validated_runs < 1:
         msg = f"runs must be >= 1, got {validated_runs}"
         raise ValueError(msg)
+
+
+def _validate_scenario_name(value: object) -> str:
+    """Validate that a scenario name is a non-empty string."""
+    if not isinstance(value, str) or not value.strip():
+        msg = "name must be a non-empty string"
+        raise ValueError(msg)
+    return value
+
+
+def _validate_payload_bytes(value: object) -> int:
+    """Validate that scenario payload size is a positive integer."""
+    payload_bytes = _validate_int(value, name="payload_bytes")
+    if payload_bytes <= 0:
+        msg = f"payload_bytes must be > 0, got {payload_bytes}"
+        raise ValueError(msg)
+    return payload_bytes
+
+
+def _validate_stages(value: object) -> int:
+    """Validate that scenario stage count meets the minimum threshold."""
+    stages = _validate_int(value, name="stages")
+    if stages < _MIN_PIPELINE_STAGES:
+        msg = f"stages must be >= {_MIN_PIPELINE_STAGES}, got {stages}"
+        raise ValueError(msg)
+    return stages
+
+
+def _validate_backend(value: BackendName) -> BackendName:
+    """Validate that a scenario backend is one of the supported values."""
+    if value not in _VALID_BACKENDS:
+        msg = f"backend must be one of {sorted(_VALID_BACKENDS)}, got {value!r}"
+        raise ValueError(msg)
+    return value
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -308,8 +357,4 @@ __all__ = [
     "PipelineBenchmarkRunResult",
     "PipelineBenchmarkScenario",
     "PipelineBenchmarkScenarioDict",
-    "_validate_bool",
-    "_validate_hyperfine_iterations",
-    "_validate_int",
-    "_validate_non_empty_string",
 ]

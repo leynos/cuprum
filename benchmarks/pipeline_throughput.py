@@ -269,6 +269,45 @@ def _write_dry_run_payload(
     )
 
 
+def _execute_hyperfine_benchmark(
+    command: list[str],
+    output_path: pth.Path,
+) -> None:
+    """Execute the hyperfine benchmark command.
+
+    Parameters
+    ----------
+    command:
+        Command list with hyperfine executable as first element.
+    output_path:
+        Path to write benchmark JSON output.
+
+    Raises
+    ------
+    FileNotFoundError
+        If hyperfine executable cannot be resolved.
+    subprocess.CalledProcessError
+        If hyperfine exits with a non-zero status.
+    """
+    command[0] = _resolve_executable(command[0])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(  # noqa: S603  # command built from fixed executable + controlled args
+        command,
+        check=True,
+        timeout=1800,
+    )
+
+
+def _prepare_benchmark_command_config(
+    *,
+    config: PipelineBenchmarkConfig,
+) -> PipelineBenchmarkConfig:
+    """Prepare command rendering config, resolving the `uv` launcher when needed."""
+    if config.dry_run:
+        return config
+    return dc.replace(config, uv_bin=_resolve_executable(config.uv_bin))
+
+
 def run_pipeline_benchmarks(
     *, config: PipelineBenchmarkConfig
 ) -> PipelineBenchmarkRunResult:
@@ -315,14 +354,7 @@ def run_pipeline_benchmarks(
     >>> run_pipeline_benchmarks(config=cfg).dry_run
     True
     """
-    if config.dry_run:
-        command_config = config
-    else:
-        command_config = dc.replace(
-            config,
-            uv_bin=_resolve_executable(config.uv_bin),
-        )
-
+    command_config = _prepare_benchmark_command_config(config=config)
     command = build_hyperfine_command(config=command_config)
 
     if config.dry_run:
@@ -333,12 +365,9 @@ def run_pipeline_benchmarks(
             rust_available=config.rust_available,
         )
     else:
-        command[0] = _resolve_executable(command[0])
-        config.output_path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(  # noqa: S603  # command built from fixed executable + controlled args
-            command,
-            check=True,
-            timeout=1800,
+        _execute_hyperfine_benchmark(
+            command=command,
+            output_path=config.output_path,
         )
 
     return PipelineBenchmarkRunResult(

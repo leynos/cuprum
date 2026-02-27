@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib as pth
+import typing as typ
 
 import pytest
 
@@ -74,52 +75,62 @@ def test_hyperfine_config_rejects_non_positive_runs() -> None:
         HyperfineConfig(warmup=0, runs=0)
 
 
-def test_pipeline_benchmark_scenario_rejects_invalid_backend() -> None:
-    """Scenario backend must be one of the supported stream backends."""
-    with pytest.raises(ValueError, match="backend must be one of"):
-        PipelineBenchmarkScenario(
-            name="pipeline-typo",
-            backend="pythno",  # type: ignore[arg-type]
-            payload_bytes=1024,
-            stages=2,
-            with_line_callbacks=False,
-        )
-
-
-def test_pipeline_benchmark_scenario_rejects_empty_name() -> None:
-    """Scenario name must be a non-empty string."""
-    with pytest.raises(ValueError, match="name must be a non-empty string"):
-        PipelineBenchmarkScenario(
-            name="",
-            backend="python",
-            payload_bytes=1024,
-            stages=2,
-            with_line_callbacks=False,
-        )
-
-
-def test_pipeline_benchmark_scenario_rejects_non_positive_payload_bytes() -> None:
-    """Scenario payload_bytes must be positive."""
-    with pytest.raises(ValueError, match="payload_bytes must be > 0"):
-        PipelineBenchmarkScenario(
-            name="pipeline-python",
-            backend="python",
-            payload_bytes=0,
-            stages=2,
-            with_line_callbacks=False,
-        )
-
-
-def test_pipeline_benchmark_scenario_rejects_too_few_stages() -> None:
-    """Scenario stages must represent at least a two-stage pipeline."""
-    with pytest.raises(ValueError, match="stages must be >= 2"):
-        PipelineBenchmarkScenario(
-            name="pipeline-python",
-            backend="python",
-            payload_bytes=1024,
-            stages=1,
-            with_line_callbacks=False,
-        )
+@pytest.mark.parametrize(
+    ("kwargs", "error_match"),
+    [
+        pytest.param(
+            {
+                "name": "",
+                "backend": "python",
+                "payload_bytes": 1024,
+                "stages": 2,
+                "with_line_callbacks": False,
+            },
+            "name must be a non-empty string",
+            id="empty_name",
+        ),
+        pytest.param(
+            {
+                "name": "pipeline-typo",
+                "backend": "pythno",  # type: ignore[arg-type]
+                "payload_bytes": 1024,
+                "stages": 2,
+                "with_line_callbacks": False,
+            },
+            "backend must be one of",
+            id="invalid_backend",
+        ),
+        pytest.param(
+            {
+                "name": "pipeline-python",
+                "backend": "python",
+                "payload_bytes": 0,
+                "stages": 2,
+                "with_line_callbacks": False,
+            },
+            "payload_bytes must be > 0",
+            id="non_positive_payload_bytes",
+        ),
+        pytest.param(
+            {
+                "name": "pipeline-python",
+                "backend": "python",
+                "payload_bytes": 1024,
+                "stages": 1,
+                "with_line_callbacks": False,
+            },
+            "stages must be >= 2",
+            id="too_few_stages",
+        ),
+    ],
+)
+def test_pipeline_benchmark_scenario_validation(
+    kwargs: dict[str, typ.Any],
+    error_match: str,
+) -> None:
+    """PipelineBenchmarkScenario validates all critical parameters."""
+    with pytest.raises(ValueError, match=error_match):
+        PipelineBenchmarkScenario(**kwargs)
 
 
 def test_build_hyperfine_command_requires_at_least_one_scenario(
