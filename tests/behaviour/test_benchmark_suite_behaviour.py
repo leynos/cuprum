@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess  # noqa: S404  # behavioural test intentionally invokes CLI process
 import sys
 import typing as typ
@@ -21,6 +22,14 @@ from pytest_bdd import given, scenario, then, when
 )
 def test_generate_benchmark_plan_dry_run() -> None:
     """Generate benchmark plans without running expensive benchmarks."""
+
+
+@scenario(
+    "../features/benchmark_suite.feature",
+    "Smoke dry-run plan contains the full scenario matrix",
+)
+def test_smoke_dry_run_contains_full_matrix() -> None:
+    """Smoke dry-run plan contains the expected 12-scenario matrix."""
 
 
 @given("a benchmark output path", target_fixture="benchmark_output_path")
@@ -140,3 +149,69 @@ def then_benchmark_plan_includes_valid_command(
             "expected each benchmark plan command argument to be a string"
         )
         assert argument, "command arguments must be non-empty strings"
+
+
+# -- Scenario matrix steps (4.4.2) -------------------------------------------
+
+_SCENARIO_NAME_PATTERN = re.compile(
+    r"^(python|rust)-(small|medium|large)-(single|multi)-(nocb|cb)$",
+)
+
+
+@then("the benchmark plan contains exactly 12 scenarios")
+def then_benchmark_plan_contains_12_scenarios(
+    benchmark_plan_payload: dict[str, object],
+) -> None:
+    """Assert that the smoke dry-run plan contains exactly 12 scenarios."""
+    scenarios = typ.cast("list[dict[str, object]]", benchmark_plan_payload["scenarios"])
+    assert len(scenarios) == 12, (
+        f"expected 12 scenarios in smoke dry-run plan, got {len(scenarios)}"
+    )
+
+
+@then("every scenario name follows the systematic naming convention")
+def then_scenario_names_are_systematic(
+    benchmark_plan_payload: dict[str, object],
+) -> None:
+    """Assert every scenario name matches the naming convention."""
+    scenarios = typ.cast("list[dict[str, object]]", benchmark_plan_payload["scenarios"])
+    for scenario_entry in scenarios:
+        name = typ.cast("str", scenario_entry["name"])
+        assert _SCENARIO_NAME_PATTERN.match(name), (
+            f"scenario name {name!r} does not match expected pattern "
+            f"{_SCENARIO_NAME_PATTERN.pattern!r}"
+        )
+
+
+@then("the scenarios cover all three payload size categories")
+def then_scenarios_cover_all_payload_sizes(
+    benchmark_plan_payload: dict[str, object],
+) -> None:
+    """Assert that three distinct payload size values are present."""
+    scenarios = typ.cast("list[dict[str, object]]", benchmark_plan_payload["scenarios"])
+    payload_sizes = {typ.cast("int", s["payload_bytes"]) for s in scenarios}
+    assert len(payload_sizes) == 3, (
+        f"expected 3 distinct payload sizes, got {len(payload_sizes)}: {payload_sizes}"
+    )
+
+
+@then("the scenarios cover both pipeline depths")
+def then_scenarios_cover_both_depths(
+    benchmark_plan_payload: dict[str, object],
+) -> None:
+    """Assert both single-stage (2) and multi-stage (3) depths are present."""
+    scenarios = typ.cast("list[dict[str, object]]", benchmark_plan_payload["scenarios"])
+    stage_counts = {typ.cast("int", s["stages"]) for s in scenarios}
+    assert stage_counts == {2, 3}, f"expected stage counts {{2, 3}}, got {stage_counts}"
+
+
+@then("the scenarios cover both callback modes")
+def then_scenarios_cover_both_callback_modes(
+    benchmark_plan_payload: dict[str, object],
+) -> None:
+    """Assert both with and without line callbacks are present."""
+    scenarios = typ.cast("list[dict[str, object]]", benchmark_plan_payload["scenarios"])
+    callback_modes = {typ.cast("bool", s["with_line_callbacks"]) for s in scenarios}
+    assert callback_modes == {True, False}, (
+        f"expected callback modes {{True, False}}, got {callback_modes}"
+    )

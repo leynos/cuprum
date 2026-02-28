@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib as pth
+import re
 import typing as typ
 
 import pytest
@@ -266,4 +267,90 @@ def test_run_pipeline_benchmarks_dry_run_writes_json(tmp_path: pth.Path) -> None
     assert command_payload, "expected payload command list to be non-empty"
     assert all(isinstance(argument, str) for argument in command_payload), (
         "expected all payload command entries to be strings"
+    )
+
+
+# -- Scenario matrix tests (4.4.2) -------------------------------------------
+
+_SCENARIO_NAME_PATTERN = re.compile(
+    r"^(python|rust)-(small|medium|large)-(single|multi)-(nocb|cb)$",
+)
+
+
+def test_default_pipeline_scenarios_smoke_matrix_count() -> None:
+    """Smoke mode with Python-only produces exactly 12 scenarios."""
+    scenarios = default_pipeline_scenarios(smoke=True, include_rust=False)
+
+    assert len(scenarios) == 12, (
+        f"expected 12 smoke scenarios (3 sizes x 2 depths x 2 callbacks), "
+        f"got {len(scenarios)}"
+    )
+
+
+def test_default_pipeline_scenarios_full_matrix_count() -> None:
+    """Full mode with both backends produces exactly 24 scenarios."""
+    scenarios = default_pipeline_scenarios(smoke=False, include_rust=True)
+
+    assert len(scenarios) == 24, (
+        f"expected 24 full scenarios (12 per backend x 2 backends), "
+        f"got {len(scenarios)}"
+    )
+
+
+def test_default_pipeline_scenarios_names_are_systematic() -> None:
+    """Every scenario name follows the systematic naming convention."""
+    scenarios = default_pipeline_scenarios(smoke=True, include_rust=True)
+
+    for scenario in scenarios:
+        assert _SCENARIO_NAME_PATTERN.match(scenario.name), (
+            f"scenario name {scenario.name!r} does not match expected pattern "
+            f"{_SCENARIO_NAME_PATTERN.pattern!r}"
+        )
+
+
+def test_default_pipeline_scenarios_covers_all_payload_sizes() -> None:
+    """The non-smoke matrix covers small (1 KB), medium (1 MB), large (100 MB)."""
+    scenarios = default_pipeline_scenarios(smoke=False, include_rust=False)
+    payload_sizes = {s.payload_bytes for s in scenarios}
+
+    assert payload_sizes == {1024, 1_048_576, 104_857_600}, (
+        f"expected payload sizes {{1024, 1048576, 104857600}}, got {payload_sizes}"
+    )
+
+
+def test_default_pipeline_scenarios_covers_both_depths() -> None:
+    """The matrix covers both single-stage (2) and multi-stage (3) depths."""
+    scenarios = default_pipeline_scenarios(smoke=True, include_rust=False)
+    stage_counts = {s.stages for s in scenarios}
+
+    assert stage_counts == {2, 3}, f"expected stage counts {{2, 3}}, got {stage_counts}"
+
+
+def test_default_pipeline_scenarios_covers_both_callback_modes() -> None:
+    """The matrix covers both with and without line callbacks."""
+    scenarios = default_pipeline_scenarios(smoke=True, include_rust=False)
+    callback_modes = {s.with_line_callbacks for s in scenarios}
+
+    assert callback_modes == {True, False}, (
+        f"expected callback modes {{True, False}}, got {callback_modes}"
+    )
+
+
+def test_default_pipeline_scenarios_smoke_uses_reduced_payloads() -> None:
+    """Smoke mode uses reduced payload sizes (1 KB, 64 KB, 1 MB)."""
+    scenarios = default_pipeline_scenarios(smoke=True, include_rust=False)
+    payload_sizes = {s.payload_bytes for s in scenarios}
+
+    assert payload_sizes == {1024, 65_536, 1_048_576}, (
+        f"expected smoke payload sizes {{1024, 65536, 1048576}}, got {payload_sizes}"
+    )
+
+
+def test_default_pipeline_scenarios_no_duplicate_names() -> None:
+    """All scenario names in the matrix are unique."""
+    scenarios = default_pipeline_scenarios(smoke=False, include_rust=True)
+    names = [s.name for s in scenarios]
+
+    assert len(names) == len(set(names)), (
+        f"expected all scenario names to be unique but found duplicates in {names}"
     )
