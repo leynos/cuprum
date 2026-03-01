@@ -1922,6 +1922,15 @@ Both pathways are tested as first-class implementations:
 - end-to-end throughput uses `hyperfine` through
   `benchmarks/pipeline_throughput.py`, which drives
   `benchmarks/pipeline_worker.py` for scenario execution and emits JSON output.
+- the throughput scenario matrix covers three payload sizes (small at 1 KB,
+  medium at 1 MB, large at 100 MB), two pipeline depths (single-stage with zero
+  passthrough stages, and multi-stage with one passthrough stage), and two
+  line-callback modes (with and without), for each backend. This produces 12
+  scenarios per backend (24 total when Rust is available). Smoke mode exercises
+  the same matrix shape with reduced payload sizes for fast validation.
+  Scenarios follow a systematic naming convention:
+  `{backend}-{size}-{depth}-{callbacks}` (for example
+  `python-small-single-nocb` or `rust-large-multi-cb`).
 
 CI includes benchmark jobs that compare Python and Rust pathway throughput,
 failing if the Rust pathway regresses beyond a defined threshold.

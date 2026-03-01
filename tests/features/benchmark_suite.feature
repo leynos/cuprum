@@ -11,3 +11,12 @@ Feature: Benchmark suite smoke workflow
     And the benchmark plan includes a valid command
     And the plan includes a Python backend scenario
     And the plan records Rust availability
+
+  Scenario: Smoke dry-run plan contains the full scenario matrix
+    Given a benchmark output path
+    When I generate benchmark plans in smoke dry-run mode
+    Then the benchmark plan contains 12 scenarios per backend
+    And every scenario name follows the systematic naming convention
+    And the scenarios cover all three payload size categories
+    And the scenarios cover both pipeline depths
+    And the scenarios cover both callback modes

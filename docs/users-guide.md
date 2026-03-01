@@ -1067,6 +1067,23 @@ Interpretation notes:
 - end-to-end hyperfine runs measure full worker-pipeline runtime and include a
   Rust scenario only when the Rust extension is available.
 
+#### Scenario matrix
+
+The end-to-end throughput suite exercises a systematic matrix of benchmark
+scenarios for each available backend:
+
+- payload sizes: small (1 KB), medium (1 MB), and large (100 MB);
+- pipeline depth: single-stage (writer|sink, no passthrough) and multi-stage
+  (writer|passthrough|sink);
+- line callbacks: with (line-by-line sink processing) and without (binary bulk
+  read).
+
+This produces 12 scenarios per backend. In smoke mode, payload sizes are
+reduced (1 KB, 64 KB, 1 MB) to keep validation fast while exercising the full
+matrix shape. Scenarios follow a systematic naming convention:
+`{backend}-{size}-{depth}-{callbacks}`, for example `python-small-single-nocb`
+or `rust-large-multi-cb`.
+
 ### Linux splice() optimization
 
 On Linux, the Rust extension automatically uses the `splice()` system call for
