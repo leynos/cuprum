@@ -81,7 +81,7 @@ This task is complete only when:
 ## Risks
 
 - Risk: The expanded smoke-mode matrix (12 scenarios) may slow down `make test`
-  via the BDD dry-run test.
+  via the behaviour-driven development (BDD) dry-run test.
   Severity: low. Likelihood: low (dry-run does not invoke hyperfine; scenario
   generation is fast). Mitigation: smoke payload sizes are kept small. Monitor
   `make test` wall time.

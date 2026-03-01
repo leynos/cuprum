@@ -158,14 +158,17 @@ _SCENARIO_NAME_PATTERN = re.compile(
 )
 
 
-@then("the benchmark plan contains exactly 12 scenarios")
-def then_benchmark_plan_contains_12_scenarios(
+@then("the benchmark plan contains 12 scenarios per backend")
+def then_benchmark_plan_contains_12_per_backend(
     benchmark_plan_payload: dict[str, object],
 ) -> None:
-    """Assert that the smoke dry-run plan contains exactly 12 scenarios."""
+    """Assert 12 scenarios per backend (12 Python-only, or 24 with Rust)."""
     scenarios = typ.cast("list[dict[str, object]]", benchmark_plan_payload["scenarios"])
-    assert len(scenarios) == 12, (
-        f"expected 12 scenarios in smoke dry-run plan, got {len(scenarios)}"
+    rust_available = benchmark_plan_payload.get("rust_available", False)
+    expected = 24 if rust_available else 12
+    assert len(scenarios) == expected, (
+        f"expected {expected} scenarios (rust_available={rust_available}), "
+        f"got {len(scenarios)}"
     )
 
 

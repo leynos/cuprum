@@ -146,10 +146,11 @@ def default_pipeline_scenarios(
     Examples
     --------
     >>> scenarios = default_pipeline_scenarios(smoke=True, include_rust=False)
-    >>> len(scenarios)
-    12
-    >>> scenarios[0].name
-    'python-small-single-nocb'
+    >>> {scenario.backend for scenario in scenarios}
+    {'python'}
+    >>> names = {scenario.name for scenario in scenarios}
+    >>> "python-small-single-nocb" in names
+    True
     """
     payloads: tuple[tuple[str, int], ...] = (
         ("small", _SMOKE_SMALL_PAYLOAD_BYTES if smoke else _SMALL_PAYLOAD_BYTES),

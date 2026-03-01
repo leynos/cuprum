@@ -354,3 +354,28 @@ def test_default_pipeline_scenarios_no_duplicate_names() -> None:
     assert len(names) == len(set(names)), (
         f"expected all scenario names to be unique but found duplicates in {names}"
     )
+
+
+def test_default_pipeline_scenarios_python_only_backends() -> None:
+    """With ``include_rust=False``, only Python backend scenarios are produced."""
+    scenarios = default_pipeline_scenarios(smoke=True, include_rust=False)
+    backends = {s.backend for s in scenarios}
+
+    assert backends == {"python"}, (
+        f"expected only python backend when include_rust=False, got {backends}"
+    )
+
+
+def test_default_pipeline_scenarios_python_and_rust_backends() -> None:
+    """With ``include_rust=True``, both backends are present with 12 each."""
+    scenarios = default_pipeline_scenarios(smoke=True, include_rust=True)
+    backends = {s.backend for s in scenarios}
+
+    assert backends == {"python", "rust"}, (
+        f"expected both python and rust backends, got {backends}"
+    )
+
+    python_count = sum(1 for s in scenarios if s.backend == "python")
+    rust_count = sum(1 for s in scenarios if s.backend == "rust")
+    assert python_count == 12, f"expected 12 python scenarios, got {python_count}"
+    assert rust_count == 12, f"expected 12 rust scenarios, got {rust_count}"

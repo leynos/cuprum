@@ -15,7 +15,7 @@ Feature: Benchmark suite smoke workflow
   Scenario: Smoke dry-run plan contains the full scenario matrix
     Given a benchmark output path
     When I generate benchmark plans in smoke dry-run mode
-    Then the benchmark plan contains exactly 12 scenarios
+    Then the benchmark plan contains 12 scenarios per backend
     And every scenario name follows the systematic naming convention
     And the scenarios cover all three payload size categories
     And the scenarios cover both pipeline depths
