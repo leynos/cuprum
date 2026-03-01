@@ -159,14 +159,28 @@ def then_benchmark_plan_includes_valid_command(
 def then_benchmark_plan_contains_12_per_backend(
     benchmark_plan_payload: dict[str, object],
 ) -> None:
-    """Assert 12 scenarios per backend (12 Python-only, or 24 with Rust)."""
+    """Assert 12 scenarios per backend with correct backend distribution."""
     scenarios = typ.cast("list[dict[str, object]]", benchmark_plan_payload["scenarios"])
     rust_available = benchmark_plan_payload.get("rust_available", False)
-    expected = 24 if rust_available else 12
-    assert len(scenarios) == expected, (
-        f"expected {expected} scenarios (rust_available={rust_available}), "
-        f"got {len(scenarios)}"
-    )
+
+    # Group by backend.
+    counts: dict[str, int] = {}
+    for scenario_entry in scenarios:
+        backend = typ.cast("str", scenario_entry["backend"])
+        counts[backend] = counts.get(backend, 0) + 1
+
+    if rust_available:
+        assert set(counts) == {"python", "rust"}, (
+            f"expected both python and rust backends when rust_available=True, "
+            f"got {set(counts)}"
+        )
+    else:
+        assert set(counts) == {"python"}, (
+            f"expected only python backend when rust_available=False, got {set(counts)}"
+        )
+
+    for backend, count in counts.items():
+        assert count == 12, f"expected 12 scenarios for {backend} backend, got {count}"
 
 
 @then("every scenario name follows the systematic naming convention")
@@ -187,11 +201,11 @@ def then_scenario_names_are_systematic(
 def then_scenarios_cover_all_payload_sizes(
     benchmark_plan_payload: dict[str, object],
 ) -> None:
-    """Assert that three distinct payload size values are present."""
+    """Assert the exact smoke payload sizes (1 KB, 64 KB, 1 MB) are present."""
     scenarios = typ.cast("list[dict[str, object]]", benchmark_plan_payload["scenarios"])
     payload_sizes = {typ.cast("int", s["payload_bytes"]) for s in scenarios}
-    assert len(payload_sizes) == 3, (
-        f"expected 3 distinct payload sizes, got {len(payload_sizes)}: {payload_sizes}"
+    assert payload_sizes == {1024, 65_536, 1_048_576}, (
+        f"expected smoke payload sizes {{1024, 65536, 1048576}}, got {payload_sizes}"
     )
 
 

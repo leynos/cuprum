@@ -23,8 +23,8 @@ uv run python benchmarks/pipeline_throughput.py \
 produces a JSON plan with 12 scenarios (Python-only; 24 when Rust is
 available), each with a systematic name, the correct payload size, stage count,
 and callback flag. All scenarios follow the naming convention
-`{backend}-{size}-{depth}-{callbacks}` (for example
-`python-small-single-nocb` or `rust-large-multi-cb`).
+`{backend}-{size}-{depth}-{callbacks}` (for example `python-small-single-nocb`
+or `rust-large-multi-cb`).
 
 This task is complete only when:
 
@@ -48,8 +48,7 @@ This task is complete only when:
   arbitrary payload sizes).
 - The minimum stage count remains 2 (`_MIN_PIPELINE_STAGES = 2`).
   "Single-stage" in the roadmap context means `stages=2` (writer|sink, zero
-  passthrough stages). "Multi-stage" means `stages=3`
-  (writer|passthrough|sink).
+  passthrough stages). "Multi-stage" means `stages=3` (writer|passthrough|sink).
 - Follow repository test-first policy: add or modify tests first, capture
   failing state, then implement minimal code to pass.
 - Provide both test styles for this feature: unit tests using `pytest` in
@@ -81,47 +80,46 @@ This task is complete only when:
 ## Risks
 
 - Risk: The expanded smoke-mode matrix (12 scenarios) may slow down `make test`
-  via the behaviour-driven development (BDD) dry-run test.
-  Severity: low. Likelihood: low (dry-run does not invoke hyperfine; scenario
-  generation is fast). Mitigation: smoke payload sizes are kept small. Monitor
-  `make test` wall time.
+  via the behaviour-driven development (BDD) dry-run test. Severity: low.
+  Likelihood: low (dry-run does not invoke hyperfine; scenario generation is
+  fast). Mitigation: smoke payload sizes are kept small. Monitor `make test`
+  wall time.
 
 - Risk: Existing tests that assert on scenario counts or specific scenario
-  names will break.
-  Severity: medium. Likelihood: medium. Mitigation: review every existing test
-  assertion before modifying the scenario generator. Existing tests use
-  `any()`/`all()` assertions that remain valid with more scenarios.
+  names will break. Severity: medium. Likelihood: medium. Mitigation: review
+  every existing test assertion before modifying the scenario generator.
+  Existing tests use `any()`/`all()` assertions that remain valid with more
+  scenarios.
 
 - Risk: Large payload (100 MB) in non-smoke mode may cause resource issues in
-  certain environments.
-  Severity: low. Likelihood: low (non-smoke benchmarks are only run via
-  `make benchmark-e2e`, which is opt-in). Mitigation: the 100 MB size matches
-  the roadmap requirement. Document the resource expectation.
+  certain environments. Severity: low. Likelihood: low (non-smoke benchmarks
+  are only run via `make benchmark-e2e`, which is opt-in). Mitigation: the 100
+  MB size matches the roadmap requirement. Document the resource expectation.
 
 ## Progress
 
 - [x] (2026-02-28) Stage A: wrote failing tests (8 unit + 1 BDD scenario).
-  Red phase confirmed: 7 new unit tests and 1 BDD scenario failed, all
-  existing tests passed.
+  Red phase confirmed: 7 new unit tests and 1 BDD scenario failed, all existing
+  tests passed.
 - [x] (2026-02-28) Stage B: implemented expanded scenario matrix. Replaced
   payload constants and rewrote `default_pipeline_scenarios()` with matrix
   generation. All 25 targeted tests passed. Dry-run output verified: 12
   scenarios with systematic names.
 - [x] (2026-02-28) Stage C: updated documentation. Added scenario matrix
-  description to `docs/cuprum-design.md` Section 13.9 and
-  `docs/users-guide.md` "Benchmark suite" section. Marked roadmap 4.4.2 done.
+  description to `docs/cuprum-design.md` Section 13.9 and `docs/users-guide.md`
+  "Benchmark suite" section. Marked roadmap 4.4.2 done.
 - [x] (2026-02-28) Stage D: full validation. All quality gates passed:
-  `make check-fmt`, `make typecheck`, `make lint`, `make test` (330 passed,
-  43 skipped), `make markdownlint` (0 errors), `make nixie`.
+  `make check-fmt`, `make typecheck`, `make lint`, `make test` (330 passed, 43
+  skipped), `make markdownlint` (0 errors), `make nixie`.
 
 ## Surprises & discoveries
 
 - Observation: the `test_default_pipeline_scenarios_no_duplicate_names` test
   passed even before implementation because the old 2-scenario set already had
   unique names. This was expected and harmless; the test still validates a
-  meaningful invariant for the 24-scenario matrix.
-  Evidence: Stage A red-phase output showed 7 failures, not 8.
-  Impact: none; the test is valuable for the final matrix.
+  meaningful invariant for the 24-scenario matrix. Evidence: Stage A red-phase
+  output showed 7 failures, not 8. Impact: none; the test is valuable for the
+  final matrix.
 
 ## Decision log
 
@@ -156,8 +154,8 @@ Completed implementation for roadmap item `4.4.2`.
 Delivered:
 
 - Expanded `default_pipeline_scenarios()` to return a 12-scenario-per-backend
-  combinatorial matrix covering 3 payload sizes, 2 pipeline depths, and
-  2 callback modes.
+  combinatorial matrix covering 3 payload sizes, 2 pipeline depths, and 2
+  callback modes.
 - Added 8 unit tests validating matrix count, naming, payload coverage, depth
   coverage, callback coverage, smoke payloads, and uniqueness.
 - Added 1 BDD scenario with five-step definitions validating the dry-run matrix
@@ -209,11 +207,10 @@ separate from the main `cuprum/` library:
   1025-1069).
 - `docs/roadmap.md` -- roadmap, item 4.4.2 (lines 166-168).
 
-Current state of `default_pipeline_scenarios()`: returns at most 2 scenarios
-(1 Python + 1 optional Rust), both with `stages=3`,
-`with_line_callbacks=False`, and a single payload size (1 KB smoke / 1 MB
-normal). After this plan: 12 per backend (24 with Rust) covering the full
-combinatorial matrix.
+Current state of `default_pipeline_scenarios()`: returns at most 2 scenarios (1
+Python + 1 optional Rust), both with `stages=3`, `with_line_callbacks=False`,
+and a single payload size (1 KB smoke / 1 MB normal). After this plan: 12 per
+backend (24 with Rust) covering the full combinatorial matrix.
 
 ## Plan of work
 
@@ -232,8 +229,8 @@ Stage B: implement the expanded scenario matrix.
 
 Replace the payload constants in `benchmarks/pipeline_throughput.py` with a
 richer set covering three payload sizes (normal and smoke variants). Rewrite
-`default_pipeline_scenarios()` to iterate over the Cartesian product of
-payload sizes, pipeline depths, and callback modes for each backend. Import
+`default_pipeline_scenarios()` to iterate over the Cartesian product of payload
+sizes, pipeline depths, and callback modes for each backend. Import
 `BackendName` from `benchmarks._benchmark_types` for type annotation.
 
 Go/no-go: proceed only after `make test` passes (all existing + new tests).
@@ -241,8 +238,8 @@ Lint, format, and type-check must pass.
 
 Stage C: update documentation.
 
-Add scenario matrix description to `docs/cuprum-design.md` Section 13.9. Add
-a "Scenario matrix" subsection to the benchmark suite section of
+Add scenario matrix description to `docs/cuprum-design.md` Section 13.9. Add a
+"Scenario matrix" subsection to the benchmark suite section of
 `docs/users-guide.md`. Mark roadmap item `4.4.2` as done.
 
 Go/no-go: `make markdownlint` and `make nixie` must pass.
@@ -372,14 +369,16 @@ _SMOKE_MEDIUM_PAYLOAD_BYTES: int = 65_536
 _SMOKE_LARGE_PAYLOAD_BYTES: int = 1_048_576
 ```
 
-Files modified (7 total, within tolerance):
+Files modified (8 total, within tolerance):
 
 1. `benchmarks/pipeline_throughput.py` -- expand constants and
    `default_pipeline_scenarios()`.
-2. `cuprum/unittests/test_benchmark_suite.py` -- add 8 new unit tests.
-3. `tests/behaviour/test_benchmark_suite_behaviour.py` -- add 1 new BDD
+2. `benchmarks/_test_constants.py` -- shared `_SCENARIO_NAME_PATTERN` regex
+   for benchmark scenario name validation across test suites.
+3. `cuprum/unittests/test_benchmark_suite.py` -- add 8 new unit tests.
+4. `tests/behaviour/test_benchmark_suite_behaviour.py` -- add 1 new BDD
    scenario function and 5 new step definitions.
-4. `tests/features/benchmark_suite.feature` -- add 1 new Gherkin scenario.
-5. `docs/cuprum-design.md` -- add scenario matrix description to Section 13.9.
-6. `docs/users-guide.md` -- add "Scenario matrix" subsection.
-7. `docs/roadmap.md` -- mark 4.4.2 as done.
+5. `tests/features/benchmark_suite.feature` -- add 1 new Gherkin scenario.
+6. `docs/cuprum-design.md` -- add scenario matrix description to Section 13.9.
+7. `docs/users-guide.md` -- add "Scenario matrix" subsection.
+8. `docs/roadmap.md` -- mark 4.4.2 as done.
