@@ -79,6 +79,47 @@ __all__ = [
 ]
 
 
+def _build_scenarios_for_backend(
+    backend: BackendName,
+    payloads: tuple[tuple[str, int], ...],
+    depths: tuple[tuple[str, int], ...],
+    callback_modes: tuple[tuple[str, bool], ...],
+) -> list[PipelineBenchmarkScenario]:
+    """Build benchmark scenarios for a single backend.
+
+    Parameters
+    ----------
+    backend:
+        Backend name (python or rust).
+    payloads:
+        Tuple of (label, bytes) pairs for payload sizes.
+    depths:
+        Tuple of (label, stage_count) pairs for pipeline depths.
+    callback_modes:
+        Tuple of (label, enabled) pairs for callback modes.
+
+    Returns
+    -------
+    list[PipelineBenchmarkScenario]
+        Scenarios for the given backend covering all payload/depth/callback
+        combinations.
+    """
+    scenarios: list[PipelineBenchmarkScenario] = []
+    for size_label, payload_bytes in payloads:
+        for depth_label, stages in depths:
+            for cb_label, with_line_callbacks in callback_modes:
+                scenarios.append(
+                    PipelineBenchmarkScenario(
+                        name=f"{backend}-{size_label}-{depth_label}-{cb_label}",
+                        backend=backend,
+                        payload_bytes=payload_bytes,
+                        stages=stages,
+                        with_line_callbacks=with_line_callbacks,
+                    ),
+                )
+    return scenarios
+
+
 def default_pipeline_scenarios(
     *,
     smoke: bool,
@@ -130,18 +171,9 @@ def default_pipeline_scenarios(
 
     scenarios: list[PipelineBenchmarkScenario] = []
     for backend in backends:
-        for size_label, payload_bytes in payloads:
-            for depth_label, stages in depths:
-                for cb_label, with_line_callbacks in callback_modes:
-                    scenarios.append(
-                        PipelineBenchmarkScenario(
-                            name=f"{backend}-{size_label}-{depth_label}-{cb_label}",
-                            backend=backend,
-                            payload_bytes=payload_bytes,
-                            stages=stages,
-                            with_line_callbacks=with_line_callbacks,
-                        ),
-                    )
+        scenarios.extend(
+            _build_scenarios_for_backend(backend, payloads, depths, callback_modes),
+        )
     return tuple(scenarios)
 
 
