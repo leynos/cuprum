@@ -133,9 +133,9 @@ This task is complete only when:
   correct. Date/Author: 2026-02-28 / DevBoxer.
 
 - Decision: multi-stage uses `stages=3` (one passthrough), not a higher count.
-  Rationale: 3 stages is the simplest multi-stage pipeline that exercises the
-  passthrough code path. Higher stage counts can be added later if needed for
-  stress testing. Date/Author: 2026-02-28 / DevBoxer.
+  Rationale: a 3-stage pipeline is the simplest multi-stage pipeline that
+  exercises the passthrough code path. Higher stage counts can be added later
+  if needed for stress testing. Date/Author: 2026-02-28 / DevBoxer.
 
 - Decision: naming convention `{backend}-{size}-{depth}-{callbacks}` with
   short tokens (`nocb`/`cb`). Rationale: systematic names make scenario
@@ -160,7 +160,7 @@ Delivered:
   2 callback modes.
 - Added 8 unit tests validating matrix count, naming, payload coverage, depth
   coverage, callback coverage, smoke payloads, and uniqueness.
-- Added 1 BDD scenario with 5 step definitions validating the dry-run matrix
+- Added 1 BDD scenario with five-step definitions validating the dry-run matrix
   structure through the CLI workflow.
 - Updated `docs/cuprum-design.md` and `docs/users-guide.md` with scenario
   matrix documentation.

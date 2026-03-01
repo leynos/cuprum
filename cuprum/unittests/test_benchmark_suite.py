@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import pathlib as pth
-import re
 import typing as typ
 
 import pytest
 
+from benchmarks._test_constants import _SCENARIO_NAME_PATTERN
 from benchmarks.pipeline_throughput import (
     HyperfineConfig,
     PipelineBenchmarkConfig,
@@ -271,10 +271,6 @@ def test_run_pipeline_benchmarks_dry_run_writes_json(tmp_path: pth.Path) -> None
 
 
 # -- Scenario matrix tests (4.4.2) -------------------------------------------
-
-_SCENARIO_NAME_PATTERN = re.compile(
-    r"^(python|rust)-(small|medium|large)-(single|multi)-(nocb|cb)$",
-)
 
 
 def test_default_pipeline_scenarios_smoke_matrix_count() -> None:

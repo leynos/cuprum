@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess  # noqa: S404  # behavioural test intentionally invokes CLI process
 import sys
 import typing as typ
 
 import pytest
+
+from benchmarks._test_constants import _SCENARIO_NAME_PATTERN
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -152,10 +153,6 @@ def then_benchmark_plan_includes_valid_command(
 
 
 # -- Scenario matrix steps (4.4.2) -------------------------------------------
-
-_SCENARIO_NAME_PATTERN = re.compile(
-    r"^(python|rust)-(small|medium|large)-(single|multi)-(nocb|cb)$",
-)
 
 
 @then("the benchmark plan contains 12 scenarios per backend")
