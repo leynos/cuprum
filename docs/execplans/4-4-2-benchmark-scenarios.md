@@ -271,7 +271,7 @@ uv run pytest -v \
   2>&1 | tee /tmp/4-4-2-stage-a.log
 ```
 
-Expected: 8 new unit tests FAIL, 1 new BDD scenario FAIL, all existing tests
+Expected: 7 new unit tests FAIL, 1 new BDD scenario FAIL, all existing tests
 PASS.
 
 ```plaintext
@@ -299,7 +299,7 @@ Expected: 12 scenarios with systematic names, payloads
 Stage C:
 
 ```plaintext
-set -o pipefail; MDLINT=/root/.bun/bin/markdownlint-cli2 \
+set -o pipefail; MDLINT=markdownlint-cli2 \
   make markdownlint 2>&1 | tee /tmp/4-4-2-stage-c-mdlint.log
 set -o pipefail; make nixie 2>&1 | tee /tmp/4-4-2-stage-c-nixie.log
 ```
