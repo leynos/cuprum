@@ -43,9 +43,11 @@ This task is complete only when:
 - Do not modify `benchmarks/_benchmark_types.py`. The existing
   `PipelineBenchmarkScenario` dataclass already supports all required fields
   (`name`, `backend`, `payload_bytes`, `stages`, `with_line_callbacks`).
-- Do not modify `benchmarks/pipeline_worker.py`. It already handles all
-  scenario field combinations (arbitrary `stages >= 2`, both callback modes,
-  arbitrary payload sizes).
+- `benchmarks/pipeline_worker.py` was modified to support callback mode:
+  `_writer_script` now emits newline-terminated lines when
+  `with_line_callbacks=True`, enabling line-by-line callback benchmarks. It
+  handles all scenario field combinations (arbitrary `stages >= 2`, both
+  callback modes, arbitrary payload sizes).
 - The minimum stage count remains 2 (`_MIN_PIPELINE_STAGES = 2`).
   "Single-stage" in the roadmap context means `stages=2` (writer|sink, zero
   passthrough stages). "Multi-stage" means `stages=3` (writer|passthrough|sink).
@@ -369,16 +371,18 @@ _SMOKE_MEDIUM_PAYLOAD_BYTES: int = 65_536
 _SMOKE_LARGE_PAYLOAD_BYTES: int = 1_048_576
 ```
 
-Files modified (8 total, within tolerance):
+Files modified (9 total, within tolerance):
 
 1. `benchmarks/pipeline_throughput.py` -- expand constants and
    `default_pipeline_scenarios()`.
-2. `benchmarks/_test_constants.py` -- shared `_SCENARIO_NAME_PATTERN` regex
+2. `benchmarks/pipeline_worker.py` -- emit newline-terminated lines in
+   `_writer_script` for callback-mode scenarios.
+3. `benchmarks/_test_constants.py` -- shared `_SCENARIO_NAME_PATTERN` regex
    for benchmark scenario name validation across test suites.
-3. `cuprum/unittests/test_benchmark_suite.py` -- add 8 new unit tests.
-4. `tests/behaviour/test_benchmark_suite_behaviour.py` -- add 1 new BDD
+4. `cuprum/unittests/test_benchmark_suite.py` -- add 8 new unit tests.
+5. `tests/behaviour/test_benchmark_suite_behaviour.py` -- add 1 new BDD
    scenario function and 5 new step definitions.
-5. `tests/features/benchmark_suite.feature` -- add 1 new Gherkin scenario.
-6. `docs/cuprum-design.md` -- add scenario matrix description to Section 13.9.
-7. `docs/users-guide.md` -- add "Scenario matrix" subsection.
-8. `docs/roadmap.md` -- mark 4.4.2 as done.
+6. `tests/features/benchmark_suite.feature` -- add 1 new Gherkin scenario.
+7. `docs/cuprum-design.md` -- add scenario matrix description to Section 13.9.
+8. `docs/users-guide.md` -- add "Scenario matrix" subsection.
+9. `docs/roadmap.md` -- mark 4.4.2 as done.
