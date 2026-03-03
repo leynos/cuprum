@@ -9,6 +9,8 @@ import typing as typ
 
 import pytest
 
+from benchmarks._test_constants import _SCENARIO_NAME_PATTERN
+
 if typ.TYPE_CHECKING:
     import pathlib as pth
 
@@ -21,6 +23,14 @@ from pytest_bdd import given, scenario, then, when
 )
 def test_generate_benchmark_plan_dry_run() -> None:
     """Generate benchmark plans without running expensive benchmarks."""
+
+
+@scenario(
+    "../features/benchmark_suite.feature",
+    "Smoke dry-run plan contains the full scenario matrix",
+)
+def test_smoke_dry_run_contains_full_matrix() -> None:
+    """Smoke dry-run plan contains the expected 12-scenario matrix."""
 
 
 @given("a benchmark output path", target_fixture="benchmark_output_path")
@@ -140,3 +150,82 @@ def then_benchmark_plan_includes_valid_command(
             "expected each benchmark plan command argument to be a string"
         )
         assert argument, "command arguments must be non-empty strings"
+
+
+# -- Scenario matrix steps (4.4.2) -------------------------------------------
+
+
+@then("the benchmark plan contains 12 scenarios per backend")
+def then_benchmark_plan_contains_12_per_backend(
+    benchmark_plan_payload: dict[str, object],
+) -> None:
+    """Assert 12 scenarios per backend with correct backend distribution."""
+    scenarios = typ.cast("list[dict[str, object]]", benchmark_plan_payload["scenarios"])
+    rust_available = benchmark_plan_payload.get("rust_available", False)
+
+    # Group by backend.
+    counts: dict[str, int] = {}
+    for scenario_entry in scenarios:
+        backend = typ.cast("str", scenario_entry["backend"])
+        counts[backend] = counts.get(backend, 0) + 1
+
+    if rust_available:
+        assert set(counts) == {"python", "rust"}, (
+            f"expected both python and rust backends when rust_available=True, "
+            f"got {set(counts)}"
+        )
+    else:
+        assert set(counts) == {"python"}, (
+            f"expected only python backend when rust_available=False, got {set(counts)}"
+        )
+
+    for backend, count in counts.items():
+        assert count == 12, f"expected 12 scenarios for {backend} backend, got {count}"
+
+
+@then("every scenario name follows the systematic naming convention")
+def then_scenario_names_are_systematic(
+    benchmark_plan_payload: dict[str, object],
+) -> None:
+    """Assert every scenario name matches the naming convention."""
+    scenarios = typ.cast("list[dict[str, object]]", benchmark_plan_payload["scenarios"])
+    for scenario_entry in scenarios:
+        name = typ.cast("str", scenario_entry["name"])
+        assert _SCENARIO_NAME_PATTERN.match(name), (
+            f"scenario name {name!r} does not match expected pattern "
+            f"{_SCENARIO_NAME_PATTERN.pattern!r}"
+        )
+
+
+@then("the scenarios cover all three payload size categories")
+def then_scenarios_cover_all_payload_sizes(
+    benchmark_plan_payload: dict[str, object],
+) -> None:
+    """Assert the exact smoke payload sizes (1 KB, 64 KB, 1 MB) are present."""
+    scenarios = typ.cast("list[dict[str, object]]", benchmark_plan_payload["scenarios"])
+    payload_sizes = {typ.cast("int", s["payload_bytes"]) for s in scenarios}
+    assert payload_sizes == {1024, 65_536, 1_048_576}, (
+        f"expected smoke payload sizes {{1024, 65536, 1048576}}, got {payload_sizes}"
+    )
+
+
+@then("the scenarios cover both pipeline depths")
+def then_scenarios_cover_both_depths(
+    benchmark_plan_payload: dict[str, object],
+) -> None:
+    """Assert both single-stage (2) and multi-stage (3) depths are present."""
+    scenarios = typ.cast("list[dict[str, object]]", benchmark_plan_payload["scenarios"])
+    stage_counts = {typ.cast("int", s["stages"]) for s in scenarios}
+    assert stage_counts == {2, 3}, f"expected stage counts {{2, 3}}, got {stage_counts}"
+
+
+@then("the scenarios cover both callback modes")
+def then_scenarios_cover_both_callback_modes(
+    benchmark_plan_payload: dict[str, object],
+) -> None:
+    """Assert both with and without line callbacks are present."""
+    scenarios = typ.cast("list[dict[str, object]]", benchmark_plan_payload["scenarios"])
+    callback_modes = {typ.cast("bool", s["with_line_callbacks"]) for s in scenarios}
+    assert callback_modes == {True, False}, (
+        f"expected callback modes {{True, False}}, got {callback_modes}"
+    )

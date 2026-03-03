@@ -61,8 +61,31 @@ def _parse_args() -> PipelineWorkerConfig:
     )
 
 
-def _writer_script() -> str:
-    """Return script for upstream payload generation."""
+def _writer_script(*, with_line_callbacks: bool) -> str:
+    """Return script for upstream payload generation.
+
+    Parameters
+    ----------
+    with_line_callbacks:
+        When ``True``, emit newline-terminated lines so downstream
+        line-by-line readers process multiple lines rather than one
+        giant blob.  When ``False``, emit raw binary bytes.
+    """
+    if with_line_callbacks:
+        return "\n".join(
+            [
+                "import sys",
+                "size = int(sys.argv[1])",
+                "line = b'x' * 79 + b'\\n'",
+                "remaining = size",
+                "out = sys.stdout.buffer",
+                "while remaining > 0:",
+                "    n = min(remaining, len(line))",
+                "    out.write(line[:n])",
+                "    remaining -= n",
+                "out.flush()",
+            ],
+        )
     return "\n".join(
         [
             "import sys",
@@ -115,7 +138,11 @@ def _build_pipeline(config: PipelineWorkerConfig) -> tuple[sh.Pipeline, Program]
     catalogue, python_program = _catalogue_for_worker()
     python = sh.make(python_program, catalogue=catalogue)
 
-    writer = python("-c", _writer_script(), str(config.payload_bytes))
+    writer = python(
+        "-c",
+        _writer_script(with_line_callbacks=config.with_line_callbacks),
+        str(config.payload_bytes),
+    )
     passthrough = python("-c", _passthrough_script())
     sink = python(
         "-c",
