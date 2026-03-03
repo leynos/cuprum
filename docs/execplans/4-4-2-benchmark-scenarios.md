@@ -100,9 +100,10 @@ This task is complete only when:
 
 ## Progress
 
-- [x] (2026-02-28) Stage A: wrote failing tests (8 unit + 1 BDD scenario).
-  Red phase confirmed: 7 new unit tests and 1 BDD scenario failed, all existing
-  tests passed.
+- [x] (2026-02-28) Stage A: wrote tests (8 unit added, 7 failed + 1 BDD
+  scenario failed). Red phase confirmed: 7 new unit tests and 1 BDD scenario
+  failed; 1 unit test (`test_default_pipeline_scenarios_no_duplicate_names`)
+  passed against the old implementation. All existing tests passed.
 - [x] (2026-02-28) Stage B: implemented expanded scenario matrix. Replaced
   payload constants and rewrote `default_pipeline_scenarios()` with matrix
   generation. All 25 targeted tests passed. Dry-run output verified: 12
@@ -257,7 +258,7 @@ modes.
 
 ## Concrete steps
 
-All commands are run from `/home/user/project`.
+All commands are run from the repository root.
 
 Stage A:
 
