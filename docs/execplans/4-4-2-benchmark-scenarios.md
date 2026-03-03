@@ -177,8 +177,10 @@ Quality and validation summary:
 
 Lessons learned:
 
-- The existing `PipelineBenchmarkScenario` dataclass and `pipeline_worker.py`
-  needed zero changes, validating the original 4.4.1 design's extensibility.
+- The existing `PipelineBenchmarkScenario` dataclass needed zero changes,
+  validating the original 4.4.1 design's extensibility.
+  `benchmarks/pipeline_worker.py` was modified to support callback mode by
+  emitting newline-terminated lines from `_writer_script`.
 - Ruff formatting preferences (no aligned inline comments) required adjusting
   constant formatting from the plan's proposed layout.
 
@@ -196,7 +198,9 @@ separate from the main `cuprum/` library:
   `build_hyperfine_command()`, `run_pipeline_benchmarks()`, and CLI `main()`.
   This is the primary file to modify.
 - `benchmarks/pipeline_worker.py` -- worker process that builds actual
-  pipelines with writer/passthrough/sink stages. NOT modified by this plan.
+  pipelines with writer/passthrough/sink stages. Modified to add callback-mode
+  support (`_writer_script` emits newline-terminated lines when
+  `with_line_callbacks=True`).
 - `cuprum/unittests/test_benchmark_suite.py` -- unit tests for the benchmark
   suite (12 existing tests).
 - `tests/behaviour/test_benchmark_suite_behaviour.py` -- BDD step definitions
