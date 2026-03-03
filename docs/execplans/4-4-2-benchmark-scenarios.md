@@ -65,7 +65,7 @@ This task is complete only when:
 
 ## Tolerances (exception triggers)
 
-- Scope: if implementation requires edits to more than 8 files (including the
+- Scope: if implementation requires edits to more than 10 files (including the
   ExecPlan itself), stop and escalate.
 - Interface: if `default_pipeline_scenarios()` must change its function
   signature (parameter names or types), stop and escalate. Adding new
