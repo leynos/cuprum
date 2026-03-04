@@ -139,6 +139,159 @@ jobs:
             --metric "line-coverage" \
             coverage.xml
 
+  benchmark-ratchet:
+    runs-on: ubuntu-latest
+    needs:
+      - lint-test
+      - typecheck-test
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: Install hyperfine
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes hyperfine
+
+      - name: Resolve baseline SHA
+        id: baseline-ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            baseline_sha="${{ github.event.pull_request.base.sha }}"
+          else
+            baseline_sha="${{ github.event.before }}"
+          fi
+          if [[ -z "${baseline_sha}" || "${baseline_sha}" =~ ^0+$ ]]; then
+            baseline_sha="${GITHUB_SHA}"
+          fi
+          echo "baseline_sha=${baseline_sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create baseline worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add "${RUNNER_TEMP}/baseline-worktree" \
+            "${{ steps.baseline-ref.outputs.baseline_sha }}"
+
+      - name: Run throughput benchmarks and ratchet comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/benchmark-ratchet"
+          mkdir -p "${artifact_dir}"
+
+          run_smoke_benchmarks() {
+            local workspace="$1"
+            local prefix="$2"
+            pushd "${workspace}" >/dev/null
+
+            make build
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+              -m ensurepip --upgrade
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run maturin develop \
+              --manifest-path rust/cuprum-rust/Cargo.toml
+
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+              benchmarks/pipeline_throughput.py \
+              --smoke \
+              --dry-run \
+              --output "${artifact_dir}/${prefix}-full-plan.json"
+
+            FULL_PLAN_PATH="${artifact_dir}/${prefix}-full-plan.json" \
+            FILTERED_PLAN_PATH="${artifact_dir}/${prefix}-plan.json" \
+            THROUGHPUT_PATH="${artifact_dir}/${prefix}-throughput.json" \
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python - <<'PY'
+          import json
+          import os
+          import pathlib as pth
+          import subprocess
+
+          full_plan_path = pth.Path(os.environ["FULL_PLAN_PATH"])
+          filtered_plan_path = pth.Path(os.environ["FILTERED_PLAN_PATH"])
+          throughput_path = pth.Path(os.environ["THROUGHPUT_PATH"])
+          full_payload = json.loads(full_plan_path.read_text(encoding="utf-8"))
+
+          scenarios = full_payload.get("scenarios", [])
+          plan_command = full_payload.get("command", [])
+          scenario_commands = plan_command[7:]
+          if len(scenarios) != len(scenario_commands):
+              raise SystemExit("scenario count must match scenario command count")
+
+          selected = [
+              (scenario, scenario_command)
+              for scenario, scenario_command in zip(scenarios, scenario_commands)
+              if scenario.get("stages") == 2
+              and scenario.get("payload_bytes", 0) <= 65536
+          ]
+          if not selected:
+              raise SystemExit("no scenarios selected for CI benchmark ratchet")
+          if not any(
+              scenario.get("backend") == "rust" for scenario, _ in selected
+          ):
+              raise SystemExit(
+                  "selected CI benchmark profile must include Rust scenarios"
+              )
+
+          command = [
+              "hyperfine",
+              "--export-json",
+              str(throughput_path),
+              "--warmup",
+              "1",
+              "--runs",
+              "3",
+              *[scenario_command for _, scenario_command in selected],
+          ]
+          subprocess.run(command, check=True)
+
+          filtered_payload = {
+              "dry_run": True,
+              "rust_available": full_payload.get("rust_available", False),
+              "command": command,
+              "scenarios": [scenario for scenario, _ in selected],
+          }
+          filtered_plan_path.write_text(
+              json.dumps(filtered_payload, indent=2, sort_keys=True),
+              encoding="utf-8",
+          )
+          PY
+
+            popd >/dev/null
+          }
+
+          run_smoke_benchmarks "${RUNNER_TEMP}/baseline-worktree" "baseline"
+          run_smoke_benchmarks "${GITHUB_WORKSPACE}" "candidate"
+
+          pushd "${GITHUB_WORKSPACE}" >/dev/null
+          UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+            benchmarks/ratchet_rust_performance.py \
+            --baseline-plan "${artifact_dir}/baseline-plan.json" \
+            --baseline-throughput "${artifact_dir}/baseline-throughput.json" \
+            --candidate-plan "${artifact_dir}/candidate-plan.json" \
+            --candidate-throughput "${artifact_dir}/candidate-throughput.json" \
+            --max-regression 0.10 \
+            --output "${artifact_dir}/ratchet-report.json"
+          popd >/dev/null
+
+      - name: Upload benchmark ratchet artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: benchmark-ratchet
+          path: ${{ runner.temp }}/benchmark-ratchet/*.json
+
   build-wheels:
     uses: ./.github/workflows/build-wheels.yml
     with:

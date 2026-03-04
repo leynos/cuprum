@@ -5,7 +5,7 @@ This ExecPlan (execution plan) is a living document. The sections
 `Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work
 proceeds.
 
-Status: DRAFT
+Status: COMPLETE
 
 Roadmap reference: `docs/roadmap.md` item `4.4.3`.
 
@@ -103,14 +103,22 @@ This task is complete only when:
 ## Progress
 
 - [x] (2026-03-03 00:00Z) Drafted ExecPlan for roadmap item `4.4.3`.
-- [ ] Stage A: add fail-first unit and behavioural tests for benchmark ratchet
-  comparison and CI-facing CLI behaviour.
-- [ ] Stage B: implement benchmark comparison module/CLI with 10% Rust
-  regression guard and JSON summary output.
-- [ ] Stage C: add benchmark CI workflow job for PR + `main` pushes, upload
-  JSON artefacts, enforce ratchet exit code.
-- [ ] Stage D: update design/users docs and mark roadmap item `4.4.3` done.
-- [ ] Stage E: run full quality gates and retain command logs.
+- [x] (2026-03-04 00:18Z) Stage A: added fail-first unit and behavioural tests
+  for benchmark ratchet comparison and CLI behaviour. Red phase confirmed with
+  `ModuleNotFoundError` for `benchmarks.ratchet_rust_performance`.
+- [x] (2026-03-04 00:24Z) Stage B: implemented
+  `benchmarks/ratchet_rust_performance.py` with JSON validation, Rust scenario
+  extraction, threshold comparison, report writing, and CLI exit codes.
+- [x] (2026-03-04 00:29Z) Stage C: added `benchmark-ratchet` job in
+  `.github/workflows/ci.yml` for pull requests and pushes to `main`, including
+  baseline/candidate smoke throughput runs, ratchet enforcement, and JSON
+  artefact upload.
+- [x] (2026-03-04 00:34Z) Stage D: updated `docs/cuprum-design.md` and
+  `docs/users-guide.md` with ratchet behaviour/artefacts and marked roadmap
+  item `4.4.3` done in `docs/roadmap.md`.
+- [x] (2026-03-04 17:16Z) Stage E: final validation complete. Passed
+  `make check-fmt`, `make typecheck`, `make lint`, `make test`,
+  `make markdownlint`, and `make nixie`.
 
 ## Surprises & discoveries
 
@@ -119,6 +127,26 @@ This task is complete only when:
   benchmark job. Evidence: design section 13.9 vs current workflow job list.
   Impact: this task must align implementation with existing documentation
   claims and keep that alignment explicit.
+
+- Observation: exactly-at-threshold comparisons can evaluate as
+  `0.10000000000000009` because of floating-point representation. Evidence:
+  Stage B tests failed when candidate Rust mean was `1.10` vs baseline `1.00`
+  with threshold `0.10`. Impact: ratchet comparison uses a small tolerance for
+  equality-at-threshold semantics.
+
+- Observation: local `make test` can fail with many Rust-path failures if a
+  generated native module (`cuprum/_rust_backend_native*.so`) is present in the
+  workspace from local `maturin develop` runs. Evidence: Stage E initially
+  failed with Rust pump/splice errors until the generated module was removed.
+  Impact: final gate validation must run in the default pure-Python baseline
+  state unless Rust validation is explicitly intended.
+
+- Observation: local `act` execution requires a working Docker daemon.
+  Evidence: `docker ps` failed with missing `/var/run/docker.sock`;
+  `act --list` worked but full job execution was not possible in this
+  environment. Impact: workflow smoke validation used `act --list` for job
+  discovery and relied on repository test coverage plus static workflow checks
+  locally.
 
 ## Decision log
 
@@ -138,21 +166,37 @@ This task is complete only when:
   keeps CI runtime bounded while preserving full matrix shape required by
   `4.4.2`. Date/Author: 2026-03-03 / Codex.
 
+- Decision: threshold equality is treated as pass, with a tiny floating-point
+  tolerance (`1e-12`) in regression checks. Rationale: prevents false failures
+  from floating-point rounding when a scenario is exactly at the configured
+  threshold. Date/Author: 2026-03-04 / Codex.
+
 ## Outcomes & retrospective
 
-Implementation has not started yet. Expected outcomes after completion:
+Implementation completed successfully.
 
-- reproducible CI ratchet job with JSON evidence;
-- deterministic Rust regression threshold enforcement at 10%;
-- docs and roadmap consistency with shipped behaviour;
-- no regressions in existing quality gates.
+- Added `benchmarks/ratchet_rust_performance.py` with JSON contract validation,
+  Rust-only scenario extraction, 10% threshold comparison, JSON report writing,
+  and CLI exit codes (`0` pass, `1` regression breach, `2` input/contract
+  failure).
+- Added unit tests in `cuprum/unittests/test_benchmark_ci_ratchet.py` and
+  behavioural tests in `tests/behaviour/test_benchmark_ci_ratchet_behaviour.py`
+  with `tests/features/benchmark_ci_ratchet.feature`.
+- Added `benchmark-ratchet` CI job in `.github/workflows/ci.yml` for
+  `pull_request` and `push` (main), producing baseline/candidate JSON and
+  failing on Rust regressions above 10%.
+- Updated documentation in `docs/cuprum-design.md` and `docs/users-guide.md`,
+  and marked `docs/roadmap.md` item `4.4.3` as done.
+- Final quality gates passed:
+  `make check-fmt`, `make typecheck`, `make lint`, `make test`,
+  `make markdownlint`, and `make nixie`.
 
 ## Context and orientation
 
 Relevant files and current state:
 
-- `.github/workflows/ci.yml`: runs formatting/lint/typecheck/test/coverage,
-  but currently no benchmark job.
+- `.github/workflows/ci.yml`: now includes `benchmark-ratchet` alongside
+  lint/typecheck/test/coverage and wheel build jobs.
 - `Makefile`: provides `benchmark-micro` and `benchmark-e2e`; no ratchet
   target.
 - `benchmarks/pipeline_throughput.py`: emits `hyperfine` JSON and dry-run plan
@@ -168,9 +212,9 @@ Relevant files and current state:
   coverage for dry-run plan generation.
 - `docs/cuprum-design.md` section 13.9: describes benchmark strategy and says
   CI regression jobs exist.
-- `docs/users-guide.md` benchmark and CI sections: describe benchmark commands
-  and CI checks; no concrete ratchet workflow description yet.
-- `docs/roadmap.md`: `4.4.3` is currently unchecked.
+- `docs/users-guide.md` benchmark and CI sections: now describe benchmark
+  ratchet execution, artefacts, and threshold formula.
+- `docs/roadmap.md`: `4.4.3` is checked (`[x]`).
 
 Terminology used in this plan:
 

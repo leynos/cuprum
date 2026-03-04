@@ -1120,6 +1120,11 @@ The continuous integration (CI) workflows run the following checks:
   to fail.
 - Formatting and lint checks run on Python 3.13.
 - Coverage upload (artifact + optional CodeScene upload) runs on Python 3.13.
+- Benchmark ratchet runs on pull requests and pushes to `main`:
+  - It benchmarks baseline and candidate revisions in smoke mode.
+  - It uploads JSON artefacts for both runs plus `ratchet-report.json`.
+  - It fails when any Rust scenario has
+    `(candidate_mean - baseline_mean) / baseline_mean > 0.10`.
 
 - Pure Python wheel:
 

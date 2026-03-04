@@ -1932,8 +1932,24 @@ Both pathways are tested as first-class implementations:
   `{backend}-{size}-{depth}-{callbacks}` (for example
   `python-small-single-nocb` or `rust-large-multi-cb`).
 
-CI includes benchmark jobs that compare Python and Rust pathway throughput,
-failing if the Rust pathway regresses beyond a defined threshold.
+CI includes a benchmark ratchet job on pull requests and pushes to `main`. The
+job executes smoke-mode throughput benchmarks for both the baseline commit and
+candidate commit in the same workflow run, writes JSON artefacts for both runs,
+and invokes `benchmarks/ratchet_rust_performance.py` to compare Rust scenario
+means.
+
+The ratchet rule is:
+
+- regression ratio = `(candidate_mean - baseline_mean) / baseline_mean`
+- fail when regression ratio `> 0.10` for any Rust scenario
+
+Artefacts uploaded by CI include:
+
+- `baseline-plan.json`
+- `baseline-throughput.json`
+- `candidate-plan.json`
+- `candidate-throughput.json`
+- `ratchet-report.json`
 
 Benchmark execution is opt-in for normal development loops. `make test` skips
 the benchmark pytest module by default, while dedicated commands run benchmarks:
