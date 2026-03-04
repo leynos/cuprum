@@ -151,18 +151,23 @@ def when_run_ratchet_cli(
     }
 
 
+def _assert_returncode(ratchet_cli_result: dict[str, object], *, expected: int) -> None:
+    """Assert the CLI return code and emit stdout/stderr for failures."""
+    completed = typ.cast(
+        "subprocess.CompletedProcess[str]", ratchet_cli_result["completed"]
+    )
+    assert completed.returncode == expected, (
+        f"expected ratchet to exit with code {expected}, got "
+        f"{completed.returncode}:\nstdout={completed.stdout}\nstderr={completed.stderr}"
+    )
+
+
 @then("the ratchet command exits successfully")
 def then_ratchet_exits_successfully(
     ratchet_cli_result: dict[str, object],
 ) -> None:
     """CLI should return zero for within-threshold regression."""
-    completed = typ.cast(
-        "subprocess.CompletedProcess[str]", ratchet_cli_result["completed"]
-    )
-    assert completed.returncode == 0, (
-        "expected successful ratchet exit code but got "
-        f"{completed.returncode}:\nstdout={completed.stdout}\nstderr={completed.stderr}"
-    )
+    _assert_returncode(ratchet_cli_result, expected=0)
 
 
 @then("the ratchet command exits with failure")
@@ -170,14 +175,7 @@ def then_ratchet_exits_with_failure(
     ratchet_cli_result: dict[str, object],
 ) -> None:
     """CLI should return non-zero for above-threshold regression."""
-    completed = typ.cast(
-        "subprocess.CompletedProcess[str]", ratchet_cli_result["completed"]
-    )
-    assert completed.returncode == 1, (
-        "expected ratchet to fail with exit code 1 when threshold is breached; "
-        "got "
-        f"{completed.returncode}:\nstdout={completed.stdout}\nstderr={completed.stderr}"
-    )
+    _assert_returncode(ratchet_cli_result, expected=1)
 
 
 @then("the ratchet report indicates success")

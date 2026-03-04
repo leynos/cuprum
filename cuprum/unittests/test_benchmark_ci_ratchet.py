@@ -9,6 +9,7 @@ import pytest
 
 from benchmarks.ratchet_rust_performance import (
     BenchmarkRunPayload,
+    ComparisonReport,
     compare_rust_regressions,
     load_plan,
     load_throughput,
@@ -60,6 +61,36 @@ def _write_json(
     return path
 
 
+def _run_comparison(
+    *,
+    baseline_python_mean: float,
+    baseline_rust_mean: float,
+    candidate_python_mean: float,
+    candidate_rust_mean: float,
+    max_regression: float = 0.10,
+) -> ComparisonReport:
+    """Build baseline/candidate payloads and run the Rust ratchet comparison."""
+    return compare_rust_regressions(
+        baseline=BenchmarkRunPayload(
+            plan=_plan_payload(),
+            throughput=_throughput_payload(
+                python_mean=baseline_python_mean,
+                rust_mean=baseline_rust_mean,
+            ),
+            context_name="baseline",
+        ),
+        candidate=BenchmarkRunPayload(
+            plan=_plan_payload(),
+            throughput=_throughput_payload(
+                python_mean=candidate_python_mean,
+                rust_mean=candidate_rust_mean,
+            ),
+            context_name="candidate",
+        ),
+        max_regression=max_regression,
+    )
+
+
 def test_load_plan_rejects_missing_scenarios(tmp_path: pth.Path) -> None:
     """Plan payloads must include a scenarios list."""
     path = _write_json(
@@ -86,18 +117,11 @@ def test_load_throughput_rejects_missing_results(tmp_path: pth.Path) -> None:
 
 def test_compare_rust_regressions_passes_within_threshold() -> None:
     """A Rust slowdown at or under 10% should pass the ratchet."""
-    report = compare_rust_regressions(
-        baseline=BenchmarkRunPayload(
-            plan=_plan_payload(),
-            throughput=_throughput_payload(python_mean=0.50, rust_mean=1.00),
-            context_name="baseline",
-        ),
-        candidate=BenchmarkRunPayload(
-            plan=_plan_payload(),
-            throughput=_throughput_payload(python_mean=1.50, rust_mean=1.10),
-            context_name="candidate",
-        ),
-        max_regression=0.10,
+    report = _run_comparison(
+        baseline_python_mean=0.50,
+        baseline_rust_mean=1.00,
+        candidate_python_mean=1.50,
+        candidate_rust_mean=1.10,
     )
 
     assert report.passed is True
@@ -109,18 +133,11 @@ def test_compare_rust_regressions_passes_within_threshold() -> None:
 
 def test_compare_rust_regressions_fails_beyond_threshold() -> None:
     """A Rust slowdown above 10% should fail the ratchet."""
-    report = compare_rust_regressions(
-        baseline=BenchmarkRunPayload(
-            plan=_plan_payload(),
-            throughput=_throughput_payload(python_mean=0.25, rust_mean=1.00),
-            context_name="baseline",
-        ),
-        candidate=BenchmarkRunPayload(
-            plan=_plan_payload(),
-            throughput=_throughput_payload(python_mean=0.25, rust_mean=1.25),
-            context_name="candidate",
-        ),
-        max_regression=0.10,
+    report = _run_comparison(
+        baseline_python_mean=0.25,
+        baseline_rust_mean=1.00,
+        candidate_python_mean=0.25,
+        candidate_rust_mean=1.25,
     )
 
     assert report.passed is False

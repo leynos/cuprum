@@ -187,6 +187,41 @@ def load_throughput(path: pth.Path) -> dict[str, object]:
     return payload
 
 
+def _validate_backend(backend: str, *, index: int) -> None:
+    """Raise ``ValueError`` when *backend* is not 'python' or 'rust'."""
+    if backend not in {"python", "rust"}:
+        msg = (
+            f"scenarios[{index}].backend must be either 'python' or 'rust', "
+            f"got {backend!r}"
+        )
+        raise ValueError(msg)
+
+
+def _extract_rust_entry(
+    *,
+    index: int,
+    scenario_value: object,
+    result_value: object,
+) -> tuple[str, float] | None:
+    """Return ``(scenario_name, mean)`` for a Rust entry, or ``None`` for non-Rust."""
+    scenario = _require_mapping(scenario_value, name=f"scenarios[{index}]")
+    result = _require_mapping(result_value, name=f"results[{index}]")
+
+    backend = _require_non_empty_string(
+        scenario.get("backend"), name=f"scenarios[{index}].backend"
+    )
+    scenario_name = _require_non_empty_string(
+        scenario.get("name"), name=f"scenarios[{index}].name"
+    )
+    _validate_backend(backend, index=index)
+
+    if backend != "rust":
+        return None
+
+    mean = _require_positive_float(result.get("mean"), name=f"results[{index}].mean")
+    return scenario_name, mean
+
+
 def _extract_rust_means(
     *,
     plan_payload: dict[str, object],
@@ -208,35 +243,14 @@ def _extract_rust_means(
     for index, (scenario_value, result_value) in enumerate(
         zip(scenarios, results, strict=True)
     ):
-        scenario = _require_mapping(
-            scenario_value,
-            name=f"scenarios[{index}]",
+        entry = _extract_rust_entry(
+            index=index,
+            scenario_value=scenario_value,
+            result_value=result_value,
         )
-        result = _require_mapping(result_value, name=f"results[{index}]")
-
-        backend = _require_non_empty_string(
-            scenario.get("backend"),
-            name=f"scenarios[{index}].backend",
-        )
-        scenario_name = _require_non_empty_string(
-            scenario.get("name"),
-            name=f"scenarios[{index}].name",
-        )
-
-        if backend not in {"python", "rust"}:
-            msg = (
-                f"scenarios[{index}].backend must be either 'python' or 'rust', "
-                f"got {backend!r}"
-            )
-            raise ValueError(msg)
-
-        if backend != "rust":
+        if entry is None:
             continue
-
-        mean = _require_positive_float(
-            result.get("mean"),
-            name=f"results[{index}].mean",
-        )
+        scenario_name, mean = entry
         if scenario_name in rust_means:
             msg = f"duplicate Rust scenario name: {scenario_name!r}"
             raise ValueError(msg)
