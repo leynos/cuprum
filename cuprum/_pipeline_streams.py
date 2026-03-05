@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses as dc
+import os
 import sys
 import typing as typ
 
@@ -242,6 +243,13 @@ def _extract_writer_fd(writer: asyncio.StreamWriter | None) -> int | None:
     return _extract_stream_fd(writer)
 
 
+def _set_stream_fds_blocking(*, reader_fd: int, writer_fd: int) -> None:
+    """Set Rust-path pipe FDs to blocking mode for stable native pumping."""
+    for fd in (reader_fd, writer_fd):
+        with contextlib.suppress(AttributeError, OSError, ValueError):
+            os.set_blocking(fd, True)
+
+
 async def _drain_reader_buffer(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter | None,
@@ -300,6 +308,7 @@ async def _pump_stream_dispatch(
             writer_fd = _extract_writer_fd(writer)
 
         if reader_fd is not None and writer_fd is not None:
+            _set_stream_fds_blocking(reader_fd=reader_fd, writer_fd=writer_fd)
             # Flush any bytes asyncio already buffered in the StreamReader
             # before the Rust pump takes over the raw file descriptor.
             await _drain_reader_buffer(reader, writer)

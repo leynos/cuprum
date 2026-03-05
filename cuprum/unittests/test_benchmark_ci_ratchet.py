@@ -61,12 +61,17 @@ def _write_json(
     return path
 
 
+class _RunMeans(typ.NamedTuple):
+    """Python and Rust mean runtimes for one benchmark run."""
+
+    python: float
+    rust: float
+
+
 def _run_comparison(
     *,
-    baseline_python_mean: float,
-    baseline_rust_mean: float,
-    candidate_python_mean: float,
-    candidate_rust_mean: float,
+    baseline: _RunMeans,
+    candidate: _RunMeans,
     max_regression: float = 0.10,
 ) -> ComparisonReport:
     """Build baseline/candidate payloads and run the Rust ratchet comparison."""
@@ -74,16 +79,16 @@ def _run_comparison(
         baseline=BenchmarkRunPayload(
             plan=_plan_payload(),
             throughput=_throughput_payload(
-                python_mean=baseline_python_mean,
-                rust_mean=baseline_rust_mean,
+                python_mean=baseline.python,
+                rust_mean=baseline.rust,
             ),
             context_name="baseline",
         ),
         candidate=BenchmarkRunPayload(
             plan=_plan_payload(),
             throughput=_throughput_payload(
-                python_mean=candidate_python_mean,
-                rust_mean=candidate_rust_mean,
+                python_mean=candidate.python,
+                rust_mean=candidate.rust,
             ),
             context_name="candidate",
         ),
@@ -118,10 +123,8 @@ def test_load_throughput_rejects_missing_results(tmp_path: pth.Path) -> None:
 def test_compare_rust_regressions_passes_within_threshold() -> None:
     """A Rust slowdown at or under 10% should pass the ratchet."""
     report = _run_comparison(
-        baseline_python_mean=0.50,
-        baseline_rust_mean=1.00,
-        candidate_python_mean=1.50,
-        candidate_rust_mean=1.10,
+        baseline=_RunMeans(python=0.50, rust=1.00),
+        candidate=_RunMeans(python=1.50, rust=1.10),
     )
 
     assert report.passed is True
@@ -134,10 +137,8 @@ def test_compare_rust_regressions_passes_within_threshold() -> None:
 def test_compare_rust_regressions_fails_beyond_threshold() -> None:
     """A Rust slowdown above 10% should fail the ratchet."""
     report = _run_comparison(
-        baseline_python_mean=0.25,
-        baseline_rust_mean=1.00,
-        candidate_python_mean=0.25,
-        candidate_rust_mean=1.25,
+        baseline=_RunMeans(python=0.25, rust=1.00),
+        candidate=_RunMeans(python=0.25, rust=1.25),
     )
 
     assert report.passed is False

@@ -222,6 +222,33 @@ def _extract_rust_entry(
     return scenario_name, mean
 
 
+def _collect_rust_means(
+    scenarios: list[object],
+    results: list[object],
+) -> dict[str, float]:
+    """Iterate paired scenarios/results and accumulate Rust means.
+
+    Raises ``ValueError`` on duplicate Rust scenario names.
+    """
+    rust_means: dict[str, float] = {}
+    for index, (scenario_value, result_value) in enumerate(
+        zip(scenarios, results, strict=True)
+    ):
+        entry = _extract_rust_entry(
+            index=index,
+            scenario_value=scenario_value,
+            result_value=result_value,
+        )
+        if entry is None:
+            continue
+        scenario_name, mean = entry
+        if scenario_name in rust_means:
+            msg = f"duplicate Rust scenario name: {scenario_name!r}"
+            raise ValueError(msg)
+        rust_means[scenario_name] = mean
+    return rust_means
+
+
 def _extract_rust_means(
     *,
     plan_payload: dict[str, object],
@@ -239,22 +266,7 @@ def _extract_rust_means(
         )
         raise ValueError(msg)
 
-    rust_means: dict[str, float] = {}
-    for index, (scenario_value, result_value) in enumerate(
-        zip(scenarios, results, strict=True)
-    ):
-        entry = _extract_rust_entry(
-            index=index,
-            scenario_value=scenario_value,
-            result_value=result_value,
-        )
-        if entry is None:
-            continue
-        scenario_name, mean = entry
-        if scenario_name in rust_means:
-            msg = f"duplicate Rust scenario name: {scenario_name!r}"
-            raise ValueError(msg)
-        rust_means[scenario_name] = mean
+    rust_means = _collect_rust_means(scenarios, results)
 
     if not rust_means:
         msg = f"{context_name}: Rust scenarios are required for ratchet comparison"

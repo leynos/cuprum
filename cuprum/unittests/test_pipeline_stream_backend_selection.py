@@ -124,6 +124,74 @@ class TestPumpStreamDispatch:
             "expected Python pump fallback when Rust FD extraction is unavailable"
         )
 
+    def test_dispatch_sets_rust_fds_blocking_before_native_pump(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Rust dispatch toggles extracted pipe FDs to blocking mode.
+
+        Parameters
+        ----------
+        monkeypatch : pytest.MonkeyPatch
+            Fixture used to override environment variables and internals.
+        """
+        _ = self
+        monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
+        set_rust_availability_for_testing(is_available=True)
+
+        read_fd, read_write_fd = _pipeline_streams.os.pipe()
+        write_read_fd, write_fd = _pipeline_streams.os.pipe()
+        _pipeline_streams.os.set_blocking(read_fd, False)
+        _pipeline_streams.os.set_blocking(write_fd, False)
+        try:
+            monkeypatch.setattr(
+                _pipeline_streams,
+                "_extract_reader_fd",
+                lambda _: read_fd,
+            )
+            monkeypatch.setattr(
+                _pipeline_streams,
+                "_extract_writer_fd",
+                lambda _: write_fd,
+            )
+
+            calls = {"rust_pump": 0, "python_pump": 0}
+
+            async def fake_python_pump(
+                reader: asyncio.StreamReader | None,
+                writer: asyncio.StreamWriter | None,
+            ) -> None:
+                await asyncio.sleep(0)
+                calls["python_pump"] += 1
+
+            import cuprum._streams_rs as streams_rs
+
+            def fake_rust_pump(reader_fd: int, writer_fd: int) -> int:
+                assert _pipeline_streams.os.get_blocking(reader_fd), (
+                    "expected reader FD to be switched to blocking mode"
+                )
+                assert _pipeline_streams.os.get_blocking(writer_fd), (
+                    "expected writer FD to be switched to blocking mode"
+                )
+                calls["rust_pump"] += 1
+                return 0
+
+            monkeypatch.setattr(streams_rs, "rust_pump_stream", fake_rust_pump)
+            configure_pump_stream_dispatch_for_testing(python_pump=fake_python_pump)
+
+            reader = typ.cast("asyncio.StreamReader", object())
+            asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, None))
+        finally:
+            _pipeline_streams.os.close(read_fd)
+            _pipeline_streams.os.close(read_write_fd)
+            _pipeline_streams.os.close(write_read_fd)
+            _pipeline_streams.os.close(write_fd)
+
+        assert calls["rust_pump"] == 1, "expected Rust pump path to execute once"
+        assert calls["python_pump"] == 0, (
+            "did not expect Python fallback when Rust pump succeeds"
+        )
+
     def test_dispatch_raises_import_error_when_rust_forced_but_unavailable(
         self,
         monkeypatch: pytest.MonkeyPatch,
