@@ -270,10 +270,18 @@ def _set_stream_fds_blocking(*, reader_fd: int, writer_fd: int) -> tuple[bool, b
     """Switch pipe FDs to blocking mode and return their prior state."""
     reader_was_blocking = os.get_blocking(reader_fd)
     writer_was_blocking = os.get_blocking(writer_fd)
-    if not reader_was_blocking:
-        os.set_blocking(reader_fd, True)
-    if not writer_was_blocking:
-        os.set_blocking(writer_fd, True)
+    reader_changed = False
+    try:
+        if not reader_was_blocking:
+            os.set_blocking(reader_fd, True)
+            reader_changed = True
+        if not writer_was_blocking:
+            os.set_blocking(writer_fd, True)
+    except OSError:
+        if reader_changed:
+            with contextlib.suppress(OSError, ValueError):
+                os.set_blocking(reader_fd, reader_was_blocking)
+        raise
     return reader_was_blocking, writer_was_blocking
 
 

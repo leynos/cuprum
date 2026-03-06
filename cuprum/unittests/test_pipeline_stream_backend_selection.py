@@ -19,6 +19,30 @@ from cuprum._testing import (
 )
 
 pytestmark = pytest.mark.usefixtures("clear_backend_caches")
+_WRITER_TOGGLE_FAILURE = "writer toggle failed"
+
+
+class _TransportWithoutPause:
+    def __init__(self, fd: int) -> None:
+        self._fd = fd
+
+    def get_extra_info(self, name: str) -> object | None:
+        if name != "pipe":
+            return None
+        return self
+
+    def fileno(self) -> int:
+        return self._fd
+
+
+class _ReaderWithoutPause:
+    def __init__(self, fd: int) -> None:
+        self.transport = _TransportWithoutPause(fd)
+
+
+class _WriterWithoutPause:
+    def __init__(self, fd: int) -> None:
+        self.transport = _TransportWithoutPause(fd)
 
 
 @pytest.fixture
@@ -252,3 +276,136 @@ class TestPumpStreamDispatch:
         assert calls["python_pump"] == 0, (
             "Python pump should not run when forced Rust is unavailable"
         )
+
+    @staticmethod
+    async def _fake_python_fallback(
+        reader: asyncio.StreamReader | None,
+        writer: asyncio.StreamWriter | None,
+        calls: dict[str, int],
+    ) -> None:
+        del reader, writer
+        await asyncio.sleep(0)
+        calls["python_pump"] += 1
+
+    def test_dispatch_restores_reader_blocking_when_writer_toggle_fails(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A writer toggle failure must roll back any reader blocking change."""
+        _ = self
+        monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
+        set_rust_availability_for_testing(is_available=True)
+
+        read_fd, read_write_fd, write_read_fd, write_fd = (
+            self._create_nonblocking_pipe_pair()
+        )
+        try:
+            monkeypatch.setattr(
+                _pipeline_streams, "_extract_reader_fd", lambda _: read_fd
+            )
+            monkeypatch.setattr(
+                _pipeline_streams, "_extract_writer_fd", lambda _: write_fd
+            )
+
+            original_set_blocking = _pipeline_streams.os.set_blocking
+            calls = {"python_pump": 0}
+
+            def fake_set_blocking(fd: int, blocking: object) -> None:
+                if fd == read_fd and blocking is True:
+                    desired_blocking = True
+                    original_set_blocking(fd, desired_blocking)
+                    return
+                if fd == write_fd and blocking is True:
+                    raise OSError(_WRITER_TOGGLE_FAILURE)
+                original_set_blocking(fd, bool(blocking))
+
+            monkeypatch.setattr(_pipeline_streams.os, "set_blocking", fake_set_blocking)
+            configure_pump_stream_dispatch_for_testing(
+                python_pump=lambda reader, writer: self._fake_python_fallback(
+                    reader,
+                    writer,
+                    calls,
+                )
+            )
+
+            reader = typ.cast("asyncio.StreamReader", object())
+            writer = typ.cast("asyncio.StreamWriter", object())
+            asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
+
+            assert calls["python_pump"] == 1, (
+                "expected Python fallback when writer blocking toggle fails"
+            )
+            assert not _pipeline_streams.os.get_blocking(read_fd), (
+                "expected reader FD blocking mode to be restored after fallback"
+            )
+            assert not _pipeline_streams.os.get_blocking(write_fd), (
+                "expected writer FD to remain in its original non-blocking mode"
+            )
+        finally:
+            _pipeline_streams.os.close(read_fd)
+            _pipeline_streams.os.close(read_write_fd)
+            _pipeline_streams.os.close(write_read_fd)
+            _pipeline_streams.os.close(write_fd)
+
+    def test_dispatch_uses_rust_when_reader_transport_cannot_pause(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Missing pause/resume hooks should not force a Python fallback."""
+        _ = self
+        monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
+        set_rust_availability_for_testing(is_available=True)
+
+        read_fd, read_write_fd, write_read_fd, write_fd = (
+            self._create_nonblocking_pipe_pair()
+        )
+        try:
+            calls = {"rust_pump": 0, "python_pump": 0}
+
+            def fake_rust_pump_stream(reader_fd: int, writer_fd: int) -> int:
+                assert reader_fd == read_fd
+                assert writer_fd == write_fd
+                calls["rust_pump"] += 1
+                return 0
+
+            import cuprum._streams_rs as streams_rs
+
+            monkeypatch.setattr(
+                streams_rs,
+                "rust_pump_stream",
+                fake_rust_pump_stream,
+            )
+            monkeypatch.setattr(
+                _pipeline_streams,
+                "_close_stream_writer",
+                lambda _writer: asyncio.sleep(0),
+            )
+            configure_pump_stream_dispatch_for_testing(
+                python_pump=lambda reader, writer: self._fake_python_fallback(
+                    reader,
+                    writer,
+                    calls,
+                )
+            )
+
+            reader = typ.cast(
+                "asyncio.StreamReader",
+                _ReaderWithoutPause(read_fd),
+            )
+            writer = typ.cast(
+                "asyncio.StreamWriter",
+                _WriterWithoutPause(write_fd),
+            )
+            asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
+
+            assert calls["rust_pump"] == 1, (
+                "expected Rust path even when reader transport lacks pause hooks"
+            )
+            assert calls["python_pump"] == 0, (
+                "did not expect Python fallback when Rust pump succeeds"
+            )
+        finally:
+            _pipeline_streams.os.close(read_fd)
+            _pipeline_streams.os.close(read_write_fd)
+            _pipeline_streams.os.close(write_read_fd)
+            _pipeline_streams.os.close(write_fd)

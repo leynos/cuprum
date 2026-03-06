@@ -11,9 +11,10 @@ Roadmap reference: `docs/roadmap.md` item `4.4.3`.
 
 ## Purpose / big picture
 
-Roadmap item `4.4.3` requires a CI benchmark job that runs on pull requests and
-pushes to `main`, persists JSON benchmark artefacts, and fails when Rust
-pathway performance regresses by more than 10%.
+Roadmap item `4.4.3` requires a continuous integration (CI) benchmark job that
+runs on pull requests and pushes to `main`, persists JavaScript Object Notation
+(JSON) benchmark artefacts, and fails when Rust pathway performance regresses
+by more than 10%.
 
 After this work, contributors can observe benchmark evidence directly from CI
 artefacts and get deterministic pass/fail signalling when Rust throughput gets
@@ -104,8 +105,9 @@ This task is complete only when:
 
 - [x] (2026-03-03 00:00Z) Drafted ExecPlan for roadmap item `4.4.3`.
 - [x] (2026-03-04 00:18Z) Stage A: added fail-first unit and behavioural tests
-  for benchmark ratchet comparison and CLI behaviour. Red phase confirmed with
-  `ModuleNotFoundError` for `benchmarks.ratchet_rust_performance`.
+  for benchmark ratchet comparison and command-line interface (CLI) behaviour.
+  Red phase confirmed with `ModuleNotFoundError` for
+  `benchmarks.ratchet_rust_performance`.
 - [x] (2026-03-04 00:24Z) Stage B: implemented
   `benchmarks/ratchet_rust_performance.py` with JSON validation, Rust scenario
   extraction, threshold comparison, report writing, and CLI exit codes.

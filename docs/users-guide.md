@@ -1131,10 +1131,10 @@ The continuous integration (CI) workflows run the following checks:
 - Benchmark ratchet runs on pull requests and pushes to `main`:
   - It benchmarks the current checkout in smoke mode.
   - It compares Rust means against the latest successful `main` baseline
-    artifact when one exists.
+    artefact when one exists.
   - It uploads candidate JSON artefacts plus `ratchet-report.json`.
   - On pushes to `main`, it also publishes the new smoke benchmark JSON as the
-    next baseline artifact for future runs.
+    next baseline artefact for future runs.
   - If no previous `main` baseline exists yet, it records a bootstrap skip
     report instead of failing the workflow.
   - It fails when any Rust scenario has

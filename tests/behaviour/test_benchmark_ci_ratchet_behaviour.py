@@ -29,6 +29,14 @@ def test_ratchet_fails_above_threshold() -> None:
     """CLI should fail when Rust slowdown breaches threshold."""
 
 
+@scenario(
+    "../features/benchmark_ci_ratchet.feature",
+    "Ratchet reports malformed inputs as configuration errors",
+)
+def test_ratchet_reports_malformed_inputs() -> None:
+    """CLI should return the malformed-input exit code for invalid fixtures."""
+
+
 def _scenario_payload(*, name: str, backend: str) -> dict[str, object]:
     return {
         "name": name,
@@ -117,6 +125,31 @@ def given_candidate_exceeds_threshold(tmp_path: pth.Path) -> dict[str, pth.Path]
     return _prepare_fixture_bundle(tmp_path=tmp_path, candidate_rust_mean=1.25)
 
 
+@given(
+    "malformed benchmark comparison fixtures",
+    target_fixture="ratchet_fixture_bundle",
+)
+def given_malformed_fixtures(tmp_path: pth.Path) -> dict[str, pth.Path]:
+    """Create fixture JSON files that trigger the CLI malformed-input path."""
+    fixture_bundle = _prepare_fixture_bundle(
+        tmp_path=tmp_path,
+        candidate_rust_mean=1.0,
+    )
+    _write_json(
+        path=fixture_bundle["candidate_plan_path"],
+        payload={
+            "dry_run": True,
+            "rust_available": True,
+            "command": ["hyperfine", "placeholder"],
+            "scenarios": [
+                _scenario_payload(name="python-small-single-nocb", backend="python"),
+                _scenario_payload(name="rust-small-single-nocb", backend="native"),
+            ],
+        },
+    )
+    return fixture_bundle
+
+
 @when("I run the Rust benchmark ratchet CLI", target_fixture="ratchet_cli_result")
 def when_run_ratchet_cli(
     ratchet_fixture_bundle: dict[str, pth.Path],
@@ -176,6 +209,14 @@ def then_ratchet_exits_with_failure(
 ) -> None:
     """CLI should return non-zero for above-threshold regression."""
     _assert_returncode(ratchet_cli_result, expected=1)
+
+
+@then("the ratchet command exits with malformed-input failure")
+def then_ratchet_exits_with_malformed_input_failure(
+    ratchet_cli_result: dict[str, object],
+) -> None:
+    """CLI should return 2 when the benchmark inputs are malformed."""
+    _assert_returncode(ratchet_cli_result, expected=2)
 
 
 @then("the ratchet report indicates success")

@@ -201,3 +201,101 @@ def test_compare_rust_regressions_rejects_missing_rust_scenarios() -> None:
             ),
             max_regression=0.10,
         )
+
+
+def test_compare_rust_regressions_rejects_invalid_backend() -> None:
+    """Scenario backends must stay within the supported benchmark set."""
+    invalid_plan = {
+        "dry_run": True,
+        "rust_available": True,
+        "command": ["hyperfine", "placeholder"],
+        "scenarios": [
+            _scenario_payload(name="python-small-single-nocb", backend="python"),
+            _scenario_payload(name="rust-small-single-nocb", backend="native"),
+        ],
+    }
+
+    with pytest.raises(ValueError, match="must be either 'python' or 'rust'"):
+        compare_rust_regressions(
+            baseline=BenchmarkRunPayload(
+                plan=invalid_plan,
+                throughput=_throughput_payload(python_mean=1.0, rust_mean=1.0),
+                context_name="baseline",
+            ),
+            candidate=BenchmarkRunPayload(
+                plan=invalid_plan,
+                throughput=_throughput_payload(python_mean=1.0, rust_mean=1.0),
+                context_name="candidate",
+            ),
+            max_regression=0.10,
+        )
+
+
+def test_compare_rust_regressions_rejects_duplicate_rust_scenario_names() -> None:
+    """Rust scenario names must remain unique for stable matching."""
+    duplicate_plan = {
+        "dry_run": True,
+        "rust_available": True,
+        "command": ["hyperfine", "placeholder"],
+        "scenarios": [
+            _scenario_payload(name="python-small-single-nocb", backend="python"),
+            _scenario_payload(name="rust-small-single-nocb", backend="rust"),
+            _scenario_payload(name="rust-small-single-nocb", backend="rust"),
+        ],
+    }
+    duplicate_throughput = {
+        "results": [
+            {"command": "python-run", "mean": 1.0},
+            {"command": "rust-run", "mean": 1.0},
+            {"command": "rust-run-duplicate", "mean": 1.1},
+        ],
+    }
+
+    with pytest.raises(ValueError, match="duplicate Rust scenario name"):
+        compare_rust_regressions(
+            baseline=BenchmarkRunPayload(
+                plan=duplicate_plan,
+                throughput=duplicate_throughput,
+                context_name="baseline",
+            ),
+            candidate=BenchmarkRunPayload(
+                plan=duplicate_plan,
+                throughput=duplicate_throughput,
+                context_name="candidate",
+            ),
+            max_regression=0.10,
+        )
+
+
+@pytest.mark.parametrize("invalid_mean", [0.0, -1.0])
+def test_compare_rust_regressions_rejects_non_positive_means(
+    invalid_mean: float,
+) -> None:
+    """Rust scenario means must be strictly positive."""
+    with pytest.raises(ValueError, match="results\\[1\\]\\.mean must be > 0"):
+        compare_rust_regressions(
+            baseline=BenchmarkRunPayload(
+                plan=_plan_payload(),
+                throughput=_throughput_payload(
+                    python_mean=1.0,
+                    rust_mean=invalid_mean,
+                ),
+                context_name="baseline",
+            ),
+            candidate=BenchmarkRunPayload(
+                plan=_plan_payload(),
+                throughput=_throughput_payload(python_mean=1.0, rust_mean=1.0),
+                context_name="candidate",
+            ),
+            max_regression=0.10,
+        )
+
+
+def test_compare_rust_regressions_rejects_negative_max_regression() -> None:
+    """The configured slowdown threshold must be non-negative."""
+    with pytest.raises(ValueError, match="max_regression must be >= 0"):
+        _run_comparison(
+            baseline=_RunMeans(python=1.0, rust=1.0),
+            candidate=_RunMeans(python=1.0, rust=1.0),
+            max_regression=-0.01,
+        )

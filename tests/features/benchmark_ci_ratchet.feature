@@ -13,3 +13,8 @@ Feature: Benchmark CI Rust performance ratchet
     When I run the Rust benchmark ratchet CLI
     Then the ratchet command exits with failure
     And the ratchet report indicates regression failure
+
+  Scenario: Ratchet reports malformed inputs as configuration errors
+    Given malformed benchmark comparison fixtures
+    When I run the Rust benchmark ratchet CLI
+    Then the ratchet command exits with malformed-input failure

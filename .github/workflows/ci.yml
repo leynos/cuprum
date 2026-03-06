@@ -220,64 +220,11 @@ jobs:
               --dry-run \
               --output "${artifact_dir}/${prefix}-full-plan.json"
 
-            FULL_PLAN_PATH="${artifact_dir}/${prefix}-full-plan.json" \
-            FILTERED_PLAN_PATH="${artifact_dir}/${prefix}-plan.json" \
-            THROUGHPUT_PATH="${artifact_dir}/${prefix}-throughput.json" \
-            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python - <<'PY'
-          import json
-          import os
-          import pathlib as pth
-          import subprocess
-
-          full_plan_path = pth.Path(os.environ["FULL_PLAN_PATH"])
-          filtered_plan_path = pth.Path(os.environ["FILTERED_PLAN_PATH"])
-          throughput_path = pth.Path(os.environ["THROUGHPUT_PATH"])
-          full_payload = json.loads(full_plan_path.read_text(encoding="utf-8"))
-
-          scenarios = full_payload.get("scenarios", [])
-          plan_command = full_payload.get("command", [])
-          scenario_commands = plan_command[7:]
-          if len(scenarios) != len(scenario_commands):
-              raise SystemExit("scenario count must match scenario command count")
-
-          selected = [
-              (scenario, scenario_command)
-              for scenario, scenario_command in zip(scenarios, scenario_commands)
-              if scenario.get("stages") == 2
-              and scenario.get("payload_bytes", 0) <= 65536
-          ]
-          if not selected:
-              raise SystemExit("no scenarios selected for CI benchmark ratchet")
-          if not any(
-              scenario.get("backend") == "rust" for scenario, _ in selected
-          ):
-              raise SystemExit(
-                  "selected CI benchmark profile must include Rust scenarios"
-              )
-
-          command = [
-              "hyperfine",
-              "--export-json",
-              str(throughput_path),
-              "--warmup",
-              "1",
-              "--runs",
-              "3",
-              *[scenario_command for _, scenario_command in selected],
-          ]
-          subprocess.run(command, check=True)
-
-          filtered_payload = {
-              "dry_run": True,
-              "rust_available": full_payload.get("rust_available", False),
-              "command": command,
-              "scenarios": [scenario for scenario, _ in selected],
-          }
-          filtered_plan_path.write_text(
-              json.dumps(filtered_payload, indent=2, sort_keys=True),
-              encoding="utf-8",
-          )
-          PY
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+              benchmarks/ci_benchmark_ratchet_profile.py \
+              --full-plan "${artifact_dir}/${prefix}-full-plan.json" \
+              --filtered-plan "${artifact_dir}/${prefix}-plan.json" \
+              --throughput "${artifact_dir}/${prefix}-throughput.json"
 
             popd >/dev/null
           }

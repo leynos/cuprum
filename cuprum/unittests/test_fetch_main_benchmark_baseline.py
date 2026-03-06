@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import io
 import typing as typ
+import urllib.error
 import zipfile
 
 import pytest
 
 from benchmarks.fetch_main_benchmark_baseline import (
     MAIN_BASELINE_NOT_FOUND_EXIT_CODE,
+    ArtifactQuery,
+    _load_json_response,
     extract_artifact_archive,
+    find_latest_artifact_download_url,
     main,
     select_latest_artifact_download_url,
 )
@@ -153,3 +157,169 @@ def test_main_returns_not_found_when_no_baseline_available(
     ])
 
     assert exit_code == MAIN_BASELINE_NOT_FOUND_EXIT_CODE
+
+
+def test_main_requires_github_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pth.Path,
+) -> None:
+    """CLI should fail fast when the configured token env var is unset."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    with pytest.raises(SystemExit, match="missing GitHub token"):
+        main([
+            "--repository",
+            "leynos/cuprum",
+            "--workflow",
+            "ci.yml",
+            "--artifact-name",
+            "benchmark-ratchet-main-baseline",
+            "--output-dir",
+            str(tmp_path),
+        ])
+
+
+def test_main_downloads_and_extracts_latest_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pth.Path,
+) -> None:
+    """CLI should download the selected archive and extract it into output_dir."""
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setattr(
+        "benchmarks.fetch_main_benchmark_baseline.find_latest_artifact_download_url",
+        lambda **_: "https://example.invalid/baseline.zip",
+    )
+
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, mode="w") as archive:
+        archive.writestr("main-plan.json", '{"dry_run": true}')
+        archive.writestr("main-throughput.json", '{"results": []}')
+
+    monkeypatch.setattr(
+        "benchmarks.fetch_main_benchmark_baseline._download_bytes",
+        lambda **_: archive_buffer.getvalue(),
+    )
+
+    exit_code = main([
+        "--repository",
+        "leynos/cuprum",
+        "--workflow",
+        "ci.yml",
+        "--artifact-name",
+        "benchmark-ratchet-main-baseline",
+        "--output-dir",
+        str(tmp_path),
+    ])
+
+    assert exit_code == 0
+    assert (tmp_path / "main-plan.json").read_text(encoding="utf-8") == (
+        '{"dry_run": true}'
+    )
+    assert (tmp_path / "main-throughput.json").read_text(encoding="utf-8") == (
+        '{"results": []}'
+    )
+
+
+def test_load_json_response_retries_transient_urlopen_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Transient transport failures should be retried with a bounded loop."""
+    temporary_outage = "temporary outage"
+    auth_token = "".join(("tok", "en"))
+
+    class _Response:
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(
+            self,
+            exc_type: object,
+            exc: object,
+            traceback: object,
+        ) -> None:
+            return None
+
+        @staticmethod
+        def read() -> bytes:
+            return b'{"workflow_runs": []}'
+
+    attempts = 0
+    timeouts: list[float] = []
+
+    def fake_urlopen(request: object, *, timeout: float) -> _Response:
+        nonlocal attempts
+        del request
+        attempts += 1
+        timeouts.append(timeout)
+        if attempts < 3:
+            raise urllib.error.URLError(temporary_outage)
+        return _Response()
+
+    monkeypatch.setattr(
+        "benchmarks.fetch_main_benchmark_baseline.urllib.request.urlopen",
+        fake_urlopen,
+    )
+    monkeypatch.setattr(
+        "benchmarks.fetch_main_benchmark_baseline.time.sleep", lambda _: None
+    )
+
+    payload = _load_json_response(
+        url="https://example.invalid/workflow-runs",
+        token=auth_token,
+    )
+
+    assert payload == {"workflow_runs": []}
+    assert attempts == 3
+    assert timeouts == [10.0, 10.0, 10.0]
+
+
+def test_find_latest_artifact_download_url_retries_per_run_artifact_queries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per-run artifact listing should tolerate a transient GitHub API failure."""
+    temporary_outage = "temporary outage"
+    auth_token = "".join(("tok", "en"))
+    payloads = [
+        {"workflow_runs": [{"id": 42}]},
+        urllib.error.URLError(temporary_outage),
+        {
+            "artifacts": [
+                {
+                    "name": "benchmark-ratchet-main-baseline",
+                    "expired": False,
+                    "archive_download_url": "https://example.invalid/archive.zip",
+                }
+            ]
+        },
+    ]
+    calls = {"count": 0}
+
+    def fake_load_json_response(*, url: str, token: str) -> typ.Mapping[str, object]:
+        del url, token
+        value = payloads[calls["count"]]
+        calls["count"] += 1
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(
+        "benchmarks.fetch_main_benchmark_baseline._load_json_response",
+        fake_load_json_response,
+    )
+    monkeypatch.setattr(
+        "benchmarks.fetch_main_benchmark_baseline.time.sleep", lambda _: None
+    )
+
+    download_url = find_latest_artifact_download_url(
+        query=ArtifactQuery(
+            repository="leynos/cuprum",
+            workflow="ci.yml",
+            branch="main",
+            event="push",
+            artifact_name="benchmark-ratchet-main-baseline",
+        ),
+        token=auth_token,
+    )
+
+    assert download_url == "https://example.invalid/archive.zip"
+    assert calls["count"] == 3

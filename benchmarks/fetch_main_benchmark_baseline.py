@@ -8,7 +8,9 @@ import io
 import json
 import os
 import pathlib as pth
+import time
 import typing as typ
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -16,6 +18,11 @@ import zipfile
 GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_TOKEN_ENV_VAR = "GITHUB_TOKEN"  # noqa: S105 - env var name, not a credential
 MAIN_BASELINE_NOT_FOUND_EXIT_CODE = 3
+_REQUEST_TIMEOUT_SECONDS = 10.0
+_RETRY_DELAYS_SECONDS = (0.5, 1.0)
+_HTTP_TOO_MANY_REQUESTS = 429
+_HTTP_SERVER_ERROR_MIN = 500
+_HTTP_SERVER_ERROR_MAX = 600
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -70,6 +77,37 @@ def _require_bool(value: object, *, name: str) -> bool:
     return value
 
 
+def _should_retry_request_failure(exc: Exception) -> bool:
+    """Return ``True`` when a GitHub API failure is transient."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code == _HTTP_TOO_MANY_REQUESTS or (
+            _HTTP_SERVER_ERROR_MIN <= exc.code < _HTTP_SERVER_ERROR_MAX
+        )
+    return isinstance(exc, urllib.error.URLError)
+
+
+def _with_retry[T](
+    operation: typ.Callable[[], T],
+    *,
+    description: str,
+) -> T:
+    """Run *operation* with bounded retry/backoff for transient HTTP failures."""
+    last_exc: Exception | None = None
+    for attempt in range(len(_RETRY_DELAYS_SECONDS) + 1):
+        try:
+            return operation()
+        except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+            if not _should_retry_request_failure(exc):
+                raise
+            last_exc = exc
+            if attempt == len(_RETRY_DELAYS_SECONDS):
+                break
+            time.sleep(_RETRY_DELAYS_SECONDS[attempt])
+    if last_exc is None:
+        raise RuntimeError(description)
+    raise last_exc
+
+
 def _load_json_response(*, url: str, token: str) -> typ.Mapping[str, object]:
     """Load a GitHub API JSON response."""
     request = urllib.request.Request(  # noqa: S310 - URL is selected by trusted caller
@@ -81,9 +119,16 @@ def _load_json_response(*, url: str, token: str) -> typ.Mapping[str, object]:
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
-    with urllib.request.urlopen(request) as response:  # noqa: S310 - authenticated GitHub API call
-        payload = json.load(response)
-    return _require_mapping(payload, name=f"response from {url}")
+
+    def _open_json_response() -> typ.Mapping[str, object]:
+        with urllib.request.urlopen(  # noqa: S310 - authenticated GitHub API call
+            request,
+            timeout=_REQUEST_TIMEOUT_SECONDS,
+        ) as response:
+            payload = json.load(response)
+        return _require_mapping(payload, name=f"response from {url}")
+
+    return _with_retry(_open_json_response, description=f"load JSON from {url}")
 
 
 def _download_bytes(*, url: str, token: str) -> bytes:
@@ -97,8 +142,15 @@ def _download_bytes(*, url: str, token: str) -> bytes:
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
-    with urllib.request.urlopen(request) as response:  # noqa: S310 - authenticated GitHub artifact download
-        return response.read()
+
+    def _open_archive() -> bytes:
+        with urllib.request.urlopen(  # noqa: S310 - authenticated GitHub artifact download
+            request,
+            timeout=_REQUEST_TIMEOUT_SECONDS,
+        ) as response:
+            return response.read()
+
+    return _with_retry(_open_archive, description=f"download archive from {url}")
 
 
 def _find_artifact_url_in_run(
@@ -212,7 +264,10 @@ def find_latest_artifact_download_url(
         f"{query.api_base_url}/repos/{encoded_repository}/actions/workflows/"
         f"{encoded_workflow}/runs?{params}"
     )
-    workflow_runs_payload = _load_json_response(url=workflow_runs_url, token=token)
+    workflow_runs_payload = _with_retry(
+        lambda: _load_json_response(url=workflow_runs_url, token=token),
+        description=f"load workflow runs from {workflow_runs_url}",
+    )
     workflow_runs = _require_list(
         workflow_runs_payload.get("workflow_runs"),
         name="workflow_runs",
@@ -226,9 +281,12 @@ def find_latest_artifact_download_url(
             f"{query.api_base_url}/repos/{encoded_repository}/actions/runs/"
             f"{run_id}/artifacts?per_page=100"
         )
-        artifacts_payload_by_run[run_id] = _load_json_response(
-            url=artifacts_url,
-            token=token,
+        artifacts_payload_by_run[run_id] = _with_retry(
+            lambda artifacts_url=artifacts_url: _load_json_response(
+                url=artifacts_url,
+                token=token,
+            ),
+            description=f"load artifacts for run {run_id}",
         )
 
     return select_latest_artifact_download_url(
@@ -301,7 +359,10 @@ def main(argv: typ.Sequence[str] | None = None) -> int:
     if download_url is None:
         return MAIN_BASELINE_NOT_FOUND_EXIT_CODE
 
-    archive_bytes = _download_bytes(url=download_url, token=token)
+    archive_bytes = _with_retry(
+        lambda: _download_bytes(url=download_url, token=token),
+        description=f"download benchmark baseline archive from {download_url}",
+    )
     extract_artifact_archive(
         archive_bytes=archive_bytes,
         output_dir=args.output_dir,
