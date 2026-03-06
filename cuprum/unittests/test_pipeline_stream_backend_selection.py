@@ -128,7 +128,7 @@ class TestPumpStreamDispatch:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Rust dispatch toggles extracted pipe FDs to blocking mode.
+        """Rust dispatch toggles FDs to blocking only during native pumping.
 
         Parameters
         ----------
@@ -143,6 +143,8 @@ class TestPumpStreamDispatch:
         write_read_fd, write_fd = _pipeline_streams.os.pipe()
         _pipeline_streams.os.set_blocking(read_fd, False)
         _pipeline_streams.os.set_blocking(write_fd, False)
+        original_reader_blocking = True
+        original_writer_blocking = True
         try:
             monkeypatch.setattr(
                 _pipeline_streams,
@@ -173,6 +175,12 @@ class TestPumpStreamDispatch:
                 assert _pipeline_streams.os.get_blocking(writer_fd), (
                     "expected writer FD to be switched to blocking mode"
                 )
+                assert reader_fd == read_fd, (
+                    "expected Rust path to use extracted reader FD"
+                )
+                assert writer_fd == write_fd, (
+                    "expected Rust path to use extracted writer FD"
+                )
                 calls["rust_pump"] += 1
                 return 0
 
@@ -181,6 +189,8 @@ class TestPumpStreamDispatch:
 
             reader = typ.cast("asyncio.StreamReader", object())
             asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, None))
+            original_reader_blocking = _pipeline_streams.os.get_blocking(read_fd)
+            original_writer_blocking = _pipeline_streams.os.get_blocking(write_fd)
         finally:
             _pipeline_streams.os.close(read_fd)
             _pipeline_streams.os.close(read_write_fd)
@@ -190,6 +200,12 @@ class TestPumpStreamDispatch:
         assert calls["rust_pump"] == 1, "expected Rust pump path to execute once"
         assert calls["python_pump"] == 0, (
             "did not expect Python fallback when Rust pump succeeds"
+        )
+        assert not original_reader_blocking, (
+            "expected original reader FD to remain non-blocking"
+        )
+        assert not original_writer_blocking, (
+            "expected original writer FD to remain non-blocking"
         )
 
     def test_dispatch_raises_import_error_when_rust_forced_but_unavailable(
