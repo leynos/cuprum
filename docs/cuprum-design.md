@@ -1952,10 +1952,11 @@ Both pathways are tested as first-class implementations:
   `python-small-single-nocb` or `rust-large-multi-cb`).
 
 CI includes a benchmark ratchet job on pull requests and pushes to `main`. The
-job executes smoke-mode throughput benchmarks for both the baseline commit and
-candidate commit in the same workflow run, writes JSON artefacts for both runs,
-and invokes `benchmarks/ratchet_rust_performance.py` to compare Rust scenario
-means.
+job executes smoke-mode throughput benchmarks for the current checkout and
+compares Rust scenario means against the latest successful `main` baseline
+artifact. On pushes to `main`, the new smoke benchmark output is uploaded as
+the next baseline artifact for future runs. When no prior `main` baseline is
+available yet, the job writes a skip report instead of failing the workflow.
 
 The ratchet rule is:
 
@@ -1964,11 +1965,15 @@ The ratchet rule is:
 
 Artefacts uploaded by CI include:
 
-- `baseline-plan.json`
-- `baseline-throughput.json`
+- `main-baseline/main-plan.json` when a previous `main` baseline artifact was
+  available for comparison
+- `main-baseline/main-throughput.json` when a previous `main` baseline artifact
+  was available for comparison
 - `candidate-plan.json`
 - `candidate-throughput.json`
 - `ratchet-report.json`
+- `main-plan.json` and `main-throughput.json` on pushes to `main`, published as
+  the baseline artifact consumed by later ratchet runs
 
 Benchmark execution is opt-in for normal development loops. `make test` skips
 the benchmark pytest module by default, while dedicated commands run benchmarks:

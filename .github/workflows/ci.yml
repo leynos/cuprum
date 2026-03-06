@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   lint-test:
     runs-on: ubuntu-latest
@@ -163,27 +167,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes hyperfine
 
-      - name: Resolve baseline SHA
-        id: baseline-ref
+      - name: Fetch latest main benchmark baseline
+        id: baseline-artifact
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
-            baseline_sha="${{ github.event.pull_request.base.sha }}"
-          else
-            baseline_sha="${{ github.event.before }}"
-          fi
-          if [[ -z "${baseline_sha}" || "${baseline_sha}" =~ ^0+$ ]]; then
-            baseline_sha="${GITHUB_SHA}"
-          fi
-          echo "baseline_sha=${baseline_sha}" >> "${GITHUB_OUTPUT}"
+          artifact_dir="${RUNNER_TEMP}/benchmark-ratchet"
+          baseline_dir="${artifact_dir}/main-baseline"
+          mkdir -p "${artifact_dir}"
 
-      - name: Create baseline worktree
-        shell: bash
-        run: |
-          set -euo pipefail
-          git worktree add "${RUNNER_TEMP}/baseline-worktree" \
-            "${{ steps.baseline-ref.outputs.baseline_sha }}"
+          if UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+            benchmarks/fetch_main_benchmark_baseline.py \
+            --repository "${GITHUB_REPOSITORY}" \
+            --workflow "ci.yml" \
+            --artifact-name "benchmark-ratchet-main-baseline" \
+            --output-dir "${baseline_dir}"
+          then
+            echo "baseline_available=true" >> "${GITHUB_OUTPUT}"
+          else
+            status=$?
+            if [[ "${status}" -eq 3 ]]; then
+              echo "baseline_available=false" >> "${GITHUB_OUTPUT}"
+              echo "No previous successful main benchmark baseline artifact is available."
+            else
+              exit "${status}"
+            fi
+          fi
 
       - name: Run throughput benchmarks and ratchet comparison
         shell: bash
@@ -271,26 +282,61 @@ jobs:
             popd >/dev/null
           }
 
-          run_smoke_benchmarks "${RUNNER_TEMP}/baseline-worktree" "baseline"
           run_smoke_benchmarks "${GITHUB_WORKSPACE}" "candidate"
 
-          pushd "${GITHUB_WORKSPACE}" >/dev/null
-          UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
-            benchmarks/ratchet_rust_performance.py \
-            --baseline-plan "${artifact_dir}/baseline-plan.json" \
-            --baseline-throughput "${artifact_dir}/baseline-throughput.json" \
-            --candidate-plan "${artifact_dir}/candidate-plan.json" \
-            --candidate-throughput "${artifact_dir}/candidate-throughput.json" \
-            --max-regression 0.10 \
-            --output "${artifact_dir}/ratchet-report.json"
-          popd >/dev/null
+          if [[ "${{ steps.baseline-artifact.outputs.baseline_available }}" == "true" ]]; then
+            pushd "${GITHUB_WORKSPACE}" >/dev/null
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+              benchmarks/ratchet_rust_performance.py \
+              --baseline-plan "${artifact_dir}/main-baseline/main-plan.json" \
+              --baseline-throughput "${artifact_dir}/main-baseline/main-throughput.json" \
+              --candidate-plan "${artifact_dir}/candidate-plan.json" \
+              --candidate-throughput "${artifact_dir}/candidate-throughput.json" \
+              --max-regression 0.10 \
+              --output "${artifact_dir}/ratchet-report.json"
+            popd >/dev/null
+          else
+            REPORT_PATH="${artifact_dir}/ratchet-report.json" \
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python - <<'PY'
+          import json
+          import os
+          import pathlib as pth
+
+          report_path = pth.Path(os.environ["REPORT_PATH"])
+          report_path.write_text(
+              json.dumps(
+                  {
+                      "baseline_available": False,
+                      "comparison_performed": False,
+                      "passed": True,
+                      "reason": "no_previous_main_benchmark_baseline",
+                  },
+                  indent=2,
+                  sort_keys=True,
+              ),
+              encoding="utf-8",
+          )
+          PY
+          fi
+
+          cp "${artifact_dir}/candidate-plan.json" "${artifact_dir}/main-plan.json"
+          cp "${artifact_dir}/candidate-throughput.json" "${artifact_dir}/main-throughput.json"
 
       - name: Upload benchmark ratchet artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: benchmark-ratchet
-          path: ${{ runner.temp }}/benchmark-ratchet/*.json
+          path: ${{ runner.temp }}/benchmark-ratchet/**/*.json
+
+      - name: Upload main benchmark baseline artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: benchmark-ratchet-main-baseline
+          path: |
+            ${{ runner.temp }}/benchmark-ratchet/main-plan.json
+            ${{ runner.temp }}/benchmark-ratchet/main-throughput.json
 
   build-wheels:
     uses: ./.github/workflows/build-wheels.yml

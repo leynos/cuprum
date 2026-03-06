@@ -155,6 +155,11 @@ This task is complete only when:
   historical artefacts from prior runs. Rationale: reduces cross-run drift and
   avoids external artefact fetch complexity while still satisfying PR/main
   gating. Date/Author: 2026-03-03 / Codex.
+- Update: superseded during follow-up CI hardening on 2026-03-06. The live
+  baseline checkout could fail before candidate benchmarks ran because the
+  baseline commit might predate Rust smoke-path stabilisation. The workflow now
+  compares against the latest successful `main` baseline artifact and
+  bootstraps cleanly when no prior baseline artifact exists.
 
 - Decision: ratchet against end-to-end throughput (`hyperfine`) Rust scenarios
   only, while still collecting microbenchmark JSON artefacts for observability.
