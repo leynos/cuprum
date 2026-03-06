@@ -101,6 +101,41 @@ def _download_bytes(*, url: str, token: str) -> bytes:
         return response.read()
 
 
+def _find_artifact_url_in_run(
+    *,
+    artifacts_payload: typ.Mapping[str, object],
+    run_id: int,
+    artifact_name: str,
+) -> str | None:
+    """Return the download URL for a matching non-expired artifact, or ``None``."""
+    artifacts = _require_list(
+        artifacts_payload.get("artifacts"),
+        name=f"artifacts for run {run_id}",
+    )
+    for artifact_index, artifact_value in enumerate(artifacts):
+        artifact = _require_mapping(
+            artifact_value,
+            name=f"artifacts[{artifact_index}] for run {run_id}",
+        )
+        name = _require_non_empty_string(
+            artifact.get("name"),
+            name=f"artifacts[{artifact_index}].name for run {run_id}",
+        )
+        expired = _require_bool(
+            artifact.get("expired"),
+            name=f"artifacts[{artifact_index}].expired for run {run_id}",
+        )
+        if name != artifact_name or expired:
+            continue
+        return _require_non_empty_string(
+            artifact.get("archive_download_url"),
+            name=(
+                f"artifacts[{artifact_index}].archive_download_url for run {run_id}"
+            ),
+        )
+    return None
+
+
 def select_latest_artifact_download_url(
     *,
     workflow_runs_payload: typ.Mapping[str, object],
@@ -118,31 +153,13 @@ def select_latest_artifact_download_url(
         artifacts_payload = artifacts_payload_by_run.get(run_id)
         if artifacts_payload is None:
             continue
-        artifacts = _require_list(
-            artifacts_payload.get("artifacts"),
-            name=f"artifacts for run {run_id}",
+        url = _find_artifact_url_in_run(
+            artifacts_payload=artifacts_payload,
+            run_id=run_id,
+            artifact_name=artifact_name,
         )
-        for artifact_index, artifact_value in enumerate(artifacts):
-            artifact = _require_mapping(
-                artifact_value,
-                name=f"artifacts[{artifact_index}] for run {run_id}",
-            )
-            name = _require_non_empty_string(
-                artifact.get("name"),
-                name=f"artifacts[{artifact_index}].name for run {run_id}",
-            )
-            expired = _require_bool(
-                artifact.get("expired"),
-                name=f"artifacts[{artifact_index}].expired for run {run_id}",
-            )
-            if name != artifact_name or expired:
-                continue
-            return _require_non_empty_string(
-                artifact.get("archive_download_url"),
-                name=(
-                    f"artifacts[{artifact_index}].archive_download_url for run {run_id}"
-                ),
-            )
+        if url is not None:
+            return url
     return None
 
 
