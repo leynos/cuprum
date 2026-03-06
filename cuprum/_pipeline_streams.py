@@ -376,6 +376,36 @@ async def _run_python_pump(
     await _pump_stream(reader, writer)
 
 
+async def _try_rust_pump(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter | None,
+) -> bool:
+    """Attempt to route the pipe hop through the Rust pump.
+
+    Returns ``True`` when Rust handled the pump, ``False`` to fall back
+    to the Python implementation.
+    """
+    rust_fd_attempt_hook = _PUMP_STREAM_DISPATCH_TEST_HOOKS.on_rust_fd_path_attempt
+    if rust_fd_attempt_hook is not None:
+        rust_fd_attempt_hook()
+
+    if _PUMP_STREAM_DISPATCH_TEST_HOOKS.force_fd_extraction_failure:
+        return False
+
+    reader_fd = _extract_reader_fd(reader)
+    writer_fd = _extract_writer_fd(writer)
+
+    if reader_fd is None or writer_fd is None:
+        return False
+
+    return await _run_rust_pump(
+        reader=reader,
+        writer=writer,
+        reader_fd=reader_fd,
+        writer_fd=writer_fd,
+    )
+
+
 async def _pump_stream_dispatch(
     reader: asyncio.StreamReader | None,
     writer: asyncio.StreamWriter | None,
@@ -386,27 +416,8 @@ async def _pump_stream_dispatch(
         return
 
     backend = get_stream_backend()
-    if backend is StreamBackend.RUST:
-        rust_fd_attempt_hook = _PUMP_STREAM_DISPATCH_TEST_HOOKS.on_rust_fd_path_attempt
-        if rust_fd_attempt_hook is not None:
-            rust_fd_attempt_hook()
-
-        if _PUMP_STREAM_DISPATCH_TEST_HOOKS.force_fd_extraction_failure:
-            reader_fd = None
-            writer_fd = None
-        else:
-            reader_fd = _extract_reader_fd(reader)
-            writer_fd = _extract_writer_fd(writer)
-
-        if reader_fd is None or writer_fd is None:
-            pass
-        elif await _run_rust_pump(
-            reader=reader,
-            writer=writer,
-            reader_fd=reader_fd,
-            writer_fd=writer_fd,
-        ):
-            return
+    if backend is StreamBackend.RUST and await _try_rust_pump(reader, writer):
+        return
 
     await _run_python_pump(reader, writer)
 

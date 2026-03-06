@@ -124,6 +124,41 @@ class TestPumpStreamDispatch:
             "expected Python pump fallback when Rust FD extraction is unavailable"
         )
 
+    @staticmethod
+    def _create_nonblocking_pipe_pair() -> tuple[int, int, int, int]:
+        """Create two OS pipes with their active ends set to non-blocking."""
+        read_fd, read_write_fd = _pipeline_streams.os.pipe()
+        write_read_fd, write_fd = _pipeline_streams.os.pipe()
+        _pipeline_streams.os.set_blocking(read_fd, False)
+        _pipeline_streams.os.set_blocking(write_fd, False)
+        return read_fd, read_write_fd, write_read_fd, write_fd
+
+    @staticmethod
+    def _make_blocking_fd_spy(
+        calls: dict[str, int],
+        expected_reader_fd: int,
+        expected_writer_fd: int,
+    ) -> "typ.Callable[[int, int], int]":  # noqa: UP037
+        """Return a fake ``rust_pump_stream`` that asserts FDs are blocking."""
+
+        def _spy(reader_fd: int, writer_fd: int) -> int:
+            assert _pipeline_streams.os.get_blocking(reader_fd), (
+                "expected reader FD to be switched to blocking mode"
+            )
+            assert _pipeline_streams.os.get_blocking(writer_fd), (
+                "expected writer FD to be switched to blocking mode"
+            )
+            assert reader_fd == expected_reader_fd, (
+                "expected Rust path to use extracted reader FD"
+            )
+            assert writer_fd == expected_writer_fd, (
+                "expected Rust path to use extracted writer FD"
+            )
+            calls["rust_pump"] += 1
+            return 0
+
+        return _spy
+
     def test_dispatch_sets_rust_fds_blocking_before_native_pump(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -139,22 +174,17 @@ class TestPumpStreamDispatch:
         monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
         set_rust_availability_for_testing(is_available=True)
 
-        read_fd, read_write_fd = _pipeline_streams.os.pipe()
-        write_read_fd, write_fd = _pipeline_streams.os.pipe()
-        _pipeline_streams.os.set_blocking(read_fd, False)
-        _pipeline_streams.os.set_blocking(write_fd, False)
+        read_fd, read_write_fd, write_read_fd, write_fd = (
+            self._create_nonblocking_pipe_pair()
+        )
         original_reader_blocking = True
         original_writer_blocking = True
         try:
             monkeypatch.setattr(
-                _pipeline_streams,
-                "_extract_reader_fd",
-                lambda _: read_fd,
+                _pipeline_streams, "_extract_reader_fd", lambda _: read_fd
             )
             monkeypatch.setattr(
-                _pipeline_streams,
-                "_extract_writer_fd",
-                lambda _: write_fd,
+                _pipeline_streams, "_extract_writer_fd", lambda _: write_fd
             )
 
             calls = {"rust_pump": 0, "python_pump": 0}
@@ -168,23 +198,11 @@ class TestPumpStreamDispatch:
 
             import cuprum._streams_rs as streams_rs
 
-            def fake_rust_pump(reader_fd: int, writer_fd: int) -> int:
-                assert _pipeline_streams.os.get_blocking(reader_fd), (
-                    "expected reader FD to be switched to blocking mode"
-                )
-                assert _pipeline_streams.os.get_blocking(writer_fd), (
-                    "expected writer FD to be switched to blocking mode"
-                )
-                assert reader_fd == read_fd, (
-                    "expected Rust path to use extracted reader FD"
-                )
-                assert writer_fd == write_fd, (
-                    "expected Rust path to use extracted writer FD"
-                )
-                calls["rust_pump"] += 1
-                return 0
-
-            monkeypatch.setattr(streams_rs, "rust_pump_stream", fake_rust_pump)
+            monkeypatch.setattr(
+                streams_rs,
+                "rust_pump_stream",
+                self._make_blocking_fd_spy(calls, read_fd, write_fd),
+            )
             configure_pump_stream_dispatch_for_testing(python_pump=fake_python_pump)
 
             reader = typ.cast("asyncio.StreamReader", object())
