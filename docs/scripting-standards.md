@@ -116,16 +116,16 @@ def main(
     # Required parameters
     bin_name: Annotated[str, Parameter(required=True)],
     version: Annotated[str, Parameter(required=True)],
-
     # Optional scalars
     package_name: str | None = None,
     target: str | None = None,
     outdir: Path | None = None,
     dry_run: bool = False,
-
     # Lists (whitespace/newline separated by default)
     formats: list[str] | None = None,
-    man_paths: Annotated[list[Path] | None, Parameter(env_var="INPUT_MAN_PATHS")] = None,
+    man_paths: Annotated[
+        list[Path] | None, Parameter(env_var="INPUT_MAN_PATHS")
+    ] = None,
     deb_depends: list[str] | None = None,
     rpm_depends: list[str] | None = None,
 ):
@@ -337,7 +337,9 @@ f.write_text("1.2.3\n", encoding="utf-8")
 version = f.read_text(encoding="utf-8").strip()
 
 # Atomic write pattern (tmp → replace)
-with tempfile.NamedTemporaryFile("w", delete=False, dir=f.parent, encoding="utf-8") as tmp:
+with tempfile.NamedTemporaryFile(
+    "w", delete=False, dir=f.parent, encoding="utf-8"
+) as tmp:
     tmp.write("new-contents\n")
     tmp_path = Path(tmp.name)
 

@@ -162,7 +162,15 @@ Running a pipeline returns a `PipelineResult` that exposes:
 import sys
 from pathlib import Path
 
-from cuprum import ECHO, Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
+from cuprum import (
+    ECHO,
+    Program,
+    ProgramCatalogue,
+    ProjectSettings,
+    ScopeConfig,
+    scoped,
+    sh,
+)
 
 PYTHON = Program(str(Path(sys.executable)))
 project = ProjectSettings(
