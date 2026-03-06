@@ -129,9 +129,7 @@ def _find_artifact_url_in_run(
             continue
         return _require_non_empty_string(
             artifact.get("archive_download_url"),
-            name=(
-                f"artifacts[{artifact_index}].archive_download_url for run {run_id}"
-            ),
+            name=(f"artifacts[{artifact_index}].archive_download_url for run {run_id}"),
         )
     return None
 
