@@ -40,19 +40,54 @@ def clear_backend_caches() -> typ.Iterator[None]:
 class TestPumpStreamDispatch:
     """Unit integration tests for ``_pump_stream_dispatch`` selection paths."""
 
-    def test_dispatch_uses_python_when_forced(
+    @pytest.mark.parametrize(
+        "case",
+        [
+            pytest.param(
+                {
+                    "backend_env": "python",
+                    "rust_available": None,
+                    "force_fd_extraction_failure": False,
+                    "expected_rust_fd_attempts": 0,
+                },
+                id="forced-python",
+            ),
+            pytest.param(
+                {
+                    "backend_env": "rust",
+                    "rust_available": True,
+                    "force_fd_extraction_failure": True,
+                    "expected_rust_fd_attempts": 1,
+                },
+                id="rust-fd-extraction-fails",
+            ),
+        ],
+    )
+    def test_dispatch_falls_back_to_python(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        case: dict[str, str | bool | int | None],
     ) -> None:
-        """Forced Python backend routes dispatch directly to Python pump.
+        """Python pump is used when forced or when Rust FD extraction fails.
 
         Parameters
         ----------
         monkeypatch : pytest.MonkeyPatch
             Fixture used to override environment variables.
+        case : dict[str, str | bool | None | int]
+            Parameterized backend mode and expected call counts.
         """
         _ = self
-        monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "python")
+        backend_env = typ.cast("str", case["backend_env"])
+        rust_available = typ.cast("bool | None", case["rust_available"])
+        force_fd_extraction_failure = typ.cast(
+            "bool", case["force_fd_extraction_failure"]
+        )
+        expected_rust_fd_attempts = typ.cast("int", case["expected_rust_fd_attempts"])
+        monkeypatch.setenv("CUPRUM_STREAM_BACKEND", backend_env)
+        if rust_available is not None:
+            set_rust_availability_for_testing(is_available=rust_available)
+
         calls = {"rust_fd_path_attempts": 0, "python_pump": 0}
 
         async def fake_pump(
@@ -66,6 +101,7 @@ class TestPumpStreamDispatch:
             calls["rust_fd_path_attempts"] += 1
 
         configure_pump_stream_dispatch_for_testing(
+            force_fd_extraction_failure=force_fd_extraction_failure,
             on_rust_fd_path_attempt=on_rust_fd_path_attempt,
             python_pump=fake_pump,
         )
@@ -74,55 +110,11 @@ class TestPumpStreamDispatch:
         writer = typ.cast("asyncio.StreamWriter", object())
         asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
 
-        assert calls["rust_fd_path_attempts"] == 0, (
-            "did not expect Rust FD extraction attempt in forced Python mode"
+        assert calls["rust_fd_path_attempts"] == expected_rust_fd_attempts, (
+            f"expected {expected_rust_fd_attempts} Rust FD extraction attempt(s), "
+            f"got {calls['rust_fd_path_attempts']}"
         )
-        assert calls["python_pump"] == 1, (
-            "expected Python pump to handle forced Python mode"
-        )
-
-    def test_dispatch_falls_back_to_python_when_rust_fd_extraction_fails(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Forced Rust mode falls back to Python when FD extraction fails.
-
-        Parameters
-        ----------
-        monkeypatch : pytest.MonkeyPatch
-            Fixture used to override environment variables.
-        """
-        _ = self
-        monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
-        set_rust_availability_for_testing(is_available=True)
-        calls = {"rust_fd_path_attempts": 0, "python_pump": 0}
-
-        async def fake_pump(
-            reader: asyncio.StreamReader | None,
-            writer: asyncio.StreamWriter | None,
-        ) -> None:
-            await asyncio.sleep(0)
-            calls["python_pump"] += 1
-
-        def on_rust_fd_path_attempt() -> None:
-            calls["rust_fd_path_attempts"] += 1
-
-        configure_pump_stream_dispatch_for_testing(
-            force_fd_extraction_failure=True,
-            on_rust_fd_path_attempt=on_rust_fd_path_attempt,
-            python_pump=fake_pump,
-        )
-
-        reader = typ.cast("asyncio.StreamReader", object())
-        writer = typ.cast("asyncio.StreamWriter", object())
-        asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
-
-        assert calls["rust_fd_path_attempts"] == 1, (
-            "expected Rust FD extraction path to be attempted once"
-        )
-        assert calls["python_pump"] == 1, (
-            "expected Python pump fallback when Rust FD extraction is unavailable"
-        )
+        assert calls["python_pump"] == 1, "expected Python pump to handle the dispatch"
 
     @staticmethod
     def _create_nonblocking_pipe_pair() -> tuple[int, int, int, int]:
