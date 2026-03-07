@@ -391,7 +391,10 @@ class TestPumpStreamDispatch:
 
             def fake_set_blocking(fd: int, blocking: object) -> None:
                 if fd == read_fd and blocking is True:
-                    original_set_blocking(fd, True)  # noqa: FBT003
+                    original_set_blocking(
+                        fd,
+                        True,  # noqa: FBT003  # mirrors os API here
+                    )
                     return
                 if fd == write_fd and blocking is True:
                     raise OSError(_WRITER_TOGGLE_FAILURE)

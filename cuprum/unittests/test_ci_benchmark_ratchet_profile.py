@@ -88,36 +88,47 @@ def test_select_ci_ratchet_scenarios_filters_for_ci_profile() -> None:
     ]
 
 
-def test_select_ci_ratchet_scenarios_requires_rust_scenario() -> None:
-    """The CI profile must keep at least one Rust scenario for the ratchet."""
-    with pytest.raises(ValueError, match="must include Rust scenarios"):
+@pytest.mark.parametrize(
+    ("scenario_kwargs", "last_command", "error_match"),
+    [
+        pytest.param(
+            {
+                "name": "python-small-single-nocb",
+                "backend": "python",
+                "payload_bytes": 1024,
+            },
+            "python only",
+            "must include Rust scenarios",
+            id="no-rust-scenario",
+        ),
+        pytest.param(
+            {
+                "name": "rust-small-single-nocb",
+                "backend": "rust",
+                "payload_bytes": -1,
+            },
+            "rust only",
+            "payload_bytes must be >= 0",
+            id="negative-payload-bytes",
+        ),
+    ],
+)
+def test_select_ci_ratchet_scenarios_rejects_invalid_single_scenario(
+    scenario_kwargs: dict[str, object],
+    last_command: str,
+    error_match: str,
+) -> None:
+    """Invalid single-scenario CI payloads should raise ValueError."""
+    with pytest.raises(ValueError, match=error_match):
         select_ci_ratchet_scenarios({
             "dry_run": True,
             "rust_available": True,
-            "command": ["a", "b", "c", "d", "e", "f", "g", "python only"],
+            "command": ["a", "b", "c", "d", "e", "f", "g", last_command],
             "scenarios": [
                 _scenario(
-                    name="python-small-single-nocb",
-                    backend="python",
-                    payload_bytes=1024,
-                    stages=2,
-                )
-            ],
-        })
-
-
-def test_select_ci_ratchet_scenarios_rejects_negative_payload_bytes() -> None:
-    """Negative scenario payload sizes should fail fast."""
-    with pytest.raises(ValueError, match="payload_bytes must be >= 0"):
-        select_ci_ratchet_scenarios({
-            "dry_run": True,
-            "rust_available": True,
-            "command": ["a", "b", "c", "d", "e", "f", "g", "rust only"],
-            "scenarios": [
-                _scenario(
-                    name="rust-small-single-nocb",
-                    backend="rust",
-                    payload_bytes=-1,
+                    name=typ.cast("str", scenario_kwargs["name"]),
+                    backend=typ.cast("str", scenario_kwargs["backend"]),
+                    payload_bytes=typ.cast("int", scenario_kwargs["payload_bytes"]),
                     stages=2,
                 )
             ],
