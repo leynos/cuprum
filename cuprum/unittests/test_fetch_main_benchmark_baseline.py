@@ -33,6 +33,19 @@ def _artifacts_payload(*, artifacts: list[dict[str, object]]) -> dict[str, objec
     return {"artifacts": artifacts}
 
 
+def _main_cli_args(output_dir: pth.Path) -> list[str]:
+    return [
+        "--repository",
+        "leynos/cuprum",
+        "--workflow",
+        "ci.yml",
+        "--artifact-name",
+        "benchmark-ratchet-main-baseline",
+        "--output-dir",
+        str(output_dir),
+    ]
+
+
 def test_select_latest_artifact_download_url_uses_newest_matching_run() -> None:
     """Artifact selection should prefer the newest run with a valid baseline."""
     runs_payload = _workflow_runs_payload(300, 200, 100)
@@ -145,16 +158,7 @@ def test_main_returns_not_found_when_no_baseline_available(
         lambda **_: None,
     )
 
-    exit_code = main([
-        "--repository",
-        "leynos/cuprum",
-        "--workflow",
-        "ci.yml",
-        "--artifact-name",
-        "benchmark-ratchet-main-baseline",
-        "--output-dir",
-        str(tmp_path),
-    ])
+    exit_code = main(_main_cli_args(tmp_path))
 
     assert exit_code == MAIN_BASELINE_NOT_FOUND_EXIT_CODE
 
@@ -167,16 +171,7 @@ def test_main_requires_github_token(
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
     with pytest.raises(SystemExit, match="missing GitHub token"):
-        main([
-            "--repository",
-            "leynos/cuprum",
-            "--workflow",
-            "ci.yml",
-            "--artifact-name",
-            "benchmark-ratchet-main-baseline",
-            "--output-dir",
-            str(tmp_path),
-        ])
+        main(_main_cli_args(tmp_path))
 
 
 def test_main_downloads_and_extracts_latest_baseline(
@@ -200,16 +195,7 @@ def test_main_downloads_and_extracts_latest_baseline(
         lambda **_: archive_buffer.getvalue(),
     )
 
-    exit_code = main([
-        "--repository",
-        "leynos/cuprum",
-        "--workflow",
-        "ci.yml",
-        "--artifact-name",
-        "benchmark-ratchet-main-baseline",
-        "--output-dir",
-        str(tmp_path),
-    ])
+    exit_code = main(_main_cli_args(tmp_path))
 
     assert exit_code == 0
     assert (tmp_path / "main-plan.json").read_text(encoding="utf-8") == (
@@ -273,15 +259,13 @@ def test_load_json_response_retries_transient_urlopen_failures(
     assert timeouts == [10.0, 10.0, 10.0]
 
 
-def test_find_latest_artifact_download_url_retries_per_run_artifact_queries(
+def test_find_latest_artifact_download_url_queries_workflow_and_artifacts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Per-run artifact listing should tolerate a transient GitHub API failure."""
-    temporary_outage = "temporary outage"
+    """Artifact lookup should fetch workflow runs and then per-run artifacts."""
     auth_token = "".join(("tok", "en"))
-    payloads = [
+    payloads: list[typ.Mapping[str, object]] = [
         {"workflow_runs": [{"id": 42}]},
-        urllib.error.URLError(temporary_outage),
         {
             "artifacts": [
                 {
@@ -292,22 +276,16 @@ def test_find_latest_artifact_download_url_retries_per_run_artifact_queries(
             ]
         },
     ]
-    calls = {"count": 0}
+    requested_urls: list[str] = []
 
     def fake_load_json_response(*, url: str, token: str) -> typ.Mapping[str, object]:
-        del url, token
-        value = payloads[calls["count"]]
-        calls["count"] += 1
-        if isinstance(value, Exception):
-            raise value
-        return value
+        del token
+        requested_urls.append(url)
+        return payloads.pop(0)
 
     monkeypatch.setattr(
         "benchmarks.fetch_main_benchmark_baseline._load_json_response",
         fake_load_json_response,
-    )
-    monkeypatch.setattr(
-        "benchmarks.fetch_main_benchmark_baseline.time.sleep", lambda _: None
     )
 
     download_url = find_latest_artifact_download_url(
@@ -322,4 +300,8 @@ def test_find_latest_artifact_download_url_retries_per_run_artifact_queries(
     )
 
     assert download_url == "https://example.invalid/archive.zip"
-    assert calls["count"] == 3
+    assert len(requested_urls) == 2
+    assert requested_urls[0].endswith(
+        "/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=20&status=success"
+    )
+    assert requested_urls[1].endswith("/actions/runs/42/artifacts?per_page=100")

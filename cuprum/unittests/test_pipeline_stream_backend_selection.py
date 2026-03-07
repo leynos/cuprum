@@ -287,6 +287,70 @@ class TestPumpStreamDispatch:
         await asyncio.sleep(0)
         calls["python_pump"] += 1
 
+    def test_run_rust_pump_pauses_reader_before_draining(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Rust pumping should pause the reader transport before draining."""
+        _ = self
+        call_order: list[str] = []
+
+        def fake_pause_reader_transport(
+            reader: asyncio.StreamReader,
+        ) -> typ.Callable[[], None]:
+            del reader
+            call_order.append("pause")
+
+            def _resume() -> None:
+                call_order.append("resume")
+
+            return _resume
+
+        async def fake_drain_reader_buffer(
+            reader: asyncio.StreamReader,
+            writer: asyncio.StreamWriter | None,
+        ) -> None:
+            del reader, writer
+            await asyncio.sleep(0)
+            call_order.append("drain")
+
+        monkeypatch.setattr(
+            _pipeline_streams,
+            "_pause_reader_transport",
+            fake_pause_reader_transport,
+        )
+        monkeypatch.setattr(
+            _pipeline_streams,
+            "_drain_reader_buffer",
+            fake_drain_reader_buffer,
+        )
+        monkeypatch.setattr(
+            _pipeline_streams,
+            "_set_stream_fds_blocking",
+            lambda **_: (True, True),
+        )
+        monkeypatch.setattr(
+            _pipeline_streams,
+            "_restore_stream_fd_blocking",
+            lambda **_: call_order.append("restore"),
+        )
+
+        import cuprum._streams_rs as streams_rs
+
+        monkeypatch.setattr(streams_rs, "rust_pump_stream", lambda *_: 0)
+
+        reader = typ.cast("asyncio.StreamReader", object())
+        asyncio.run(
+            _pipeline_streams._run_rust_pump(
+                reader=reader,
+                writer=None,
+                reader_fd=1,
+                writer_fd=2,
+            )
+        )
+
+        assert call_order == ["pause", "drain", "restore", "resume"]
+
     def test_dispatch_restores_reader_blocking_when_writer_toggle_fails(
         self,
         monkeypatch: pytest.MonkeyPatch,

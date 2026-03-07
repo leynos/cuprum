@@ -91,10 +91,10 @@ This task is complete only when:
   Mitigation: build/install native extension in both baseline and candidate
   worktrees before running benchmarks; fail fast if Rust scenarios are absent.
 
-- Risk: Checking out and benchmarking both baseline and candidate refs may be
-  slow or brittle. Severity: medium. Likelihood: medium. Mitigation: use smoke
-  benchmark mode for CI ratchet, keep command paths explicit, and archive
-  intermediate JSON for debugging.
+- Risk: Fetching the latest successful `main` baseline artifact and benchmarking
+  the candidate commit may be slow or brittle. Severity: medium. Likelihood:
+  medium. Mitigation: use smoke benchmark mode for CI ratchet, keep command
+  paths explicit, and archive intermediate JSON for debugging.
 
 - Risk: Hyperfine output ordering could drift from scenario metadata mapping.
   Severity: medium. Likelihood: low. Mitigation: generate matching dry-run plan
@@ -225,8 +225,8 @@ Relevant files and current state:
 
 Terminology used in this plan:
 
-- Baseline: benchmark JSON produced from the base commit (`pull_request` base
-  SHA or `push` "before" SHA).
+- Baseline: benchmark JSON fetched from the latest successful `main` run in the
+  artifact store.
 - Candidate: benchmark JSON produced from the commit under test (`github.sha`).
 - Regression ratio: `(candidate_mean - baseline_mean) / baseline_mean` for the
   same Rust scenario. Positive values mean slower candidate performance.
@@ -264,9 +264,10 @@ Stage C: implement CI benchmark ratchet job.
 Add a job in `.github/workflows/ci.yml` (or a new workflow called from it) that
 runs on `pull_request` and `push` to `main` and does the following:
 
-- prepares baseline and candidate worktrees;
-- builds dependencies and Rust extension for each worktree;
-- runs smoke benchmark commands to emit JSON outputs;
+- fetches the baseline artifact from the latest successful `main` run;
+- builds dependencies and the Rust extension for the candidate commit under
+  test;
+- runs smoke benchmark commands to emit candidate JSON outputs;
 - runs the ratchet comparison CLI with `--max-regression 0.10`;
 - uploads JSON artefacts (baseline, candidate, and comparison report).
 
@@ -398,10 +399,10 @@ Quality criteria:
 
 - Benchmark comparison commands are idempotent; rerunning overwrites JSON
   outputs.
-- CI workspace preparation should use fresh worktrees/directories per run to
-  avoid cross-run contamination.
-- If baseline checkout fails for a given event payload, stop and log the
-  missing SHA contract before retrying with corrected event handling.
+- CI workspace preparation should use fresh directories per run to avoid
+  cross-run contamination.
+- If baseline artifact fetch fails for a given event payload, stop and log the
+  missing artifact contract before retrying with corrected event handling.
 - If benchmark output schema mismatches expected keys, fail fast with explicit
   error messages and preserve offending JSON as artefacts.
 

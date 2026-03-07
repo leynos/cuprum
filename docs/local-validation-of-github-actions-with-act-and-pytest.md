@@ -70,7 +70,8 @@ jobs:
               "GITHUB_REF": os.getenv("GITHUB_REF", ""),
             },
           }
-          open("out/result.json", "w").write(json.dumps(data))
+          with open("out/result.json", "w") as f:
+              f.write(json.dumps(data))
           PY
       - name: Upload artefact
         uses: actions/upload-artifact@v4

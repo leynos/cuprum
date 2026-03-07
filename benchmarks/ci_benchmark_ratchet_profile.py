@@ -50,6 +50,35 @@ def load_plan_payload(full_plan_path: pth.Path) -> dict[str, object]:
     return full_payload
 
 
+def _require_numeric_payload_bytes(value: object) -> int | float:
+    """Return *value* as a numeric payload size, or raise ``TypeError``."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        msg = "scenario payload_bytes must be numeric"
+        raise TypeError(msg)
+    return value
+
+
+def _select_scenario(
+    scenario_value: object,
+    scenario_command_value: object,
+) -> tuple[dict[str, object], str] | None:
+    """Return a filtered (scenario, command) pair, or ``None``."""
+    scenario = _require_mapping(scenario_value, name="scenario")
+    scenario_command = _require_non_empty_string(
+        scenario_command_value,
+        name="scenario command",
+    )
+    if scenario.get("stages") != _CI_RATCHET_STAGE_COUNT:
+        return None
+    payload_bytes = _require_numeric_payload_bytes(scenario.get("payload_bytes", 0))
+    if payload_bytes < 0:
+        msg = "scenario payload_bytes must be >= 0"
+        raise ValueError(msg)
+    if payload_bytes > _CI_RATCHET_MAX_PAYLOAD_BYTES:
+        return None
+    return scenario, scenario_command
+
+
 def select_ci_ratchet_scenarios(
     full_payload: typ.Mapping[str, object],
 ) -> list[tuple[dict[str, object], str]]:
@@ -58,28 +87,14 @@ def select_ci_ratchet_scenarios(
     plan_command = _require_list(full_payload.get("command"), name="command")
     scenario_commands = plan_command[_HYPERFINE_PREFIX_ARGUMENT_COUNT:]
 
-    selected: list[tuple[dict[str, object], str]] = []
-    for scenario_value, scenario_command_value in zip(
-        scenarios,
-        scenario_commands,
-        strict=True,
-    ):
-        scenario = _require_mapping(scenario_value, name="scenario")
-        scenario_command = _require_non_empty_string(
-            scenario_command_value,
-            name="scenario command",
+    selected = [
+        entry
+        for scenario_value, scenario_command_value in zip(
+            scenarios, scenario_commands, strict=True
         )
-        if scenario.get("stages") != _CI_RATCHET_STAGE_COUNT:
-            continue
-        payload_bytes = scenario.get("payload_bytes", 0)
-        if isinstance(payload_bytes, bool) or not isinstance(
-            payload_bytes, int | float
-        ):
-            msg = "scenario payload_bytes must be numeric"
-            raise TypeError(msg)
-        if payload_bytes > _CI_RATCHET_MAX_PAYLOAD_BYTES:
-            continue
-        selected.append((scenario, scenario_command))
+        if (entry := _select_scenario(scenario_value, scenario_command_value))
+        is not None
+    ]
 
     if not selected:
         msg = "no scenarios selected for CI benchmark ratchet"

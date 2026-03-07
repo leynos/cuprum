@@ -105,6 +105,24 @@ def test_select_ci_ratchet_scenarios_requires_rust_scenario() -> None:
         })
 
 
+def test_select_ci_ratchet_scenarios_rejects_negative_payload_bytes() -> None:
+    """Negative scenario payload sizes should fail fast."""
+    with pytest.raises(ValueError, match="payload_bytes must be >= 0"):
+        select_ci_ratchet_scenarios({
+            "dry_run": True,
+            "rust_available": True,
+            "command": ["a", "b", "c", "d", "e", "f", "g", "rust only"],
+            "scenarios": [
+                _scenario(
+                    name="rust-small-single-nocb",
+                    backend="rust",
+                    payload_bytes=-1,
+                    stages=2,
+                )
+            ],
+        })
+
+
 def test_load_plan_payload_rejects_mismatched_command_count(tmp_path: pth.Path) -> None:
     """The helper should reject dry-run plans with misaligned command counts."""
     plan_path = tmp_path / "full-plan.json"

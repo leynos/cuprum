@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import dataclasses as dc
 import json
+import math
 import pathlib as pth
 import sys
 import typing as typ
@@ -135,6 +136,9 @@ def _require_positive_float(value: object, *, name: str) -> float:
         msg = f"{name} must be a number"
         raise TypeError(msg)
     validated = float(value)
+    if not math.isfinite(validated):
+        msg = f"{name} must be finite"
+        raise ValueError(msg)
     if validated <= 0.0:
         msg = f"{name} must be > 0"
         raise ValueError(msg)
@@ -147,6 +151,9 @@ def _require_non_negative_float(value: object, *, name: str) -> float:
         msg = f"{name} must be a number"
         raise TypeError(msg)
     validated = float(value)
+    if not math.isfinite(validated):
+        msg = f"{name} must be finite"
+        raise ValueError(msg)
     if validated < 0.0:
         msg = f"{name} must be >= 0"
         raise ValueError(msg)

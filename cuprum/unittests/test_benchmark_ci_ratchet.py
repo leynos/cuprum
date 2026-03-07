@@ -291,6 +291,30 @@ def test_compare_rust_regressions_rejects_non_positive_means(
         )
 
 
+@pytest.mark.parametrize("invalid_mean", [float("nan"), float("inf"), float("-inf")])
+def test_compare_rust_regressions_rejects_non_finite_means(
+    invalid_mean: float,
+) -> None:
+    """Rust scenario means must be finite numbers."""
+    with pytest.raises(ValueError, match="must be finite"):
+        compare_rust_regressions(
+            baseline=BenchmarkRunPayload(
+                plan=_plan_payload(),
+                throughput=_throughput_payload(
+                    python_mean=1.0,
+                    rust_mean=invalid_mean,
+                ),
+                context_name="baseline",
+            ),
+            candidate=BenchmarkRunPayload(
+                plan=_plan_payload(),
+                throughput=_throughput_payload(python_mean=1.0, rust_mean=1.0),
+                context_name="candidate",
+            ),
+            max_regression=0.10,
+        )
+
+
 def test_compare_rust_regressions_rejects_negative_max_regression() -> None:
     """The configured slowdown threshold must be non-negative."""
     with pytest.raises(ValueError, match="max_regression must be >= 0"):
@@ -298,4 +322,20 @@ def test_compare_rust_regressions_rejects_negative_max_regression() -> None:
             baseline=_RunMeans(python=1.0, rust=1.0),
             candidate=_RunMeans(python=1.0, rust=1.0),
             max_regression=-0.01,
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid_max_regression",
+    [float("nan"), float("inf"), float("-inf")],
+)
+def test_compare_rust_regressions_rejects_non_finite_max_regression(
+    invalid_max_regression: float,
+) -> None:
+    """The configured slowdown threshold must be finite."""
+    with pytest.raises(ValueError, match="must be finite"):
+        _run_comparison(
+            baseline=_RunMeans(python=1.0, rust=1.0),
+            candidate=_RunMeans(python=1.0, rust=1.0),
+            max_regression=invalid_max_regression,
         )

@@ -309,8 +309,13 @@ async def _run_rust_pump(
     """Run the Rust pump for one pipe hop; return ``True`` when handled."""
     # Flush any bytes asyncio already buffered in the StreamReader
     # before the Rust pump takes over the raw file descriptor.
-    await _drain_reader_buffer(reader, writer)
     resume_reader = _pause_reader_transport(reader)
+    try:
+        await _drain_reader_buffer(reader, writer)
+    except Exception:
+        if resume_reader is not None:
+            resume_reader()
+        raise
 
     try:
         reader_was_blocking, writer_was_blocking = _set_stream_fds_blocking(

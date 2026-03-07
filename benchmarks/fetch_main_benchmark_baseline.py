@@ -264,10 +264,7 @@ def find_latest_artifact_download_url(
         f"{query.api_base_url}/repos/{encoded_repository}/actions/workflows/"
         f"{encoded_workflow}/runs?{params}"
     )
-    workflow_runs_payload = _with_retry(
-        lambda: _load_json_response(url=workflow_runs_url, token=token),
-        description=f"load workflow runs from {workflow_runs_url}",
-    )
+    workflow_runs_payload = _load_json_response(url=workflow_runs_url, token=token)
     workflow_runs = _require_list(
         workflow_runs_payload.get("workflow_runs"),
         name="workflow_runs",
@@ -281,12 +278,9 @@ def find_latest_artifact_download_url(
             f"{query.api_base_url}/repos/{encoded_repository}/actions/runs/"
             f"{run_id}/artifacts?per_page=100"
         )
-        artifacts_payload_by_run[run_id] = _with_retry(
-            lambda artifacts_url=artifacts_url: _load_json_response(
-                url=artifacts_url,
-                token=token,
-            ),
-            description=f"load artifacts for run {run_id}",
+        artifacts_payload_by_run[run_id] = _load_json_response(
+            url=artifacts_url,
+            token=token,
         )
 
     return select_latest_artifact_download_url(
@@ -359,10 +353,7 @@ def main(argv: typ.Sequence[str] | None = None) -> int:
     if download_url is None:
         return MAIN_BASELINE_NOT_FOUND_EXIT_CODE
 
-    archive_bytes = _with_retry(
-        lambda: _download_bytes(url=download_url, token=token),
-        description=f"download benchmark baseline archive from {download_url}",
-    )
+    archive_bytes = _download_bytes(url=download_url, token=token)
     extract_artifact_archive(
         archive_bytes=archive_bytes,
         output_dir=args.output_dir,

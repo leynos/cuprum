@@ -13,6 +13,16 @@ if typ.TYPE_CHECKING:
 from pytest_bdd import given, scenario, then, when
 
 
+class FixtureBundle(typ.TypedDict):
+    """Typed fixture paths for one ratchet CLI invocation."""
+
+    baseline_plan_path: pth.Path
+    baseline_throughput_path: pth.Path
+    candidate_plan_path: pth.Path
+    candidate_throughput_path: pth.Path
+    report_path: pth.Path
+
+
 @scenario(
     "../features/benchmark_ci_ratchet.feature",
     "Ratchet passes when Rust regression stays within threshold",
@@ -38,6 +48,7 @@ def test_ratchet_reports_malformed_inputs() -> None:
 
 
 def _scenario_payload(*, name: str, backend: str) -> dict[str, object]:
+    """Create scenario payload."""
     return {
         "name": name,
         "backend": backend,
@@ -48,6 +59,7 @@ def _scenario_payload(*, name: str, backend: str) -> dict[str, object]:
 
 
 def _plan_payload() -> dict[str, object]:
+    """Create plan payload."""
     return {
         "dry_run": True,
         "rust_available": True,
@@ -60,6 +72,7 @@ def _plan_payload() -> dict[str, object]:
 
 
 def _throughput_payload(*, python_mean: float, rust_mean: float) -> dict[str, object]:
+    """Create throughput payload."""
     return {
         "results": [
             {"command": "python-run", "mean": python_mean},
@@ -73,6 +86,7 @@ def _write_json(
     path: pth.Path,
     payload: dict[str, object],
 ) -> None:
+    """Write JSON payload."""
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -80,7 +94,8 @@ def _prepare_fixture_bundle(
     *,
     tmp_path: pth.Path,
     candidate_rust_mean: float,
-) -> dict[str, pth.Path]:
+) -> FixtureBundle:
+    """Create ratchet fixture bundle."""
     baseline_plan_path = tmp_path / "baseline-plan.json"
     baseline_throughput_path = tmp_path / "baseline-throughput.json"
     candidate_plan_path = tmp_path / "candidate-plan.json"
@@ -111,7 +126,7 @@ def _prepare_fixture_bundle(
     "benchmark comparison fixtures where candidate stays within threshold",
     target_fixture="ratchet_fixture_bundle",
 )
-def given_candidate_within_threshold(tmp_path: pth.Path) -> dict[str, pth.Path]:
+def given_candidate_within_threshold(tmp_path: pth.Path) -> FixtureBundle:
     """Create fixture JSON files with a 10% Rust slowdown (passes)."""
     return _prepare_fixture_bundle(tmp_path=tmp_path, candidate_rust_mean=1.10)
 
@@ -120,7 +135,7 @@ def given_candidate_within_threshold(tmp_path: pth.Path) -> dict[str, pth.Path]:
     "benchmark comparison fixtures where candidate exceeds threshold",
     target_fixture="ratchet_fixture_bundle",
 )
-def given_candidate_exceeds_threshold(tmp_path: pth.Path) -> dict[str, pth.Path]:
+def given_candidate_exceeds_threshold(tmp_path: pth.Path) -> FixtureBundle:
     """Create fixture JSON files with a 25% Rust slowdown (fails)."""
     return _prepare_fixture_bundle(tmp_path=tmp_path, candidate_rust_mean=1.25)
 
@@ -129,7 +144,7 @@ def given_candidate_exceeds_threshold(tmp_path: pth.Path) -> dict[str, pth.Path]
     "malformed benchmark comparison fixtures",
     target_fixture="ratchet_fixture_bundle",
 )
-def given_malformed_fixtures(tmp_path: pth.Path) -> dict[str, pth.Path]:
+def given_malformed_fixtures(tmp_path: pth.Path) -> FixtureBundle:
     """Create fixture JSON files that trigger the CLI malformed-input path."""
     fixture_bundle = _prepare_fixture_bundle(
         tmp_path=tmp_path,
@@ -152,7 +167,7 @@ def given_malformed_fixtures(tmp_path: pth.Path) -> dict[str, pth.Path]:
 
 @when("I run the Rust benchmark ratchet CLI", target_fixture="ratchet_cli_result")
 def when_run_ratchet_cli(
-    ratchet_fixture_bundle: dict[str, pth.Path],
+    ratchet_fixture_bundle: FixtureBundle,
 ) -> dict[str, object]:
     """Execute the ratchet CLI against prepared baseline/candidate fixtures."""
     command = [
