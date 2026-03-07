@@ -20,6 +20,7 @@ if typ.TYPE_CHECKING:
 
 
 def _scenario_payload(*, name: str, backend: str) -> dict[str, object]:
+    """Return a scenario payload dict."""
     return {
         "name": name,
         "backend": backend,
@@ -30,6 +31,7 @@ def _scenario_payload(*, name: str, backend: str) -> dict[str, object]:
 
 
 def _plan_payload() -> dict[str, object]:
+    """Return a benchmark plan payload."""
     return {
         "dry_run": True,
         "rust_available": True,
@@ -42,6 +44,7 @@ def _plan_payload() -> dict[str, object]:
 
 
 def _throughput_payload(*, python_mean: float, rust_mean: float) -> dict[str, object]:
+    """Return a throughput payload."""
     return {
         "results": [
             {"command": "python-run", "mean": python_mean},
@@ -56,6 +59,7 @@ def _write_json(
     filename: str,
     payload: dict[str, object],
 ) -> pth.Path:
+    """Write a JSON payload to a temp file."""
     path = tmp_path / filename
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path

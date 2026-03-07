@@ -8,36 +8,18 @@ import pathlib as pth
 import subprocess  # noqa: S404 - helper intentionally invokes hyperfine
 import typing as typ
 
+from benchmarks._validation import (
+    _require_list,
+    _require_mapping,
+    _require_non_empty_string,
+)
+
 _HYPERFINE_PREFIX_ARGUMENT_COUNT = 7
 _CI_RATCHET_STAGE_COUNT = 2
 _CI_RATCHET_MAX_PAYLOAD_BYTES = 65536
 
 
-def _require_mapping(value: object, *, name: str) -> dict[str, object]:
-    """Validate that *value* is a JSON object."""
-    if not isinstance(value, dict):
-        msg = f"{name} must be an object"
-        raise TypeError(msg)
-    return typ.cast("dict[str, object]", value)
-
-
-def _require_list(value: object, *, name: str) -> list[object]:
-    """Validate that *value* is a JSON array."""
-    if not isinstance(value, list):
-        msg = f"{name} must be a list"
-        raise TypeError(msg)
-    return typ.cast("list[object]", value)
-
-
-def _require_non_empty_string(value: object, *, name: str) -> str:
-    """Validate that *value* is a non-empty string."""
-    if not isinstance(value, str) or not value.strip():
-        msg = f"{name} must be a non-empty string"
-        raise ValueError(msg)
-    return value
-
-
-def load_plan_payload(full_plan_path: pth.Path) -> dict[str, object]:
+def load_plan_payload(full_plan_path: pth.Path) -> typ.Mapping[str, object]:
     """Load and validate the dry-run benchmark plan payload."""
     payload = json.loads(full_plan_path.read_text(encoding="utf-8"))
     full_payload = _require_mapping(payload, name=f"plan payload from {full_plan_path}")
@@ -61,7 +43,7 @@ def _require_numeric_payload_bytes(value: object) -> int | float:
 def _select_scenario(
     scenario_value: object,
     scenario_command_value: object,
-) -> tuple[dict[str, object], str] | None:
+) -> tuple[typ.Mapping[str, object], str] | None:
     """Return a filtered (scenario, command) pair, or ``None``."""
     scenario = _require_mapping(scenario_value, name="scenario")
     scenario_command = _require_non_empty_string(
@@ -81,7 +63,7 @@ def _select_scenario(
 
 def select_ci_ratchet_scenarios(
     full_payload: typ.Mapping[str, object],
-) -> list[tuple[dict[str, object], str]]:
+) -> list[tuple[typ.Mapping[str, object], str]]:
     """Return the benchmark scenarios retained by the CI ratchet profile."""
     scenarios = _require_list(full_payload.get("scenarios"), name="scenarios")
     plan_command = _require_list(full_payload.get("command"), name="command")
@@ -108,7 +90,7 @@ def select_ci_ratchet_scenarios(
 def build_hyperfine_command(
     *,
     throughput_path: pth.Path,
-    selected: typ.Sequence[tuple[dict[str, object], str]],
+    selected: typ.Sequence[tuple[typ.Mapping[str, object], str]],
 ) -> list[str]:
     """Build the hyperfine command for the filtered CI scenario set."""
     return [
@@ -128,7 +110,7 @@ def write_filtered_plan(
     filtered_plan_path: pth.Path,
     rust_available: bool,
     command: list[str],
-    selected: typ.Sequence[tuple[dict[str, object], str]],
+    selected: typ.Sequence[tuple[typ.Mapping[str, object], str]],
 ) -> None:
     """Write the filtered dry-run plan used by the benchmark ratchet."""
     filtered_payload = {

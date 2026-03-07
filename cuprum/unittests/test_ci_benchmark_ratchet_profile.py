@@ -25,6 +25,7 @@ def _scenario(
     payload_bytes: int,
     stages: int,
 ) -> dict[str, object]:
+    """Create a scenario dict for CI benchmark tests."""
     return {
         "name": name,
         "backend": backend,

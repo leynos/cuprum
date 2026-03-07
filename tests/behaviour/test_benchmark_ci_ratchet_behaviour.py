@@ -23,6 +23,13 @@ class FixtureBundle(typ.TypedDict):
     report_path: pth.Path
 
 
+class CliResult(typ.TypedDict):
+    """Typed CLI result payload for benchmark ratchet behaviour tests."""
+
+    completed: subprocess.CompletedProcess[str]
+    report_path: pth.Path
+
+
 @scenario(
     "../features/benchmark_ci_ratchet.feature",
     "Ratchet passes when Rust regression stays within threshold",
@@ -168,7 +175,7 @@ def given_malformed_fixtures(tmp_path: pth.Path) -> FixtureBundle:
 @when("I run the Rust benchmark ratchet CLI", target_fixture="ratchet_cli_result")
 def when_run_ratchet_cli(
     ratchet_fixture_bundle: FixtureBundle,
-) -> dict[str, object]:
+) -> CliResult:
     """Execute the ratchet CLI against prepared baseline/candidate fixtures."""
     command = [
         sys.executable,
@@ -199,11 +206,9 @@ def when_run_ratchet_cli(
     }
 
 
-def _assert_returncode(ratchet_cli_result: dict[str, object], *, expected: int) -> None:
+def _assert_returncode(ratchet_cli_result: CliResult, *, expected: int) -> None:
     """Assert the CLI return code and emit stdout/stderr for failures."""
-    completed = typ.cast(
-        "subprocess.CompletedProcess[str]", ratchet_cli_result["completed"]
-    )
+    completed = ratchet_cli_result["completed"]
     assert completed.returncode == expected, (
         f"expected ratchet to exit with code {expected}, got "
         f"{completed.returncode}:\nstdout={completed.stdout}\nstderr={completed.stderr}"
@@ -212,7 +217,7 @@ def _assert_returncode(ratchet_cli_result: dict[str, object], *, expected: int) 
 
 @then("the ratchet command exits successfully")
 def then_ratchet_exits_successfully(
-    ratchet_cli_result: dict[str, object],
+    ratchet_cli_result: CliResult,
 ) -> None:
     """CLI should return zero for within-threshold regression."""
     _assert_returncode(ratchet_cli_result, expected=0)
@@ -220,7 +225,7 @@ def then_ratchet_exits_successfully(
 
 @then("the ratchet command exits with failure")
 def then_ratchet_exits_with_failure(
-    ratchet_cli_result: dict[str, object],
+    ratchet_cli_result: CliResult,
 ) -> None:
     """CLI should return non-zero for above-threshold regression."""
     _assert_returncode(ratchet_cli_result, expected=1)
@@ -228,7 +233,7 @@ def then_ratchet_exits_with_failure(
 
 @then("the ratchet command exits with malformed-input failure")
 def then_ratchet_exits_with_malformed_input_failure(
-    ratchet_cli_result: dict[str, object],
+    ratchet_cli_result: CliResult,
 ) -> None:
     """CLI should return 2 when the benchmark inputs are malformed."""
     _assert_returncode(ratchet_cli_result, expected=2)
@@ -236,11 +241,10 @@ def then_ratchet_exits_with_malformed_input_failure(
 
 @then("the ratchet report indicates success")
 def then_ratchet_report_indicates_success(
-    ratchet_cli_result: dict[str, object],
+    ratchet_cli_result: CliResult,
 ) -> None:
     """Report JSON should indicate the comparison passed."""
-    report_path = typ.cast("pth.Path", ratchet_cli_result["report_path"])
-    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload = json.loads(ratchet_cli_result["report_path"].read_text(encoding="utf-8"))
 
     assert payload["passed"] is True, "expected ratchet report passed=True"
     assert payload["rust_scenarios_compared"] == 1, (
@@ -250,11 +254,10 @@ def then_ratchet_report_indicates_success(
 
 @then("the ratchet report indicates regression failure")
 def then_ratchet_report_indicates_failure(
-    ratchet_cli_result: dict[str, object],
+    ratchet_cli_result: CliResult,
 ) -> None:
     """Report JSON should indicate the comparison failed with regressions."""
-    report_path = typ.cast("pth.Path", ratchet_cli_result["report_path"])
-    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload = json.loads(ratchet_cli_result["report_path"].read_text(encoding="utf-8"))
 
     assert payload["passed"] is False, "expected ratchet report passed=False"
     regressions = payload["regressions"]

@@ -23,6 +23,8 @@ _WRITER_TOGGLE_FAILURE = "writer toggle failed"
 
 
 class _TransportWithoutPause:
+    """Transport shim exposing fileno() and pipe info for tests."""
+
     def __init__(self, fd: int) -> None:
         self._fd = fd
 
@@ -36,11 +38,15 @@ class _TransportWithoutPause:
 
 
 class _ReaderWithoutPause:
+    """Test reader object holding a transport without pause support."""
+
     def __init__(self, fd: int) -> None:
         self.transport = _TransportWithoutPause(fd)
 
 
 class _WriterWithoutPause:
+    """Test writer object holding a transport without pause support."""
+
     def __init__(self, fd: int) -> None:
         self.transport = _TransportWithoutPause(fd)
 
@@ -154,7 +160,7 @@ class TestPumpStreamDispatch:
         calls: dict[str, int],
         expected_reader_fd: int,
         expected_writer_fd: int,
-    ) -> "typ.Callable[[int, int], int]":  # noqa: UP037
+    ) -> typ.Callable[[int, int], int]:
         """Return a fake ``rust_pump_stream`` that asserts FDs are blocking."""
 
         def _spy(reader_fd: int, writer_fd: int) -> int:

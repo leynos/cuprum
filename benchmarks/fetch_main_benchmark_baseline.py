@@ -15,6 +15,12 @@ import urllib.parse
 import urllib.request
 import zipfile
 
+from benchmarks._validation import (
+    _require_list,
+    _require_mapping,
+    _require_non_empty_string,
+)
+
 GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_TOKEN_ENV_VAR = "GITHUB_TOKEN"  # noqa: S105 - env var name, not a credential
 MAIN_BASELINE_NOT_FOUND_EXIT_CODE = 3
@@ -35,30 +41,6 @@ class ArtifactQuery:
     event: str
     artifact_name: str
     api_base_url: str = GITHUB_API_BASE_URL
-
-
-def _require_mapping(value: object, *, name: str) -> typ.Mapping[str, object]:
-    """Validate that *value* is a JSON object."""
-    if not isinstance(value, dict):
-        msg = f"{name} must be an object"
-        raise TypeError(msg)
-    return typ.cast("dict[str, object]", value)
-
-
-def _require_list(value: object, *, name: str) -> list[object]:
-    """Validate that *value* is a JSON array."""
-    if not isinstance(value, list):
-        msg = f"{name} must be a list"
-        raise TypeError(msg)
-    return typ.cast("list[object]", value)
-
-
-def _require_non_empty_string(value: object, *, name: str) -> str:
-    """Validate that *value* is a non-empty string."""
-    if not isinstance(value, str) or not value.strip():
-        msg = f"{name} must be a non-empty string"
-        raise ValueError(msg)
-    return value
 
 
 def _require_int(value: object, *, name: str) -> int:

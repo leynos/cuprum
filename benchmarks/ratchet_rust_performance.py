@@ -15,6 +15,12 @@ import pathlib as pth
 import sys
 import typing as typ
 
+from benchmarks._validation import (
+    _require_list,
+    _require_mapping,
+    _require_non_empty_string,
+)
+
 _FLOAT_TOLERANCE = 1e-12
 
 
@@ -104,30 +110,6 @@ def _load_json(path: pth.Path) -> dict[str, object]:
         msg = f"expected a JSON object in {path}, got {type(payload).__name__}"
         raise TypeError(msg)
     return typ.cast("dict[str, object]", payload)
-
-
-def _require_list(value: object, *, name: str) -> list[object]:
-    """Validate and return a list value."""
-    if not isinstance(value, list):
-        msg = f"{name} must be a list"
-        raise TypeError(msg)
-    return typ.cast("list[object]", value)
-
-
-def _require_mapping(value: object, *, name: str) -> dict[str, object]:
-    """Validate and return a mapping-like JSON object."""
-    if not isinstance(value, dict):
-        msg = f"{name} must be an object"
-        raise TypeError(msg)
-    return typ.cast("dict[str, object]", value)
-
-
-def _require_non_empty_string(value: object, *, name: str) -> str:
-    """Validate and return a non-empty string."""
-    if not isinstance(value, str) or not value.strip():
-        msg = f"{name} must be a non-empty string"
-        raise ValueError(msg)
-    return value
 
 
 def _require_positive_float(value: object, *, name: str) -> float:
