@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   lint-test:
     runs-on: ubuntu-latest
@@ -138,6 +142,148 @@ jobs:
             --format "cobertura" \
             --metric "line-coverage" \
             coverage.xml
+
+  benchmark-ratchet:
+    runs-on: ubuntu-latest
+    needs:
+      - lint-test
+      - typecheck-test
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: Install hyperfine
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes hyperfine
+
+      - name: Fetch latest main benchmark baseline
+        id: baseline-artifact
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/benchmark-ratchet"
+          baseline_dir="${artifact_dir}/main-baseline"
+          mkdir -p "${artifact_dir}"
+
+          if UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+            benchmarks/fetch_main_benchmark_baseline.py \
+            --repository "${GITHUB_REPOSITORY}" \
+            --workflow "ci.yml" \
+            --artifact-name "benchmark-ratchet-main-baseline" \
+            --output-dir "${baseline_dir}"
+          then
+            echo "baseline_available=true" >> "${GITHUB_OUTPUT}"
+          else
+            status=$?
+            if [[ "${status}" -eq 3 ]]; then
+              echo "baseline_available=false" >> "${GITHUB_OUTPUT}"
+              echo "No previous successful main benchmark baseline artifact is available."
+            else
+              exit "${status}"
+            fi
+          fi
+
+      - name: Run throughput benchmarks and ratchet comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/benchmark-ratchet"
+          mkdir -p "${artifact_dir}"
+
+          run_smoke_benchmarks() {
+            local workspace="$1"
+            local prefix="$2"
+            pushd "${workspace}" >/dev/null
+
+            make build
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+              -m ensurepip --upgrade
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run maturin develop \
+              --manifest-path rust/cuprum-rust/Cargo.toml
+
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+              benchmarks/pipeline_throughput.py \
+              --smoke \
+              --dry-run \
+              --output "${artifact_dir}/${prefix}-full-plan.json"
+
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+              benchmarks/ci_benchmark_ratchet_profile.py \
+              --full-plan "${artifact_dir}/${prefix}-full-plan.json" \
+              --filtered-plan "${artifact_dir}/${prefix}-plan.json" \
+              --throughput "${artifact_dir}/${prefix}-throughput.json"
+
+            popd >/dev/null
+          }
+
+          run_smoke_benchmarks "${GITHUB_WORKSPACE}" "candidate"
+
+          if [[ "${{ steps.baseline-artifact.outputs.baseline_available }}" == "true" ]]; then
+            pushd "${GITHUB_WORKSPACE}" >/dev/null
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+              benchmarks/ratchet_rust_performance.py \
+              --baseline-plan "${artifact_dir}/main-baseline/main-plan.json" \
+              --baseline-throughput "${artifact_dir}/main-baseline/main-throughput.json" \
+              --candidate-plan "${artifact_dir}/candidate-plan.json" \
+              --candidate-throughput "${artifact_dir}/candidate-throughput.json" \
+              --max-regression 0.10 \
+              --output "${artifact_dir}/ratchet-report.json"
+            popd >/dev/null
+          else
+            REPORT_PATH="${artifact_dir}/ratchet-report.json" \
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python - <<'PY'
+          import json
+          import os
+          import pathlib as pth
+
+          report_path = pth.Path(os.environ["REPORT_PATH"])
+          report_path.write_text(
+              json.dumps(
+                  {
+                      "baseline_available": False,
+                      "comparison_performed": False,
+                      "passed": True,
+                      "reason": "no_previous_main_benchmark_baseline",
+                  },
+                  indent=2,
+                  sort_keys=True,
+              ),
+              encoding="utf-8",
+          )
+          PY
+          fi
+
+          cp "${artifact_dir}/candidate-plan.json" "${artifact_dir}/main-plan.json"
+          cp "${artifact_dir}/candidate-throughput.json" "${artifact_dir}/main-throughput.json"
+
+      - name: Upload benchmark ratchet artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: benchmark-ratchet
+          path: ${{ runner.temp }}/benchmark-ratchet/**/*.json
+
+      - name: Upload main benchmark baseline artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: benchmark-ratchet-main-baseline
+          path: |
+            ${{ runner.temp }}/benchmark-ratchet/main-plan.json
+            ${{ runner.temp }}/benchmark-ratchet/main-throughput.json
 
   build-wheels:
     uses: ./.github/workflows/build-wheels.yml

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses as dc
+import os
 import sys
 import typing as typ
 
@@ -242,6 +243,117 @@ def _extract_writer_fd(writer: asyncio.StreamWriter | None) -> int | None:
     return _extract_stream_fd(writer)
 
 
+def _pause_reader_transport(
+    reader: asyncio.StreamReader,
+) -> typ.Callable[[], None] | None:
+    """Pause reader transport callbacks while Rust pump owns the raw FD."""
+    transport = getattr(reader, "transport", None)
+    if transport is None:
+        transport = getattr(reader, "_transport", None)
+    pause_reading = getattr(transport, "pause_reading", None)
+    resume_reading = getattr(transport, "resume_reading", None)
+    if not callable(pause_reading) or not callable(resume_reading):
+        return None
+    try:
+        pause_reading()
+    except (RuntimeError, OSError):
+        return None
+
+    def _resume() -> None:
+        with contextlib.suppress(RuntimeError, OSError):
+            resume_reading()
+
+    return _resume
+
+
+def _set_stream_fds_blocking(*, reader_fd: int, writer_fd: int) -> tuple[bool, bool]:
+    """Switch pipe FDs to blocking mode and return their prior state."""
+    reader_was_blocking = os.get_blocking(reader_fd)
+    writer_was_blocking = os.get_blocking(writer_fd)
+    reader_changed = False
+    try:
+        if not reader_was_blocking:
+            os.set_blocking(reader_fd, True)
+            reader_changed = True
+        if not writer_was_blocking:
+            os.set_blocking(writer_fd, True)
+    except OSError:
+        if reader_changed:
+            with contextlib.suppress(OSError, ValueError):
+                os.set_blocking(reader_fd, reader_was_blocking)
+        raise
+    return reader_was_blocking, writer_was_blocking
+
+
+def _restore_stream_fd_blocking(
+    *,
+    reader_fd: int,
+    writer_fd: int,
+    reader_was_blocking: bool,
+    writer_was_blocking: bool,
+) -> None:
+    """Restore pipe FD blocking mode captured before Rust pumping."""
+    with contextlib.suppress(OSError, ValueError):
+        os.set_blocking(reader_fd, reader_was_blocking)
+    with contextlib.suppress(OSError, ValueError):
+        os.set_blocking(writer_fd, writer_was_blocking)
+
+
+async def _run_rust_pump(
+    *,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter | None,
+    reader_fd: int,
+    writer_fd: int,
+) -> bool:
+    """Run the Rust pump for one pipe hop; return ``True`` when handled."""
+    # Flush any bytes asyncio already buffered in the StreamReader
+    # before the Rust pump takes over the raw file descriptor.
+    resume_reader = _pause_reader_transport(reader)
+    try:
+        await _drain_reader_buffer(reader, writer)
+    except Exception:
+        if resume_reader is not None:
+            resume_reader()
+        raise
+
+    try:
+        reader_was_blocking, writer_was_blocking = _set_stream_fds_blocking(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+        )
+    except OSError:
+        if resume_reader is not None:
+            resume_reader()
+        return False
+
+    from cuprum._streams_rs import rust_pump_stream
+
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(
+            None,
+            rust_pump_stream,
+            reader_fd,
+            writer_fd,
+        )
+    finally:
+        _restore_stream_fd_blocking(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+            reader_was_blocking=reader_was_blocking,
+            writer_was_blocking=writer_was_blocking,
+        )
+        if resume_reader is not None:
+            resume_reader()
+    # The Rust pump closes the writer FD on return (drop semantics).
+    # Suppress OSError so the asyncio transport close does not raise
+    # EBADF when the descriptor is already gone.
+    with contextlib.suppress(OSError):
+        await _close_stream_writer(writer)
+    return True
+
+
 async def _drain_reader_buffer(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter | None,
@@ -277,6 +389,36 @@ async def _run_python_pump(
     await _pump_stream(reader, writer)
 
 
+async def _try_rust_pump(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter | None,
+) -> bool:
+    """Attempt to route the pipe hop through the Rust pump.
+
+    Returns ``True`` when Rust handled the pump, ``False`` to fall back
+    to the Python implementation.
+    """
+    rust_fd_attempt_hook = _PUMP_STREAM_DISPATCH_TEST_HOOKS.on_rust_fd_path_attempt
+    if rust_fd_attempt_hook is not None:
+        rust_fd_attempt_hook()
+
+    if _PUMP_STREAM_DISPATCH_TEST_HOOKS.force_fd_extraction_failure:
+        return False
+
+    reader_fd = _extract_reader_fd(reader)
+    writer_fd = _extract_writer_fd(writer)
+
+    if reader_fd is None or writer_fd is None:
+        return False
+
+    return await _run_rust_pump(
+        reader=reader,
+        writer=writer,
+        reader_fd=reader_fd,
+        writer_fd=writer_fd,
+    )
+
+
 async def _pump_stream_dispatch(
     reader: asyncio.StreamReader | None,
     writer: asyncio.StreamWriter | None,
@@ -287,38 +429,8 @@ async def _pump_stream_dispatch(
         return
 
     backend = get_stream_backend()
-    if backend is StreamBackend.RUST:
-        rust_fd_attempt_hook = _PUMP_STREAM_DISPATCH_TEST_HOOKS.on_rust_fd_path_attempt
-        if rust_fd_attempt_hook is not None:
-            rust_fd_attempt_hook()
-
-        if _PUMP_STREAM_DISPATCH_TEST_HOOKS.force_fd_extraction_failure:
-            reader_fd = None
-            writer_fd = None
-        else:
-            reader_fd = _extract_reader_fd(reader)
-            writer_fd = _extract_writer_fd(writer)
-
-        if reader_fd is not None and writer_fd is not None:
-            # Flush any bytes asyncio already buffered in the StreamReader
-            # before the Rust pump takes over the raw file descriptor.
-            await _drain_reader_buffer(reader, writer)
-
-            from cuprum._streams_rs import rust_pump_stream
-
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                None,
-                rust_pump_stream,
-                reader_fd,
-                writer_fd,
-            )
-            # The Rust pump closes the writer FD on return (drop semantics).
-            # Suppress OSError so the asyncio transport close does not raise
-            # EBADF when the descriptor is already gone.
-            with contextlib.suppress(OSError):
-                await _close_stream_writer(writer)
-            return
+    if backend is StreamBackend.RUST and await _try_rust_pump(reader, writer):
+        return
 
     await _run_python_pump(reader, writer)
 

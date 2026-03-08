@@ -162,7 +162,15 @@ Running a pipeline returns a `PipelineResult` that exposes:
 import sys
 from pathlib import Path
 
-from cuprum import ECHO, Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
+from cuprum import (
+    ECHO,
+    Program,
+    ProgramCatalogue,
+    ProjectSettings,
+    ScopeConfig,
+    scoped,
+    sh,
+)
 
 PYTHON = Program(str(Path(sys.executable)))
 project = ProjectSettings(
@@ -1120,6 +1128,17 @@ The continuous integration (CI) workflows run the following checks:
   to fail.
 - Formatting and lint checks run on Python 3.13.
 - Coverage upload (artifact + optional CodeScene upload) runs on Python 3.13.
+- Benchmark ratchet runs on pull requests and pushes to `main`:
+  - It benchmarks the current checkout in smoke mode.
+  - It compares Rust means against the latest successful `main` baseline
+    artefact when one exists.
+  - It uploads candidate JSON artefacts plus `ratchet-report.json`.
+  - On pushes to `main`, it also publishes the new smoke benchmark JSON as the
+    next baseline artefact for future runs.
+  - If no previous `main` baseline exists yet, it records a bootstrap skip
+    report instead of failing the workflow.
+  - It fails when any Rust scenario has
+    `(candidate_mean - baseline_mean) / baseline_mean > 0.10`.
 
 - Pure Python wheel:
 

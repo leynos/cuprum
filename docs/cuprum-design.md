@@ -364,8 +364,7 @@ class SafeCmd:
         context: ExecutionContext | None = None,
     ) -> CommandResult: ...
 
-    def __or__(self, other: "SafeCmd") -> "Pipeline":
-        ...
+    def __or__(self, other: "SafeCmd") -> "Pipeline": ...
 ```
 
 #### 6.1.3 `DynamicCmd[Out]`
@@ -385,7 +384,7 @@ class Pipeline(Generic[Out]):
         self,
         *,
         capture: bool = True,  # capture final stage stdout and all stderr
-        echo: bool = False,    # echo captured streams to configured sinks
+        echo: bool = False,  # echo captured streams to configured sinks
         timeout: float | None = None,
         context: ExecutionContext | None = None,
     ) -> PipelineResult: ...
@@ -393,7 +392,7 @@ class Pipeline(Generic[Out]):
         self,
         *,
         capture: bool = True,  # capture final stage stdout and all stderr
-        echo: bool = False,    # echo captured streams to configured sinks
+        echo: bool = False,  # echo captured streams to configured sinks
         timeout: float | None = None,
         context: ExecutionContext | None = None,
     ) -> PipelineResult: ...
@@ -472,9 +471,11 @@ SafePath = NewType("SafePath", str)
 
 LS = Program("ls")
 
+
 def safe_path(p: Path) -> SafePath:
     # e.g. enforce absolute paths, prevent "..", etc.
     return SafePath(p.as_posix())
+
 
 def ls(path: SafePath | None = None, long: bool = False) -> SafeCmd[str]:
     args: list[str] = []
@@ -483,6 +484,7 @@ def ls(path: SafePath | None = None, long: bool = False) -> SafeCmd[str]:
     if path is not None:
         args.append(path)
     return sh.make(LS)(*args)
+
 
 # Usage
 result = ls(safe_path(Path("/var/log")), long=True).run_sync(echo=True)
@@ -635,8 +637,15 @@ hooks:
 from cuprum import sh
 from cmds import GIT
 
+
 async def deploy():
-    async with sh.scoped(ScopeConfig(allowlist=frozenset([GIT]), before_hooks=(audit_hook,), after_hooks=(metrics_hook,))):
+    async with sh.scoped(
+        ScopeConfig(
+            allowlist=frozenset([GIT]),
+            before_hooks=(audit_hook,),
+            after_hooks=(metrics_hook,),
+        )
+    ):
         cmd = make_git_deploy_cmd()
         await cmd.run()
 ```
@@ -660,11 +669,14 @@ Example:
 ```python
 from cuprum import sh
 
+
 def log_before(cmd):
     logger.info("About to run %s", cmd)
 
+
 def log_after(cmd, result):
     logger.info("Done %s: exit=%s", cmd, result.exit_code)
+
 
 # Register context-wide hooks
 before_reg = sh.before(log_before)
@@ -763,6 +775,7 @@ class ExecEvent:
     duration_s: float | None
     tags: Mapping[str, object]
 
+
 ExecHook = Callable[[ExecEvent], None | Awaitable[None]]
 ```
 
@@ -783,13 +796,19 @@ def log_to_logging(ev: ExecEvent) -> None:
     if ev.phase == "start":
         logger.info(
             "cuprum.start program=%s argv=%r cwd=%s pid=%s",
-            ev.program, ev.argv, ev.cwd, ev.pid,
+            ev.program,
+            ev.argv,
+            ev.cwd,
+            ev.pid,
         )
     elif ev.phase == "exit":
         logger.info(
             "cuprum.exit program=%s exit=%s dur=%.3fs",
-            ev.program, ev.exit_code, ev.duration_s or 0.0,
+            ev.program,
+            ev.exit_code,
+            ev.duration_s or 0.0,
         )
+
 
 with sh.before(lambda cmd: None), sh.observe(log_to_logging):
     await run_workload()
@@ -1932,8 +1951,29 @@ Both pathways are tested as first-class implementations:
   `{backend}-{size}-{depth}-{callbacks}` (for example
   `python-small-single-nocb` or `rust-large-multi-cb`).
 
-CI includes benchmark jobs that compare Python and Rust pathway throughput,
-failing if the Rust pathway regresses beyond a defined threshold.
+CI includes a benchmark ratchet job on pull requests and pushes to `main`. The
+job executes smoke-mode throughput benchmarks for the current checkout and
+compares Rust scenario means against the latest successful `main` baseline
+artefact. On pushes to `main`, the new smoke benchmark output is uploaded as
+the next baseline artefact for future runs. When no prior `main` baseline is
+available yet, the job writes a skip report instead of failing the workflow.
+
+The ratchet rule is:
+
+- regression ratio = `(candidate_mean - baseline_mean) / baseline_mean`
+- fail when regression ratio `> 0.10` for any Rust scenario
+
+Artefacts uploaded by CI include:
+
+- `main-baseline/main-plan.json` when a previous `main` baseline artefact was
+  available for comparison
+- `main-baseline/main-throughput.json` when a previous `main` baseline artefact
+  was available for comparison
+- `candidate-plan.json`
+- `candidate-throughput.json`
+- `ratchet-report.json`
+- `main-plan.json` and `main-throughput.json` on pushes to `main`, published as
+  the baseline artefact consumed by later ratchet runs
 
 Benchmark execution is opt-in for normal development loops. `make test` skips
 the benchmark pytest module by default, while dedicated commands run benchmarks:

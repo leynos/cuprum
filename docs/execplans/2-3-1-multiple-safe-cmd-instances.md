@@ -53,6 +53,7 @@ async def run_concurrent(
 ) -> ConcurrentResult:
     """Execute multiple SafeCmd instances concurrently."""
 
+
 def run_concurrent_sync(
     *commands: SafeCmd,
     config: ConcurrentConfig | None = None,
