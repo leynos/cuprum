@@ -1132,13 +1132,33 @@ The continuous integration (CI) workflows run the following checks:
   - It benchmarks the current checkout in smoke mode.
   - It compares Rust means against the latest successful `main` baseline
     artefact when one exists.
-  - It uploads candidate JSON artefacts plus `ratchet-report.json`.
+  - It generates a Python-versus-Rust comparison report from the candidate
+    smoke artefacts and appends the same Markdown table to the GitHub Actions
+    workflow summary.
+  - It uploads candidate JSON artefacts plus `ratchet-report.json` and
+    `comparison-report.json`.
   - On pushes to `main`, it also publishes the new smoke benchmark JSON as the
     next baseline artefact for future runs.
   - If no previous `main` baseline exists yet, it records a bootstrap skip
     report instead of failing the workflow.
   - It fails when any Rust scenario has
     `(candidate_mean - baseline_mean) / baseline_mean > 0.10`.
+
+The workflow summary table is derived from the filtered candidate smoke plan
+and throughput JSON. Rows are matched by the shared scenario label
+(`small-single-nocb`, `small-single-cb`, and so on) and include:
+
+- Python mean runtime in seconds
+- Rust mean runtime in seconds
+- speedup ratio `python_mean / rust_mean`
+- faster backend (`python`, `rust`, or `tie`)
+
+Interpretation:
+
+- `2.00x` means the Python run took twice as long as the Rust run, so Rust was
+  faster.
+- `1.00x` means the two backends were effectively tied for that scenario.
+- `0.80x` means Python was faster for that scenario.
 
 - Pure Python wheel:
 

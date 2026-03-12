@@ -269,12 +269,38 @@ jobs:
           cp "${artifact_dir}/candidate-plan.json" "${artifact_dir}/main-plan.json"
           cp "${artifact_dir}/candidate-throughput.json" "${artifact_dir}/main-throughput.json"
 
+      - name: Generate benchmark comparison report
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/benchmark-ratchet"
+          UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+            benchmarks/python_vs_rust_comparison_report.py \
+            --plan "${artifact_dir}/candidate-plan.json" \
+            --throughput "${artifact_dir}/candidate-throughput.json" \
+            --ratchet-report "${artifact_dir}/ratchet-report.json" \
+            --output-json "${artifact_dir}/comparison-report.json" \
+            --output-markdown "${artifact_dir}/comparison-summary.md"
+
+      - name: Publish benchmark workflow summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/benchmark-ratchet"
+          if [[ -f "${artifact_dir}/comparison-summary.md" ]]; then
+            cat "${artifact_dir}/comparison-summary.md" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
       - name: Upload benchmark ratchet artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: benchmark-ratchet
-          path: ${{ runner.temp }}/benchmark-ratchet/**/*.json
+          path: |
+            ${{ runner.temp }}/benchmark-ratchet/**/*.json
+            ${{ runner.temp }}/benchmark-ratchet/**/*.md
 
       - name: Upload main benchmark baseline artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

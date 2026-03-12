@@ -169,7 +169,7 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 - [x] 4.4.3. Add a CI job that runs benchmarks on pull requests and main branch
   pushes; store results as JSON artefacts and fail if the Rust pathway
   regresses beyond a 10% threshold.
-- [ ] 4.4.4. Generate benchmark comparison report (Python vs Rust) and publish a
+- [x] 4.4.4. Generate benchmark comparison report (Python vs Rust) and publish a
   summary table to the GitHub Actions workflow summary.
 
 ### 4.5. Documentation
