@@ -5,7 +5,7 @@ This ExecPlan (execution plan) is a living document. The sections
 `Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work
 proceeds.
 
-Status: DRAFT
+Status: COMPLETE
 
 Roadmap reference: `docs/roadmap.md` item `4.4.4`.
 
@@ -118,14 +118,23 @@ This task is complete only when:
   `4.4.3` benchmark-ratchet implementation, the benchmark ADR, and repository
   documentation/testing constraints.
 - [x] (2026-03-08 00:10Z) Drafted this ExecPlan for roadmap item `4.4.4`.
-- [ ] Stage A: add fail-first unit and behavioural tests for Python-versus-Rust
-  report generation and workflow-summary Markdown output.
-- [ ] Stage B: implement report-generation helper and CLI.
-- [ ] Stage C: integrate report generation and summary publication into
-  `.github/workflows/ci.yml`.
-- [ ] Stage D: update `docs/cuprum-design.md`, `docs/users-guide.md`, and mark
-  roadmap item `4.4.4` done in `docs/roadmap.md`.
-- [ ] Stage E: run full validation and capture outcomes in this ExecPlan.
+- [x] (2026-03-12 23:14Z) Stage A: added fail-first unit and behavioural tests
+  for Python-versus-Rust report generation and workflow-summary Markdown
+  output. Red phase confirmed with `ModuleNotFoundError` for
+  `benchmarks.python_vs_rust_comparison_report`.
+- [x] (2026-03-12 23:20Z) Stage B: implemented
+  `benchmarks/python_vs_rust_comparison_report.py` with paired scenario
+  validation, JSON report writing, ratchet-status loading, Markdown summary
+  rendering, and CLI exit codes.
+- [x] (2026-03-12 23:25Z) Stage C: integrated comparison-report generation and
+  workflow-summary publication into `.github/workflows/ci.yml`, including
+  uploaded Markdown artefacts for inspection.
+- [x] (2026-03-12 23:28Z) Stage D: updated `docs/cuprum-design.md` and
+  `docs/users-guide.md`, and marked roadmap item `4.4.4` done in
+  `docs/roadmap.md`.
+- [x] (2026-03-12 23:42Z) Stage E: final validation complete. Passed
+  `make fmt`, `make check-fmt`, `make typecheck`, `make lint`, `make test`,
+  `make markdownlint`, and `make nixie`.
 
 ## Surprises & discoveries
 
@@ -152,6 +161,18 @@ This task is complete only when:
   implementation should align the workflow with the ADR rather than introducing
   a different reporting surface.
 
+- Observation: placing summary publication after the ratchet command in the
+  same shell step would suppress the workflow summary whenever the Rust ratchet
+  failed with exit code `1`. Impact: summary generation and publication were
+  moved into separate `if: always()` workflow steps so reviewers still get the
+  Python-versus-Rust table on failing benchmark runs.
+
+- Observation: `make test` initially failed on an unrelated timing assertion in
+  `cuprum/unittests/test_concurrency.py::test_concurrency_none_allows_unlimited`
+   while several other gate commands were running concurrently. Impact: the
+  final `make test` validation was rerun in isolation and passed cleanly; the
+  `4.4.4` implementation did not require changes to concurrency code.
+
 ## Decision log
 
 - Decision: generate the Python-versus-Rust comparison from the candidate smoke
@@ -170,12 +191,45 @@ This task is complete only when:
   selection drift and undermine confidence in the CI summary. Date/Author:
   2026-03-08 / Codex.
 
+- Decision: publish the summary table in a dedicated `if: always()` workflow
+  step and upload `comparison-summary.md` alongside the JSON artefacts.
+  Rationale: preserves reviewer-visible output on ratchet failures and keeps
+  the generated Markdown easy to inspect outside the GitHub Actions summary.
+  Date/Author: 2026-03-12 / Codex.
+
 ## Outcomes & retrospective
 
-Implementation has not started. Success for this ExecPlan means the repository
-gains a tested Python-versus-Rust comparison report, the workflow summary shows
-the new table on `pull_request` and `push` runs, the relevant docs are updated,
-and roadmap item `4.4.4` is marked done only after all quality gates pass.
+Implementation completed successfully.
+
+Delivered:
+
+- `benchmarks/python_vs_rust_comparison_report.py` with validated candidate
+  plan/throughput pairing, ratchet-status summary loading, JSON report output,
+  Markdown workflow-summary rendering, and CLI exit codes.
+- Unit tests in `cuprum/unittests/test_benchmark_comparison_report.py`.
+- Behavioural tests in
+  `tests/behaviour/test_benchmark_comparison_report_behaviour.py` with
+  `tests/features/benchmark_comparison_report.feature`.
+- Workflow integration in `.github/workflows/ci.yml` so the existing
+  `benchmark-ratchet` job writes `comparison-report.json`,
+  `comparison-summary.md`, appends the Markdown table to
+  `$GITHUB_STEP_SUMMARY`, and uploads both artefacts.
+- Documentation updates in `docs/cuprum-design.md` and `docs/users-guide.md`.
+- Roadmap update in `docs/roadmap.md`, marking item `4.4.4` done.
+
+Quality and validation summary:
+
+- Red phase: targeted tests failed with `ModuleNotFoundError` for the new
+  comparison-report helper.
+- Green phase: benchmark-specific unit and behavioural tests passed.
+- Final gates passed:
+  - `make fmt`
+  - `make check-fmt`
+  - `make typecheck`
+  - `make lint`
+  - `make test`
+  - `make markdownlint`
+  - `make nixie`
 
 ## Context and orientation
 

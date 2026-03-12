@@ -1957,6 +1957,10 @@ compares Rust scenario means against the latest successful `main` baseline
 artefact. On pushes to `main`, the new smoke benchmark output is uploaded as
 the next baseline artefact for future runs. When no prior `main` baseline is
 available yet, the job writes a skip report instead of failing the workflow.
+The same job also generates a Python-versus-Rust comparison report from the
+candidate smoke artefacts and appends a Markdown summary table to
+`$GITHUB_STEP_SUMMARY`, so reviewers can inspect backend speedups even when the
+Rust ratchet later fails the job.
 
 The ratchet rule is:
 
@@ -1971,9 +1975,23 @@ Artefacts uploaded by CI include:
   was available for comparison
 - `candidate-plan.json`
 - `candidate-throughput.json`
+- `comparison-report.json`
+- `comparison-summary.md`
 - `ratchet-report.json`
 - `main-plan.json` and `main-throughput.json` on pushes to `main`, published as
   the baseline artefact consumed by later ratchet runs
+
+The workflow summary table is generated from matched Python and Rust candidate
+scenarios using the backend-independent scenario label (for example
+`small-single-nocb`). Each row reports:
+
+- Python mean runtime in seconds
+- Rust mean runtime in seconds
+- speedup ratio = `python_mean / rust_mean`
+- faster backend (`python`, `rust`, or `tie`)
+
+Values above `1.0x` indicate Rust was faster for that row; values below `1.0x`
+indicate Python was faster.
 
 Benchmark execution is opt-in for normal development loops. `make test` skips
 the benchmark pytest module by default, while dedicated commands run benchmarks:
