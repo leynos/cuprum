@@ -275,13 +275,22 @@ jobs:
         run: |
           set -euo pipefail
           artifact_dir="${RUNNER_TEMP}/benchmark-ratchet"
-          UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
-            benchmarks/python_vs_rust_comparison_report.py \
-            --plan "${artifact_dir}/candidate-plan.json" \
-            --throughput "${artifact_dir}/candidate-throughput.json" \
-            --ratchet-report "${artifact_dir}/ratchet-report.json" \
-            --output-json "${artifact_dir}/comparison-report.json" \
-            --output-markdown "${artifact_dir}/comparison-summary.md"
+
+          # Only generate report if all required input files exist
+          if [[ -f "${artifact_dir}/candidate-plan.json" ]] && \
+             [[ -f "${artifact_dir}/candidate-throughput.json" ]] && \
+             [[ -f "${artifact_dir}/ratchet-report.json" ]]; then
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+              benchmarks/python_vs_rust_comparison_report.py \
+              --plan "${artifact_dir}/candidate-plan.json" \
+              --throughput "${artifact_dir}/candidate-throughput.json" \
+              --ratchet-report "${artifact_dir}/ratchet-report.json" \
+              --output-json "${artifact_dir}/comparison-report.json" \
+              --output-markdown "${artifact_dir}/comparison-summary.md"
+          else
+            echo "Skipping comparison report generation: required input files not found"
+            echo "This usually indicates the benchmark run failed before completing"
+          fi
 
       - name: Publish benchmark workflow summary
         if: always()
