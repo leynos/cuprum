@@ -13,6 +13,7 @@ import dataclasses as dc
 import json
 import pathlib as pth
 import sys
+from collections import Counter
 
 from benchmarks._validation import (
     _require_list,
@@ -190,44 +191,47 @@ def _extract_candidate_entry(
     )
 
 
+def _get_required_entries(
+    comparison_id: str,
+    entries: dict[str, _ScenarioEntry],
+) -> tuple[_ScenarioEntry, _ScenarioEntry]:
+    """Return (python_entry, rust_entry) or raise ValueError if either is absent."""
+    python_entry = entries.get("python")
+    if python_entry is None:
+        msg = f"comparison group {comparison_id!r} is missing Python scenario"
+        raise ValueError(msg)
+    rust_entry = entries.get("rust")
+    if rust_entry is None:
+        msg = f"comparison group {comparison_id!r} is missing Rust scenario"
+        raise ValueError(msg)
+    return python_entry, rust_entry
+
+
 def _build_report_from_grouped_entries(
     grouped: dict[str, dict[str, _ScenarioEntry]],
 ) -> BenchmarkComparisonReport:
     """Build the final report from grouped backend entries."""
     rows: list[BenchmarkComparisonRow] = []
-    rust_wins = 0
-    python_wins = 0
-    ties = 0
+    tally: Counter[str] = Counter()
     for comparison_id in sorted(grouped):
-        entries = grouped[comparison_id]
-        python_entry = entries.get("python")
-        if python_entry is None:
-            msg = f"comparison group {comparison_id!r} is missing Python scenario"
-            raise ValueError(msg)
-        rust_entry = entries.get("rust")
-        if rust_entry is None:
-            msg = f"comparison group {comparison_id!r} is missing Rust scenario"
-            raise ValueError(msg)
+        python_entry, rust_entry = _get_required_entries(
+            comparison_id, grouped[comparison_id]
+        )
         row = _build_row(
             comparison_id=comparison_id,
             python_entry=python_entry,
             rust_entry=rust_entry,
         )
         rows.append(row)
-        if row.faster_backend == "rust":
-            rust_wins += 1
-        elif row.faster_backend == "python":
-            python_wins += 1
-        else:
-            ties += 1
+        tally[row.faster_backend] += 1
 
     return BenchmarkComparisonReport(
         rows=tuple(rows),
         summary=BenchmarkComparisonSummary(
             row_count=len(rows),
-            rust_wins=rust_wins,
-            python_wins=python_wins,
-            ties=ties,
+            rust_wins=tally["rust"],
+            python_wins=tally["python"],
+            ties=len(rows) - tally["rust"] - tally["python"],
         ),
     )
 
