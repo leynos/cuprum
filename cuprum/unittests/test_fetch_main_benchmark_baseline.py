@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import http.client
 import io
+import math
 import typing as typ
 import urllib.error
+import urllib.request
 import zipfile
 
 import pytest
@@ -12,6 +15,8 @@ import pytest
 from benchmarks.fetch_main_benchmark_baseline import (
     MAIN_BASELINE_NOT_FOUND_EXIT_CODE,
     ArtifactQuery,
+    _ArtifactArchiveRedirectHandler,
+    _download_bytes,
     _load_json_response,
     extract_artifact_archive,
     find_latest_artifact_download_url,
@@ -257,6 +262,88 @@ def test_load_json_response_retries_transient_urlopen_failures(
     assert payload == {"workflow_runs": []}
     assert attempts == 3
     assert timeouts == [10.0, 10.0, 10.0]
+
+
+def test_artifact_redirect_handler_strips_auth_on_cross_origin_redirect() -> None:
+    """Cross-origin redirects must not forward GitHub auth headers."""
+    handler = _ArtifactArchiveRedirectHandler()
+    request = urllib.request.Request(
+        "https://api.github.com/repos/leynos/cuprum/actions/artifacts/1/zip",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": "Bearer token",
+            "User-Agent": "cuprum-benchmark-ratchet",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+
+    redirected_request = handler.redirect_request(
+        request,
+        fp=io.BytesIO(),
+        code=302,
+        msg="Found",
+        headers=http.client.HTTPMessage(),
+        newurl="https://pipelines.actions.githubusercontent.com/archive.zip?sig=abc",
+    )
+
+    assert redirected_request is not None
+    assert redirected_request.get_header("Authorization") is None
+    assert redirected_request.get_header("X-GitHub-Api-Version") is None
+    assert redirected_request.get_header("Accept") == "application/vnd.github+json"
+    assert redirected_request.get_header("User-agent") == "cuprum-benchmark-ratchet"
+
+
+def test_download_bytes_uses_artifact_redirect_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Artifact downloads should use the redirect policy that strips auth."""
+
+    class _Response:
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(
+            self,
+            exc_type: object,
+            exc: object,
+            traceback: object,
+        ) -> None:
+            return None
+
+        @staticmethod
+        def read() -> bytes:
+            return b"archive-bytes"
+
+    class _Opener:
+        @staticmethod
+        def open(
+            request: urllib.request.Request,
+            *,
+            timeout: float,
+        ) -> _Response:
+            assert request.get_header("Authorization") == "Bearer token"
+            assert math.isclose(timeout, 10.0)
+            return _Response()
+
+    def fake_build_opener(
+        *handlers: urllib.request.BaseHandler,
+    ) -> _Opener:
+        assert any(
+            isinstance(handler, _ArtifactArchiveRedirectHandler) for handler in handlers
+        )
+        return _Opener()
+
+    monkeypatch.setattr(
+        "benchmarks.fetch_main_benchmark_baseline.urllib.request.build_opener",
+        fake_build_opener,
+    )
+
+    archive_bytes = _download_bytes(
+        url="https://api.github.com/repos/leynos/cuprum/actions/artifacts/1/zip",
+        token="".join(("tok", "en")),
+    )
+
+    assert archive_bytes == b"archive-bytes"
 
 
 def test_find_latest_artifact_download_url_queries_workflow_and_artifacts(

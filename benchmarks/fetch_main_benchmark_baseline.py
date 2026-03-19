@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses as dc
+import http.client
 import io
 import json
 import os
@@ -29,6 +30,10 @@ _RETRY_DELAYS_SECONDS = (0.5, 1.0)
 _HTTP_TOO_MANY_REQUESTS = 429
 _HTTP_SERVER_ERROR_MIN = 500
 _HTTP_SERVER_ERROR_MAX = 600
+_GITHUB_REDIRECT_HEADERS_TO_STRIP = (
+    "Authorization",
+    "X-GitHub-Api-Version",
+)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -90,6 +95,37 @@ def _with_retry[T](
     raise last_exc
 
 
+class _ArtifactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Strip GitHub-only headers when following cross-origin archive redirects."""
+
+    def redirect_request(  # noqa: PLR0913, PLR0917
+        self,
+        req: urllib.request.Request,
+        fp: typ.IO[bytes],
+        code: int,
+        msg: str,
+        headers: http.client.HTTPMessage,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        redirected_request = super().redirect_request(
+            req=req,
+            fp=fp,
+            code=code,
+            msg=msg,
+            headers=headers,
+            newurl=newurl,
+        )
+        if redirected_request is None:
+            return None
+
+        source_host = urllib.parse.urlsplit(req.full_url).netloc
+        destination_host = urllib.parse.urlsplit(redirected_request.full_url).netloc
+        if source_host != destination_host:
+            for header in _GITHUB_REDIRECT_HEADERS_TO_STRIP:
+                redirected_request.remove_header(header)
+        return redirected_request
+
+
 def _load_json_response(*, url: str, token: str) -> typ.Mapping[str, object]:
     """Load a GitHub API JSON response."""
     request = urllib.request.Request(  # noqa: S310 - URL is selected by trusted caller
@@ -124,9 +160,10 @@ def _download_bytes(*, url: str, token: str) -> bytes:
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
+    opener = urllib.request.build_opener(_ArtifactArchiveRedirectHandler())
 
     def _open_archive() -> bytes:
-        with urllib.request.urlopen(  # noqa: S310 - authenticated GitHub artifact download
+        with opener.open(
             request,
             timeout=_REQUEST_TIMEOUT_SECONDS,
         ) as response:

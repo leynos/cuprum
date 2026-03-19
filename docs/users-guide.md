@@ -1132,6 +1132,8 @@ The continuous integration (CI) workflows run the following checks:
   - It benchmarks the current checkout in smoke mode.
   - It compares Rust means against the latest successful `main` baseline
     artefact when one exists.
+  - Its baseline fetch helper follows GitHub’s signed archive redirects
+    without forwarding GitHub-only authentication headers to the storage host.
   - It generates a Python-versus-Rust comparison report from the candidate
     smoke artefacts and appends the same Markdown table to the GitHub Actions
     workflow summary.

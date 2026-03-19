@@ -1957,10 +1957,13 @@ compares Rust scenario means against the latest successful `main` baseline
 artefact. On pushes to `main`, the new smoke benchmark output is uploaded as
 the next baseline artefact for future runs. When no prior `main` baseline is
 available yet, the job writes a skip report instead of failing the workflow.
-The same job also generates a Python-versus-Rust comparison report from the
-candidate smoke artefacts and appends a Markdown summary table to
-`$GITHUB_STEP_SUMMARY`, so reviewers can inspect backend speedups even when the
-Rust ratchet later fails the job.
+The baseline fetch helper follows GitHub’s signed archive redirects without
+forwarding GitHub-only authentication headers to the storage host, avoiding
+cross-origin 401 responses during artefact download. The same job also
+generates a Python-versus-Rust comparison report from the candidate smoke
+artefacts and appends a Markdown summary table to `$GITHUB_STEP_SUMMARY`, so
+reviewers can inspect backend speedups even when the Rust ratchet later fails
+the job.
 
 The ratchet rule is:
 
