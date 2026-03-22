@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import dataclasses as dc
-import http.client
 import io
 import json
 import os
@@ -21,6 +20,9 @@ from benchmarks._validation import (
     _require_mapping,
     _require_non_empty_string,
 )
+
+if typ.TYPE_CHECKING:
+    import http.client
 
 GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_TOKEN_ENV_VAR = "GITHUB_TOKEN"  # noqa: S105 - env var name, not a credential
@@ -98,6 +100,23 @@ def _with_retry[T](
 class _ArtifactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Strip GitHub-only headers when following cross-origin archive redirects."""
 
+    @staticmethod
+    def _is_cross_origin(
+        req: urllib.request.Request,
+        redirected_request: urllib.request.Request,
+    ) -> bool:
+        """Return True when the redirect crosses host boundaries."""
+        return (
+            urllib.parse.urlsplit(req.full_url).netloc
+            != urllib.parse.urlsplit(redirected_request.full_url).netloc
+        )
+
+    @staticmethod
+    def _strip_sensitive_headers(request: urllib.request.Request) -> None:
+        """Remove GitHub-specific authentication headers from *request* in place."""
+        for header in _GITHUB_REDIRECT_HEADERS_TO_STRIP:
+            request.remove_header(header)
+
     def redirect_request(  # noqa: PLR0913, PLR0917
         self,
         req: urllib.request.Request,
@@ -117,12 +136,8 @@ class _ArtifactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
         )
         if redirected_request is None:
             return None
-
-        source_host = urllib.parse.urlsplit(req.full_url).netloc
-        destination_host = urllib.parse.urlsplit(redirected_request.full_url).netloc
-        if source_host != destination_host:
-            for header in _GITHUB_REDIRECT_HEADERS_TO_STRIP:
-                redirected_request.remove_header(header)
+        if self._is_cross_origin(req, redirected_request):
+            self._strip_sensitive_headers(redirected_request)
         return redirected_request
 
 
