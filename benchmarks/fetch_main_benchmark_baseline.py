@@ -106,9 +106,10 @@ class _ArtifactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
         """Strip sensitive headers when a redirect crosses host boundaries."""
         source_host = urllib.parse.urlsplit(req.full_url).netloc
         destination_host = urllib.parse.urlsplit(redirected_request.full_url).netloc
-        if source_host != destination_host:
-            for header in _GITHUB_REDIRECT_HEADERS_TO_STRIP:
-                redirected_request.remove_header(header)
+        if source_host == destination_host:
+            return
+        for header in _GITHUB_REDIRECT_HEADERS_TO_STRIP:
+            redirected_request.remove_header(header)
 
     def redirect_request(
         self,
