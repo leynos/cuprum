@@ -11,9 +11,9 @@ Roadmap reference: `docs/roadmap.md` item `4.4.4`.
 
 ## Purpose / big picture
 
-Roadmap item `4.4.4` requires the benchmark CI flow to produce a human-readable
-comparison report for the Python and Rust stream backends and publish a summary
-table to the GitHub Actions workflow summary.
+Roadmap item `4.4.4` requires the benchmark continuous integration (CI) flow to
+produce a human-readable comparison report for the Python and Rust stream
+backends and publish a summary table to the GitHub Actions workflow summary.
 
 After this work, a maintainer opening a pull request or inspecting a `main`
 workflow run can read the workflow summary and immediately see how the current
@@ -115,8 +115,8 @@ This task is complete only when:
 ## Progress
 
 - [x] (2026-03-08 00:00Z) Reviewed roadmap item `4.4.4`, the completed
-  `4.4.3` benchmark-ratchet implementation, the benchmark ADR, and repository
-  documentation/testing constraints.
+  `4.4.3` benchmark-ratchet implementation, the benchmark architecture decision
+  record (ADR), and repository documentation/testing constraints.
 - [x] (2026-03-08 00:10Z) Drafted this ExecPlan for roadmap item `4.4.4`.
 - [x] (2026-03-12 23:14Z) Stage A: added fail-first unit and behavioural tests
   for Python-versus-Rust report generation and workflow-summary Markdown
@@ -452,5 +452,4 @@ The implementing agent should capture concise evidence showing:
 
 ## Approval gate
 
-This document is the draft phase only. Do not start implementation until the
-user explicitly approves this ExecPlan or requests revisions.
+Implementation complete. All objectives met and quality gates passed.

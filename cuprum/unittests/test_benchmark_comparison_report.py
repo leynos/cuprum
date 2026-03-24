@@ -114,6 +114,28 @@ def test_compare_candidate_backend_results_builds_sorted_rows() -> None:
     )
 
 
+def test_compare_candidate_backend_results_treats_close_means_as_ties() -> None:
+    """Means within FLOAT_TOLERANCE should be treated as ties."""
+    plan_payload = _candidate_plan_payload()
+    throughput_payload = _candidate_throughput_payload()
+    results = typ.cast("list[dict[str, object]]", throughput_payload["results"])
+    # Make the first pair (python-small-single-nocb and rust-small-single-nocb) a tie
+    results[0]["mean"] = 0.42
+    results[1]["mean"] = 0.42 + 5e-13
+
+    report = compare_candidate_backend_results(
+        plan_payload=plan_payload,
+        throughput_payload=throughput_payload,
+    )
+
+    # Results sorted by comparison_id: small-single-cb before small-single-nocb
+    assert report.rows[1].comparison_id == "small-single-nocb"
+    assert report.rows[1].faster_backend == "tie"
+    assert report.summary.ties == 1
+    assert report.summary.rust_wins == 1
+    assert report.summary.python_wins == 0
+
+
 def test_compare_candidate_backend_results_rejects_missing_rust_pair() -> None:
     """Every comparison group must include both Python and Rust scenarios."""
     plan_payload = _candidate_plan_payload()
@@ -132,6 +154,98 @@ def test_compare_candidate_backend_results_rejects_missing_rust_pair() -> None:
             plan_payload=plan_payload,
             throughput_payload=throughput_payload,
         )
+
+
+def test_compare_candidate_backend_results_rejects_duplicate_backend() -> None:
+    """Each comparison group must not contain duplicate backend entries."""
+    plan_payload = _candidate_plan_payload()
+    scenarios = typ.cast("list[dict[str, object]]", plan_payload["scenarios"])
+    # Both scenarios should have the same comparison_id (after stripping backend prefix)
+    first_scenario = dict(scenarios[0])
+    # Keep the same name to ensure both map to the same comparison_id
+    plan_payload["scenarios"] = [scenarios[0], first_scenario]
+
+    throughput_payload = _candidate_throughput_payload()
+    results = typ.cast("list[dict[str, object]]", throughput_payload["results"])
+    first_result = dict(results[0])
+    throughput_payload["results"] = [results[0], first_result]
+
+    with pytest.raises(ValueError, match=r"duplicate.*python.*scenario"):
+        compare_candidate_backend_results(
+            plan_payload=plan_payload,
+            throughput_payload=throughput_payload,
+        )
+
+
+def test_compare_candidate_backend_results_rejects_invalid_backend() -> None:
+    """Scenario backend values must be 'python' or 'rust'."""
+    plan_payload = _candidate_plan_payload()
+    scenarios = typ.cast("list[dict[str, object]]", plan_payload["scenarios"])
+    invalid_scenario = dict(scenarios[0])
+    invalid_scenario["backend"] = "invalid-backend"
+    plan_payload["scenarios"] = [invalid_scenario]
+
+    throughput_payload = _candidate_throughput_payload()
+    results = typ.cast("list[dict[str, object]]", throughput_payload["results"])
+    throughput_payload["results"] = [results[0]]
+
+    with pytest.raises(ValueError, match="must be either 'python' or 'rust'"):
+        compare_candidate_backend_results(
+            plan_payload=plan_payload,
+            throughput_payload=throughput_payload,
+        )
+
+
+def test_load_ratchet_report_rejects_non_boolean_passed(tmp_path: pth.Path) -> None:
+    """Ratchet report must have a boolean 'passed' field."""
+    ratchet_path = _write_json(
+        tmp_path=tmp_path,
+        filename="ratchet-report.json",
+        payload={
+            "passed": "yes",
+            "comparison_performed": True,
+            "baseline_available": True,
+        },
+    )
+
+    with pytest.raises(TypeError, match="boolean passed field"):
+        load_ratchet_report(ratchet_path)
+
+
+def test_load_ratchet_report_rejects_non_boolean_comparison_performed(
+    tmp_path: pth.Path,
+) -> None:
+    """Ratchet report must have a boolean 'comparison_performed' field."""
+    ratchet_path = _write_json(
+        tmp_path=tmp_path,
+        filename="ratchet-report.json",
+        payload={
+            "passed": True,
+            "comparison_performed": "yes",
+            "baseline_available": True,
+        },
+    )
+
+    with pytest.raises(TypeError, match="non-boolean 'comparison_performed'"):
+        load_ratchet_report(ratchet_path)
+
+
+def test_load_ratchet_report_rejects_non_boolean_baseline_available(
+    tmp_path: pth.Path,
+) -> None:
+    """Ratchet report must have a boolean 'baseline_available' field."""
+    ratchet_path = _write_json(
+        tmp_path=tmp_path,
+        filename="ratchet-report.json",
+        payload={
+            "passed": True,
+            "comparison_performed": True,
+            "baseline_available": "yes",
+        },
+    )
+
+    with pytest.raises(TypeError, match="non-boolean 'baseline_available'"):
+        load_ratchet_report(ratchet_path)
 
 
 @pytest.mark.parametrize(

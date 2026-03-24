@@ -278,7 +278,21 @@ def load_ratchet_report(path: pth.Path) -> RatchetStatus:
     report = _require_mapping(payload, name=f"ratchet report from {path}")
 
     comparison_performed = report.get("comparison_performed")
+    if comparison_performed is not None and not isinstance(comparison_performed, bool):
+        msg = (
+            f"ratchet report from {path} has non-boolean 'comparison_performed' "
+            f"field: {comparison_performed!r}"
+        )
+        raise TypeError(msg)
+
     baseline_available = report.get("baseline_available")
+    if baseline_available is not None and not isinstance(baseline_available, bool):
+        msg = (
+            f"ratchet report from {path} has non-boolean 'baseline_available' "
+            f"field: {baseline_available!r}"
+        )
+        raise TypeError(msg)
+
     if comparison_performed is False or baseline_available is False:
         reason = report.get("reason")
         if reason == _BOOTSTRAP_SKIP_REASON:

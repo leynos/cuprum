@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import dataclasses as dc
-import http.client
 import io
 import json
 import os
@@ -117,9 +116,7 @@ class _ArtifactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
         *args: object,
         **kwargs: object,
     ) -> urllib.request.Request | None:
-        _ = isinstance(kwargs.get("headers"), http.client.HTTPMessage)
-        redirect_handler = typ.cast("typ.Any", super())
-        redirected_request = redirect_handler.redirect_request(req, *args, **kwargs)
+        redirected_request = super().redirect_request(req, *args, **kwargs)  # type: ignore[arg-type]
         if redirected_request is None:
             return None
         self._strip_cross_origin_headers(req, redirected_request)

@@ -204,6 +204,8 @@ def then_comparison_report_command_exits_with_malformed_input_failure(
 ) -> None:
     """Malformed comparison-report CLI runs should exit two."""
     _assert_returncode(comparison_cli_result, expected=2)
+    completed = comparison_cli_result["completed"]
+    assert "benchmark comparison report failed to evaluate inputs" in completed.stderr
 
 
 @then("the comparison report JSON contains paired backend rows")
