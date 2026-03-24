@@ -264,8 +264,36 @@ def test_load_json_response_retries_transient_urlopen_failures(
     assert timeouts == [10.0, 10.0, 10.0]
 
 
-def test_artifact_redirect_handler_preserves_auth_on_same_origin_redirect() -> None:
-    """Same-origin redirects must preserve GitHub auth headers."""
+@pytest.mark.parametrize(
+    ("newurl", "expected_headers"),
+    [
+        pytest.param(
+            "https://api.github.com/repos/leynos/cuprum/actions/artifacts/2/zip",
+            {
+                "Authorization": "Bearer token",
+                "X-github-api-version": "2022-11-28",
+                "Accept": "application/vnd.github+json",
+                "User-agent": "cuprum-benchmark-ratchet",
+            },
+            id="same-origin-preserves-auth",
+        ),
+        pytest.param(
+            "https://pipelines.actions.githubusercontent.com/archive.zip?sig=abc",
+            {
+                "Authorization": None,
+                "X-github-api-version": None,
+                "Accept": "application/vnd.github+json",
+                "User-agent": "cuprum-benchmark-ratchet",
+            },
+            id="cross-origin-strips-auth",
+        ),
+    ],
+)
+def test_artifact_redirect_handler_header_policy(
+    newurl: str,
+    expected_headers: dict[str, str | None],
+) -> None:
+    """Redirect handler must preserve auth on same-origin and strip on cross-origin."""
     handler = _ArtifactArchiveRedirectHandler()
     request = urllib.request.Request(
         "https://api.github.com/repos/leynos/cuprum/actions/artifacts/1/zip",
@@ -283,42 +311,12 @@ def test_artifact_redirect_handler_preserves_auth_on_same_origin_redirect() -> N
         code=302,
         msg="Found",
         headers=http.client.HTTPMessage(),
-        newurl="https://api.github.com/repos/leynos/cuprum/actions/artifacts/2/zip",
+        newurl=newurl,
     )
 
     assert redirected_request is not None
-    assert redirected_request.get_header("Authorization") == "Bearer token"
-    assert redirected_request.get_header("X-github-api-version") == "2022-11-28"
-    assert redirected_request.get_header("Accept") == "application/vnd.github+json"
-
-
-def test_artifact_redirect_handler_strips_auth_on_cross_origin_redirect() -> None:
-    """Cross-origin redirects must not forward GitHub auth headers."""
-    handler = _ArtifactArchiveRedirectHandler()
-    request = urllib.request.Request(
-        "https://api.github.com/repos/leynos/cuprum/actions/artifacts/1/zip",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": "Bearer token",
-            "User-Agent": "cuprum-benchmark-ratchet",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
-
-    redirected_request = handler.redirect_request(
-        request,
-        fp=io.BytesIO(),
-        code=302,
-        msg="Found",
-        headers=http.client.HTTPMessage(),
-        newurl="https://pipelines.actions.githubusercontent.com/archive.zip?sig=abc",
-    )
-
-    assert redirected_request is not None
-    assert redirected_request.get_header("Authorization") is None
-    assert redirected_request.get_header("X-github-api-version") is None
-    assert redirected_request.get_header("Accept") == "application/vnd.github+json"
-    assert redirected_request.get_header("User-agent") == "cuprum-benchmark-ratchet"
+    for header, expected_value in expected_headers.items():
+        assert redirected_request.get_header(header) == expected_value
 
 
 def test_download_bytes_uses_artifact_redirect_handler(
