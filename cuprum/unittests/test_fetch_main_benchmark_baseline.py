@@ -264,6 +264,19 @@ def test_load_json_response_retries_transient_urlopen_failures(
     assert timeouts == [10.0, 10.0, 10.0]
 
 
+def _make_github_artifact_request() -> urllib.request.Request:
+    """Build a GitHub artifact download request with standard auth headers."""
+    return urllib.request.Request(
+        "https://api.github.com/repos/leynos/cuprum/actions/artifacts/1/zip",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": "Bearer token",
+            "User-Agent": "cuprum-benchmark-ratchet",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+
+
 @pytest.mark.parametrize(
     ("newurl", "expected_headers"),
     [
@@ -293,17 +306,9 @@ def test_artifact_redirect_handler_header_policy(
     newurl: str,
     expected_headers: dict[str, str | None],
 ) -> None:
-    """Redirect handler must preserve auth on same-origin and strip on cross-origin."""
+    """Redirect handler strips auth on cross-origin, preserves on same-origin."""
     handler = _ArtifactArchiveRedirectHandler()
-    request = urllib.request.Request(
-        "https://api.github.com/repos/leynos/cuprum/actions/artifacts/1/zip",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": "Bearer token",
-            "User-Agent": "cuprum-benchmark-ratchet",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
+    request = _make_github_artifact_request()
 
     redirected_request = handler.redirect_request(
         request,
@@ -316,7 +321,9 @@ def test_artifact_redirect_handler_header_policy(
 
     assert redirected_request is not None
     for header, expected_value in expected_headers.items():
-        assert redirected_request.get_header(header) == expected_value
+        assert redirected_request.get_header(header) == expected_value, (
+            f"Header {header!r}: expected {expected_value!r}"
+        )
 
 
 def test_download_bytes_uses_artifact_redirect_handler(
