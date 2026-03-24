@@ -196,55 +196,38 @@ def test_compare_candidate_backend_results_rejects_invalid_backend() -> None:
         )
 
 
-def test_load_ratchet_report_rejects_non_boolean_passed(tmp_path: pth.Path) -> None:
-    """Ratchet report must have a boolean 'passed' field."""
-    ratchet_path = _write_json(
-        tmp_path=tmp_path,
-        filename="ratchet-report.json",
-        payload={
-            "passed": "yes",
-            "comparison_performed": True,
-            "baseline_available": True,
-        },
-    )
-
-    with pytest.raises(TypeError, match="boolean passed field"):
-        load_ratchet_report(ratchet_path)
-
-
-def test_load_ratchet_report_rejects_non_boolean_comparison_performed(
+@pytest.mark.parametrize(
+    ("payload", "expected_match"),
+    [
+        pytest.param(
+            {"passed": "yes", "comparison_performed": True, "baseline_available": True},
+            "boolean passed field",
+            id="passed",
+        ),
+        pytest.param(
+            {"passed": True, "comparison_performed": "yes", "baseline_available": True},
+            "non-boolean 'comparison_performed'",
+            id="comparison_performed",
+        ),
+        pytest.param(
+            {"passed": True, "comparison_performed": True, "baseline_available": "yes"},
+            "non-boolean 'baseline_available'",
+            id="baseline_available",
+        ),
+    ],
+)
+def test_load_ratchet_report_rejects_non_boolean_field(
     tmp_path: pth.Path,
+    payload: dict[str, object],
+    expected_match: str,
 ) -> None:
-    """Ratchet report must have a boolean 'comparison_performed' field."""
+    """Ratchet report boolean fields must be booleans."""
     ratchet_path = _write_json(
         tmp_path=tmp_path,
         filename="ratchet-report.json",
-        payload={
-            "passed": True,
-            "comparison_performed": "yes",
-            "baseline_available": True,
-        },
+        payload=payload,
     )
-
-    with pytest.raises(TypeError, match="non-boolean 'comparison_performed'"):
-        load_ratchet_report(ratchet_path)
-
-
-def test_load_ratchet_report_rejects_non_boolean_baseline_available(
-    tmp_path: pth.Path,
-) -> None:
-    """Ratchet report must have a boolean 'baseline_available' field."""
-    ratchet_path = _write_json(
-        tmp_path=tmp_path,
-        filename="ratchet-report.json",
-        payload={
-            "passed": True,
-            "comparison_performed": True,
-            "baseline_available": "yes",
-        },
-    )
-
-    with pytest.raises(TypeError, match="non-boolean 'baseline_available'"):
+    with pytest.raises(TypeError, match=expected_match):
         load_ratchet_report(ratchet_path)
 
 

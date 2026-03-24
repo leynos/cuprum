@@ -52,15 +52,19 @@ def _scenario_payload(
     *,
     name: str,
     backend: str,
-    with_line_callbacks: bool = False,
+    **overrides: object,
 ) -> dict[str, object]:
     """Create one benchmark scenario payload."""
+    defaults: dict[str, object] = {
+        "payload_bytes": 1024,
+        "stages": 2,
+        "with_line_callbacks": False,
+    }
     return {
         "name": name,
         "backend": backend,
-        "payload_bytes": 1024,
-        "stages": 2,
-        "with_line_callbacks": with_line_callbacks,
+        **defaults,
+        **overrides,
     }
 
 

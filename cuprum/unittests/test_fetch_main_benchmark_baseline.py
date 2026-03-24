@@ -316,7 +316,7 @@ def test_artifact_redirect_handler_strips_auth_on_cross_origin_redirect() -> Non
 
     assert redirected_request is not None
     assert redirected_request.get_header("Authorization") is None
-    assert redirected_request.get_header("X-GitHub-Api-Version") is None
+    assert redirected_request.get_header("X-github-api-version") is None
     assert redirected_request.get_header("Accept") == "application/vnd.github+json"
     assert redirected_request.get_header("User-agent") == "cuprum-benchmark-ratchet"
 

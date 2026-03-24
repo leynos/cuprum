@@ -31,7 +31,7 @@ _HTTP_SERVER_ERROR_MIN = 500
 _HTTP_SERVER_ERROR_MAX = 600
 _GITHUB_REDIRECT_HEADERS_TO_STRIP = (
     "Authorization",
-    "X-GitHub-Api-Version",
+    "X-github-api-version",
 )
 
 
@@ -103,9 +103,11 @@ class _ArtifactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
         redirected_request: urllib.request.Request,
     ) -> None:
         """Strip sensitive headers when a redirect crosses host boundaries."""
-        source_host = urllib.parse.urlsplit(req.full_url).netloc
-        destination_host = urllib.parse.urlsplit(redirected_request.full_url).netloc
-        if source_host == destination_host:
+        source_parts = urllib.parse.urlsplit(req.full_url)
+        destination_parts = urllib.parse.urlsplit(redirected_request.full_url)
+        source_origin = (source_parts.scheme, source_parts.netloc)
+        destination_origin = (destination_parts.scheme, destination_parts.netloc)
+        if source_origin == destination_origin:
             return
         for header in _GITHUB_REDIRECT_HEADERS_TO_STRIP:
             redirected_request.remove_header(header)

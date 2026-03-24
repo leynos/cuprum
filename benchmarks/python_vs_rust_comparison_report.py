@@ -13,6 +13,7 @@ import dataclasses as dc
 import json
 import pathlib as pth
 import sys
+import typing as typ
 from collections import Counter
 
 from benchmarks._validation import (
@@ -231,7 +232,7 @@ def _build_report_from_grouped_entries(
             row_count=len(rows),
             rust_wins=tally["rust"],
             python_wins=tally["python"],
-            ties=len(rows) - tally["rust"] - tally["python"],
+            ties=tally["tie"],
         ),
     )
 
@@ -272,38 +273,34 @@ def compare_candidate_backend_results(
     return _build_report_from_grouped_entries(grouped)
 
 
-def load_ratchet_report(path: pth.Path) -> RatchetStatus:
-    """Load the Rust regression ratchet report and summarize its status."""
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    report = _require_mapping(payload, name=f"ratchet report from {path}")
+def _require_optional_bool(
+    report: typ.Mapping[str, object],
+    field: str,
+    path: pth.Path,
+) -> bool | None:
+    """Return the boolean value of *field* from *report*, or None if absent.
 
-    comparison_performed = report.get("comparison_performed")
-    if comparison_performed is not None and not isinstance(comparison_performed, bool):
-        msg = (
-            f"ratchet report from {path} has non-boolean 'comparison_performed' "
-            f"field: {comparison_performed!r}"
-        )
+    Raise TypeError if the field is present but not a boolean.
+    """
+    value = report.get(field)
+    if value is not None and not isinstance(value, bool):
+        msg = f"ratchet report from {path} has non-boolean {field!r} field: {value!r}"
         raise TypeError(msg)
+    return value  # narrowed to bool | None
 
-    baseline_available = report.get("baseline_available")
-    if baseline_available is not None and not isinstance(baseline_available, bool):
-        msg = (
-            f"ratchet report from {path} has non-boolean 'baseline_available' "
-            f"field: {baseline_available!r}"
+
+def _ratchet_skip_detail(report: typ.Mapping[str, object]) -> str:
+    """Return the human-readable skip-reason string for a skipped ratchet run."""
+    if report.get("reason") == _BOOTSTRAP_SKIP_REASON:
+        return (
+            "Rust regression ratchet skipped: no previous successful main "
+            "baseline artefact."
         )
-        raise TypeError(msg)
+    return "Rust regression ratchet skipped."
 
-    if comparison_performed is False or baseline_available is False:
-        reason = report.get("reason")
-        if reason == _BOOTSTRAP_SKIP_REASON:
-            detail = (
-                "Rust regression ratchet skipped: no previous successful main "
-                "baseline artefact."
-            )
-        else:
-            detail = "Rust regression ratchet skipped."
-        return RatchetStatus(status="skipped", detail=detail)
 
+def _ratchet_passed_status(report: typ.Mapping[str, object]) -> RatchetStatus:
+    """Return a passed or failed RatchetStatus based on the *passed* field."""
     passed_value = report.get("passed")
     if not isinstance(passed_value, bool):
         msg = "ratchet report must include a boolean passed field"
@@ -311,6 +308,20 @@ def load_ratchet_report(path: pth.Path) -> RatchetStatus:
     if passed_value:
         return RatchetStatus(status="passed", detail="Rust regression ratchet passed.")
     return RatchetStatus(status="failed", detail="Rust regression ratchet failed.")
+
+
+def load_ratchet_report(path: pth.Path) -> RatchetStatus:
+    """Load the Rust regression ratchet report and summarize its status."""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    report = _require_mapping(payload, name=f"ratchet report from {path}")
+
+    comparison_performed = _require_optional_bool(report, "comparison_performed", path)
+    baseline_available = _require_optional_bool(report, "baseline_available", path)
+
+    if comparison_performed is False or baseline_available is False:
+        return RatchetStatus(status="skipped", detail=_ratchet_skip_detail(report))
+
+    return _ratchet_passed_status(report)
 
 
 def render_summary_markdown(
