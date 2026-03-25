@@ -29,6 +29,10 @@ _RETRY_DELAYS_SECONDS = (0.5, 1.0)
 _HTTP_TOO_MANY_REQUESTS = 429
 _HTTP_SERVER_ERROR_MIN = 500
 _HTTP_SERVER_ERROR_MAX = 600
+_GITHUB_REDIRECT_HEADERS_TO_STRIP = (
+    "Authorization",
+    "X-github-api-version",
+)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -90,6 +94,37 @@ def _with_retry[T](
     raise last_exc
 
 
+class _ArtifactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Strip GitHub-only headers when following cross-origin archive redirects."""
+
+    def _strip_cross_origin_headers(  # noqa: PLR6301
+        self,
+        req: urllib.request.Request,
+        redirected_request: urllib.request.Request,
+    ) -> None:
+        """Strip sensitive headers when a redirect crosses host boundaries."""
+        source_parts = urllib.parse.urlsplit(req.full_url)
+        destination_parts = urllib.parse.urlsplit(redirected_request.full_url)
+        source_origin = (source_parts.scheme, source_parts.netloc)
+        destination_origin = (destination_parts.scheme, destination_parts.netloc)
+        if source_origin == destination_origin:
+            return
+        for header in _GITHUB_REDIRECT_HEADERS_TO_STRIP:
+            redirected_request.remove_header(header)
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        *args: object,
+        **kwargs: object,
+    ) -> urllib.request.Request | None:
+        redirected_request = super().redirect_request(req, *args, **kwargs)  # type: ignore[arg-type]
+        if redirected_request is None:
+            return None
+        self._strip_cross_origin_headers(req, redirected_request)
+        return redirected_request
+
+
 def _load_json_response(*, url: str, token: str) -> typ.Mapping[str, object]:
     """Load a GitHub API JSON response."""
     request = urllib.request.Request(  # noqa: S310 - URL is selected by trusted caller
@@ -124,9 +159,10 @@ def _download_bytes(*, url: str, token: str) -> bytes:
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
+    opener = urllib.request.build_opener(_ArtifactArchiveRedirectHandler())
 
     def _open_archive() -> bytes:
-        with urllib.request.urlopen(  # noqa: S310 - authenticated GitHub artifact download
+        with opener.open(
             request,
             timeout=_REQUEST_TIMEOUT_SECONDS,
         ) as response:
