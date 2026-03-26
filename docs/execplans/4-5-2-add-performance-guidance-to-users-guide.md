@@ -5,7 +5,7 @@ This ExecPlan (execution plan) is a living document. The sections
 `Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work
 proceeds.
 
-Status: DRAFT
+Status: COMPLETE
 
 Roadmap reference: `docs/roadmap.md` item `4.5.2`.
 
@@ -141,15 +141,22 @@ This task is complete only when:
   `docs/users-guide.md` and `docs/cuprum-design.md` around Rust consume-path
   usage.
 - [x] (2026-03-25 00:30Z) Drafted this ExecPlan.
-- [ ] Stage A: add or adjust fail-first unit and behavioural tests for the
-  consumer-visible backend-selection and capture behaviour that the guide will
-  document.
-- [ ] Stage B: update `docs/users-guide.md` to provide a clear decision
-  framework, configuration examples, and conservative throughput expectations.
-- [ ] Stage C: update `docs/cuprum-design.md` to record the final clarified
-  design statements and remove outdated claims.
-- [ ] Stage D: mark `docs/roadmap.md` item `4.5.2` done.
-- [ ] Stage E: run full validation and record results.
+- [x] (2026-03-26 00:10Z) Stage A: added fail-first documentation-contract
+  tests in `cuprum/unittests/test_performance_guidance_docs.py`,
+  `tests/features/performance_guidance_docs.feature`, and
+  `tests/behaviour/test_performance_guidance_docs_behaviour.py`. Red phase
+  confirmed before the docs update.
+- [x] (2026-03-26 00:18Z) Stage B: updated `docs/users-guide.md` with a
+  dedicated backend-choice section, explicit environment-variable timing, the
+  current pumping-versus-capture scope, and conservative throughput guidance.
+- [x] (2026-03-26 00:20Z) Stage C: updated `docs/cuprum-design.md` to remove
+  the stale implication that current Rust acceleration applies to stdout/stderr
+  capture.
+- [x] (2026-03-26 00:21Z) Stage D: marked roadmap item `4.5.2` done in
+  `docs/roadmap.md`.
+- [x] (2026-03-26 00:32Z) Stage E: final validation complete. Passed
+  `make check-fmt`, `make typecheck`, `make lint`, `make test`,
+  `make markdownlint`, and `make nixie`.
 
 ## Surprises & discoveries
 
@@ -176,6 +183,13 @@ This task is complete only when:
   point readers at these existing measurement paths instead of inventing a new
   workflow.
 
+- Observation: adding both a unit-style and a behavioural documentation test
+  with the same module basename caused pytest collection to fail with an import
+  mismatch before the actual red-phase assertions ran. Impact: the behavioural
+  test module was renamed to
+  `tests/behaviour/test_performance_guidance_docs_behaviour.py` to keep test
+  module names unique.
+
 ## Decision log
 
 - Decision: treat roadmap item `4.5.2` as a documentation-and-contract task,
@@ -194,19 +208,54 @@ This task is complete only when:
   size, pipeline depth, platform, and whether Linux `splice()` is active.
   Date/Author: 2026-03-25 / Codex.
 
+- Decision: validate roadmap item `4.5.2` with documentation-contract tests
+  rather than only runtime assertions in existing backend modules. Rationale:
+  the change is primarily consumer-facing documentation, so the most direct red
+  phase is to assert the guide and design document expose the promised guidance
+  and terminology. Date/Author: 2026-03-26 / Codex.
+
 ## Outcomes & retrospective
 
-Pending. This is a draft ExecPlan; implementation has not started.
+Implementation completed successfully.
 
-Success for the eventual implementation should look like this:
+Delivered:
 
-- a reader can choose `auto`, `python`, or `rust` without cross-reading the
-  design document;
-- the users' guide clearly states that current Rust acceleration applies to
-  inter-stage pumping and not stdout or stderr capture;
-- any throughput expectation is explicitly qualified and linked to benchmark
-  commands and CI comparison artefacts;
-- the roadmap item is checked off only after tests and quality gates pass.
+- added documentation-contract tests in
+  `cuprum/unittests/test_performance_guidance_docs.py`,
+  `tests/features/performance_guidance_docs.feature`, and
+  `tests/behaviour/test_performance_guidance_docs_behaviour.py`;
+- updated `docs/users-guide.md` with a dedicated "Choosing a stream backend"
+  section covering `auto`, `python`, and `rust`, the environment-variable
+  timing rule, the current pumping-versus-capture scope, and workload-specific
+  benchmark guidance via `make benchmark-e2e`;
+- updated `docs/cuprum-design.md` so section 13.5 now matches the shipped
+  implementation and no longer implies that current Rust acceleration applies
+  to stdout/stderr capture;
+- marked `docs/roadmap.md` item `4.5.2` done.
+
+Validation summary:
+
+- red phase:
+  `uv run pytest -q cuprum/unittests/test_performance_guidance_docs.py tests/behaviour/test_performance_guidance_docs_behaviour.py`
+  failed before the doc updates;
+- green phase:
+  the same targeted suite passed with `3 passed`;
+- final gates passed:
+  - `make check-fmt`
+  - `make typecheck`
+  - `make lint`
+  - `make test`
+  - `MDLINT=/root/.bun/bin/markdownlint-cli2 make markdownlint`
+  - `make nixie`
+- final `make test` result:
+  `394 passed, 43 skipped`.
+
+Lessons learned:
+
+- documentation roadmap items benefit from explicit doc-contract tests when
+  the requirement is not new runtime behaviour but new consumer guidance;
+- unique test module basenames matter when adding unit and behavioural tests
+  that both import under pytest discovery.
 
 ## Context and orientation
 

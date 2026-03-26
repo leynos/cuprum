@@ -1776,24 +1776,29 @@ and call is_available"]
 
 The following table summarizes when each pathway is recommended:
 
-| Scenario                       | Recommended pathway | Rationale                          |
-| ------------------------------ | ------------------- | ---------------------------------- |
-| Small commands (<1 MB output)  | Either              | Overhead difference negligible     |
-| Large data pipelines (>100 MB) | Rust                | Avoids event loop round-trips      |
-| Many concurrent pipelines      | Rust                | Reduced GIL contention             |
-| Debugging/tracing output lines | Python              | `on_line` callbacks require Python |
-| Platform without a Rust wheel  | Python              | Automatic fallback                 |
+| Scenario                       | Recommended pathway | Rationale                               |
+| ------------------------------ | ------------------- | --------------------------------------- |
+| Small commands (<1 MB output)  | Either              | Overhead difference is often negligible |
+| Large data pipelines (>100 MB) | Rust                | Avoids event loop round-trips           |
+| Many concurrent pipelines      | Rust                | Reduced GIL contention                  |
+| Debugging/tracing output lines | Python              | Capture path remains Python-based       |
+| Platform without a Rust wheel  | Python              | Automatic fallback                      |
+
+Current Rust acceleration applies to inter-stage pipeline pumping, not
+stdout/stderr capture.
 
 The Rust pathway provides the greatest benefit for:
 
 - `_pump_stream()` in multi-stage pipelines (data transfer between stages);
-- `_consume_stream()` without line callbacks (the internal
-  `_consume_stream_without_lines()` code path).
+- large pipe-to-pipe transfers, especially on Linux where `splice()` can keep
+  the transfer inside the kernel.
 
 The Python pathway remains preferable when:
 
 - line-by-line observation hooks (`on_line`) are registered;
 - teeing to sinks (`echo_output`) is required;
+- stdout/stderr capture behaviour must exactly follow the current Python decode
+  and sink-handling path;
 - debugging requires visibility into the event loop;
 - platform wheels are unavailable.
 
