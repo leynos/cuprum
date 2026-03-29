@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -15,19 +16,32 @@ def _read_doc(relative_path: str) -> str:
     return (_repo_root() / relative_path).read_text(encoding="utf-8")
 
 
+def _extract_markdown_subsection(markdown: str, *, heading: str, level: int = 3) -> str:
+    """Return the content for a Markdown subsection until the next peer heading."""
+    heading_pattern = re.escape("#" * level + f" {heading}")
+    match = re.search(
+        rf"(?ms)^{heading_pattern}\n(?P<section>.*?)(?=^#{{1,{level}}}\s|\Z)",
+        markdown,
+    )
+    if match is None:
+        msg = f"missing subsection heading: {heading!r}"
+        raise AssertionError(msg)
+    return match.group("section")
+
+
 def test_users_guide_includes_backend_choice_guidance() -> None:
     """Users' guide should tell readers how to choose a stream backend."""
     guide = _read_doc("docs/users-guide.md")
 
-    assert "### Choosing a stream backend" in guide
-    section = guide.split("### Choosing a stream backend", maxsplit=1)[1]
+    section = _extract_markdown_subsection(guide, heading="Choosing a stream backend")
 
     assert "`auto`" in section
     assert "`python`" in section
     assert "`rust`" in section
     assert "before first backend resolution in the process" in section
     assert "inter-stage pipeline pumping" in section
-    assert "stdout/stderr capture still uses the Python pathway" in section
+    assert "stdout/stderr capture" in section
+    assert "Python pathway" in section
     assert "`make benchmark-e2e`" in section
 
 

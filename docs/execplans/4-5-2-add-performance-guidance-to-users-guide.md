@@ -11,11 +11,10 @@ Roadmap reference: `docs/roadmap.md` item `4.5.2`.
 
 ## Purpose / big picture
 
-Roadmap item `4.5.2` requires consumer-facing guidance in
-`docs/users-guide.md` that tells users when to choose the pure Python pathway
-or the optional Rust pathway, how to configure selection with
-`CUPRUM_STREAM_BACKEND`, and what throughput improvement they should expect in
-practice.
+Roadmap item `4.5.2` requires consumer-facing guidance in `docs/users-guide.md`
+that tells users when to choose the pure Python pathway or the optional Rust
+pathway, how to configure selection with `CUPRUM_STREAM_BACKEND`, and what
+throughput improvement they should expect in practice.
 
 This is not just a prose tidy-up. The users' guide is currently close to the
 goal, but the guidance is spread across several subsections, and there is a
@@ -109,8 +108,8 @@ This task is complete only when:
   and remove redundant wording nearby.
 
 - Risk: the design document currently overstates Rust consume-path usage
-  relative to the implementation. Severity: high. Likelihood: high.
-  Mitigation: inspect the code path once, document the finding, and update
+  relative to the implementation. Severity: high. Likelihood: high. Mitigation:
+  inspect the code path once, document the finding, and update
   `docs/cuprum-design.md` to match the actual behaviour.
 
 - Risk: performance guidance can become marketing language if it uses broad or
@@ -168,8 +167,8 @@ This task is complete only when:
 
 - Observation: `docs/users-guide.md` says stream consumption currently always
   uses the Python pathway, while `docs/cuprum-design.md` section 13.5 still
-  describes Rust consume-path benefits. Impact: `4.5.2` must reconcile the
-  docs before it can be marked done.
+  describes Rust consume-path benefits. Impact: `4.5.2` must reconcile the docs
+  before it can be marked done.
 
 - Observation: the implementation confirms the users' guide statement.
   `cuprum/_pipeline_streams.py` creates stdout and stderr capture tasks with
@@ -200,8 +199,8 @@ This task is complete only when:
 - Decision: resolve the design/users-guide conflict in favour of the current
   implementation unless tests reveal otherwise. Rationale: the guide must
   describe what users get today, and the code inspection currently supports the
-  guide's statement that capture remains Python-based. Date/Author:
-  2026-03-25 / Codex.
+  guide's statement that capture remains Python-based. Date/Author: 2026-03-25
+  / Codex.
 
 - Decision: prefer conservative, workload-dependent throughput wording over a
   hard-coded global speedup claim. Rationale: benchmark results vary by payload
@@ -237,7 +236,7 @@ Validation summary:
 
 - red phase:
   `uv run pytest -q cuprum/unittests/test_performance_guidance_docs.py tests/behaviour/test_performance_guidance_docs_behaviour.py`
-  failed before the doc updates;
+   failed before the doc updates;
 - green phase:
   the same targeted suite passed with `3 passed`;
 - final gates passed:
@@ -422,9 +421,8 @@ uv run pytest -q tests/behaviour/test_backend_dispatcher_behaviour.py \
   2>&1 | tee /tmp/4-5-2-targeted-bdd-pre.log
 ```
 
-   Expected before documentation updates:
-   a new or adjusted assertion should fail if the documented contract is not
-   already covered correctly.
+   Expected before documentation updates: a new or adjusted assertion should
+   fail if the documented contract is not already covered correctly.
 
 1. Update `docs/users-guide.md`.
 

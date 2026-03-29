@@ -1790,7 +1790,7 @@ stdout/stderr capture.
 The Rust pathway provides the greatest benefit for:
 
 - `_pump_stream()` in multi-stage pipelines (data transfer between stages);
-- large pipe-to-pipe transfers, especially on Linux where `splice()` can keep
+- large pipe-to-pipe transfers, especially on Linux, where `splice()` can keep
   the transfer inside the kernel.
 
 The Python pathway remains preferable when:
