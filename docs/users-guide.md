@@ -1011,7 +1011,7 @@ example:
 CUPRUM_STREAM_BACKEND=rust uv run python my_script.py
 ```
 
-If you change the environment variable after Cuprum has already resolved the
+If the environment variable is changed after Cuprum has already resolved the
 backend in the current process, the cached result will continue to be used.
 
 The backend selection is active for inter-stage stream pumping in pipelines.

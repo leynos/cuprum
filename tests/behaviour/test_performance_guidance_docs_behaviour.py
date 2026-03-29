@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from pytest_bdd import given, scenario, then, when
+
+from tests.helpers import extract_markdown_subsection
 
 
 @scenario(
@@ -16,19 +17,6 @@ def test_users_can_find_backend_selection_guidance() -> None:
     """Users can find backend-selection guidance in the guide."""
 
 
-def _extract_markdown_subsection(markdown: str, *, heading: str, level: int = 3) -> str:
-    """Return the content for a Markdown subsection until the next peer heading."""
-    heading_pattern = re.escape("#" * level + f" {heading}")
-    match = re.search(
-        rf"(?ms)^{heading_pattern}\n(?P<section>.*?)(?=^#{{1,{level}}}\s|\Z)",
-        markdown,
-    )
-    if match is None:
-        msg = f"missing subsection heading: {heading!r}"
-        raise AssertionError(msg)
-    return match.group("section")
-
-
 @given(
     "the users' guide performance section",
     target_fixture="performance_guidance_section",
@@ -37,7 +25,7 @@ def given_performance_guidance_section() -> str:
     """Load the performance-guidance section from the users' guide."""
     guide_path = Path(__file__).resolve().parents[2] / "docs/users-guide.md"
     guide = guide_path.read_text(encoding="utf-8")
-    return _extract_markdown_subsection(guide, heading="Choosing a stream backend")
+    return extract_markdown_subsection(guide, heading="Choosing a stream backend")
 
 
 @when(

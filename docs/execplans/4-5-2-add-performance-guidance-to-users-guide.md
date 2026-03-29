@@ -384,8 +384,8 @@ Do not mark the roadmap item done until every required gate passes.
    - forced Rust still raises `ImportError` when unavailable;
    - pipeline pumping can fall back to Python when Rust pumping is infeasible;
    - stdout and stderr capture behaviour documented in the guide is backed by a
-     unit-level assertion, especially if the final guide says capture still
-     remains on the Python path.
+  unit-level assertion, especially if the final guide says capture remains on
+  the Python path.
 
 3. Add or adjust behavioural tests next.
 
