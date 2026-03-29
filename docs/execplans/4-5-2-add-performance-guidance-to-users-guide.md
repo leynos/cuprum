@@ -323,10 +323,12 @@ Stage B: rewrite the users' guide section around user decisions.
 Create or reshape a section in `docs/users-guide.md` so a user can answer three
 questions quickly:
 
-1. When should I leave `auto` alone versus forcing `python` or `rust`?
-2. How exactly do I configure `CUPRUM_STREAM_BACKEND`, and when must I set it?
-3. What improvement should I expect for large throughput-heavy workloads, and
-   when should I measure instead of guessing?
+1. When is it appropriate to leave `auto` unchanged versus explicitly
+   specifying `python` or `rust`?
+2. How is `CUPRUM_STREAM_BACKEND` configured, and under which circumstances
+   must it be set?
+3. What improvement is expected for large throughput-heavy workloads, and when
+   is measurement required rather than estimation?
 
 This stage should replace scattered explanation with a tighter narrative, not
 append more redundant paragraphs.

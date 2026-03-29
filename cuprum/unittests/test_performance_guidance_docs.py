@@ -23,14 +23,22 @@ def test_users_guide_includes_backend_choice_guidance() -> None:
 
     section = extract_markdown_subsection(guide, heading="Choosing a stream backend")
 
-    assert "`auto`" in section
-    assert "`python`" in section
-    assert "`rust`" in section
-    assert "before first backend resolution in the process" in section
-    assert "inter-stage pipeline pumping" in section
-    assert "stdout/stderr capture" in section
-    assert "Python pathway" in section
-    assert "`make benchmark-e2e`" in section
+    assert "`auto`" in section, "Missing documentation clause: '`auto`'"
+    assert "`python`" in section, "Missing documentation clause: '`python`'"
+    assert "`rust`" in section, "Missing documentation clause: '`rust`'"
+    assert "before first backend resolution in the process" in section, (
+        "Missing documentation clause: 'before first backend resolution in the process'"
+    )
+    assert "inter-stage pipeline pumping" in section, (
+        "Missing documentation clause: 'inter-stage pipeline pumping'"
+    )
+    assert "stdout/stderr capture" in section, (
+        "Missing documentation clause: 'stdout/stderr capture'"
+    )
+    assert "Python pathway" in section, "Missing documentation clause: 'Python pathway'"
+    assert "`make benchmark-e2e`" in section, (
+        "Missing documentation clause: '`make benchmark-e2e`'"
+    )
 
 
 def test_design_doc_matches_current_pumping_scope() -> None:
@@ -39,5 +47,10 @@ def test_design_doc_matches_current_pumping_scope() -> None:
 
     assert "Current Rust acceleration applies to inter-stage pipeline pumping" in (
         design_doc
+    ), (
+        "Missing design-doc clause: "
+        "'Current Rust acceleration applies to inter-stage pipeline pumping'"
     )
-    assert "stdout/stderr capture" in design_doc
+    assert "stdout/stderr capture" in design_doc, (
+        "Missing design-doc clause: 'stdout/stderr capture'"
+    )
