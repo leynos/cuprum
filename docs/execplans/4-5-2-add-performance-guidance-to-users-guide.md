@@ -235,8 +235,12 @@ Delivered:
 Validation summary:
 
 - red phase:
-  `uv run pytest -q cuprum/unittests/test_performance_guidance_docs.py tests/behaviour/test_performance_guidance_docs_behaviour.py`
-   failed before the doc updates;
+
+  ```bash
+  uv run pytest -q cuprum/unittests/test_performance_guidance_docs.py tests/behaviour/test_performance_guidance_docs_behaviour.py
+  ```
+
+  failed before the doc updates;
 - green phase:
   the same targeted suite passed with `3 passed`;
 - final gates passed:
@@ -386,8 +390,8 @@ Do not mark the roadmap item done until every required gate passes.
    - forced Rust still raises `ImportError` when unavailable;
    - pipeline pumping can fall back to Python when Rust pumping is infeasible;
    - stdout and stderr capture behaviour documented in the guide is backed by a
-  unit-level assertion, especially if the final guide says capture remains on
-  the Python path.
+     unit-level assertion, especially if the final guide says capture remains
+     on the Python path.
 
 3. Add or adjust behavioural tests next.
 
