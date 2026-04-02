@@ -441,7 +441,7 @@ uv run pytest -q tests/behaviour/test_backend_dispatcher_behaviour.py \
      resolution in the process;
    - an explicit statement that current Rust acceleration applies to inter-stage
      pumping, while stdout and stderr capture remains Python-based;
-   - conservative throughput guidance, such as:
+   - conservative throughput guidance such as:
      small outputs often show negligible difference, while large multi-stage
      transfers can see substantial improvements and should be measured with
      `make benchmark-e2e`.
@@ -493,7 +493,7 @@ set -o pipefail
 make nixie 2>&1 | tee /tmp/4-5-2-nixie.log
 ```
 
-1. Record the final outcome in this ExecPlan.
+1. Record the outcome in this ExecPlan.
 
    Update:
 
