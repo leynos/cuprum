@@ -938,7 +938,7 @@ The `ConcurrentResult` dataclass provides:
 ## Performance extensions (optional Rust)
 
 Cuprum ships as a pure Python wheel by default. Some platforms also provide
-native wheels that bundle an optional Rust extension used by future stream
+native wheels that bundle an optional Rust extension used by stream performance
 optimizations. The Rust extension is not required to use Cuprum and does not
 change behaviour for pure Python installations.
 
@@ -994,6 +994,26 @@ The backend is resolved once on first use and the result is cached for the
 lifetime of the process. Changing the environment variable after the first
 resolution has no effect.
 
+### Choosing a stream backend
+
+Most users should leave backend selection on `auto`. This uses the Rust pathway
+when the native extension is installed and falls back cleanly to pure Python
+otherwise. Select `python` when the pure Python path is required regardless of
+wheel availability, for example when debugging, reproducing an issue on a pure
+Python installation, or relying on Python-only capture features. Select `rust`
+for benchmarking or throughput-heavy workloads and to require the native
+extension (fail if unavailable).
+
+Set `CUPRUM_STREAM_BACKEND` before first backend resolution in the process. For
+example:
+
+```bash
+CUPRUM_STREAM_BACKEND=rust uv run python my_script.py
+```
+
+If the environment variable is changed after Cuprum has already resolved the
+backend in the current process, the cached result will continue to be used.
+
 The backend selection is active for inter-stage stream pumping in pipelines.
 When the Rust backend is selected, data transfer between pipeline stages uses
 the Rust extension outside the GIL via `loop.run_in_executor()`. Stream
@@ -1010,12 +1030,19 @@ Forced Rust mode is intentionally strict. If `CUPRUM_STREAM_BACKEND=rust` is
 set and the Rust extension is unavailable, pipeline execution raises
 `ImportError` instead of silently falling back.
 
-Choose the Rust backend for high-throughput workloads (for example,
-multi-megabyte outputs) where lower per-chunk overhead improves throughput. For
-small outputs or when custom encoding/error handling is required, prefer the
-Python implementation. Expect the most noticeable throughput gains on large
-streams; smaller payloads may see minimal differences, so measure on
-representative workloads.
+Current Rust acceleration applies to inter-stage pipeline pumping. For
+high-throughput, multi-stage pipelines, this can reduce per-chunk overhead and
+deliver substantial multi-fold throughput improvements on large transfers,
+especially on Linux pipe-to-pipe workloads where `splice()` is available. For
+small outputs, the difference is often negligible. When stdout/stderr capture,
+custom encoding/error handling, or line-oriented callbacks matter more than raw
+throughput, prefer `python`. The current backend selection does not change
+capture semantics: stdout/stderr capture still uses the Python pathway.
+
+Use `make benchmark-e2e` to measure workload before standardizing on `rust` for
+a production path. The benchmark suite gives a better answer than a fixed rule
+of thumb when payload size, platform, or callback behaviour differ from the
+default scenarios.
 
 Both backends are tested for behavioural parity across edge cases including
 empty streams, multi-byte UTF-8 at chunk boundaries, broken pipes (where the

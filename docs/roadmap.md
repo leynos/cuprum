@@ -177,7 +177,7 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 - [x] 4.5.1. Extend `docs/cuprum-design.md` with Section 13 covering Rust
   extension architecture, API boundary, fallback strategy, and performance
   characteristics.
-- [ ] 4.5.2. Add performance guidance to `docs/users-guide.md` explaining when
+- [x] 4.5.2. Add performance guidance to `docs/users-guide.md` explaining when
   to use each pathway, how to configure selection via environment variable, and
   expected throughput improvements.
 - [ ] 4.5.3. Document build prerequisites (Rust toolchain 1.70+, cargo, maturin)
