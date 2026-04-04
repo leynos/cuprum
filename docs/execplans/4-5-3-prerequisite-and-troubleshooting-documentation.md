@@ -5,7 +5,7 @@ This ExecPlan (execution plan) is a living document. The sections
 `Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work
 proceeds.
 
-Status: DRAFT
+Status: DONE
 
 Roadmap references: `docs/roadmap.md` items `4.5.3` and `4.5.4`.
 
@@ -128,20 +128,26 @@ This task is complete only when:
 
 ## Progress
 
-- [ ] Reviewed roadmap items, existing documentation, and build
+- [x] Reviewed roadmap items, existing documentation, and build
   configuration.
-- [ ] Drafted this ExecPlan.
-- [ ] Stage A: added fail-first documentation-contract tests.
-- [ ] Stage B: updated `docs/users-guide.md` with build prerequisites
+- [x] Drafted this ExecPlan.
+- [x] Stage A: added fail-first documentation-contract tests.
+- [x] Stage B: updated `docs/users-guide.md` with build prerequisites
   section.
-- [ ] Stage C: updated `docs/users-guide.md` with troubleshooting section.
-- [ ] Stage D: reconciled `docs/cuprum-design.md` minimum Rust version.
-- [ ] Stage E: marked roadmap items `4.5.3` and `4.5.4` done.
-- [ ] Stage F: final validation and retrospective.
+- [x] Stage C: updated `docs/users-guide.md` with troubleshooting section.
+- [x] Stage D: reconciled `docs/cuprum-design.md` minimum Rust version.
+- [x] Stage E: marked roadmap items `4.5.3` and `4.5.4` done.
+- [x] Stage F: final validation and retrospective.
 
 ## Surprises & discoveries
 
-(To be populated during implementation.)
+- The `maturin develop` command in the build prerequisites section was
+  initially placed only inside a fenced code block. The documentation-contract
+  test expected backtick-wrapped inline text (`` `maturin develop` ``), so the
+  prose was adjusted to include an inline reference before the code block.
+
+- The `make fmt` auto-formatter rewrapped some bullet point lines in the new
+  sections. No manual fixups were needed beyond the initial edit.
 
 ## Decision log
 
@@ -164,7 +170,45 @@ This task is complete only when:
 
 ## Outcomes & retrospective
 
-(To be populated on completion.)
+Implementation completed on 2026-04-04.
+
+Files created:
+
+- `cuprum/unittests/test_prerequisite_docs.py` (8 unit tests)
+- `tests/features/prerequisite_docs.feature` (2 scenarios)
+- `tests/behaviour/test_prerequisite_docs_behaviour.py` (2 BDD tests)
+
+Files modified:
+
+- `docs/users-guide.md` — replaced "Building from source" with expanded
+  "Build prerequisites for native extensions" and added "Troubleshooting"
+  subsection.
+- `docs/cuprum-design.md` — updated section 13.8 from "rustc 1.74+" to
+  "rustc 1.85+".
+- `docs/roadmap.md` — marked items 4.5.3 and 4.5.4 done; corrected the
+  roadmap version reference from 1.70+ to 1.85+.
+- `docs/execplans/4-5-3-prerequisite-and-troubleshooting-documentation.md`
+  — this file (living updates).
+
+Quality gate results (final run):
+
+- `make check-fmt`: pass
+- `make typecheck`: pass (ty 0.0.8)
+- `make lint`: pass (ruff)
+- `make test`: 405 passed, 43 skipped
+- `make markdownlint`: 0 errors
+- `make nixie`: all diagrams validated
+
+Total file count: 7 (3 new + 4 modified), well within the 10-file tolerance.
+
+Retrospective notes:
+
+- The test-first approach worked smoothly. All 10 new tests failed before
+  the documentation was added and passed immediately after, with only one minor
+  adjustment needed (inline backtick reference for `maturin develop`).
+- Combining 4.5.3 and 4.5.4 into a single plan was the right call; the
+  troubleshooting section naturally follows the prerequisites section and they
+  share the same test infrastructure.
 
 ## Context and orientation
 

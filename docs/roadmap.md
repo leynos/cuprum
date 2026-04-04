@@ -180,8 +180,8 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 - [x] 4.5.2. Add performance guidance to `docs/users-guide.md` explaining when
   to use each pathway, how to configure selection via environment variable, and
   expected throughput improvements.
-- [ ] 4.5.3. Document build prerequisites (Rust toolchain 1.70+, cargo, maturin)
-  for contributors building from source with native extensions.
-- [ ] 4.5.4. Add a troubleshooting section for common issues: missing wheels on
+- [x] 4.5.3. Document build prerequisites (Rust toolchain 1.85+, cargo,
+  maturin) for contributors building from source with native extensions.
+- [x] 4.5.4. Add a troubleshooting section for common issues: missing wheels on
   exotic platforms, forced fallback behaviour, and benchmark result
   interpretation.

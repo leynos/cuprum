@@ -1136,15 +1136,98 @@ The optimization is transparent to users:
 For maximum benefit, ensure pipeline stages use pipes (the default for
 `Pipeline` execution) rather than temporary files.
 
-### Building from source
+### Build prerequisites for native extensions
 
-For development builds, run `maturin develop` from the project root after
-installing a Rust toolchain. This installs Cuprum in editable/development mode
-as an alternative to building native wheels.
+Contributors who want to build or develop the optional Rust extension from
+source need the following tools installed:
 
-Contributors who want to build native wheels need a Rust toolchain (rustc and
-cargo, version 1.74 or newer) and maturin. Pure Python wheels continue to build
-using `uv_build` without any Rust dependencies.
+- **Rust toolchain (rustc and cargo) 1.85 or later.** The Rust crate uses
+  `edition = "2024"`, which requires Rust 1.85+. Install via
+  [rustup](https://rustup.rs/):
+
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  ```
+
+  cargo ships as part of the standard rustup installation and does not need to
+  be installed separately.
+
+- **maturin** (the Rust-to-Python build bridge). maturin is pinned as a dev
+  dependency and is installed automatically when you run `uv sync --group dev`.
+  Alternatively, install it manually:
+
+  ```bash
+  pip install maturin==1.6.0
+  ```
+
+To build and install the Rust extension in development mode, run
+`maturin develop` from the project root:
+
+```bash
+maturin develop
+```
+
+This compiles the Rust crate, links the resulting shared library into the
+Cuprum package, and makes the extension available for import. To verify the
+extension is working:
+
+```bash
+python -c "import cuprum; print(cuprum.is_rust_available())"
+```
+
+The command should print `True` when the Rust extension is available.
+
+Pure Python wheels do not require a Rust toolchain. Running `uv build --wheel`
+produces a pure Python wheel using `uv_build` without any Rust dependencies.
+
+### Troubleshooting
+
+This section addresses common issues when working with the optional Rust
+extension.
+
+**Missing wheels on unsupported platforms.** Pre-built native wheels are
+published for common platforms: Linux (x86_64, aarch64), macOS (x86_64, arm64),
+and Windows (x86_64, arm64). On other platforms, `pip install cuprum` installs
+the pure Python wheel automatically. The pure Python wheel provides the same
+functionality without Rust acceleration. Contributors who want Rust
+acceleration on unsupported platforms can build from source using the
+prerequisites described above and running `maturin develop`.
+
+**Forced fallback behaviour.** The `CUPRUM_STREAM_BACKEND` environment variable
+controls which stream implementation is used:
+
+- `auto` (default): uses the Rust pathway when available, otherwise falls
+  back silently to the Python pathway.
+- `python`: forces the pure Python pathway regardless of whether the Rust
+  extension is installed.
+- `rust`: forces the Rust pathway and raises `ImportError` if the extension
+  is unavailable.
+
+If `CUPRUM_STREAM_BACKEND=rust` is set but the Rust extension is not installed,
+pipeline execution raises `ImportError` instead of falling back. To diagnose
+whether the extension is available, run:
+
+```bash
+python -c "import cuprum; print(cuprum.is_rust_available())"
+```
+
+See the "Choosing a stream backend" section above for full details on backend
+selection.
+
+**Benchmark result interpretation.** When reading benchmark results, keep the
+following in mind:
+
+- Small payloads show negligible difference between Python and Rust pathways.
+  The overhead being avoided is per-chunk, and small payloads have few chunks.
+- The `splice()` optimization is Linux-only. macOS and Windows use
+  read/write loops, so Rust throughput gains are smaller on those platforms.
+- The CI comparison summary reports speedup as `python_mean / rust_mean`.
+  Values above `1.0x` mean Rust was faster.
+- Use `make benchmark-e2e` to measure performance on your specific workload
+  and platform before drawing conclusions.
+
+See the "Benchmark suite" section above for scenario definitions and metric
+details.
 
 ### CI build commands
 

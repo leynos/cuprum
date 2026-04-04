@@ -1922,7 +1922,7 @@ manylinux-compatible environments, while pure Python wheels are built with
 `uv_build`. Release workflows collect all wheels into a single directory and
 publish them in one `uv publish` command to keep metadata aligned.
 
-Contributors building from source require a Rust toolchain (rustc 1.74+, cargo)
+Contributors building from source require a Rust toolchain (rustc 1.85+, cargo)
 in addition to Python. The `maturin develop` command builds and installs the
 extension in development mode.
 
