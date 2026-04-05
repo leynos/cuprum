@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tests.helpers import (
     BUILD_PREREQUISITES_HEADING,
     TROUBLESHOOTING_HEADING,
@@ -11,52 +13,72 @@ from tests.helpers import (
     read_users_guide,
 )
 
+# -- Fixtures -----------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def users_guide() -> str:
+    """Load the users' guide once per module."""
+    return read_users_guide()
+
+
+@pytest.fixture(scope="module")
+def prerequisites_section(users_guide: str) -> str:
+    """Extract the build prerequisites section from the users' guide."""
+    return extract_markdown_subsection(users_guide, heading=BUILD_PREREQUISITES_HEADING)
+
+
+@pytest.fixture(scope="module")
+def troubleshooting_section(users_guide: str) -> str:
+    """Extract the troubleshooting section from the users' guide."""
+    return extract_markdown_subsection(users_guide, heading=TROUBLESHOOTING_HEADING)
+
+
 # -- 4.5.3: Build prerequisites -----------------------------------------------
 
 
-def test_users_guide_has_build_prerequisites_section() -> None:
-    """Users' guide should contain a build prerequisites heading."""
-    guide = read_users_guide()
+@pytest.mark.parametrize(
+    "term",
+    [
+        "Rust",
+        "maturin",
+        "cargo",
+        "rustup",
+    ],
+)
+def test_users_guide_build_prerequisites_mentions_tools(
+    prerequisites_section: str, term: str
+) -> None:
+    """Users' guide build prerequisites should mention essential tools.
 
-    section = extract_markdown_subsection(guide, heading=BUILD_PREREQUISITES_HEADING)
+    Uses case-insensitive checks to avoid brittle failures from capitalization.
+    """
+    assert contains_case_insensitive(prerequisites_section, term), (
+        f"Missing documentation clause: '{term}'"
+    )
 
-    # Case-insensitive checks for tool names to avoid brittle failures
-    assert contains_case_insensitive(section, "Rust"), (
-        "Missing documentation clause: 'Rust'"
-    )
-    assert contains_case_insensitive(section, "maturin"), (
-        "Missing documentation clause: 'maturin'"
-    )
-    assert contains_case_insensitive(section, "cargo"), (
-        "Missing documentation clause: 'cargo'"
-    )
-    # Version and exact code references need exact matches
-    assert "1.85" in section, "Missing documentation clause: '1.85'"
-    assert "`maturin develop`" in section, (
+
+def test_users_guide_build_prerequisites_mentions_version(
+    prerequisites_section: str,
+) -> None:
+    """Users' guide should specify the minimum Rust version."""
+    assert "1.85" in prerequisites_section, "Missing documentation clause: '1.85'"
+
+
+def test_users_guide_build_prerequisites_mentions_maturin_develop(
+    prerequisites_section: str,
+) -> None:
+    """Users' guide should mention the maturin develop command."""
+    assert "`maturin develop`" in prerequisites_section, (
         "Missing documentation clause: '`maturin develop`'"
     )
 
 
-def test_users_guide_build_prerequisites_mention_rustup() -> None:
-    """Users' guide should mention rustup as the installation method."""
-    guide = read_users_guide()
-
-    section = extract_markdown_subsection(guide, heading=BUILD_PREREQUISITES_HEADING)
-
-    # Case-insensitive check for rustup
-    assert contains_case_insensitive(section, "rustup"), (
-        "Missing documentation clause: 'rustup'"
-    )
-
-
-def test_users_guide_build_prerequisites_mention_verification() -> None:
+def test_users_guide_build_prerequisites_mention_verification(
+    prerequisites_section: str,
+) -> None:
     """Users' guide should tell readers how to verify the Rust extension."""
-    guide = read_users_guide()
-
-    section = extract_markdown_subsection(guide, heading=BUILD_PREREQUISITES_HEADING)
-
-    # Exact match required for function name
-    assert "is_rust_available()" in section, (
+    assert "is_rust_available()" in prerequisites_section, (
         "Missing documentation clause: 'is_rust_available()'"
     )
 
@@ -64,52 +86,35 @@ def test_users_guide_build_prerequisites_mention_verification() -> None:
 # -- 4.5.4: Troubleshooting ---------------------------------------------------
 
 
-def test_users_guide_has_troubleshooting_section() -> None:
+def test_users_guide_has_troubleshooting_section(troubleshooting_section: str) -> None:
     """Users' guide should contain a troubleshooting heading."""
-    guide = read_users_guide()
-
-    section = extract_markdown_subsection(guide, heading=TROUBLESHOOTING_HEADING)
-
-    assert section, "Troubleshooting section is empty"
+    assert troubleshooting_section.strip(), "Troubleshooting section is empty"
 
 
-def test_troubleshooting_covers_missing_wheels() -> None:
-    """Troubleshooting section should address missing wheels."""
-    guide = read_users_guide()
+@pytest.mark.parametrize(
+    "term",
+    [
+        "wheel",
+        "fallback",
+        "benchmark",
+    ],
+)
+def test_troubleshooting_covers_topics(troubleshooting_section: str, term: str) -> None:
+    """Troubleshooting section should address key topics.
 
-    section = extract_markdown_subsection(guide, heading=TROUBLESHOOTING_HEADING)
-
-    # Case-insensitive check using shared helper
-    assert contains_case_insensitive(section, "wheel"), (
-        "Missing documentation clause about wheels in troubleshooting"
+    Uses case-insensitive checks to avoid brittle failures from capitalization.
+    """
+    assert contains_case_insensitive(troubleshooting_section, term), (
+        f"Missing documentation clause about {term} in troubleshooting"
     )
 
 
-def test_troubleshooting_covers_fallback_behaviour() -> None:
-    """Troubleshooting section should address fallback behaviour."""
-    guide = read_users_guide()
-
-    section = extract_markdown_subsection(guide, heading=TROUBLESHOOTING_HEADING)
-
-    # Case-insensitive check for general term
-    assert contains_case_insensitive(section, "fallback"), (
-        "Missing documentation clause about fallback in troubleshooting"
-    )
-    # Exact match required for environment variable name
-    assert "CUPRUM_STREAM_BACKEND" in section, (
+def test_troubleshooting_mentions_backend_env_var(
+    troubleshooting_section: str,
+) -> None:
+    """Troubleshooting section should mention CUPRUM_STREAM_BACKEND."""
+    assert "CUPRUM_STREAM_BACKEND" in troubleshooting_section, (
         "Missing documentation clause: 'CUPRUM_STREAM_BACKEND'"
-    )
-
-
-def test_troubleshooting_covers_benchmark_interpretation() -> None:
-    """Troubleshooting section should address benchmark interpretation."""
-    guide = read_users_guide()
-
-    section = extract_markdown_subsection(guide, heading=TROUBLESHOOTING_HEADING)
-
-    # Case-insensitive check using shared helper
-    assert contains_case_insensitive(section, "benchmark"), (
-        "Missing documentation clause about benchmarks in troubleshooting"
     )
 
 

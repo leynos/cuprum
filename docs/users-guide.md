@@ -1187,8 +1187,8 @@ extension.
 
 **Missing wheels on unsupported platforms.** Pre-built native wheels are
 published for common platforms: Linux (x86_64, aarch64), macOS (x86_64, arm64),
-and Windows (x86_64, arm64). On other platforms, `pip install cuprum` installs
-the pure Python wheel automatically. The pure Python wheel provides the same
+and Windows (x86_64). On other platforms, `pip install cuprum` installs the
+pure Python wheel automatically. The pure Python wheel provides the same
 functionality without Rust acceleration. Contributors who want Rust
 acceleration on unsupported platforms can build from source using the
 prerequisites described above and running `maturin develop`.

@@ -10,7 +10,7 @@ from .docs import (
 )
 from .markdown import extract_markdown_subsection
 
-__all__ = [
+__all__ = (
     "BUILD_PREREQUISITES_HEADING",
     "TROUBLESHOOTING_HEADING",
     "contains_case_insensitive",
@@ -18,4 +18,4 @@ __all__ = [
     "read_doc",
     "read_users_guide",
     "repo_root",
-]
+)
