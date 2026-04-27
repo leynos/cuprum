@@ -21,6 +21,8 @@ from benchmarks.tee_profile_worker import TeeProfileWorkerConfig, run_tee_profil
 if typ.TYPE_CHECKING:
     import pathlib as pth
 
+    from syrupy.assertion import SnapshotAssertion
+
 
 def _summarise_folded(
     tmp_path: pth.Path,
@@ -48,6 +50,28 @@ def _summarise_folded(
     )
     return summary, top_leaf, top_inclusive, summary_path
 
+
+def _redact(obj: object, keys: frozenset[str]) -> object:
+    """Recursively replace the values of nominated keys with '<redacted>'."""
+    if isinstance(obj, dict):
+        return {
+            k: "<redacted>" if k in keys else _redact(v, keys) for k, v in obj.items()
+        }
+    if isinstance(obj, list):
+        return [_redact(item, keys) for item in obj]
+    return obj
+
+
+_VOLATILE_KEYS = frozenset({
+    "sha256",
+    "wall_time_seconds",
+    "output_bytes",
+    "fixture_path",
+    "wrapped_fixture_path",
+    "output_dir",
+    "profile_dir",
+    "worker_command",
+})
 
 _SCENARIO_NAMES_WITH_RUST: list[str] = [
     "echo-devnull-nocb-s1",
@@ -92,6 +116,20 @@ def test_fixture_generation_is_repeatable(tmp_path: pth.Path) -> None:
     )
 
 
+def test_write_fixture_manifest_snapshot(
+    tmp_path: pth.Path,
+    snapshot: SnapshotAssertion,
+) -> None:
+    """write_fixture manifest structure matches snapshot."""
+    config = FixtureConfig(seed=42, raw_bytes=96, wrap=0)
+    result = write_fixture(
+        config,
+        output=tmp_path / "fixture.b64",
+        manifest=tmp_path / "manifest.json",
+    )
+    assert _redact(result, _VOLATILE_KEYS) == snapshot
+
+
 def test_folded_summary_empty_file_yields_zero_totals(tmp_path: pth.Path) -> None:
     """Empty folded input produces zero samples and empty rankings."""
     summary, top_leaf, top_inclusive, summary_path = _summarise_folded(tmp_path, "")
@@ -124,6 +162,17 @@ def test_folded_summary_ranks_inclusive_and_leaf_frames(tmp_path: pth.Path) -> N
     assert top_leaf[0]["leaf_samples"] == 4
     assert top_inclusive[0]["frame"] == "root"
     assert summary_path.exists()
+
+
+def test_summarize_folded_snapshot(
+    tmp_path: pth.Path,
+    snapshot: SnapshotAssertion,
+) -> None:
+    """summarize_folded_file output structure matches snapshot."""
+    summary, _, _, _ = _summarise_folded(
+        tmp_path, "root;parent;leaf 3\nroot;other 2\nroot;parent;leaf 1\n"
+    )
+    assert _redact(summary, _VOLATILE_KEYS) == snapshot
 
 
 def test_folded_summary_counts_repeated_frames_once_per_stack(
@@ -183,6 +232,29 @@ def test_profile_plan_scenario_matrix(
     )
 
 
+def test_run_profile_plan_snapshot(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    snapshot: SnapshotAssertion,
+) -> None:
+    """run_profile_plan output structure matches snapshot."""
+    monkeypatch.setattr(profile_tee_hotpath, "can_use_rust_backend", lambda: False)
+    fixture = tmp_path / "fixture.b64"
+    fixture.write_text("YWJj\n")
+    wrapped = tmp_path / "fixture-wrap76.b64"
+    wrapped.write_text("YWJj\n")
+    config = TeeProfileDriverConfig(
+        fixture_path=fixture,
+        wrapped_fixture_path=wrapped,
+        output_dir=tmp_path / "profiles",
+        profiler="none",
+        warmup_count=1,
+        repeat_count=1,
+    )
+    plan = run_profile_plan(config=config)
+    assert _redact(plan, _VOLATILE_KEYS) == snapshot
+
+
 @pytest.mark.parametrize("with_line_callbacks", [False, True])
 def test_worker_exercises_parent_side_consume_path(
     tmp_path: pth.Path,
@@ -219,6 +291,29 @@ def test_worker_exercises_parent_side_consume_path(
             assert stdout_line_count > 0
         else:
             assert stdout_line_count == 0
+
+
+def test_run_tee_profile_worker_snapshot(
+    tmp_path: pth.Path,
+    snapshot: SnapshotAssertion,
+) -> None:
+    """run_tee_profile_worker output structure matches snapshot."""
+    fixture = tmp_path / "fixture.b64"
+    fixture.write_text("YWJjZGVm\n")
+
+    result = run_tee_profile_worker(
+        TeeProfileWorkerConfig(
+            fixture_path=fixture,
+            stages=1,
+            mode="tee",
+            sink_kind="devnull",
+            with_line_callbacks=True,
+            backend="python",
+            repeat_count=1,
+        ),
+    )
+
+    assert _redact(result, _VOLATILE_KEYS) == snapshot
 
 
 def test_worker_accumulates_repeat_counters(tmp_path: pth.Path) -> None:
