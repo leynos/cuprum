@@ -164,6 +164,7 @@ def _selected_backend(backend: BackendName) -> typ.Iterator[None]:
         os.environ.pop("CUPRUM_STREAM_BACKEND", None)
     else:
         os.environ["CUPRUM_STREAM_BACKEND"] = backend
+    _backend._check_rust_available.cache_clear()
     _backend.get_stream_backend.cache_clear()
     try:
         yield
@@ -172,6 +173,7 @@ def _selected_backend(backend: BackendName) -> typ.Iterator[None]:
             os.environ.pop("CUPRUM_STREAM_BACKEND", None)
         else:
             os.environ["CUPRUM_STREAM_BACKEND"] = previous
+        _backend._check_rust_available.cache_clear()
         _backend.get_stream_backend.cache_clear()
 
 
