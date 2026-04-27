@@ -8,7 +8,7 @@ import typing as typ
 
 import pytest
 
-from benchmarks import profile_tee_hotpath
+from benchmarks import profile_tee_hotpath, tee_profile_worker
 from benchmarks.deterministic_b64_fixture import FixtureConfig, write_fixture
 from benchmarks.profile_tee_hotpath import (
     TeeProfileDriverConfig,
@@ -198,12 +198,12 @@ def test_worker_exercises_parent_side_consume_path(
         assert result["status"] == "ok"
         assert result["exit_code"] == 0
         assert result["scenario"] == f"{mode}-devnull-{cb_label}-s1-python"
-        captured_output_length = typ.cast("int", result["captured_output_length"])
+        captured_output_length = result["captured_output_length"]
         if mode == "echo":
             assert captured_output_length == 0
         else:
             assert captured_output_length > 0
-        stdout_line_count = typ.cast("int", result["stdout_line_count"])
+        stdout_line_count = result["stdout_line_count"]
         if with_line_callbacks:
             assert stdout_line_count > 0
         else:
@@ -236,6 +236,34 @@ def test_worker_accumulates_repeat_counters(tmp_path: pth.Path) -> None:
     assert result["stdout_line_count"] == 3, (
         f"expected line callbacks to accumulate across repeats, got {result}"
     )
+
+
+def test_worker_cli_reports_config_errors(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Worker CLI returns a process-style error for invalid configuration."""
+    missing_fixture = tmp_path / "missing.b64"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "tee_profile_worker.py",
+            "--fixture",
+            str(missing_fixture),
+            "--stages",
+            "1",
+            "--mode",
+            "echo",
+            "--sink-kind",
+            "devnull",
+        ],
+    )
+
+    assert tee_profile_worker.main() == 2
+    captured = capsys.readouterr()
+    assert f"fixture_path must exist and be a file: {missing_fixture}" in captured.err
 
 
 def test_default_scenarios_use_requested_repeat_count(tmp_path: pth.Path) -> None:

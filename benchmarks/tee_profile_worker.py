@@ -27,10 +27,30 @@ from cuprum import (
 
 type TeeMode = typ.Literal["echo", "capture", "tee"]
 type BackendName = typ.Literal["auto", "python", "rust"]
+type WorkerCommandResult = sh.CommandResult | sh.PipelineResult
 
 _VALID_MODES = {"echo", "capture", "tee"}
 _VALID_SINKS = {"devnull", "text_blackhole", "pty_blackhole"}
 _VALID_BACKENDS = {"auto", "python", "rust"}
+
+
+class TeeProfileWorkerResult(typ.TypedDict):
+    """Machine-readable tee profiling worker result payload."""
+
+    scenario: str
+    fixture_path: str
+    fixture_manifest_hash: str | None
+    stages: int
+    mode: TeeMode
+    sink_kind: SinkKind
+    with_line_callbacks: bool
+    backend: BackendName
+    repeat_count: int
+    wall_time_seconds: float
+    status: typ.Literal["ok", "failed"]
+    exit_code: int
+    captured_output_length: int
+    stdout_line_count: int
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -201,10 +221,14 @@ def _manifest_hash(fixture_path: pth.Path) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _run_once(config: TeeProfileWorkerConfig) -> tuple[int, int, int]:  # noqa: PLR0914
-    """Run one Cuprum command and return status, exit code, and capture length."""
-    worker_cmd = _build_command(config)
-    capture, echo = _capture_and_echo_flags(config.mode)
+def _run_command_sync(
+    config: TeeProfileWorkerConfig,
+    worker_cmd: _WorkerCommand,
+    *,
+    capture: bool,
+    echo: bool,
+) -> tuple[WorkerCommandResult, int]:
+    """Run one configured command synchronously and count stdout line events."""
     line_count = 0
 
     def observe_line(event: ExecEvent) -> None:
@@ -236,25 +260,42 @@ def _run_once(config: TeeProfileWorkerConfig) -> tuple[int, int, int]:  # noqa: 
                     echo=echo,
                     context=context,
                 )
+    return result, line_count
+
+
+def _result_exit_code(result: WorkerCommandResult) -> int:
+    """Return the failing exit code for a command or pipeline result."""
+    if result.ok:
+        return 0
+    if isinstance(result, sh.PipelineResult):
+        failure = result.failure
+        return 0 if failure is None else int(failure.exit_code)
+    return int(result.exit_code)
+
+
+def _run_once(config: TeeProfileWorkerConfig) -> tuple[int, int, int]:
+    """Run one Cuprum command and return status, exit code, and capture length."""
+    worker_cmd = _build_command(config)
+    capture, echo = _capture_and_echo_flags(config.mode)
+    result, line_count = _run_command_sync(
+        config,
+        worker_cmd,
+        capture=capture,
+        echo=echo,
+    )
 
     captured = result.stdout
     captured_len = len(captured) if captured is not None else 0
-    ok = bool(result.ok)
-    if isinstance(result, sh.PipelineResult):
-        failure = result.failure
-        exit_code = 0 if failure is None else int(failure.exit_code)
-    else:
-        exit_code = int(result.exit_code)
-    return captured_len, exit_code if not ok else 0, line_count
+    return captured_len, _result_exit_code(result), line_count
 
 
-def run_tee_profile_worker(config: TeeProfileWorkerConfig) -> dict[str, object]:
+def run_tee_profile_worker(config: TeeProfileWorkerConfig) -> TeeProfileWorkerResult:
     """Execute a configured tee profiling worker and return a JSON payload."""
     started = time.perf_counter()
     total_captured_len = 0
     total_line_count = 0
     exit_code = 0
-    status = "ok"
+    status: typ.Literal["ok", "failed"] = "ok"
     with _selected_backend(config.backend):
         for _ in range(config.repeat_count):
             captured_len, exit_code, line_count = _run_once(config)
@@ -307,8 +348,8 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     """Run the tee profiling worker CLI."""
     args = _parse_args()
-    result = run_tee_profile_worker(
-        TeeProfileWorkerConfig(
+    try:
+        config = TeeProfileWorkerConfig(
             fixture_path=args.fixture,
             stages=args.stages,
             mode=args.mode,
@@ -318,15 +359,19 @@ def main() -> int:
             repeat_count=args.repeat_count,
             encoding=args.encoding,
             errors=args.errors,
-        ),
-    )
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    result = run_tee_profile_worker(config)
     payload = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.output is None:
         sys.stdout.write(payload)
     else:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(payload)
-    return int(typ.cast("int", result["exit_code"]))
+    return result["exit_code"]
 
 
 if __name__ == "__main__":

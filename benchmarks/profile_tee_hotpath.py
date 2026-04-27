@@ -14,7 +14,11 @@ import time
 import typing as typ
 
 from benchmarks.summarize_folded import summarize_folded_file
-from benchmarks.tee_profile_worker import TeeProfileWorkerConfig, run_tee_profile_worker
+from benchmarks.tee_profile_worker import (
+    TeeProfileWorkerConfig,
+    TeeProfileWorkerResult,
+    run_tee_profile_worker,
+)
 from cuprum import is_rust_available
 
 if typ.TYPE_CHECKING:
@@ -328,7 +332,7 @@ def _run_worker_measured(
     scenario: TeeProfileScenario,
     *,
     scenario_dir: pth.Path,
-) -> dict[str, object]:
+) -> TeeProfileWorkerResult:
     """Run the worker directly and write ``worker-result.json``."""
     result = run_tee_profile_worker(scenario.worker_config())
     _write_json(scenario_dir / "worker-result.json", result)
@@ -462,7 +466,7 @@ def _run_py_spy(
     )
 
 
-def run_profile_scenario(*, config: TeeProfileDriverConfig) -> dict[str, object]:
+def run_profile_scenario(*, config: TeeProfileDriverConfig) -> typ.Mapping[str, object]:
     """Run one scenario, optionally under a profiler."""
     scenario = _scenario_by_name(config)
     scenario_dir = config.output_dir / scenario.name
@@ -484,9 +488,12 @@ def run_profile_scenario(*, config: TeeProfileDriverConfig) -> dict[str, object]
     typ.assert_never(config.profiler)
 
 
-def run_profile_matrix(*, config: TeeProfileDriverConfig) -> list[dict[str, object]]:
+def run_profile_matrix(
+    *,
+    config: TeeProfileDriverConfig,
+) -> list[typ.Mapping[str, object]]:
     """Run all scenarios serially in the fixed matrix order."""
-    results: list[dict[str, object]] = []
+    results: list[typ.Mapping[str, object]] = []
     for scenario in default_tee_profile_scenarios(
         fixture_path=config.fixture_path,
         wrapped_fixture_path=config.wrapped_fixture_path,
