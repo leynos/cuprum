@@ -1,0 +1,124 @@
+"""Tests for the tee profiling benchmark harness."""
+
+from __future__ import annotations
+
+import json
+import typing as typ
+
+from benchmarks.deterministic_b64_fixture import FixtureConfig, write_fixture
+from benchmarks.profile_tee_hotpath import (
+    TeeProfileDriverConfig,
+    default_tee_profile_scenarios,
+    run_profile_plan,
+)
+from benchmarks.summarize_folded import summarize_folded_file
+from benchmarks.tee_profile_worker import TeeProfileWorkerConfig, run_tee_profile_worker
+
+if typ.TYPE_CHECKING:
+    import pathlib as pth
+
+
+def test_fixture_generation_is_repeatable(tmp_path: pth.Path) -> None:
+    """The same seed and size produce identical manifest hashes."""
+    first_output = tmp_path / "first.b64"
+    first_manifest = tmp_path / "first.json"
+    second_output = tmp_path / "second.b64"
+    second_manifest = tmp_path / "second.json"
+
+    config = FixtureConfig(seed=12345, raw_bytes=4096, wrap=76)
+    first = write_fixture(config, output=first_output, manifest=first_manifest)
+    second = write_fixture(config, output=second_output, manifest=second_manifest)
+
+    assert first["sha256"] == second["sha256"]
+    assert first_output.read_bytes() == second_output.read_bytes()
+    assert json.loads(first_manifest.read_text())["sha256"] == first["sha256"]
+
+
+def test_folded_summary_ranks_inclusive_and_leaf_frames(tmp_path: pth.Path) -> None:
+    """Folded stack summaries expose ranked frame costs."""
+    folded = tmp_path / "stacks.folded"
+    folded.write_text("root;parent;leaf 3\nroot;other 2\nroot;parent;leaf 1\n")
+    summary_path = tmp_path / "summary.json"
+
+    summary = summarize_folded_file(
+        folded,
+        output=summary_path,
+        limit=5,
+        example_limit=2,
+    )
+    top_leaf = typ.cast("list[dict[str, object]]", summary["top_leaf_frames"])
+    top_inclusive = typ.cast(
+        "list[dict[str, object]]",
+        summary["top_inclusive_frames"],
+    )
+
+    assert summary["total_samples"] == 6
+    assert top_leaf[0]["frame"] == "leaf"
+    assert top_leaf[0]["leaf_samples"] == 4
+    assert top_inclusive[0]["frame"] == "root"
+    assert summary_path.exists()
+
+
+def test_profile_plan_contains_initial_matrix(tmp_path: pth.Path) -> None:
+    """The default plan preserves the required scenario matrix."""
+    fixture = tmp_path / "fixture.b64"
+    fixture.write_text("YWJj\n")
+    wrapped = tmp_path / "fixture-wrap76.b64"
+    wrapped.write_text("YWJj\n")
+    config = TeeProfileDriverConfig(
+        fixture_path=fixture,
+        wrapped_fixture_path=wrapped,
+        output_dir=tmp_path / "profiles",
+        profiler="none",
+        warmup_count=1,
+        repeat_count=3,
+    )
+
+    plan = run_profile_plan(config=config)
+    scenarios = typ.cast("list[dict[str, object]]", plan["scenarios"])
+
+    assert [scenario["name"] for scenario in scenarios] == [
+        "echo-devnull-nocb-s1",
+        "echo-textblackhole-nocb-s1",
+        "echo-pty-nocb-s1",
+        "tee-devnull-nocb-s1",
+        "echo-devnull-cb-s1",
+        "echo-devnull-nocb-s4-python",
+        "echo-devnull-nocb-s4-rust",
+    ]
+
+
+def test_worker_exercises_parent_side_consume_path(tmp_path: pth.Path) -> None:
+    """A small fixture can run through echo, capture, and tee modes."""
+    fixture = tmp_path / "fixture.b64"
+    fixture.write_text("YWJjZGVm\n")
+
+    for mode in ("echo", "capture", "tee"):
+        result = run_tee_profile_worker(
+            TeeProfileWorkerConfig(
+                fixture_path=fixture,
+                stages=1,
+                mode=mode,
+                sink_kind="devnull",
+                with_line_callbacks=False,
+                backend="python",
+                repeat_count=1,
+            ),
+        )
+
+        assert result["status"] == "ok"
+        assert result["exit_code"] == 0
+
+
+def test_default_scenarios_use_requested_repeat_count(tmp_path: pth.Path) -> None:
+    """Scenario expansion keeps fixed repeat counts across the matrix."""
+    fixture = tmp_path / "fixture.b64"
+    wrapped = tmp_path / "fixture-wrap76.b64"
+
+    scenarios = default_tee_profile_scenarios(
+        fixture_path=fixture,
+        wrapped_fixture_path=wrapped,
+        repeat_count=7,
+    )
+
+    assert {scenario.repeat_count for scenario in scenarios} == {7}
