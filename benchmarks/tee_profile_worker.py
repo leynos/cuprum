@@ -161,9 +161,13 @@ def _catalogue_for_worker() -> tuple[ProgramCatalogue, Program]:
 
 def _build_command(
     config: TeeProfileWorkerConfig,
+    *,
+    catalogue: ProgramCatalogue | None = None,
+    python_program: Program | None = None,
 ) -> _WorkerCommand:
     """Build a single-stage command or multi-stage pipeline."""
-    catalogue, python_program = _catalogue_for_worker()
+    if catalogue is None or python_program is None:
+        catalogue, python_program = _catalogue_for_worker()
     python = sh.make(python_program, catalogue=catalogue)
     writer = python("-c", _writer_script(), str(config.fixture_path))
     allowlist = frozenset([python_program])

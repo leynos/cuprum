@@ -459,18 +459,29 @@ def _run_py_spy(
     )
 
 
-def run_profile_scenario(*, config: TeeProfileDriverConfig) -> typ.Mapping[str, object]:
-    """Run one scenario, optionally under a profiler."""
-    scenario = _scenario_by_name(config)
-    scenario_dir = config.output_dir / scenario.name
-    scenario_dir.mkdir(parents=True, exist_ok=True)
-    _write_json(scenario_dir / "scenario.json", scenario.as_dict())
-    _run_warmup(scenario, warmup_count=config.warmup_count)
-    if config.profiler == "perf":
-        return _run_perf(scenario, scenario_dir=scenario_dir, config=config)
-    if config.profiler == "py-spy":
-        return _run_py_spy(scenario, scenario_dir=scenario_dir)
-    if config.profiler == "none":
+class ProfilerAdapter(typ.Protocol):
+    """Interface for profiler orchestration strategies."""
+
+    def run(
+        self,
+        scenario: TeeProfileScenario,
+        *,
+        scenario_dir: pth.Path,
+        config: TeeProfileDriverConfig,
+    ) -> typ.Mapping[str, object]:
+        """Execute the scenario under this profiler and return the result."""
+        ...
+
+
+class _NoneProfiler:
+    @staticmethod
+    def run(
+        scenario: TeeProfileScenario,
+        *,
+        scenario_dir: pth.Path,
+        config: TeeProfileDriverConfig,
+    ) -> typ.Mapping[str, object]:
+        """Execute the scenario without profiler sampling."""
         result = _run_worker_measured(scenario, scenario_dir=scenario_dir)
         notes = (
             "Profiler disabled; perf.data, perf.report.txt, stacks.folded, "
@@ -478,7 +489,55 @@ def run_profile_scenario(*, config: TeeProfileDriverConfig) -> typ.Mapping[str, 
         )
         (scenario_dir / "notes.txt").write_text(notes)
         return result
-    typ.assert_never(config.profiler)
+
+
+class _PerfProfiler:
+    @staticmethod
+    def run(
+        scenario: TeeProfileScenario,
+        *,
+        scenario_dir: pth.Path,
+        config: TeeProfileDriverConfig,
+    ) -> typ.Mapping[str, object]:
+        """Execute the scenario under Linux perf."""
+        return _run_perf(scenario, scenario_dir=scenario_dir, config=config)
+
+
+class _PySpyProfiler:
+    @staticmethod
+    def run(
+        scenario: TeeProfileScenario,
+        *,
+        scenario_dir: pth.Path,
+        config: TeeProfileDriverConfig,
+    ) -> typ.Mapping[str, object]:
+        """Execute the scenario under py-spy."""
+        return _run_py_spy(scenario, scenario_dir=scenario_dir)
+
+
+def _profiler_for(name: ProfilerName) -> ProfilerAdapter:
+    """Return the adapter for the requested profiler."""
+    if name == "none":
+        return _NoneProfiler()
+    if name == "perf":
+        return _PerfProfiler()
+    if name == "py-spy":
+        return _PySpyProfiler()
+    typ.assert_never(name)
+
+
+def run_profile_scenario(*, config: TeeProfileDriverConfig) -> typ.Mapping[str, object]:
+    """Run one scenario, optionally under a profiler."""
+    scenario = _scenario_by_name(config)
+    scenario_dir = config.output_dir / scenario.name
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(scenario_dir / "scenario.json", scenario.as_dict())
+    _run_warmup(scenario, warmup_count=config.warmup_count)
+    return _profiler_for(config.profiler).run(
+        scenario,
+        scenario_dir=scenario_dir,
+        config=config,
+    )
 
 
 def run_profile_matrix(
