@@ -4,6 +4,7 @@ MDFORMAT_ALL ?= mdformat-all
 TOOLS = $(MDFORMAT_ALL) ruff $(MDLINT) uv
 VENV_TOOLS = pytest
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
+export PATH := $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
 
 .PHONY: help all clean build build-release lint fmt check-fmt \
         markdownlint nixie test typecheck benchmark-micro benchmark-e2e \
