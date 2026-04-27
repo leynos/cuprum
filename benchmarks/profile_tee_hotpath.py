@@ -35,15 +35,11 @@ _DEFAULT_WRAPPED_FIXTURE = pth.Path("dist/fixtures/seed12345-wrap76.b64")
 def can_use_rust_backend() -> bool:
     """Return whether Rust backend scenarios can run in this environment.
 
-    Parameters
-    ----------
-    None
-        This check has no parameters.
-
     Returns
     -------
     bool
-        ``True`` when the Rust extension is importable in this environment.
+        ``True`` when the Cuprum Rust extension is importable in the current
+        environment; ``False`` otherwise.
     """
     return is_rust_available()
 
@@ -239,16 +235,16 @@ def default_tee_profile_scenarios(
     Parameters
     ----------
     fixture_path:
-        Unwrapped fixture path used by no-callback scenarios.
+        Path to the unwrapped base64 fixture used by most scenarios.
     wrapped_fixture_path:
-        Wrap-76 fixture path used by line-callback scenarios.
+        Path to the wrap-76 fixture used by line-callback scenarios.
     repeat_count:
         Measured repeat count applied to every scenario.
 
     Returns
     -------
     tuple[TeeProfileScenario, ...]
-        Ordered tuple of default scenarios. The Rust backend scenario is
+        Ordered tuple of default profiling scenarios. The Rust-backend scenario
         omitted when ``can_use_rust_backend()`` returns ``False``.
     """
     return (
@@ -310,7 +306,8 @@ def run_profile_plan(*, config: TeeProfileDriverConfig) -> dict[str, object]:
     Parameters
     ----------
     config:
-        Tee profiling driver configuration.
+        Driver configuration including fixture paths, output directory,
+        profiler choice, and run counts.
 
     Returns
     -------
@@ -318,8 +315,8 @@ def run_profile_plan(*, config: TeeProfileDriverConfig) -> dict[str, object]:
         JSON-serialisable plan with ``fixture_path``,
         ``wrapped_fixture_path``, ``output_dir``, ``profiler``,
         ``warmup_count``, ``repeat_count``, ``perf_frequency``,
-        ``perf_call_graph``, and ``scenarios`` keys. Each scenario mapping
-        includes ``worker_command`` and ``profile_dir``.
+        ``perf_call_graph``, and ``scenarios`` (list of dicts, each containing
+        ``worker_command`` and ``profile_dir``).
     """
     scenarios = default_tee_profile_scenarios(
         fixture_path=config.fixture_path,
@@ -574,7 +571,8 @@ def run_profile_scenario(*, config: TeeProfileDriverConfig) -> typ.Mapping[str, 
     Parameters
     ----------
     config:
-        Tee profiling driver configuration with ``scenario_name`` set.
+        Driver configuration with ``scenario_name`` identifying the scenario
+        to execute.
 
     Returns
     -------
@@ -602,12 +600,14 @@ def run_profile_matrix(
     Parameters
     ----------
     config:
-        Tee profiling driver configuration.
+        Driver configuration for the full scenario matrix.
 
     Returns
     -------
     list[Mapping[str, object]]
-        Worker result mappings in scenario matrix order.
+        List of worker result mappings in default scenario matrix order.
+        Execution stops and propagates the failure result on the first
+        non-zero exit code.
     """
     results: list[typ.Mapping[str, object]] = []
     for scenario in default_tee_profile_scenarios(
@@ -688,15 +688,11 @@ def _config_from_args(args: argparse.Namespace) -> TeeProfileDriverConfig:
 def main() -> int:
     """Run the tee profile driver CLI.
 
-    Parameters
-    ----------
-    None
-        Reads arguments from ``sys.argv``.
-
     Returns
     -------
     int
-        Process exit code.
+        Process exit code; 0 on success, non-zero on worker or configuration
+        failure.
     """
     args = _base_parser().parse_args()
     config = _config_from_args(args)

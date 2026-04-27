@@ -115,18 +115,18 @@ def write_fixture(
     Parameters
     ----------
     config:
-        Fixture configuration containing the seed, raw byte count, and wrap
-        mode.
+        Fixture generation settings (seed, raw_bytes, wrap).
     output:
-        Path written with the base64 payload.
+        Destination path for the base64-encoded fixture payload.
     manifest:
-        Path written with JSON metadata.
+        Destination path for the JSON manifest file.
 
     Returns
     -------
     dict[str, object]
-        Manifest payload with ``seed``, ``raw_bytes``, ``wrap``,
-        ``output_bytes``, ``sha256``, and ``algorithm`` keys.
+        Manifest payload with keys ``seed`` (int), ``raw_bytes`` (int),
+        ``wrap`` (int), ``output_bytes`` (int), ``sha256`` (str), and
+        ``algorithm`` (str).
     """
     output.parent.mkdir(parents=True, exist_ok=True)
     manifest.parent.mkdir(parents=True, exist_ok=True)
@@ -176,15 +176,10 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     """Run the fixture generator.
 
-    Parameters
-    ----------
-    None
-        Reads arguments from ``sys.argv``.
-
     Returns
     -------
     int
-        Process exit code.
+        Process exit code; 0 on success.
     """
     args = _parse_args()
     payload = write_fixture(

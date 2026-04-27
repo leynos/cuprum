@@ -97,19 +97,22 @@ def summarize_folded_file(
     Parameters
     ----------
     folded_path:
-        Folded-stack text file to parse.
+        Path to a folded-stack text file where each non-empty line has the
+        form ``frame1;frame2 count``.
     output:
-        JSON destination for the summary document.
+        Path at which the JSON summary is written (parent directories are
+        created automatically).
     limit:
-        Maximum ranked entries per list. Defaults to ``30``.
+        Maximum number of entries in each ranked list. Defaults to 30.
     example_limit:
-        Maximum example stacks retained per frame. Defaults to ``3``.
+        Maximum number of example stack strings stored per frame. Defaults to 3.
 
     Returns
     -------
     dict[str, object]
-        Summary payload with ``total_samples``, ``top_inclusive_frames``,
-        ``top_leaf_frames``, and ``top_stacks`` keys.
+        Summary with keys ``total_samples`` (int), ``top_inclusive_frames``
+        (list of dicts), ``top_leaf_frames`` (list of dicts), and
+        ``top_stacks`` (list of dicts).
     """
     state = _FoldedSummaryState(
         inclusive=collections.Counter(),
@@ -159,15 +162,10 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     """Run the folded-stack summariser CLI.
 
-    Parameters
-    ----------
-    None
-        Reads arguments from ``sys.argv``.
-
     Returns
     -------
     int
-        Process exit code.
+        Process exit code; 0 on success.
     """
     args = _parse_args()
     summarize_folded_file(args.folded, output=args.output, limit=args.limit)

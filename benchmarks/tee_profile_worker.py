@@ -313,16 +313,18 @@ def run_tee_profile_worker(config: TeeProfileWorkerConfig) -> TeeProfileWorkerRe
     Parameters
     ----------
     config:
-        Tee profiling worker configuration.
+        Worker execution settings including fixture path, stage count, mode,
+        sink kind, backend, and repeat count.
 
     Returns
     -------
     TeeProfileWorkerResult
-        Typed result payload with ``scenario``, ``fixture_path``,
-        ``fixture_manifest_hash``, ``stages``, ``mode``, ``sink_kind``,
-        ``with_line_callbacks``, ``backend``, ``repeat_count``,
-        ``wall_time_seconds``, ``status``, ``exit_code``,
-        ``captured_output_length``, and ``stdout_line_count`` keys.
+        Result mapping with keys ``scenario`` (str), ``fixture_path`` (str),
+        ``fixture_manifest_hash`` (str or None), ``stages`` (int), ``mode``
+        (str), ``sink_kind`` (str), ``with_line_callbacks`` (bool),
+        ``backend`` (str), ``repeat_count`` (int), ``wall_time_seconds``
+        (float), ``status`` (``"ok"`` or ``"failed"``), ``exit_code`` (int),
+        ``captured_output_length`` (int), and ``stdout_line_count`` (int).
     """
     started = time.perf_counter()
     total_captured_len = 0
@@ -381,15 +383,11 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     """Run the tee profiling worker CLI.
 
-    Parameters
-    ----------
-    None
-        Reads arguments from ``sys.argv``.
-
     Returns
     -------
     int
-        Process exit code.
+        Process exit code derived from the worker result's ``exit_code`` field;
+        0 on success.
     """
     args = _parse_args()
     try:

@@ -114,17 +114,18 @@ def open_sink(
     Parameters
     ----------
     kind:
-        Sink implementation to open: ``"devnull"``, ``"text_blackhole"``, or
-        ``"pty_blackhole"``.
+        Sink variant: ``"devnull"`` (OS null device), ``"text_blackhole"``
+        (character counter), or ``"pty_blackhole"`` (pseudo-terminal drained
+        by a daemon thread).
     encoding:
-        Text encoding used by sinks that wrap file descriptors.
+        Text encoding forwarded to the underlying stream or PTY slave.
     errors:
-        Error handling strategy used by sinks that wrap file descriptors.
+        Error-handling scheme forwarded to the underlying stream.
 
     Returns
     -------
     Iterator[IO[str]]
-        Context-managed writable text stream.
+        Context-managed writable text stream; resources are released on exit.
     """
     if kind == "devnull":
         with pth.Path(os.devnull).open("w", encoding=encoding, errors=errors) as stream:
