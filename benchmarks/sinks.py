@@ -37,7 +37,18 @@ class TextBlackhole(io.TextIOBase):
 
 
 class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
-    """TTY-like sink with a background drainer for throughput profiling."""
+    """TTY-like sink with a background drainer for throughput profiling.
+
+    Synchronisation contract
+    ------------------------
+    The master file-descriptor is owned exclusively by the ``_drain`` daemon
+    thread after ``__enter__`` returns. The slave ``IO[str]`` stream returned
+    by ``__enter__`` must only be used from the thread that called
+    ``__enter__``. ``__exit__`` closes the slave first, which causes the
+    master-side ``os.read`` in ``_drain`` to raise ``OSError`` and return,
+    then waits up to five seconds for the thread to finish. No lock is needed
+    because the two threads access disjoint file descriptors.
+    """
 
     def __init__(self, *, encoding: str, errors: str) -> None:
         self._encoding = encoding

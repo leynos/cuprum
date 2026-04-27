@@ -9,6 +9,7 @@ import json
 import os
 import pathlib as pth
 import sys
+import threading
 import time
 import typing as typ
 
@@ -32,6 +33,7 @@ type WorkerCommandResult = sh.CommandResult | sh.PipelineResult
 _VALID_MODES = {"echo", "capture", "tee"}
 _VALID_SINKS = {"devnull", "text_blackhole", "pty_blackhole"}
 _VALID_BACKENDS = {"auto", "python", "rust"}
+_BACKEND_LOCK = threading.Lock()
 
 
 class TeeProfileWorkerResult(typ.TypedDict):
@@ -182,23 +184,29 @@ def _build_command(
 
 @contextlib.contextmanager
 def _selected_backend(backend: BackendName) -> typ.Iterator[None]:
-    """Select the stream backend for parent-side pipeline pumping."""
-    previous = os.environ.get("CUPRUM_STREAM_BACKEND")
-    if backend == "auto":
-        os.environ.pop("CUPRUM_STREAM_BACKEND", None)
-    else:
-        os.environ["CUPRUM_STREAM_BACKEND"] = backend
-    _backend._check_rust_available.cache_clear()
-    _backend.get_stream_backend.cache_clear()
-    try:
-        yield
-    finally:
-        if previous is None:
+    """Select the stream backend for parent-side pipeline pumping.
+
+    Acquires ``_BACKEND_LOCK`` for the duration of the context to serialise
+    access to ``os.environ`` and the backend LRU caches. This context manager
+    is not re-entrant; callers must not nest it.
+    """
+    with _BACKEND_LOCK:
+        previous = os.environ.get("CUPRUM_STREAM_BACKEND")
+        if backend == "auto":
             os.environ.pop("CUPRUM_STREAM_BACKEND", None)
         else:
-            os.environ["CUPRUM_STREAM_BACKEND"] = previous
+            os.environ["CUPRUM_STREAM_BACKEND"] = backend
         _backend._check_rust_available.cache_clear()
         _backend.get_stream_backend.cache_clear()
+        try:
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop("CUPRUM_STREAM_BACKEND", None)
+            else:
+                os.environ["CUPRUM_STREAM_BACKEND"] = previous
+            _backend._check_rust_available.cache_clear()
+            _backend.get_stream_backend.cache_clear()
 
 
 def _capture_and_echo_flags(mode: TeeMode) -> tuple[bool, bool]:
@@ -232,7 +240,13 @@ def _run_command_sync(
     capture: bool,
     echo: bool,
 ) -> tuple[WorkerCommandResult, int]:
-    """Run one configured command synchronously and count stdout line events."""
+    """Run one configured command synchronously and count stdout line events.
+
+    The ``observe_line`` closure mutates ``line_count`` via ``nonlocal``
+    without a lock. This is safe because ``sh.observe`` calls the callback
+    synchronously in the same thread that calls ``run_sync``; no concurrent
+    access to ``line_count`` is possible.
+    """
     line_count = 0
 
     def observe_line(event: ExecEvent) -> None:
