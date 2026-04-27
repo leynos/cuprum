@@ -49,17 +49,29 @@ class TeeProfileWorkerConfig:
 
     def __post_init__(self) -> None:
         """Validate worker configuration."""
+        self._coerce_fixture_path()
+        self._validate_numeric_bounds()
+        self._validate_enum_fields()
+
+    def _coerce_fixture_path(self) -> None:
+        """Coerce and validate the fixture path."""
         fixture_path = pth.Path(self.fixture_path)
         object.__setattr__(self, "fixture_path", fixture_path)
         if not fixture_path.is_file():
             msg = f"fixture_path must exist and be a file: {fixture_path}"
             raise ValueError(msg)
+
+    def _validate_numeric_bounds(self) -> None:
+        """Validate numeric worker bounds."""
         if self.stages < 1:
             msg = f"stages must be >= 1, got {self.stages}"
             raise ValueError(msg)
         if self.repeat_count < 1:
             msg = f"repeat-count must be >= 1, got {self.repeat_count}"
             raise ValueError(msg)
+
+    def _validate_enum_fields(self) -> None:
+        """Validate enum-like worker fields."""
         if self.mode not in _VALID_MODES:
             msg = f"mode must be one of {sorted(_VALID_MODES)}, got {self.mode!r}"
             raise ValueError(msg)
