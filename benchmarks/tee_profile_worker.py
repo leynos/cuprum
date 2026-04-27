@@ -89,6 +89,14 @@ class TeeProfileWorkerConfig:
             raise ValueError(msg)
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _WorkerCommand:
+    """Built command plus allowlist required to execute it."""
+
+    cmd: sh.SafeCmd | sh.Pipeline
+    allowlist: frozenset[Program]
+
+
 def _writer_script() -> str:
     """Return the fixture replay script."""
     return "\n".join(
@@ -133,18 +141,19 @@ def _catalogue_for_worker() -> tuple[ProgramCatalogue, Program]:
 
 def _build_command(
     config: TeeProfileWorkerConfig,
-) -> tuple[sh.SafeCmd | sh.Pipeline, Program]:
+) -> _WorkerCommand:
     """Build a single-stage command or multi-stage pipeline."""
     catalogue, python_program = _catalogue_for_worker()
     python = sh.make(python_program, catalogue=catalogue)
     writer = python("-c", _writer_script(), str(config.fixture_path))
+    allowlist = frozenset([python_program])
     if config.stages == 1:
-        return writer, python_program
+        return _WorkerCommand(cmd=writer, allowlist=allowlist)
 
     command: sh.SafeCmd | sh.Pipeline = writer | python("-c", _passthrough_script())
     for _ in range(config.stages - 2):
         command |= python("-c", _passthrough_script())
-    return command, python_program
+    return _WorkerCommand(cmd=command, allowlist=allowlist)
 
 
 @contextlib.contextmanager
@@ -192,7 +201,7 @@ def _manifest_hash(fixture_path: pth.Path) -> str | None:
 
 def _run_once(config: TeeProfileWorkerConfig) -> tuple[int, int, int]:  # noqa: PLR0914
     """Run one Cuprum command and return status, exit code, and capture length."""
-    command, python_program = _build_command(config)
+    worker_cmd = _build_command(config)
     capture, echo = _capture_and_echo_flags(config.mode)
     line_count = 0
 
@@ -211,16 +220,20 @@ def _run_once(config: TeeProfileWorkerConfig) -> tuple[int, int, int]:  # noqa: 
             encoding=config.encoding,
             errors=config.errors,
         )
-        with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        with scoped(ScopeConfig(allowlist=worker_cmd.allowlist)):
             if config.with_line_callbacks:
                 with sh.observe(observe_line):
-                    result = command.run_sync(
+                    result = worker_cmd.cmd.run_sync(
                         capture=capture,
                         echo=echo,
                         context=context,
                     )
             else:
-                result = command.run_sync(capture=capture, echo=echo, context=context)
+                result = worker_cmd.cmd.run_sync(
+                    capture=capture,
+                    echo=echo,
+                    context=context,
+                )
 
     captured = result.stdout
     captured_len = len(captured) if captured is not None else 0

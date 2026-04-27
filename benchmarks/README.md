@@ -48,9 +48,9 @@ uv run python benchmarks/deterministic_b64_fixture.py \
 
 Recommended raw fixture sizes are:
 
-- smoke: 64 MiB;
-- medium: 512 MiB;
-- heavy: 1.5 GiB, producing roughly 2 GiB of base64 text.
+- smoke: 64 MiB (mebibytes);
+- medium: 512 MiB (mebibytes);
+- heavy: 1.5 GiB (gibibytes), producing roughly 2 GiB of base64 text.
 
 The manifest records the seed, raw size, wrapping mode, output byte count,
 output SHA-256, and generator algorithm identifier.
@@ -91,6 +91,10 @@ uv run python benchmarks/profile_tee_hotpath.py \
   run-scenario \
   --scenario echo-devnull-nocb-s1
 ```
+
+The `perf` sampling defaults match `perf record -F 999 -g --call-graph
+dwarf,16384`. Tune them without editing the harness by passing
+`--perf-frequency` or `--perf-call-graph` before the subcommand.
 
 Run the full matrix serially:
 

@@ -1047,7 +1047,7 @@ default scenarios.
 For parent-side tee and capture profiling, use the dedicated harness documented
 in `benchmarks/README.md`. That harness replays deterministic base64 fixtures
 into the parent process and records text-first `perf` artefacts for the
-`echo=True` and `capture=True` consume path. It is the right tool when
+`echo=True` and `capture=True` consumption paths. It is the right tool when
 investigating sink write cost, line-callback overhead, capture accumulation, or
 the boundary between inter-stage pumping and final stream consumption.
 

@@ -34,6 +34,56 @@ def test_fixture_generation_is_repeatable(tmp_path: pth.Path) -> None:
     assert json.loads(first_manifest.read_text())["sha256"] == first["sha256"]
 
 
+def test_folded_summary_empty_file_yields_zero_totals(tmp_path: pth.Path) -> None:
+    """Empty folded input produces zero samples and empty rankings."""
+    folded = tmp_path / "stacks.folded"
+    folded.write_text("")
+    summary_path = tmp_path / "summary.json"
+
+    summary = summarize_folded_file(
+        folded,
+        output=summary_path,
+        limit=5,
+        example_limit=2,
+    )
+    top_leaf = typ.cast("list[dict[str, object]]", summary["top_leaf_frames"])
+    top_inclusive = typ.cast(
+        "list[dict[str, object]]",
+        summary["top_inclusive_frames"],
+    )
+
+    assert summary["total_samples"] == 0
+    assert top_leaf == []
+    assert top_inclusive == []
+    assert summary_path.exists()
+
+
+def test_folded_summary_all_invalid_lines_yield_zero_totals(
+    tmp_path: pth.Path,
+) -> None:
+    """Malformed folded lines are ignored and do not contribute samples."""
+    folded = tmp_path / "stacks.folded"
+    folded.write_text("root;leaf\nroot;leaf not_an_int\n; 3\n")
+    summary_path = tmp_path / "summary.json"
+
+    summary = summarize_folded_file(
+        folded,
+        output=summary_path,
+        limit=5,
+        example_limit=2,
+    )
+    top_leaf = typ.cast("list[dict[str, object]]", summary["top_leaf_frames"])
+    top_inclusive = typ.cast(
+        "list[dict[str, object]]",
+        summary["top_inclusive_frames"],
+    )
+
+    assert summary["total_samples"] == 0
+    assert top_leaf == []
+    assert top_inclusive == []
+    assert summary_path.exists()
+
+
 def test_folded_summary_ranks_inclusive_and_leaf_frames(tmp_path: pth.Path) -> None:
     """Folded stack summaries expose ranked frame costs."""
     folded = tmp_path / "stacks.folded"
@@ -108,6 +158,45 @@ def test_worker_exercises_parent_side_consume_path(tmp_path: pth.Path) -> None:
 
         assert result["status"] == "ok"
         assert result["exit_code"] == 0
+        assert result["scenario"] == f"{mode}-devnull-nocb-s1-python"
+        captured_output_length = typ.cast("int", result["captured_output_length"])
+        if mode == "echo":
+            assert captured_output_length == 0
+        else:
+            assert captured_output_length > 0
+        assert result["stdout_line_count"] == 0
+
+
+def test_worker_exercises_parent_side_consume_path_with_callbacks(
+    tmp_path: pth.Path,
+) -> None:
+    """A small fixture can run through all modes with line callbacks."""
+    fixture = tmp_path / "fixture_with_cb.b64"
+    fixture.write_text("YWJjZGVm\n")
+
+    for mode in ("echo", "capture", "tee"):
+        result = run_tee_profile_worker(
+            TeeProfileWorkerConfig(
+                fixture_path=fixture,
+                stages=1,
+                mode=mode,
+                sink_kind="devnull",
+                with_line_callbacks=True,
+                backend="python",
+                repeat_count=1,
+            ),
+        )
+
+        assert result["status"] == "ok"
+        assert result["exit_code"] == 0
+        assert result["scenario"] == f"{mode}-devnull-cb-s1-python"
+        captured_output_length = typ.cast("int", result["captured_output_length"])
+        if mode == "echo":
+            assert captured_output_length == 0
+        else:
+            assert captured_output_length > 0
+        stdout_line_count = typ.cast("int", result["stdout_line_count"])
+        assert stdout_line_count > 0
 
 
 def test_default_scenarios_use_requested_repeat_count(tmp_path: pth.Path) -> None:

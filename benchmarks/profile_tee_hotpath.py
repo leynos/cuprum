@@ -84,6 +84,8 @@ class TeeProfileDriverConfig:
     profiler: ProfilerName = "none"
     warmup_count: int = 1
     repeat_count: int = 3
+    perf_frequency: int = 999
+    perf_call_graph: str = "dwarf,16384"
     scenario_name: str | None = None
 
     def __post_init__(self) -> None:
@@ -93,6 +95,12 @@ class TeeProfileDriverConfig:
             raise ValueError(msg)
         if self.repeat_count < 1:
             msg = f"repeat-count must be >= 1, got {self.repeat_count}"
+            raise ValueError(msg)
+        if self.perf_frequency < 1:
+            msg = f"perf-frequency must be >= 1, got {self.perf_frequency}"
+            raise ValueError(msg)
+        if not self.perf_call_graph.strip():
+            msg = "perf-call-graph must be a non-empty string"
             raise ValueError(msg)
 
 
@@ -269,6 +277,8 @@ def run_profile_plan(*, config: TeeProfileDriverConfig) -> dict[str, object]:
         "profiler": config.profiler,
         "warmup_count": config.warmup_count,
         "repeat_count": config.repeat_count,
+        "perf_frequency": config.perf_frequency,
+        "perf_call_graph": config.perf_call_graph,
         "scenarios": [
             {
                 **scenario.as_dict(),
@@ -321,6 +331,7 @@ def _run_perf(
     scenario: TeeProfileScenario,
     *,
     scenario_dir: pth.Path,
+    config: TeeProfileDriverConfig,
 ) -> dict[str, object]:
     """Record one scenario with Linux ``perf`` and generate text artefacts."""
     perf = _require_tool("perf")
@@ -330,10 +341,10 @@ def _run_perf(
         perf,
         "record",
         "-F",
-        "999",
+        str(config.perf_frequency),
         "-g",
         "--call-graph",
-        "dwarf,16384",
+        config.perf_call_graph,
         "-o",
         str(perf_data),
         "--",
@@ -442,7 +453,7 @@ def run_profile_scenario(*, config: TeeProfileDriverConfig) -> dict[str, object]
     _write_json(scenario_dir / "scenario.json", scenario.as_dict())
     _run_warmup(scenario, warmup_count=config.warmup_count)
     if config.profiler == "perf":
-        return _run_perf(scenario, scenario_dir=scenario_dir)
+        return _run_perf(scenario, scenario_dir=scenario_dir, config=config)
     if config.profiler == "py-spy":
         return _run_py_spy(scenario, scenario_dir=scenario_dir)
     if config.profiler == "none":
@@ -490,6 +501,8 @@ def _base_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--warmup-count", type=int, default=1)
     parser.add_argument("--repeat-count", type=int, default=3)
+    parser.add_argument("--perf-frequency", type=int, default=999)
+    parser.add_argument("--perf-call-graph", default="dwarf,16384")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("plan")
     subparsers.add_parser("run")
@@ -507,6 +520,8 @@ def _config_from_args(args: argparse.Namespace) -> TeeProfileDriverConfig:
         profiler=args.profiler,
         warmup_count=args.warmup_count,
         repeat_count=args.repeat_count,
+        perf_frequency=args.perf_frequency,
+        perf_call_graph=args.perf_call_graph,
         scenario_name=getattr(args, "scenario", None),
     )
 

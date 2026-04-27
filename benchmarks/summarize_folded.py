@@ -49,7 +49,7 @@ class _FoldedSummaryState:
         stack_text = ";".join(frames)
         self.stacks[stack_text] += samples
         self.total += samples
-        for frame in set(frames):
+        for frame in frames:
             self.inclusive[frame] += samples
             frame_examples = self.examples.setdefault(frame, [])
             if len(frame_examples) < example_limit:
