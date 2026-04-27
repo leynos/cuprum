@@ -126,6 +126,21 @@ def test_folded_summary_ranks_inclusive_and_leaf_frames(tmp_path: pth.Path) -> N
     assert summary_path.exists()
 
 
+def test_folded_summary_counts_repeated_frames_once_per_stack(
+    tmp_path: pth.Path,
+) -> None:
+    """Inclusive folded counts deduplicate frames within one stack."""
+    summary, _top_leaf, top_inclusive, _summary_path = _summarise_folded(
+        tmp_path, "root;recursive;recursive;leaf 3\n"
+    )
+
+    recursive = next(entry for entry in top_inclusive if entry["frame"] == "recursive")
+
+    assert summary["total_samples"] == 3
+    assert recursive["inclusive_samples"] == 3
+    assert recursive["example_stacks"] == ["root;recursive;recursive;leaf"]
+
+
 @pytest.mark.parametrize(
     ("rust_available", "expected_names"),
     [

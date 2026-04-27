@@ -253,7 +253,8 @@ def _worker_command(scenario: TeeProfileScenario) -> list[str]:
     """Build an equivalent worker command for plans and manual reruns."""
     command = [
         sys.executable,
-        str(pth.Path(__file__).with_name("tee_profile_worker.py")),
+        "-m",
+        "benchmarks.tee_profile_worker",
         "--fixture",
         str(scenario.fixture_path),
         "--stages",
