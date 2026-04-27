@@ -96,13 +96,12 @@ class TeeProfileDriverConfig:
             raise ValueError(msg)
 
 
-def default_tee_profile_scenarios(
-    *,
+def _single_stage_no_callback_scenarios(
     fixture_path: pth.Path,
-    wrapped_fixture_path: pth.Path,
+    *,
     repeat_count: int,
 ) -> tuple[TeeProfileScenario, ...]:
-    """Return the required initial tee profiling scenario matrix."""
+    """Return single-stage, no-callback scenarios across sinks and modes."""
     return (
         TeeProfileScenario(
             name="echo-devnull-nocb-s1",
@@ -144,6 +143,16 @@ def default_tee_profile_scenarios(
             backend="auto",
             repeat_count=repeat_count,
         ),
+    )
+
+
+def _line_callback_scenarios(
+    wrapped_fixture_path: pth.Path,
+    *,
+    repeat_count: int,
+) -> tuple[TeeProfileScenario, ...]:
+    """Return single-stage line-callback scenarios using the wrapped fixture."""
+    return (
         TeeProfileScenario(
             name="echo-devnull-cb-s1",
             fixture_path=wrapped_fixture_path,
@@ -154,6 +163,16 @@ def default_tee_profile_scenarios(
             backend="auto",
             repeat_count=repeat_count,
         ),
+    )
+
+
+def _multi_stage_backend_scenarios(
+    fixture_path: pth.Path,
+    *,
+    repeat_count: int,
+) -> tuple[TeeProfileScenario, ...]:
+    """Return multi-stage scenarios for Python/Rust backend comparison."""
+    return (
         TeeProfileScenario(
             name="echo-devnull-nocb-s4-python",
             fixture_path=fixture_path,
@@ -174,6 +193,20 @@ def default_tee_profile_scenarios(
             backend="rust",
             repeat_count=repeat_count,
         ),
+    )
+
+
+def default_tee_profile_scenarios(
+    *,
+    fixture_path: pth.Path,
+    wrapped_fixture_path: pth.Path,
+    repeat_count: int,
+) -> tuple[TeeProfileScenario, ...]:
+    """Return the required initial tee profiling scenario matrix."""
+    return (
+        *_single_stage_no_callback_scenarios(fixture_path, repeat_count=repeat_count),
+        *_line_callback_scenarios(wrapped_fixture_path, repeat_count=repeat_count),
+        *_multi_stage_backend_scenarios(fixture_path, repeat_count=repeat_count),
     )
 
 
