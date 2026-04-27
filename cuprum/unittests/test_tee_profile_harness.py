@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import sys
 import typing as typ
 
+from benchmarks import profile_tee_hotpath
 from benchmarks.deterministic_b64_fixture import FixtureConfig, write_fixture
 from benchmarks.profile_tee_hotpath import (
     TeeProfileDriverConfig,
@@ -16,6 +18,8 @@ from benchmarks.tee_profile_worker import TeeProfileWorkerConfig, run_tee_profil
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
+
+    import pytest
 
 
 def test_fixture_generation_is_repeatable(tmp_path: pth.Path) -> None:
@@ -211,3 +215,43 @@ def test_default_scenarios_use_requested_repeat_count(tmp_path: pth.Path) -> Non
     )
 
     assert {scenario.repeat_count for scenario in scenarios} == {7}
+
+
+def test_profile_cli_returns_scenario_worker_failure_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run-scenario returns the worker exit code when the worker fails."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "profile_tee_hotpath.py",
+            "run-scenario",
+            "--scenario",
+            "echo-devnull-nocb-s1",
+        ],
+    )
+    monkeypatch.setattr(
+        profile_tee_hotpath,
+        "run_profile_scenario",
+        lambda *, config: {"status": "failed", "exit_code": 17},
+    )
+
+    assert profile_tee_hotpath.main() == 17
+
+
+def test_profile_cli_returns_matrix_failure_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run returns non-zero when any matrix scenario reports failure."""
+    monkeypatch.setattr(sys, "argv", ["profile_tee_hotpath.py", "run"])
+    monkeypatch.setattr(
+        profile_tee_hotpath,
+        "run_profile_matrix",
+        lambda *, config: [
+            {"status": "ok", "exit_code": 0},
+            {"status": "failed", "exit_code": 3},
+        ],
+    )
+
+    assert profile_tee_hotpath.main() == 3

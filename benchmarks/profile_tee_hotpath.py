@@ -480,6 +480,25 @@ def run_profile_matrix(*, config: TeeProfileDriverConfig) -> list[dict[str, obje
     return results
 
 
+def _worker_result_exit_status(result: typ.Mapping[str, object]) -> int:
+    """Return the shell exit status implied by a worker result payload."""
+    exit_code = result.get("exit_code")
+    if isinstance(exit_code, int) and exit_code != 0:
+        return exit_code
+    if result.get("status") == "failed":
+        return 1
+    return 0
+
+
+def _matrix_exit_status(results: typ.Iterable[typ.Mapping[str, object]]) -> int:
+    """Return the first failing shell status from a scenario result sequence."""
+    for result in results:
+        exit_status = _worker_result_exit_status(result)
+        if exit_status != 0:
+            return exit_status
+    return 0
+
+
 def _base_parser() -> argparse.ArgumentParser:
     """Build the CLI parser."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -534,11 +553,11 @@ def main() -> int:
         print(json.dumps(run_profile_plan(config=config), indent=2, sort_keys=True))
         return 0
     if args.command == "run-scenario":
-        run_profile_scenario(config=config)
-        return 0
+        result = run_profile_scenario(config=config)
+        return _worker_result_exit_status(result)
     if args.command == "run":
-        run_profile_matrix(config=config)
-        return 0
+        results = run_profile_matrix(config=config)
+        return _matrix_exit_status(results)
     msg = f"unknown command: {args.command}"
     raise ValueError(msg)
 
