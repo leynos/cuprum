@@ -6,6 +6,8 @@ import json
 import sys
 import typing as typ
 
+import pytest
+
 from benchmarks import profile_tee_hotpath
 from benchmarks.deterministic_b64_fixture import FixtureConfig, write_fixture
 from benchmarks.profile_tee_hotpath import (
@@ -19,30 +21,25 @@ from benchmarks.tee_profile_worker import TeeProfileWorkerConfig, run_tee_profil
 if typ.TYPE_CHECKING:
     import pathlib as pth
 
-    import pytest
 
-
-def _run_folded_summary(
+def _summarise_folded(
     tmp_path: pth.Path,
     content: str,
-    *,
-    limit: int = 5,
-    example_limit: int = 2,
 ) -> tuple[
     dict[str, object],
     list[dict[str, object]],
     list[dict[str, object]],
     pth.Path,
 ]:
-    """Write *content* to a folded file, summarise it, and return the results."""
+    """Write a folded file, run summarize_folded_file, and return parsed results."""
     folded = tmp_path / "stacks.folded"
     folded.write_text(content)
     summary_path = tmp_path / "summary.json"
     summary = summarize_folded_file(
         folded,
         output=summary_path,
-        limit=limit,
-        example_limit=example_limit,
+        limit=5,
+        example_limit=2,
     )
     top_leaf = typ.cast("list[dict[str, object]]", summary["top_leaf_frames"])
     top_inclusive = typ.cast(
@@ -50,28 +47,6 @@ def _run_folded_summary(
         summary["top_inclusive_frames"],
     )
     return summary, top_leaf, top_inclusive, summary_path
-
-
-def _run_worker_for_mode(
-    fixture: pth.Path,
-    mode: str,
-    *,
-    with_line_callbacks: bool,
-    backend: str = "python",
-    repeat_count: int = 1,
-) -> dict[str, object]:
-    """Run the tee profile worker for a single mode and return its result."""
-    return run_tee_profile_worker(
-        TeeProfileWorkerConfig(
-            fixture_path=fixture,
-            stages=1,
-            mode=typ.cast("typ.Literal['echo', 'capture', 'tee']", mode),
-            sink_kind="devnull",
-            with_line_callbacks=with_line_callbacks,
-            backend=typ.cast("typ.Literal['auto', 'python', 'rust']", backend),
-            repeat_count=repeat_count,
-        ),
-    )
 
 
 def test_fixture_generation_is_repeatable(tmp_path: pth.Path) -> None:
@@ -99,7 +74,7 @@ def test_fixture_generation_is_repeatable(tmp_path: pth.Path) -> None:
 
 def test_folded_summary_empty_file_yields_zero_totals(tmp_path: pth.Path) -> None:
     """Empty folded input produces zero samples and empty rankings."""
-    summary, top_leaf, top_inclusive, summary_path = _run_folded_summary(tmp_path, "")
+    summary, top_leaf, top_inclusive, summary_path = _summarise_folded(tmp_path, "")
     assert summary["total_samples"] == 0
     assert top_leaf == []
     assert top_inclusive == []
@@ -110,7 +85,7 @@ def test_folded_summary_all_invalid_lines_yield_zero_totals(
     tmp_path: pth.Path,
 ) -> None:
     """Malformed folded lines are ignored and do not contribute samples."""
-    summary, top_leaf, top_inclusive, summary_path = _run_folded_summary(
+    summary, top_leaf, top_inclusive, summary_path = _summarise_folded(
         tmp_path, "root;leaf\nroot;leaf not_an_int\n; 3\n"
     )
     assert summary["total_samples"] == 0
@@ -121,7 +96,7 @@ def test_folded_summary_all_invalid_lines_yield_zero_totals(
 
 def test_folded_summary_ranks_inclusive_and_leaf_frames(tmp_path: pth.Path) -> None:
     """Folded stack summaries expose ranked frame costs."""
-    summary, top_leaf, top_inclusive, summary_path = _run_folded_summary(
+    summary, top_leaf, top_inclusive, summary_path = _summarise_folded(
         tmp_path, "root;parent;leaf 3\nroot;other 2\nroot;parent;leaf 1\n"
     )
     assert summary["total_samples"] == 6
@@ -197,72 +172,42 @@ def test_profile_plan_omits_rust_backend_when_unavailable(
     ], f"expected Rust scenario to be omitted, got {scenario_names}"
 
 
-def test_worker_exercises_parent_side_consume_path(tmp_path: pth.Path) -> None:
+@pytest.mark.parametrize("with_line_callbacks", [False, True])
+def test_worker_exercises_parent_side_consume_path(
+    tmp_path: pth.Path,
+    with_line_callbacks: bool,  # noqa: FBT001 - pytest parametrises this value.
+) -> None:
     """A small fixture can run through echo, capture, and tee modes."""
     fixture = tmp_path / "fixture.b64"
     fixture.write_text("YWJjZGVm\n")
+    cb_label = "cb" if with_line_callbacks else "nocb"
 
     for mode in ("echo", "capture", "tee"):
-        result = _run_worker_for_mode(fixture, mode, with_line_callbacks=False)
+        result = run_tee_profile_worker(
+            TeeProfileWorkerConfig(
+                fixture_path=fixture,
+                stages=1,
+                mode=mode,
+                sink_kind="devnull",
+                with_line_callbacks=with_line_callbacks,
+                backend="python",
+                repeat_count=1,
+            ),
+        )
 
-        assert result["status"] == "ok", (
-            f"expected worker status ok for {mode}, got {result}"
-        )
-        assert result["exit_code"] == 0, (
-            f"expected worker exit code 0 for {mode}, got {result}"
-        )
-        assert result["scenario"] == f"{mode}-devnull-nocb-s1-python", (
-            f"expected scenario label for {mode}, got {result['scenario']}"
-        )
+        assert result["status"] == "ok"
+        assert result["exit_code"] == 0
+        assert result["scenario"] == f"{mode}-devnull-{cb_label}-s1-python"
         captured_output_length = typ.cast("int", result["captured_output_length"])
         if mode == "echo":
-            assert captured_output_length == 0, (
-                "expected echo-only mode to capture 0 bytes, "
-                f"got {captured_output_length}"
-            )
+            assert captured_output_length == 0
         else:
-            assert captured_output_length > 0, (
-                f"expected {mode} mode to capture bytes, got {captured_output_length}"
-            )
-        assert result["stdout_line_count"] == 0, (
-            f"expected no line callbacks for {mode}, got {result['stdout_line_count']}"
-        )
-
-
-def test_worker_exercises_parent_side_consume_path_with_callbacks(
-    tmp_path: pth.Path,
-) -> None:
-    """A small fixture can run through all modes with line callbacks."""
-    fixture = tmp_path / "fixture_with_cb.b64"
-    fixture.write_text("YWJjZGVm\n")
-
-    for mode in ("echo", "capture", "tee"):
-        result = _run_worker_for_mode(fixture, mode, with_line_callbacks=True)
-
-        assert result["status"] == "ok", (
-            f"expected worker status ok for callback {mode}, got {result}"
-        )
-        assert result["exit_code"] == 0, (
-            f"expected worker exit code 0 for callback {mode}, got {result}"
-        )
-        assert result["scenario"] == f"{mode}-devnull-cb-s1-python", (
-            f"expected callback scenario label for {mode}, got {result['scenario']}"
-        )
-        captured_output_length = typ.cast("int", result["captured_output_length"])
-        if mode == "echo":
-            assert captured_output_length == 0, (
-                f"expected echo-only callback mode to capture 0 bytes, "
-                f"got {captured_output_length}"
-            )
-        else:
-            assert captured_output_length > 0, (
-                f"expected callback {mode} mode to capture bytes, "
-                f"got {captured_output_length}"
-            )
+            assert captured_output_length > 0
         stdout_line_count = typ.cast("int", result["stdout_line_count"])
-        assert stdout_line_count > 0, (
-            f"expected callback {mode} mode to observe lines, got {stdout_line_count}"
-        )
+        if with_line_callbacks:
+            assert stdout_line_count > 0
+        else:
+            assert stdout_line_count == 0
 
 
 def test_worker_accumulates_repeat_counters(tmp_path: pth.Path) -> None:
