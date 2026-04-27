@@ -308,7 +308,22 @@ def _run_once(config: TeeProfileWorkerConfig) -> tuple[int, int, int]:
 
 
 def run_tee_profile_worker(config: TeeProfileWorkerConfig) -> TeeProfileWorkerResult:
-    """Execute a configured tee profiling worker and return a JSON payload."""
+    """Execute a configured tee profiling worker and return a JSON payload.
+
+    Parameters
+    ----------
+    config:
+        Tee profiling worker configuration.
+
+    Returns
+    -------
+    TeeProfileWorkerResult
+        Typed result payload with ``scenario``, ``fixture_path``,
+        ``fixture_manifest_hash``, ``stages``, ``mode``, ``sink_kind``,
+        ``with_line_callbacks``, ``backend``, ``repeat_count``,
+        ``wall_time_seconds``, ``status``, ``exit_code``,
+        ``captured_output_length``, and ``stdout_line_count`` keys.
+    """
     started = time.perf_counter()
     total_captured_len = 0
     total_line_count = 0
@@ -364,7 +379,18 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    """Run the tee profiling worker CLI."""
+    """Run the tee profiling worker CLI.
+
+    Parameters
+    ----------
+    None
+        Reads arguments from ``sys.argv``.
+
+    Returns
+    -------
+    int
+        Process exit code.
+    """
     args = _parse_args()
     try:
         config = TeeProfileWorkerConfig(

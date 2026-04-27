@@ -110,7 +110,24 @@ def write_fixture(
     output: pth.Path,
     manifest: pth.Path,
 ) -> dict[str, object]:
-    """Write a deterministic base64 fixture and JSON manifest."""
+    """Write a deterministic base64 fixture and JSON manifest.
+
+    Parameters
+    ----------
+    config:
+        Fixture configuration containing the seed, raw byte count, and wrap
+        mode.
+    output:
+        Path written with the base64 payload.
+    manifest:
+        Path written with JSON metadata.
+
+    Returns
+    -------
+    dict[str, object]
+        Manifest payload with ``seed``, ``raw_bytes``, ``wrap``,
+        ``output_bytes``, ``sha256``, and ``algorithm`` keys.
+    """
     output.parent.mkdir(parents=True, exist_ok=True)
     manifest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -157,7 +174,18 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    """Run the fixture generator."""
+    """Run the fixture generator.
+
+    Parameters
+    ----------
+    None
+        Reads arguments from ``sys.argv``.
+
+    Returns
+    -------
+    int
+        Process exit code.
+    """
     args = _parse_args()
     payload = write_fixture(
         FixtureConfig(seed=args.seed, raw_bytes=args.raw_bytes, wrap=args.wrap),

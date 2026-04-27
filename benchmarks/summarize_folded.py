@@ -92,7 +92,25 @@ def summarize_folded_file(
     limit: int = 30,
     example_limit: int = 3,
 ) -> dict[str, object]:
-    """Summarise a folded stack file into an agent-friendly JSON document."""
+    """Summarise a folded stack file into an agent-friendly JSON document.
+
+    Parameters
+    ----------
+    folded_path:
+        Folded-stack text file to parse.
+    output:
+        JSON destination for the summary document.
+    limit:
+        Maximum ranked entries per list. Defaults to ``30``.
+    example_limit:
+        Maximum example stacks retained per frame. Defaults to ``3``.
+
+    Returns
+    -------
+    dict[str, object]
+        Summary payload with ``total_samples``, ``top_inclusive_frames``,
+        ``top_leaf_frames``, and ``top_stacks`` keys.
+    """
     state = _FoldedSummaryState(
         inclusive=collections.Counter(),
         leaf=collections.Counter(),
@@ -139,7 +157,18 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    """Run the folded-stack summariser CLI."""
+    """Run the folded-stack summariser CLI.
+
+    Parameters
+    ----------
+    None
+        Reads arguments from ``sys.argv``.
+
+    Returns
+    -------
+    int
+        Process exit code.
+    """
     args = _parse_args()
     summarize_folded_file(args.folded, output=args.output, limit=args.limit)
     return 0

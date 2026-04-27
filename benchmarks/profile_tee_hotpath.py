@@ -33,7 +33,18 @@ _DEFAULT_WRAPPED_FIXTURE = pth.Path("dist/fixtures/seed12345-wrap76.b64")
 
 
 def can_use_rust_backend() -> bool:
-    """Return whether Rust backend scenarios can run in this environment."""
+    """Return whether Rust backend scenarios can run in this environment.
+
+    Parameters
+    ----------
+    None
+        This check has no parameters.
+
+    Returns
+    -------
+    bool
+        ``True`` when the Rust extension is importable in this environment.
+    """
     return is_rust_available()
 
 
@@ -223,7 +234,23 @@ def default_tee_profile_scenarios(
     wrapped_fixture_path: pth.Path,
     repeat_count: int,
 ) -> tuple[TeeProfileScenario, ...]:
-    """Return the required initial tee profiling scenario matrix."""
+    """Return the required initial tee profiling scenario matrix.
+
+    Parameters
+    ----------
+    fixture_path:
+        Unwrapped fixture path used by no-callback scenarios.
+    wrapped_fixture_path:
+        Wrap-76 fixture path used by line-callback scenarios.
+    repeat_count:
+        Measured repeat count applied to every scenario.
+
+    Returns
+    -------
+    tuple[TeeProfileScenario, ...]
+        Ordered tuple of default scenarios. The Rust backend scenario is
+        omitted when ``can_use_rust_backend()`` returns ``False``.
+    """
     return (
         *_single_stage_no_callback_scenarios(fixture_path, repeat_count=repeat_count),
         *_line_callback_scenarios(wrapped_fixture_path, repeat_count=repeat_count),
@@ -278,7 +305,22 @@ def _worker_command(scenario: TeeProfileScenario) -> list[str]:
 
 
 def run_profile_plan(*, config: TeeProfileDriverConfig) -> dict[str, object]:
-    """Generate a serial, auditable profiling plan."""
+    """Generate a serial, auditable profiling plan.
+
+    Parameters
+    ----------
+    config:
+        Tee profiling driver configuration.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-serialisable plan with ``fixture_path``,
+        ``wrapped_fixture_path``, ``output_dir``, ``profiler``,
+        ``warmup_count``, ``repeat_count``, ``perf_frequency``,
+        ``perf_call_graph``, and ``scenarios`` keys. Each scenario mapping
+        includes ``worker_command`` and ``profile_dir``.
+    """
     scenarios = default_tee_profile_scenarios(
         fixture_path=config.fixture_path,
         wrapped_fixture_path=config.wrapped_fixture_path,
@@ -527,7 +569,18 @@ def _profiler_for(name: ProfilerName) -> ProfilerAdapter:
 
 
 def run_profile_scenario(*, config: TeeProfileDriverConfig) -> typ.Mapping[str, object]:
-    """Run one scenario, optionally under a profiler."""
+    """Run one scenario, optionally under a profiler.
+
+    Parameters
+    ----------
+    config:
+        Tee profiling driver configuration with ``scenario_name`` set.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Worker result mapping as produced by ``run_tee_profile_worker``.
+    """
     scenario = _scenario_by_name(config)
     scenario_dir = config.output_dir / scenario.name
     scenario_dir.mkdir(parents=True, exist_ok=True)
@@ -544,7 +597,18 @@ def run_profile_matrix(
     *,
     config: TeeProfileDriverConfig,
 ) -> list[typ.Mapping[str, object]]:
-    """Run all scenarios serially in the fixed matrix order."""
+    """Run all scenarios serially in the fixed matrix order.
+
+    Parameters
+    ----------
+    config:
+        Tee profiling driver configuration.
+
+    Returns
+    -------
+    list[Mapping[str, object]]
+        Worker result mappings in scenario matrix order.
+    """
     results: list[typ.Mapping[str, object]] = []
     for scenario in default_tee_profile_scenarios(
         fixture_path=config.fixture_path,
@@ -622,7 +686,18 @@ def _config_from_args(args: argparse.Namespace) -> TeeProfileDriverConfig:
 
 
 def main() -> int:
-    """Run the tee profile driver CLI."""
+    """Run the tee profile driver CLI.
+
+    Parameters
+    ----------
+    None
+        Reads arguments from ``sys.argv``.
+
+    Returns
+    -------
+    int
+        Process exit code.
+    """
     args = _base_parser().parse_args()
     config = _config_from_args(args)
     if args.command == "plan":

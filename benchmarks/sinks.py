@@ -109,7 +109,23 @@ def open_sink(
     encoding: str,
     errors: str,
 ) -> typ.Iterator[typ.IO[str]]:
-    """Open a profiling sink by kind."""
+    """Open a profiling sink by kind.
+
+    Parameters
+    ----------
+    kind:
+        Sink implementation to open: ``"devnull"``, ``"text_blackhole"``, or
+        ``"pty_blackhole"``.
+    encoding:
+        Text encoding used by sinks that wrap file descriptors.
+    errors:
+        Error handling strategy used by sinks that wrap file descriptors.
+
+    Returns
+    -------
+    Iterator[IO[str]]
+        Context-managed writable text stream.
+    """
     if kind == "devnull":
         with pth.Path(os.devnull).open("w", encoding=encoding, errors=errors) as stream:
             yield stream
