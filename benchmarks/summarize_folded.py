@@ -7,6 +7,14 @@ import collections
 import dataclasses as dc
 import json
 import pathlib as pth
+import sys
+
+
+def _validate_positive_int(name: str, value: int) -> None:
+    """Validate a positive integer public argument."""
+    if type(value) is not int or value <= 0:
+        msg = f"{name} must be a positive integer, got {value!r}"
+        raise ValueError(msg)
 
 
 def _parse_folded_line(line: str) -> tuple[tuple[str, ...], int] | None:
@@ -114,6 +122,9 @@ def summarize_folded_file(
         (list of dicts), ``top_leaf_frames`` (list of dicts), and
         ``top_stacks`` (list of dicts).
     """
+    _validate_positive_int("limit", limit)
+    _validate_positive_int("example_limit", example_limit)
+
     state = _FoldedSummaryState(
         inclusive=collections.Counter(),
         leaf=collections.Counter(),
@@ -156,6 +167,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("folded", type=pth.Path)
     parser.add_argument("--output", type=pth.Path, required=True)
     parser.add_argument("--limit", type=int, default=30)
+    parser.add_argument("--example-limit", type=int, default=3)
     return parser.parse_args()
 
 
@@ -168,7 +180,16 @@ def main() -> int:
         Process exit code; 0 on success.
     """
     args = _parse_args()
-    summarize_folded_file(args.folded, output=args.output, limit=args.limit)
+    try:
+        summarize_folded_file(
+            args.folded,
+            output=args.output,
+            limit=args.limit,
+            example_limit=args.example_limit,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     return 0
 
 

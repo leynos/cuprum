@@ -60,17 +60,33 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
     def __enter__(self) -> typ.IO[str]:
         """Open the pseudo-terminal and start draining the master side."""
         master_fd, slave_fd = pty.openpty()
-        self._master_fd = master_fd
-        self._slave = os.fdopen(
-            slave_fd,
-            "w",
-            buffering=1,
-            encoding=self._encoding,
-            errors=self._errors,
-        )
-        self._thread = threading.Thread(target=self._drain, daemon=True)
-        self._thread.start()
-        return self._slave
+        slave: typ.IO[str] | None = None
+        try:
+            self._master_fd = master_fd
+            slave = os.fdopen(
+                slave_fd,
+                "w",
+                buffering=1,
+                encoding=self._encoding,
+                errors=self._errors,
+            )
+            self._slave = slave
+            self._thread = threading.Thread(target=self._drain, daemon=True)
+            self._thread.start()
+        except Exception:
+            if slave is None:
+                with contextlib.suppress(OSError):
+                    os.close(slave_fd)
+            else:
+                with contextlib.suppress(Exception):
+                    slave.close()
+            with contextlib.suppress(OSError):
+                os.close(master_fd)
+            self._master_fd = None
+            self._slave = None
+            self._thread = None
+            raise
+        return slave
 
     def __exit__(
         self,

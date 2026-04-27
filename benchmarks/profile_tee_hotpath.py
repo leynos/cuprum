@@ -616,7 +616,10 @@ def run_profile_matrix(
         repeat_count=config.repeat_count,
     ):
         scenario_config = dc.replace(config, scenario_name=scenario.name)
-        results.append(run_profile_scenario(config=scenario_config))
+        result = run_profile_scenario(config=scenario_config)
+        results.append(result)
+        if _worker_result_exit_status(result) != 0:
+            break
     return results
 
 

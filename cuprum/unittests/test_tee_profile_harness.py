@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess  # noqa: S404 - integration tests exercise fixed CLI commands.
 import sys
 import typing as typ
@@ -11,7 +12,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from benchmarks import profile_tee_hotpath, tee_profile_worker
+from benchmarks import profile_tee_hotpath, sinks, tee_profile_worker
 from benchmarks.deterministic_b64_fixture import FixtureConfig, write_fixture
 from benchmarks.profile_tee_hotpath import (
     TeeProfileDriverConfig,
@@ -136,10 +137,16 @@ def test_write_fixture_manifest_snapshot(
 def test_folded_summary_empty_file_yields_zero_totals(tmp_path: pth.Path) -> None:
     """Empty folded input produces zero samples and empty rankings."""
     summary, top_leaf, top_inclusive, summary_path = _summarise_folded(tmp_path, "")
-    assert summary["total_samples"] == 0
-    assert top_leaf == []
-    assert top_inclusive == []
-    assert summary_path.exists()
+    assert summary["total_samples"] == 0, (
+        f"expected total_samples to be 0 for empty input, got {summary}"
+    )
+    assert top_leaf == [], (
+        f"expected no top leaf frames for empty input, got {top_leaf}"
+    )
+    assert top_inclusive == [], (
+        f"expected no top inclusive frames for empty input, got {top_inclusive}"
+    )
+    assert summary_path.exists(), f"expected summary file to exist at {summary_path}"
 
 
 def test_folded_summary_all_invalid_lines_yield_zero_totals(
@@ -149,10 +156,16 @@ def test_folded_summary_all_invalid_lines_yield_zero_totals(
     summary, top_leaf, top_inclusive, summary_path = _summarise_folded(
         tmp_path, "root;leaf\nroot;leaf not_an_int\n; 3\n"
     )
-    assert summary["total_samples"] == 0
-    assert top_leaf == []
-    assert top_inclusive == []
-    assert summary_path.exists()
+    assert summary["total_samples"] == 0, (
+        f"expected malformed input to contribute 0 samples, got {summary}"
+    )
+    assert top_leaf == [], (
+        f"expected no top leaf frames for invalid input, got {top_leaf}"
+    )
+    assert top_inclusive == [], (
+        f"expected no top inclusive frames for invalid input, got {top_inclusive}"
+    )
+    assert summary_path.exists(), f"expected summary file to exist at {summary_path}"
 
 
 def test_folded_summary_ranks_inclusive_and_leaf_frames(tmp_path: pth.Path) -> None:
@@ -160,11 +173,19 @@ def test_folded_summary_ranks_inclusive_and_leaf_frames(tmp_path: pth.Path) -> N
     summary, top_leaf, top_inclusive, summary_path = _summarise_folded(
         tmp_path, "root;parent;leaf 3\nroot;other 2\nroot;parent;leaf 1\n"
     )
-    assert summary["total_samples"] == 6
-    assert top_leaf[0]["frame"] == "leaf"
-    assert top_leaf[0]["leaf_samples"] == 4
-    assert top_inclusive[0]["frame"] == "root"
-    assert summary_path.exists()
+    assert summary["total_samples"] == 6, (
+        f"expected total_samples to be 6, got {summary}"
+    )
+    assert top_leaf[0]["frame"] == "leaf", (
+        f"expected leaf to be top leaf frame, got {top_leaf}"
+    )
+    assert top_leaf[0]["leaf_samples"] == 4, (
+        f"expected leaf_samples for leaf to be 4, got {top_leaf[0]}"
+    )
+    assert top_inclusive[0]["frame"] == "root", (
+        f"expected root to be top inclusive frame, got {top_inclusive}"
+    )
+    assert summary_path.exists(), f"expected summary file to exist at {summary_path}"
 
 
 def test_summarize_folded_snapshot(
@@ -188,9 +209,104 @@ def test_folded_summary_counts_repeated_frames_once_per_stack(
 
     recursive = next(entry for entry in top_inclusive if entry["frame"] == "recursive")
 
-    assert summary["total_samples"] == 3
-    assert recursive["inclusive_samples"] == 3
-    assert recursive["example_stacks"] == ["root;recursive;recursive;leaf"]
+    assert summary["total_samples"] == 3, (
+        f"expected total_samples to be 3 for recursive stack, got {summary}"
+    )
+    assert recursive["inclusive_samples"] == 3, (
+        f"expected recursive frame to count once per stack, got {recursive}"
+    )
+    assert recursive["example_stacks"] == ["root;recursive;recursive;leaf"], (
+        f"expected recursive example stack to be retained once, got {recursive}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "fragment"),
+    [
+        pytest.param({"limit": 0}, "limit must be a positive integer", id="limit-zero"),
+        pytest.param(
+            {"example_limit": 0},
+            "example_limit must be a positive integer",
+            id="example-limit-zero",
+        ),
+        pytest.param(
+            {"limit": True},
+            "limit must be a positive integer",
+            id="limit-bool",
+        ),
+    ],
+)
+def test_folded_summary_rejects_invalid_limits(
+    tmp_path: pth.Path,
+    kwargs: dict[str, object],
+    fragment: str,
+) -> None:
+    """Folded summary API rejects non-positive and non-integer limits."""
+    folded = tmp_path / "stacks.folded"
+    folded.write_text("root;leaf 1\n")
+    summary_func = typ.cast("typ.Any", summarize_folded_file)
+
+    with pytest.raises(ValueError, match=fragment):
+        summary_func(folded, output=tmp_path / "summary.json", **kwargs)
+
+
+def test_folded_summary_cli_rejects_invalid_limit(tmp_path: pth.Path) -> None:
+    """Folded summary CLI exits non-zero for invalid limit values."""
+    folded = tmp_path / "stacks.folded"
+    folded.write_text("root;leaf 1\n")
+    completed = subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            "-m",
+            "benchmarks.summarize_folded",
+            str(folded),
+            "--output",
+            str(tmp_path / "summary.json"),
+            "--limit",
+            "0",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2, (
+        f"expected CLI exit code 2 for invalid limit, got {completed.returncode}"
+    )
+    assert "limit must be a positive integer" in completed.stderr, (
+        f"expected invalid limit message on stderr, got {completed.stderr!r}"
+    )
+
+
+def test_pty_blackhole_enter_cleans_up_when_fdopen_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PTY sink setup closes open file descriptors if fdopen fails."""
+    master_fd, slave_fd = os.openpty()
+    monkeypatch.setattr(sinks.pty, "openpty", lambda: (master_fd, slave_fd))
+
+    def fail_fdopen(*_args: object, **_kwargs: object) -> typ.NoReturn:
+        msg = "fdopen failed"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(sinks.os, "fdopen", fail_fdopen)
+    blackhole = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
+
+    with pytest.raises(RuntimeError, match="fdopen failed"):
+        blackhole.__enter__()
+
+    for fd in (master_fd, slave_fd):
+        with pytest.raises(OSError, match="Bad file descriptor"):
+            os.fstat(fd)
+    assert blackhole._master_fd is None, (
+        f"expected master fd state to be reset, got {blackhole._master_fd}"
+    )
+    assert blackhole._slave is None, (
+        f"expected slave state to be reset, got {blackhole._slave}"
+    )
+    assert blackhole._thread is None, (
+        f"expected thread state to be reset, got {blackhole._thread}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -281,19 +397,31 @@ def test_worker_exercises_parent_side_consume_path(
             ),
         )
 
-        assert result["status"] == "ok"
-        assert result["exit_code"] == 0
-        assert result["scenario"] == f"{mode}-devnull-{cb_label}-s1-python"
+        assert result["status"] == "ok", f"expected worker status ok, got {result}"
+        assert result["exit_code"] == 0, (
+            f"expected worker exit code 0 for mode {mode}, got {result}"
+        )
+        assert result["scenario"] == f"{mode}-devnull-{cb_label}-s1-python", (
+            f"expected scenario label for mode {mode}, got {result}"
+        )
         captured_output_length = result["captured_output_length"]
         if mode == "echo":
-            assert captured_output_length == 0
+            assert captured_output_length == 0, (
+                f"expected no captured output in echo mode, got {result}"
+            )
         else:
-            assert captured_output_length > 0
+            assert captured_output_length > 0, (
+                f"expected captured output in {mode} mode, got {result}"
+            )
         stdout_line_count = result["stdout_line_count"]
         if with_line_callbacks:
-            assert stdout_line_count > 0
+            assert stdout_line_count > 0, (
+                f"expected stdout line callbacks to run, got {result}"
+            )
         else:
-            assert stdout_line_count == 0
+            assert stdout_line_count == 0, (
+                f"expected no stdout line callbacks without callbacks, got {result}"
+            )
 
 
 def test_run_tee_profile_worker_snapshot(
@@ -370,9 +498,12 @@ def test_worker_cli_reports_config_errors(
         ],
     )
 
-    assert tee_profile_worker.main() == 2
+    assert tee_profile_worker.main() == 2, "expected invalid worker config exit code 2"
     captured = capsys.readouterr()
-    assert f"fixture_path must exist and be a file: {missing_fixture}" in captured.err
+    expected_error = f"fixture_path must exist and be a file: {missing_fixture}"
+    assert expected_error in captured.err, (
+        f"expected missing fixture error on stderr, got {captured.err!r}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -528,8 +659,8 @@ def test_worker_cli_runs_successfully_via_subprocess(tmp_path: pth.Path) -> None
     assert completed.returncode == 0, f"expected exit 0, got {completed.returncode}"
     assert output.exists(), "expected worker-result.json to be written"
     result = json.loads(output.read_text())
-    assert result["status"] == "ok"
-    assert result["exit_code"] == 0
+    assert result["status"] == "ok", f"expected worker status ok, got {result}"
+    assert result["exit_code"] == 0, f"expected worker exit code 0, got {result}"
 
 
 def test_worker_command_uses_module_invocation(tmp_path: pth.Path) -> None:
@@ -569,6 +700,41 @@ def test_default_scenarios_use_requested_repeat_count(tmp_path: pth.Path) -> Non
 
     assert {scenario.repeat_count for scenario in scenarios} == {7}, (
         f"expected every scenario repeat count to be 7, got {scenarios}"
+    )
+
+
+def test_profile_matrix_stops_after_first_worker_failure(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Profile matrix execution stops after the first failing scenario."""
+    fixture = tmp_path / "fixture.b64"
+    fixture.write_text("YWJj\n")
+    wrapped = tmp_path / "fixture-wrap76.b64"
+    wrapped.write_text("YWJj\n")
+    config = TeeProfileDriverConfig(
+        fixture_path=fixture,
+        wrapped_fixture_path=wrapped,
+        output_dir=tmp_path / "profiles",
+        profiler="none",
+        warmup_count=0,
+        repeat_count=1,
+    )
+    observed: list[str | None] = []
+
+    def fail_scenario(*, config: TeeProfileDriverConfig) -> dict[str, object]:
+        observed.append(config.scenario_name)
+        return {"status": "failed", "exit_code": 9}
+
+    monkeypatch.setattr(profile_tee_hotpath, "run_profile_scenario", fail_scenario)
+
+    results = profile_tee_hotpath.run_profile_matrix(config=config)
+
+    assert observed == ["echo-devnull-nocb-s1"], (
+        f"expected matrix to stop after first scenario, got {observed}"
+    )
+    assert results == [{"status": "failed", "exit_code": 9}], (
+        f"expected only first failure result, got {results}"
     )
 
 
@@ -663,8 +829,12 @@ def test_fixture_generation_is_deterministic(
         output=tmp_path / "b.b64",
         manifest=tmp_path / "b.json",
     )
-    assert first["sha256"] == second["sha256"]
-    assert first["output_bytes"] == second["output_bytes"]
+    assert first["sha256"] == second["sha256"], (
+        f"expected deterministic sha256 values to match, got {first} and {second}"
+    )
+    assert first["output_bytes"] == second["output_bytes"], (
+        f"expected deterministic output byte counts to match, got {first} and {second}"
+    )
 
 
 @given(
@@ -685,7 +855,9 @@ def test_fixture_output_bytes_matches_manifest(
     output = tmp_path / "fixture.b64"
     manifest = tmp_path / "manifest.json"
     result = write_fixture(config, output=output, manifest=manifest)
-    assert result["output_bytes"] == output.stat().st_size
+    assert result["output_bytes"] == output.stat().st_size, (
+        f"expected manifest output_bytes to equal file size, got {result}"
+    )
 
 
 @given(
@@ -694,8 +866,8 @@ def test_fixture_output_bytes_matches_manifest(
             st.lists(
                 st.text(
                     alphabet=st.characters(
-                        blacklist_categories=("Cs",),
-                        blacklist_characters=(";", " ", "\n"),
+                        blacklist_categories=("Cc", "Cs", "Zl", "Zp", "Zs"),
+                        blacklist_characters=(";",),
                     ),
                     min_size=1,
                     max_size=20,
@@ -721,4 +893,6 @@ def test_folded_summary_total_samples_matches_input(
     lines = "\n".join(f"{';'.join(frames)} {count}" for frames, count in stacks)
     summary, _leaf, _inclusive, _ = _summarise_folded(tmp_path, lines)
     expected_total = sum(count for _, count in stacks)
-    assert summary["total_samples"] == expected_total
+    assert summary["total_samples"] == expected_total, (
+        f"expected total_samples {expected_total}, got {summary}"
+    )
