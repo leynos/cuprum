@@ -96,12 +96,13 @@ def summarize_folded_file(
         examples={},
     )
 
-    for line in folded_path.read_text(errors="replace").splitlines():
-        parsed = _parse_folded_line(line)
-        if parsed is None:
-            continue
-        frames, samples = parsed
-        state.add(frames, samples, example_limit=example_limit)
+    with folded_path.open(errors="replace") as fh:
+        for line in fh:
+            parsed = _parse_folded_line(line.rstrip("\n"))
+            if parsed is None:
+                continue
+            frames, samples = parsed
+            state.add(frames, samples, example_limit=example_limit)
 
     top_inclusive = _rank_frames(state, state.inclusive, limit=limit)
     top_leaf = _rank_frames(state, state.leaf, limit=limit)

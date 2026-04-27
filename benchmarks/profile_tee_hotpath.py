@@ -15,6 +15,7 @@ import typing as typ
 
 from benchmarks.summarize_folded import summarize_folded_file
 from benchmarks.tee_profile_worker import TeeProfileWorkerConfig, run_tee_profile_worker
+from cuprum import is_rust_available
 
 if typ.TYPE_CHECKING:
     from benchmarks.sinks import SinkKind
@@ -25,6 +26,11 @@ type ProfilerName = typ.Literal["none", "perf", "py-spy"]
 _DEFAULT_OUTPUT_DIR = pth.Path("dist/profiles")
 _DEFAULT_FIXTURE = pth.Path("dist/fixtures/seed12345-nowrap.b64")
 _DEFAULT_WRAPPED_FIXTURE = pth.Path("dist/fixtures/seed12345-wrap76.b64")
+
+
+def can_use_rust_backend() -> bool:
+    """Return whether Rust backend scenarios can run in this environment."""
+    return is_rust_available()
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -180,17 +186,20 @@ def _multi_stage_backend_scenarios(
     repeat_count: int,
 ) -> tuple[TeeProfileScenario, ...]:
     """Return multi-stage scenarios for Python/Rust backend comparison."""
+    python_scenario = TeeProfileScenario(
+        name="echo-devnull-nocb-s4-python",
+        fixture_path=fixture_path,
+        stages=4,
+        mode="echo",
+        sink_kind="devnull",
+        with_line_callbacks=False,
+        backend="python",
+        repeat_count=repeat_count,
+    )
+    if not can_use_rust_backend():
+        return (python_scenario,)
     return (
-        TeeProfileScenario(
-            name="echo-devnull-nocb-s4-python",
-            fixture_path=fixture_path,
-            stages=4,
-            mode="echo",
-            sink_kind="devnull",
-            with_line_callbacks=False,
-            backend="python",
-            repeat_count=repeat_count,
-        ),
+        python_scenario,
         TeeProfileScenario(
             name="echo-devnull-nocb-s4-rust",
             fixture_path=fixture_path,
