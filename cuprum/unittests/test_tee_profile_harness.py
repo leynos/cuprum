@@ -572,47 +572,67 @@ def test_default_scenarios_use_requested_repeat_count(tmp_path: pth.Path) -> Non
     )
 
 
-def test_profile_cli_returns_scenario_worker_failure_exit_code(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """run-scenario returns the worker exit code when the worker fails."""
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "profile_tee_hotpath.py",
-            "run-scenario",
-            "--scenario",
-            "echo-devnull-nocb-s1",
-        ],
+def _run_profile_cli(*args: str) -> int:
+    """Invoke benchmarks.profile_tee_hotpath via subprocess and return its exit code."""
+    completed = subprocess.run(  # noqa: S603
+        [sys.executable, "-m", "benchmarks.profile_tee_hotpath", *args],
+        check=False,
     )
-    monkeypatch.setattr(
-        profile_tee_hotpath,
-        "run_profile_scenario",
-        lambda *, config: {"status": "failed", "exit_code": 17},
-    )
+    return completed.returncode
 
-    assert profile_tee_hotpath.main() == 17, (
-        "expected run-scenario CLI to return worker failure exit code 17"
+
+def test_profile_cli_returns_scenario_worker_failure_exit_code(
+    tmp_path: pth.Path,
+) -> None:
+    """Profile CLI run-scenario returns non-zero when the worker fails."""
+    # Use a fixture path that does not exist so the worker exits non-zero.
+    missing = tmp_path / "no_such_fixture.b64"
+    wrapped = tmp_path / "no_such_wrapped.b64"
+    exit_code = _run_profile_cli(
+        "--fixture",
+        str(missing),
+        "--wrapped-fixture",
+        str(wrapped),
+        "--output-dir",
+        str(tmp_path / "profiles"),
+        "--profiler",
+        "none",
+        "--warmup-count",
+        "0",
+        "--repeat-count",
+        "1",
+        "run-scenario",
+        "--scenario",
+        "echo-devnull-nocb-s1",
+    )
+    assert exit_code != 0, (
+        f"expected non-zero exit code when fixture is missing, got {exit_code}"
     )
 
 
 def test_profile_cli_returns_matrix_failure_exit_code(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pth.Path,
 ) -> None:
-    """Run returns non-zero when any matrix scenario reports failure."""
-    monkeypatch.setattr(sys, "argv", ["profile_tee_hotpath.py", "run"])
-    monkeypatch.setattr(
-        profile_tee_hotpath,
-        "run_profile_matrix",
-        lambda *, config: [
-            {"status": "ok", "exit_code": 0},
-            {"status": "failed", "exit_code": 3},
-        ],
+    """Profile CLI run returns non-zero when at least one scenario fails."""
+    missing = tmp_path / "no_such_fixture.b64"
+    wrapped = tmp_path / "no_such_wrapped.b64"
+    exit_code = _run_profile_cli(
+        "--fixture",
+        str(missing),
+        "--wrapped-fixture",
+        str(wrapped),
+        "--output-dir",
+        str(tmp_path / "profiles"),
+        "--profiler",
+        "none",
+        "--warmup-count",
+        "0",
+        "--repeat-count",
+        "1",
+        "run",
     )
-
-    assert profile_tee_hotpath.main() == 3, (
-        "expected matrix CLI to return first worker failure exit code 3"
+    assert exit_code != 0, (
+        f"expected non-zero exit code when matrix scenarios fail, got {exit_code}"
     )
 
 
