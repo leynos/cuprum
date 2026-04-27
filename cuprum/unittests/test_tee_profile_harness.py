@@ -49,6 +49,26 @@ def _summarise_folded(
     return summary, top_leaf, top_inclusive, summary_path
 
 
+_SCENARIO_NAMES_WITH_RUST: list[str] = [
+    "echo-devnull-nocb-s1",
+    "echo-textblackhole-nocb-s1",
+    "echo-pty-nocb-s1",
+    "tee-devnull-nocb-s1",
+    "echo-devnull-cb-s1",
+    "echo-devnull-nocb-s4-python",
+    "echo-devnull-nocb-s4-rust",
+]
+
+_SCENARIO_NAMES_WITHOUT_RUST: list[str] = [
+    "echo-devnull-nocb-s1",
+    "echo-textblackhole-nocb-s1",
+    "echo-pty-nocb-s1",
+    "tee-devnull-nocb-s1",
+    "echo-devnull-cb-s1",
+    "echo-devnull-nocb-s4-python",
+]
+
+
 def test_fixture_generation_is_repeatable(tmp_path: pth.Path) -> None:
     """The same seed and size produce identical manifest hashes."""
     first_output = tmp_path / "first.b64"
@@ -106,12 +126,26 @@ def test_folded_summary_ranks_inclusive_and_leaf_frames(tmp_path: pth.Path) -> N
     assert summary_path.exists()
 
 
-def test_profile_plan_contains_initial_matrix(
+@pytest.mark.parametrize(
+    ("rust_available", "expected_names"),
+    [
+        pytest.param(True, _SCENARIO_NAMES_WITH_RUST, id="rust-available"),
+        pytest.param(False, _SCENARIO_NAMES_WITHOUT_RUST, id="rust-unavailable"),
+    ],
+)
+def test_profile_plan_scenario_matrix(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
+    rust_available: bool,  # noqa: FBT001 - pytest parametrises this value.
+    expected_names: list[str],
 ) -> None:
-    """The default plan preserves the required scenario matrix."""
-    monkeypatch.setattr(profile_tee_hotpath, "can_use_rust_backend", lambda: True)
+    """The default plan includes or omits the Rust scenario.
+
+    Backend availability controls whether the Rust scenario is present.
+    """
+    monkeypatch.setattr(
+        profile_tee_hotpath, "can_use_rust_backend", lambda: rust_available
+    )
     fixture = tmp_path / "fixture.b64"
     fixture.write_text("YWJj\n")
     wrapped = tmp_path / "fixture-wrap76.b64"
@@ -128,48 +162,10 @@ def test_profile_plan_contains_initial_matrix(
     plan = run_profile_plan(config=config)
     scenarios = typ.cast("list[dict[str, object]]", plan["scenarios"])
 
-    assert [scenario["name"] for scenario in scenarios] == [
-        "echo-devnull-nocb-s1",
-        "echo-textblackhole-nocb-s1",
-        "echo-pty-nocb-s1",
-        "tee-devnull-nocb-s1",
-        "echo-devnull-cb-s1",
-        "echo-devnull-nocb-s4-python",
-        "echo-devnull-nocb-s4-rust",
-    ], f"expected full scenario matrix when Rust is available, got {scenarios}"
-
-
-def test_profile_plan_omits_rust_backend_when_unavailable(
-    tmp_path: pth.Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The default plan excludes Rust scenarios when Rust is unavailable."""
-    monkeypatch.setattr(profile_tee_hotpath, "can_use_rust_backend", lambda: False)
-    fixture = tmp_path / "fixture.b64"
-    fixture.write_text("YWJj\n")
-    wrapped = tmp_path / "fixture-wrap76.b64"
-    wrapped.write_text("YWJj\n")
-    config = TeeProfileDriverConfig(
-        fixture_path=fixture,
-        wrapped_fixture_path=wrapped,
-        output_dir=tmp_path / "profiles",
-        profiler="none",
-        warmup_count=1,
-        repeat_count=3,
+    assert [scenario["name"] for scenario in scenarios] == expected_names, (
+        f"expected scenario matrix for rust_available={rust_available!r}, "
+        f"got {scenarios}"
     )
-
-    plan = run_profile_plan(config=config)
-    scenarios = typ.cast("list[dict[str, object]]", plan["scenarios"])
-    scenario_names = [scenario["name"] for scenario in scenarios]
-
-    assert scenario_names == [
-        "echo-devnull-nocb-s1",
-        "echo-textblackhole-nocb-s1",
-        "echo-pty-nocb-s1",
-        "tee-devnull-nocb-s1",
-        "echo-devnull-cb-s1",
-        "echo-devnull-nocb-s4-python",
-    ], f"expected Rust scenario to be omitted, got {scenario_names}"
 
 
 @pytest.mark.parametrize("with_line_callbacks", [False, True])
