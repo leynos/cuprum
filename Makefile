@@ -6,6 +6,7 @@ VENV_TOOLS = pytest
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
 LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
 LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
+UV_RUN_ENV = $(LOCAL_TOOL_ENV) $(UV_ENV)
 
 .PHONY: help all clean build build-release lint fmt check-fmt \
         markdownlint nixie test typecheck benchmark-micro benchmark-e2e \
@@ -16,10 +17,10 @@ LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
 all: build check-fmt lint typecheck test
 
 .venv: pyproject.toml
-	$(UV_ENV) uv venv --clear
+	$(UV_RUN_ENV) uv venv --clear
 
 build: uv .venv ## Build virtual-env and install deps
-	$(UV_ENV) uv sync --group dev
+	$(UV_RUN_ENV) uv sync --group dev
 
 build-release: ## Build artefacts (sdist & wheel)
 	python -m build --sdist --wheel
@@ -69,9 +70,9 @@ lint: ruff ## Run linters
 	$(LOCAL_TOOL_ENV) ruff check
 
 typecheck: build ## Run typechecking
-	$(UV_ENV) uv sync --group dev
-	$(UV_ENV) uv run ty --version
-	$(UV_ENV) uv run ty check
+	$(UV_RUN_ENV) uv sync --group dev
+	$(UV_RUN_ENV) uv run ty --version
+	$(UV_RUN_ENV) uv run ty check
 
 markdownlint: $(MDLINT) ## Lint Markdown files
 	$(LOCAL_TOOL_ENV) $(MDLINT) '**/*.md'
@@ -81,17 +82,17 @@ nixie: ## Validate Mermaid diagrams
 	$(LOCAL_TOOL_ENV) $(NIXIE) --no-sandbox
 
 test: build uv $(VENV_TOOLS) ## Run tests
-	$(UV_ENV) uv run pytest -v -n auto
+	$(UV_RUN_ENV) uv run pytest -v -n auto
 
 benchmark-micro: build uv ## Run pytest-benchmark microbenchmarks
 	mkdir -p dist/benchmarks
-	$(UV_ENV) CUPRUM_RUN_BENCHMARKS=1 uv run pytest -q \
+	$(UV_RUN_ENV) CUPRUM_RUN_BENCHMARKS=1 uv run pytest -q \
 	  benchmarks/test_stream_microbenchmarks.py \
 	  --benchmark-json=dist/benchmarks/microbenchmarks.json
 
 benchmark-e2e: build uv ## Run hyperfine end-to-end throughput benchmark
 	mkdir -p dist/benchmarks
-	$(UV_ENV) uv run python benchmarks/pipeline_throughput.py \
+	$(UV_RUN_ENV) uv run python benchmarks/pipeline_throughput.py \
 	  --output dist/benchmarks/pipeline-throughput.json
 
 help: ## Show available targets
