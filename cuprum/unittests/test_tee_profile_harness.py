@@ -7,6 +7,8 @@ import sys
 import typing as typ
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from benchmarks import profile_tee_hotpath, tee_profile_worker
 from benchmarks.deterministic_b64_fixture import FixtureConfig, write_fixture
@@ -430,3 +432,88 @@ def test_profile_cli_returns_matrix_failure_exit_code(
     assert profile_tee_hotpath.main() == 3, (
         "expected matrix CLI to return first worker failure exit code 3"
     )
+
+
+@given(
+    seed=st.integers(min_value=0, max_value=2**31 - 1),
+    raw_bytes=st.integers(min_value=0, max_value=4096),
+    wrap=st.sampled_from([0, 76]),
+)
+@settings(
+    max_examples=30,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+def test_fixture_generation_is_deterministic(
+    tmp_path: pth.Path,
+    seed: int,
+    raw_bytes: int,
+    wrap: int,
+) -> None:
+    """write_fixture always produces the same SHA-256 for any valid FixtureConfig."""
+    config = FixtureConfig(seed=seed, raw_bytes=raw_bytes, wrap=wrap)
+    first = write_fixture(
+        config,
+        output=tmp_path / "a.b64",
+        manifest=tmp_path / "a.json",
+    )
+    second = write_fixture(
+        config,
+        output=tmp_path / "b.b64",
+        manifest=tmp_path / "b.json",
+    )
+    assert first["sha256"] == second["sha256"]
+    assert first["output_bytes"] == second["output_bytes"]
+
+
+@given(
+    raw_bytes=st.integers(min_value=0, max_value=4096),
+    wrap=st.sampled_from([0, 76]),
+)
+@settings(
+    max_examples=20,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+def test_fixture_output_bytes_matches_manifest(
+    tmp_path: pth.Path,
+    raw_bytes: int,
+    wrap: int,
+) -> None:
+    """The output_bytes field in the manifest equals the fixture file size."""
+    config = FixtureConfig(seed=0, raw_bytes=raw_bytes, wrap=wrap)
+    output = tmp_path / "fixture.b64"
+    manifest = tmp_path / "manifest.json"
+    result = write_fixture(config, output=output, manifest=manifest)
+    assert result["output_bytes"] == output.stat().st_size
+
+
+@given(
+    stacks=st.lists(
+        st.tuples(
+            st.lists(
+                st.text(
+                    alphabet=st.characters(blacklist_characters=(";", " ", "\n")),
+                    min_size=1,
+                    max_size=20,
+                ),
+                min_size=1,
+                max_size=5,
+            ),
+            st.integers(min_value=1, max_value=100),
+        ),
+        min_size=1,
+        max_size=20,
+    )
+)
+@settings(
+    max_examples=30,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+def test_folded_summary_total_samples_matches_input(
+    tmp_path: pth.Path,
+    stacks: list[tuple[list[str], int]],
+) -> None:
+    """total_samples always equals the sum of per-stack counts."""
+    lines = "\n".join(f"{';'.join(frames)} {count}" for frames, count in stacks)
+    summary, _leaf, _inclusive, _ = _summarise_folded(tmp_path, lines)
+    expected_total = sum(count for _, count in stacks)
+    assert summary["total_samples"] == expected_total
