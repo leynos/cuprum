@@ -100,23 +100,15 @@ class TeeProfileDriverConfig:
 
     def __post_init__(self) -> None:
         """Validate driver configuration."""
-        self._validate_run_counts()
-        self._validate_perf_settings()
-
-    def _validate_run_counts(self) -> None:
-        """Validate execution-loop count fields."""
-        if self.warmup_count < 0:
-            msg = f"warmup-count must be >= 0, got {self.warmup_count}"
-            raise ValueError(msg)
-        if self.repeat_count < 1:
-            msg = f"repeat-count must be >= 1, got {self.repeat_count}"
-            raise ValueError(msg)
-
-    def _validate_perf_settings(self) -> None:
-        """Validate perf sampling configuration fields."""
-        if self.perf_frequency < 1:
-            msg = f"perf-frequency must be >= 1, got {self.perf_frequency}"
-            raise ValueError(msg)
+        int_bounds: tuple[tuple[str, int, int], ...] = (
+            ("warmup-count", self.warmup_count, 0),
+            ("repeat-count", self.repeat_count, 1),
+            ("perf-frequency", self.perf_frequency, 1),
+        )
+        for name, value, minimum in int_bounds:
+            if value < minimum:
+                msg = f"{name} must be >= {minimum}, got {value}"
+                raise ValueError(msg)
         if not self.perf_call_graph.strip():
             msg = "perf-call-graph must be a non-empty string"
             raise ValueError(msg)
