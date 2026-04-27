@@ -203,6 +203,29 @@ def test_worker_exercises_parent_side_consume_path_with_callbacks(
         assert stdout_line_count > 0
 
 
+def test_worker_accumulates_repeat_counters(tmp_path: pth.Path) -> None:
+    """Worker output counters accumulate over repeated measured runs."""
+    fixture = tmp_path / "fixture_repeat.b64"
+    fixture.write_text("YWJjZGVm\n")
+
+    result = run_tee_profile_worker(
+        TeeProfileWorkerConfig(
+            fixture_path=fixture,
+            stages=1,
+            mode="tee",
+            sink_kind="devnull",
+            with_line_callbacks=True,
+            backend="python",
+            repeat_count=3,
+        ),
+    )
+
+    assert result["status"] == "ok"
+    assert result["exit_code"] == 0
+    assert result["captured_output_length"] == len(fixture.read_text()) * 3
+    assert result["stdout_line_count"] == 3
+
+
 def test_default_scenarios_use_requested_repeat_count(tmp_path: pth.Path) -> None:
     """Scenario expansion keeps fixed repeat counts across the matrix."""
     fixture = tmp_path / "fixture.b64"

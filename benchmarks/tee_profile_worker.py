@@ -249,13 +249,15 @@ def _run_once(config: TeeProfileWorkerConfig) -> tuple[int, int, int]:  # noqa: 
 def run_tee_profile_worker(config: TeeProfileWorkerConfig) -> dict[str, object]:
     """Execute a configured tee profiling worker and return a JSON payload."""
     started = time.perf_counter()
-    captured_len = 0
-    line_count = 0
+    total_captured_len = 0
+    total_line_count = 0
     exit_code = 0
     status = "ok"
     with _selected_backend(config.backend):
         for _ in range(config.repeat_count):
             captured_len, exit_code, line_count = _run_once(config)
+            total_captured_len += captured_len
+            total_line_count += line_count
             if exit_code != 0:
                 status = "failed"
                 break
@@ -273,8 +275,8 @@ def run_tee_profile_worker(config: TeeProfileWorkerConfig) -> dict[str, object]:
         "wall_time_seconds": wall_time,
         "status": status,
         "exit_code": exit_code,
-        "captured_output_length": captured_len,
-        "stdout_line_count": line_count,
+        "captured_output_length": total_captured_len,
+        "stdout_line_count": total_line_count,
     }
 
 
