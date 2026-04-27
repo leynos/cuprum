@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess  # noqa: S404 - integration tests exercise fixed CLI commands.
 import sys
 import typing as typ
 
@@ -374,6 +375,187 @@ def test_worker_cli_reports_config_errors(
     assert f"fixture_path must exist and be a file: {missing_fixture}" in captured.err
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "fragment"),
+    [
+        pytest.param(
+            {"stages": 0},
+            "stages must be >= 1",
+            id="stages-zero",
+        ),
+        pytest.param(
+            {"repeat_count": 0},
+            "repeat-count must be >= 1",
+            id="repeat-count-zero",
+        ),
+        pytest.param(
+            {"mode": "invalid"},
+            "mode must be one of",
+            id="invalid-mode",
+        ),
+        pytest.param(
+            {"sink_kind": "invalid"},
+            "sink-kind must be one of",
+            id="invalid-sink",
+        ),
+        pytest.param(
+            {"backend": "invalid"},
+            "backend must be one of",
+            id="invalid-backend",
+        ),
+    ],
+)
+def test_worker_config_rejects_invalid_fields(
+    tmp_path: pth.Path,
+    kwargs: dict[str, object],
+    fragment: str,
+) -> None:
+    """TeeProfileWorkerConfig raises ValueError for invalid field values."""
+    fixture = tmp_path / "fixture.b64"
+    fixture.write_text("YWJj\n")
+    base: dict[str, object] = {
+        "fixture_path": fixture,
+        "stages": 1,
+        "mode": "echo",
+        "sink_kind": "devnull",
+        "with_line_callbacks": False,
+        "backend": "python",
+        "repeat_count": 1,
+    }
+    base.update(kwargs)
+    config_type = typ.cast("typ.Any", TeeProfileWorkerConfig)
+    with pytest.raises(ValueError, match=fragment):
+        config_type(**base)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "fragment"),
+    [
+        pytest.param(
+            {"warmup_count": -1},
+            "warmup-count must be >= 0",
+            id="warmup-negative",
+        ),
+        pytest.param(
+            {"repeat_count": 0},
+            "repeat-count must be >= 1",
+            id="repeat-zero",
+        ),
+        pytest.param(
+            {"perf_frequency": 0},
+            "perf-frequency must be >= 1",
+            id="perf-freq-zero",
+        ),
+        pytest.param(
+            {"perf_call_graph": "  "},
+            "perf-call-graph must be a non-empty string",
+            id="blank-call-graph",
+        ),
+    ],
+)
+def test_driver_config_rejects_invalid_fields(
+    kwargs: dict[str, object],
+    fragment: str,
+) -> None:
+    """TeeProfileDriverConfig raises ValueError for invalid numeric/string fields."""
+    base: dict[str, object] = {
+        "warmup_count": 1,
+        "repeat_count": 3,
+        "perf_frequency": 999,
+        "perf_call_graph": "dwarf,16384",
+    }
+    base.update(kwargs)
+    config_type = typ.cast("typ.Any", TeeProfileDriverConfig)
+    with pytest.raises(ValueError, match=fragment):
+        config_type(**base)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "fragment"),
+    [
+        pytest.param(
+            {"raw_bytes": -1},
+            "raw-bytes must be >= 0",
+            id="negative-raw-bytes",
+        ),
+        pytest.param(
+            {"wrap": 1},
+            "wrap must be 0 or 76",
+            id="invalid-wrap",
+        ),
+    ],
+)
+def test_fixture_config_rejects_invalid_fields(
+    kwargs: dict[str, object],
+    fragment: str,
+) -> None:
+    """FixtureConfig raises ValueError for out-of-range fields."""
+    base: dict[str, object] = {"seed": 0, "raw_bytes": 64, "wrap": 0}
+    base.update(kwargs)
+    config_type = typ.cast("typ.Any", FixtureConfig)
+    with pytest.raises(ValueError, match=fragment):
+        config_type(**base)
+
+
+def test_worker_cli_runs_successfully_via_subprocess(tmp_path: pth.Path) -> None:
+    """Worker CLI produces a valid JSON result when invoked as a subprocess."""
+    fixture = tmp_path / "fixture.b64"
+    fixture.write_text("YWJjZGVm\n")
+    output = tmp_path / "result.json"
+    completed = subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            "-m",
+            "benchmarks.tee_profile_worker",
+            "--fixture",
+            str(fixture),
+            "--stages",
+            "1",
+            "--mode",
+            "echo",
+            "--sink-kind",
+            "devnull",
+            "--backend",
+            "python",
+            "--repeat-count",
+            "1",
+            "--output",
+            str(output),
+        ],
+        check=False,
+    )
+
+    assert completed.returncode == 0, f"expected exit 0, got {completed.returncode}"
+    assert output.exists(), "expected worker-result.json to be written"
+    result = json.loads(output.read_text())
+    assert result["status"] == "ok"
+    assert result["exit_code"] == 0
+
+
+def test_worker_command_uses_module_invocation(tmp_path: pth.Path) -> None:
+    """_worker_command produces a -m benchmarks.tee_profile_worker invocation."""
+    from benchmarks.profile_tee_hotpath import TeeProfileScenario, _worker_command
+
+    fixture = tmp_path / "fixture.b64"
+    fixture.write_text("YWJj\n")
+    scenario = TeeProfileScenario(
+        name="echo-devnull-nocb-s1",
+        fixture_path=fixture,
+        stages=1,
+        mode="echo",
+        sink_kind="devnull",
+        with_line_callbacks=False,
+        backend="python",
+        repeat_count=1,
+    )
+    cmd = _worker_command(scenario)
+
+    assert cmd[1] == "-m", f"expected -m flag at index 1, got {cmd}"
+    assert cmd[2] == "benchmarks.tee_profile_worker", (
+        f"expected module name at index 2, got {cmd}"
+    )
+
+
 def test_default_scenarios_use_requested_repeat_count(tmp_path: pth.Path) -> None:
     """Scenario expansion keeps fixed repeat counts across the matrix."""
     fixture = tmp_path / "fixture.b64"
@@ -491,7 +673,10 @@ def test_fixture_output_bytes_matches_manifest(
         st.tuples(
             st.lists(
                 st.text(
-                    alphabet=st.characters(blacklist_characters=(";", " ", "\n")),
+                    alphabet=st.characters(
+                        blacklist_categories=("Cs",),
+                        blacklist_characters=(";", " ", "\n"),
+                    ),
                     min_size=1,
                     max_size=20,
                 ),
