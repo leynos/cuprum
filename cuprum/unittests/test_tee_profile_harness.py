@@ -22,6 +22,58 @@ if typ.TYPE_CHECKING:
     import pytest
 
 
+def _run_folded_summary(
+    tmp_path: pth.Path,
+    content: str,
+    *,
+    limit: int = 5,
+    example_limit: int = 2,
+) -> tuple[
+    dict[str, object],
+    list[dict[str, object]],
+    list[dict[str, object]],
+    pth.Path,
+]:
+    """Write *content* to a folded file, summarise it, and return the results."""
+    folded = tmp_path / "stacks.folded"
+    folded.write_text(content)
+    summary_path = tmp_path / "summary.json"
+    summary = summarize_folded_file(
+        folded,
+        output=summary_path,
+        limit=limit,
+        example_limit=example_limit,
+    )
+    top_leaf = typ.cast("list[dict[str, object]]", summary["top_leaf_frames"])
+    top_inclusive = typ.cast(
+        "list[dict[str, object]]",
+        summary["top_inclusive_frames"],
+    )
+    return summary, top_leaf, top_inclusive, summary_path
+
+
+def _run_worker_for_mode(
+    fixture: pth.Path,
+    mode: str,
+    *,
+    with_line_callbacks: bool,
+    backend: str = "python",
+    repeat_count: int = 1,
+) -> dict[str, object]:
+    """Run the tee profile worker for a single mode and return its result."""
+    return run_tee_profile_worker(
+        TeeProfileWorkerConfig(
+            fixture_path=fixture,
+            stages=1,
+            mode=typ.cast("typ.Literal['echo', 'capture', 'tee']", mode),
+            sink_kind="devnull",
+            with_line_callbacks=with_line_callbacks,
+            backend=typ.cast("typ.Literal['auto', 'python', 'rust']", backend),
+            repeat_count=repeat_count,
+        ),
+    )
+
+
 def test_fixture_generation_is_repeatable(tmp_path: pth.Path) -> None:
     """The same seed and size produce identical manifest hashes."""
     first_output = tmp_path / "first.b64"
@@ -47,90 +99,36 @@ def test_fixture_generation_is_repeatable(tmp_path: pth.Path) -> None:
 
 def test_folded_summary_empty_file_yields_zero_totals(tmp_path: pth.Path) -> None:
     """Empty folded input produces zero samples and empty rankings."""
-    folded = tmp_path / "stacks.folded"
-    folded.write_text("")
-    summary_path = tmp_path / "summary.json"
-
-    summary = summarize_folded_file(
-        folded,
-        output=summary_path,
-        limit=5,
-        example_limit=2,
-    )
-    top_leaf = typ.cast("list[dict[str, object]]", summary["top_leaf_frames"])
-    top_inclusive = typ.cast(
-        "list[dict[str, object]]",
-        summary["top_inclusive_frames"],
-    )
-
-    assert summary["total_samples"] == 0, (
-        f"expected empty folded input to have 0 samples, got {summary['total_samples']}"
-    )
-    assert top_leaf == [], f"expected no leaf rankings, got {top_leaf}"
-    assert top_inclusive == [], f"expected no inclusive rankings, got {top_inclusive}"
-    assert summary_path.exists(), f"expected summary file at {summary_path}"
+    summary, top_leaf, top_inclusive, summary_path = _run_folded_summary(tmp_path, "")
+    assert summary["total_samples"] == 0
+    assert top_leaf == []
+    assert top_inclusive == []
+    assert summary_path.exists()
 
 
 def test_folded_summary_all_invalid_lines_yield_zero_totals(
     tmp_path: pth.Path,
 ) -> None:
     """Malformed folded lines are ignored and do not contribute samples."""
-    folded = tmp_path / "stacks.folded"
-    folded.write_text("root;leaf\nroot;leaf not_an_int\n; 3\n")
-    summary_path = tmp_path / "summary.json"
-
-    summary = summarize_folded_file(
-        folded,
-        output=summary_path,
-        limit=5,
-        example_limit=2,
+    summary, top_leaf, top_inclusive, summary_path = _run_folded_summary(
+        tmp_path, "root;leaf\nroot;leaf not_an_int\n; 3\n"
     )
-    top_leaf = typ.cast("list[dict[str, object]]", summary["top_leaf_frames"])
-    top_inclusive = typ.cast(
-        "list[dict[str, object]]",
-        summary["top_inclusive_frames"],
-    )
-
-    assert summary["total_samples"] == 0, (
-        "expected invalid folded input to have 0 samples, "
-        f"got {summary['total_samples']}"
-    )
-    assert top_leaf == [], f"expected no leaf rankings, got {top_leaf}"
-    assert top_inclusive == [], f"expected no inclusive rankings, got {top_inclusive}"
-    assert summary_path.exists(), f"expected summary file at {summary_path}"
+    assert summary["total_samples"] == 0
+    assert top_leaf == []
+    assert top_inclusive == []
+    assert summary_path.exists()
 
 
 def test_folded_summary_ranks_inclusive_and_leaf_frames(tmp_path: pth.Path) -> None:
     """Folded stack summaries expose ranked frame costs."""
-    folded = tmp_path / "stacks.folded"
-    folded.write_text("root;parent;leaf 3\nroot;other 2\nroot;parent;leaf 1\n")
-    summary_path = tmp_path / "summary.json"
-
-    summary = summarize_folded_file(
-        folded,
-        output=summary_path,
-        limit=5,
-        example_limit=2,
+    summary, top_leaf, top_inclusive, summary_path = _run_folded_summary(
+        tmp_path, "root;parent;leaf 3\nroot;other 2\nroot;parent;leaf 1\n"
     )
-    top_leaf = typ.cast("list[dict[str, object]]", summary["top_leaf_frames"])
-    top_inclusive = typ.cast(
-        "list[dict[str, object]]",
-        summary["top_inclusive_frames"],
-    )
-
-    assert summary["total_samples"] == 6, (
-        f"expected 6 folded samples, got {summary['total_samples']}"
-    )
-    assert top_leaf[0]["frame"] == "leaf", (
-        f"expected top leaf frame to be leaf, got {top_leaf[0]}"
-    )
-    assert top_leaf[0]["leaf_samples"] == 4, (
-        f"expected leaf frame to have 4 leaf samples, got {top_leaf[0]}"
-    )
-    assert top_inclusive[0]["frame"] == "root", (
-        f"expected top inclusive frame to be root, got {top_inclusive[0]}"
-    )
-    assert summary_path.exists(), f"expected summary file at {summary_path}"
+    assert summary["total_samples"] == 6
+    assert top_leaf[0]["frame"] == "leaf"
+    assert top_leaf[0]["leaf_samples"] == 4
+    assert top_inclusive[0]["frame"] == "root"
+    assert summary_path.exists()
 
 
 def test_profile_plan_contains_initial_matrix(
@@ -205,17 +203,7 @@ def test_worker_exercises_parent_side_consume_path(tmp_path: pth.Path) -> None:
     fixture.write_text("YWJjZGVm\n")
 
     for mode in ("echo", "capture", "tee"):
-        result = run_tee_profile_worker(
-            TeeProfileWorkerConfig(
-                fixture_path=fixture,
-                stages=1,
-                mode=mode,
-                sink_kind="devnull",
-                with_line_callbacks=False,
-                backend="python",
-                repeat_count=1,
-            ),
-        )
+        result = _run_worker_for_mode(fixture, mode, with_line_callbacks=False)
 
         assert result["status"] == "ok", (
             f"expected worker status ok for {mode}, got {result}"
@@ -249,17 +237,7 @@ def test_worker_exercises_parent_side_consume_path_with_callbacks(
     fixture.write_text("YWJjZGVm\n")
 
     for mode in ("echo", "capture", "tee"):
-        result = run_tee_profile_worker(
-            TeeProfileWorkerConfig(
-                fixture_path=fixture,
-                stages=1,
-                mode=mode,
-                sink_kind="devnull",
-                with_line_callbacks=True,
-                backend="python",
-                repeat_count=1,
-            ),
-        )
+        result = _run_worker_for_mode(fixture, mode, with_line_callbacks=True)
 
         assert result["status"] == "ok", (
             f"expected worker status ok for callback {mode}, got {result}"
