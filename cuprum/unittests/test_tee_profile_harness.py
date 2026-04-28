@@ -134,36 +134,34 @@ def test_write_fixture_manifest_snapshot(
     assert _redact(result, _VOLATILE_KEYS) == snapshot
 
 
-def test_folded_summary_empty_file_yields_zero_totals(tmp_path: pth.Path) -> None:
-    """Empty folded input produces zero samples and empty rankings."""
-    summary, top_leaf, top_inclusive, summary_path = _summarise_folded(tmp_path, "")
-    assert summary["total_samples"] == 0, (
-        f"expected total_samples to be 0 for empty input, got {summary}"
-    )
-    assert top_leaf == [], (
-        f"expected no top leaf frames for empty input, got {top_leaf}"
-    )
-    assert top_inclusive == [], (
-        f"expected no top inclusive frames for empty input, got {top_inclusive}"
-    )
-    assert summary_path.exists(), f"expected summary file to exist at {summary_path}"
-
-
-def test_folded_summary_all_invalid_lines_yield_zero_totals(
+@pytest.mark.parametrize(
+    ("content", "description"),
+    [
+        pytest.param("", "empty input", id="empty-file"),
+        pytest.param(
+            "root;leaf\nroot;leaf not_an_int\n; 3\n",
+            "malformed input",
+            id="all-invalid-lines",
+        ),
+    ],
+)
+def test_folded_summary_yields_zero_totals_for_degenerate_input(
     tmp_path: pth.Path,
+    content: str,
+    description: str,
 ) -> None:
-    """Malformed folded lines are ignored and do not contribute samples."""
+    """Degenerate folded input produces zero samples and empty rankings."""
     summary, top_leaf, top_inclusive, summary_path = _summarise_folded(
-        tmp_path, "root;leaf\nroot;leaf not_an_int\n; 3\n"
+        tmp_path, content
     )
     assert summary["total_samples"] == 0, (
-        f"expected malformed input to contribute 0 samples, got {summary}"
+        f"expected total_samples to be 0 for {description}, got {summary}"
     )
     assert top_leaf == [], (
-        f"expected no top leaf frames for invalid input, got {top_leaf}"
+        f"expected no top leaf frames for {description}, got {top_leaf}"
     )
     assert top_inclusive == [], (
-        f"expected no top inclusive frames for invalid input, got {top_inclusive}"
+        f"expected no top inclusive frames for {description}, got {top_inclusive}"
     )
     assert summary_path.exists(), f"expected summary file to exist at {summary_path}"
 
