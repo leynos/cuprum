@@ -72,6 +72,11 @@ context and again when restoring the previous environment value.
 
 ## Scenario driver (`benchmarks/profile_tee_hotpath.py`)
 
+`benchmarks/profile_tee_hotpath.py` remains the public driver and module entry
+point. It re-exports the stable API while the implementation is split across
+supporting modules: scenario composition in `benchmarks/tee_profile_scenarios.py`,
+profiler orchestration in `benchmarks/tee_profile_profilers.py`, and command-line
+interface and JSON output helpers in `benchmarks/tee_profile_driver.py`.
 `TeeProfileScenario` records a resolved scenario: name, fixture path, stage
 count, mode, sink kind, line-callback flag, backend, repeat count, encoding,
 and error handling. `TeeProfileDriverConfig` records fixture paths, output

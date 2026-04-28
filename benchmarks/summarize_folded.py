@@ -187,7 +187,7 @@ def main() -> int:
             limit=args.limit,
             example_limit=args.example_limit,
         )
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
     return 0

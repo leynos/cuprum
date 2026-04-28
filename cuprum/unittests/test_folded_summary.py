@@ -188,6 +188,31 @@ def test_folded_summary_cli_rejects_invalid_limit(tmp_path: pth.Path) -> None:
     )
 
 
+def test_folded_summary_cli_rejects_missing_input(tmp_path: pth.Path) -> None:
+    """Folded summary CLI exits non-zero for missing folded files."""
+    missing = tmp_path / "missing.folded"
+    completed = subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            "-m",
+            "benchmarks.summarize_folded",
+            str(missing),
+            "--output",
+            str(tmp_path / "summary.json"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2, (
+        f"expected CLI exit code 2 for missing input, got {completed.returncode}"
+    )
+    assert str(missing) in completed.stderr, (
+        f"expected missing file path on stderr, got {completed.stderr!r}"
+    )
+
+
 @given(
     stacks=st.lists(
         st.tuples(

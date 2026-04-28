@@ -73,12 +73,12 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
             self._slave = slave
             self._thread = threading.Thread(target=self._drain, daemon=True)
             self._thread.start()
-        except Exception:
+        except (OSError, RuntimeError):
             if slave is None:
                 with contextlib.suppress(OSError):
                     os.close(slave_fd)
             else:
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(OSError):
                     slave.close()
             with contextlib.suppress(OSError):
                 os.close(master_fd)
