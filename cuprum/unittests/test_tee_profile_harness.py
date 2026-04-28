@@ -745,11 +745,27 @@ def _run_profile_cli(*args: str) -> int:
     return completed.returncode
 
 
-def test_profile_cli_returns_scenario_worker_failure_exit_code(
+@pytest.mark.parametrize(
+    ("subcommand_args", "description"),
+    [
+        pytest.param(
+            ("run-scenario", "--scenario", "echo-devnull-nocb-s1"),
+            "run-scenario with missing fixture",
+            id="scenario-worker-failure",
+        ),
+        pytest.param(
+            ("run",),
+            "run matrix with missing fixtures",
+            id="matrix-failure",
+        ),
+    ],
+)
+def test_profile_cli_returns_failure_exit_code(
     tmp_path: pth.Path,
+    subcommand_args: tuple[str, ...],
+    description: str,
 ) -> None:
-    """Profile CLI run-scenario returns non-zero when the worker fails."""
-    # Use a fixture path that does not exist so the worker exits non-zero.
+    """Profile CLI returns non-zero when the worker fails."""
     missing = tmp_path / "no_such_fixture.b64"
     wrapped = tmp_path / "no_such_wrapped.b64"
     exit_code = _run_profile_cli(
@@ -765,38 +781,10 @@ def test_profile_cli_returns_scenario_worker_failure_exit_code(
         "0",
         "--repeat-count",
         "1",
-        "run-scenario",
-        "--scenario",
-        "echo-devnull-nocb-s1",
+        *subcommand_args,
     )
     assert exit_code != 0, (
-        f"expected non-zero exit code when fixture is missing, got {exit_code}"
-    )
-
-
-def test_profile_cli_returns_matrix_failure_exit_code(
-    tmp_path: pth.Path,
-) -> None:
-    """Profile CLI run returns non-zero when at least one scenario fails."""
-    missing = tmp_path / "no_such_fixture.b64"
-    wrapped = tmp_path / "no_such_wrapped.b64"
-    exit_code = _run_profile_cli(
-        "--fixture",
-        str(missing),
-        "--wrapped-fixture",
-        str(wrapped),
-        "--output-dir",
-        str(tmp_path / "profiles"),
-        "--profiler",
-        "none",
-        "--warmup-count",
-        "0",
-        "--repeat-count",
-        "1",
-        "run",
-    )
-    assert exit_code != 0, (
-        f"expected non-zero exit code when matrix scenarios fail, got {exit_code}"
+        f"expected non-zero exit code for {description}, got {exit_code}"
     )
 
 
