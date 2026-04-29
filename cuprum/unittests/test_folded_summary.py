@@ -154,10 +154,13 @@ def test_folded_summary_rejects_invalid_limits(
     """Folded summary API rejects non-positive and non-integer limits."""
     folded = tmp_path / "stacks.folded"
     folded.write_text("root;leaf 1\n")
-    summary_func = typ.cast("typ.Any", summarize_folded_file)
 
     with pytest.raises(ValueError, match=fragment):
-        summary_func(folded, output=tmp_path / "summary.json", **kwargs)
+        summarize_folded_file(  # type: ignore[call-overload]
+            folded,
+            output=tmp_path / "summary.json",
+            **kwargs,  # type: ignore[invalid-argument-type]
+        )
 
 
 def _run_folded_summary_cli(

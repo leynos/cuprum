@@ -28,11 +28,17 @@ def test_pty_blackhole_enter_cleans_up_when_fdopen_fails(
     with pytest.raises(RuntimeError, match="fdopen failed"):
         blackhole.__enter__()
 
-    for fd in (master_fd, slave_fd):
-        with pytest.raises(OSError, match=r".") as excinfo:
+    def fstat_error(fd: int) -> OSError:
+        try:
             os.fstat(fd)
-        assert excinfo.value.errno == errno.EBADF, (
-            f"expected EBADF for closed fd {fd}, got {excinfo.value.errno}"
+        except OSError as exc:
+            return exc
+        pytest.fail(f"expected closed fd {fd} to raise OSError")
+
+    for fd in (master_fd, slave_fd):
+        exc = fstat_error(fd)
+        assert exc.errno == errno.EBADF, (
+            f"expected EBADF for closed fd {fd}, got {exc.errno}"
         )
     assert blackhole._master_fd is None, (
         f"expected master fd state to be reset, got {blackhole._master_fd}"

@@ -78,11 +78,17 @@ def test_fixture_config_rejects_invalid_fields(
     """FixtureConfig raises ValueError for out-of-range fields."""
     base: dict[str, object] = {"seed": 0, "raw_bytes": 64, "wrap": 0}
     base.update(kwargs)
+    seed = base["seed"]
+    raw_bytes = base["raw_bytes"]
+    wrap = base["wrap"]
+    assert isinstance(seed, int)
+    assert isinstance(raw_bytes, int)
+    assert isinstance(wrap, int)
     with pytest.raises(ValueError, match=fragment):
         FixtureConfig(
-            seed=typ.cast("int", base["seed"]),
-            raw_bytes=typ.cast("int", base["raw_bytes"]),
-            wrap=typ.cast("int", base["wrap"]),
+            seed=int(seed),
+            raw_bytes=int(raw_bytes),
+            wrap=int(wrap),
         )
 
 
@@ -205,4 +211,6 @@ def test_fixture_wrap76_lines_are_at_most_76_characters(
         assert 1 <= len(non_empty_lines[-1]) <= 76, (
             f"expected last line length in [1, 76], got {len(non_empty_lines[-1])}"
         )
-    assert typ.cast("int", result["output_bytes"]) > 0
+    output_bytes = result["output_bytes"]
+    assert isinstance(output_bytes, int)
+    assert output_bytes > 0
