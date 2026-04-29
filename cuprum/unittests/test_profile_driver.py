@@ -7,6 +7,8 @@ import sys
 import typing as typ
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from benchmarks import profile_tee_hotpath
 from benchmarks.profile_tee_hotpath import (
@@ -120,6 +122,46 @@ def test_default_scenarios_use_requested_repeat_count(tmp_path: pth.Path) -> Non
 
     assert {scenario.repeat_count for scenario in scenarios} == {7}, (
         f"expected every scenario repeat count to be 7, got {scenarios}"
+    )
+
+
+@given(repeat_count=st.integers(min_value=1, max_value=10))
+@settings(
+    max_examples=20,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+def test_scenario_matrix_order_is_stable(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    repeat_count: int,
+) -> None:
+    """default_tee_profile_scenarios always returns scenarios in the same order.
+
+    The scenario matrix order is a stable contract: callers and snapshot tests
+    depend on it. This property test verifies that varying ``repeat_count``
+    never reorders the scenarios.
+    """
+    monkeypatch.setattr(profile_tee_hotpath, "can_use_rust_backend", lambda: False)
+    fixture = tmp_path / "fixture.b64"
+    fixture.write_text("YWJj\n")
+    wrapped = tmp_path / "fixture-wrap76.b64"
+    wrapped.write_text("YWJj\n")
+    scenarios = default_tee_profile_scenarios(
+        fixture_path=fixture,
+        wrapped_fixture_path=wrapped,
+        repeat_count=repeat_count,
+    )
+    names = [s.name for s in scenarios]
+    expected_prefix = [
+        "echo-devnull-nocb-s1",
+        "echo-textblackhole-nocb-s1",
+        "echo-pty-nocb-s1",
+        "tee-devnull-nocb-s1",
+        "echo-devnull-cb-s1",
+        "echo-devnull-nocb-s4-python",
+    ]
+    assert names == expected_prefix, (
+        f"expected stable scenario order {expected_prefix}, got {names}"
     )
 
 

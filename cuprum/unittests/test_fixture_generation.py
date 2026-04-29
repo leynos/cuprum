@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import typing as typ
 
 import pytest
@@ -141,3 +142,67 @@ def test_fixture_output_bytes_matches_manifest(
     assert result["output_bytes"] == output.stat().st_size, (
         f"expected manifest output_bytes to equal file size, got {result}"
     )
+
+
+@given(
+    raw_bytes=st.integers(min_value=0, max_value=4096),
+)
+@settings(
+    max_examples=30,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+def test_fixture_output_size_follows_base64_expansion_ratio(
+    tmp_path: pth.Path,
+    raw_bytes: int,
+) -> None:
+    """Unwrapped fixture output size equals the base64 expansion of raw_bytes.
+
+    The base64 alphabet encodes 3 raw bytes as 4 characters. Output is padded
+    to a multiple of 4, so the expected size is ``ceil(raw_bytes / 3) * 4``.
+    """
+    config = FixtureConfig(seed=0, raw_bytes=raw_bytes, wrap=0)
+    output = tmp_path / "fixture.b64"
+    manifest = tmp_path / "manifest.json"
+    result = write_fixture(config, output=output, manifest=manifest)
+    expected_bytes = math.ceil(raw_bytes / 3) * 4
+    assert result["output_bytes"] == expected_bytes, (
+        f"expected base64 output size {expected_bytes} for raw_bytes={raw_bytes}, "
+        f"got {result['output_bytes']}"
+    )
+
+
+@given(
+    raw_bytes=st.integers(min_value=1, max_value=4096),
+)
+@settings(
+    max_examples=30,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+def test_fixture_wrap76_lines_are_at_most_76_characters(
+    tmp_path: pth.Path,
+    raw_bytes: int,
+) -> None:
+    """Every line in a wrap=76 fixture has at most 76 characters (no newline).
+
+    The MIME base64 line length is exactly 76 characters per line; only the
+    final line may be shorter when the encoded payload does not divide evenly.
+    """
+    config = FixtureConfig(seed=0, raw_bytes=raw_bytes, wrap=76)
+    output = tmp_path / "fixture.b64"
+    result = write_fixture(
+        config,
+        output=output,
+        manifest=tmp_path / "manifest.json",
+    )
+    lines = output.read_bytes().split(b"\n")
+    non_empty_lines = [line for line in lines if line]
+    for line in non_empty_lines[:-1]:
+        assert len(line) == 76, (
+            f"expected line length 76 for wrap=76 fixture with "
+            f"raw_bytes={raw_bytes}, got {len(line)}"
+        )
+    if non_empty_lines:
+        assert 1 <= len(non_empty_lines[-1]) <= 76, (
+            f"expected last line length in [1, 76], got {len(non_empty_lines[-1])}"
+        )
+    assert typ.cast("int", result["output_bytes"]) > 0
