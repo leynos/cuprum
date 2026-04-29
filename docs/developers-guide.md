@@ -112,6 +112,55 @@ generated. `perf` uses Linux `perf record`, then post-processes with
 `perf report`, `perf script`, and `inferno-collapse-perf`. `py-spy` runs the
 optional Python-first profiler and writes its raw output.
 
+### Profiler adapter protocol
+
+Profiler orchestration is decoupled from scenario execution through the
+`ProfilerAdapter` protocol (defined in `benchmarks/tee_profile_profilers.py`).
+Any object with a `run(scenario, *, scenario_dir, config)` method satisfies the
+protocol. Three concrete adapters are provided:
+
+| Adapter class | `profiler` value | Behaviour |
+| --- | --- | --- |
+| `_NoneProfiler` | `"none"` | Runs the worker directly and writes `notes.txt` explaining that profiler artefacts were not generated. |
+| `_PerfProfiler` | `"perf"` | Records `perf.data`, generates `perf.report.txt` and `stacks.folded` via `inferno-collapse-perf`, and summarizes folded stacks to `summary.json`. |
+| `_PySpyProfiler` | `"py-spy"` | Records a raw `py-spy` trace to `pyspy.raw`. |
+
+`_profiler_for(name)` is the factory that maps a `ProfilerName` literal to its
+adapter. Adding a new profiler requires implementing the protocol and
+registering it in `_profiler_for`.
+
+### `TeeProfileScenario` semantics
+
+`TeeProfileScenario` is a frozen dataclass representing one fully resolved
+profiling scenario. Its fields are:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `name` | `str` | Unique scenario identifier, used as the sub-directory name under `output_dir`. |
+| `fixture_path` | `pathlib.Path` | Path to the base64 fixture file replayed by the worker. |
+| `stages` | `int` | Number of pipeline stages (1 = single stage, >1 = chained pass-through stages). |
+| `mode` | `TeeMode` | Consumption mode: `"echo"`, `"capture"`, or `"tee"`. |
+| `sink_kind` | `SinkKind` | Output sink variant used during execution. |
+| `with_line_callbacks` | `bool` | Whether stdout-line observers are registered during the run. |
+| `backend` | `BackendName` | Stream backend: `"auto"`, `"python"`, or `"rust"`. |
+| `repeat_count` | `int` | Number of measured repetitions. |
+
+`as_dict()` returns a JSON-serializable dictionary. `worker_config()` converts
+the scenario into a `TeeProfileWorkerConfig`, optionally overriding
+`repeat_count`.
+
+### Worker configuration validation
+
+`TeeProfileWorkerConfig.__post_init__` delegates validation to three private
+methods:
+
+- `_coerce_fixture_path` coerces `fixture_path` to `pathlib.Path` and raises
+  `ValueError` if the path does not refer to an existing file.
+- `_validate_numeric_bounds` raises `ValueError` if `stages < 1` or
+  `repeat_count < 1`.
+- `_validate_enum_fields` raises `ValueError` if `mode`, `sink_kind`, or
+  `backend` are not members of the respective `_VALID_*` sets.
+
 ## Folded-stack summarizer (`benchmarks/summarize_folded.py`)
 
 The folded-stack summarizer consumes one text file where each non-empty line has
@@ -133,3 +182,33 @@ recursion, it is counted once for that stack in the inclusive tally.
 tool-discovery recipes only. This supports non-interactive Continuous
 Integration/Continuous Delivery (CI/CD) hook environments without globally
 shadowing system tools for unrelated Makefile workflows.
+
+## Design decisions
+
+### Deterministic fixtures over random data
+
+Fixtures are generated from a SHA-256 counter-mode seeded stream rather than
+from `os.urandom` or `random`. This makes every profiling run reproducible
+from the same `--seed` and `--raw-bytes` arguments, enabling artefact comparison
+across runs and across machines without storing large binary files in the
+repository.
+
+### Extracted helper methods in `__post_init__`
+
+`TeeProfileWorkerConfig.__post_init__` delegates to private helpers rather than
+containing all validation inline. This keeps the cyclomatic complexity of each
+method below the project threshold of 9 while preserving the single-class
+boundary. Inlining the helpers back into `__post_init__` would restore a
+complexity of 13 and is explicitly rejected.
+
+### Table-driven validation in `TeeProfileDriverConfig.__post_init__`
+
+`TeeProfileDriverConfig.__post_init__` uses a table of `(name, value, minimum)`
+triples to validate numeric bounds in a single loop, reducing measurable
+cyclomatic complexity while preserving exact error messages.
+
+### Scenario matrix order is a stable contract
+
+The default scenario matrix order is fixed and documented. Callers, snapshot
+tests, and CI artefact directories all depend on it. It must not be reordered
+without updating snapshot files and any downstream tooling.
