@@ -160,56 +160,62 @@ def test_folded_summary_rejects_invalid_limits(
         summary_func(folded, output=tmp_path / "summary.json", **kwargs)
 
 
-def test_folded_summary_cli_rejects_invalid_limit(tmp_path: pth.Path) -> None:
-    """Folded summary CLI exits non-zero for invalid limit values."""
-    folded = tmp_path / "stacks.folded"
-    folded.write_text("root;leaf 1\n")
-    completed = subprocess.run(  # noqa: S603
+def _run_folded_summary_cli(
+    folded_path: pth.Path,
+    output_path: pth.Path,
+    *extra_args: str,
+) -> subprocess.CompletedProcess[str]:
+    """Invoke benchmarks.summarize_folded via subprocess and return the result."""
+    return subprocess.run(  # noqa: S603
         [
             sys.executable,
             "-m",
             "benchmarks.summarize_folded",
-            str(folded),
+            str(folded_path),
             "--output",
-            str(tmp_path / "summary.json"),
-            "--limit",
-            "0",
+            str(output_path),
+            *extra_args,
         ],
         check=False,
         capture_output=True,
         text=True,
     )
 
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(
+            (
+                "stacks.folded",
+                "root;leaf 1\n",
+                ("--limit", "0"),
+                "limit must be a positive integer",
+            ),
+            id="invalid-limit",
+        ),
+        pytest.param(
+            ("missing.folded", None, (), None),
+            id="missing-input",
+        ),
+    ],
+)
+def test_folded_summary_cli_rejects_invalid_invocation(
+    tmp_path: pth.Path,
+    case: tuple[str, str | None, tuple[str, ...], str | None],
+) -> None:
+    """Folded summary CLI exits with code 2 for invalid or missing input."""
+    filename, file_content, extra_args, stderr_fragment = case
+    folded = tmp_path / filename
+    if file_content is not None:
+        folded.write_text(file_content)
+    completed = _run_folded_summary_cli(folded, tmp_path / "summary.json", *extra_args)
+    expected_fragment = stderr_fragment if stderr_fragment is not None else str(folded)
     assert completed.returncode == 2, (
-        f"expected CLI exit code 2 for invalid limit, got {completed.returncode}"
+        f"expected CLI exit code 2, got {completed.returncode}"
     )
-    assert "limit must be a positive integer" in completed.stderr, (
-        f"expected invalid limit message on stderr, got {completed.stderr!r}"
-    )
-
-
-def test_folded_summary_cli_rejects_missing_input(tmp_path: pth.Path) -> None:
-    """Folded summary CLI exits non-zero for missing folded files."""
-    missing = tmp_path / "missing.folded"
-    completed = subprocess.run(  # noqa: S603
-        [
-            sys.executable,
-            "-m",
-            "benchmarks.summarize_folded",
-            str(missing),
-            "--output",
-            str(tmp_path / "summary.json"),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert completed.returncode == 2, (
-        f"expected CLI exit code 2 for missing input, got {completed.returncode}"
-    )
-    assert str(missing) in completed.stderr, (
-        f"expected missing file path on stderr, got {completed.stderr!r}"
+    assert expected_fragment in completed.stderr, (
+        f"expected {expected_fragment!r} in stderr, got {completed.stderr!r}"
     )
 
 
