@@ -33,6 +33,20 @@ type WorkerCommandResult = sh.CommandResult | sh.PipelineResult
 _VALID_MODES = {"echo", "capture", "tee"}
 _VALID_SINKS = {"devnull", "text_blackhole", "pty_blackhole"}
 _VALID_BACKENDS = {"auto", "python", "rust"}
+
+
+class BackendSelector(typ.Protocol):
+    """Interface for activating a named stream backend for a context.
+
+    Implementations must be usable as a context manager that sets the backend
+    on entry and restores the previous state on exit.
+    """
+
+    def __call__(self, backend: BackendName) -> contextlib.AbstractContextManager[None]:
+        """Return a context manager that activates *backend*."""
+        ...
+
+
 _BACKEND_LOCK = threading.Lock()
 
 
@@ -182,31 +196,45 @@ def _build_command(
     return _WorkerCommand(cmd=command, allowlist=allowlist)
 
 
-@contextlib.contextmanager
-def _selected_backend(backend: BackendName) -> typ.Iterator[None]:
-    """Select the stream backend for parent-side pipeline pumping.
+class _EnvBackendSelector:
+    """Activate a named stream backend by mutating ``os.environ``.
 
     Acquires ``_BACKEND_LOCK`` for the duration of the context to serialise
-    access to ``os.environ`` and the backend LRU caches. This context manager
-    is not re-entrant; callers must not nest it.
+    access to ``os.environ`` and the backend LRU caches. This selector is
+    not re-entrant; callers must not nest it.
     """
-    with _BACKEND_LOCK:
-        previous = os.environ.get("CUPRUM_STREAM_BACKEND")
-        if backend == "auto":
-            os.environ.pop("CUPRUM_STREAM_BACKEND", None)
-        else:
-            os.environ["CUPRUM_STREAM_BACKEND"] = backend
-        _backend._check_rust_available.cache_clear()
-        _backend.get_stream_backend.cache_clear()
-        try:
-            yield
-        finally:
-            if previous is None:
+
+    def __call__(
+        self,
+        backend: BackendName,
+    ) -> contextlib.AbstractContextManager[None]:
+        """Return a context manager that activates *backend*."""
+        return self._activate(backend)
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _activate(backend: BackendName) -> typ.Iterator[None]:
+        """Select the stream backend for parent-side pipeline pumping."""
+        with _BACKEND_LOCK:
+            previous = os.environ.get("CUPRUM_STREAM_BACKEND")
+            if backend == "auto":
                 os.environ.pop("CUPRUM_STREAM_BACKEND", None)
             else:
-                os.environ["CUPRUM_STREAM_BACKEND"] = previous
+                os.environ["CUPRUM_STREAM_BACKEND"] = backend
             _backend._check_rust_available.cache_clear()
             _backend.get_stream_backend.cache_clear()
+            try:
+                yield
+            finally:
+                if previous is None:
+                    os.environ.pop("CUPRUM_STREAM_BACKEND", None)
+                else:
+                    os.environ["CUPRUM_STREAM_BACKEND"] = previous
+                _backend._check_rust_available.cache_clear()
+                _backend.get_stream_backend.cache_clear()
+
+
+_default_backend_selector: BackendSelector = _EnvBackendSelector()
 
 
 def _capture_and_echo_flags(mode: TeeMode) -> tuple[bool, bool]:
@@ -307,7 +335,11 @@ def _run_once(config: TeeProfileWorkerConfig) -> tuple[int, int, int]:
     return captured_len, _result_exit_code(result), line_count
 
 
-def run_tee_profile_worker(config: TeeProfileWorkerConfig) -> TeeProfileWorkerResult:
+def run_tee_profile_worker(
+    config: TeeProfileWorkerConfig,
+    *,
+    backend_selector: BackendSelector | None = None,
+) -> TeeProfileWorkerResult:
     """Execute a configured tee profiling worker and return a JSON payload.
 
     Parameters
@@ -315,6 +347,10 @@ def run_tee_profile_worker(config: TeeProfileWorkerConfig) -> TeeProfileWorkerRe
     config:
         Worker execution settings including fixture path, stage count, mode,
         sink kind, backend, and repeat count.
+    backend_selector:
+        Optional override for backend activation. Defaults to
+        ``_EnvBackendSelector()``, which mutates ``os.environ``. Pass a custom
+        implementation in tests to avoid side-effects.
 
     Returns
     -------
@@ -326,12 +362,15 @@ def run_tee_profile_worker(config: TeeProfileWorkerConfig) -> TeeProfileWorkerRe
         (float), ``status`` (``"ok"`` or ``"failed"``), ``exit_code`` (int),
         ``captured_output_length`` (int), and ``stdout_line_count`` (int).
     """
+    selector = (
+        backend_selector if backend_selector is not None else _default_backend_selector
+    )
     started = time.perf_counter()
     total_captured_len = 0
     total_line_count = 0
     exit_code = 0
     status: typ.Literal["ok", "failed"] = "ok"
-    with _selected_backend(config.backend):
+    with selector(config.backend):
         for _ in range(config.repeat_count):
             captured_len, exit_code, line_count = _run_once(config)
             total_captured_len += captured_len
