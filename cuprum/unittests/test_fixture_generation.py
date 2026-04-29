@@ -77,9 +77,12 @@ def test_fixture_config_rejects_invalid_fields(
     """FixtureConfig raises ValueError for out-of-range fields."""
     base: dict[str, object] = {"seed": 0, "raw_bytes": 64, "wrap": 0}
     base.update(kwargs)
-    config_type = typ.cast("typ.Any", FixtureConfig)
     with pytest.raises(ValueError, match=fragment):
-        config_type(**base)
+        FixtureConfig(
+            seed=typ.cast("int", base["seed"]),
+            raw_bytes=typ.cast("int", base["raw_bytes"]),
+            wrap=typ.cast("int", base["wrap"]),
+        )
 
 
 @given(

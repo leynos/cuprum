@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import typing as typ
 
@@ -28,8 +29,11 @@ def test_pty_blackhole_enter_cleans_up_when_fdopen_fails(
         blackhole.__enter__()
 
     for fd in (master_fd, slave_fd):
-        with pytest.raises(OSError, match="Bad file descriptor"):
+        with pytest.raises(OSError, match=r".") as excinfo:
             os.fstat(fd)
+        assert excinfo.value.errno == errno.EBADF, (
+            f"expected EBADF for closed fd {fd}, got {excinfo.value.errno}"
+        )
     assert blackhole._master_fd is None, (
         f"expected master fd state to be reset, got {blackhole._master_fd}"
     )

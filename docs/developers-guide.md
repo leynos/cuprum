@@ -112,15 +112,15 @@ generated. `perf` uses Linux `perf record`, then post-processes with
 `perf report`, `perf script`, and `inferno-collapse-perf`. `py-spy` runs the
 optional Python-first profiler and writes its raw output.
 
-## Folded-stack summariser (`benchmarks/summarize_folded.py`)
+## Folded-stack summarizer (`benchmarks/summarize_folded.py`)
 
-The folded-stack summariser consumes one text file where each non-empty line has
+The folded-stack summarizer consumes one text file where each non-empty line has
 the form `frame1;frame2 count`. Malformed lines, empty stacks, and non-positive
 sample counts are ignored.
 
 It writes a JSON summary with `total_samples`, `top_inclusive_frames`,
 `top_leaf_frames`, and `top_stacks`. Frame entries include inclusive samples,
-leaf samples, normalised percentages, and example stacks, while stack entries
+leaf samples, normalized percentages, and example stacks, while stack entries
 record sample counts and percentages.
 
 Inclusive frame accounting deduplicates frames within a single folded stack. If

@@ -1,4 +1,20 @@
-"""Scenario driver for Cuprum tee hot-path profiling."""
+"""Cuprum tee hot-path profiling driver.
+
+This module is the public driver and compatibility surface for the Cuprum tee
+profiling harness. Use it when measuring parent-side final stream consumption
+for ``echo=True`` and ``capture=True`` workloads, including sink write cost,
+line-callback overhead, capture accumulation, and the boundary between
+inter-stage pumping and final stream consumption.
+
+Run the harness with ``python -m benchmarks.profile_tee_hotpath``. The
+``plan`` subcommand emits an auditable JSON scenario plan, while
+``run-scenario`` and ``run`` write per-scenario directories containing
+``scenario.json``, ``worker-result.json``, and, when a profiler is enabled,
+profiler artefacts such as ``perf.data``, ``perf.report.txt``,
+``stacks.folded``, and ``summary.json``.
+
+Example: ``python -m benchmarks.profile_tee_hotpath --profiler none run``.
+"""
 
 from __future__ import annotations
 
@@ -168,7 +184,38 @@ def _scenario_by_name(config: TeeProfileDriverConfig) -> TeeProfileScenario:
     raise ValueError(msg)
 
 
-def run_profile_plan(*, config: TeeProfileDriverConfig) -> dict[str, object]:
+class _PlanScenarioEntry(typ.TypedDict):
+    """One scenario entry in a profiling plan."""
+
+    name: str
+    fixture_path: str
+    stages: int
+    mode: typ.Literal["capture", "echo", "tee"]
+    sink_kind: typ.Literal["devnull", "pty_blackhole", "text_blackhole"]
+    with_line_callbacks: bool
+    backend: typ.Literal["auto", "python", "rust"]
+    repeat_count: int
+    encoding: str
+    errors: str
+    worker_command: list[str]
+    profile_dir: str
+
+
+class _ProfilePlan(typ.TypedDict):
+    """Resolved profiling plan emitted by ``plan``."""
+
+    fixture_path: str
+    wrapped_fixture_path: str
+    output_dir: str
+    profiler: ProfilerName
+    warmup_count: int
+    repeat_count: int
+    perf_frequency: int
+    perf_call_graph: str
+    scenarios: list[_PlanScenarioEntry]
+
+
+def run_profile_plan(*, config: TeeProfileDriverConfig) -> _ProfilePlan:
     """Generate a serial, auditable profiling plan.
 
     Parameters
@@ -179,7 +226,7 @@ def run_profile_plan(*, config: TeeProfileDriverConfig) -> dict[str, object]:
 
     Returns
     -------
-    dict[str, object]
+    _ProfilePlan
         JSON-serialisable plan with ``fixture_path``,
         ``wrapped_fixture_path``, ``output_dir``, ``profiler``,
         ``warmup_count``, ``repeat_count``, ``perf_frequency``,
@@ -201,11 +248,20 @@ def run_profile_plan(*, config: TeeProfileDriverConfig) -> dict[str, object]:
         "perf_frequency": config.perf_frequency,
         "perf_call_graph": config.perf_call_graph,
         "scenarios": [
-            {
-                **scenario.as_dict(),
-                "worker_command": _worker_command(scenario),
-                "profile_dir": str(config.output_dir / scenario.name),
-            }
+            _PlanScenarioEntry(
+                name=scenario.name,
+                fixture_path=str(scenario.fixture_path),
+                stages=scenario.stages,
+                mode=scenario.mode,
+                sink_kind=scenario.sink_kind,
+                with_line_callbacks=scenario.with_line_callbacks,
+                backend=scenario.backend,
+                repeat_count=scenario.repeat_count,
+                encoding=scenario.encoding,
+                errors=scenario.errors,
+                worker_command=_worker_command(scenario),
+                profile_dir=str(config.output_dir / scenario.name),
+            )
             for scenario in scenarios
         ],
     }
