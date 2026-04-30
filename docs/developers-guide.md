@@ -172,9 +172,11 @@ It writes a JSON summary with `total_samples`, `top_inclusive_frames`,
 leaf samples, normalized percentages, and example stacks, while stack entries
 record sample counts and percentages.
 
-Inclusive frame accounting counts every frame occurrence within a folded stack.
-If the same frame appears multiple times in one stack, for example through
-recursion, each occurrence contributes to the inclusive tally.
+Inclusive frame accounting counts each distinct frame name **once per stack**,
+regardless of how many times it appears in that stack (for example, through
+recursion or inlined duplicate symbols). This matches the convention used by
+most sampling profilers: a recursive frame inflates the wall-time cost of the
+leaf, not the inclusive tally of every caller on the path.
 
 ## Makefile tooling changes
 

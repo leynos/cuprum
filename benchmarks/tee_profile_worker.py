@@ -47,6 +47,19 @@ class BackendSelector(typ.Protocol):
         ...
 
 
+class Clock(typ.Protocol):
+    """Interface for wall-clock time measurement.
+
+    The return value is a monotonically increasing float in seconds,
+    compatible with ``time.perf_counter``.
+    """
+
+    def __call__(self) -> float:
+        """Return the current time in seconds."""
+        ...
+
+
+_default_clock: Clock = time.perf_counter
 _BACKEND_LOCK = threading.Lock()
 
 
@@ -339,6 +352,7 @@ def run_tee_profile_worker(
     config: TeeProfileWorkerConfig,
     *,
     backend_selector: BackendSelector | None = None,
+    clock: Clock | None = None,
 ) -> TeeProfileWorkerResult:
     """Execute a configured tee profiling worker and return a JSON payload.
 
@@ -351,6 +365,9 @@ def run_tee_profile_worker(
         Optional override for backend activation. Defaults to
         ``_EnvBackendSelector()``, which mutates ``os.environ``. Pass a custom
         implementation in tests to avoid side-effects.
+    clock:
+        Optional wall-clock callable. Defaults to ``time.perf_counter``. Pass a
+        deterministic stub in tests to avoid timing non-determinism.
 
     Returns
     -------
@@ -365,7 +382,8 @@ def run_tee_profile_worker(
     selector = (
         backend_selector if backend_selector is not None else _default_backend_selector
     )
-    started = time.perf_counter()
+    timer = clock if clock is not None else _default_clock
+    started = timer()
     total_captured_len = 0
     total_line_count = 0
     exit_code = 0
@@ -378,7 +396,7 @@ def run_tee_profile_worker(
             if exit_code != 0:
                 status = "failed"
                 break
-    wall_time = time.perf_counter() - started
+    wall_time = timer() - started
     return {
         "scenario": _scenario_label(config),
         "fixture_path": str(config.fixture_path),

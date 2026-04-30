@@ -97,11 +97,14 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
         """Close the sink and wait briefly for the drainer to finish."""
         if self._slave is not None:
             self._slave.close()
+            self._slave = None
         if self._master_fd is not None:
             with contextlib.suppress(OSError):
                 os.close(self._master_fd)
+            self._master_fd = None
         if self._thread is not None:
             self._thread.join(timeout=5.0)
+            self._thread = None
         return None
 
     def _drain(self) -> None:
