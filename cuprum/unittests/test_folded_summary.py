@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import operator
 import subprocess  # noqa: S404 - integration tests exercise fixed CLI commands.
 import sys
 import typing as typ
@@ -258,3 +259,49 @@ def test_folded_summary_total_samples_matches_input(
     assert summary["total_samples"] == expected_total, (
         f"expected total_samples {expected_total}, got {summary}"
     )
+
+
+@given(
+    stacks=st.lists(
+        st.tuples(
+            st.lists(
+                st.text(
+                    alphabet=st.characters(
+                        blacklist_categories=("Cc", "Cs", "Zl", "Zp", "Zs"),
+                        blacklist_characters=(";",),
+                    ),
+                    min_size=1,
+                    max_size=12,
+                ).map(operator.itemgetter(slice(12))),
+                min_size=1,
+                max_size=6,
+            ).map(lambda fs: fs + fs[:1]),
+            st.integers(min_value=1, max_value=20),
+        ),
+        min_size=1,
+        max_size=15,
+    )
+)
+@settings(
+    max_examples=30,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+def test_inclusive_counts_deduplicate_within_each_stack(
+    tmp_path: pth.Path,
+    stacks: list[tuple[list[str], int]],
+) -> None:
+    """Inclusive samples count each frame once per folded stack."""
+    lines = "\n".join(f"{';'.join(frames)} {count}" for frames, count in stacks)
+    summary, _leaf, inclusive, _ = _summarise_folded(tmp_path, lines)
+    expected: dict[str, int] = {}
+    for frames, count in stacks:
+        for frame in set(frames):
+            expected[frame] = expected.get(frame, 0) + count
+    expected_total = sum(count for _, count in stacks)
+    assert summary["total_samples"] == expected_total, (
+        f"expected total_samples {expected_total}, got {summary}"
+    )
+    for entry in inclusive:
+        frame = entry["frame"]
+        assert isinstance(frame, str)
+        assert entry["inclusive_samples"] == expected[frame]
