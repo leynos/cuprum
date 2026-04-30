@@ -16,7 +16,7 @@ behaviour need to be checked.
 zero, and `wrap` must be one of `0` or `76`; `wrap=0` writes unwrapped base64
 output, while `wrap=76` writes line-oriented output for callback scenarios.
 
-The generator uses a SHA-256 (Secure Hash Algorithm 256) counter-mode seeded
+The generator uses an SHA-256 (Secure Hash Algorithm 256) counter-mode seeded
 stream. It encodes `str(seed).encode("utf-8")` plus successive big-endian
 counters, reads deterministic bytes in stable chunks, base64-encodes those
 chunks, and streams the encoded output to disk. The JSON (JavaScript Object
@@ -187,7 +187,7 @@ shadowing system tools for unrelated Makefile workflows.
 
 ### Deterministic fixtures over random data
 
-Fixtures are generated from a SHA-256 counter-mode seeded stream rather than
+Fixtures are generated from an SHA-256 counter-mode seeded stream rather than
 from `os.urandom` or `random`. This makes every profiling run reproducible
 from the same `--seed` and `--raw-bytes` arguments, enabling artefact comparison
 across runs and across machines without storing large binary files in the

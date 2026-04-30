@@ -255,7 +255,7 @@ def _manifest_hash(fixture_path: pth.Path) -> str | None:
         return None
     try:
         payload = json.loads(manifest_path.read_text())
-    except json.JSONDecodeError:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     value = payload.get("sha256")
     return value if isinstance(value, str) else None
