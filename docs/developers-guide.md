@@ -172,9 +172,9 @@ It writes a JSON summary with `total_samples`, `top_inclusive_frames`,
 leaf samples, normalized percentages, and example stacks, while stack entries
 record sample counts and percentages.
 
-Inclusive frame accounting deduplicates frames within a single folded stack. If
-the same frame appears multiple times in one stack, for example through
-recursion, it is counted once for that stack in the inclusive tally.
+Inclusive frame accounting counts every frame occurrence within a folded stack.
+If the same frame appears multiple times in one stack, for example through
+recursion, each occurrence contributes to the inclusive tally.
 
 ## Makefile tooling changes
 
