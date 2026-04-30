@@ -230,16 +230,21 @@ def test_driver_config_rejects_invalid_fields(
     fragment: str,
 ) -> None:
     """TeeProfileDriverConfig raises ValueError for invalid numeric/string fields."""
-    base: dict[str, object] = {
-        "warmup_count": 1,
-        "repeat_count": 3,
-        "perf_frequency": 999,
-        "perf_call_graph": "dwarf,16384",
-    }
-    base.update(kwargs)
-    config_type = typ.cast("typ.Any", TeeProfileDriverConfig)
+    warmup_count = kwargs.get("warmup_count", 1)
+    repeat_count = kwargs.get("repeat_count", 3)
+    perf_frequency = kwargs.get("perf_frequency", 999)
+    perf_call_graph = kwargs.get("perf_call_graph", "dwarf,16384")
+    assert isinstance(warmup_count, int)
+    assert isinstance(repeat_count, int)
+    assert isinstance(perf_frequency, int)
+    assert isinstance(perf_call_graph, str)
     with pytest.raises(ValueError, match=fragment):
-        config_type(**base)
+        TeeProfileDriverConfig(
+            warmup_count=warmup_count,
+            repeat_count=repeat_count,
+            perf_frequency=perf_frequency,
+            perf_call_graph=perf_call_graph,
+        )
 
 
 def test_worker_command_uses_module_invocation(tmp_path: pth.Path) -> None:
