@@ -4,6 +4,9 @@ MDFORMAT_ALL ?= mdformat-all
 TOOLS = $(MDFORMAT_ALL) ruff $(MDLINT) uv
 VENV_TOOLS = pytest
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
+LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
+LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
+UV_RUN_ENV = $(LOCAL_TOOL_ENV) $(UV_ENV)
 
 .PHONY: help all clean build build-release lint fmt check-fmt \
         markdownlint nixie test typecheck benchmark-micro benchmark-e2e \
@@ -14,10 +17,10 @@ UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
 all: build check-fmt lint typecheck test
 
 .venv: pyproject.toml
-	$(UV_ENV) uv venv --clear
+	$(UV_RUN_ENV) uv venv --clear
 
 build: uv .venv ## Build virtual-env and install deps
-	$(UV_ENV) uv sync --group dev
+	$(UV_RUN_ENV) uv sync --group dev
 
 build-release: ## Build artefacts (sdist & wheel)
 	python -m build --sdist --wheel
@@ -29,14 +32,14 @@ clean: ## Remove build artifacts
 	find . -type d -name '__pycache__' -print0 | xargs -0 -r rm -rf
 
 define ensure_tool
-	@command -v $(1) >/dev/null 2>&1 || { \
+	@$(LOCAL_TOOL_ENV) command -v $(1) >/dev/null 2>&1 || { \
 	  printf "Error: '%s' is required, but not installed\n" "$(1)" >&2; \
 	  exit 1; \
 	}
 endef
 
 define ensure_tool_venv
-	@$(UV_ENV) uv run which $(1) >/dev/null 2>&1 || { \
+	@$(LOCAL_TOOL_ENV) $(UV_ENV) uv run which $(1) >/dev/null 2>&1 || { \
 	  printf "Error: '%s' is required in the virtualenv, but is not installed\n" "$(1)" >&2; \
 	  exit 1; \
 	}
@@ -55,41 +58,41 @@ $(VENV_TOOLS): ## Verify required CLI tools in venv
 endif
 
 fmt: ruff $(MDFORMAT_ALL) ## Format sources
-	ruff format
-	ruff check --select I --fix
-	$(MDFORMAT_ALL)
+	$(LOCAL_TOOL_ENV) ruff format
+	$(LOCAL_TOOL_ENV) ruff check --select I --fix
+	$(LOCAL_TOOL_ENV) $(MDFORMAT_ALL)
 
 check-fmt: ruff ## Verify formatting
-	ruff format --check
+	$(LOCAL_TOOL_ENV) ruff format --check
 	# mdformat-all doesn't currently do checking
 
 lint: ruff ## Run linters
-	ruff check
+	$(LOCAL_TOOL_ENV) ruff check
 
 typecheck: build ## Run typechecking
-	$(UV_ENV) uv sync --group dev
-	$(UV_ENV) uv run ty --version
-	$(UV_ENV) uv run ty check
+	$(UV_RUN_ENV) uv sync --group dev
+	$(UV_RUN_ENV) uv run ty --version
+	$(UV_RUN_ENV) uv run ty check
 
 markdownlint: $(MDLINT) ## Lint Markdown files
-	$(MDLINT) '**/*.md'
+	$(LOCAL_TOOL_ENV) $(MDLINT) '**/*.md'
 
 nixie: ## Validate Mermaid diagrams
 	$(call ensure_tool,nixie)
-	$(NIXIE) --no-sandbox
+	$(LOCAL_TOOL_ENV) $(NIXIE) --no-sandbox
 
 test: build uv $(VENV_TOOLS) ## Run tests
-	$(UV_ENV) uv run pytest -v -n auto
+	$(UV_RUN_ENV) uv run pytest -v -n auto
 
 benchmark-micro: build uv ## Run pytest-benchmark microbenchmarks
 	mkdir -p dist/benchmarks
-	$(UV_ENV) CUPRUM_RUN_BENCHMARKS=1 uv run pytest -q \
+	$(UV_RUN_ENV) CUPRUM_RUN_BENCHMARKS=1 uv run pytest -q \
 	  benchmarks/test_stream_microbenchmarks.py \
 	  --benchmark-json=dist/benchmarks/microbenchmarks.json
 
 benchmark-e2e: build uv ## Run hyperfine end-to-end throughput benchmark
 	mkdir -p dist/benchmarks
-	$(UV_ENV) uv run python benchmarks/pipeline_throughput.py \
+	$(UV_RUN_ENV) uv run python benchmarks/pipeline_throughput.py \
 	  --output dist/benchmarks/pipeline-throughput.json
 
 help: ## Show available targets

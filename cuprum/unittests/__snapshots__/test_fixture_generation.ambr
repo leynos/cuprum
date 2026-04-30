@@ -1,0 +1,11 @@
+# serializer version: 1
+# name: test_write_fixture_manifest_snapshot
+  dict({
+    'algorithm': 'sha256-counter-v1',
+    'output_bytes': '<redacted>',
+    'raw_bytes': 96,
+    'seed': 42,
+    'sha256': '<redacted>',
+    'wrap': 0,
+  })
+# ---

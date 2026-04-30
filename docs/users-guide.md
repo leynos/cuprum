@@ -1044,6 +1044,13 @@ a production path. The benchmark suite gives a better answer than a fixed rule
 of thumb when payload size, platform, or callback behaviour differ from the
 default scenarios.
 
+For parent-side tee and capture profiling, use the dedicated harness documented
+in `benchmarks/README.md`. That harness replays deterministic base64 fixtures
+into the parent process and records text-first `perf` artefacts for the
+`echo=True` and `capture=True` consumption paths. It is the right tool when
+investigating sink write cost, line-callback overhead, capture accumulation, or
+the boundary between inter-stage pumping and final stream consumption.
+
 Both backends are tested for behavioural parity across edge cases including
 empty streams, multi-byte UTF-8 at chunk boundaries, broken pipes (where the
 downstream stage exits before the upstream finishes), and backpressure under

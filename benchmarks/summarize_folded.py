@@ -1,0 +1,197 @@
+"""Summarise folded stack samples into JSON rankings."""
+
+from __future__ import annotations
+
+import argparse
+import collections
+import dataclasses as dc
+import json
+import pathlib as pth
+import sys
+
+
+def _validate_positive_int(name: str, value: int) -> None:
+    """Validate a positive integer public argument."""
+    if type(value) is not int or value <= 0:
+        msg = f"{name} must be a positive integer, got {value!r}"
+        raise ValueError(msg)
+
+
+def _parse_folded_line(line: str) -> tuple[tuple[str, ...], int] | None:
+    """Parse one folded-stack line."""
+    stripped = line.strip()
+    if not stripped:
+        return None
+    stack_text, separator, count_text = stripped.rpartition(" ")
+    if not separator:
+        return None
+    try:
+        count = int(count_text)
+    except ValueError:
+        return None
+    frames = tuple(frame for frame in stack_text.split(";") if frame)
+    if not frames or count <= 0:
+        return None
+    return frames, count
+
+
+def _percent(samples: int, total: int) -> float:
+    """Return a rounded percentage for sample counts."""
+    if total == 0:
+        return 0.0
+    return round(samples * 100.0 / total, 4)
+
+
+@dc.dataclass(slots=True)
+class _FoldedSummaryState:
+    """Accumulated folded-stack counters."""
+
+    inclusive: collections.Counter[str]
+    leaf: collections.Counter[str]
+    stacks: collections.Counter[str]
+    examples: dict[str, list[str]]
+    total: int = 0
+
+    def add(self, frames: tuple[str, ...], samples: int, *, example_limit: int) -> None:
+        """Add one parsed stack to the summary state."""
+        stack_text = ";".join(frames)
+        self.stacks[stack_text] += samples
+        self.total += samples
+        seen_frames: set[str] = set()
+        for frame in frames:
+            if frame in seen_frames:
+                continue
+            seen_frames.add(frame)
+            self.inclusive[frame] += samples
+            frame_examples = self.examples.setdefault(frame, [])
+            if len(frame_examples) < example_limit:
+                frame_examples.append(stack_text)
+        self.leaf[frames[-1]] += samples
+
+
+def _rank_frames(
+    state: _FoldedSummaryState,
+    ranking: collections.Counter[str],
+    *,
+    limit: int,
+) -> list[dict[str, object]]:
+    """Build ranked frame entries."""
+    ranked = sorted(
+        ranking,
+        key=lambda frame: (-ranking[frame], -state.leaf[frame], frame),
+    )
+    return [
+        {
+            "frame": frame,
+            "inclusive_samples": state.inclusive[frame],
+            "inclusive_percent": _percent(state.inclusive[frame], state.total),
+            "leaf_samples": state.leaf[frame],
+            "leaf_percent": _percent(state.leaf[frame], state.total),
+            "example_stacks": state.examples.get(frame, []),
+        }
+        for frame in ranked[:limit]
+    ]
+
+
+def summarize_folded_file(
+    folded_path: pth.Path,
+    *,
+    output: pth.Path,
+    limit: int = 30,
+    example_limit: int = 3,
+) -> dict[str, object]:
+    """Summarise a folded stack file into an agent-friendly JSON document.
+
+    Parameters
+    ----------
+    folded_path:
+        Path to a folded-stack text file where each non-empty line has the
+        form ``frame1;frame2 count``.
+    output:
+        Path at which the JSON summary is written (parent directories are
+        created automatically).
+    limit:
+        Maximum number of entries in each ranked list. Defaults to 30.
+    example_limit:
+        Maximum number of example stack strings stored per frame. Defaults to 3.
+
+    Returns
+    -------
+    dict[str, object]
+        Summary with keys ``total_samples`` (int), ``top_inclusive_frames``
+        (list of dicts), ``top_leaf_frames`` (list of dicts), and
+        ``top_stacks`` (list of dicts).
+    """
+    _validate_positive_int("limit", limit)
+    _validate_positive_int("example_limit", example_limit)
+
+    state = _FoldedSummaryState(
+        inclusive=collections.Counter(),
+        leaf=collections.Counter(),
+        stacks=collections.Counter(),
+        examples={},
+    )
+
+    with folded_path.open(errors="replace") as fh:
+        for line in fh:
+            parsed = _parse_folded_line(line.rstrip("\n"))
+            if parsed is None:
+                continue
+            frames, samples = parsed
+            state.add(frames, samples, example_limit=example_limit)
+
+    top_inclusive = _rank_frames(state, state.inclusive, limit=limit)
+    top_leaf = _rank_frames(state, state.leaf, limit=limit)
+    top_stacks = [
+        {
+            "stack": stack,
+            "samples": samples,
+            "percent": _percent(samples, state.total),
+        }
+        for stack, samples in state.stacks.most_common(limit)
+    ]
+    summary: dict[str, object] = {
+        "total_samples": state.total,
+        "top_inclusive_frames": top_inclusive,
+        "top_leaf_frames": top_leaf,
+        "top_stacks": top_stacks,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    return summary
+
+
+def _parse_args() -> argparse.Namespace:
+    """Parse summariser CLI arguments."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("folded", type=pth.Path)
+    parser.add_argument("--output", type=pth.Path, required=True)
+    parser.add_argument("--limit", type=int, default=30)
+    parser.add_argument("--example-limit", type=int, default=3)
+    return parser.parse_args()
+
+
+def main() -> int:
+    """Run the folded-stack summariser CLI.
+
+    Returns
+    -------
+    int
+        Process exit code; 0 on success.
+    """
+    args = _parse_args()
+    try:
+        summarize_folded_file(
+            args.folded,
+            output=args.output,
+            limit=args.limit,
+            example_limit=args.example_limit,
+        )
+    except (ValueError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

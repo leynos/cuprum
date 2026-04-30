@@ -1,0 +1,86 @@
+# serializer version: 1
+# name: test_summarize_folded_snapshot
+  dict({
+    'top_inclusive_frames': list([
+      dict({
+        'example_stacks': list([
+          'root;parent;leaf',
+          'root;other',
+        ]),
+        'frame': 'root',
+        'inclusive_percent': 100.0,
+        'inclusive_samples': 6,
+        'leaf_percent': 0.0,
+        'leaf_samples': 0,
+      }),
+      dict({
+        'example_stacks': list([
+          'root;parent;leaf',
+          'root;parent;leaf',
+        ]),
+        'frame': 'leaf',
+        'inclusive_percent': 66.6667,
+        'inclusive_samples': 4,
+        'leaf_percent': 66.6667,
+        'leaf_samples': 4,
+      }),
+      dict({
+        'example_stacks': list([
+          'root;parent;leaf',
+          'root;parent;leaf',
+        ]),
+        'frame': 'parent',
+        'inclusive_percent': 66.6667,
+        'inclusive_samples': 4,
+        'leaf_percent': 0.0,
+        'leaf_samples': 0,
+      }),
+      dict({
+        'example_stacks': list([
+          'root;other',
+        ]),
+        'frame': 'other',
+        'inclusive_percent': 33.3333,
+        'inclusive_samples': 2,
+        'leaf_percent': 33.3333,
+        'leaf_samples': 2,
+      }),
+    ]),
+    'top_leaf_frames': list([
+      dict({
+        'example_stacks': list([
+          'root;parent;leaf',
+          'root;parent;leaf',
+        ]),
+        'frame': 'leaf',
+        'inclusive_percent': 66.6667,
+        'inclusive_samples': 4,
+        'leaf_percent': 66.6667,
+        'leaf_samples': 4,
+      }),
+      dict({
+        'example_stacks': list([
+          'root;other',
+        ]),
+        'frame': 'other',
+        'inclusive_percent': 33.3333,
+        'inclusive_samples': 2,
+        'leaf_percent': 33.3333,
+        'leaf_samples': 2,
+      }),
+    ]),
+    'top_stacks': list([
+      dict({
+        'percent': 66.6667,
+        'samples': 4,
+        'stack': 'root;parent;leaf',
+      }),
+      dict({
+        'percent': 33.3333,
+        'samples': 2,
+        'stack': 'root;other',
+      }),
+    ]),
+    'total_samples': 6,
+  })
+# ---
