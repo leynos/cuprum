@@ -64,6 +64,7 @@ class Clock(typ.Protocol):
 
 _default_clock: Clock = time.perf_counter
 _BACKEND_LOCK = threading.Lock()
+_lock_state = threading.local()
 
 
 class TeeProfileWorkerResult(typ.TypedDict):
@@ -217,7 +218,7 @@ class _EnvBackendSelector:
 
     Acquires ``_BACKEND_LOCK`` for the duration of the context to serialise
     access to ``os.environ`` and the backend LRU caches. This selector is
-    not re-entrant; callers must not nest it.
+    not re-entrant; attempted nested entry raises ``RuntimeError``.
     """
 
     def __call__(
@@ -231,15 +232,20 @@ class _EnvBackendSelector:
     @contextlib.contextmanager
     def _activate(backend: BackendName) -> cabc.Iterator[None]:
         """Select the stream backend for parent-side pipeline pumping."""
+        if getattr(_lock_state, "is_active", False):
+            msg = "_EnvBackendSelector is not re-entrant; nested calls are forbidden"
+            raise RuntimeError(msg)
+
         with _BACKEND_LOCK:
+            _lock_state.is_active = True
             previous = os.environ.get("CUPRUM_STREAM_BACKEND")
-            if backend == "auto":
-                os.environ.pop("CUPRUM_STREAM_BACKEND", None)
-            else:
-                os.environ["CUPRUM_STREAM_BACKEND"] = backend
-            _backend._check_rust_available.cache_clear()
-            _backend.get_stream_backend.cache_clear()
             try:
+                if backend == "auto":
+                    os.environ.pop("CUPRUM_STREAM_BACKEND", None)
+                else:
+                    os.environ["CUPRUM_STREAM_BACKEND"] = backend
+                _backend._check_rust_available.cache_clear()
+                _backend.get_stream_backend.cache_clear()
                 yield
             finally:
                 if previous is None:
@@ -248,6 +254,7 @@ class _EnvBackendSelector:
                     os.environ["CUPRUM_STREAM_BACKEND"] = previous
                 _backend._check_rust_available.cache_clear()
                 _backend.get_stream_backend.cache_clear()
+                _lock_state.is_active = False
 
 
 _default_backend_selector: BackendSelector = _EnvBackendSelector()
