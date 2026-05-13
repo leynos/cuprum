@@ -6,6 +6,7 @@ import argparse
 import contextlib
 import dataclasses as dc
 import json
+import logging
 import os
 import pathlib as pth
 import sys
@@ -36,6 +37,10 @@ type WorkerCommandResult = sh.CommandResult | sh.PipelineResult
 _VALID_MODES = {"echo", "capture", "tee"}
 _VALID_SINKS = {"devnull", "text_blackhole", "pty_blackhole"}
 _VALID_BACKENDS = {"auto", "python", "rust"}
+_REENTRANT_SELECTOR_MESSAGE = (
+    "_EnvBackendSelector is not re-entrant; nested calls are forbidden"
+)
+_logger = logging.getLogger(__name__)
 
 
 class BackendSelector(typ.Protocol):
@@ -61,12 +66,28 @@ class Clock(typ.Protocol):
         """Return the current time in seconds."""
         ...
 
+class _BackendSelectorState:
+    """Track selector activation for the current thread."""
 
-_default_clock: Clock = time.perf_counter
-_BACKEND_LOCK = threading.Lock()
-_lock_state = threading.local()
+    def __init__(self, state: threading.local) -> None:
+        """Store the thread-local state object used by the selector."""
+        self._state = state
 
+    def enter(self) -> bool:
+        """Mark this thread active, returning ``False`` for nested entry."""
+        if self.is_active:
+            return False
+        self._state.is_active = True
+        return True
 
+    def exit(self) -> None:
+        """Mark this thread inactive."""
+        self._state.is_active = False
+
+    @property
+    def is_active(self) -> bool:
+        """Return whether the current thread already owns the selector."""
+        return bool(getattr(self._state, "is_active", False))
 class TeeProfileWorkerResult(typ.TypedDict):
     """Machine-readable tee profiling worker result payload."""
 
@@ -218,7 +239,8 @@ class _EnvBackendSelector:
 
     Acquires ``_BACKEND_LOCK`` for the duration of the context to serialise
     access to ``os.environ`` and the backend LRU caches. This selector is
-    not re-entrant; attempted nested entry raises ``RuntimeError``.
+    not re-entrant; attempted nested entry raises ``RuntimeError`` and logs
+    the rejected backend and thread identifier.
     """
 
     def __call__(
@@ -232,29 +254,37 @@ class _EnvBackendSelector:
     @contextlib.contextmanager
     def _activate(backend: BackendName) -> cabc.Iterator[None]:
         """Select the stream backend for parent-side pipeline pumping."""
-        if getattr(_lock_state, "is_active", False):
-            msg = "_EnvBackendSelector is not re-entrant; nested calls are forbidden"
-            raise RuntimeError(msg)
-
         with _BACKEND_LOCK:
-            _lock_state.is_active = True
-            previous = os.environ.get("CUPRUM_STREAM_BACKEND")
+            if not _selector_state.enter():
+                _logger.warning(
+                    "Rejected re-entrant backend selector activation",
+                    extra={
+                        "backend": backend,
+                        "thread_id": threading.get_ident(),
+                        "selector_active": _selector_state.is_active,
+                    },
+                )
+                raise RuntimeError(_REENTRANT_SELECTOR_MESSAGE)
+
             try:
-                if backend == "auto":
-                    os.environ.pop("CUPRUM_STREAM_BACKEND", None)
-                else:
-                    os.environ["CUPRUM_STREAM_BACKEND"] = backend
-                _backend._check_rust_available.cache_clear()
-                _backend.get_stream_backend.cache_clear()
-                yield
+                previous = os.environ.get("CUPRUM_STREAM_BACKEND")
+                try:
+                    if backend == "auto":
+                        os.environ.pop("CUPRUM_STREAM_BACKEND", None)
+                    else:
+                        os.environ["CUPRUM_STREAM_BACKEND"] = backend
+                    _backend._check_rust_available.cache_clear()
+                    _backend.get_stream_backend.cache_clear()
+                    yield
+                finally:
+                    if previous is None:
+                        os.environ.pop("CUPRUM_STREAM_BACKEND", None)
+                    else:
+                        os.environ["CUPRUM_STREAM_BACKEND"] = previous
+                    _backend._check_rust_available.cache_clear()
+                    _backend.get_stream_backend.cache_clear()
             finally:
-                if previous is None:
-                    os.environ.pop("CUPRUM_STREAM_BACKEND", None)
-                else:
-                    os.environ["CUPRUM_STREAM_BACKEND"] = previous
-                _backend._check_rust_available.cache_clear()
-                _backend.get_stream_backend.cache_clear()
-                _lock_state.is_active = False
+                _selector_state.exit()
 
 
 _default_backend_selector: BackendSelector = _EnvBackendSelector()

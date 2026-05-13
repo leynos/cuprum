@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess  # noqa: S404 - integration tests exercise fixed CLI commands.
 import sys
 import threading
@@ -122,25 +123,119 @@ def test_worker_accumulates_repeat_counters(tmp_path: pth.Path) -> None:
 
 
 def test_concurrent_workers_do_not_race(tmp_path: pth.Path) -> None:
-    """Concurrent workers with different backends complete successfully."""
+    """Concurrent workers with same and different backends complete."""
     fixture = tmp_path / "fixture_concurrent.b64"
     fixture.write_text("YWJjZGVm\n")
     alternate_backend = (
         "rust" if tee_profile_worker._backend._check_rust_available() else "auto"
     )
-    backends: tuple[tee_profile_worker.BackendName, tee_profile_worker.BackendName] = (
-        "python",
-        alternate_backend,
+    backend_pairs: tuple[
+        tuple[tee_profile_worker.BackendName, tee_profile_worker.BackendName],
+        ...,
+    ] = (
+        ("python", "python"),
+        ("python", alternate_backend),
     )
-    barrier = threading.Barrier(parties=len(backends) + 1)
+
+    def run_backend_pair(
+        backends: tuple[
+            tee_profile_worker.BackendName,
+            tee_profile_worker.BackendName,
+        ],
+    ) -> None:
+        barrier = threading.Barrier(parties=len(backends) + 1)
+        errors: list[BaseException] = []
+        results: list[tee_profile_worker.TeeProfileWorkerResult] = []
+        result_lock = threading.Lock()
+
+        def run_worker(backend: tee_profile_worker.BackendName) -> None:
+            try:
+                barrier.wait(timeout=5)
+                result = run_tee_profile_worker(
+                    TeeProfileWorkerConfig(
+                        fixture_path=fixture,
+                        stages=1,
+                        mode="tee",
+                        sink_kind="devnull",
+                        with_line_callbacks=True,
+                        backend=backend,
+                        repeat_count=1,
+                    ),
+                )
+            except BaseException as exc:  # noqa: BLE001 - thread failures must surface.
+                with result_lock:
+                    errors.append(exc)
+                return
+
+            with result_lock:
+                results.append(result)
+
+        threads = [
+            threading.Thread(target=run_worker, args=(backend,), daemon=True)
+            for backend in backends
+        ]
+        for thread in threads:
+            thread.start()
+
+        barrier.wait(timeout=5)
+        for thread in threads:
+            thread.join(timeout=10)
+
+        alive_threads = [thread.name for thread in threads if thread.is_alive()]
+        assert not alive_threads, (
+            f"expected worker threads to finish for {backends}, got {alive_threads}"
+        )
+        assert not errors, f"expected no worker thread errors, got {errors!r}"
+        assert len(results) == len(backends), (
+            f"expected one result per worker, got {results}"
+        )
+        assert all(result["status"] == "ok" for result in results), (
+            f"expected all worker statuses to be ok, got {results}"
+        )
+        assert all(result["exit_code"] == 0 for result in results), (
+            f"expected all worker exit codes to be 0, got {results}"
+        )
+
+    for backends in backend_pairs:
+        run_backend_pair(backends)
+
+
+def test_concurrent_workers_preserve_backend_environment(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A competing worker cannot mutate the active worker's backend env."""
+    fixture = tmp_path / "fixture_env_lock.b64"
+    fixture.write_text("YWJjZGVm\n")
+    events = {
+        "first_inside": threading.Event(),
+        "second_started": threading.Event(),
+        "second_entered_run": threading.Event(),
+        "release_second": threading.Event(),
+    }
+    observations: list[str | None] = []
     errors: list[BaseException] = []
-    results: list[tee_profile_worker.TeeProfileWorkerResult] = []
     result_lock = threading.Lock()
+
+    def fake_run_once(config: TeeProfileWorkerConfig) -> tuple[int, int, int]:
+        if config.backend == "python":
+            events["first_inside"].set()
+            assert events["second_started"].wait(timeout=5)
+            events["second_entered_run"].wait(timeout=0.2)
+            observations.append(os.environ.get("CUPRUM_STREAM_BACKEND"))
+            events["release_second"].set()
+        else:
+            events["second_entered_run"].set()
+            assert events["release_second"].wait(timeout=5)
+        return 0, 0, 0
+
+    monkeypatch.setattr(tee_profile_worker, "_run_once", fake_run_once)
 
     def run_worker(backend: tee_profile_worker.BackendName) -> None:
         try:
-            barrier.wait(timeout=5)
-            result = run_tee_profile_worker(
+            if backend == "auto":
+                events["second_started"].set()
+            run_tee_profile_worker(
                 TeeProfileWorkerConfig(
                     fixture_path=fixture,
                     stages=1,
@@ -154,45 +249,38 @@ def test_concurrent_workers_do_not_race(tmp_path: pth.Path) -> None:
         except BaseException as exc:  # noqa: BLE001 - thread failures must surface.
             with result_lock:
                 errors.append(exc)
-            return
 
-        with result_lock:
-            results.append(result)
+    first = threading.Thread(target=run_worker, args=("python",), daemon=True)
+    second = threading.Thread(target=run_worker, args=("auto",), daemon=True)
+    first.start()
+    assert events["first_inside"].wait(timeout=5), (
+        "expected first worker to enter run body"
+    )
+    second.start()
+    first.join(timeout=10)
+    second.join(timeout=10)
 
-    threads = [
-        threading.Thread(target=run_worker, args=(backend,), daemon=True)
-        for backend in backends
-    ]
-    for thread in threads:
-        thread.start()
-
-    barrier.wait(timeout=5)
-    for thread in threads:
-        thread.join(timeout=10)
-
-    alive_threads = [thread.name for thread in threads if thread.is_alive()]
+    alive_threads = [thread.name for thread in (first, second) if thread.is_alive()]
     assert not alive_threads, f"expected worker threads to finish, got {alive_threads}"
     assert not errors, f"expected no worker thread errors, got {errors!r}"
-    assert len(results) == len(backends), (
-        f"expected one result per worker, got {results}"
-    )
-    assert all(result["status"] == "ok" for result in results), (
-        f"expected all worker statuses to be ok, got {results}"
-    )
-    assert all(result["exit_code"] == 0 for result in results), (
-        f"expected all worker exit codes to be 0, got {results}"
+    assert observations == ["python"], (
+        f"expected first worker env to stay pinned, got {observations}"
     )
 
 
-def test_nested_selector_raises_runtime_error() -> None:
-    """Nested backend selector entry fails explicitly instead of deadlocking."""
+def test_nested_selector_raises_runtime_error_and_recovers() -> None:
+    """Nested backend selector entry fails explicitly and cleans up state."""
     expected_message = (
         "_EnvBackendSelector is not re-entrant; nested calls are forbidden"
     )
-    with tee_profile_worker._EnvBackendSelector._activate("python"):  # noqa: SIM117
+    selector = tee_profile_worker._EnvBackendSelector()
+    with selector("python"):  # noqa: SIM117
         with pytest.raises(RuntimeError, match=expected_message):
-            with tee_profile_worker._EnvBackendSelector._activate("auto"):
+            with selector("auto"):
                 pass
+
+    with selector("auto"):
+        pass
 
 
 def test_worker_cli_reports_config_errors(
