@@ -160,7 +160,8 @@ def test_concurrent_workers_do_not_race(tmp_path: pth.Path) -> None:
             results.append(result)
 
     threads = [
-        threading.Thread(target=run_worker, args=(backend,)) for backend in backends
+        threading.Thread(target=run_worker, args=(backend,), daemon=True)
+        for backend in backends
     ]
     for thread in threads:
         thread.start()
