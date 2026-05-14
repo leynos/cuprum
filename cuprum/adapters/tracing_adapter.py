@@ -92,7 +92,7 @@ class Span(typ.Protocol):
             Attribute value (string, int, float, bool, or list thereof).
 
         """
-        ...
+        raise NotImplementedError
 
     def add_event(
         self,
@@ -109,7 +109,7 @@ class Span(typ.Protocol):
             Optional attributes for the event.
 
         """
-        ...
+        raise NotImplementedError
 
     def set_status(self, *, ok: bool) -> None:
         """Set the span status.
@@ -120,11 +120,11 @@ class Span(typ.Protocol):
             True if the operation succeeded, False otherwise.
 
         """
-        ...
+        raise NotImplementedError
 
     def end(self) -> None:
         """End the span, recording its duration."""
-        ...
+        raise NotImplementedError
 
 
 class Tracer(typ.Protocol):
@@ -154,7 +154,7 @@ class Tracer(typ.Protocol):
             A span that must be ended by calling :meth:`Span.end`.
 
         """
-        ...
+        raise NotImplementedError
 
 
 @dc.dataclass(slots=True)

@@ -11,6 +11,8 @@ from cuprum._observability import _freeze_str_mapping, _merge_tags
 from cuprum._pipeline_streams import _collect_pipe_results
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum._pipeline_internals import _StageObservation
     from cuprum._pipeline_streams import _PipelineRunConfig
     from cuprum.sh import SafeCmd
@@ -33,8 +35,8 @@ async def _terminate_process_with_wait(
     process: asyncio.subprocess.Process,
     *,
     grace_period: float,
-    is_done: typ.Callable[[], bool],
-    wait_for_exit: typ.Callable[[], typ.Awaitable[int]],
+    is_done: cabc.Callable[[], bool],
+    wait_for_exit: cabc.Callable[[], cabc.Awaitable[int]],
 ) -> None:
     """Terminate a process, awaiting completion via the provided waiter."""
     grace_period = max(0.0, grace_period)
@@ -100,7 +102,7 @@ async def _cleanup_pipeline_on_error(
     return await _collect_pipe_results(pipe_tasks)
 
 
-def _merge_env(extra: typ.Mapping[str, str] | None) -> dict[str, str] | None:
+def _merge_env(extra: cabc.Mapping[str, str] | None) -> dict[str, str] | None:
     """Overlay extra environment variables when provided."""
     if extra is None:
         return None

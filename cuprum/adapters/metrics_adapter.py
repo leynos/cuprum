@@ -93,7 +93,7 @@ class MetricsCollector(typ.Protocol):
             Label key-value pairs for metric dimensions.
 
         """
-        ...
+        raise NotImplementedError
 
     def observe_histogram(
         self,
@@ -113,7 +113,7 @@ class MetricsCollector(typ.Protocol):
             Label key-value pairs for metric dimensions.
 
         """
-        ...
+        raise NotImplementedError
 
 
 @dc.dataclass

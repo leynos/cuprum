@@ -11,6 +11,7 @@ import threading
 import typing as typ
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import types
 
 type SinkKind = typ.Literal["devnull", "text_blackhole", "pty_blackhole"]
@@ -127,7 +128,7 @@ def open_sink(
     *,
     encoding: str,
     errors: str,
-) -> typ.Iterator[typ.IO[str]]:
+) -> cabc.Iterator[typ.IO[str]]:
     """Open a profiling sink by kind.
 
     Parameters

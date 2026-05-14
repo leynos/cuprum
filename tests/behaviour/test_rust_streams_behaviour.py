@@ -19,13 +19,14 @@ from pytest_bdd import given, scenario, then, when
 from tests.helpers.stream_pipes import _pipe_pair, _read_all, _safe_close
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from types import ModuleType
 
 
 def _expose_rust_stream_function(
     rust_streams: ModuleType,
     function_name: str,
-) -> typ.Callable[..., typ.Any]:
+) -> cabc.Callable[..., typ.Any]:
     """Return a named Rust stream function from the module.
 
     Parameters
@@ -41,7 +42,7 @@ def _expose_rust_stream_function(
         The requested Rust stream function.
     """
     return typ.cast(
-        "typ.Callable[..., typ.Any]",
+        "cabc.Callable[..., typ.Any]",
         getattr(rust_streams, function_name),
     )
 
@@ -101,7 +102,7 @@ def test_rust_pump_stream_large_transfer_behaviour() -> None:
 
 
 @given("the Rust pump stream is available", target_fixture="rust_pump")
-def given_rust_pump(rust_streams: ModuleType) -> typ.Callable[[int, int], int]:
+def given_rust_pump(rust_streams: ModuleType) -> cabc.Callable[[int, int], int]:
     """Expose the Rust pump stream function.
 
     Parameters
@@ -120,7 +121,7 @@ def given_rust_pump(rust_streams: ModuleType) -> typ.Callable[[int, int], int]:
 @given("the Rust consume stream is available", target_fixture="rust_consume")
 def given_rust_consume(
     rust_streams: ModuleType,
-) -> typ.Callable[..., str]:
+) -> cabc.Callable[..., str]:
     """Expose the Rust consume stream function.
 
     Parameters
@@ -141,7 +142,7 @@ def given_rust_consume(
     target_fixture="pumped_payload",
 )
 def when_pump_payload(
-    rust_pump: typ.Callable[[int, int], int],
+    rust_pump: cabc.Callable[[int, int], int],
 ) -> tuple[bytes, bytes]:
     """Pump data through pipes using the Rust function.
 
@@ -173,7 +174,7 @@ def when_pump_payload(
     target_fixture="consumed_payload",
 )
 def when_consume_invalid_utf8(
-    rust_consume: typ.Callable[..., str],
+    rust_consume: cabc.Callable[..., str],
 ) -> tuple[bytes, str]:
     """Consume invalid UTF-8 payload through pipes.
 
@@ -245,7 +246,7 @@ def then_output_matches_replacement(
     target_fixture="large_pumped_payload",
 )
 def when_pump_large_payload(
-    rust_pump: typ.Callable[[int, int], int],
+    rust_pump: cabc.Callable[[int, int], int],
 ) -> tuple[bytes, bytes, int]:
     """Pump a large payload through pipes using the Rust function.
 

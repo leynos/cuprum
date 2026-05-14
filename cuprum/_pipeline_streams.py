@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """Stream coordination for pipeline execution."""
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ from cuprum._streams import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum._pipeline_internals import _StageObservation
     from cuprum.sh import ExecutionContext
 
@@ -27,11 +30,11 @@ class _PumpStreamDispatchTestHooks:
     """Test-only overrides for stream dispatch."""
 
     force_fd_extraction_failure: bool = False
-    on_rust_fd_path_attempt: typ.Callable[[], None] | None = None
+    on_rust_fd_path_attempt: cabc.Callable[[], None] | None = None
     python_pump: (
-        typ.Callable[
+        cabc.Callable[
             [asyncio.StreamReader | None, asyncio.StreamWriter | None],
-            typ.Awaitable[None],
+            cabc.Awaitable[None],
         ]
         | None
     ) = None
@@ -43,11 +46,11 @@ _PUMP_STREAM_DISPATCH_TEST_HOOKS = _PumpStreamDispatchTestHooks()
 def configure_pump_stream_dispatch_for_testing(
     *,
     force_fd_extraction_failure: bool = False,
-    on_rust_fd_path_attempt: typ.Callable[[], None] | None = None,
+    on_rust_fd_path_attempt: cabc.Callable[[], None] | None = None,
     python_pump: (
-        typ.Callable[
+        cabc.Callable[
             [asyncio.StreamReader | None, asyncio.StreamWriter | None],
-            typ.Awaitable[None],
+            cabc.Awaitable[None],
         ]
         | None
     ) = None,
@@ -162,7 +165,7 @@ def _create_stage_capture_tasks(
     if not config.capture_or_echo:
         return stderr_task, stdout_task
 
-    stderr_on_line: typ.Callable[[str], None] | None = None
+    stderr_on_line: cabc.Callable[[str], None] | None = None
     if observation.hooks.observe_hooks:
 
         def stderr_on_line(line: str) -> None:
@@ -184,7 +187,7 @@ def _create_stage_capture_tasks(
     if not is_last_stage:
         return stderr_task, stdout_task
 
-    stdout_on_line: typ.Callable[[str], None] | None = None
+    stdout_on_line: cabc.Callable[[str], None] | None = None
     if observation.hooks.observe_hooks:
 
         def stdout_on_line(line: str) -> None:
@@ -245,7 +248,7 @@ def _extract_writer_fd(writer: asyncio.StreamWriter | None) -> int | None:
 
 def _pause_reader_transport(
     reader: asyncio.StreamReader,
-) -> typ.Callable[[], None] | None:
+) -> cabc.Callable[[], None] | None:
     """Pause reader transport callbacks while Rust pump owns the raw FD."""
     transport = getattr(reader, "transport", None)
     if transport is None:

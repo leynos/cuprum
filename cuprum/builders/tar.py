@@ -11,6 +11,8 @@ from cuprum.builders.args import safe_path
 from cuprum.catalogue import TAR
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum.sh import SafeCmd
 
 
@@ -48,7 +50,7 @@ def _get_compression_flag(options: TarCreateOptions) -> str:
 
 def tar_create(
     archive: str | Path,
-    sources: typ.Sequence[str | Path],
+    sources: cabc.Sequence[str | Path],
     *,
     options: TarCreateOptions | None = None,
 ) -> SafeCmd:

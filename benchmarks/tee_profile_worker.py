@@ -26,6 +26,9 @@ from cuprum import (
     sh,
 )
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 type TeeMode = typ.Literal["echo", "capture", "tee"]
 type BackendName = typ.Literal["auto", "python", "rust"]
 type WorkerCommandResult = sh.CommandResult | sh.PipelineResult
@@ -226,7 +229,7 @@ class _EnvBackendSelector:
 
     @staticmethod
     @contextlib.contextmanager
-    def _activate(backend: BackendName) -> typ.Iterator[None]:
+    def _activate(backend: BackendName) -> cabc.Iterator[None]:
         """Select the stream backend for parent-side pipeline pumping."""
         with _BACKEND_LOCK:
             previous = os.environ.get("CUPRUM_STREAM_BACKEND")

@@ -16,6 +16,9 @@ from types import MappingProxyType
 
 from cuprum.program import Program
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 
 def _coerce_program(raw: Program | str) -> Program:
     """Return input as Program for type narrowing; no transformation performed."""
@@ -56,7 +59,7 @@ class ProgramEntry:
 class ProgramCatalogue:
     """Catalogue of curated programs with a default allowlist."""
 
-    def __init__(self, *, projects: typ.Iterable[ProjectSettings]) -> None:
+    def __init__(self, *, projects: cabc.Iterable[ProjectSettings]) -> None:
         """Build a catalogue from the supplied project definitions."""
         self._projects = self._index_projects(projects)
         self._program_to_project = self._index_programs(self._projects)
@@ -86,13 +89,13 @@ class ProgramCatalogue:
         """Return the owning project for the given program."""
         return self.lookup(program).project
 
-    def visible_settings(self) -> typ.Mapping[str, ProjectSettings]:
+    def visible_settings(self) -> cabc.Mapping[str, ProjectSettings]:
         """Expose project metadata to downstream services."""
         return self._visible_settings_cache
 
     @staticmethod
     def _index_projects(
-        projects: typ.Iterable[ProjectSettings],
+        projects: cabc.Iterable[ProjectSettings],
     ) -> dict[str, ProjectSettings]:
         """Index project settings by name and guard against duplicates."""
         indexed: dict[str, ProjectSettings] = {}

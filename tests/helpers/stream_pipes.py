@@ -6,6 +6,9 @@ import contextlib
 import os
 import typing as typ
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 
 def _safe_close(fd: int) -> None:
     """Close a file descriptor, ignoring errors."""
@@ -25,7 +28,7 @@ def _read_all(fd: int, *, chunk_size: int = 4096) -> bytes:
 
 
 @contextlib.contextmanager
-def _pipe_pair() -> typ.Iterator[tuple[int, int, int, int]]:
+def _pipe_pair() -> cabc.Iterator[tuple[int, int, int, int]]:
     """Manage pipe creation and cleanup for stream tests."""
     in_read, in_write = os.pipe()
     out_read, out_write = os.pipe()

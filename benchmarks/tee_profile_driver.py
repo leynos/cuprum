@@ -19,6 +19,9 @@ from benchmarks.tee_profile_scenarios import (
     default_tee_profile_scenarios,
 )
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 
 def run_profile_plan(*, config: TeeProfileDriverConfig) -> dict[str, object]:
     """Generate a serial, auditable profiling plan.
@@ -63,13 +66,15 @@ def run_profile_plan(*, config: TeeProfileDriverConfig) -> dict[str, object]:
     }
 
 
-def _write_json(path: pth.Path, payload: typ.Mapping[str, object]) -> None:
+def _write_json(path: pth.Path, payload: cabc.Mapping[str, object]) -> None:
     """Write stable JSON output."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
-def run_profile_scenario(*, config: TeeProfileDriverConfig) -> typ.Mapping[str, object]:
+def run_profile_scenario(
+    *, config: TeeProfileDriverConfig
+) -> cabc.Mapping[str, object]:
     """Run one scenario, optionally under a profiler.
 
     Parameters
@@ -100,7 +105,7 @@ def run_profile_scenario(*, config: TeeProfileDriverConfig) -> typ.Mapping[str, 
 def run_profile_matrix(
     *,
     config: TeeProfileDriverConfig,
-) -> list[typ.Mapping[str, object]]:
+) -> list[cabc.Mapping[str, object]]:
     """Run all scenarios serially in the fixed matrix order.
 
     Parameters
@@ -115,7 +120,7 @@ def run_profile_matrix(
         Execution stops and propagates the failure result on the first
         non-zero exit code.
     """
-    results: list[typ.Mapping[str, object]] = []
+    results: list[cabc.Mapping[str, object]] = []
     for scenario in default_tee_profile_scenarios(
         fixture_path=config.fixture_path,
         wrapped_fixture_path=config.wrapped_fixture_path,
@@ -129,7 +134,7 @@ def run_profile_matrix(
     return results
 
 
-def _worker_result_exit_status(result: typ.Mapping[str, object]) -> int:
+def _worker_result_exit_status(result: cabc.Mapping[str, object]) -> int:
     """Return the shell exit status implied by a worker result payload."""
     exit_code = result.get("exit_code")
     if isinstance(exit_code, int) and exit_code != 0:
@@ -139,7 +144,7 @@ def _worker_result_exit_status(result: typ.Mapping[str, object]) -> int:
     return 0
 
 
-def _matrix_exit_status(results: typ.Iterable[typ.Mapping[str, object]]) -> int:
+def _matrix_exit_status(results: cabc.Iterable[cabc.Mapping[str, object]]) -> int:
     """Return the first failing shell status from a scenario result sequence."""
     for result in results:
         exit_status = _worker_result_exit_status(result)

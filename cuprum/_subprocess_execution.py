@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """Internal subprocess execution machinery.
 
 This module encapsulates the low-level subprocess spawning, stream handling,
@@ -73,9 +74,8 @@ async def _wait_for_exit_code(
         if consumers:
             await asyncio.gather(*consumers, return_exceptions=True)
         raise
-    else:
-        exited_at = time.perf_counter()
-        return exit_code, exited_at
+    exited_at = time.perf_counter()
+    return exit_code, exited_at
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -93,7 +93,7 @@ class _SubprocessExecution:
 class _SubprocessTimeoutError(Exception):
     """Internal wrapper for subprocess timeouts with captured output."""
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments
         self,
         *,
         timeout: float,

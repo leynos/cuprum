@@ -97,7 +97,7 @@ def then_command_result_has_output(run_result: CommandResult) -> None:
     """Validate captured stdout/stderr and exit code."""
     assert run_result.exit_code == 0
     assert run_result.stdout == "behaviour"
-    assert run_result.stderr == ""
+    assert not run_result.stderr
 
 
 @given(

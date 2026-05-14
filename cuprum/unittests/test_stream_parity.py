@@ -65,7 +65,7 @@ def _build_pipeline(
 class TestStreamParity:
     """Parity tests for Python and Rust stream backends."""
 
-    def test_empty_pipeline_produces_empty_stdout(  # noqa: PLR6301  # FIXME: pytest class convention; methods don't use self
+    def test_empty_pipeline_produces_empty_stdout(
         self,
         stream_backend: str,
     ) -> None:
@@ -109,7 +109,7 @@ class TestStreamParity:
             ),
         ],
     )
-    def test_utf8_chars_survive_pipeline(  # noqa: PLR6301  # FIXME: pytest class convention; methods don't use self
+    def test_utf8_chars_survive_pipeline(
         self,
         stream_backend: str,
         char: str,
@@ -141,7 +141,7 @@ class TestStreamParity:
         assert result.stdout == payload, f"{description} should survive pipeline"
         assert result.ok is True, "pipeline should succeed"
 
-    def test_mixed_utf8_payload_survives_pipeline(  # noqa: PLR6301  # FIXME: pytest class convention; methods don't use self
+    def test_mixed_utf8_payload_survives_pipeline(
         self,
         stream_backend: str,
     ) -> None:
@@ -164,7 +164,7 @@ class TestStreamParity:
         assert result.stdout == payload, "mixed UTF-8 payload should survive pipeline"
         assert result.ok is True, "pipeline should succeed"
 
-    def test_broken_pipe_downstream_early_exit(  # noqa: PLR6301  # FIXME: pytest class convention; methods don't use self
+    def test_broken_pipe_downstream_early_exit(
         self,
         stream_backend: str,
     ) -> None:
@@ -209,7 +209,7 @@ class TestStreamParity:
         "stages",
         [pytest.param(2, id="two-stages"), pytest.param(3, id="three-stages")],
     )
-    def test_backpressure_large_payload(  # noqa: PLR6301  # FIXME: pytest class convention; methods don't use self
+    def test_backpressure_large_payload(
         self,
         stream_backend: str,
         stages: int,

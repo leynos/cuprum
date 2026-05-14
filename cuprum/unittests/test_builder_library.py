@@ -20,6 +20,9 @@ from cuprum.builders import (
     tar_extract,
 )
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 
 def test_safe_path_requires_absolute_by_default(tmp_path: Path) -> None:
     """SafePath rejects relative paths unless explicitly allowed."""
@@ -190,7 +193,7 @@ def test_tar_create_rejects_single_path_source(tmp_path: Path) -> None:
     archive = tmp_path / "archive.tar"
     source = tmp_path / "source"
     for value in (source, source.as_posix()):
-        sequence = typ.cast("typ.Sequence[str | Path]", value)
+        sequence = typ.cast("cabc.Sequence[str | Path]", value)
         with pytest.raises(TypeError, match="tar_create requires a sequence of"):
             tar_create(archive, sequence)
 

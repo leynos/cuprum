@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections.abc as cabc
 import io
 import os
 import sys
@@ -19,7 +20,7 @@ from tests.helpers.catalogue import python_builder as build_python_builder
 if typ.TYPE_CHECKING:
     from cuprum.sh import SafeCmd
 
-type ExecuteFn = typ.Callable[[SafeCmd, dict[str, typ.Any]], CommandResult]
+type ExecuteFn = cabc.Callable[[SafeCmd, dict[str, typ.Any]], CommandResult]
 
 
 def _execute_async(cmd: SafeCmd, kwargs: dict[str, typ.Any]) -> CommandResult:
@@ -41,7 +42,7 @@ def execution_strategy(request: pytest.FixtureRequest) -> tuple[str, ExecuteFn]:
 
 
 @pytest.fixture
-def python_builder() -> typ.Callable[..., SafeCmd]:
+def python_builder() -> cabc.Callable[..., SafeCmd]:
     """Provide a SafeCmd builder for the current Python interpreter."""
     return build_python_builder()
 
@@ -62,7 +63,7 @@ def test_captures_output_and_exit_code(
 
 
 def test_captures_stderr_only(
-    python_builder: typ.Callable[..., SafeCmd],
+    python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """Both run() and run_sync() capture stderr independently."""
@@ -82,7 +83,7 @@ def test_captures_stderr_only(
 
 
 def test_captures_and_echoes_stderr(
-    python_builder: typ.Callable[..., SafeCmd],
+    python_builder: cabc.Callable[..., SafeCmd],
     capsys: pytest.CaptureFixture[str],
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
@@ -123,7 +124,7 @@ def test_echoes_when_requested(
 
 
 def test_applies_env_overrides(
-    python_builder: typ.Callable[..., SafeCmd],
+    python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """Both run() and run_sync() overlay env vars without global mutation."""
@@ -145,7 +146,7 @@ def test_applies_env_overrides(
 
 
 def test_captures_nonzero_exit_code_and_ok_flag(
-    python_builder: typ.Callable[..., SafeCmd],
+    python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """Both run() and run_sync() capture non-zero exits and expose ok flag."""
@@ -159,7 +160,7 @@ def test_captures_nonzero_exit_code_and_ok_flag(
 
 
 def test_applies_cwd_override(
-    python_builder: typ.Callable[..., SafeCmd],
+    python_builder: cabc.Callable[..., SafeCmd],
     tmp_path: Path,
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
@@ -191,7 +192,7 @@ def test_allows_disabling_capture(
 
 
 def test_timeout_raises_timeout_expired(
-    python_builder: typ.Callable[..., SafeCmd],
+    python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """Timeouts raise TimeoutExpired with no output when capture is disabled."""
@@ -207,7 +208,7 @@ def test_timeout_raises_timeout_expired(
 
 
 def test_echoes_to_custom_sinks(
-    python_builder: typ.Callable[..., SafeCmd],
+    python_builder: cabc.Callable[..., SafeCmd],
     capsys: pytest.CaptureFixture[str],
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
@@ -243,7 +244,7 @@ def test_echoes_to_custom_sinks(
 
 
 def test_decodes_with_configured_encoding(
-    python_builder: typ.Callable[..., SafeCmd],
+    python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """Both run() and run_sync() use configured encoding/errors for decoding."""
@@ -276,7 +277,7 @@ def test_decodes_with_configured_encoding(
 
 def test_non_cooperative_subprocess_is_escalated_and_killed(
     tmp_path: Path,
-    python_builder: typ.Callable[..., SafeCmd],
+    python_builder: cabc.Callable[..., SafeCmd],
 ) -> None:
     """Non-cooperative child is killed after cancel_grace elapses."""
     if sys.platform == "win32":  # pragma: no cover - platform-specific behaviour
@@ -477,7 +478,7 @@ def test_run_passes_command_and_result_to_hooks(
 
 
 def test_run_does_not_invoke_after_hooks_on_cancellation(
-    python_builder: typ.Callable[..., SafeCmd],
+    python_builder: cabc.Callable[..., SafeCmd],
 ) -> None:
     """run() does not invoke after hooks when task is cancelled."""
     from cuprum.context import ScopeConfig, scoped

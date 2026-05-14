@@ -17,6 +17,7 @@ import os
 import typing as typ
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from types import ModuleType
 
 
@@ -35,7 +36,7 @@ def _convert_fd_for_platform(fd: int) -> int:
 
     # Use getattr to avoid cross-platform stub mismatches in type checking.
     get_osfhandle = typ.cast(
-        "typ.Callable[[int], int]",
+        "cabc.Callable[[int], int]",
         getattr(msvcrt, "get_osfhandle"),  # noqa: B009  # https://github.com/leynos/cuprum/pull/29#discussion_r2743182508
     )
     handle = get_osfhandle(fd)

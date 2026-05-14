@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """Generate a Python-versus-Rust benchmark comparison report.
 
 This module reads the filtered candidate benchmark plan plus throughput JSON
@@ -9,11 +10,11 @@ summary content suitable for ``$GITHUB_STEP_SUMMARY``.
 from __future__ import annotations
 
 import argparse
+import collections.abc as cabc
 import dataclasses as dc
 import json
 import pathlib as pth
 import sys
-import typing as typ
 from collections import Counter
 
 from benchmarks._validation import (
@@ -274,7 +275,7 @@ def compare_candidate_backend_results(
 
 
 def _require_optional_bool(
-    report: typ.Mapping[str, object],
+    report: cabc.Mapping[str, object],
     field: str,
     path: pth.Path,
 ) -> bool | None:
@@ -289,7 +290,7 @@ def _require_optional_bool(
     return value  # narrowed to bool | None
 
 
-def _ratchet_skip_detail(report: typ.Mapping[str, object]) -> str:
+def _ratchet_skip_detail(report: cabc.Mapping[str, object]) -> str:
     """Return the human-readable skip-reason string for a skipped ratchet run."""
     if report.get("reason") == _BOOTSTRAP_SKIP_REASON:
         return (
@@ -299,7 +300,7 @@ def _ratchet_skip_detail(report: typ.Mapping[str, object]) -> str:
     return "Rust regression ratchet skipped."
 
 
-def _ratchet_passed_status(report: typ.Mapping[str, object]) -> RatchetStatus:
+def _ratchet_passed_status(report: cabc.Mapping[str, object]) -> RatchetStatus:
     """Return a passed or failed RatchetStatus based on the *passed* field."""
     passed_value = report.get("passed")
     if not isinstance(passed_value, bool):

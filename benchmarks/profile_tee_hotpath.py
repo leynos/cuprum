@@ -53,6 +53,7 @@ from benchmarks.tee_profile_scenarios import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib as pth
 
 _ORIGINAL_CAN_USE_RUST_BACKEND = _scenarios.can_use_rust_backend
@@ -267,7 +268,9 @@ def run_profile_plan(*, config: TeeProfileDriverConfig) -> _ProfilePlan:
     }
 
 
-def run_profile_scenario(*, config: TeeProfileDriverConfig) -> typ.Mapping[str, object]:
+def run_profile_scenario(
+    *, config: TeeProfileDriverConfig
+) -> cabc.Mapping[str, object]:
     """Run one scenario, optionally under a profiler.
 
     Parameters
@@ -296,7 +299,7 @@ def run_profile_scenario(*, config: TeeProfileDriverConfig) -> typ.Mapping[str, 
 def run_profile_matrix(
     *,
     config: TeeProfileDriverConfig,
-) -> list[typ.Mapping[str, object]]:
+) -> list[cabc.Mapping[str, object]]:
     """Run all scenarios serially in the fixed matrix order.
 
     Parameters
@@ -312,8 +315,8 @@ def run_profile_matrix(
         non-zero exit code.
     """
 
-    def run_matrix() -> list[typ.Mapping[str, object]]:
-        results: list[typ.Mapping[str, object]] = []
+    def run_matrix() -> list[cabc.Mapping[str, object]]:
+        results: list[cabc.Mapping[str, object]] = []
         for scenario in default_tee_profile_scenarios(
             fixture_path=config.fixture_path,
             wrapped_fixture_path=config.wrapped_fixture_path,

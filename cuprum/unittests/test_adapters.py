@@ -1,6 +1,6 @@
 """Unit tests for telemetry adapter modules."""
 
-# ruff: noqa: PLR6301,SIM117
+# ruff: noqa: SIM117
 
 from __future__ import annotations
 
@@ -28,10 +28,13 @@ from cuprum.catalogue import ProgramCatalogue, ProjectSettings
 from cuprum.context import ScopeConfig, scoped
 from cuprum.program import Program
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 
 def _python_builder(
     *, project_name: str = "adapter-tests"
-) -> tuple[typ.Callable[..., sh.SafeCmd], ProgramCatalogue]:
+) -> tuple[cabc.Callable[..., sh.SafeCmd], ProgramCatalogue]:
     python_program = Program(str(Path(sys.executable)))
     project = ProjectSettings(
         name=project_name,

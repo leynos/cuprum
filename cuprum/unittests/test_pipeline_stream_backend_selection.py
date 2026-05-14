@@ -19,12 +19,15 @@ from cuprum._testing import (
     set_rust_availability_for_testing,
 )
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 pytestmark = pytest.mark.usefixtures("clear_backend_caches")
 _WRITER_TOGGLE_FAILURE = "writer toggle failed"
 
 
 @contextlib.contextmanager
-def _nonblocking_pipe_pair() -> typ.Iterator[tuple[int, int, int, int]]:
+def _nonblocking_pipe_pair() -> cabc.Iterator[tuple[int, int, int, int]]:
     """Yield two pipes with active ends configured for non-blocking I/O."""
     read_fd, read_write_fd = _pipeline_streams.os.pipe()
     write_read_fd, write_fd = _pipeline_streams.os.pipe()
@@ -69,7 +72,7 @@ class _WriterWithoutPause:
 
 
 @pytest.fixture
-def clear_backend_caches() -> typ.Iterator[None]:
+def clear_backend_caches() -> cabc.Iterator[None]:
     """Clear and restore backend-selection test hooks for each test."""
     from cuprum import _backend
 
@@ -168,7 +171,7 @@ class TestPumpStreamDispatch:
         calls: dict[str, int],
         expected_reader_fd: int,
         expected_writer_fd: int,
-    ) -> typ.Callable[[int, int], int]:
+    ) -> cabc.Callable[[int, int], int]:
         """Return a fake ``rust_pump_stream`` that asserts FDs are blocking."""
 
         def _spy(reader_fd: int, writer_fd: int) -> int:
@@ -309,7 +312,7 @@ class TestPumpStreamDispatch:
 
         def fake_pause_reader_transport(
             reader: asyncio.StreamReader,
-        ) -> typ.Callable[[], None]:
+        ) -> cabc.Callable[[], None]:
             del reader
             call_order.append("pause")
 

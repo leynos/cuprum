@@ -12,6 +12,8 @@ from weakref import WeakKeyDictionary
 from cuprum.context import HookRegistration, after, before
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum.sh import CommandResult, SafeCmd
 
 
@@ -96,8 +98,8 @@ def _build_logging_hooks(
     start_level: int,
     exit_level: int,
 ) -> tuple[
-    typ.Callable[[SafeCmd], None],
-    typ.Callable[[SafeCmd, CommandResult], None],
+    cabc.Callable[[SafeCmd], None],
+    cabc.Callable[[SafeCmd, CommandResult], None],
 ]:
     """Create before/after hooks that log start and exit events."""
     start_times: WeakKeyDictionary[SafeCmd, float] = WeakKeyDictionary()

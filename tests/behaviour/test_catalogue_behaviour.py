@@ -18,6 +18,7 @@ from cuprum.catalogue import (
 from cuprum.program import Program
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from types import ModuleType
 
     from cuprum.sh import SafeCmd
@@ -121,7 +122,7 @@ def then_catalogue_rejects(catalogue_result: dict[str, object]) -> None:
 @when("downstream services request visible settings", target_fixture="visible_settings")
 def when_request_visible_settings(
     catalogue: ProgramCatalogue,
-) -> typ.Mapping[str, ProjectSettings]:
+) -> cabc.Mapping[str, ProjectSettings]:
     """Expose project metadata to the scenario."""
     return catalogue.visible_settings()
 
@@ -142,7 +143,7 @@ def when_build_safe_command(
 
 @then(parsers.parse('project "{project_name}" advertises noise rules and docs'))
 def then_project_metadata_present(
-    visible_settings: typ.Mapping[str, ProjectSettings],
+    visible_settings: cabc.Mapping[str, ProjectSettings],
     project_name: str,
 ) -> None:
     """Ensure downstream services can see project metadata."""

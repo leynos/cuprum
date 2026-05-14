@@ -13,12 +13,14 @@ from cuprum.program import Program
 from cuprum.sh import ExecutionContext
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum.events import ExecEvent
 
 
 def _python_builder(
     *, project_name: str = "observe-tests"
-) -> tuple[typ.Callable[..., sh.SafeCmd], ProgramCatalogue]:
+) -> tuple[cabc.Callable[..., sh.SafeCmd], ProgramCatalogue]:
     python_program = Program(str(Path(sys.executable)))
     project = ProjectSettings(
         name=project_name,

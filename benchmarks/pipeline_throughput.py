@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """Benchmark end-to-end pipeline throughput with hyperfine.
 
 This module defines benchmark scenarios, command rendering helpers, and a CLI
@@ -50,6 +51,9 @@ from benchmarks._benchmark_types import (
     PipelineBenchmarkScenarioDict,
 )
 from cuprum import is_rust_available
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 # Payload sizes for the benchmark scenario matrix.
 _SMALL_PAYLOAD_BYTES = 1024  # 1 KB
@@ -180,8 +184,8 @@ def default_pipeline_scenarios(
 
 def render_prefixed_command(
     *,
-    command: typ.Sequence[str],
-    env: typ.Mapping[str, str],
+    command: cabc.Sequence[str],
+    env: cabc.Mapping[str, str],
 ) -> str:
     """Render a shell command with deterministic environment prefixes.
 
@@ -314,8 +318,8 @@ def build_hyperfine_command(*, config: PipelineBenchmarkConfig) -> list[str]:
 def _write_dry_run_payload(
     *,
     output_path: pth.Path,
-    command: typ.Sequence[str],
-    scenarios: typ.Sequence[PipelineBenchmarkScenario],
+    command: cabc.Sequence[str],
+    scenarios: cabc.Sequence[PipelineBenchmarkScenario],
     rust_available: bool,
 ) -> None:
     """Write dry-run benchmark metadata to JSON."""

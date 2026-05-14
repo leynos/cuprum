@@ -21,6 +21,8 @@ from cuprum._testing import (
 from tests.helpers.catalogue import combine_programs_into_catalogue, python_catalogue
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum.program import Program
     from cuprum.sh import PipelineResult
 
@@ -33,7 +35,7 @@ def requires_rust_backend() -> None:
 
 
 @pytest.fixture(autouse=True)
-def reset_stream_dispatch_test_hooks() -> typ.Iterator[None]:
+def reset_stream_dispatch_test_hooks() -> cabc.Iterator[None]:
     """Reset stream-dispatch test hooks before and after each scenario."""
     set_rust_availability_for_testing(is_available=None)
     reset_pump_stream_dispatch_for_testing()
