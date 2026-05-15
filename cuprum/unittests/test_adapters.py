@@ -1,7 +1,5 @@
 """Unit tests for telemetry adapter modules."""
 
-# ruff: noqa: SIM117
-
 from __future__ import annotations
 
 import logging
@@ -79,9 +77,12 @@ class TestStructuredLoggingHook:
         logger.setLevel(logging.DEBUG)
         hook = structured_logging_hook(logger=logger)
 
-        with caplog.at_level(logging.DEBUG, logger="cuprum.exec.test"):
-            with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
-                result = cmd.run_sync()
+        with (
+            caplog.at_level(logging.DEBUG, logger="cuprum.exec.test"),
+            scoped(ScopeConfig(allowlist=catalogue.allowlist)),
+            sh.observe(hook),
+        ):
+            result = cmd.run_sync()
 
         assert result.exit_code == 0
 
@@ -101,9 +102,12 @@ class TestStructuredLoggingHook:
         logger.setLevel(logging.DEBUG)
         hook = structured_logging_hook(logger=logger)
 
-        with caplog.at_level(logging.DEBUG, logger="cuprum.exec.extras"):
-            with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
-                cmd.run_sync()
+        with (
+            caplog.at_level(logging.DEBUG, logger="cuprum.exec.extras"),
+            scoped(ScopeConfig(allowlist=catalogue.allowlist)),
+            sh.observe(hook),
+        ):
+            cmd.run_sync()
 
         start_record = next(r for r in caplog.records if "cuprum.start" in r.message)
         assert hasattr(start_record, "cuprum_phase")
@@ -126,9 +130,12 @@ class TestStructuredLoggingHook:
         )
         hook = structured_logging_hook(logger=logger, levels=levels)
 
-        with caplog.at_level(logging.INFO, logger="cuprum.exec.levels"):
-            with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
-                cmd.run_sync()
+        with (
+            caplog.at_level(logging.INFO, logger="cuprum.exec.levels"),
+            scoped(ScopeConfig(allowlist=catalogue.allowlist)),
+            sh.observe(hook),
+        ):
+            cmd.run_sync()
 
         messages = [r.message for r in caplog.records]
         assert not any("cuprum.plan" in m for m in messages)

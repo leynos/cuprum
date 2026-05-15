@@ -1,4 +1,3 @@
-# pylint: disable=too-many-lines
 """Stream coordination for pipeline execution."""
 
 from __future__ import annotations
@@ -7,22 +6,28 @@ import asyncio
 import contextlib
 import dataclasses as dc
 import os
-import sys
 import typing as typ
 
 from cuprum._backend import StreamBackend, get_stream_backend
-from cuprum._streams import (
-    _close_stream_writer,
-    _consume_stream,
-    _pump_stream,
-    _StreamConfig,
+from cuprum._pipeline_config import (
+    _PipelineRunConfig as _PipelineRunConfig,
 )
+from cuprum._pipeline_config import (
+    _prepare_pipeline_config as _prepare_pipeline_config,
+)
+from cuprum._pipeline_stage_streams import (
+    _create_stage_capture_tasks as _create_stage_capture_tasks,
+)
+from cuprum._pipeline_stage_streams import (
+    _get_stage_stream_fds as _get_stage_stream_fds,
+)
+from cuprum._pipeline_stage_streams import (
+    _StageStreamConfig as _StageStreamConfig,
+)
+from cuprum._streams import _close_stream_writer, _pump_stream
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-    from cuprum._pipeline_internals import _StageObservation
-    from cuprum.sh import ExecutionContext
 
 
 @dc.dataclass(slots=True)
@@ -66,147 +71,6 @@ def configure_pump_stream_dispatch_for_testing(
 def reset_pump_stream_dispatch_for_testing() -> None:
     """Reset ``_pump_stream_dispatch`` test hooks to defaults."""
     configure_pump_stream_dispatch_for_testing()
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _PipelineRunConfig:
-    ctx: ExecutionContext
-    capture: bool
-    echo: bool
-    timeout: float | None
-    stdout_sink: typ.IO[str]
-    stderr_sink: typ.IO[str]
-
-    @property
-    def capture_or_echo(self) -> bool:
-        return self.capture or self.echo
-
-    @property
-    def stream_config(self) -> _StreamConfig:
-        return _StreamConfig(
-            capture_output=self.capture,
-            echo_output=self.echo,
-            sink=self.stdout_sink,
-            encoding=self.ctx.encoding,
-            errors=self.ctx.errors,
-        )
-
-
-def _prepare_pipeline_config(
-    *,
-    capture: bool,
-    echo: bool,
-    timeout: float | None,
-    context: ExecutionContext | None,
-) -> _PipelineRunConfig:
-    """Normalise runtime options for pipeline execution."""
-    from cuprum._pipeline_internals import _sh_module
-
-    sh = _sh_module()
-    ctx = context or sh.ExecutionContext()
-    stdout_sink = ctx.stdout_sink if ctx.stdout_sink is not None else sys.stdout
-    stderr_sink = ctx.stderr_sink if ctx.stderr_sink is not None else sys.stderr
-    return _PipelineRunConfig(
-        ctx=ctx,
-        capture=capture,
-        echo=echo,
-        timeout=timeout,
-        stdout_sink=stdout_sink,
-        stderr_sink=stderr_sink,
-    )
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _StageStreamConfig:
-    """Stream file descriptor configuration for a pipeline stage."""
-
-    stdin: int
-    stdout: int
-    stderr: int
-
-
-def _get_stage_stream_fds(
-    idx: int,
-    last_idx: int,
-    *,
-    capture_or_echo: bool,
-) -> _StageStreamConfig:
-    """Determine stream file descriptors for a pipeline stage.
-
-    First stage reads from DEVNULL; intermediate stages use pipes for stdin.
-    stdout is piped for intermediate stages or when capturing. stderr is piped
-    only when capturing or echoing.
-    """
-    stdin = asyncio.subprocess.DEVNULL if idx == 0 else asyncio.subprocess.PIPE
-    stdout = (
-        asyncio.subprocess.PIPE
-        if idx != last_idx or capture_or_echo
-        else asyncio.subprocess.DEVNULL
-    )
-    stderr = asyncio.subprocess.PIPE if capture_or_echo else asyncio.subprocess.DEVNULL
-    return _StageStreamConfig(stdin=stdin, stdout=stdout, stderr=stderr)
-
-
-def _create_stage_capture_tasks(
-    process: asyncio.subprocess.Process,
-    config: _PipelineRunConfig,
-    *,
-    is_last_stage: bool,
-    observation: _StageObservation,
-) -> tuple[asyncio.Task[str | None] | None, asyncio.Task[str | None] | None]:
-    """Create stderr and stdout capture tasks for a pipeline stage.
-
-    Returns (stderr_task, stdout_task). stderr is captured for all stages when
-    capture_or_echo is enabled. stdout is only captured for the final stage.
-    """
-    stderr_task: asyncio.Task[str | None] | None = None
-    stdout_task: asyncio.Task[str | None] | None = None
-
-    if not config.capture_or_echo:
-        return stderr_task, stdout_task
-
-    stderr_on_line: cabc.Callable[[str], None] | None = None
-    if observation.hooks.observe_hooks:
-
-        def stderr_on_line(line: str) -> None:
-            from cuprum._pipeline_internals import _EventDetails
-
-            observation.emit(
-                "stderr",
-                _EventDetails(pid=process.pid, line=line),
-            )
-
-    stderr_task = asyncio.create_task(
-        _consume_stream(
-            process.stderr,
-            dc.replace(config.stream_config, sink=config.stderr_sink),
-            on_line=stderr_on_line,
-        ),
-    )
-
-    if not is_last_stage:
-        return stderr_task, stdout_task
-
-    stdout_on_line: cabc.Callable[[str], None] | None = None
-    if observation.hooks.observe_hooks:
-
-        def stdout_on_line(line: str) -> None:
-            from cuprum._pipeline_internals import _EventDetails
-
-            observation.emit(
-                "stdout",
-                _EventDetails(pid=process.pid, line=line),
-            )
-
-    stdout_task = asyncio.create_task(
-        _consume_stream(
-            process.stdout,
-            config.stream_config,
-            on_line=stdout_on_line,
-        ),
-    )
-
-    return stderr_task, stdout_task
 
 
 def _fd_from_transport(transport: object | None) -> int | None:
