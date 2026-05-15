@@ -6,8 +6,8 @@ The profiling benchmark harness provides deterministic parent-side tee and
 capture hot-path profiling for Cuprum, distinct from end-to-end throughput
 benchmarks that measure whole pipelines. It lives under `benchmarks/`, uses
 Linux `perf` as the primary profiler, supports optional `py-spy` corroboration,
-and can run unprofiled smoke scenarios when only command construction and worker
-behaviour need to be checked.
+and can run unprofiled smoke scenarios when only command construction and
+worker behaviour need to be checked.
 
 ## Fixture generation (`benchmarks/deterministic_b64_fixture.py`)
 
@@ -36,19 +36,19 @@ python -m benchmarks.deterministic_b64_fixture \
 
 ## Sink model (`benchmarks/sinks.py`)
 
-| Sink kind | Implementation | Cost model |
-| --- | --- | --- |
-| `devnull` | Operating system null device | Discards bytes without allocation. |
-| `text_blackhole` | `TextBlackhole` text stream | Counts characters and exposes no `.buffer`, forcing the text branch. |
-| `pty_blackhole` | `PtyBlackhole` pseudo-terminal master/slave pair | Drains the master side from a daemon thread to simulate terminal-like throughput. |
+| Sink kind        | Implementation                                   | Cost model                                                                        |
+| ---------------- | ------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `devnull`        | Operating system null device                     | Discards bytes without allocation.                                                |
+| `text_blackhole` | `TextBlackhole` text stream                      | Counts characters and exposes no `.buffer`, forcing the text branch.              |
+| `pty_blackhole`  | `PtyBlackhole` pseudo-terminal master/slave pair | Drains the master side from a daemon thread to simulate terminal-like throughput. |
 
 ## Worker (`benchmarks/tee_profile_worker.py`)
 
 `TeeProfileWorkerConfig` defines one worker run. It validates that
-`fixture_path` points to an existing file, `stages >= 1`,
-`repeat_count >= 1`, and that `mode`, `sink_kind`, and `backend` are members of
-the supported literal sets. It also carries `encoding` and `errors`, which
-default to `utf-8` and `replace`.
+`fixture_path` points to an existing file, `stages >= 1`, `repeat_count >= 1`,
+and that `mode`, `sink_kind`, and `backend` are members of the supported
+literal sets. It also carries `encoding` and `errors`, which default to `utf-8`
+and `replace`.
 
 `run_tee_profile_worker` builds a command or pipeline through `_build_command`,
 selects the stream backend through `_selected_backend`, runs the workload
@@ -59,31 +59,32 @@ driver.
 
 The worker mode maps directly to Cuprum's final consume flags:
 
-| Mode | `capture` | `echo` |
-| --- | --- | --- |
-| `echo` | `False` | `True` |
-| `capture` | `True` | `False` |
-| `tee` | `True` | `True` |
+| Mode      | `capture` | `echo`  |
+| --------- | --------- | ------- |
+| `echo`    | `False`   | `True`  |
+| `capture` | `True`    | `False` |
+| `tee`     | `True`    | `True`  |
 
 Backend selection is process-local and environment-driven. `auto` unsets
-`CUPRUM_STREAM_BACKEND`; `python` and `rust` set it explicitly. `_selected_backend`
-clears the backend availability and selection caches before entering the
-context and again when restoring the previous environment value.
+`CUPRUM_STREAM_BACKEND`; `python` and `rust` set it explicitly.
+`_selected_backend` clears the backend availability and selection caches before
+entering the context and again when restoring the previous environment value.
 
 ## Scenario driver (`benchmarks/profile_tee_hotpath.py`)
 
 `benchmarks/profile_tee_hotpath.py` remains the public driver and module entry
 point. It re-exports the stable API while the implementation is split across
-supporting modules: scenario composition in `benchmarks/tee_profile_scenarios.py`,
-profiler orchestration in `benchmarks/tee_profile_profilers.py`, and command-line
-interface and JSON output helpers in `benchmarks/tee_profile_driver.py`.
-`TeeProfileScenario` records a resolved scenario: name, fixture path, stage
-count, mode, sink kind, line-callback flag, backend, repeat count, encoding,
-and error handling. `TeeProfileDriverConfig` records fixture paths, output
-directory, profiler choice, warm-up count, measured repeat count, `perf`
-frequency, call-graph configuration, and an optional scenario name. It validates
-that run counts and `perf` frequency are in range, and that the `perf`
-call-graph setting is not blank.
+supporting modules: scenario composition in
+`benchmarks/tee_profile_scenarios.py`, profiler orchestration in
+`benchmarks/tee_profile_profilers.py`, and command-line interface and JSON
+output helpers in `benchmarks/tee_profile_driver.py`. `TeeProfileScenario`
+records a resolved scenario: name, fixture path, stage count, mode, sink kind,
+line-callback flag, backend, repeat count, encoding, and error handling.
+`TeeProfileDriverConfig` records fixture paths, output directory, profiler
+choice, warm-up count, measured repeat count, `perf` frequency, call-graph
+configuration, and an optional scenario name. It validates that run counts and
+`perf` frequency are in range, and that the `perf` call-graph setting is not
+blank.
 
 The default matrix is stable and ordered:
 
@@ -119,11 +120,11 @@ Profiler orchestration is decoupled from scenario execution through the
 Any object with a `run(scenario, *, scenario_dir, config)` method satisfies the
 protocol. Three concrete adapters are provided:
 
-| Adapter class | `profiler` value | Behaviour |
-| --- | --- | --- |
-| `_NoneProfiler` | `"none"` | Runs the worker directly and writes `notes.txt` explaining that profiler artefacts were not generated. |
-| `_PerfProfiler` | `"perf"` | Records `perf.data`, generates `perf.report.txt` and `stacks.folded` via `inferno-collapse-perf`, and summarizes folded stacks to `summary.json`. |
-| `_PySpyProfiler` | `"py-spy"` | Records a raw `py-spy` trace to `pyspy.raw`. |
+| Adapter class    | `profiler` value | Behaviour                                                                                                                                         |
+| ---------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_NoneProfiler`  | `"none"`         | Runs the worker directly and writes `notes.txt` explaining that profiler artefacts were not generated.                                            |
+| `_PerfProfiler`  | `"perf"`         | Records `perf.data`, generates `perf.report.txt` and `stacks.folded` via `inferno-collapse-perf`, and summarizes folded stacks to `summary.json`. |
+| `_PySpyProfiler` | `"py-spy"`       | Records a raw `py-spy` trace to `pyspy.raw`.                                                                                                      |
 
 `_profiler_for(name)` is the factory that maps a `ProfilerName` literal to its
 adapter. Adding a new profiler requires implementing the protocol and
@@ -134,16 +135,16 @@ registering it in `_profiler_for`.
 `TeeProfileScenario` is a frozen dataclass representing one fully resolved
 profiling scenario. Its fields are:
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `name` | `str` | Unique scenario identifier, used as the sub-directory name under `output_dir`. |
-| `fixture_path` | `pathlib.Path` | Path to the base64 fixture file replayed by the worker. |
-| `stages` | `int` | Number of pipeline stages (1 = single stage, >1 = chained pass-through stages). |
-| `mode` | `TeeMode` | Consumption mode: `"echo"`, `"capture"`, or `"tee"`. |
-| `sink_kind` | `SinkKind` | Output sink variant used during execution. |
-| `with_line_callbacks` | `bool` | Whether stdout-line observers are registered during the run. |
-| `backend` | `BackendName` | Stream backend: `"auto"`, `"python"`, or `"rust"`. |
-| `repeat_count` | `int` | Number of measured repetitions. |
+| Field                 | Type           | Description                                                                     |
+| --------------------- | -------------- | ------------------------------------------------------------------------------- |
+| `name`                | `str`          | Unique scenario identifier, used as the sub-directory name under `output_dir`.  |
+| `fixture_path`        | `pathlib.Path` | Path to the base64 fixture file replayed by the worker.                         |
+| `stages`              | `int`          | Number of pipeline stages (1 = single stage, >1 = chained pass-through stages). |
+| `mode`                | `TeeMode`      | Consumption mode: `"echo"`, `"capture"`, or `"tee"`.                            |
+| `sink_kind`           | `SinkKind`     | Output sink variant used during execution.                                      |
+| `with_line_callbacks` | `bool`         | Whether stdout-line observers are registered during the run.                    |
+| `backend`             | `BackendName`  | Stream backend: `"auto"`, `"python"`, or `"rust"`.                              |
+| `repeat_count`        | `int`          | Number of measured repetitions.                                                 |
 
 `as_dict()` returns a JSON-serializable dictionary. `worker_config()` converts
 the scenario into a `TeeProfileWorkerConfig`, optionally overriding
@@ -163,9 +164,9 @@ methods:
 
 ## Folded-stack summarizer (`benchmarks/summarize_folded.py`)
 
-The folded-stack summarizer consumes one text file where each non-empty line has
-the form `frame1;frame2 count`. Malformed lines, empty stacks, and non-positive
-sample counts are ignored.
+The folded-stack summarizer consumes one text file where each non-empty line
+has the form `frame1;frame2 count`. Malformed lines, empty stacks, and
+non-positive sample counts are ignored.
 
 It writes a JSON summary with `total_samples`, `top_inclusive_frames`,
 `top_leaf_frames`, and `top_stacks`. Frame entries include inclusive samples,
@@ -180,18 +181,131 @@ leaf, not the inclusive tally of every caller on the path.
 
 ## Makefile tooling changes
 
-`LOCAL_TOOL_ENV` prepends `~/.local/bin` and `~/.bun/bin` to `PATH` for `uv` and
-tool-discovery recipes only. This supports non-interactive Continuous
+`LOCAL_TOOL_ENV` prepends `~/.local/bin` and `~/.bun/bin` to `PATH` for `uv`
+and tool-discovery recipes only. This supports non-interactive Continuous
 Integration/Continuous Delivery (CI/CD) hook environments without globally
 shadowing system tools for unrelated Makefile workflows.
+
+## Python linting
+
+Cuprum uses a two-tier Python lint gate. Ruff is the first tier and remains the
+fast, broad lint pass for formatting-adjacent checks, import order, docstring
+rules, security checks, naming, complexity, and Ruff's native Pylint-derived
+rules. Pylint is the second tier and runs after Ruff through the
+`leynos/pylint-pypy-shim` package under PyPy.
+
+The decision is recorded in
+[ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md). The
+short version is:
+
+- Ruff owns fast feedback and the primary rule set.
+- Pylint owns selected checks that Ruff does not cover, especially logging
+  interpolation, pattern matching, generator control flow, environment
+  handling, subprocess safety, and selected readability checks.
+- Pylint runs through the PyPy shim so that the second tier is isolated from the
+  project virtual environment and matches the lint approach used by
+  `leynos/episodic`.
+
+Run the complete lint gate with:
+
+```bash
+make lint
+```
+
+`make lint` performs the following commands in order:
+
+1. `ruff check`
+2. The PyPy-backed `pylint-pypy` command stored in `$(PYLINT)`, with
+   `$(PYLINT_TARGETS)` appended.
+
+Ruff must pass before Pylint runs. When investigating a lint failure, fix the
+Ruff findings first, then rerun `make lint` to reach the Pylint tier.
+
+### Lint Makefile variables
+
+The root `Makefile` exposes the following lint-related variables:
+
+| Variable               | Default                                                                      | Purpose                                                                |
+| ---------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `PYLINT_PYTHON`        | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.     |
+| `PYLINT_TARGETS`       | `benchmarks conftest.py cuprum tests`                                        | Directories and files passed to `pylint-pypy`.                         |
+| `PYLINT_PYPY_SHIM_REF` | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                          |
+| `PYLINT_PYPY_SHIM`     | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                  |
+| `PYLINT`               | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                   |
+| `LOCAL_TOOL_ENV`       | Derived `PATH`                                                               | Adds local binary directories before invoking host tools such as Ruff. |
+| `UV_ENV`               | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.              |
+
+Override these variables only for local diagnosis. For example, to lint a
+single module with the configured second tier:
+
+```bash
+PYLINT_TARGETS=cuprum/sh.py make lint
+```
+
+Do not change `PYLINT_PYPY_SHIM_REF` casually. Updating the pinned shim
+revision changes the lint runtime and must be reviewed like any other toolchain
+update.
+
+### Episodic lint policy
+
+Cuprum imports the lint policy used by `leynos/episodic` rather than inventing
+a separate house style. The imported policy consists of:
+
+- Ruff `target-version = "py312"` for Cuprum's supported Python baseline.
+- Ruff banned `typing.*` generic aliases, requiring modern built-in generics or
+  `collections.abc` and `contextlib` equivalents.
+- Test-file exceptions for assertion-heavy tests and pytest method conventions.
+- A focused Pylint configuration that disables all messages by default, then
+  enables only the selected messages that complement Ruff.
+- A PyPy-backed Pylint invocation through the pinned shim repository.
+
+This means new code should prefer:
+
+```python
+from __future__ import annotations
+
+import typing as typ
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+
+def names(values: cabc.Iterable[str]) -> list[str]:
+    return list(values)
+```
+
+Use `typing as typ` for `TYPE_CHECKING`, casts, aliases, and other `typing`
+helpers that are not banned. Use `collections.abc` imports inside
+`typ.TYPE_CHECKING` when annotations are deferred and the names are only needed
+for type checking.
+
+### `pyproject.toml` lint configuration
+
+The canonical lint configuration lives in `pyproject.toml`:
+
+- `[tool.ruff]` sets line length, preview mode, and target Python version.
+- `[tool.ruff.lint]` selects the active Ruff rule families.
+- `[tool.ruff.lint.per-file-ignores]` records test-specific exceptions.
+- `[tool.ruff.lint.flake8-import-conventions]` and
+  `[tool.ruff.lint.flake8-import-conventions.aliases]` enforce import aliases
+  such as `typing as typ` and `collections.abc as cabc`.
+- `[tool.ruff.lint.flake8-tidy-imports.banned-api]` bans deprecated
+  `typing.*` aliases and explains each replacement.
+- `[tool.ruff.lint.pylint]` sets Ruff's Pylint-derived thresholds.
+- `[tool.pylint.main]`, `[tool.pylint.design]`, and
+  `[tool.pylint."messages control"]` configure the second-tier Pylint pass.
+
+When changing lint policy, update both `pyproject.toml` and this guide. If the
+change alters the architecture of the lint gate, update
+[ADR-003](adr-003-two-tier-python-linting.md) as well.
 
 ## Design decisions
 
 ### Deterministic fixtures over random data
 
 Fixtures are generated from an SHA-256 counter-mode seeded stream rather than
-from `os.urandom` or `random`. This makes every profiling run reproducible
-from the same `--seed` and `--raw-bytes` arguments, enabling artefact comparison
+from `os.urandom` or `random`. This makes every profiling run reproducible from
+the same `--seed` and `--raw-bytes` arguments, enabling artefact comparison
 across runs and across machines without storing large binary files in the
 repository.
 
