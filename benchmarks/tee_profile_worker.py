@@ -1,4 +1,31 @@
-"""Worker process for parent-side tee hot-path profiling."""
+"""Parent-side tee hot-path profiling worker.
+
+This module drives the benchmark path that consumes command output on the
+parent side. It is intended to be run in an isolated subprocess by the CLI, or
+called directly from benchmark harnesses that need the same worker behaviour
+without an extra process boundary.
+
+The primary public surface is ``TeeProfileWorkerConfig`` for validated worker
+inputs, ``TeeProfileWorkerResult`` for the JSON-compatible result payload,
+``run_tee_profile_worker`` for executing a configured run, and the
+``BackendSelector`` and ``Clock`` protocols used to inject backend selection
+and timing behaviour in tests.
+
+Backend selection is handled by ``_EnvBackendSelector``, a deliberately
+non-reentrant context manager that mutates the process-wide environment while
+holding ``_BACKEND_LOCK``. ``_BackendSelectorState`` provides the thread-local
+reentrancy guard, while ``_BACKEND_LOCK`` is an ``RLock`` that serialises
+``os.environ`` changes across workers and still allows same-thread helper code
+to re-enter the lock safely.
+
+The worker clears caches in ``cuprum._backend`` whenever it changes or restores
+``CUPRUM_STREAM_BACKEND`` so backend discovery reflects the active environment.
+Command output is sent through ``benchmarks.sinks`` to exercise the same sink
+families used by the benchmark suite.
+
+The ``main()`` entry point parses CLI arguments, runs the worker, and writes a
+machine-readable JSON result to stdout or to the requested output path.
+"""
 
 from __future__ import annotations
 
@@ -331,6 +358,7 @@ def _run_command_sync(
     line_count = 0
 
     def observe_line(event: ExecEvent) -> None:
+        """Count stdout line callback events emitted during command execution."""
         nonlocal line_count
         if event.phase == "stdout" and event.line is not None:
             line_count += 1
@@ -486,6 +514,11 @@ def main() -> int:
         Process exit code derived from the worker result's ``exit_code`` field;
         0 on success.
     """
+    # Developer guide: CLIs must initialise warning-level logging explicitly.
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     args = _parse_args()
     try:
         config = TeeProfileWorkerConfig(
