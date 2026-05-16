@@ -93,6 +93,12 @@ class Clock(typ.Protocol):
         """Return the current time in seconds."""
         ...
 
+
+_default_clock: Clock = time.perf_counter
+_BACKEND_LOCK = threading.RLock()
+_lock_state = threading.local()
+
+
 class _BackendSelectorState:
     """Track selector activation for the current thread."""
 
@@ -115,6 +121,11 @@ class _BackendSelectorState:
     def is_active(self) -> bool:
         """Return whether the current thread already owns the selector."""
         return bool(getattr(self._state, "is_active", False))
+
+
+_selector_state = _BackendSelectorState(_lock_state)
+
+
 class TeeProfileWorkerResult(typ.TypedDict):
     """Machine-readable tee profiling worker result payload."""
 

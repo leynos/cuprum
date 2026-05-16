@@ -31,6 +31,7 @@ from benchmarks.tee_profile_worker import TeeProfileWorkerConfig, run_tee_profil
 from cuprum.unittests.conftest import _VOLATILE_KEYS, redact
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib as pth
 
     from syrupy.assertion import SnapshotAssertion
@@ -159,7 +160,7 @@ class _CoordinatedBackendSelector:
     def _activate(
         self,
         backend: tee_profile_worker.BackendName,
-    ) -> typ.Iterator[None]:
+    ) -> cabc.Iterator[None]:
         """Coordinate worker timing after the real selector sets the env var."""
         with self._delegate(backend):
             if backend == "python":

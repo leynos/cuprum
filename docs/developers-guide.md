@@ -45,10 +45,10 @@ python -m benchmarks.deterministic_b64_fixture \
 ## Worker (`benchmarks/tee_profile_worker.py`)
 
 `TeeProfileWorkerConfig` defines one worker run. It validates that
-`fixture_path` points to an existing file, `stages >= 1`,
-`repeat_count >= 1`, and that `mode`, `sink_kind`, and `backend` are members of
-the supported literal sets. It also carries `encoding` and `errors`, which
-default to `utf-8` and `replace`.
+`fixture_path` points to an existing file, `stages >= 1`, `repeat_count >= 1`,
+and that `mode`, `sink_kind`, and `backend` are members of the supported
+literal sets. It also carries `encoding` and `errors`, which default to `utf-8`
+and `replace`.
 
 `run_tee_profile_worker` builds a command or pipeline through `_build_command`,
 selects the stream backend through `_EnvBackendSelector`, runs the workload
@@ -59,11 +59,11 @@ driver.
 
 The worker mode maps directly to Cuprum's final consume flags:
 
-| Mode | `capture` | `echo` |
-| --- | --- | --- |
-| `echo` | `False` | `True` |
-| `capture` | `True` | `False` |
-| `tee` | `True` | `True` |
+| Mode      | `capture` | `echo`  |
+| --------- | --------- | ------- |
+| `echo`    | `False`   | `True`  |
+| `capture` | `True`    | `False` |
+| `tee`     | `True`    | `True`  |
 
 Backend selection is process-local and environment-driven. `auto` unsets
 `CUPRUM_STREAM_BACKEND`; `python` and `rust` set it explicitly.
