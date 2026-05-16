@@ -37,11 +37,6 @@ if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
 
-_ALTERNATE_BACKEND: tee_profile_worker.BackendName = (
-    "rust" if tee_profile_worker._backend._check_rust_available() else "auto"
-)
-
-
 @dc.dataclass(frozen=True, slots=True)
 class _WorkerThreadState:
     """Shared state for concurrent profile-worker thread targets."""
@@ -378,7 +373,8 @@ def test_backend_lock_is_reentrant() -> None:
     "backends",
     [
         pytest.param(("python", "python"), id="same-backend"),
-        pytest.param(("python", _ALTERNATE_BACKEND), id="alternate-backend"),
+        pytest.param(("python", "rust"), id="rust-backend"),
+        pytest.param(("python", "auto"), id="auto-backend"),
     ],
 )
 def test_concurrent_workers_do_not_race(
@@ -386,6 +382,9 @@ def test_concurrent_workers_do_not_race(
     backends: tuple[tee_profile_worker.BackendName, tee_profile_worker.BackendName],
 ) -> None:
     """Concurrent workers with same and different backends complete."""
+    if "rust" in backends and not tee_profile_worker._backend._check_rust_available():
+        pytest.skip("Rust backend is unavailable")
+
     fixture = tmp_path / "fixture_concurrent.b64"
     fixture.write_text("YWJjZGVm\n")
     _assert_backend_pair_completes(fixture, backends)
