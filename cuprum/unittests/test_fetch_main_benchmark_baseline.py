@@ -25,6 +25,7 @@ from benchmarks.fetch_main_benchmark_baseline import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib as pth
 
 
@@ -384,7 +385,7 @@ def test_find_latest_artifact_download_url_queries_workflow_and_artifacts(
 ) -> None:
     """Artifact lookup should fetch workflow runs and then per-run artifacts."""
     auth_token = "".join(("tok", "en"))
-    payloads: list[typ.Mapping[str, object]] = [
+    payloads: list[cabc.Mapping[str, object]] = [
         {"workflow_runs": [{"id": 42}]},
         {
             "artifacts": [
@@ -398,7 +399,7 @@ def test_find_latest_artifact_download_url_queries_workflow_and_artifacts(
     ]
     requested_urls: list[str] = []
 
-    def fake_load_json_response(*, url: str, token: str) -> typ.Mapping[str, object]:
+    def fake_load_json_response(*, url: str, token: str) -> cabc.Mapping[str, object]:
         del token
         requested_urls.append(url)
         return payloads.pop(0)

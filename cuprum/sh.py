@@ -206,7 +206,7 @@ class TimeoutExpired(TimeoutError):  # noqa: N818  # match subprocess.TimeoutExp
     def __init__(
         self,
         *,
-        cmd: typ.Sequence[str] | object,
+        cmd: cabc.Sequence[str] | object,
         timeout: float,
         output: str | bytes | None = None,
         stderr: str | bytes | None = None,

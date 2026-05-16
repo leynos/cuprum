@@ -15,39 +15,12 @@ import typing as typ
 from cuprum._pipeline_internals import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _terminate_process
 from cuprum._streams import _consume_stream, _StreamConfig
+from cuprum._subprocess_context import _resolve_timeout, _sh_module
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.context import CuprumContext
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
-
-
-def _sh_module() -> typ.Any:  # noqa: ANN401 — returns module, typed access via attributes
-    """Lazy import sh module to avoid circular imports."""
-    from cuprum import sh
-
-    return sh
-
-
-def _current_context() -> CuprumContext:
-    """Get the current context via lazy import to avoid circular imports."""
-    from cuprum.context import current_context
-
-    return current_context()
-
-
-def _resolve_timeout(
-    *,
-    timeout: float | None,
-    context: ExecutionContext | None,
-) -> float | None:
-    """Resolve the effective timeout from explicit, context, and scoped values."""
-    if timeout is not None:
-        return timeout
-    if context is not None and context.timeout is not None:
-        return context.timeout
-    return _current_context().timeout
 
 
 async def _wait_for_exit_code(
@@ -73,9 +46,8 @@ async def _wait_for_exit_code(
         if consumers:
             await asyncio.gather(*consumers, return_exceptions=True)
         raise
-    else:
-        exited_at = time.perf_counter()
-        return exit_code, exited_at
+    exited_at = time.perf_counter()
+    return exit_code, exited_at
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -90,22 +62,25 @@ class _SubprocessExecution:
     observation: _StageObservation
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _SubprocessTimeoutDetails:
+    """Captured subprocess timeout details."""
+
+    timeout: float
+    stdout: str | None
+    stderr: str | None
+    exited_at: float
+
+
 class _SubprocessTimeoutError(Exception):
     """Internal wrapper for subprocess timeouts with captured output."""
 
-    def __init__(
-        self,
-        *,
-        timeout: float,
-        stdout: str | None,
-        stderr: str | None,
-        exited_at: float,
-    ) -> None:
-        super().__init__(f"Execution exceeded {timeout}s timeout")
-        self.timeout = timeout
-        self.stdout = stdout
-        self.stderr = stderr
-        self.exited_at = exited_at
+    def __init__(self, details: _SubprocessTimeoutDetails) -> None:
+        super().__init__(f"Execution exceeded {details.timeout}s timeout")
+        self.timeout = details.timeout
+        self.stdout = details.stdout
+        self.stderr = details.stderr
+        self.exited_at = details.exited_at
 
 
 async def _spawn_subprocess(
@@ -210,10 +185,12 @@ async def _run_subprocess_with_streams(
             msg = "TimeoutError without a configured timeout"
             raise RuntimeError(msg) from exc
         raise _SubprocessTimeoutError(
-            timeout=timeout,
-            stdout=stdout_text,
-            stderr=stderr_text,
-            exited_at=time.perf_counter(),
+            _SubprocessTimeoutDetails(
+                timeout=timeout,
+                stdout=stdout_text,
+                stderr=stderr_text,
+                exited_at=time.perf_counter(),
+            ),
         ) from exc
     stdout_text, stderr_text = await asyncio.gather(*consumers)
     return exit_code, exited_at, stdout_text, stderr_text
@@ -387,6 +364,7 @@ __all__ = [
     "_ExitEventDetails",
     "_SubprocessExecution",
     "_SubprocessTimeoutContext",
+    "_SubprocessTimeoutDetails",
     "_SubprocessTimeoutError",
     "_TimeoutContext",
     "_create_stream_callback",

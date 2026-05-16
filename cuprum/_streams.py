@@ -9,6 +9,7 @@ import typing as typ
 
 if typ.TYPE_CHECKING:
     import asyncio
+    import collections.abc as cabc
 
 _READ_SIZE = 4096
 
@@ -28,7 +29,7 @@ async def _consume_stream(
     stream: asyncio.StreamReader | None,
     config: _StreamConfig,
     *,
-    on_line: typ.Callable[[str], None] | None = None,
+    on_line: cabc.Callable[[str], None] | None = None,
 ) -> str | None:
     """Read from a subprocess stream, teeing to sink when requested."""
     if on_line is None:
@@ -68,7 +69,7 @@ async def _consume_stream_with_lines(
     stream: asyncio.StreamReader | None,
     config: _StreamConfig,
     *,
-    on_line: typ.Callable[[str], None],
+    on_line: cabc.Callable[[str], None],
 ) -> str | None:
     """Read from a subprocess stream while emitting decoded output lines."""
     if stream is None:
@@ -201,7 +202,7 @@ def _write_chunk(
 def _emit_completed_lines(
     text: str,
     *,
-    on_line: typ.Callable[[str], None],
+    on_line: cabc.Callable[[str], None],
 ) -> str:
     """Emit complete lines from text and return the remaining partial line."""
     lines = text.splitlines(keepends=True)

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import typing as typ
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
-def _require_mapping(value: object, *, name: str) -> typ.Mapping[str, object]:
+
+def _require_mapping(value: object, *, name: str) -> cabc.Mapping[str, object]:
     """Validate and return a mapping-like JSON object."""
     if not isinstance(value, dict):
         msg = f"{name} must be an object"

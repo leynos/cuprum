@@ -7,6 +7,11 @@ UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
 LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
 LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
 UV_RUN_ENV = $(LOCAL_TOOL_ENV) $(UV_ENV)
+PYLINT_PYTHON ?= pypy
+PYLINT_TARGETS ?= benchmarks conftest.py cuprum tests
+PYLINT_PYPY_SHIM_REF ?= 726d09f968b4d729ee4b29c71fc732e744854f3b
+PYLINT_PYPY_SHIM = git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)
+PYLINT = $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) --from '$(PYLINT_PYPY_SHIM)' pylint-pypy
 
 .PHONY: help all clean build build-release lint fmt check-fmt \
         markdownlint nixie test typecheck benchmark-micro benchmark-e2e \
@@ -66,8 +71,9 @@ check-fmt: ruff ## Verify formatting
 	$(LOCAL_TOOL_ENV) ruff format --check
 	# mdformat-all doesn't currently do checking
 
-lint: ruff ## Run linters
+lint: ruff uv ## Run linters
 	$(LOCAL_TOOL_ENV) ruff check
+	$(PYLINT) $(PYLINT_TARGETS)
 
 typecheck: build ## Run typechecking
 	$(UV_RUN_ENV) uv sync --group dev

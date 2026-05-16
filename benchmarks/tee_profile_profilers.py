@@ -19,6 +19,7 @@ from benchmarks.tee_profile_scenarios import (
 from benchmarks.tee_profile_worker import TeeProfileWorkerResult, run_tee_profile_worker
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib as pth
 
 
@@ -119,21 +120,21 @@ def _postprocess_perf(*, scenario_dir: pth.Path) -> None:
         raise RuntimeError(msg)
 
     inferno = _require_tool("inferno-collapse-perf")
-    script = subprocess.Popen(  # noqa: S603
+    with subprocess.Popen(  # noqa: S603
         [perf, "script", "-i", str(scenario_dir / "perf.data")],
         stdout=subprocess.PIPE,
         text=True,
-    )
-    folded = subprocess.run(  # noqa: S603
-        [inferno],
-        stdin=script.stdout,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if script.stdout is not None:
-        script.stdout.close()
-    script_return = script.wait()
+    ) as script:
+        folded = subprocess.run(  # noqa: S603
+            [inferno],
+            stdin=script.stdout,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if script.stdout is not None:
+            script.stdout.close()
+        script_return = script.wait()
     (scenario_dir / "stacks.folded").write_text(folded.stdout)
     if script_return != 0 or folded.returncode != 0:
         msg = "perf script or inferno-collapse-perf failed"
@@ -184,9 +185,9 @@ class ProfilerAdapter(typ.Protocol):
         *,
         scenario_dir: pth.Path,
         config: TeeProfileDriverConfig,
-    ) -> typ.Mapping[str, object]:
+    ) -> cabc.Mapping[str, object]:
         """Execute the scenario under this profiler and return the result."""
-        ...
+        raise NotImplementedError
 
 
 class _NoneProfiler:
@@ -196,7 +197,7 @@ class _NoneProfiler:
         *,
         scenario_dir: pth.Path,
         config: TeeProfileDriverConfig,
-    ) -> typ.Mapping[str, object]:
+    ) -> cabc.Mapping[str, object]:
         """Execute the scenario without profiler sampling."""
         result = _run_worker_measured(scenario, scenario_dir=scenario_dir)
         notes = (
@@ -214,7 +215,7 @@ class _PerfProfiler:
         *,
         scenario_dir: pth.Path,
         config: TeeProfileDriverConfig,
-    ) -> typ.Mapping[str, object]:
+    ) -> cabc.Mapping[str, object]:
         """Execute the scenario under Linux perf."""
         return _run_perf(scenario, scenario_dir=scenario_dir, config=config)
 
@@ -226,7 +227,7 @@ class _PySpyProfiler:
         *,
         scenario_dir: pth.Path,
         config: TeeProfileDriverConfig,
-    ) -> typ.Mapping[str, object]:
+    ) -> cabc.Mapping[str, object]:
         """Execute the scenario under py-spy."""
         return _run_py_spy(scenario, scenario_dir=scenario_dir)
 

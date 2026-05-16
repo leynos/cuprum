@@ -21,6 +21,9 @@ from benchmarks._validation import (
     _require_non_empty_string,
 )
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_TOKEN_ENV_VAR = "GITHUB_TOKEN"  # noqa: S105 - env var name, not a credential
 MAIN_BASELINE_NOT_FOUND_EXIT_CODE = 3
@@ -73,7 +76,7 @@ def _should_retry_request_failure(exc: Exception) -> bool:
 
 
 def _with_retry[T](
-    operation: typ.Callable[[], T],
+    operation: cabc.Callable[[], T],
     *,
     description: str,
 ) -> T:
@@ -125,7 +128,7 @@ class _ArtifactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
         return redirected_request
 
 
-def _load_json_response(*, url: str, token: str) -> typ.Mapping[str, object]:
+def _load_json_response(*, url: str, token: str) -> cabc.Mapping[str, object]:
     """Load a GitHub API JSON response."""
     request = urllib.request.Request(  # noqa: S310 - URL is selected by trusted caller
         url,
@@ -137,7 +140,7 @@ def _load_json_response(*, url: str, token: str) -> typ.Mapping[str, object]:
         },
     )
 
-    def _open_json_response() -> typ.Mapping[str, object]:
+    def _open_json_response() -> cabc.Mapping[str, object]:
         with urllib.request.urlopen(  # noqa: S310 - authenticated GitHub API call
             request,
             timeout=_REQUEST_TIMEOUT_SECONDS,
@@ -173,7 +176,7 @@ def _download_bytes(*, url: str, token: str) -> bytes:
 
 def _find_artifact_url_in_run(
     *,
-    artifacts_payload: typ.Mapping[str, object],
+    artifacts_payload: cabc.Mapping[str, object],
     run_id: int,
     artifact_name: str,
 ) -> str | None:
@@ -206,8 +209,8 @@ def _find_artifact_url_in_run(
 
 def select_latest_artifact_download_url(
     *,
-    workflow_runs_payload: typ.Mapping[str, object],
-    artifacts_payload_by_run: typ.Mapping[int, typ.Mapping[str, object]],
+    workflow_runs_payload: cabc.Mapping[str, object],
+    artifacts_payload_by_run: cabc.Mapping[int, cabc.Mapping[str, object]],
     artifact_name: str,
 ) -> str | None:
     """Return the latest non-expired artifact download URL, if available."""
@@ -288,7 +291,7 @@ def find_latest_artifact_download_url(
         name="workflow_runs",
     )
 
-    artifacts_payload_by_run: dict[int, typ.Mapping[str, object]] = {}
+    artifacts_payload_by_run: dict[int, cabc.Mapping[str, object]] = {}
     for index, run_value in enumerate(workflow_runs):
         run = _require_mapping(run_value, name=f"workflow_runs[{index}]")
         run_id = _require_int(run.get("id"), name=f"workflow_runs[{index}].id")
@@ -308,7 +311,7 @@ def find_latest_artifact_download_url(
     )
 
 
-def _parse_args(argv: typ.Sequence[str] | None) -> argparse.Namespace:
+def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -350,7 +353,7 @@ def _parse_args(argv: typ.Sequence[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: typ.Sequence[str] | None = None) -> int:
+def main(argv: cabc.Sequence[str] | None = None) -> int:
     """Run the baseline artifact fetch CLI."""
     args = _parse_args(argv)
     token = os.environ.get(args.token_env, "").strip()

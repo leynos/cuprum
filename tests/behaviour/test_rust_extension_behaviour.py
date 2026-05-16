@@ -9,6 +9,9 @@ from pytest_bdd import given, scenario, then, when
 
 import cuprum as c
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 
 @scenario(
     "../features/rust_extension.feature",
@@ -19,7 +22,7 @@ def test_rust_extension_availability() -> None:
 
 
 @given("the Cuprum Rust availability probe", target_fixture="probe")
-def given_probe() -> typ.Callable[[], bool]:
+def given_probe() -> cabc.Callable[[], bool]:
     """Expose the Rust backend availability probe."""
     return c.is_rust_available
 
@@ -28,7 +31,7 @@ def given_probe() -> typ.Callable[[], bool]:
     "I check whether the Rust extension is available",
     target_fixture="availability",
 )
-def when_check_availability(probe: typ.Callable[[], bool]) -> bool:
+def when_check_availability(probe: cabc.Callable[[], bool]) -> bool:
     """Invoke the availability probe."""
     return probe()
 

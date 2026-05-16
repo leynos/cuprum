@@ -11,6 +11,8 @@ from cuprum.catalogue import ProgramCatalogue, ProjectSettings
 from cuprum.program import Program
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum.sh import SafeCmd
 
 
@@ -26,7 +28,7 @@ def python_catalogue() -> tuple[ProgramCatalogue, Program]:
     return ProgramCatalogue(projects=(project,)), python_program
 
 
-def python_builder() -> typ.Callable[..., SafeCmd]:
+def python_builder() -> cabc.Callable[..., SafeCmd]:
     """Provide a SafeCmd builder for the current Python interpreter."""
     catalogue, program = python_catalogue()
     return sh.make(program, catalogue=catalogue)

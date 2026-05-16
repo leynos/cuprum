@@ -32,7 +32,7 @@ def _validate_path_string(raw_value: str, *, allow_relative: bool) -> None:
     path = PurePath(raw_value)
     is_absolute = path.is_absolute() or _WINDOWS_ABS_PATTERN.match(raw_value)
     checks = (
-        (raw_value == "", "SafePath cannot be empty"),
+        (not raw_value, "SafePath cannot be empty"),
         ("\x00" in raw_value, "SafePath cannot contain NUL characters"),
         (
             ".." in path.parts,
@@ -72,7 +72,7 @@ def safe_path(value: str | Path, *, allow_relative: bool = False) -> SafePath:
 def _validate_git_ref(value: str) -> None:
     """Validate git reference strings before wrapping as GitRef."""
     checks = (
-        (value == "", "GitRef cannot be empty"),
+        (not value, "GitRef cannot be empty"),
         (value.startswith("-"), "GitRef cannot start with '-'"),
         (
             any(char.isspace() for char in value),

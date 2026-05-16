@@ -27,6 +27,7 @@ from cuprum.context import current_context
 from cuprum.events import ExecEvent
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import types
 
     from cuprum.context import AfterHook, BeforeHook
@@ -66,9 +67,9 @@ def _run_before_hooks(cmd: SafeCmd) -> _ExecutionHooks:
 class _StageObservation:
     cmd: SafeCmd
     hooks: _ExecutionHooks
-    tags: typ.Mapping[str, object]
+    tags: cabc.Mapping[str, object]
     cwd: Path | None
-    env_overlay: typ.Mapping[str, str] | None
+    env_overlay: cabc.Mapping[str, str] | None
     pending_tasks: list[asyncio.Task[None]]
 
     def emit(
