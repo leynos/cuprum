@@ -37,27 +37,25 @@ if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
 
-@dc.dataclass(frozen=True, slots=True)
-class _WorkerThreadState:
-    """Shared state for concurrent profile-worker thread targets."""
-
-    fixture: pth.Path
-    barrier: threading.Barrier
-    result_lock: threading.Lock
-    results: list[tee_profile_worker.TeeProfileWorkerResult]
-    errors: list[BaseException]
-
-
-def _run_profile_worker_thread(
-    state: _WorkerThreadState,
+def _run_worker_thread(
     backend: tee_profile_worker.BackendName,
+    fixture: pth.Path,
+    barrier: threading.Barrier,
+    results: list[tee_profile_worker.TeeProfileWorkerResult],
+    errors: list[BaseException],
+    result_lock: threading.Lock,
 ) -> None:
-    """Run one profile worker in a thread and record its result or error."""
+    """Run one tee-profile worker, synchronising start via *barrier*.
+
+    Appends the result to *results* or the exception to *errors* under
+    *result_lock* so that the calling thread can inspect them safely after
+    joining.
+    """
     try:
-        state.barrier.wait(timeout=5)
+        barrier.wait(timeout=5)
         result = run_tee_profile_worker(
             TeeProfileWorkerConfig(
-                fixture_path=state.fixture,
+                fixture_path=fixture,
                 stages=1,
                 mode="tee",
                 sink_kind="devnull",
@@ -67,35 +65,34 @@ def _run_profile_worker_thread(
             ),
         )
     except BaseException as exc:  # noqa: BLE001 - thread failures must surface.
-        with state.result_lock:
-            state.errors.append(exc)
+        with result_lock:
+            errors.append(exc)
         return
 
-    with state.result_lock:
-        state.results.append(result)
+    with result_lock:
+        results.append(result)
 
 
 def _assert_backend_pair_completes(
+    backends: tuple[tee_profile_worker.BackendName, ...],
     fixture: pth.Path,
-    backends: tuple[tee_profile_worker.BackendName, tee_profile_worker.BackendName],
 ) -> None:
-    """Assert two concurrently started backend workers complete successfully.
+    """Assert that concurrent workers for *backends* all complete without error.
 
-    The helper starts one thread per backend, releases them through a shared
-    barrier, and joins all threads before checking that every thread produced a
-    successful worker result. Shared result and error lists are always read and
-    written while holding ``result_lock`` because assertions run concurrently
-    with thread shutdown timing.
+    Spins up one thread per backend, synchronises their starts via a
+    ``threading.Barrier``, joins each thread, and asserts that every worker
+    returned ``status == "ok"`` and ``exit_code == 0``. All shared mutable
+    state (results, errors) is accessed under *result_lock*.
     """
     barrier = threading.Barrier(parties=len(backends) + 1)
     errors: list[BaseException] = []
     results: list[tee_profile_worker.TeeProfileWorkerResult] = []
     result_lock = threading.Lock()
-    state = _WorkerThreadState(fixture, barrier, result_lock, results, errors)
+
     threads = [
         threading.Thread(
-            target=_run_profile_worker_thread,
-            args=(state, backend),
+            target=_run_worker_thread,
+            args=(backend, fixture, barrier, results, errors, result_lock),
             daemon=True,
         )
         for backend in backends
@@ -255,6 +252,19 @@ def _run_worker_with_selector(
             state.errors.append(exc)
 
 
+_ALTERNATE_BACKEND: tee_profile_worker.BackendName = (
+    "rust" if tee_profile_worker._backend._check_rust_available() else "auto"
+)
+
+_BACKEND_PAIRS: tuple[
+    tuple[tee_profile_worker.BackendName, tee_profile_worker.BackendName],
+    ...,
+] = (
+    ("python", "python"),
+    ("python", _ALTERNATE_BACKEND),
+)
+
+
 @pytest.mark.parametrize("with_line_callbacks", [False, True])
 def test_worker_exercises_parent_side_consume_path(
     tmp_path: pth.Path,
@@ -369,25 +379,15 @@ def test_backend_lock_is_reentrant() -> None:
         tee_profile_worker._BACKEND_LOCK.release()
 
 
-@pytest.mark.parametrize(
-    "backends",
-    [
-        pytest.param(("python", "python"), id="same-backend"),
-        pytest.param(("python", "rust"), id="rust-backend"),
-        pytest.param(("python", "auto"), id="auto-backend"),
-    ],
-)
+@pytest.mark.parametrize("backends", _BACKEND_PAIRS)
 def test_concurrent_workers_do_not_race(
     tmp_path: pth.Path,
     backends: tuple[tee_profile_worker.BackendName, tee_profile_worker.BackendName],
 ) -> None:
-    """Concurrent workers with same and different backends complete."""
-    if "rust" in backends and not tee_profile_worker._backend._check_rust_available():
-        pytest.skip("Rust backend is unavailable")
-
+    """Concurrent workers with the given backend pair complete without races."""
     fixture = tmp_path / "fixture_concurrent.b64"
     fixture.write_text("YWJjZGVm\n")
-    _assert_backend_pair_completes(fixture, backends)
+    _assert_backend_pair_completes(backends, fixture)
 
 
 def test_concurrent_workers_preserve_backend_environment(
