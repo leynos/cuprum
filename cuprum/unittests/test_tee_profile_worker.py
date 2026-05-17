@@ -157,7 +157,9 @@ class _CoordinatedBackendSelector:
         with self._delegate(backend):
             if backend == "python":
                 self._events["first_inside"].set()
-                assert self._events["second_started"].wait(timeout=5)
+                assert self._events["second_started"].wait(timeout=5), (
+                    "expected second_started event to signal selector start"
+                )
                 with self._observation_lock:
                     self._observations.append(os.environ.get("CUPRUM_STREAM_BACKEND"))
                 self._events["release_first"].set()
@@ -174,6 +176,7 @@ class _SelectorThreadState:
     backend_selector: tee_profile_worker.BackendSelector
     events: dict[str, threading.Event]
     result_lock: threading.Lock
+    results: list[tee_profile_worker.TeeProfileWorkerResult]
     errors: list[BaseException]
 
 
@@ -190,6 +193,7 @@ class _BackendEnvironmentRace:
         }
         self.observations: list[str | None] = []
         self.observation_lock = threading.Lock()
+        self.results: list[tee_profile_worker.TeeProfileWorkerResult] = []
         self.errors: list[BaseException] = []
         self.result_lock = threading.Lock()
         selector = _CoordinatedBackendSelector(
@@ -202,6 +206,7 @@ class _BackendEnvironmentRace:
             selector,
             self.events,
             self.result_lock,
+            self.results,
             self.errors,
         )
 
@@ -221,6 +226,11 @@ class _BackendEnvironmentRace:
         with self.result_lock:
             return list(self.errors)
 
+    def results_snapshot(self) -> list[tee_profile_worker.TeeProfileWorkerResult]:
+        """Return captured worker results while holding the result lock."""
+        with self.result_lock:
+            return list(self.results)
+
     def observations_snapshot(self) -> list[str | None]:
         """Return recorded environment observations under their lock."""
         with self.observation_lock:
@@ -235,7 +245,7 @@ def _run_worker_with_selector(
     try:
         if backend == "auto":
             state.events["second_started"].set()
-        run_tee_profile_worker(
+        result = run_tee_profile_worker(
             TeeProfileWorkerConfig(
                 fixture_path=state.fixture,
                 stages=1,
@@ -247,6 +257,8 @@ def _run_worker_with_selector(
             ),
             backend_selector=state.backend_selector,
         )
+        with state.result_lock:
+            state.results.append(result)
     except BaseException as exc:  # noqa: BLE001 - thread failures must surface.
         with state.result_lock:
             state.errors.append(exc)
@@ -414,9 +426,19 @@ def test_concurrent_workers_preserve_backend_environment(
         "expected second worker to enter selector"
     )
     recorded_errors = race.errors_snapshot()
+    recorded_results = race.results_snapshot()
     recorded_observations = race.observations_snapshot()
     assert not recorded_errors, (
         f"expected no worker thread errors, got {recorded_errors!r}"
+    )
+    assert len(recorded_results) == 2, (
+        f"expected two worker results, got {recorded_results}"
+    )
+    assert all(result["status"] == "ok" for result in recorded_results), (
+        f"expected all worker statuses to be ok, got {recorded_results}"
+    )
+    assert all(result["exit_code"] == 0 for result in recorded_results), (
+        f"expected all worker exit codes to be 0, got {recorded_results}"
     )
     assert recorded_observations == ["python"], (
         f"expected first worker env to stay pinned, got {recorded_observations}"

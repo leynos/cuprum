@@ -295,12 +295,11 @@ class _EnvBackendSelector:
         with _BACKEND_LOCK:
             if not _selector_state.enter():
                 _logger.warning(
-                    "Rejected re-entrant backend selector activation",
-                    extra={
-                        "backend": backend,
-                        "thread_id": threading.get_ident(),
-                        "selector_active": _selector_state.is_active,
-                    },
+                    "Rejected re-entrant backend selector activation: "
+                    "backend=%r thread_id=%s selector_active=%s",
+                    backend,
+                    threading.get_ident(),
+                    _selector_state.is_active,
                 )
                 raise RuntimeError(_REENTRANT_SELECTOR_MESSAGE)
 
