@@ -16,6 +16,7 @@ concurrency coordination.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import dataclasses as dc
 import json
 import os
@@ -37,19 +38,32 @@ if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
 
+@dataclasses.dataclass
+class _WorkerSharedState:
+    """Shared mutable state for collecting results and errors from worker threads.
+
+    All access to *results* and *errors* must be performed under *result_lock*
+    to prevent data races between concurrent worker threads.
+    """
+
+    results: list[tee_profile_worker.TeeProfileWorkerResult] = dataclasses.field(
+        default_factory=list,
+    )
+    errors: list[BaseException] = dataclasses.field(default_factory=list)
+    result_lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
+
+
 def _run_worker_thread(
     backend: tee_profile_worker.BackendName,
     fixture: pth.Path,
     barrier: threading.Barrier,
-    results: list[tee_profile_worker.TeeProfileWorkerResult],
-    errors: list[BaseException],
-    result_lock: threading.Lock,
+    shared: _WorkerSharedState,
 ) -> None:
     """Run one tee-profile worker, synchronising start via *barrier*.
 
-    Appends the result to *results* or the exception to *errors* under
-    *result_lock* so that the calling thread can inspect them safely after
-    joining.
+    Appends the result to *shared.results* or the exception to *shared.errors*
+    under *shared.result_lock* so that the calling thread can inspect them
+    safely after joining.
     """
     try:
         barrier.wait(timeout=5)
@@ -65,12 +79,12 @@ def _run_worker_thread(
             ),
         )
     except BaseException as exc:  # noqa: BLE001 - thread failures must surface.
-        with result_lock:
-            errors.append(exc)
+        with shared.result_lock:
+            shared.errors.append(exc)
         return
 
-    with result_lock:
-        results.append(result)
+    with shared.result_lock:
+        shared.results.append(result)
 
 
 def _assert_backend_pair_completes(
@@ -81,18 +95,15 @@ def _assert_backend_pair_completes(
 
     Spins up one thread per backend, synchronises their starts via a
     ``threading.Barrier``, joins each thread, and asserts that every worker
-    returned ``status == "ok"`` and ``exit_code == 0``. All shared mutable
-    state (results, errors) is accessed under *result_lock*.
+    returned ``status == "ok"`` and ``exit_code == 0``.
     """
     barrier = threading.Barrier(parties=len(backends) + 1)
-    errors: list[BaseException] = []
-    results: list[tee_profile_worker.TeeProfileWorkerResult] = []
-    result_lock = threading.Lock()
+    shared = _WorkerSharedState()
 
     threads = [
         threading.Thread(
             target=_run_worker_thread,
-            args=(backend, fixture, barrier, results, errors, result_lock),
+            args=(backend, fixture, barrier, shared),
             daemon=True,
         )
         for backend in backends
@@ -109,20 +120,15 @@ def _assert_backend_pair_completes(
     assert not alive_threads, (
         f"expected worker threads to finish for {backends}, got {alive_threads}"
     )
-    with result_lock:
-        recorded_errors = list(errors)
-        recorded_results = list(results)
-    assert not recorded_errors, (
-        f"expected no worker thread errors, got {recorded_errors!r}"
+    assert not shared.errors, f"expected no worker thread errors, got {shared.errors!r}"
+    assert len(shared.results) == len(backends), (
+        f"expected one result per worker, got {shared.results}"
     )
-    assert len(recorded_results) == len(backends), (
-        f"expected one result per worker, got {recorded_results}"
+    assert all(result["status"] == "ok" for result in shared.results), (
+        f"expected all worker statuses to be ok, got {shared.results}"
     )
-    assert all(result["status"] == "ok" for result in recorded_results), (
-        f"expected all worker statuses to be ok, got {recorded_results}"
-    )
-    assert all(result["exit_code"] == 0 for result in recorded_results), (
-        f"expected all worker exit codes to be 0, got {recorded_results}"
+    assert all(result["exit_code"] == 0 for result in shared.results), (
+        f"expected all worker exit codes to be 0, got {shared.results}"
     )
 
 
