@@ -160,11 +160,13 @@ class _CoordinatedBackendSelector:
         backend: tee_profile_worker.BackendName,
     ) -> cabc.Iterator[None]:
         """Coordinate worker timing after the real selector sets the env var."""
+        if backend != "python":
+            self._events["second_selector_attempting"].set()
         with self._delegate(backend):
             if backend == "python":
                 self._events["first_inside"].set()
-                assert self._events["second_started"].wait(timeout=5), (
-                    "expected second_started event to signal selector start"
+                assert self._events["second_selector_attempting"].wait(timeout=5), (
+                    "expected second_selector_attempting event to signal selector start"
                 )
                 with self._observation_lock:
                     self._observations.append(os.environ.get("CUPRUM_STREAM_BACKEND"))
@@ -193,7 +195,7 @@ class _BackendEnvironmentRace:
         """Initialise events, result capture, and the injected selector."""
         self.events = {
             "first_inside": threading.Event(),
-            "second_started": threading.Event(),
+            "second_selector_attempting": threading.Event(),
             "second_entered": threading.Event(),
             "release_first": threading.Event(),
         }
@@ -249,8 +251,6 @@ def _run_worker_with_selector(
 ) -> None:
     """Run a worker with an injected selector and capture thread failures."""
     try:
-        if backend == "auto":
-            state.events["second_started"].set()
         result = run_tee_profile_worker(
             TeeProfileWorkerConfig(
                 fixture_path=state.fixture,
