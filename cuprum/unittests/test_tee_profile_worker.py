@@ -19,6 +19,7 @@ import contextlib
 import dataclasses
 import dataclasses as dc
 import json
+import logging
 import os
 import subprocess  # noqa: S404 - integration tests exercise fixed CLI commands.
 import sys
@@ -451,16 +452,22 @@ def test_concurrent_workers_preserve_backend_environment(
     )
 
 
-def test_nested_selector_raises_runtime_error_and_recovers() -> None:
+def test_nested_selector_raises_runtime_error_and_recovers(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Nested backend selector entry fails explicitly and cleans up state."""
     expected_message = (
         "_EnvBackendSelector is not re-entrant; nested calls are forbidden"
     )
+    expected_warning = "Rejected re-entrant backend selector activation"
     selector = tee_profile_worker._EnvBackendSelector()
     with selector("python"):  # noqa: SIM117
-        with pytest.raises(RuntimeError, match=expected_message):
-            with selector("auto"):
-                pass
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(RuntimeError, match=expected_message):
+                with selector("auto"):
+                    pass
+
+    assert expected_warning in caplog.text
 
     with selector("auto"):
         pass
