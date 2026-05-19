@@ -160,18 +160,25 @@ class _CoordinatedBackendSelector:
         self,
         backend: tee_profile_worker.BackendName,
     ) -> cabc.Iterator[None]:
-        """Coordinate worker timing after the real selector sets the env var."""
+        """Coordinate worker timing at the selector boundary.
+
+        For non-python backends the method signals *second_selector_attempting*
+        before entering the delegate so that the python-backend thread can
+        record its environment observation while it still holds ``_BACKEND_LOCK``
+        and Thread 2 is about to contend for it. Thread 1 is guaranteed to hold
+        the lock when it reads the env because it has not yet exited
+        ``with self._delegate("python")``.
+        """
         if backend != "python":
             self._events["second_selector_attempting"].set()
         with self._delegate(backend):
             if backend == "python":
                 self._events["first_inside"].set()
                 assert self._events["second_selector_attempting"].wait(timeout=5), (
-                    "expected second_selector_attempting event to signal selector start"
+                    "expected second_selector_attempting to signal selector contention"
                 )
                 with self._observation_lock:
                     self._observations.append(os.environ.get("CUPRUM_STREAM_BACKEND"))
-                self._events["release_first"].set()
             else:
                 self._events["second_entered"].set()
             yield
@@ -198,7 +205,6 @@ class _BackendEnvironmentRace:
             "first_inside": threading.Event(),
             "second_selector_attempting": threading.Event(),
             "second_entered": threading.Event(),
-            "release_first": threading.Event(),
         }
         self.observations: list[str | None] = []
         self.observation_lock = threading.Lock()
@@ -250,7 +256,7 @@ def _run_worker_with_selector(
     state: _SelectorThreadState,
     backend: tee_profile_worker.BackendName,
 ) -> None:
-    """Run a worker with an injected selector and capture thread failures."""
+    """Run a worker with selector-internal timing and capture thread failures."""
     try:
         result = run_tee_profile_worker(
             TeeProfileWorkerConfig(
@@ -471,6 +477,48 @@ def test_nested_selector_raises_runtime_error_and_recovers(
 
     with selector("auto"):
         pass
+
+
+def test_nested_selector_logs_rejection_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Reentrant selector activation emits a structured warning log record.
+
+    Verifies that the rejected-backend name, the active-selector flag, and
+    a thread-id field are all present in the logged message. The thread_id
+    value is redacted for snapshot determinism.
+    """
+    import re
+
+    selector = tee_profile_worker._EnvBackendSelector()
+    with (
+        caplog.at_level(
+            logging.WARNING,
+            logger="benchmarks.tee_profile_worker",
+        ),
+        selector("python"),
+        contextlib.suppress(RuntimeError),
+        selector("auto"),
+    ):
+        pass
+
+    warning_records = [
+        record
+        for record in caplog.records
+        if "re-entrant" in record.getMessage().lower()
+    ]
+    assert warning_records, "expected a reentrant-rejection warning to be logged"
+    msg = warning_records[0].getMessage()
+    redacted = re.sub(r"thread_id=\d+", "thread_id=<redacted>", msg)
+    assert "backend='auto'" in redacted, (
+        f"expected rejected backend name in warning, got: {redacted!r}"
+    )
+    assert "thread_id=<redacted>" in redacted, (
+        f"expected thread_id field in warning, got: {redacted!r}"
+    )
+    assert "selector_active=True" in redacted, (
+        f"expected selector_active field in warning, got: {redacted!r}"
+    )
 
 
 def test_worker_cli_reports_config_errors(
