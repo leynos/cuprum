@@ -1738,6 +1738,28 @@ Forced Rust mode remains strict: when `CUPRUM_STREAM_BACKEND=rust` and the
 extension is unavailable, backend resolution raises `ImportError` and execution
 fails fast rather than silently falling back.
 
+### 13.4.1 Profiling Backend Selector Guard
+
+The parent-side tee profiling harness needs to run the same workload under
+different backend selections without changing the public pipeline API. It uses
+an injectable `BackendSelector` around each worker run to set
+`CUPRUM_STREAM_BACKEND`, clear Cuprum's backend cache, execute the workload,
+and then restore the previous environment.
+
+This selector mutates process-wide state, so the implementation serializes the
+critical section with a process-local `threading.RLock`. A thread-local
+reentrancy guard rejects nested activation on the same thread with
+`RuntimeError` before any environment mutation occurs. The lock permits
+well-formed helper code to re-acquire the same lock while preserving the
+stronger selector invariant that only one active backend override owns the
+environment/cache pair at a time.
+
+The rejected reentry path emits a warning that includes the requested backend,
+the current thread id, and the active-selector flag. This makes accidental
+nested selector use visible in CLI and CI logs while keeping recovery simple:
+after the exception, the outer selector still restores `CUPRUM_STREAM_BACKEND`
+and refreshes the cached backend choice.
+
 For screen readers: The following flowchart illustrates the backend selection
 algorithm, showing how the environment variable and availability checks
 determine which pathway is used.

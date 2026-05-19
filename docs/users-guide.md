@@ -1051,6 +1051,16 @@ into the parent process and records text-first `perf` artefacts for the
 investigating sink write cost, line-callback overhead, capture accumulation, or
 the boundary between inter-stage pumping and final stream consumption.
 
+The profiling harness accepts a `BackendSelector` dependency for benchmark
+workers that need to force a backend around a single parent-side run. The
+default selector mutates `CUPRUM_STREAM_BACKEND` process-wide while holding a
+backend lock, clears Cuprum's cached backend choice for the scoped run, and
+restores the original environment afterwards. It is intentionally non-reentrant
+on the same thread: nested selector activation raises `RuntimeError` rather
+than risking a stale environment value or backend cache leak. Avoid wrapping
+one `BackendSelector` activation inside another; start a separate worker
+process or let the outer selector own the full profiled run.
+
 Both backends are tested for behavioural parity across edge cases including
 empty streams, multi-byte UTF-8 at chunk boundaries, broken pipes (where the
 downstream stage exits before the upstream finishes), and backpressure under

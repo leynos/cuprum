@@ -481,6 +481,7 @@ def test_nested_selector_raises_runtime_error_and_recovers(
 
 def test_nested_selector_logs_rejection_warning(
     caplog: pytest.LogCaptureFixture,
+    snapshot: SnapshotAssertion,
 ) -> None:
     """Reentrant selector activation emits a structured warning log record.
 
@@ -517,6 +518,7 @@ def test_nested_selector_logs_rejection_warning(
     assert "selector_active=True" in redacted, (
         f"expected selector_active field in warning, got: {redacted!r}"
     )
+    assert redacted == snapshot
 
 
 def test_worker_cli_reports_config_errors(
