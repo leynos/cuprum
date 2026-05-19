@@ -16,7 +16,6 @@ concurrency coordination.
 from __future__ import annotations
 
 import contextlib
-import dataclasses
 import dataclasses as dc
 import json
 import logging
@@ -39,7 +38,7 @@ if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
 
-@dataclasses.dataclass
+@dc.dataclass(slots=True)
 class _WorkerSharedState:
     """Shared mutable state for collecting results and errors from worker threads.
 
@@ -47,11 +46,11 @@ class _WorkerSharedState:
     to prevent data races between concurrent worker threads.
     """
 
-    results: list[tee_profile_worker.TeeProfileWorkerResult] = dataclasses.field(
+    results: list[tee_profile_worker.TeeProfileWorkerResult] = dc.field(
         default_factory=list,
     )
-    errors: list[BaseException] = dataclasses.field(default_factory=list)
-    result_lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
+    errors: list[BaseException] = dc.field(default_factory=list)
+    result_lock: threading.Lock = dc.field(default_factory=threading.Lock)
 
 
 def _run_worker_thread(
