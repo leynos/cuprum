@@ -20,6 +20,7 @@ import dataclasses as dc
 import json
 import logging
 import os
+import re
 import subprocess  # noqa: S404 - integration tests exercise fixed CLI commands.
 import sys
 import threading
@@ -174,7 +175,7 @@ class _CoordinatedBackendSelector:
             if backend == "python":
                 self._events["first_inside"].set()
                 assert self._events["second_selector_attempting"].wait(timeout=5), (
-                    "expected second_selector_attempting to signal selector contention"
+                    "expected second_selector_attempting event to signal selector start"
                 )
                 with self._observation_lock:
                     self._observations.append(os.environ.get("CUPRUM_STREAM_BACKEND"))
@@ -487,8 +488,6 @@ def test_nested_selector_logs_rejection_warning(
     a thread-id field are all present in the logged message. The thread_id
     value is redacted for snapshot determinism.
     """
-    import re
-
     selector = tee_profile_worker._EnvBackendSelector()
     with (
         caplog.at_level(
