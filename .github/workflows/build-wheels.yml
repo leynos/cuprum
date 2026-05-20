@@ -8,7 +8,7 @@ on:
         required: true
 
 env:
-  MATURIN_VERSION: "1.6.0"
+  MATURIN_VERSION: "1.13.3"
 
 jobs:
   build-pure-wheel:
