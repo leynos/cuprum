@@ -85,7 +85,7 @@ jobs:
           maturin-version: ${{ env.MATURIN_VERSION }}
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
-          container: ghcr.io/rust-cross/manylinux_2_28-cross:aarch64
+          container: ghcr.io/rust-cross/manylinux_2_28-cross@sha256:4864c3e931d790def6dba05cbf133b236b242d0c732f77546c68663c7923116e # aarch64
           command: build
           args: >-
             --release --out wheelhouse --manifest-path rust/cuprum-rust/Cargo.toml
