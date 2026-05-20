@@ -3,10 +3,12 @@
 This module encapsulates the low-level subprocess spawning, stream handling,
 timeout management, and execution lifecycle for SafeCmd.run().
 """
+# pylint: disable=too-many-lines
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses as dc
 import sys
 import time
@@ -60,6 +62,7 @@ class _SubprocessExecution:
     echo: bool
     timeout: float | None
     observation: _StageObservation
+    stdin_data: bytes | None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -99,9 +102,43 @@ async def _spawn_subprocess(
             if execution.capture or execution.echo
             else asyncio.subprocess.DEVNULL
         ),
+        stdin=(
+            asyncio.subprocess.PIPE
+            if execution.stdin_data is not None
+            else asyncio.subprocess.DEVNULL
+        ),
         env=_merge_env(execution.ctx.env),
         cwd=(str(execution.ctx.cwd) if execution.ctx.cwd is not None else None),
     )
+
+
+async def _write_stdin(
+    process: asyncio.subprocess.Process,
+    stdin_data: bytes,
+) -> None:
+    """Write caller-provided stdin bytes and close the pipe."""
+    stdin = process.stdin
+    if stdin is None:
+        return
+    try:
+        stdin.write(stdin_data)
+        await stdin.drain()
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+    finally:
+        stdin.close()
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+            await stdin.wait_closed()
+
+
+def _spawn_stdin_writer(
+    process: asyncio.subprocess.Process,
+    stdin_data: bytes | None,
+) -> asyncio.Task[None] | None:
+    """Start stdin writing when direct stdin data was supplied."""
+    if stdin_data is None:
+        return None
+    return asyncio.create_task(_write_stdin(process, stdin_data))
 
 
 def _create_stream_callback(
@@ -171,6 +208,7 @@ async def _run_subprocess_with_streams(
         errors=execution.ctx.errors,
     )
     consumers = _spawn_stream_consumers(process, execution, stream_config, pid=pid)
+    stdin_task = _spawn_stdin_writer(process, execution.stdin_data)
     try:
         exit_code, exited_at = await _wait_for_exit_code(
             process,
@@ -179,6 +217,8 @@ async def _run_subprocess_with_streams(
             consumers=consumers,
         )
     except TimeoutError as exc:
+        if stdin_task is not None:
+            await asyncio.gather(stdin_task, return_exceptions=True)
         stdout_text, stderr_text = await asyncio.gather(*consumers)
         # Invariant: TimeoutError only raised when timeout is configured
         if timeout is None:
@@ -192,6 +232,12 @@ async def _run_subprocess_with_streams(
                 exited_at=time.perf_counter(),
             ),
         ) from exc
+    except asyncio.CancelledError:
+        if stdin_task is not None:
+            await asyncio.gather(stdin_task, return_exceptions=True)
+        raise
+    if stdin_task is not None:
+        await stdin_task
     stdout_text, stderr_text = await asyncio.gather(*consumers)
     return exit_code, exited_at, stdout_text, stderr_text
 
@@ -311,11 +357,16 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     stderr_text: str | None = None
     try:
         if not execution.capture and not execution.echo:
+            stdin_task = _spawn_stdin_writer(process, execution.stdin_data)
+            cleanup_tasks = (stdin_task,) if stdin_task is not None else ()
             exit_code, exited_at = await _wait_for_exit_code(
                 process,
                 execution.ctx,
                 timeout=execution.timeout,
+                consumers=cleanup_tasks,
             )
+            if stdin_task is not None:
+                await stdin_task
         else:
             (
                 exit_code,

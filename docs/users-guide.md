@@ -227,7 +227,8 @@ and echo semantics and returns a structured `CommandResult`:
   - `stdout_sink` and `stderr_sink` route echoed output to alternative text
     streams when `echo=True`.
   - `encoding` and `errors` configure how captured output is decoded; defaults
-    are `"utf-8"` with `"replace"`.
+    are `"utf-8"` with `"replace"`. The same settings are used when
+    `input_text` is encoded for subprocess stdin.
 - `exit_code`, `pid`, and `ok` on the `CommandResult` make it easy to branch on
   success.
 
@@ -247,6 +248,22 @@ async def greet() -> None:
 If the awaiting task is cancelled while a command is running, Cuprum sends
 `SIGTERM` to the subprocess, waits for a short grace period, and then escalates
 to `SIGKILL` to ensure the child process is cleaned up.
+
+### Direct stdin input
+
+Use `input_text` or `input_bytes` on `run()` / `run_sync()` to feed data
+directly to a command's standard input without adding an extra allowlisted
+program to a pipeline. `input_text` is encoded with the execution context's
+`encoding` and `errors` settings. `input_bytes` writes the supplied bytes
+unchanged. Supplying both values is invalid.
+
+```python
+from cuprum import GIT, sh
+
+cmd = sh.make(GIT)("hash-object", "--stdin")
+result = cmd.run_sync(input_text="hello\n")
+print(result.stdout)
+```
 
 ### Timeouts
 

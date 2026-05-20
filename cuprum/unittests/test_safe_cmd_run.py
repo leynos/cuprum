@@ -270,6 +270,130 @@ def test_decodes_with_configured_encoding(
     assert result.stderr == ""
 
 
+def test_input_text_feeds_stdin(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Both run() and run_sync() feed text directly to stdin."""
+    _, execute = execution_strategy
+    command = python_builder("-c", "import sys; print(sys.stdin.read(), end='')")
+
+    result = execute(command, {"input_text": "hello stdin\n"})
+
+    assert result.exit_code == 0
+    assert result.stdout == "hello stdin\n"
+    assert result.stderr == ""
+
+
+def test_input_bytes_feeds_raw_stdin(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Both run() and run_sync() feed bytes directly to stdin."""
+    _, execute = execution_strategy
+    command = python_builder(
+        "-c",
+        "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
+    )
+
+    result = execute(command, {"input_bytes": b"\x00raw\xff\n"})
+
+    assert result.exit_code == 0
+    assert result.stdout == "\x00raw\ufffd\n"
+    assert result.stderr == ""
+
+
+def test_input_text_uses_configured_encoding(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Text stdin is encoded using the execution context settings."""
+    _, execute = execution_strategy
+    command = python_builder(
+        "-c",
+        "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
+    )
+
+    result = execute(
+        command,
+        {
+            "input_text": "\u2013",
+            "context": ExecutionContext(encoding="cp1252", errors="strict"),
+        },
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == "\u2013"
+    assert result.stderr == ""
+
+
+def test_input_text_and_input_bytes_conflict(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Supplying both stdin forms raises a validation error."""
+    _, execute = execution_strategy
+    command = python_builder("-c", "import sys; sys.stdin.read()")
+
+    with pytest.raises(
+        ValueError,
+        match=r"input_text and input_bytes cannot both be provided",
+    ):
+        execute(command, {"input_text": "hello", "input_bytes": b"hello"})
+
+
+def test_input_text_works_when_capture_is_disabled(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Stdin injection still works when stdout/stderr are not captured."""
+    _, execute = execution_strategy
+    command = python_builder(
+        "-c",
+        "import sys; sys.exit(0 if sys.stdin.read() == 'uncaptured' else 9)",
+    )
+
+    result = execute(command, {"capture": False, "input_text": "uncaptured"})
+
+    assert result.exit_code == 0
+    assert result.stdout is None
+    assert result.stderr is None
+
+
+def test_nonzero_exit_code_is_captured_with_input_text(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Non-zero exits still include captured streams when stdin is supplied."""
+    _, execute = execution_strategy
+    command = python_builder(
+        "-c",
+        ("import sys; data = sys.stdin.read(); print(data, end=''); sys.exit(7)"),
+    )
+
+    result = execute(command, {"input_text": "failure input"})
+
+    assert result.exit_code == 7
+    assert result.ok is False
+    assert result.stdout == "failure input"
+    assert result.stderr == ""
+
+
+def test_process_closing_stdin_early_is_handled(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """A process that ignores stdin does not fail the command run."""
+    _, execute = execution_strategy
+    command = python_builder("-c", "print('done')")
+
+    result = execute(command, {"input_text": "ignored stdin"})
+
+    assert result.exit_code == 0
+    assert result.stdout == "done\n"
+    assert result.stderr == ""
+
+
 # -----------------------------------------------------------------------------
 # Async-only tests (cancellation semantics)
 # -----------------------------------------------------------------------------

@@ -289,13 +289,15 @@ class SafeCmd:
         """Compose this command with another stage, producing a Pipeline."""
         return Pipeline.concat(self, other)
 
-    async def run(
+    async def run(  # noqa: PLR0913 - mirrors subprocess.run-style runtime API
         self,
         *,
         capture: bool = True,
         echo: bool = False,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
+        input_text: str | None = None,
+        input_bytes: bytes | None = None,
     ) -> CommandResult:
         """Execute the command asynchronously with predictable cancellation.
 
@@ -309,6 +311,11 @@ class SafeCmd:
             Optional wall-clock timeout in seconds; ``None`` disables timeouts.
         context:
             Optional execution settings such as env, cwd, and cancel grace.
+        input_text:
+            Optional text to feed to the subprocess stdin, encoded with the
+            execution context encoding and error handling.
+        input_bytes:
+            Optional raw bytes to feed to the subprocess stdin.
 
         Returns
         -------
@@ -323,7 +330,15 @@ class SafeCmd:
             If the command exceeds the configured timeout.
 
         """
+        if input_text is not None and input_bytes is not None:
+            msg = "input_text and input_bytes cannot both be provided"
+            raise ValueError(msg)
         ctx = context or ExecutionContext()
+        stdin_data = (
+            input_text.encode(ctx.encoding, ctx.errors)
+            if input_text is not None
+            else input_bytes
+        )
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         tracking = _ExecutionTracking(
             execution_hooks=_run_before_hooks(self),
@@ -350,6 +365,7 @@ class SafeCmd:
                     echo=echo,
                     timeout=effective_timeout,
                     observation=observation,
+                    stdin_data=stdin_data,
                 ),
             )
             for hook in tracking.execution_hooks.after_hooks:
@@ -364,13 +380,15 @@ class SafeCmd:
         await _wait_for_exec_hook_tasks(tracking.pending_tasks)
         return result
 
-    def run_sync(
+    def run_sync(  # noqa: PLR0913 - mirrors run() for sync callers
         self,
         *,
         capture: bool = True,
         echo: bool = False,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
+        input_text: str | None = None,
+        input_bytes: bytes | None = None,
     ) -> CommandResult:
         """Execute the command synchronously with predictable semantics.
 
@@ -387,6 +405,11 @@ class SafeCmd:
             Optional wall-clock timeout in seconds; ``None`` disables timeouts.
         context:
             Optional execution settings such as env, cwd, and cancel grace.
+        input_text:
+            Optional text to feed to the subprocess stdin, encoded with the
+            execution context encoding and error handling.
+        input_bytes:
+            Optional raw bytes to feed to the subprocess stdin.
 
         Returns
         -------
@@ -400,6 +423,8 @@ class SafeCmd:
                 echo=echo,
                 timeout=timeout,
                 context=context,
+                input_text=input_text,
+                input_bytes=input_bytes,
             ),
         )
 

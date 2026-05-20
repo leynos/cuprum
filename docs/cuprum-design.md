@@ -354,6 +354,8 @@ class SafeCmd:
         echo: bool = False,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
+        input_text: str | None = None,
+        input_bytes: bytes | None = None,
     ) -> CommandResult: ...
     def run_sync(
         self,
@@ -362,6 +364,8 @@ class SafeCmd:
         echo: bool = False,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
+        input_text: str | None = None,
+        input_bytes: bytes | None = None,
     ) -> CommandResult: ...
 
     def __or__(self, other: "SafeCmd") -> "Pipeline": ...
