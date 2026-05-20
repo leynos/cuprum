@@ -518,7 +518,9 @@ def test_nested_selector_logs_rejection_warning(
     assert "selector_active=True" in redacted, (
         f"expected selector_active field in warning, got: {redacted!r}"
     )
-    assert redacted == snapshot
+    assert redacted == snapshot, (
+        f"Snapshot mismatch: redacted={redacted!r} expected={snapshot!r}"
+    )
 
 
 def test_worker_cli_reports_config_errors(
