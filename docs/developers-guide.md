@@ -51,7 +51,7 @@ literal sets. It also carries `encoding` and `errors`, which default to `utf-8`
 and `replace`.
 
 `run_tee_profile_worker` builds a command or pipeline through `_build_command`,
-selects the stream backend through `_selected_backend`, runs the workload
+selects the stream backend through `_EnvBackendSelector`, runs the workload
 `repeat_count` times, accumulates `captured_output_length` and
 `stdout_line_count`, and returns a `TeeProfileWorkerResult`. The worker result
 is the machine-readable payload written by the worker CLI and by the scenario
@@ -67,8 +67,13 @@ The worker mode maps directly to Cuprum's final consume flags:
 
 Backend selection is process-local and environment-driven. `auto` unsets
 `CUPRUM_STREAM_BACKEND`; `python` and `rust` set it explicitly.
-`_selected_backend` clears the backend availability and selection caches before
+`_EnvBackendSelector` holds a process-wide lock while the worker runs so
+concurrent benchmark workers cannot race on `os.environ` or the backend
+availability and selection caches. The selector clears those caches before
 entering the context and again when restoring the previous environment value.
+It is intentionally not re-entrant: a thread-local guard detects nested entry
+on the same thread, logs the rejected backend and thread identifier, and raises
+`RuntimeError` before mutating backend state.
 
 ## Scenario driver (`benchmarks/profile_tee_hotpath.py`)
 

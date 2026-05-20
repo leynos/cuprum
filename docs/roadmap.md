@@ -171,6 +171,9 @@ scenarios whilst maintaining pure Python as a first-class pathway.
   regresses beyond a 10% threshold.
 - [x] 4.4.4. Generate benchmark comparison report (Python vs Rust) and publish a
   summary table to the GitHub Actions workflow summary.
+- [x] 4.4.5. Complete issue `#53` by guarding parent-side tee profiling backend
+  selection with a process-wide lock plus same-thread reentrancy rejection, and
+  document the selector contract for benchmark workers.
 
 ### 4.5. Documentation
 

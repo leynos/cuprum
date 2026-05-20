@@ -1,4 +1,31 @@
-"""Worker process for parent-side tee hot-path profiling."""
+"""Parent-side tee hot-path profiling worker.
+
+This module drives the benchmark path that consumes command output on the
+parent side. It is intended to be run in an isolated subprocess by the CLI, or
+called directly from benchmark harnesses that need the same worker behaviour
+without an extra process boundary.
+
+The primary public surface is ``TeeProfileWorkerConfig`` for validated worker
+inputs, ``TeeProfileWorkerResult`` for the JSON-compatible result payload,
+``run_tee_profile_worker`` for executing a configured run, and the
+``BackendSelector`` and ``Clock`` protocols used to inject backend selection
+and timing behaviour in tests.
+
+Backend selection is handled by ``_EnvBackendSelector``, a deliberately
+non-reentrant context manager that mutates the process-wide environment while
+holding ``_BACKEND_LOCK``. ``_BackendSelectorState`` provides the thread-local
+reentrancy guard, while ``_BACKEND_LOCK`` is an ``RLock`` that serialises
+``os.environ`` changes across workers and still allows same-thread helper code
+to re-enter the lock safely.
+
+The worker clears caches in ``cuprum._backend`` whenever it changes or restores
+``CUPRUM_STREAM_BACKEND`` so backend discovery reflects the active environment.
+Command output is sent through ``benchmarks.sinks`` to exercise the same sink
+families used by the benchmark suite.
+
+The ``main()`` entry point parses CLI arguments, runs the worker, and writes a
+machine-readable JSON result to stdout or to the requested output path.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +33,7 @@ import argparse
 import contextlib
 import dataclasses as dc
 import json
+import logging
 import os
 import pathlib as pth
 import sys
@@ -36,6 +64,10 @@ type WorkerCommandResult = sh.CommandResult | sh.PipelineResult
 _VALID_MODES = {"echo", "capture", "tee"}
 _VALID_SINKS = {"devnull", "text_blackhole", "pty_blackhole"}
 _VALID_BACKENDS = {"auto", "python", "rust"}
+_REENTRANT_SELECTOR_MESSAGE = (
+    "_EnvBackendSelector is not re-entrant; nested calls are forbidden"
+)
+_logger = logging.getLogger(__name__)
 
 
 class BackendSelector(typ.Protocol):
@@ -63,7 +95,35 @@ class Clock(typ.Protocol):
 
 
 _default_clock: Clock = time.perf_counter
-_BACKEND_LOCK = threading.Lock()
+_BACKEND_LOCK = threading.RLock()
+_lock_state = threading.local()
+
+
+class _BackendSelectorState:
+    """Track selector activation for the current thread."""
+
+    def __init__(self, state: threading.local) -> None:
+        """Store the thread-local state object used by the selector."""
+        self._state = state
+
+    def enter(self) -> bool:
+        """Mark this thread active, returning ``False`` for nested entry."""
+        if self.is_active:
+            return False
+        self._state.is_active = True
+        return True
+
+    def exit(self) -> None:
+        """Mark this thread inactive."""
+        self._state.is_active = False
+
+    @property
+    def is_active(self) -> bool:
+        """Return whether the current thread already owns the selector."""
+        return bool(getattr(self._state, "is_active", False))
+
+
+_selector_state = _BackendSelectorState(_lock_state)
 
 
 class TeeProfileWorkerResult(typ.TypedDict):
@@ -217,7 +277,8 @@ class _EnvBackendSelector:
 
     Acquires ``_BACKEND_LOCK`` for the duration of the context to serialise
     access to ``os.environ`` and the backend LRU caches. This selector is
-    not re-entrant; callers must not nest it.
+    not re-entrant; attempted nested entry raises ``RuntimeError`` and logs
+    the rejected backend and thread identifier.
     """
 
     def __call__(
@@ -232,22 +293,35 @@ class _EnvBackendSelector:
     def _activate(backend: BackendName) -> cabc.Iterator[None]:
         """Select the stream backend for parent-side pipeline pumping."""
         with _BACKEND_LOCK:
-            previous = os.environ.get("CUPRUM_STREAM_BACKEND")
-            if backend == "auto":
-                os.environ.pop("CUPRUM_STREAM_BACKEND", None)
-            else:
-                os.environ["CUPRUM_STREAM_BACKEND"] = backend
-            _backend._check_rust_available.cache_clear()
-            _backend.get_stream_backend.cache_clear()
+            if not _selector_state.enter():
+                _logger.warning(
+                    "Rejected re-entrant backend selector activation: "
+                    "backend=%r thread_id=%s selector_active=%s",
+                    backend,
+                    threading.get_ident(),
+                    _selector_state.is_active,
+                )
+                raise RuntimeError(_REENTRANT_SELECTOR_MESSAGE)
+
             try:
-                yield
+                previous = os.environ.get("CUPRUM_STREAM_BACKEND")
+                try:
+                    if backend == "auto":
+                        os.environ.pop("CUPRUM_STREAM_BACKEND", None)
+                    else:
+                        os.environ["CUPRUM_STREAM_BACKEND"] = backend
+                    _backend._check_rust_available.cache_clear()
+                    _backend.get_stream_backend.cache_clear()
+                    yield
+                finally:
+                    if previous is None:
+                        os.environ.pop("CUPRUM_STREAM_BACKEND", None)
+                    else:
+                        os.environ["CUPRUM_STREAM_BACKEND"] = previous
+                    _backend._check_rust_available.cache_clear()
+                    _backend.get_stream_backend.cache_clear()
             finally:
-                if previous is None:
-                    os.environ.pop("CUPRUM_STREAM_BACKEND", None)
-                else:
-                    os.environ["CUPRUM_STREAM_BACKEND"] = previous
-                _backend._check_rust_available.cache_clear()
-                _backend.get_stream_backend.cache_clear()
+                _selector_state.exit()
 
 
 _default_backend_selector: BackendSelector = _EnvBackendSelector()
@@ -294,6 +368,7 @@ def _run_command_sync(
     line_count = 0
 
     def observe_line(event: ExecEvent) -> None:
+        """Count stdout line callback events emitted during command execution."""
         nonlocal line_count
         if event.phase == "stdout" and event.line is not None:
             line_count += 1
@@ -449,6 +524,11 @@ def main() -> int:
         Process exit code derived from the worker result's ``exit_code`` field;
         0 on success.
     """
+    # Developer guide: CLIs must initialise warning-level logging explicitly.
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     args = _parse_args()
     try:
         config = TeeProfileWorkerConfig(

@@ -7,8 +7,8 @@ subprocess sink and therefore bypasses the final parent consume loop.
 
 ## Prerequisites
 
-Linux is the reference platform for profiler artefacts. Build Cuprum with
-debug information and frame pointers before collecting samples:
+Linux is the reference platform for profiler artefacts. Build Cuprum with debug
+information and frame pointers before collecting samples:
 
 ```bash
 export RUSTFLAGS="-C force-frame-pointers=yes"
@@ -75,8 +75,8 @@ The default matrix is fixed:
 
 ## Running scenarios
 
-Run one unprofiled scenario to validate the workload and write
-`scenario.json`, `worker-result.json`, and `notes.txt`:
+Run one unprofiled scenario to validate the workload and write `scenario.json`,
+`worker-result.json`, and `notes.txt`:
 
 ```bash
 uv run python benchmarks/profile_tee_hotpath.py run-scenario \
@@ -92,9 +92,10 @@ uv run python benchmarks/profile_tee_hotpath.py \
   --scenario echo-devnull-nocb-s1
 ```
 
-The `perf` sampling defaults match `perf record -F 999 -g --call-graph
-dwarf,16384`. Tune them without editing the harness by passing
-`--perf-frequency` or `--perf-call-graph` before the subcommand.
+The `perf` sampling defaults match
+`perf record -F 999 -g --call-graph dwarf,16384`. Tune them without editing the
+harness by passing `--perf-frequency` or `--perf-call-graph` before the
+subcommand.
 
 Run the full matrix serially:
 
