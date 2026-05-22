@@ -141,6 +141,13 @@ def _spawn_stdin_writer(
     return asyncio.create_task(_write_stdin(process, stdin_data))
 
 
+async def _cleanup_stdin_task(stdin_task: asyncio.Task[None] | None) -> None:
+    """Await a stdin writer task, suppressing any exceptions."""
+    if stdin_task is None:
+        return
+    await asyncio.gather(stdin_task, return_exceptions=True)
+
+
 def _create_stream_callback(
     observation: _StageObservation,
     event_type: typ.Literal["stdout", "stderr"],
@@ -217,8 +224,7 @@ async def _run_subprocess_with_streams(
             consumers=consumers,
         )
     except TimeoutError as exc:
-        if stdin_task is not None:
-            await asyncio.gather(stdin_task, return_exceptions=True)
+        await _cleanup_stdin_task(stdin_task)
         stdout_text, stderr_text = await asyncio.gather(*consumers)
         # Invariant: TimeoutError only raised when timeout is configured
         if timeout is None:
@@ -233,11 +239,9 @@ async def _run_subprocess_with_streams(
             ),
         ) from exc
     except asyncio.CancelledError:
-        if stdin_task is not None:
-            await asyncio.gather(stdin_task, return_exceptions=True)
+        await _cleanup_stdin_task(stdin_task)
         raise
-    if stdin_task is not None:
-        await stdin_task
+    await _cleanup_stdin_task(stdin_task)
     stdout_text, stderr_text = await asyncio.gather(*consumers)
     return exit_code, exited_at, stdout_text, stderr_text
 
@@ -414,10 +418,11 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
 __all__ = [
     "_ExitEventDetails",
     "_SubprocessExecution",
+    "_cleanup_stdin_task",
     "_SubprocessTimeoutContext",
     "_SubprocessTimeoutDetails",
     "_SubprocessTimeoutError",
-    "_TimeoutContext",
+
     "_create_stream_callback",
     "_emit_exit_event",
     "_execute_subprocess",
