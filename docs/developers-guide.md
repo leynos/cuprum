@@ -318,6 +318,56 @@ and tool-discovery recipes only. This supports non-interactive Continuous
 Integration/Continuous Delivery (CI/CD) hook environments without globally
 shadowing system tools for unrelated Makefile workflows.
 
+
+## Rust property testing and verification
+
+Rust-level tests for `cuprum-rust` live with the crate under
+`rust/cuprum-rust/src/`. Use them for pure decoder, parsing, state-machine, and
+adapter logic where Python integration tests would only cover a few examples.
+
+Property tests use [proptest](https://docs.rs/proptest/latest/proptest/) as a
+development dependency. Prefer generated payloads and small helper functions
+that expose pure behaviour. The UTF-8 decoder tests generate arbitrary byte
+vectors and chunk split points, then compare the decoded output with
+`String::from_utf8_lossy` as the oracle.
+
+Kani harnesses are reserved for bounded verification of small, high-value state
+spaces. Gate Kani-only modules and helpers with `#[cfg(kani)]`, and share pure
+test helpers behind `#[cfg(any(test, kani))]` when both proptest and Kani need
+the same simulation path. Register new custom cfg names in the workspace lint
+configuration so `unexpected_cfgs` warnings remain meaningful.
+
+Run the normal Rust gate from the `rust/` directory:
+
+```bash
+make test
+```
+
+`make test` runs the crate tests through `cargo nextest`, including proptest
+cases compiled under `#[cfg(test)]`. Run the complete Rust lint and formatting
+gates before committing Rust changes:
+
+```bash
+make check-fmt
+make lint
+```
+
+Run Kani separately because it is a bounded model checker rather than a normal
+unit-test runner. The Kani installer places the verifier under `~/.kani`; on
+this system the dynamic library path is required when invoking the crate
+harnesses:
+
+```bash
+LD_LIBRARY_PATH=/home/leynos/.kani/kani-0.67.0/toolchain/lib \
+  cargo kani --package cuprum-rust
+```
+
+When adding new Kani proofs, keep the bounds explicit with attributes such as
+`#[kani::unwind(N)]`, include `kani::cover!` statements for the intended
+boundary cases, and avoid broad symbolic comparisons that force Kani through
+large allocation-heavy standard-library internals unless the proof genuinely
+requires that surface.
+
 ## Python linting
 
 Cuprum uses a two-tier Python lint gate. Ruff is the first tier and remains the

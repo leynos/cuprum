@@ -29,8 +29,12 @@ use utf8::{FinalChunk, decode_utf8_replace};
 ///
 /// # Returns
 /// `true` when the extension is successfully loaded.
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "PyO3 runtime entrypoints should not be const functions."
+)]
 #[pyfunction]
-const fn is_available() -> bool {
+fn is_available() -> bool {
     true
 }
 
@@ -88,14 +92,13 @@ fn rust_consume_stream(py: Python<'_>, reader_fd: i64, buffer_size: i64) -> PyRe
 
 #[cfg(unix)]
 fn convert_fd(value: i64) -> PyResult<PlatformFd> {
-    let fd =
-        i32::try_from(value).map_err(|_| PyValueError::new_err("file descriptor out of range"))?;
-    if fd < 0 {
-        return Err(PyValueError::new_err(
-            "file descriptor must be non-negative",
-        ));
+    let handle_value = value as u64;
+    if usize::BITS >= 64 {
+        return Ok(handle_value as usize);
     }
-    Ok(fd)
+    let truncated = u32::try_from(handle_value)
+        .map_err(|_| PyValueError::new_err("file handle out of range"))?;
+    Ok(truncated as usize)
 }
 
 #[cfg(windows)]
@@ -125,9 +128,9 @@ fn validate_buffer_size(buffer_size: i64) -> PyResult<BufferSize> {
 }
 
 #[cfg(unix)]
-fn stream_from_raw(fd: PlatformFd) -> StreamHandle {
-    // SAFETY: The caller ensures the fd is valid and owned by the caller.
-    unsafe { OwnedFd::from_raw_fd(fd) }
+fn stream_from_raw(handle: PlatformFd) -> StreamHandle {
+    // SAFETY: The caller ensures the handle is valid and owned by the caller.
+    unsafe { File::from_raw_handle(handle as RawHandle) }
 }
 
 #[cfg(windows)]
@@ -164,7 +167,7 @@ fn consume_stream(reader_fd: ReaderFd, buffer_size: BufferSize) -> Result<String
 }
 
 #[cfg(unix)]
-type PlatformFd = i32;
+type PlatformFd = usize;
 
 #[cfg(windows)]
 type PlatformFd = usize;
