@@ -92,6 +92,7 @@ source = { editable = "." }
 dev = [
     { name = "crosshair-tool" },
     { name = "hypothesis" },
+    { name = "hypothesis-crosshair" },
     { name = "interrogate" },
     { name = "maturin" },
     { name = "pyright" },
@@ -111,6 +112,7 @@ dev = [
 dev = [
     { name = "crosshair-tool" },
     { name = "hypothesis" },
+    { name = "hypothesis-crosshair" },
     { name = "interrogate" },
     { name = "maturin", specifier = "==1.13.3" },
     { name = "pyright" },
@@ -152,6 +154,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/19/e1/ef365ff480903b929d28e057f57b76cae51a30375943e33374ec9a165d9c/hypothesis-6.151.9.tar.gz", hash = "sha256:2f284428dda6c3c48c580de0e18470ff9c7f5ef628a647ee8002f38c3f9097ca", size = 463534, upload-time = "2026-02-16T22:59:23.09Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c4/f7/5cc291d701094754a1d327b44d80a44971e13962881d9a400235726171da/hypothesis-6.151.9-py3-none-any.whl", hash = "sha256:7b7220585c67759b1b1ef839b1e6e9e3d82ed468cfc1ece43c67184848d7edd9", size = 529307, upload-time = "2026-02-16T22:59:20.443Z" },
+]
+
+[[package]]
+name = "hypothesis-crosshair"
+version = "0.0.28"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "crosshair-tool" },
+    { name = "hypothesis" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/81/2e/8c00562bdd92e5f27263b1e150a439f6949ba862c26eab124aed10d4f21f/hypothesis_crosshair-0.0.28.tar.gz", hash = "sha256:5b881d6178162dfa393852bc92e59186894c48f3879c64382f4681494af9757e", size = 13795, upload-time = "2026-04-29T00:13:57.91Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/15/ff/4e4b289884514859034154361855ba4ae8f163342b67f24a013f60a058ff/hypothesis_crosshair-0.0.28-py3-none-any.whl", hash = "sha256:fa7651a4f74d219db84743370ddc206fcfed612d80a49d58988baf75f497f018", size = 15968, upload-time = "2026-04-29T00:13:56.594Z" },
 ]
 
 [[package]]

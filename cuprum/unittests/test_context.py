@@ -8,6 +8,8 @@ import typing as typ
 from unittest import mock
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from cuprum.catalogue import ECHO, LS
 from cuprum.context import (
@@ -16,6 +18,12 @@ from cuprum.context import (
     CuprumContext,
     ForbiddenProgramError,
     ScopeConfig,
+    _merge_after_hooks,
+    _merge_before_hooks,
+    _merge_observe_hooks,
+    _narrow_allowlist,
+    _resolve_narrowed_timeout,
+    _validate_timeout,
     after,
     allow,
     before,
@@ -24,6 +32,16 @@ from cuprum.context import (
     scoped,
 )
 from cuprum.program import Program
+from cuprum.unittests import strategies as cuprum_st
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+_PROPERTY_SETTINGS = settings(derandomize=True, deadline=None, max_examples=50)
+
+# Run the symbolic backend for these tests with:
+#   uv run pytest cuprum/unittests/test_context.py -m crosshair \
+#     --hypothesis-profile=crosshair
 
 # =============================================================================
 # CuprumContext Basics
@@ -124,9 +142,127 @@ def test_narrow_prepends_after_hooks() -> None:
     assert narrowed.after_hooks == (child_hook, parent_hook)
 
 
-# =============================================================================
-# Global ContextVar Access
-# =============================================================================
+def test_narrowed_empty_allowlist_remains_restricted() -> None:
+    """narrow() preserves an empty restricted allowlist across nested scopes."""
+    parent = CuprumContext(allowlist=frozenset([ECHO]))
+    empty = parent.narrow(ScopeConfig(allowlist=frozenset()))
+    narrowed = empty.narrow(ScopeConfig(allowlist=frozenset([ECHO])))
+
+    assert narrowed.allowlist == frozenset()
+    with pytest.raises(ForbiddenProgramError):
+        narrowed.check_allowed(ECHO)
+
+
+@pytest.mark.crosshair
+@_PROPERTY_SETTINGS
+@given(parent=cuprum_st.allowlists(), config=cuprum_st.optional_allowlists())
+def test_narrow_allowlist_can_only_shrink_non_empty_parent(
+    parent: frozenset[Program],
+    config: frozenset[Program] | None,
+) -> None:
+    """Property: narrowing cannot broaden a populated parent allowlist."""
+    result = _narrow_allowlist(parent, config)
+
+    if parent:
+        assert result <= parent
+
+
+@pytest.mark.crosshair
+@_PROPERTY_SETTINGS
+@given(parent=cuprum_st.allowlists(), config=cuprum_st.allowlists())
+def test_narrow_allowlist_result_subset_of_config(
+    parent: frozenset[Program],
+    config: frozenset[Program],
+) -> None:
+    """Property: explicit config allowlists constrain the result."""
+    assert _narrow_allowlist(parent, config) <= config
+
+
+@pytest.mark.crosshair
+@_PROPERTY_SETTINGS
+@given(parent=cuprum_st.allowlists())
+def test_narrow_allowlist_none_config_preserves_parent(
+    parent: frozenset[Program],
+) -> None:
+    """Property: absent config allowlist inherits the parent exactly."""
+    assert _narrow_allowlist(parent, None) == parent
+
+
+@pytest.mark.crosshair
+@_PROPERTY_SETTINGS
+@given(
+    parent=cuprum_st.allowlists().filter(bool),
+    first=cuprum_st.allowlists(),
+    second=cuprum_st.allowlists(),
+)
+def test_narrow_allowlist_two_steps_match_single_intersection(
+    parent: frozenset[Program],
+    first: frozenset[Program],
+    second: frozenset[Program],
+) -> None:
+    """Property: repeated narrowing matches one equivalent intersection."""
+    first_step = _narrow_allowlist(parent, first, parent_is_restricted=True)
+    two_step = _narrow_allowlist(first_step, second, parent_is_restricted=True)
+    single_step = _narrow_allowlist(parent, first & second)
+
+    assert two_step == single_step
+
+
+@pytest.mark.crosshair
+@_PROPERTY_SETTINGS
+@given(parent=cuprum_st.hook_tuples(), config=cuprum_st.hook_tuples())
+def test_merge_before_hooks_preserves_fifo_order(
+    parent: tuple[cabc.Callable[..., None], ...],
+    config: tuple[cabc.Callable[..., None], ...],
+) -> None:
+    """Property: before hooks append child hooks after parent hooks."""
+    result = _merge_before_hooks(
+        typ.cast("tuple[BeforeHook, ...]", parent),
+        typ.cast("tuple[BeforeHook, ...]", config),
+    )
+
+    assert len(result) == len(parent) + len(config)
+    assert result[: len(parent)] == parent
+    assert result[len(parent) :] == config
+    assert set(result) == {*parent, *config}
+
+
+@pytest.mark.crosshair
+@_PROPERTY_SETTINGS
+@given(parent=cuprum_st.hook_tuples(), config=cuprum_st.hook_tuples())
+def test_merge_after_hooks_preserves_lifo_order(
+    parent: tuple[cabc.Callable[..., None], ...],
+    config: tuple[cabc.Callable[..., None], ...],
+) -> None:
+    """Property: after hooks prepend child hooks before parent hooks."""
+    result = _merge_after_hooks(
+        typ.cast("tuple[AfterHook, ...]", parent),
+        typ.cast("tuple[AfterHook, ...]", config),
+    )
+
+    assert len(result) == len(parent) + len(config)
+    assert result[: len(config)] == config
+    assert result[len(config) :] == parent
+    assert set(result) == {*parent, *config}
+
+
+@pytest.mark.crosshair
+@_PROPERTY_SETTINGS
+@given(parent=cuprum_st.hook_tuples(), config=cuprum_st.hook_tuples())
+def test_merge_observe_hooks_preserves_fifo_order(
+    parent: tuple[cabc.Callable[..., None], ...],
+    config: tuple[cabc.Callable[..., None], ...],
+) -> None:
+    """Property: observe hooks append child hooks after parent hooks."""
+    result = _merge_observe_hooks(
+        typ.cast("tuple[typ.Any, ...]", parent),
+        typ.cast("tuple[typ.Any, ...]", config),
+    )
+
+    assert len(result) == len(parent) + len(config)
+    assert result[: len(parent)] == parent
+    assert result[len(parent) :] == config
+    assert set(result) == {*parent, *config}
 
 
 def test_current_context_returns_context() -> None:
@@ -455,3 +591,77 @@ def test_cuprum_context_timeout_validation(
         assert ctx.timeout == expected_result
         if expected_result is not None:
             assert isinstance(ctx.timeout, float)
+
+
+@pytest.mark.crosshair
+@_PROPERTY_SETTINGS
+@given(timeout=st.none())
+def test_validate_timeout_preserves_none(timeout: None) -> None:
+    """Property: None timeout values are preserved."""
+    assert _validate_timeout(timeout, "Test") is None
+
+
+@pytest.mark.crosshair
+@_PROPERTY_SETTINGS
+@given(timeout=st.floats(min_value=0.0, max_value=3600.0, allow_nan=False))
+def test_validate_timeout_preserves_non_negative_floats(timeout: float) -> None:
+    """Property: non-negative float timeouts are accepted unchanged."""
+    result = _validate_timeout(timeout, "Test")
+
+    assert result is not None
+    assert result >= timeout
+    assert result <= timeout
+
+
+@pytest.mark.crosshair
+@_PROPERTY_SETTINGS
+@given(timeout=st.integers(min_value=0))
+def test_validate_timeout_coerces_non_negative_integers(timeout: int) -> None:
+    """Property: non-negative integer timeouts are coerced to float."""
+    result = _validate_timeout(typ.cast("float", timeout), "Test")
+
+    assert result is not None
+    assert isinstance(result, float)
+    assert result.hex() == float(timeout).hex()
+
+
+@pytest.mark.crosshair
+@_PROPERTY_SETTINGS
+@given(timeout=st.floats(max_value=-0.000001, allow_nan=False))
+def test_validate_timeout_rejects_negative_floats(timeout: float) -> None:
+    """Property: negative float timeouts are rejected."""
+    with pytest.raises(ValueError, match="timeout must be non-negative"):
+        _validate_timeout(timeout, "Test")
+
+
+@pytest.mark.crosshair
+@_PROPERTY_SETTINGS
+@given(timeout=st.integers(max_value=-1))
+def test_validate_timeout_rejects_negative_integers(timeout: int) -> None:
+    """Property: negative integer timeouts are rejected."""
+    with pytest.raises(ValueError, match="timeout must be non-negative"):
+        _validate_timeout(typ.cast("float", timeout), "Test")
+
+
+@pytest.mark.crosshair
+@_PROPERTY_SETTINGS
+@given(parent=cuprum_st.timeouts())
+def test_resolve_narrowed_timeout_inherits_without_config(
+    parent: float | None,
+) -> None:
+    """Property: absent config timeout inherits the parent timeout."""
+    assert _resolve_narrowed_timeout(parent, None) == parent
+
+
+@pytest.mark.crosshair
+@_PROPERTY_SETTINGS
+@given(
+    parent=cuprum_st.timeouts(),
+    config=st.floats(min_value=0.0, max_value=3600.0, allow_nan=False),
+)
+def test_resolve_narrowed_timeout_config_overrides_parent(
+    parent: float | None,
+    config: float,
+) -> None:
+    """Property: explicit config timeout overrides any parent timeout."""
+    assert _resolve_narrowed_timeout(parent, config) == config

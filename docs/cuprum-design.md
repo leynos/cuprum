@@ -898,12 +898,15 @@ The following design decisions were made during implementation:
 
 **Allowlist narrowing semantics:**
 
-- When `narrow()` is called on a context with an empty allowlist, the provided
-  allowlist is used directly as the new base. This allows establishing an
-  initial scope from the default (empty) context.
+- When `narrow()` is called on the unrestricted default context with an empty
+  allowlist, the provided allowlist is used directly as the new base. This
+  allows establishing an initial scope from the default context.
 - When `narrow()` is called on a context with a non-empty allowlist, the
   provided allowlist is intersected with the parent's. This ensures narrowing
   can only remove programs, never add them.
+- When narrowing an explicit restricted scope produces an empty allowlist, that
+  empty allowlist remains restrictive. Nested scopes cannot use it as a new
+  unrestricted base.
 - This two-mode behaviour balances safety (can't widen) with usability (can
   establish base scopes).
 

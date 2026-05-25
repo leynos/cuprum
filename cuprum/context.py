@@ -170,7 +170,57 @@ def _validate_timeout(timeout: float | None, class_name: str) -> float | None:
         raise ValueError(msg)
     return timeout_float
 
+def _narrow_allowlist(
+    parent: frozenset[Program],
+    config: frozenset[Program] | None,
+    *,
+    parent_is_restricted: bool = False,
+) -> frozenset[Program]:
+    """Return the allowlist produced by narrowing a parent context."""
+    if config is None:
+        return parent
+    if parent_is_restricted and not parent:
+        return parent
+    if parent:
+        return parent & config
+    return config
 
+def _is_narrowed_allowlist_restricted(
+    config: frozenset[Program] | None,
+    *,
+    parent_is_restricted: bool,
+) -> bool:
+    """Return whether a narrowed context has an active allowlist restriction."""
+    return parent_is_restricted or config is not None
+
+def _merge_before_hooks(
+    parent: tuple[BeforeHook, ...],
+    config: tuple[BeforeHook, ...],
+) -> tuple[BeforeHook, ...]:
+    """Append scoped before hooks after parent hooks for FIFO execution."""
+    return parent + config
+
+def _merge_after_hooks(
+    parent: tuple[AfterHook, ...],
+    config: tuple[AfterHook, ...],
+) -> tuple[AfterHook, ...]:
+    """Prepend scoped after hooks before parent hooks for LIFO execution."""
+    return config + parent
+
+def _merge_observe_hooks(
+    parent: tuple[ExecHook, ...],
+    config: tuple[ExecHook, ...],
+) -> tuple[ExecHook, ...]:
+    """Append scoped observe hooks after parent hooks for FIFO execution."""
+    return parent + config
+
+def _resolve_narrowed_timeout(
+    parent: float | None, config: float | None
+) -> float | None:
+    """Return the timeout inherited or overridden by a narrowed context."""
+    if config is None:
+        return parent
+    return config
 @dc.dataclass(frozen=True, slots=True)
 class ScopeConfig:
     """Configuration object for scoped execution context updates.
@@ -235,6 +285,9 @@ class CuprumContext:
         Optional immutable environment overlay layered over the live
         ``os.environ`` when command environments are resolved. When ``None``,
         no overlay is active on this context.
+    _allowlist_is_restricted:
+        Internal marker distinguishing the permissive empty default allowlist
+        from an empty allowlist produced by narrowing a restricted scope.
 
     """
 
@@ -244,6 +297,7 @@ class CuprumContext:
     observe_hooks: tuple[ExecHook, ...] = ()
     timeout: float | None = None
     env_overlay: cabc.Mapping[str, str] | None = None
+    _allowlist_is_restricted: bool = False
 
     def __post_init__(self) -> None:
         """Validate and coerce timeout after initialization."""
@@ -272,7 +326,7 @@ class CuprumContext:
         default). This allows gradual adoption: code can run without explicit
         context setup, and scoped(ScopeConfig()) can later establish restrictions.
         """
-        if not self.allowlist:
+        if not self.allowlist and not self._allowlist_is_restricted:
             return  # Empty allowlist permits all programs
         if not self.is_allowed(program):
             msg = f"Program '{program}' is not allowed in the current context"
@@ -299,29 +353,24 @@ class CuprumContext:
         add programs). This ensures safety while allowing initial setup.
 
         """
-        if config.allowlist is None:
-            new_allowlist = self.allowlist
-        elif self.allowlist:
-            # Parent has programs: intersect to narrow
-            new_allowlist = self.allowlist & config.allowlist
-        else:
-            # Parent is empty: use provided allowlist as new base
-            new_allowlist = config.allowlist
-
-        new_before = self.before_hooks + config.before_hooks
-        # After hooks run inner-to-outer, so prepend new hooks
-        new_after = config.after_hooks + self.after_hooks
-        new_observe = self.observe_hooks + config.observe_hooks
-        new_timeout = self.timeout if config.timeout is None else config.timeout
-        new_env_overlay = merge_env_overlays(self.env_overlay, config.env_overlay)
-
+        is_restricted = _is_narrowed_allowlist_restricted(
+            config.allowlist,
+            parent_is_restricted=self._allowlist_is_restricted,
+        )
         return CuprumContext(
-            allowlist=new_allowlist,
-            before_hooks=new_before,
-            after_hooks=new_after,
-            observe_hooks=new_observe,
-            timeout=new_timeout,
-            env_overlay=new_env_overlay,
+            allowlist=_narrow_allowlist(
+                self.allowlist,
+                config.allowlist,
+                parent_is_restricted=self._allowlist_is_restricted,
+            ),
+            before_hooks=_merge_before_hooks(self.before_hooks, config.before_hooks),
+            after_hooks=_merge_after_hooks(self.after_hooks, config.after_hooks),
+            observe_hooks=_merge_observe_hooks(
+                self.observe_hooks, config.observe_hooks
+            ),
+            timeout=_resolve_narrowed_timeout(self.timeout, config.timeout),
+            env_overlay=merge_env_overlays(self.env_overlay, config.env_overlay),
+            _allowlist_is_restricted=is_restricted,
         )
 
     def with_allowlist(self, allowlist: frozenset[Program]) -> CuprumContext:
@@ -330,7 +379,11 @@ class CuprumContext:
         Unlike narrow(), this sets the allowlist directly without intersection.
         Use with care; prefer narrow() for enforcing safety invariants.
         """
-        return dc.replace(self, allowlist=allowlist)
+        return dc.replace(
+            self,
+            allowlist=allowlist,
+            _allowlist_is_restricted=bool(allowlist),
+        )
 
     def with_before_hook(self, hook: BeforeHook) -> CuprumContext:
         """Return a context with an additional before hook."""
