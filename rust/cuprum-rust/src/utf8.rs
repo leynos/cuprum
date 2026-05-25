@@ -233,3 +233,97 @@ mod tests {
         }
     }
 }
+
+#[cfg(kani)]
+mod kani_proofs {
+    //! Bounded Kani proofs for short UTF-8 payloads and chunk boundaries.
+
+    use super::{FinalChunk, decode_chunks, decode_utf8_replace};
+
+    fn decode_single_chunk(input: &[u8], final_chunk: bool) -> (String, Vec<u8>) {
+        let mut pending = input.to_vec();
+        let mut output = String::new();
+        decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(final_chunk));
+        (output, pending)
+    }
+
+    fn is_valid_incomplete_utf8_sequence(pending: &[u8]) -> bool {
+        match pending {
+            [first] => matches!(first, 0xC2..=0xDF | 0xE0..=0xEF | 0xF0..=0xF4),
+            [0xE0, second] => matches!(second, 0xA0..=0xBF),
+            [0xE1..=0xEC, second] => matches!(second, 0x80..=0xBF),
+            [0xED, second] => matches!(second, 0x80..=0x9F),
+            [0xEE..=0xEF, second] => matches!(second, 0x80..=0xBF),
+            [0xF0, second] => matches!(second, 0x90..=0xBF),
+            [0xF1..=0xF3, second] => matches!(second, 0x80..=0xBF),
+            [0xF4, second] => matches!(second, 0x80..=0x8F),
+            [0xF0, second, third] => matches!(second, 0x90..=0xBF) && matches!(third, 0x80..=0xBF),
+            [0xF1..=0xF3, second, third] => {
+                matches!(second, 0x80..=0xBF) && matches!(third, 0x80..=0xBF)
+            }
+            [0xF4, second, third] => matches!(second, 0x80..=0x8F) && matches!(third, 0x80..=0xBF),
+            _ => false,
+        }
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn single_chunk_matches_from_utf8_lossy() {
+        let input = [b'a', 0xFF, b'b'];
+        let (output, pending) = decode_single_chunk(&input, true);
+        let output_bytes = output.as_bytes();
+
+        kani::cover!(output_bytes.len() == 5, "exercise invalid UTF-8 payloads");
+        kani::assert(output_bytes.len() == 5, "replacement output length");
+        kani::assert(output_bytes[0] == b'a', "valid prefix is preserved");
+        kani::assert(output_bytes[1] == 0xEF, "replacement byte 1");
+        kani::assert(output_bytes[2] == 0xBF, "replacement byte 2");
+        kani::assert(output_bytes[3] == 0xBD, "replacement byte 3");
+        kani::assert(output_bytes[4] == b'b', "valid suffix is preserved");
+        kani::assert(
+            pending.is_empty(),
+            "final chunk must leave no pending bytes",
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn two_chunk_boundaries_match_from_utf8_lossy() {
+        let input = [0xC2, 0xA2];
+        let split_point = 1_usize;
+        let (left, right) = input.split_at(split_point);
+        let chunks = [left, right];
+        let (output, pending) = decode_chunks(&chunks, true);
+        let output_bytes = output.as_bytes();
+
+        kani::cover!(
+            left.len() == 1 && right.len() == 1,
+            "exercise split points that bisect valid multi-byte sequences"
+        );
+        kani::assert(output_bytes.len() == 2, "two chunks decode one scalar");
+        kani::assert(output_bytes[0] == 0xC2, "first scalar byte is preserved");
+        kani::assert(output_bytes[1] == 0xA2, "second scalar byte is preserved");
+        kani::assert(
+            pending.is_empty(),
+            "final chunk must leave no pending bytes",
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn pending_state_is_valid_incomplete_utf8() {
+        let input = [0xE0, 0xA0];
+        let (_output, pending) = decode_single_chunk(&input, false);
+
+        kani::assert(
+            pending.len() <= 3,
+            "pending UTF-8 tail is at most three bytes",
+        );
+        if !pending.is_empty() {
+            kani::assert(
+                is_valid_incomplete_utf8_sequence(&pending),
+                "pending bytes must form an incomplete UTF-8 prefix",
+            );
+        }
+    }
+}
