@@ -35,7 +35,9 @@ from cuprum._streams import (
     _close_stream_writer,
     _consume_stream,
     _pump_stream,
+    _split_complete_lines,
     _StreamConfig,
+    _strip_line_ending,
     _write_chunk,
 )
 from cuprum.sh import _resolve_timeout
@@ -99,7 +101,9 @@ _EXPORTS = {
     "_close_stream_writer": _close_stream_writer,
     "_consume_stream": _consume_stream,
     "_pump_stream": _pump_stream,
+    "_split_complete_lines": _split_complete_lines,
     "_StreamConfig": _StreamConfig,
+    "_strip_line_ending": _strip_line_ending,
     "_write_chunk": _write_chunk,
     "_resolve_timeout": _resolve_timeout,
 }

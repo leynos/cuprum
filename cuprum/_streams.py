@@ -205,18 +205,38 @@ def _emit_completed_lines(
     on_line: cabc.Callable[[str], None],
 ) -> str:
     """Emit complete lines from text and return the remaining partial line."""
+    lines, remainder = _split_complete_lines(text)
+
+    for line in lines:
+        on_line(line)
+
+    return remainder
+
+
+def _split_complete_lines(text: str) -> tuple[list[str], str]:
+    """Split text into completed lines and a trailing partial line.
+
+    Parameters
+    ----------
+    text : str
+        Text to split using Python's universal line boundary rules.
+
+    Returns
+    -------
+    tuple[list[str], str]
+        Completed lines with one trailing line ending removed from each line,
+        followed by the remaining partial line. The remainder is empty when
+        ``text`` ends with a line ending or contains no partial line.
+    """
     lines = text.splitlines(keepends=True)
     if not lines:
-        return text
+        return [], text
 
     remainder = ""
     if not _ends_with_line_ending(lines[-1]):
         remainder = lines.pop()
 
-    for line in lines:
-        on_line(_strip_line_ending(line))
-
-    return remainder
+    return [_strip_line_ending(line) for line in lines], remainder
 
 
 def _ends_with_line_ending(line: str) -> bool:
