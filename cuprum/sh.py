@@ -86,6 +86,26 @@ def _coerce_argv(
     return positional + flags
 
 
+def _resolve_stdin_data(
+    input_text: str | None,
+    input_bytes: bytes | None,
+    ctx: ExecutionContext,
+) -> bytes | None:
+    """Validate and encode stdin arguments into a single bytes payload.
+
+    Raises
+    ------
+    ValueError
+        When both ``input_text`` and ``input_bytes`` are supplied.
+    """
+    if input_text is not None and input_bytes is not None:
+        msg = "input_text and input_bytes cannot both be provided"
+        raise ValueError(msg)
+    if input_text is not None:
+        return input_text.encode(ctx.encoding, ctx.errors)
+    return input_bytes
+
+
 @dc.dataclass(frozen=True, slots=True)
 class CommandResult:
     """Structured result returned by command execution.
@@ -296,6 +316,26 @@ class IOOptions:
     echo: bool = False
 
 
+async def _execute_with_hooks(
+    cmd: SafeCmd,
+    execution: _SubprocessExecution,
+    tracking: _ExecutionTracking,
+) -> CommandResult:
+    """Run *execution* and dispatch after-hooks, handling cancellation."""
+    try:
+        result = await _execute_subprocess(execution)
+        for hook in tracking.execution_hooks.after_hooks:
+            hook(cmd, result)
+    except asyncio.CancelledError:
+        await asyncio.shield(_wait_for_exec_hook_tasks(tracking.pending_tasks))
+        raise
+    except BaseException:
+        await _wait_for_exec_hook_tasks(tracking.pending_tasks)
+        raise
+    await _wait_for_exec_hook_tasks(tracking.pending_tasks)
+    return result
+
+
 @dc.dataclass(frozen=True, slots=True)
 class SafeCmd:
     """Typed representation of a curated command ready for execution."""
@@ -356,11 +396,7 @@ class SafeCmd:
         io = io or IOOptions()
         stdin = stdin or StdinInput()
         ctx = context or ExecutionContext()
-        stdin_data = (
-            stdin.text.encode(ctx.encoding, ctx.errors)
-            if stdin.text is not None
-            else stdin.data
-        )
+        stdin_data = _resolve_stdin_data(stdin.text, stdin.data, ctx)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         tracking = _ExecutionTracking(
             execution_hooks=_run_before_hooks(self),
@@ -378,29 +414,19 @@ class SafeCmd:
         for hook in tracking.execution_hooks.before_hooks:
             hook(self)
 
-        try:
-            result = await _execute_subprocess(
-                _SubprocessExecution(
-                    cmd=self,
-                    ctx=ctx,
-                    capture=io.capture,
-                    echo=io.echo,
-                    timeout=effective_timeout,
-                    observation=observation,
-                    stdin_data=stdin_data,
-                ),
-            )
-            for hook in tracking.execution_hooks.after_hooks:
-                hook(self, result)
-        except asyncio.CancelledError:
-            await asyncio.shield(_wait_for_exec_hook_tasks(tracking.pending_tasks))
-            raise
-        except BaseException:
-            await _wait_for_exec_hook_tasks(tracking.pending_tasks)
-            raise
-
-        await _wait_for_exec_hook_tasks(tracking.pending_tasks)
-        return result
+        return await _execute_with_hooks(
+            self,
+            _SubprocessExecution(
+                cmd=self,
+                ctx=ctx,
+                capture=io.capture,
+                echo=io.echo,
+                timeout=effective_timeout,
+                observation=observation,
+                stdin_data=stdin_data,
+            ),
+            tracking,
+        )
 
     def run_sync(
         self,
