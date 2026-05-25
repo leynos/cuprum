@@ -66,6 +66,7 @@ result_large_err = "deny"
 
 [workspace.lints.rust]
 missing_docs = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
 
 [workspace.lints.rustdoc]
 missing_crate_level_docs = "deny"
