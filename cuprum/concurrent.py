@@ -179,6 +179,13 @@ def _build_final_results(
         final_results (not original positions) for failed commands, in ascending
         order.
 
+    post: all(result is not None for result in __return__[0])
+    post: __return__[0] == [result for result in results if result is not None]
+    post: len(__return__[0]) == sum(1 for result in results if result is not None)
+    post: all(0 <= idx < len(__return__[0]) for idx in __return__[1])
+    post: all(not __return__[0][idx].ok for idx in __return__[1])
+    post: __return__[1] == sorted(__return__[1])
+
     """
     final_results: list[CommandResult] = []
     failures: list[int] = []

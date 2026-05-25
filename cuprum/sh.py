@@ -41,9 +41,7 @@ from cuprum.catalogue import (
 from cuprum.catalogue import UnknownProgramError as UnknownProgramError
 from cuprum.context import observe as observe
 from cuprum.context import scoped as scoped
-
-if typ.TYPE_CHECKING:
-    from cuprum.program import Program
+from cuprum.program import Program  # noqa: TC001
 
 type _ArgValue = str | int | float | bool | Path
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
