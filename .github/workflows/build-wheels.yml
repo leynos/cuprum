@@ -8,6 +8,7 @@ on:
         required: true
 
 env:
+  # Keep in sync with .github/actions/build-wheels/action.yml and pyproject.toml.
   MATURIN_VERSION: "1.13.3"
 
 jobs:
