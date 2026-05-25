@@ -233,13 +233,13 @@ and echo semantics and returns a structured `CommandResult`:
   success.
 
 ```python
-from cuprum import ECHO, ExecutionContext, RunOutputOptions, sh
+from cuprum import ECHO, ExecutionContext, IOOptions, sh
 
 
 async def greet() -> None:
     cmd = sh.make(ECHO)("-n", "hello runtime")
     ctx = ExecutionContext(env={"GREETING": "1"})
-    result = await cmd.run(output=RunOutputOptions(echo=True), context=ctx)
+    result = await cmd.run(io=IOOptions(echo=True), context=ctx)
     if not result.ok:
         raise RuntimeError(f"echo failed: {result.exit_code}")
     print(result.stdout)
@@ -301,13 +301,13 @@ using the same capture rules as successful runs.
 For scripts or contexts where async/await is not available, use `run_sync()`:
 
 ```python
-from cuprum import ECHO, ExecutionContext, RunOutputOptions, sh
+from cuprum import ECHO, ExecutionContext, IOOptions, sh
 
 
 def greet() -> None:
     cmd = sh.make(ECHO)("-n", "hello sync")
     ctx = ExecutionContext(env={"GREETING": "1"})
-    result = cmd.run_sync(output=RunOutputOptions(echo=True), context=ctx)
+    result = cmd.run_sync(io=IOOptions(echo=True), context=ctx)
     if not result.ok:
         raise RuntimeError(f"echo failed: {result.exit_code}")
     print(result.stdout)
@@ -728,7 +728,7 @@ The hook creates spans with these attributes:
 - `cuprum.pipeline_stage_index`: Pipeline stage index (if applicable)
 
 Output lines (stdout/stderr) are recorded as span events when
-`record_output=True` (the default).
+`record_io=True` (the default).
 
 To integrate with OpenTelemetry, implement the `Tracer` and `Span` protocols:
 

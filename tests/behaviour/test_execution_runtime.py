@@ -12,7 +12,7 @@ import pytest
 from pytest_bdd import given, scenario, then, when
 
 from cuprum import ECHO, TimeoutExpired, sh
-from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
+from cuprum.sh import ExecutionContext, IOOptions, StdinInput
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
@@ -174,7 +174,7 @@ def when_run_command_with_timeout(
     ctx = ExecutionContext(env={"CUPRUM_PID_FILE": str(pid_file)})
     with pytest.raises(TimeoutExpired, match=r"timed out") as exc_info:
         command.run_sync(
-            output=RunOutputOptions(capture=False),
+            io=IOOptions(capture=False),
             timeout=timeout,
             context=ctx,
         )
@@ -306,7 +306,7 @@ def _cancel_command_with_grace(
         )
         task = asyncio.create_task(
             command.run(
-                output=RunOutputOptions(capture=False),
+                io=IOOptions(capture=False),
                 context=ExecutionContext(
                     env={"CUPRUM_PID_FILE": str(pid_file)},
                     cancel_grace=grace,

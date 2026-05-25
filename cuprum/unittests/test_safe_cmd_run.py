@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from cuprum import ECHO, TimeoutExpired, sh
-from cuprum.sh import CommandResult, ExecutionContext, RunOutputOptions, StdinInput
+from cuprum.sh import CommandResult, ExecutionContext, IOOptions, StdinInput
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
@@ -94,7 +94,7 @@ def test_captures_and_echoes_stderr(
         'import sys; print("err", file=sys.stderr)',
     )
 
-    result = execute(command, {"output": RunOutputOptions(echo=True)})
+    result = execute(command, {"io": IOOptions(echo=True)})
 
     captured = capsys.readouterr()
 
@@ -115,7 +115,7 @@ def test_echoes_when_requested(
     _, execute = execution_strategy
     command = sh.make(ECHO)("hello runtime")
 
-    result = execute(command, {"output": RunOutputOptions(echo=True)})
+    result = execute(command, {"io": IOOptions(echo=True)})
 
     captured = capfd.readouterr()
     assert result.stdout is not None
@@ -184,7 +184,7 @@ def test_allows_disabling_capture(
     _, execute = execution_strategy
     command = sh.make(ECHO)("uncaptured output")
 
-    result = execute(command, {"output": RunOutputOptions(capture=False)})
+    result = execute(command, {"io": IOOptions(capture=False)})
 
     assert result.exit_code == 0
     assert result.stdout is None
@@ -202,7 +202,7 @@ def test_timeout_raises_timeout_expired(
     with pytest.raises(TimeoutExpired, match=r"timed out") as exc_info:
         execute(
             command,
-            {"timeout": 0.1, "output": RunOutputOptions(capture=False)},
+            {"timeout": 0.1, "io": IOOptions(capture=False)},
         )
 
     assert exc_info.value.timeout == pytest.approx(0.1)
@@ -227,7 +227,7 @@ def test_echoes_to_custom_sinks(
     result = execute(
         command,
         {
-            "output": RunOutputOptions(echo=True),
+            "io": IOOptions(echo=True),
             "context": ExecutionContext(
                 stdout_sink=stdout_sink,
                 stderr_sink=stderr_sink,
@@ -338,7 +338,7 @@ def test_input_text_and_input_bytes_conflict(
     _ = python_builder, execution_strategy
     with pytest.raises(
         ValueError,
-        match=r"text and data cannot both be provided",
+        match=r"StdinInput\.text and StdinInput\.data cannot both be provided",
     ):
         StdinInput(text="hello", data=b"hello")
 
@@ -357,7 +357,7 @@ def test_input_text_works_when_capture_is_disabled(
     result = execute(
         command,
         {
-            "output": RunOutputOptions(capture=False),
+            "io": IOOptions(capture=False),
             "stdin": StdinInput(text="uncaptured"),
         },
     )
@@ -440,7 +440,7 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
     async def orchestrate() -> int:
         task = asyncio.create_task(
             command.run(
-                output=RunOutputOptions(capture=False),
+                io=IOOptions(capture=False),
                 context=ExecutionContext(
                     env={"CUPRUM_PID_FILE": str(pid_file)},
                     cancel_grace=0.1,
@@ -632,7 +632,7 @@ def test_run_does_not_invoke_after_hooks_on_cancellation(
         ):
             task = asyncio.create_task(
                 command.run(
-                    output=RunOutputOptions(capture=False),
+                    io=IOOptions(capture=False),
                     context=ExecutionContext(cancel_grace=0.1),
                 ),
             )

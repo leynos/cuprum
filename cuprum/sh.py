@@ -268,10 +268,7 @@ def _prepare_execution_observation(
 
 @dc.dataclass(frozen=True, slots=True)
 class StdinInput:
-    """Caller-provided data to write to a subprocess's stdin pipe.
-
-    Exactly one of *text* or *data* may be supplied.
-    """
+    """Caller-provided data to write to a subprocess's stdin pipe."""
 
     text: str | None = None
     data: bytes | None = None
@@ -279,18 +276,12 @@ class StdinInput:
     def __post_init__(self) -> None:
         """Reject ambiguous stdin payloads."""
         if self.text is not None and self.data is not None:
-            msg = "text and data cannot both be provided"
+            msg = "StdinInput.text and StdinInput.data cannot both be provided"
             raise ValueError(msg)
-
-    def resolve(self, ctx: ExecutionContext) -> bytes | None:
-        """Return bytes to write, encoding *text* with *ctx* when needed."""
-        if self.text is not None:
-            return self.text.encode(ctx.encoding, ctx.errors)
-        return self.data
 
 
 @dc.dataclass(frozen=True, slots=True)
-class RunOutputOptions:
+class IOOptions:
     """Controls how a command's output streams are handled.
 
     Parameters
@@ -331,7 +322,7 @@ class SafeCmd:
     async def run(
         self,
         *,
-        output: RunOutputOptions = RunOutputOptions(),  # noqa: B008
+        io: IOOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
@@ -340,14 +331,14 @@ class SafeCmd:
 
         Parameters
         ----------
-        output:
-            Runtime output handling settings for stdout/stderr.
+        io:
+            Optional ``IOOptions`` controlling stdout/stderr handling.
         timeout:
             Optional wall-clock timeout in seconds; ``None`` disables timeouts.
         context:
             Optional execution settings such as env, cwd, and cancel grace.
         stdin:
-            Optional caller-provided stdin data to feed to the subprocess.
+            Optional ``StdinInput`` data to feed to the subprocess.
 
         Returns
         -------
@@ -362,14 +353,20 @@ class SafeCmd:
             If the command exceeds the configured timeout.
 
         """
+        io = io or IOOptions()
+        stdin = stdin or StdinInput()
         ctx = context or ExecutionContext()
-        stdin_data = stdin.resolve(ctx) if stdin is not None else None
+        stdin_data = (
+            stdin.text.encode(ctx.encoding, ctx.errors)
+            if stdin.text is not None
+            else stdin.data
+        )
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         tracking = _ExecutionTracking(
             execution_hooks=_run_before_hooks(self),
             pending_tasks=[],
         )
-        io_behaviour = _IOBehaviour(capture=output.capture, echo=output.echo)
+        io_behaviour = _IOBehaviour(capture=io.capture, echo=io.echo)
         observation = _prepare_execution_observation(
             self,
             ctx,
@@ -386,8 +383,8 @@ class SafeCmd:
                 _SubprocessExecution(
                     cmd=self,
                     ctx=ctx,
-                    capture=output.capture,
-                    echo=output.echo,
+                    capture=io.capture,
+                    echo=io.echo,
                     timeout=effective_timeout,
                     observation=observation,
                     stdin_data=stdin_data,
@@ -408,7 +405,7 @@ class SafeCmd:
     def run_sync(
         self,
         *,
-        output: RunOutputOptions = RunOutputOptions(),  # noqa: B008
+        io: IOOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
@@ -420,14 +417,14 @@ class SafeCmd:
 
         Parameters
         ----------
-        output:
-            Runtime output handling settings for stdout/stderr.
+        io:
+            Optional ``IOOptions`` controlling stdout/stderr handling.
         timeout:
             Optional wall-clock timeout in seconds; ``None`` disables timeouts.
         context:
             Optional execution settings such as env, cwd, and cancel grace.
         stdin:
-            Optional caller-provided stdin data to feed to the subprocess.
+            Optional ``StdinInput`` data to feed to the subprocess.
 
         Returns
         -------
@@ -437,7 +434,7 @@ class SafeCmd:
         """
         return asyncio.run(
             self.run(
-                output=output,
+                io=io,
                 timeout=timeout,
                 context=context,
                 stdin=stdin,
@@ -527,9 +524,9 @@ def make(
 __all__ = [
     "CommandResult",
     "ExecutionContext",
+    "IOOptions",
     "Pipeline",
     "PipelineResult",
-    "RunOutputOptions",
     "SafeCmd",
     "SafeCmdBuilder",
     "StdinInput",
