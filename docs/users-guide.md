@@ -1220,7 +1220,7 @@ source need the following tools installed:
   Alternatively, install it manually:
 
   ```bash
-  pip install maturin==1.6.0
+  pip install maturin==1.13.3
   ```
 
 To build and install the Rust extension in development mode, run
