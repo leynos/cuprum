@@ -188,15 +188,9 @@ def _spawn_stream_consumers(
     )
 
 
-async def _run_subprocess_with_streams(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-    *,
-    pid: int | None,
-    timeout: float | None,
-) -> tuple[int, float, str | None, str | None]:
-    """Run subprocess with stream capture and timeout handling."""
-    stream_config = _StreamConfig(
+def _build_stream_config(execution: _SubprocessExecution) -> _StreamConfig:
+    """Build the stdout _StreamConfig for an execution context."""
+    return _StreamConfig(
         capture_output=execution.capture,
         echo_output=execution.echo,
         sink=(
@@ -207,6 +201,41 @@ async def _run_subprocess_with_streams(
         encoding=execution.ctx.encoding,
         errors=execution.ctx.errors,
     )
+
+
+async def _handle_stream_timeout(
+    exc: TimeoutError,
+    *,
+    stdin_task: asyncio.Task[None] | None,
+    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+    timeout: float | None,
+) -> typ.NoReturn:
+    """Clean up stdin/stream tasks on timeout and raise _SubprocessTimeoutError."""
+    if stdin_task is not None:
+        await asyncio.gather(stdin_task, return_exceptions=True)
+    stdout_text, stderr_text = await asyncio.gather(*consumers)
+    if timeout is None:
+        msg = "TimeoutError without a configured timeout"
+        raise RuntimeError(msg) from exc
+    raise _SubprocessTimeoutError(
+        _SubprocessTimeoutDetails(
+            timeout=timeout,
+            stdout=stdout_text,
+            stderr=stderr_text,
+            exited_at=time.perf_counter(),
+        ),
+    ) from exc
+
+
+async def _run_subprocess_with_streams(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+    *,
+    pid: int | None,
+    timeout: float | None,
+) -> tuple[int, float, str | None, str | None]:
+    """Run subprocess with stream capture and timeout handling."""
+    stream_config = _build_stream_config(execution)
     consumers = _spawn_stream_consumers(process, execution, stream_config, pid=pid)
     stdin_task = _spawn_stdin_writer(process, execution.stdin_data)
     try:
@@ -217,21 +246,9 @@ async def _run_subprocess_with_streams(
             consumers=consumers,
         )
     except TimeoutError as exc:
-        if stdin_task is not None:
-            await asyncio.gather(stdin_task, return_exceptions=True)
-        stdout_text, stderr_text = await asyncio.gather(*consumers)
-        # Invariant: TimeoutError only raised when timeout is configured
-        if timeout is None:
-            msg = "TimeoutError without a configured timeout"
-            raise RuntimeError(msg) from exc
-        raise _SubprocessTimeoutError(
-            _SubprocessTimeoutDetails(
-                timeout=timeout,
-                stdout=stdout_text,
-                stderr=stderr_text,
-                exited_at=time.perf_counter(),
-            ),
-        ) from exc
+        await _handle_stream_timeout(
+            exc, stdin_task=stdin_task, consumers=consumers, timeout=timeout
+        )
     except asyncio.CancelledError:
         if stdin_task is not None:
             await asyncio.gather(stdin_task, return_exceptions=True)
@@ -418,10 +435,12 @@ __all__ = [
     "_SubprocessTimeoutDetails",
     "_SubprocessTimeoutError",
     "_TimeoutContext",
+    "_build_stream_config",
     "_create_stream_callback",
     "_emit_exit_event",
     "_execute_subprocess",
     "_get_exit_code",
+    "_handle_stream_timeout",
     "_handle_subprocess_timeout",
     "_raise_timeout_expired",
     "_resolve_timeout",
