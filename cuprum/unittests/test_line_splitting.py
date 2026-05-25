@@ -193,24 +193,18 @@ def _strip_line_ending_contract(line: str) -> None:
     """
 
 
+@pytest.mark.parametrize(
+    "contract",
+    [
+        pytest.param(_split_no_text_loss_contract, id="split_no_text_loss"),
+        pytest.param(_strip_line_ending_contract, id="strip_line_ending"),
+    ],
+)
 @pytest.mark.skipif(check_states is None, reason="CrossHair is not installed")
-def test_crosshair_split_no_text_loss() -> None:
-    """Property: CrossHair symbolically verifies split text preservation."""
+def test_crosshair_contracts(contract: typ.Callable[..., None]) -> None:  # noqa: TID251
+    """Property: CrossHair symbolically verifies line-splitting contracts."""
     check_states(
-        _split_no_text_loss_contract,
-        MessageType.CONFIRMED,
-        AnalysisOptionSet(
-            analysis_kind=(AnalysisKind.PEP316,),
-            per_condition_timeout=10,
-        ),
-    )
-
-
-@pytest.mark.skipif(check_states is None, reason="CrossHair is not installed")
-def test_crosshair_strip_line_ending_contract() -> None:
-    """Property: CrossHair symbolically verifies line-ending stripping."""
-    check_states(
-        _strip_line_ending_contract,
+        contract,
         MessageType.CONFIRMED,
         AnalysisOptionSet(
             analysis_kind=(AnalysisKind.PEP316,),
