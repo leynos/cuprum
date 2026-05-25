@@ -9,7 +9,15 @@ import typing as typ
 
 import pytest
 
-from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
+from cuprum import (
+    Program,
+    ProgramCatalogue,
+    ProjectSettings,
+    RunOutputOptions,
+    ScopeConfig,
+    scoped,
+    sh,
+)
 from tests.helpers.parity import parity_catalogue, run_parity_pipeline
 
 if typ.TYPE_CHECKING:
@@ -93,7 +101,7 @@ def test_benchmark_consume_throughput(
 
     def run_once() -> int:
         with scoped(ScopeConfig(allowlist=allowlist)):
-            result = command.run_sync(capture=True, echo=False)
+            result = command.run_sync(output=RunOutputOptions(capture=True))
         assert result.ok
         assert result.stdout is not None
         return len(result.stdout)

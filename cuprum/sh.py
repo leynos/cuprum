@@ -267,6 +267,45 @@ def _prepare_execution_observation(
 
 
 @dc.dataclass(frozen=True, slots=True)
+class StdinInput:
+    """Caller-provided data to write to a subprocess's stdin pipe.
+
+    Exactly one of *text* or *data* may be supplied.
+    """
+
+    text: str | None = None
+    data: bytes | None = None
+
+    def __post_init__(self) -> None:
+        """Reject ambiguous stdin payloads."""
+        if self.text is not None and self.data is not None:
+            msg = "text and data cannot both be provided"
+            raise ValueError(msg)
+
+    def resolve(self, ctx: ExecutionContext) -> bytes | None:
+        """Return bytes to write, encoding *text* with *ctx* when needed."""
+        if self.text is not None:
+            return self.text.encode(ctx.encoding, ctx.errors)
+        return self.data
+
+
+@dc.dataclass(frozen=True, slots=True)
+class RunOutputOptions:
+    """Controls how a command's output streams are handled.
+
+    Parameters
+    ----------
+    capture:
+        When ``True`` capture stdout/stderr; otherwise discard them.
+    echo:
+        When ``True`` tee stdout/stderr to the parent process.
+    """
+
+    capture: bool = True
+    echo: bool = False
+
+
+@dc.dataclass(frozen=True, slots=True)
 class SafeCmd:
     """Typed representation of a curated command ready for execution."""
 
@@ -289,33 +328,26 @@ class SafeCmd:
         """Compose this command with another stage, producing a Pipeline."""
         return Pipeline.concat(self, other)
 
-    async def run(  # noqa: PLR0913 - mirrors subprocess.run-style runtime API
+    async def run(
         self,
         *,
-        capture: bool = True,
-        echo: bool = False,
+        output: RunOutputOptions = RunOutputOptions(),  # noqa: B008
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        input_text: str | None = None,
-        input_bytes: bytes | None = None,
+        stdin: StdinInput | None = None,
     ) -> CommandResult:
         """Execute the command asynchronously with predictable cancellation.
 
         Parameters
         ----------
-        capture:
-            When ``True`` capture stdout/stderr; otherwise discard them.
-        echo:
-            When ``True`` tee stdout/stderr to the parent process.
+        output:
+            Runtime output handling settings for stdout/stderr.
         timeout:
             Optional wall-clock timeout in seconds; ``None`` disables timeouts.
         context:
             Optional execution settings such as env, cwd, and cancel grace.
-        input_text:
-            Optional text to feed to the subprocess stdin, encoded with the
-            execution context encoding and error handling.
-        input_bytes:
-            Optional raw bytes to feed to the subprocess stdin.
+        stdin:
+            Optional caller-provided stdin data to feed to the subprocess.
 
         Returns
         -------
@@ -330,21 +362,14 @@ class SafeCmd:
             If the command exceeds the configured timeout.
 
         """
-        if input_text is not None and input_bytes is not None:
-            msg = "input_text and input_bytes cannot both be provided"
-            raise ValueError(msg)
         ctx = context or ExecutionContext()
-        stdin_data = (
-            input_text.encode(ctx.encoding, ctx.errors)
-            if input_text is not None
-            else input_bytes
-        )
+        stdin_data = stdin.resolve(ctx) if stdin is not None else None
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         tracking = _ExecutionTracking(
             execution_hooks=_run_before_hooks(self),
             pending_tasks=[],
         )
-        io_behaviour = _IOBehaviour(capture=capture, echo=echo)
+        io_behaviour = _IOBehaviour(capture=output.capture, echo=output.echo)
         observation = _prepare_execution_observation(
             self,
             ctx,
@@ -361,8 +386,8 @@ class SafeCmd:
                 _SubprocessExecution(
                     cmd=self,
                     ctx=ctx,
-                    capture=capture,
-                    echo=echo,
+                    capture=output.capture,
+                    echo=output.echo,
                     timeout=effective_timeout,
                     observation=observation,
                     stdin_data=stdin_data,
@@ -380,15 +405,13 @@ class SafeCmd:
         await _wait_for_exec_hook_tasks(tracking.pending_tasks)
         return result
 
-    def run_sync(  # noqa: PLR0913 - mirrors run() for sync callers
+    def run_sync(
         self,
         *,
-        capture: bool = True,
-        echo: bool = False,
+        output: RunOutputOptions = RunOutputOptions(),  # noqa: B008
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        input_text: str | None = None,
-        input_bytes: bytes | None = None,
+        stdin: StdinInput | None = None,
     ) -> CommandResult:
         """Execute the command synchronously with predictable semantics.
 
@@ -397,19 +420,14 @@ class SafeCmd:
 
         Parameters
         ----------
-        capture:
-            When ``True`` capture stdout/stderr; otherwise discard them.
-        echo:
-            When ``True`` tee stdout/stderr to the parent process.
+        output:
+            Runtime output handling settings for stdout/stderr.
         timeout:
             Optional wall-clock timeout in seconds; ``None`` disables timeouts.
         context:
             Optional execution settings such as env, cwd, and cancel grace.
-        input_text:
-            Optional text to feed to the subprocess stdin, encoded with the
-            execution context encoding and error handling.
-        input_bytes:
-            Optional raw bytes to feed to the subprocess stdin.
+        stdin:
+            Optional caller-provided stdin data to feed to the subprocess.
 
         Returns
         -------
@@ -419,12 +437,10 @@ class SafeCmd:
         """
         return asyncio.run(
             self.run(
-                capture=capture,
-                echo=echo,
+                output=output,
                 timeout=timeout,
                 context=context,
-                input_text=input_text,
-                input_bytes=input_bytes,
+                stdin=stdin,
             ),
         )
 
@@ -513,8 +529,10 @@ __all__ = [
     "ExecutionContext",
     "Pipeline",
     "PipelineResult",
+    "RunOutputOptions",
     "SafeCmd",
     "SafeCmdBuilder",
+    "StdinInput",
     "TimeoutExpired",
     "UnknownProgramError",
     "make",

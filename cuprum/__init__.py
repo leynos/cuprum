@@ -62,8 +62,10 @@ from cuprum.sh import (
     ExecutionContext,
     Pipeline,
     PipelineResult,
+    RunOutputOptions,
     SafeCmd,
     SafeCmdBuilder,
+    StdinInput,
     TimeoutExpired,
 )
 
@@ -100,9 +102,11 @@ __all__ = [
     "ProgramCatalogue",
     "ProgramEntry",
     "ProjectSettings",
+    "RunOutputOptions",
     "SafeCmd",
     "SafeCmdBuilder",
     "ScopeConfig",
+    "StdinInput",
     "TimeoutExpired",
     "UnknownProgramError",
     "after",

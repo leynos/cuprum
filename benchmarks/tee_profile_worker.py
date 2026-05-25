@@ -384,13 +384,25 @@ def _run_command_sync(
             errors=config.errors,
         )
         with scoped(ScopeConfig(allowlist=worker_cmd.allowlist)):
-            if config.with_line_callbacks:
+            if config.with_line_callbacks and isinstance(worker_cmd.cmd, sh.SafeCmd):
                 with sh.observe(observe_line):
                     result = worker_cmd.cmd.run_sync(
+                        output=sh.RunOutputOptions(capture=capture, echo=echo),
+                        context=context,
+                    )
+            elif config.with_line_callbacks:
+                with sh.observe(observe_line):
+                    pipeline = typ.cast("sh.Pipeline", worker_cmd.cmd)
+                    result = pipeline.run_sync(
                         capture=capture,
                         echo=echo,
                         context=context,
                     )
+            elif isinstance(worker_cmd.cmd, sh.SafeCmd):
+                result = worker_cmd.cmd.run_sync(
+                    output=sh.RunOutputOptions(capture=capture, echo=echo),
+                    context=context,
+                )
             else:
                 result = worker_cmd.cmd.run_sync(
                     capture=capture,

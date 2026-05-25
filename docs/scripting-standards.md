@@ -276,7 +276,7 @@ Guidance:
 
 ```python
 from pathlib import Path
-from cuprum import ExecutionContext, Program, scoped, sh
+from cuprum import ExecutionContext, Program, RunOutputOptions, scoped, sh
 
 MAKE = Program("make")
 make = sh.make(MAKE)
@@ -288,7 +288,10 @@ context = ExecutionContext(
 )
 
 with scoped(allowlist=frozenset([MAKE])):
-    result = make("--version").run_sync(context=context, echo=True)
+    result = make("--version").run_sync(
+        context=context,
+        output=RunOutputOptions(echo=True),
+    )
 if not result.ok:
     raise RuntimeError(result.stderr.strip())
 ```
@@ -406,7 +409,10 @@ def main(
     if not dry_run:
         context = ExecutionContext(cwd=project_root.as_posix())
         with scoped(allowlist=CATALOGUE.allowlist):
-            result = git("tag", f"v{version}").run_sync(context=context, echo=True)
+            result = git("tag", f"v{version}").run_sync(
+                context=context,
+                output=RunOutputOptions(echo=True),
+            )
         if not result.ok:
             raise SystemExit(result.exit_code)
 

@@ -228,18 +228,18 @@ and echo semantics and returns a structured `CommandResult`:
     streams when `echo=True`.
   - `encoding` and `errors` configure how captured output is decoded; defaults
     are `"utf-8"` with `"replace"`. The same settings are used when
-    `input_text` is encoded for subprocess stdin.
+    `StdinInput.text` is encoded for subprocess stdin.
 - `exit_code`, `pid`, and `ok` on the `CommandResult` make it easy to branch on
   success.
 
 ```python
-from cuprum import ECHO, ExecutionContext, sh
+from cuprum import ECHO, ExecutionContext, RunOutputOptions, sh
 
 
 async def greet() -> None:
     cmd = sh.make(ECHO)("-n", "hello runtime")
     ctx = ExecutionContext(env={"GREETING": "1"})
-    result = await cmd.run(echo=True, context=ctx)
+    result = await cmd.run(output=RunOutputOptions(echo=True), context=ctx)
     if not result.ok:
         raise RuntimeError(f"echo failed: {result.exit_code}")
     print(result.stdout)
@@ -251,17 +251,17 @@ to `SIGKILL` to ensure the child process is cleaned up.
 
 ### Direct stdin input
 
-Use `input_text` or `input_bytes` on `run()` / `run_sync()` to feed data
-directly to a command's standard input without adding an extra allowlisted
-program to a pipeline. `input_text` is encoded with the execution context's
-`encoding` and `errors` settings. `input_bytes` writes the supplied bytes
-unchanged. Supplying both values is invalid.
+Use `StdinInput` on `run()` / `run_sync()` to feed data directly to a command's
+standard input without adding an extra allowlisted program to a pipeline.
+`StdinInput(text=...)` is encoded with the execution context's `encoding` and
+`errors` settings. `StdinInput(data=...)` writes the supplied bytes unchanged.
+Supplying both values is invalid.
 
 ```python
-from cuprum import GIT, sh
+from cuprum import GIT, StdinInput, sh
 
 cmd = sh.make(GIT)("hash-object", "--stdin")
-result = cmd.run_sync(input_text="hello\n")
+result = cmd.run_sync(stdin=StdinInput(text="hello\n"))
 print(result.stdout)
 ```
 
@@ -301,13 +301,13 @@ using the same capture rules as successful runs.
 For scripts or contexts where async/await is not available, use `run_sync()`:
 
 ```python
-from cuprum import ECHO, ExecutionContext, sh
+from cuprum import ECHO, ExecutionContext, RunOutputOptions, sh
 
 
 def greet() -> None:
     cmd = sh.make(ECHO)("-n", "hello sync")
     ctx = ExecutionContext(env={"GREETING": "1"})
-    result = cmd.run_sync(echo=True, context=ctx)
+    result = cmd.run_sync(output=RunOutputOptions(echo=True), context=ctx)
     if not result.ok:
         raise RuntimeError(f"echo failed: {result.exit_code}")
     print(result.stdout)

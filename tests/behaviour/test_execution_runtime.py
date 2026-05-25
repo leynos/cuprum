@@ -12,7 +12,7 @@ import pytest
 from pytest_bdd import given, scenario, then, when
 
 from cuprum import ECHO, TimeoutExpired, sh
-from cuprum.sh import ExecutionContext
+from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
@@ -116,7 +116,7 @@ def when_run_command_sync(simple_echo_command: SafeCmd) -> CommandResult:
 )
 def when_run_command_with_direct_stdin(stdin_reader_command: SafeCmd) -> CommandResult:
     """Execute the SafeCmd with text fed directly to stdin."""
-    return stdin_reader_command.run_sync(input_text="behaviour stdin\n")
+    return stdin_reader_command.run_sync(stdin=StdinInput(text="behaviour stdin\n"))
 
 
 @then("the command result contains captured output")
@@ -173,7 +173,11 @@ def when_run_command_with_timeout(
 
     ctx = ExecutionContext(env={"CUPRUM_PID_FILE": str(pid_file)})
     with pytest.raises(TimeoutExpired, match=r"timed out") as exc_info:
-        command.run_sync(capture=False, timeout=timeout, context=ctx)
+        command.run_sync(
+            output=RunOutputOptions(capture=False),
+            timeout=timeout,
+            context=ctx,
+        )
 
     behaviour_state["timeout_error"] = exc_info.value
     behaviour_state["timeout_value"] = timeout
@@ -302,7 +306,7 @@ def _cancel_command_with_grace(
         )
         task = asyncio.create_task(
             command.run(
-                capture=False,
+                output=RunOutputOptions(capture=False),
                 context=ExecutionContext(
                     env={"CUPRUM_PID_FILE": str(pid_file)},
                     cancel_grace=grace,

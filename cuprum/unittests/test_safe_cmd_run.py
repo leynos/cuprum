@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from cuprum import ECHO, TimeoutExpired, sh
-from cuprum.sh import CommandResult, ExecutionContext
+from cuprum.sh import CommandResult, ExecutionContext, RunOutputOptions, StdinInput
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
@@ -94,7 +94,7 @@ def test_captures_and_echoes_stderr(
         'import sys; print("err", file=sys.stderr)',
     )
 
-    result = execute(command, {"echo": True})
+    result = execute(command, {"output": RunOutputOptions(echo=True)})
 
     captured = capsys.readouterr()
 
@@ -115,7 +115,7 @@ def test_echoes_when_requested(
     _, execute = execution_strategy
     command = sh.make(ECHO)("hello runtime")
 
-    result = execute(command, {"echo": True})
+    result = execute(command, {"output": RunOutputOptions(echo=True)})
 
     captured = capfd.readouterr()
     assert result.stdout is not None
@@ -184,7 +184,7 @@ def test_allows_disabling_capture(
     _, execute = execution_strategy
     command = sh.make(ECHO)("uncaptured output")
 
-    result = execute(command, {"capture": False})
+    result = execute(command, {"output": RunOutputOptions(capture=False)})
 
     assert result.exit_code == 0
     assert result.stdout is None
@@ -200,7 +200,10 @@ def test_timeout_raises_timeout_expired(
     command = python_builder("-c", "import time; time.sleep(2)")
 
     with pytest.raises(TimeoutExpired, match=r"timed out") as exc_info:
-        execute(command, {"timeout": 0.1, "capture": False})
+        execute(
+            command,
+            {"timeout": 0.1, "output": RunOutputOptions(capture=False)},
+        )
 
     assert exc_info.value.timeout == pytest.approx(0.1)
     assert exc_info.value.stdout is None
@@ -224,7 +227,7 @@ def test_echoes_to_custom_sinks(
     result = execute(
         command,
         {
-            "echo": True,
+            "output": RunOutputOptions(echo=True),
             "context": ExecutionContext(
                 stdout_sink=stdout_sink,
                 stderr_sink=stderr_sink,
@@ -278,7 +281,7 @@ def test_input_text_feeds_stdin(
     _, execute = execution_strategy
     command = python_builder("-c", "import sys; print(sys.stdin.read(), end='')")
 
-    result = execute(command, {"input_text": "hello stdin\n"})
+    result = execute(command, {"stdin": StdinInput(text="hello stdin\n")})
 
     assert result.exit_code == 0
     assert result.stdout == "hello stdin\n"
@@ -296,7 +299,7 @@ def test_input_bytes_feeds_raw_stdin(
         "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
     )
 
-    result = execute(command, {"input_bytes": b"\x00raw\xff\n"})
+    result = execute(command, {"stdin": StdinInput(data=b"\x00raw\xff\n")})
 
     assert result.exit_code == 0
     assert result.stdout == "\x00raw\ufffd\n"
@@ -317,7 +320,7 @@ def test_input_text_uses_configured_encoding(
     result = execute(
         command,
         {
-            "input_text": "\u2013",
+            "stdin": StdinInput(text="\u2013"),
             "context": ExecutionContext(encoding="cp1252", errors="strict"),
         },
     )
@@ -332,14 +335,12 @@ def test_input_text_and_input_bytes_conflict(
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """Supplying both stdin forms raises a validation error."""
-    _, execute = execution_strategy
-    command = python_builder("-c", "import sys; sys.stdin.read()")
-
+    _ = python_builder, execution_strategy
     with pytest.raises(
         ValueError,
-        match=r"input_text and input_bytes cannot both be provided",
+        match=r"text and data cannot both be provided",
     ):
-        execute(command, {"input_text": "hello", "input_bytes": b"hello"})
+        StdinInput(text="hello", data=b"hello")
 
 
 def test_input_text_works_when_capture_is_disabled(
@@ -353,7 +354,13 @@ def test_input_text_works_when_capture_is_disabled(
         "import sys; sys.exit(0 if sys.stdin.read() == 'uncaptured' else 9)",
     )
 
-    result = execute(command, {"capture": False, "input_text": "uncaptured"})
+    result = execute(
+        command,
+        {
+            "output": RunOutputOptions(capture=False),
+            "stdin": StdinInput(text="uncaptured"),
+        },
+    )
 
     assert result.exit_code == 0
     assert result.stdout is None
@@ -371,7 +378,7 @@ def test_nonzero_exit_code_is_captured_with_input_text(
         ("import sys; data = sys.stdin.read(); print(data, end=''); sys.exit(7)"),
     )
 
-    result = execute(command, {"input_text": "failure input"})
+    result = execute(command, {"stdin": StdinInput(text="failure input")})
 
     assert result.exit_code == 7
     assert result.ok is False
@@ -387,7 +394,7 @@ def test_process_closing_stdin_early_is_handled(
     _, execute = execution_strategy
     command = python_builder("-c", "print('done')")
 
-    result = execute(command, {"input_text": "ignored stdin"})
+    result = execute(command, {"stdin": StdinInput(text="ignored stdin")})
 
     assert result.exit_code == 0
     assert result.stdout == "done\n"
@@ -433,7 +440,7 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
     async def orchestrate() -> int:
         task = asyncio.create_task(
             command.run(
-                capture=False,
+                output=RunOutputOptions(capture=False),
                 context=ExecutionContext(
                     env={"CUPRUM_PID_FILE": str(pid_file)},
                     cancel_grace=0.1,
@@ -624,7 +631,10 @@ def test_run_does_not_invoke_after_hooks_on_cancellation(
             )
         ):
             task = asyncio.create_task(
-                command.run(capture=False, context=ExecutionContext(cancel_grace=0.1)),
+                command.run(
+                    output=RunOutputOptions(capture=False),
+                    context=ExecutionContext(cancel_grace=0.1),
+                ),
             )
             await asyncio.sleep(0.1)  # Let the process start
             task.cancel()
