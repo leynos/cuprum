@@ -148,7 +148,7 @@ for final stdout or stderr consumption when all of the following are true:
 - the stream exposes a suitable raw file descriptor or platform handle.
 
 This would accelerate large-output
-`SafeCmd.run(io=IOOptions(capture=True, echo=False))` and final
+`SafeCmd.run(output=RunOutputOptions(capture=True, echo=False))` and final
 pipeline output capture without changing public API semantics.
 
 The dispatcher must fall back to `_consume_stream_without_lines()` for custom

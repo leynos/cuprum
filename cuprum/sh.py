@@ -252,6 +252,50 @@ class _ExecutionTracking:
 
 
 @dc.dataclass(frozen=True, slots=True)
+class StdinInput:
+    """Caller-provided data to write to a subprocess's stdin pipe.
+
+    Exactly one of *text* or *data* may be supplied.
+    """
+
+    text: str | None = None
+    data: bytes | None = None
+
+    def __post_init__(self) -> None:
+        """Reject ambiguous stdin payloads."""
+        if self.text is not None and self.data is not None:
+            msg = "text and data cannot both be provided"
+            raise ValueError(msg)
+
+    def resolve(self, ctx: ExecutionContext) -> bytes | None:
+        """Return the bytes payload, encoding *text* with *ctx* when needed."""
+        if self.text is not None:
+            return self.text.encode(ctx.encoding, ctx.errors)
+        return self.data
+
+
+@dc.dataclass(frozen=True, slots=True)
+class RunOutputOptions:
+    """Controls how a command's output streams are handled.
+
+    Attributes
+    ----------
+    capture:
+        When ``True`` capture stdout/stderr; otherwise discard them.
+    echo:
+        When ``True`` tee stdout/stderr to the parent process.
+    """
+
+    capture: bool = True
+    echo: bool = False
+
+
+@dc.dataclass(frozen=True, slots=True)
+class IOOptions(RunOutputOptions):
+    """Deprecated alias for command output stream options."""
+
+
+@dc.dataclass(frozen=True, slots=True)
 class _IOBehaviour:
     """Runtime I/O behaviour flags for command execution."""
 
@@ -284,44 +328,6 @@ def _prepare_execution_observation(
         tags=tags,
         pending_tasks=tracking.pending_tasks,
     )
-
-
-@dc.dataclass(frozen=True, slots=True)
-class StdinInput:
-    """Caller-provided data to write to a subprocess's stdin pipe."""
-
-    text: str | None = None
-    data: bytes | None = None
-
-    def __post_init__(self) -> None:
-        """Reject ambiguous stdin payloads."""
-        if self.text is not None and self.data is not None:
-            msg = "StdinInput.text and StdinInput.data cannot both be provided"
-            raise ValueError(msg)
-
-
-@dc.dataclass(frozen=True, slots=True)
-class IOOptions:
-    """Controls how a command's output streams are handled.
-
-    Parameters
-    ----------
-    capture:
-        When ``True`` capture stdout/stderr; otherwise discard them.
-    echo:
-        When ``True`` tee stdout/stderr to the parent process.
-    """
-
-    capture: bool = True
-    echo: bool = False
-
-
-@dc.dataclass(frozen=True, slots=True)
-class RunOutputOptions(IOOptions):
-    """Controls how ``run_sync()`` output streams are handled."""
-
-
-_DEFAULT_RUN_OUTPUT_OPTIONS = RunOutputOptions()
 
 
 async def _execute_with_hooks(
@@ -370,7 +376,7 @@ class SafeCmd:
     async def run(
         self,
         *,
-        io: IOOptions | None = None,
+        output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
@@ -379,8 +385,8 @@ class SafeCmd:
 
         Parameters
         ----------
-        io:
-            Optional ``IOOptions`` controlling stdout/stderr handling.
+        output:
+            Optional ``RunOutputOptions`` controlling stdout/stderr handling.
         timeout:
             Optional wall-clock timeout in seconds; ``None`` disables timeouts.
         context:
@@ -401,16 +407,15 @@ class SafeCmd:
             If the command exceeds the configured timeout.
 
         """
-        io = io or IOOptions()
-        stdin = stdin or StdinInput()
+        out = output or RunOutputOptions()
         ctx = context or ExecutionContext()
-        stdin_data = _resolve_stdin_data(stdin.text, stdin.data, ctx)
+        stdin_data = stdin.resolve(ctx) if stdin is not None else None
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         tracking = _ExecutionTracking(
             execution_hooks=_run_before_hooks(self),
             pending_tasks=[],
         )
-        io_behaviour = _IOBehaviour(capture=io.capture, echo=io.echo)
+        io_behaviour = _IOBehaviour(capture=out.capture, echo=out.echo)
         observation = _prepare_execution_observation(
             self,
             ctx,
@@ -427,8 +432,8 @@ class SafeCmd:
             _SubprocessExecution(
                 cmd=self,
                 ctx=ctx,
-                capture=io.capture,
-                echo=io.echo,
+                capture=out.capture,
+                echo=out.echo,
                 timeout=effective_timeout,
                 observation=observation,
                 stdin_data=stdin_data,
@@ -439,40 +444,17 @@ class SafeCmd:
     def run_sync(
         self,
         *,
-        output: RunOutputOptions = _DEFAULT_RUN_OUTPUT_OPTIONS,
+        output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
     ) -> CommandResult:
-        """Execute the command synchronously with predictable semantics.
+        """Execute the command synchronously.
 
-        This method mirrors ``run()`` by driving the event loop internally.
-        Return semantics are identical.
-
-        Parameters
-        ----------
-        output:
-            ``RunOutputOptions`` controlling stdout/stderr handling.
-        timeout:
-            Optional wall-clock timeout in seconds; ``None`` disables timeouts.
-        context:
-            Optional execution settings such as env, cwd, and cancel grace.
-        stdin:
-            Optional ``StdinInput`` data to feed to the subprocess.
-
-        Returns
-        -------
-        CommandResult
-            Structured information about the completed process.
-
+        Mirrors :meth:`run`; all parameters and return semantics are identical.
         """
         return asyncio.run(
-            self.run(
-                io=output,
-                timeout=timeout,
-                context=context,
-                stdin=stdin,
-            ),
+            self.run(output=output, timeout=timeout, context=context, stdin=stdin),
         )
 
 

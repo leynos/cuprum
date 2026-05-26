@@ -350,7 +350,7 @@ class SafeCmd:
     async def run(
         self,
         *,
-        io: IOOptions | None = None,
+        output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
@@ -358,7 +358,7 @@ class SafeCmd:
     def run_sync(
         self,
         *,
-        output: RunOutputOptions = RunOutputOptions(),
+        output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,

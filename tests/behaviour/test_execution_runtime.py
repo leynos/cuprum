@@ -12,7 +12,7 @@ import pytest
 from pytest_bdd import given, scenario, then, when
 
 from cuprum import ECHO, TimeoutExpired, sh
-from cuprum.sh import ExecutionContext, IOOptions, RunOutputOptions, StdinInput
+from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
@@ -306,7 +306,7 @@ def _cancel_command_with_grace(
         )
         task = asyncio.create_task(
             command.run(
-                io=IOOptions(capture=False),
+                output=RunOutputOptions(capture=False),
                 context=ExecutionContext(
                     env={"CUPRUM_PID_FILE": str(pid_file)},
                     cancel_grace=grace,

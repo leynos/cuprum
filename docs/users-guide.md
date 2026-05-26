@@ -233,13 +233,13 @@ and echo semantics and returns a structured `CommandResult`:
   success.
 
 ```python
-from cuprum import ECHO, ExecutionContext, IOOptions, sh
+from cuprum import ECHO, ExecutionContext, RunOutputOptions, sh
 
 
 async def greet() -> None:
     cmd = sh.make(ECHO)("-n", "hello runtime")
     ctx = ExecutionContext(env={"GREETING": "1"})
-    result = await cmd.run(io=IOOptions(echo=True), context=ctx)
+    result = await cmd.run(output=RunOutputOptions(echo=True), context=ctx)
     if not result.ok:
         raise RuntimeError(f"echo failed: {result.exit_code}")
     print(result.stdout)
