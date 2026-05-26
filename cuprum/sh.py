@@ -329,7 +329,7 @@ async def _execute_with_hooks(
     execution: _SubprocessExecution,
     tracking: _ExecutionTracking,
 ) -> CommandResult:
-    """Run *execution* and dispatch after-hooks, handling cancellation."""
+    """Execute *execution*, dispatch after-hooks, and handle cancellation."""
     try:
         result = await _execute_subprocess(execution)
         for hook in tracking.execution_hooks.after_hooks:
