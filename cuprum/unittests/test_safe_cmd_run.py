@@ -14,7 +14,12 @@ from pathlib import Path
 import pytest
 
 from cuprum import ECHO, TimeoutExpired, sh
-from cuprum.sh import CommandResult, ExecutionContext, IOOptions, StdinInput
+from cuprum.sh import (
+    CommandResult,
+    ExecutionContext,
+    IOOptions,
+    StdinInput,
+)
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
@@ -30,7 +35,10 @@ def _execute_async(cmd: SafeCmd, kwargs: dict[str, typ.Any]) -> CommandResult:
 
 def _execute_sync(cmd: SafeCmd, kwargs: dict[str, typ.Any]) -> CommandResult:
     """Execute a SafeCmd using the sync run_sync() method."""
-    return cmd.run_sync(**kwargs)
+    sync_kwargs = dict(kwargs)
+    if "io" in sync_kwargs and "output" not in sync_kwargs:
+        sync_kwargs["output"] = sync_kwargs.pop("io")
+    return cmd.run_sync(**sync_kwargs)
 
 
 @pytest.fixture(params=["async", "sync"], ids=["run()", "run_sync()"])

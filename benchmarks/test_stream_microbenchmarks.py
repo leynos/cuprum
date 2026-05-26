@@ -10,10 +10,10 @@ import typing as typ
 import pytest
 
 from cuprum import (
-    IOOptions,
     Program,
     ProgramCatalogue,
     ProjectSettings,
+    RunOutputOptions,
     ScopeConfig,
     scoped,
     sh,
@@ -101,7 +101,7 @@ def test_benchmark_consume_throughput(
 
     def run_once() -> int:
         with scoped(ScopeConfig(allowlist=allowlist)):
-            result = command.run_sync(io=IOOptions(capture=True))
+            result = command.run_sync(output=RunOutputOptions(capture=True))
         assert result.ok
         assert result.stdout is not None
         return len(result.stdout)

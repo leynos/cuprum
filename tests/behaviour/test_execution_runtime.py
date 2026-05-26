@@ -12,7 +12,7 @@ import pytest
 from pytest_bdd import given, scenario, then, when
 
 from cuprum import ECHO, TimeoutExpired, sh
-from cuprum.sh import ExecutionContext, IOOptions, StdinInput
+from cuprum.sh import ExecutionContext, IOOptions, RunOutputOptions, StdinInput
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
@@ -174,7 +174,7 @@ def when_run_command_with_timeout(
     ctx = ExecutionContext(env={"CUPRUM_PID_FILE": str(pid_file)})
     with pytest.raises(TimeoutExpired, match=r"timed out") as exc_info:
         command.run_sync(
-            io=IOOptions(capture=False),
+            output=RunOutputOptions(capture=False),
             timeout=timeout,
             context=ctx,
         )

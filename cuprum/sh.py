@@ -316,6 +316,14 @@ class IOOptions:
     echo: bool = False
 
 
+@dc.dataclass(frozen=True, slots=True)
+class RunOutputOptions(IOOptions):
+    """Controls how ``run_sync()`` output streams are handled."""
+
+
+_DEFAULT_RUN_OUTPUT_OPTIONS = RunOutputOptions()
+
+
 async def _execute_with_hooks(
     cmd: SafeCmd,
     execution: _SubprocessExecution,
@@ -431,7 +439,7 @@ class SafeCmd:
     def run_sync(
         self,
         *,
-        io: IOOptions | None = None,
+        output: RunOutputOptions = _DEFAULT_RUN_OUTPUT_OPTIONS,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
@@ -439,12 +447,12 @@ class SafeCmd:
         """Execute the command synchronously with predictable semantics.
 
         This method mirrors ``run()`` by driving the event loop internally.
-        All parameters and return semantics are identical.
+        Return semantics are identical.
 
         Parameters
         ----------
-        io:
-            Optional ``IOOptions`` controlling stdout/stderr handling.
+        output:
+            ``RunOutputOptions`` controlling stdout/stderr handling.
         timeout:
             Optional wall-clock timeout in seconds; ``None`` disables timeouts.
         context:
@@ -460,7 +468,7 @@ class SafeCmd:
         """
         return asyncio.run(
             self.run(
-                io=io,
+                io=output,
                 timeout=timeout,
                 context=context,
                 stdin=stdin,
@@ -553,6 +561,7 @@ __all__ = [
     "IOOptions",
     "Pipeline",
     "PipelineResult",
+    "RunOutputOptions",
     "SafeCmd",
     "SafeCmdBuilder",
     "StdinInput",

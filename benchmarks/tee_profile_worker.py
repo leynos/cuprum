@@ -387,7 +387,7 @@ def _run_command_sync(
             if config.with_line_callbacks and isinstance(worker_cmd.cmd, sh.SafeCmd):
                 with sh.observe(observe_line):
                     result = worker_cmd.cmd.run_sync(
-                        io=sh.IOOptions(capture=capture, echo=echo),
+                        output=sh.RunOutputOptions(capture=capture, echo=echo),
                         context=context,
                     )
             elif config.with_line_callbacks:
@@ -400,7 +400,7 @@ def _run_command_sync(
                     )
             elif isinstance(worker_cmd.cmd, sh.SafeCmd):
                 result = worker_cmd.cmd.run_sync(
-                    io=sh.IOOptions(capture=capture, echo=echo),
+                    output=sh.RunOutputOptions(capture=capture, echo=echo),
                     context=context,
                 )
             else:

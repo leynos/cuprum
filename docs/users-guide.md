@@ -301,20 +301,21 @@ using the same capture rules as successful runs.
 For scripts or contexts where async/await is not available, use `run_sync()`:
 
 ```python
-from cuprum import ECHO, ExecutionContext, IOOptions, sh
+from cuprum import ECHO, ExecutionContext, RunOutputOptions, sh
 
 
 def greet() -> None:
     cmd = sh.make(ECHO)("-n", "hello sync")
     ctx = ExecutionContext(env={"GREETING": "1"})
-    result = cmd.run_sync(io=IOOptions(echo=True), context=ctx)
+    result = cmd.run_sync(output=RunOutputOptions(echo=True), context=ctx)
     if not result.ok:
         raise RuntimeError(f"echo failed: {result.exit_code}")
     print(result.stdout)
 ```
 
-`run_sync()` accepts the same parameters as `run()` and returns an identical
-`CommandResult`. It drives the event loop internally via `asyncio.run()`.
+`run_sync()` accepts `RunOutputOptions` for synchronous output handling and
+returns the same `CommandResult` shape as `run()`. It drives the event loop
+internally via `asyncio.run()`.
 
 ## Execution context and hooks
 

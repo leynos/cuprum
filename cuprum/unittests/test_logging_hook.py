@@ -8,7 +8,7 @@ import typing as typ
 from cuprum import ECHO, sh
 from cuprum.context import ScopeConfig, current_context, scoped
 from cuprum.logging_hooks import _build_logging_hooks, logging_hook
-from cuprum.sh import CommandResult, IOOptions
+from cuprum.sh import CommandResult, RunOutputOptions
 
 if typ.TYPE_CHECKING:
     import pytest
@@ -78,7 +78,7 @@ def test_logging_hook_handles_uncaptured_output(
 
     with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), logging_hook(logger=logger):
         cmd: SafeCmd = sh.make(ECHO)("uncaptured")
-        _ = cmd.run_sync(io=IOOptions(capture=False))
+        _ = cmd.run_sync(output=RunOutputOptions(capture=False))
 
     messages = [record.getMessage() for record in caplog.records]
     exit_lines = [msg for msg in messages if "cuprum.exit" in msg]
