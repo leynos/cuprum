@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.metadata as im
 import shutil
+import sys
 import typing as typ
 
 import pytest
@@ -39,7 +40,14 @@ def test_installed_maturin_matches_expected_pin() -> None:
     )
 
 
+_MATURIN_SUPPORTS_PYTHON = sys.version_info < (3, 15)
+
+
 @pytest.mark.skipif(not toolchain_available(), reason="Rust toolchain unavailable.")
+@pytest.mark.skipif(
+    not _MATURIN_SUPPORTS_PYTHON,
+    reason="maturin 1.13.3 does not support this Python version.",
+)
 def test_maturin_wheel_build_snapshot(
     tmp_path: pth.Path,
     snapshot: SnapshotAssertion,

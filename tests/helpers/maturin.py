@@ -40,6 +40,7 @@ def expected_maturin_version() -> str:
 
 
 def _require_pin_match(match: re.Match[str] | None, location: str) -> str:
+    """Extract a version from a regex match or raise AssertionError with location."""
     if match is None:
         msg = f"Could not locate maturin version pin in {location}"
         raise AssertionError(msg)
@@ -90,7 +91,11 @@ def build_native_wheel(out_dir: Path) -> Path:
         "--manifest-path",
         str(repo_root() / "rust/cuprum-rust/Cargo.toml"),
     ]
-    subprocess.run(command, check=True, cwd=repo_root())  # noqa: S603
+    subprocess.run(  # noqa: S603 - command list uses only trusted paths and pinned maturin
+        command,
+        check=True,
+        cwd=repo_root(),
+    )
     wheels = sorted(out_dir.glob("*.whl"))
     if len(wheels) != 1:
         msg = f"Expected exactly one wheel in {out_dir}, found {wheels!r}"
@@ -99,6 +104,7 @@ def build_native_wheel(out_dir: Path) -> Path:
 
 
 def _header_value(headers: dict[str, list[str]], key: str) -> str | None:
+    """Return the first header value for the given key, or None if absent."""
     values = headers.get(key)
     if not values:
         return None
@@ -106,6 +112,7 @@ def _header_value(headers: dict[str, list[str]], key: str) -> str | None:
 
 
 def _parse_metadata(raw_metadata: str) -> dict[str, typ.Any]:
+    """Parse RFC 2822-style metadata headers into a normalised dict."""
     headers: dict[str, list[str]] = {}
     current_key: str | None = None
     for line in raw_metadata.splitlines():
@@ -128,6 +135,7 @@ def _parse_metadata(raw_metadata: str) -> dict[str, typ.Any]:
 
 
 def _normalise_wheel_entry(name: str) -> str:
+    """Normalise platform/version wheel entry names to stable placeholders."""
     if _EXTENSION_MODULE_RE.match(name):
         return "cuprum/_rust_backend_native.cpython-<platform>.so"
     if "/sboms/" in name:

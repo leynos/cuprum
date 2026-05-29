@@ -1320,8 +1320,8 @@ The continuous integration (CI) workflows run the following checks:
     `(candidate_mean - baseline_mean) / baseline_mean > 0.10`.
 
 The workflow summary table is derived from the filtered candidate smoke plan
-and throughput JSON. Rows are matched by the shared scenario label
-(`small-single-nocb`, `small-single-cb`, and so on) and include:
+and throughput JSON. Rows are matched by the shared scenario label (
+`small-single-nocb`, `small-single-cb`, and so on) and include:
 
 - Python mean runtime in seconds
 - Rust mean runtime in seconds

@@ -123,8 +123,8 @@ Hard invariants that must hold throughout implementation:
   command line exceeds the Linux `MAX_ARG_STRLEN` limit (131072 bytes per
   argument), causing `OSError: [Errno 36] File name too long`. Evidence:
   `make test` failed with this error for both backpressure tests. Impact:
-  Changed approach to generate large payloads inside the subprocess
-  (`sys.stdout.write('x' * 1048576)`) rather than passing them as command-line
+  Changed approach to generate large payloads inside the subprocess (
+  `sys.stdout.write('x' * 1048576)`) rather than passing them as command-line
   arguments. UTF-8 payloads (under 21 KB) were unaffected.
 
 - Observation: pytest requires unique basenames for test modules across

@@ -40,8 +40,8 @@ This task is complete only when:
 - Keep scope bounded to roadmap item `4.4.2`. Do not implement CI workflow
   gating or report publication from `4.4.3` and `4.4.4` in this task.
 - Do not modify `benchmarks/_benchmark_types.py`. The existing
-  `PipelineBenchmarkScenario` dataclass already supports all required fields
-  (`name`, `backend`, `payload_bytes`, `stages`, `with_line_callbacks`).
+  `PipelineBenchmarkScenario` dataclass already supports all required fields (
+  `name`, `backend`, `payload_bytes`, `stages`, `with_line_callbacks`).
 - `benchmarks/pipeline_worker.py` was modified to support callback mode:
   `_writer_script` now emits newline-terminated lines when
   `with_line_callbacks=True`, enabling line-by-line callback benchmarks. It
