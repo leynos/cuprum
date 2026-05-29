@@ -11,6 +11,7 @@ import asyncio
 import collections.abc as cabc
 import dataclasses as dc
 import typing as typ
+import warnings
 from pathlib import Path
 
 from cuprum._observability import (
@@ -84,26 +85,6 @@ def _coerce_argv(
     positional = tuple(_stringify_arg(arg) for arg in args)
     flags = _serialize_kwargs(kwargs)
     return positional + flags
-
-
-def _resolve_stdin_data(
-    input_text: str | None,
-    input_bytes: bytes | None,
-    ctx: ExecutionContext,
-) -> bytes | None:
-    """Validate and encode stdin arguments into a single bytes payload.
-
-    Raises
-    ------
-    ValueError
-        When both ``input_text`` and ``input_bytes`` are supplied.
-    """
-    if input_text is not None and input_bytes is not None:
-        msg = "input_text and input_bytes cannot both be provided"
-        raise ValueError(msg)
-    if input_text is not None:
-        return input_text.encode(ctx.encoding, ctx.errors)
-    return input_bytes
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -293,6 +274,14 @@ class RunOutputOptions:
 @dc.dataclass(frozen=True, slots=True)
 class IOOptions(RunOutputOptions):
     """Deprecated alias for command output stream options."""
+
+    def __post_init__(self) -> None:
+        """Emit a ``DeprecationWarning`` when ``IOOptions`` is constructed."""
+        warnings.warn(
+            "IOOptions is deprecated; use RunOutputOptions instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
 
 @dc.dataclass(frozen=True, slots=True)

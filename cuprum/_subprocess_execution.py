@@ -3,6 +3,7 @@
 This module encapsulates the low-level subprocess spawning, stream handling,
 timeout management, and execution lifecycle for SafeCmd.run().
 """
+# TODO: refactor into smaller submodules (stdin/runner), see issue #30.
 # pylint: disable=too-many-lines
 
 from __future__ import annotations
@@ -251,6 +252,7 @@ async def _run_subprocess_with_streams(
         )
     except asyncio.CancelledError:
         if stdin_task is not None:
+            stdin_task.cancel()
             await asyncio.gather(stdin_task, return_exceptions=True)
         raise
     if stdin_task is not None:
