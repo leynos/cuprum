@@ -49,6 +49,7 @@ _MATURIN_SUPPORTS_PYTHON = sys.version_info < (3, 15)
     not _MATURIN_SUPPORTS_PYTHON,
     reason=f"maturin {_MATURIN_VERSION} does not support this Python version.",
 )
+@pytest.mark.timeout(0)
 def test_maturin_wheel_build_snapshot(
     tmp_path: pth.Path,
     snapshot: SnapshotAssertion,
