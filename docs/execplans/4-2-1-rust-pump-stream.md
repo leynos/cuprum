@@ -32,8 +32,8 @@ completion.
 - The Rust module must release the GIL during blocking I/O and use a default
   buffer size of 64 KB.
 - Error propagation must map Rust I/O errors to Python `OSError` while treating
-  expected `BrokenPipe`/`ConnectionReset` semantics consistently with the
-  Python `_pump_stream()` implementation.
+  expected `BrokenPipe`/`ConnectionReset` semantics consistently with the Python
+  `_pump_stream()` implementation.
 
 ## Tolerances (exception triggers)
 
@@ -168,9 +168,19 @@ Stage C: implement Rust `rust_pump_stream()` and Python shims.
 Extend the Rust module in `rust/cuprum-rust/src/lib.rs` to export
 `rust_pump_stream()`:
 
-- Signature: `rust_pump_stream(reader_fd: int, writer_fd: int,
-  buffer_size: int = 65536) -> int` returning the total bytes transferred.
-- Validate `buffer_size > 0`, else raise `ValueError`.
+- Signature:
+
+  ```text
+  rust_pump_stream(
+      reader_fd: int,
+      writer_fd: int,
+      buffer_size: int = 65536,
+  ) -> int
+  ```
+
+  returning the total bytes transferred.
+- Validate `buffer_size > 0`, else
+  raise `ValueError`.
 - Release the GIL with `Python::allow_threads` for the entire read/write loop.
 - Use a reusable buffer sized to `buffer_size`.
 - Avoid closing the reader FD by forgetting the `File` wrapper; allow the
@@ -288,8 +298,10 @@ Expected changes include:
 
 Rust function (PyO3-exposed):
 
-    rust_pump_stream(reader_fd: int, writer_fd: int, buffer_size: int = 65536)
-        -> int
+```text
+rust_pump_stream(reader_fd: int, writer_fd: int, buffer_size: int = 65536)
+    -> int
+```
 
 - Returns total bytes transferred.
 - Raises `ValueError` for invalid buffer sizes.
