@@ -321,7 +321,7 @@ change alters the architecture of the lint gate, update
 [ADR-003](adr-003-two-tier-python-linting.md) as well.
 
 
-### Maturin pin synchronisation and native wheel tests
+## Maturin pin synchronisation and native wheel tests
 
 The `tests/helpers/maturin.py` module provides shared helpers for tests that
 validate the maturin version pin contract and native wheel build output.
@@ -341,8 +341,9 @@ asserts that the installed version matches the pinned development dependency.
 Rust toolchain (`cargo` and `rustc`) and is skipped on Python ≥ 3.15 until
 maturin adds support for that interpreter. Builds a native wheel into a
 temporary directory, extracts normalised metadata and layout information, and
-compares the result against a [syrupy](https://github.com/toptal/syrupy)
-snapshot stored at `cuprum/unittests/__snapshots__/test_maturin_build.ambr`.
+compares the result against a
+[syrupy](https://github.com/syrupy-project/syrupy) snapshot stored at
+`cuprum/unittests/__snapshots__/test_maturin_build.ambr`.
 
 To update the snapshot after a maturin or PyO3 bump, run:
 
@@ -351,8 +352,7 @@ uv run pytest cuprum/unittests/test_maturin_build.py \
     --snapshot-update -k test_maturin_wheel_build_snapshot
 ```
 
-
-### Compile-time UI tests (trybuild)
+## Compile-time UI tests (trybuild)
 
 The Rust crate at `rust/cuprum-rust/` uses
 [trybuild](https://github.com/dtolnay/trybuild) to validate PyO3 macro

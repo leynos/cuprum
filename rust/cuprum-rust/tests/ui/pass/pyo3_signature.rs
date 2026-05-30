@@ -7,8 +7,7 @@ use pyo3::prelude::*;
 
 #[pyfunction]
 #[pyo3(signature = (reader_fd, writer_fd, buffer_size = 65536))]
-fn example_pump(reader_fd: i64, writer_fd: i64, buffer_size: i64) -> PyResult<i64> {
-    let _ = (reader_fd, writer_fd, buffer_size);
+fn example_pump(_reader_fd: i64, _writer_fd: i64, _buffer_size: i64) -> PyResult<i64> {
     Ok(0)
 }
 

@@ -292,7 +292,7 @@ Expected changes include:
 
 Rust function (PyO3-exposed):
 
-```rust
+```python
 rust_pump_stream(reader_fd: int, writer_fd: int, buffer_size: int = 65536)
     -> int
 ```

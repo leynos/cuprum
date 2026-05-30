@@ -40,7 +40,10 @@ def test_installed_maturin_matches_expected_pin() -> None:
     )
 
 
-_MATURIN_VERSION = expected_maturin_version()
+try:
+    _MATURIN_VERSION = expected_maturin_version()
+except OSError:
+    _MATURIN_VERSION = None
 _MATURIN_SUPPORTS_PYTHON = sys.version_info < (3, 15)
 
 
