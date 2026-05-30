@@ -249,7 +249,15 @@ class StdinInput:
             raise ValueError(msg)
 
     def resolve(self, ctx: ExecutionContext) -> bytes | None:
-        """Return the bytes payload, encoding *text* with *ctx* when needed."""
+        """Return the bytes payload, encoding *text* with *ctx* when needed.
+
+        Raises
+        ------
+        UnicodeEncodeError
+            When *text* cannot be encoded using ``ctx.encoding`` and
+            ``ctx.errors`` is ``"strict"`` (or another non-suppressing
+            error handler).
+        """
         if self.text is not None:
             return self.text.encode(ctx.encoding, ctx.errors)
         return self.data
@@ -394,6 +402,9 @@ class SafeCmd:
             If the program is not in the current context's allowlist.
         TimeoutExpired
             If the command exceeds the configured timeout.
+        UnicodeEncodeError
+            If ``stdin.text`` cannot be encoded with the active
+            ``ExecutionContext`` encoding and errors settings.
 
         """
         out = output or RunOutputOptions()
@@ -441,6 +452,16 @@ class SafeCmd:
         """Execute the command synchronously.
 
         Mirrors :meth:`run`; all parameters and return semantics are identical.
+
+        Raises
+        ------
+        ForbiddenProgramError
+            If the program is not in the current context's allowlist.
+        TimeoutExpired
+            If the command exceeds the configured timeout.
+        UnicodeEncodeError
+            If ``stdin.text`` cannot be encoded with the active
+            ``ExecutionContext`` encoding and errors settings.
         """
         return asyncio.run(
             self.run(output=output, timeout=timeout, context=context, stdin=stdin),

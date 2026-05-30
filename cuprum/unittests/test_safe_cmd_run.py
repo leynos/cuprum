@@ -695,3 +695,19 @@ def test_stdin_input_cancellation_cleans_up_task(
             await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
 
     asyncio.run(_orchestrate())
+
+
+@pytest.mark.parametrize("execution_strategy", ["async", "sync"])
+def test_input_text_encoding_failure_raises(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: str,
+) -> None:
+    """UnicodeEncodeError propagates when text cannot be encoded."""
+    command = python_builder("-c", "import sys; sys.stdin.read()")
+    ctx = ExecutionContext(encoding="ascii", errors="strict")
+    execute = _execute_async if execution_strategy == "async" else _execute_sync
+    with pytest.raises(UnicodeEncodeError):
+        execute(
+            command,
+            {"stdin": StdinInput(text="\u00e9 non-ASCII"), "context": ctx},
+        )

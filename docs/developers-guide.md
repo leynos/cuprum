@@ -355,8 +355,33 @@ executes:
    `TimeoutError`, `_handle_stream_timeout` cancels/gathers the stdin task
    before raising `_SubprocessTimeoutError`.  On `asyncio.CancelledError`, the
    task is explicitly cancelled and gathered before re-raising.
+
+   `_build_stream_config(execution)` centralises the construction of the
+   `_StreamConfig` used by the streaming execution path.  Extracting it
+   removes one branch from `_run_subprocess_with_streams` and makes the
+   stdout-sink resolution logic testable in isolation.
+
 6. In the non-streaming path (`_execute_subprocess`), the same writer task is
    created and awaited after `_wait_for_exit_code` completes.
+   `_execute_with_hooks(cmd, execution, tracking)` is the single site that
+   runs `_execute_subprocess`, iterates after-hooks, and coordinates
+   cancellation-safe cleanup of pending hook tasks.  It replaces the
+   try/except ladder that previously lived inline in `SafeCmd.run`, keeping
+   the public method to a minimal orchestration skeleton.
 
 Passing no `StdinInput` leaves subprocess stdin inherited from the parent
 process, preserving the pre-feature behaviour.
+
+## Development roadmap
+
+### 0.2.0 — Direct stdin input (issue `#30`)
+
+- `StdinInput` parameter object with mutual-exclusion enforcement and
+  `resolve(ctx)` encoding helper.
+- `_SubprocessExecution.stdin_data` field; `_spawn_subprocess` opens
+  `stdin=PIPE` only when data is present.
+- Concurrent stdin writer task (`_spawn_stdin_writer` / `_write_stdin`)
+  with `stdin_error` event emission on broken-pipe scenarios.
+- `_build_stream_config` and `_handle_stream_timeout` helpers to reduce
+  `_run_subprocess_with_streams` complexity.
+- `_execute_with_hooks` helper extracted from `SafeCmd.run`. ❌

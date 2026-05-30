@@ -47,6 +47,8 @@ async def _wait_for_exit_code(
     except asyncio.CancelledError:
         await _terminate_process(process, ctx.cancel_grace)
         if consumers:
+            for task in consumers:
+                task.cancel()
             await asyncio.gather(*consumers, return_exceptions=True)
         raise
     exited_at = time.perf_counter()

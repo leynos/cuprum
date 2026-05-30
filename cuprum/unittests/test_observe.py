@@ -10,7 +10,7 @@ from cuprum import sh
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
 from cuprum.context import ScopeConfig, current_context, scoped
 from cuprum.program import Program
-from cuprum.sh import ExecutionContext
+from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -159,3 +159,34 @@ def test_pipeline_observe_emits_stage_tags_and_final_stdout() -> None:
         if ev.phase == "stdout"
         and typ.cast("int", ev.tags["pipeline_stage_index"]) == 1
     ]
+
+
+def test_observe_emits_stdin_error_event_when_process_closes_stdin_early() -> None:
+    """Emit ``stdin_error`` event when the subprocess closes stdin early."""
+    builder, catalogue = _python_builder(project_name="observe-stdin-error")
+    # This command reads a byte to unblock the writer, then closes stdin.
+    cmd = builder(
+        "-c",
+        "import sys; sys.stdin.read(1); sys.stdin.close(); print('done')",
+    )
+
+    events: list[ExecEvent] = []
+
+    def hook(ev: ExecEvent) -> None:
+        events.append(ev)
+
+    large_payload = b"x" * 262144  # 256 KiB; exceeds typical pipe buffer
+    with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
+        result = cmd.run_sync(
+            stdin=StdinInput(data=large_payload),
+            output=RunOutputOptions(capture=True),
+        )
+
+    assert result.exit_code == 0
+    stdin_error_events = [ev for ev in events if ev.phase == "stdin_error"]
+    assert stdin_error_events, (
+        "Expected at least one stdin_error event when the subprocess closes stdin early"
+    )
+    first = stdin_error_events[0]
+    assert first.pid is not None
+    assert first.note is not None  # error type/detail should be present
