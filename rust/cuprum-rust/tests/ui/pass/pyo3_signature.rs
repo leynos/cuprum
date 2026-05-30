@@ -1,3 +1,8 @@
+//! Compile-pass UI test: `#[pyo3(signature = (...))]` with a default argument.
+//!
+//! Validates that a `#[pyfunction]` annotated with an explicit PyO3 signature
+//! that includes a defaulted parameter compiles without error.
+
 use pyo3::prelude::*;
 
 #[pyfunction]

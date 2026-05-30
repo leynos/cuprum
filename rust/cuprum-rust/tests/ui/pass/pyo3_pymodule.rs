@@ -1,3 +1,9 @@
+//! Compile-pass UI test: well-formed `#[pymodule]` definition.
+//!
+//! Validates that a `#[pymodule]` function returning `PyResult<()>` and
+//! registering a `#[pyfunction]` compiles without error under the project's
+//! PyO3 version.
+
 use pyo3::prelude::*;
 
 #[pyfunction]
