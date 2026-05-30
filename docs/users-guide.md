@@ -245,6 +245,30 @@ async def greet() -> None:
     print(result.stdout)
 ```
 
+### Migrating from `capture`/`echo` keyword arguments
+
+Prior to this release, `run()` and `run_sync()` accepted `capture` and `echo`
+directly:
+
+```python
+# Before
+result = await cmd.run(capture=True, echo=False)
+result = cmd.run_sync(capture=False)
+```
+
+Group them into `RunOutputOptions`:
+
+```python
+# After
+from cuprum import RunOutputOptions
+
+result = await cmd.run(output=RunOutputOptions(capture=True, echo=False))
+result = cmd.run_sync(output=RunOutputOptions(capture=False))
+```
+
+`RunOutputOptions(capture=True, echo=False)` is the default; you only need to
+supply it explicitly when overriding either flag.
+
 If the awaiting task is cancelled while a command is running, Cuprum sends
 `SIGTERM` to the subprocess, waits for a short grace period, and then escalates
 to `SIGKILL` to ensure the child process is cleaned up.
@@ -264,6 +288,10 @@ cmd = sh.make(GIT)("hash-object", "--stdin")
 result = cmd.run_sync(stdin=StdinInput(text="hello\n"))
 print(result.stdout)
 ```
+
+If the subprocess closes its stdin pipe before all data is written (e.g. `head`
+reads only the first lines), the write failure is silently recorded as a
+`stdin_error` trace event and execution continues normally.
 
 ### Timeouts
 
@@ -663,8 +691,8 @@ The hook collects:
 
 All metrics include `program` and `project` labels.
 
-To integrate with a real metrics library like `prometheus_client`, implement
-the `MetricsCollector` protocol:
+To integrate with a real metrics library like `prometheus_client`, implement the
+`MetricsCollector` protocol:
 
 ```python
 from prometheus_client import Counter, Histogram
@@ -728,8 +756,8 @@ The hook creates spans with these attributes:
 - `cuprum.project`: Project name from tags
 - `cuprum.pipeline_stage_index`: Pipeline stage index (if applicable)
 
-Output lines (stdout/stderr) are recorded as span events when
-`record_io=True` (the default).
+Output lines (stdout/stderr) are recorded as span events when `record_io=True`
+(the default).
 
 To integrate with OpenTelemetry, implement the `Tracer` and `Span` protocols:
 
@@ -1075,9 +1103,9 @@ default selector mutates `CUPRUM_STREAM_BACKEND` process-wide while holding a
 backend lock, clears Cuprum's cached backend choice for the scoped run, and
 restores the original environment afterwards. It is intentionally non-reentrant
 on the same thread: nested selector activation raises `RuntimeError` rather
-than risking a stale environment value or backend cache leak. Avoid wrapping
-one `BackendSelector` activation inside another; start a separate worker
-process or let the outer selector own the full profiled run.
+than risking a stale environment value or backend cache leak. Avoid wrapping one
+`BackendSelector` activation inside another; start a separate worker process
+or let the outer selector own the full profiled run.
 
 Both backends are tested for behavioural parity across edge cases including
 empty streams, multi-byte UTF-8 at chunk boundaries, broken pipes (where the
@@ -1095,8 +1123,8 @@ content integrity across both Python and Rust pumping pathways.
 ### Benchmark suite
 
 Cuprum includes an opt-in benchmark suite for stream-performance tracking.
-Benchmark modules are intentionally excluded from normal `make test` runs
-unless `CUPRUM_RUN_BENCHMARKS=1` is set.
+Benchmark modules are intentionally excluded from normal `make test` runs unless
+`CUPRUM_RUN_BENCHMARKS=1` is set.
 
 Run microbenchmarks (pytest-benchmark):
 

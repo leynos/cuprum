@@ -112,6 +112,7 @@ async def _spawn_subprocess(
 async def _write_stdin(
     process: asyncio.subprocess.Process,
     stdin_data: bytes,
+    observation: _StageObservation,
 ) -> None:
     """Write caller-provided stdin bytes and close the pipe."""
     stdin = process.stdin
@@ -120,8 +121,14 @@ async def _write_stdin(
     try:
         stdin.write(stdin_data)
         await stdin.drain()
-    except (BrokenPipeError, ConnectionResetError):
-        pass
+    except (BrokenPipeError, ConnectionResetError) as exc:
+        observation.emit(
+            "stdin_error",
+            _EventDetails(
+                pid=process.pid,
+                note=f"{type(exc).__name__}: {exc!s}",
+            ),
+        )
     finally:
         stdin.close()
         with contextlib.suppress(BrokenPipeError, ConnectionResetError):
@@ -131,11 +138,12 @@ async def _write_stdin(
 def _spawn_stdin_writer(
     process: asyncio.subprocess.Process,
     stdin_data: bytes | None,
+    observation: _StageObservation,
 ) -> asyncio.Task[None] | None:
     """Start stdin writing when direct stdin data was supplied."""
     if stdin_data is None:
         return None
-    return asyncio.create_task(_write_stdin(process, stdin_data))
+    return asyncio.create_task(_write_stdin(process, stdin_data, observation))
 
 
 def _create_stream_callback(
@@ -234,7 +242,9 @@ async def _run_subprocess_with_streams(
     """Run subprocess with stream capture and timeout handling."""
     stream_config = _build_stream_config(execution)
     consumers = _spawn_stream_consumers(process, execution, stream_config, pid=pid)
-    stdin_task = _spawn_stdin_writer(process, execution.stdin_data)
+    stdin_task = _spawn_stdin_writer(
+        process, execution.stdin_data, execution.observation
+    )
     try:
         exit_code, exited_at = await _wait_for_exit_code(
             process,
@@ -372,7 +382,9 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     stderr_text: str | None = None
     try:
         if not execution.capture and not execution.echo:
-            stdin_task = _spawn_stdin_writer(process, execution.stdin_data)
+            stdin_task = _spawn_stdin_writer(
+                process, execution.stdin_data, execution.observation
+            )
             cleanup_tasks = (stdin_task,) if stdin_task is not None else ()
             exit_code, exited_at = await _wait_for_exit_code(
                 process,

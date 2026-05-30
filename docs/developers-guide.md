@@ -333,3 +333,30 @@ cyclomatic complexity while preserving exact error messages.
 The default scenario matrix order is fixed and documented. Callers, snapshot
 tests, and CI artefact directories all depend on it. It must not be reordered
 without updating snapshot files and any downstream tooling.
+
+## Subprocess stdin injection
+
+When `stdin: StdinInput` is passed to `SafeCmd.run()`, the following sequence
+executes:
+
+1. `StdinInput.resolve(ctx)` encodes `text` via the execution-context
+   encoding/errors, or returns `data` bytes unchanged.  Mutual exclusion is
+   enforced at `StdinInput` construction time by `__post_init__`.
+2. The resolved bytes are stored on `_SubprocessExecution.stdin_data`.
+3. `_spawn_subprocess` opens `stdin=asyncio.subprocess.PIPE` when
+   `stdin_data is not None`; otherwise `stdin=None` (inherit parent).
+4. `_spawn_stdin_writer` creates an `asyncio.Task` that calls `_write_stdin`,
+   which writes the bytes, drains the pipe, and closes it.  `BrokenPipeError`
+   and `ConnectionResetError` are caught and emitted as a `stdin_error` trace
+   event so operators can observe early-close scenarios without execution
+   disruption.
+5. In the streaming path (`_run_subprocess_with_streams`), the stdin writer
+   task runs concurrently with the stdout/stderr consumer tasks.  On
+   `TimeoutError`, `_handle_stream_timeout` cancels/gathers the stdin task
+   before raising `_SubprocessTimeoutError`.  On `asyncio.CancelledError`, the
+   task is explicitly cancelled and gathered before re-raising.
+6. In the non-streaming path (`_execute_subprocess`), the same writer task is
+   created and awaited after `_wait_for_exit_code` completes.
+
+Passing no `StdinInput` leaves subprocess stdin inherited from the parent
+process, preserving the pre-feature behaviour.

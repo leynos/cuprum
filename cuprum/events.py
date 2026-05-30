@@ -16,7 +16,7 @@ if typ.TYPE_CHECKING:
 
     from cuprum.program import Program
 
-type ExecPhase = typ.Literal["plan", "start", "stdout", "stderr", "exit"]
+type ExecPhase = typ.Literal["plan", "start", "stdout", "stderr", "exit", "stdin_error"]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -50,6 +50,9 @@ class ExecEvent:
         including output drain after process termination).
     tags:
         Arbitrary, JSON-like metadata associated with this execution.
+    note:
+        Optional human-readable diagnostic string for ancillary events
+        such as ``stdin_error``.
 
     """
 
@@ -64,6 +67,7 @@ class ExecEvent:
     exit_code: int | None
     duration_s: float | None
     tags: cabc.Mapping[str, object]
+    note: str | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]

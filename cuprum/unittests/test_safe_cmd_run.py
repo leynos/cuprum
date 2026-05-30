@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections.abc as cabc
+import contextlib
 import io
 import os
 import sys
@@ -648,3 +649,49 @@ def test_run_does_not_invoke_after_hooks_on_cancellation(
 
     asyncio.run(orchestrate())
     assert after_called is False
+
+
+@pytest.mark.parametrize("execution_strategy", ["async", "sync"])
+def test_stdin_input_with_timeout_escalation(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: str,
+) -> None:
+    """Stdin writer task is cleaned up when the command times out."""
+    command = python_builder(
+        "-c",
+        "import sys, time; sys.stdin.read(); time.sleep(10)",
+    )
+    execute = _execute_async if execution_strategy == "async" else _execute_sync
+    with pytest.raises(TimeoutExpired):
+        execute(
+            command,
+            {
+                "stdin": StdinInput(text="x"),
+                "timeout": 0.2,
+                "output": RunOutputOptions(capture=False),
+            },
+        )
+
+
+def test_stdin_input_cancellation_cleans_up_task(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """Cancelling a command with stdin data does not hang."""
+
+    async def _orchestrate() -> None:
+        command = python_builder(
+            "-c",
+            "import sys, time; sys.stdin.read(); time.sleep(30)",
+        )
+        task = asyncio.create_task(
+            command.run(
+                output=RunOutputOptions(capture=False),
+                stdin=StdinInput(text="payload"),
+            )
+        )
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+
+    asyncio.run(_orchestrate())
