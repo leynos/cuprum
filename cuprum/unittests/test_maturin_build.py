@@ -40,13 +40,14 @@ def test_installed_maturin_matches_expected_pin() -> None:
     )
 
 
+_MATURIN_VERSION = expected_maturin_version()
 _MATURIN_SUPPORTS_PYTHON = sys.version_info < (3, 15)
 
 
 @pytest.mark.skipif(not toolchain_available(), reason="Rust toolchain unavailable.")
 @pytest.mark.skipif(
     not _MATURIN_SUPPORTS_PYTHON,
-    reason="maturin 1.13.3 does not support this Python version.",
+    reason=f"maturin {_MATURIN_VERSION} does not support this Python version.",
 )
 def test_maturin_wheel_build_snapshot(
     tmp_path: pth.Path,

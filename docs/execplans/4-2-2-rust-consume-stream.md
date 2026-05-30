@@ -15,8 +15,8 @@ and returns decoded text with incremental UTF-8 decoding matching Python's
 `errors="replace"` behaviour. The Rust function must align with the pure Python
 `_consume_stream_without_lines()` semantics for output capture while remaining
 optional and internal. Success is visible when new unit tests and behavioural
-tests fail before the implementation, pass after it, and all quality gates (
-`make check-fmt`, `make typecheck`, `make lint`, `make test`) complete
+tests fail before the implementation, pass after it, and all quality gates
+(`make check-fmt`, `make typecheck`, `make lint`, `make test`) complete
 successfully. The roadmap entry 4.2.2 is marked done only after the
 implementation, documentation updates, and validation succeed.
 

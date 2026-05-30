@@ -23,9 +23,9 @@ After this work, maintainers can run the test suite and see explicit proof that:
 - forcing Rust without Rust support raises a clear `ImportError` at execution
   time.
 
-This task is done only when unit tests (`pytest`) and behavioural tests (
-`pytest-bdd`) cover these cases, required docs are updated, quality gates pass,
-and roadmap item `4.3.3` is marked done.
+This task is done only when unit tests (`pytest`) and behavioural tests
+(`pytest-bdd`) cover these cases, required docs are updated, quality gates
+pass, and roadmap item `4.3.3` is marked done.
 
 ## Constraints
 
