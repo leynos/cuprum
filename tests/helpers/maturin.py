@@ -148,8 +148,12 @@ def wheel_build_snapshot(whl_path: Path) -> dict[str, typ.Any]:
     with zipfile.ZipFile(whl_path) as archive:
         entry_names = archive.namelist()
         wheel_name = next(
-            name for name in entry_names if name.endswith(".dist-info/WHEEL")
+            (name for name in entry_names if name.endswith(".dist-info/WHEEL")),
+            None,
         )
+        if wheel_name is None:
+            msg = "wheel is missing .dist-info/WHEEL metadata"
+            raise AssertionError(msg)
         metadata_name = wheel_name.replace("/WHEEL", "/METADATA")
         wheel_payload = archive.read(wheel_name).decode("utf-8")
         metadata_payload = archive.read(metadata_name).decode("utf-8")
