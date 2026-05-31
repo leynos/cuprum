@@ -1,9 +1,8 @@
 # Add benchmark CI ratchet for Rust pathway regression (4.4.3)
 
-This ExecPlan (execution plan) is a living document. The sections
-`Constraints`, `Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`,
-`Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work
-proceeds.
+This ExecPlan (execution plan) is a living document. The sections `Constraints`,
+`Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`,
+and `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
 Status: COMPLETE
 
@@ -116,8 +115,8 @@ This task is complete only when:
   baseline/candidate smoke throughput runs, ratchet enforcement, and JSON
   artefact upload.
 - [x] (2026-03-04 00:34Z) Stage D: updated `docs/cuprum-design.md` and
-  `docs/users-guide.md` with ratchet behaviour/artefacts and marked roadmap
-  item `4.4.3` done in `docs/roadmap.md`.
+  `docs/users-guide.md` with ratchet behaviour/artefacts and marked roadmap item
+  `4.4.3` done in `docs/roadmap.md`.
 - [x] (2026-03-04 17:16Z) Stage E: final validation complete. Passed
   `make check-fmt`, `make typecheck`, `make lint`, `make test`,
   `make markdownlint`, and `make nixie`.

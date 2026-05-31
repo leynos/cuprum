@@ -36,8 +36,8 @@ easy to run from the existing `make lint` workflow.
 
 ### Option A: Ruff only
 
-Keep the existing Ruff-only lint target and import only the Ruff-side rules
-from `leynos/episodic`.
+Keep the existing Ruff-only lint target and import only the Ruff-side rules from
+`leynos/episodic`.
 
 This would preserve speed and simplicity, but would omit selected Pylint checks
 for logging interpolation, pattern matching, generator behaviour, environment

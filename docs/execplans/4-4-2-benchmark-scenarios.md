@@ -1,9 +1,8 @@
 # Define benchmark scenario matrix (4.4.2)
 
-This ExecPlan (execution plan) is a living document. The sections
-`Constraints`, `Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`,
-`Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work
-proceeds.
+This ExecPlan (execution plan) is a living document. The sections `Constraints`,
+`Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`,
+and `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
 Status: COMPLETE
 
@@ -140,9 +139,8 @@ This task is complete only when:
 
 - Decision: naming convention `{backend}-{size}-{depth}-{callbacks}` with
   short tokens (`nocb`/`cb`). Rationale: systematic names make scenario
-  identification unambiguous in benchmark output. This replaces the current
-  flat `pipeline-python`/`pipeline-rust` naming. Date/Author: 2026-02-28 /
-  DevBoxer.
+  identification unambiguous in benchmark output. This replaces the current flat
+  `pipeline-python`/`pipeline-rust` naming. Date/Author: 2026-02-28 / DevBoxer.
 
 - Decision: smoke mode reduces payload sizes but preserves the full matrix
   shape. Smoke payloads are small=1 KB, medium=64 KB, large=1 MB. Rationale:

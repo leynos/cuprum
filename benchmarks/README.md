@@ -1,8 +1,8 @@
 # Tee hot-path profiling harness
 
 This directory contains a deterministic profiling harness for the parent-side
-tee and capture path used by `echo=True` and `capture=True`. It is separate
-from `pipeline_worker.py`, which measures end-to-end pipeline throughput with a
+tee and capture path used by `echo=True` and `capture=True`. It is separate from
+`pipeline_worker.py`, which measures end-to-end pipeline throughput with a
 subprocess sink and therefore bypasses the final parent consume loop.
 
 ## Prerequisites

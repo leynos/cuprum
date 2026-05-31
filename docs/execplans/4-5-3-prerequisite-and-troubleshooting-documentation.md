@@ -1,9 +1,8 @@
 # Document build prerequisites and troubleshooting (4.5.3 + 4.5.4)
 
-This ExecPlan (execution plan) is a living document. The sections
-`Constraints`, `Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`,
-`Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work
-proceeds.
+This ExecPlan (execution plan) is a living document. The sections `Constraints`,
+`Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`,
+and `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
 Status: DONE
 
@@ -385,8 +384,8 @@ Go/no-go: all documentation-contract tests should now pass.
 
 ### Stage D: reconcile `docs/cuprum-design.md`
 
-Update section 13.8 to change "rustc 1.74+" to "rustc 1.85+" to match the
-actual `edition = "2024"` requirement in `rust/cuprum-rust/Cargo.toml`.
+Update section 13.8 to change "rustc 1.74+" to "rustc 1.85+" to match the actual
+`edition = "2024"` requirement in `rust/cuprum-rust/Cargo.toml`.
 
 Go/no-go: the design document and users' guide should state the same minimum
 Rust version.

@@ -182,8 +182,8 @@ Stage B: scaffolding and tests (small, verifiable diffs).
 - Add a pytest-bdd feature under `tests/features/` and a corresponding
   behavioural test under `tests/behaviour/` that exercises installation and
   import expectations at a user level (for example, importing the module and
-  calling `is_available()` returns `True` when the Rust extension is present
-  and `False` otherwise).
+  calling `is_available()` returns `True` when the Rust extension is present and
+  `False` otherwise).
 - Ensure the tests are written before implementation so they fail without the
   new module and pass after it is wired in.
 

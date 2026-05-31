@@ -273,9 +273,8 @@ command execution in a logical scope:
 - **runtime defaults:** optional execution defaults (for example, a scoped
   timeout) applied when a call does not supply explicit runtime overrides.
 
-Internally, a `ContextVar[CuprumContext]` holds the current context. Public
-APIs (`sh.allow`, `sh.before`, `sh.scoped`) update this context in a controlled
-way.
+Internally, a `ContextVar[CuprumContext]` holds the current context. Public APIs
+(`sh.allow`, `sh.before`, `sh.scoped`) update this context in a controlled way.
 
 Contexts are nested: entering a new `with sh.scoped(ScopeConfig(...))` creates
 a derived context, and exiting restores the previous one. This behaves
@@ -788,8 +787,8 @@ The concrete shape is an implementation detail, but the design assumes:
 
 ### 7.2 Logging via `logging`
 
-A common usage pattern is to register a hook that logs events using the
-standard `logging` module.
+A common usage pattern is to register a hook that logs events using the standard
+`logging` module.
 
 Example:
 
@@ -1837,8 +1836,8 @@ pathway. The following behaviours are only available via the Python backend:
 
 - **Teeing to sinks (`echo_output`):** The Python pathway can write chunks to a
   `sink` (e.g. `sys.stdout`) whilst simultaneously capturing output. The Rust
-  extension does not support this; when `echo_io=True`, the dispatcher
-  routes to Python.
+  extension does not support this; when `echo_io=True`, the dispatcher routes
+  to Python.
 
 - **Custom encodings:** The Rust extension always decodes as UTF-8 with
   replacement semantics. Other encodings or error modes require the Python

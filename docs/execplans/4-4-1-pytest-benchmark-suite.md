@@ -1,9 +1,8 @@
 # Create benchmark suite for stream performance (4.4.1)
 
-This ExecPlan (execution plan) is a living document. The sections
-`Constraints`, `Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`,
-`Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work
-proceeds.
+This ExecPlan (execution plan) is a living document. The sections `Constraints`,
+`Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`,
+and `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
 Status: COMPLETE
 
@@ -240,9 +239,9 @@ JSON output.
 
 Stage C: implement `hyperfine` end-to-end throughput harness.
 
-Add a small script that constructs and runs pipeline throughput benchmarks
-using `hyperfine`, writing structured JSON results per scenario matrix.
-Validate script behaviour via unit tests and behavioural smoke scenarios.
+Add a small script that constructs and runs pipeline throughput benchmarks using
+`hyperfine`, writing structured JSON results per scenario matrix. Validate
+script behaviour via unit tests and behavioural smoke scenarios.
 
 Go/no-go: proceed only when both Python and Rust command variants are produced
 correctly (Rust path may skip when unavailable).
