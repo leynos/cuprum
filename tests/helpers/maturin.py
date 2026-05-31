@@ -144,7 +144,17 @@ def _normalise_wheel_entry(name: str) -> str:
 
 
 def wheel_build_snapshot(whl_path: Path) -> dict[str, typ.Any]:
-    """Return a normalised snapshot of wheel metadata and layout."""
+    """Return a normalised snapshot of wheel metadata and layout.
+
+    Raises
+    ------
+    AssertionError
+        If the wheel metadata is missing expected maturin fields.
+    OSError
+        If the wheel file cannot be opened or read.
+    zipfile.BadZipFile
+        If the wheel file is not a valid zip archive.
+    """
     with zipfile.ZipFile(whl_path) as archive:
         entry_names = archive.namelist()
         wheel_name = next(
@@ -161,16 +171,23 @@ def wheel_build_snapshot(whl_path: Path) -> dict[str, typ.Any]:
         if generator_match is None:
             msg = f"Could not parse maturin generator from WHEEL metadata: {whl_path}"
             raise AssertionError(msg)
+        root_is_purelib = next(
+            (
+                line.removeprefix("Root-Is-Purelib: ")
+                for line in wheel_payload.splitlines()
+                if line.startswith("Root-Is-Purelib:")
+            ),
+            None,
+        )
+        if root_is_purelib is None:
+            msg = "wheel is missing Root-Is-Purelib metadata"
+            raise AssertionError(msg)
 
         return {
             "generator": generator_match.group(1),
             "metadata": _parse_metadata(metadata_payload),
             "wheel": {
-                "root_is_purelib": next(
-                    line.removeprefix("Root-Is-Purelib: ")
-                    for line in wheel_payload.splitlines()
-                    if line.startswith("Root-Is-Purelib:")
-                ),
+                "root_is_purelib": root_is_purelib,
                 "tag": "<platform-tag>",
             },
             "entries": sorted(_normalise_wheel_entry(name) for name in entry_names),

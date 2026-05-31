@@ -41,6 +41,8 @@ def test_installed_maturin_matches_expected_pin() -> None:
     )
 
 
+# Disable pytest-timeout here so SIGALRM cannot interrupt the maturin build
+# subprocess while it is writing wheel artefacts.
 @pytest.mark.timeout(0)
 def test_maturin_wheel_build_snapshot(
     tmp_path: pth.Path,
