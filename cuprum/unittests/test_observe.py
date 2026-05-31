@@ -7,6 +7,8 @@ import sys
 import typing as typ
 from pathlib import Path
 
+import pytest
+
 from cuprum import sh
 from cuprum._pipeline_internals import _EventDetails
 from cuprum._subprocess_execution import _write_stdin
@@ -247,10 +249,27 @@ def test_observe_emits_stdin_error_event_when_process_closes_stdin_early() -> No
     assert first.note is not None  # error type/detail should be present
 
 
-def test_write_stdin_observes_os_error_from_drain() -> None:
-    """Emit stdin_error details for non-broken-pipe OSError failures."""
-    stdin = _FailingStdin(drain_error=OSError("disk quota-ish"))
-    process = _FakeProcess(stdin)
+@pytest.mark.parametrize(
+    ("failing_stdin", "expected_note"),
+    [
+        pytest.param(
+            _FailingStdin(drain_error=OSError("disk quota-ish")),
+            "OSError: disk quota-ish",
+            id="os_error_from_drain",
+        ),
+        pytest.param(
+            _FailingStdin(wait_closed_error=RuntimeError("loop closed")),
+            "RuntimeError: loop closed",
+            id="runtime_error_from_wait_closed",
+        ),
+    ],
+)
+def test_write_stdin_observes_error_events(
+    failing_stdin: _FailingStdin,
+    expected_note: str,
+) -> None:
+    """Emit stdin_error details for failures during write/drain/close."""
+    process = _FakeProcess(failing_stdin)
     observation = _FakeObservation()
 
     asyncio.run(
@@ -261,33 +280,10 @@ def test_write_stdin_observes_os_error_from_drain() -> None:
         )
     )
 
-    assert stdin.closed is True
+    assert failing_stdin.closed is True
     assert observation.events == [
         (
             "stdin_error",
-            _EventDetails(pid=123, note="OSError: disk quota-ish"),
-        )
-    ]
-
-
-def test_write_stdin_observes_runtime_error_from_wait_closed() -> None:
-    """Emit stdin_error details when wait_closed fails."""
-    stdin = _FailingStdin(wait_closed_error=RuntimeError("loop closed"))
-    process = _FakeProcess(stdin)
-    observation = _FakeObservation()
-
-    asyncio.run(
-        _write_stdin(
-            typ.cast("asyncio.subprocess.Process", process),
-            b"payload",
-            typ.cast("_StageObservation", observation),
-        )
-    )
-
-    assert stdin.closed is True
-    assert observation.events == [
-        (
-            "stdin_error",
-            _EventDetails(pid=123, note="RuntimeError: loop closed"),
+            _EventDetails(pid=123, note=expected_note),
         )
     ]
