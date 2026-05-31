@@ -9,8 +9,6 @@ import sys
 import typing as typ
 import zipfile
 
-from tests.helpers.docs import repo_root
-
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
@@ -29,9 +27,9 @@ _DIST_INFO_SUFFIXES: dict[str, str] = {
 }
 
 
-def expected_maturin_version() -> str:
-    """Return the maturin version pinned in ``pyproject.toml``."""
-    pyproject = (repo_root() / "pyproject.toml").read_text(encoding="utf-8")
+def read_expected_maturin_version(root: Path) -> str:
+    """Read the maturin version pinned in ``pyproject.toml``."""
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
     match = _MATURIN_PIN_RE.search(pyproject)
     if match is None:
         msg = "Could not locate maturin dev dependency pin in pyproject.toml"
@@ -47,12 +45,11 @@ def _require_pin_match(match: re.Match[str] | None, location: str) -> str:
     return match.group(1)
 
 
-def collect_maturin_pins(root: Path | None = None) -> dict[str, str]:
-    """Collect maturin version pins from the synchronized locations."""
-    base = root or repo_root()
-    pyproject = (base / "pyproject.toml").read_text(encoding="utf-8")
-    workflow = (base / ".github/workflows/build-wheels.yml").read_text(encoding="utf-8")
-    action = (base / ".github/actions/build-wheels/action.yml").read_text(
+def read_maturin_pins(root: Path) -> dict[str, str]:
+    """Read maturin version pins from the synchronized locations."""
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    workflow = (root / ".github/workflows/build-wheels.yml").read_text(encoding="utf-8")
+    action = (root / ".github/actions/build-wheels/action.yml").read_text(
         encoding="utf-8"
     )
 
@@ -77,7 +74,7 @@ def toolchain_available() -> bool:
     return shutil.which("cargo") is not None and shutil.which("rustc") is not None
 
 
-def build_native_wheel(out_dir: Path) -> Path:
+def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
     """Build a native wheel with the pinned maturin version."""
     out_dir.mkdir(parents=True, exist_ok=True)
     command = [
@@ -89,12 +86,12 @@ def build_native_wheel(out_dir: Path) -> Path:
         "--out",
         str(out_dir),
         "--manifest-path",
-        str(repo_root() / "rust/cuprum-rust/Cargo.toml"),
+        str(root / "rust/cuprum-rust/Cargo.toml"),
     ]
     subprocess.run(  # noqa: S603 - command list uses only trusted paths and pinned maturin
         command,
         check=True,
-        cwd=repo_root(),
+        cwd=root,
     )
     wheels = sorted(out_dir.glob("*.whl"))
     if len(wheels) != 1:
@@ -149,8 +146,9 @@ def _normalise_wheel_entry(name: str) -> str:
 def wheel_build_snapshot(whl_path: Path) -> dict[str, typ.Any]:
     """Return a normalised snapshot of wheel metadata and layout."""
     with zipfile.ZipFile(whl_path) as archive:
+        entry_names = archive.namelist()
         wheel_name = next(
-            name for name in archive.namelist() if name.endswith(".dist-info/WHEEL")
+            name for name in entry_names if name.endswith(".dist-info/WHEEL")
         )
         metadata_name = wheel_name.replace("/WHEEL", "/METADATA")
         wheel_payload = archive.read(wheel_name).decode("utf-8")
@@ -171,7 +169,5 @@ def wheel_build_snapshot(whl_path: Path) -> dict[str, typ.Any]:
                 ),
                 "tag": "<platform-tag>",
             },
-            "entries": sorted(
-                _normalise_wheel_entry(name) for name in archive.namelist()
-            ),
+            "entries": sorted(_normalise_wheel_entry(name) for name in entry_names),
         }
