@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import typing as typ
 from pathlib import Path
 
 from cuprum import sh
+from cuprum._pipeline_internals import _EventDetails
+from cuprum._subprocess_execution import _write_stdin
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
 from cuprum.context import ScopeConfig, current_context, scoped
 from cuprum.program import Program
@@ -15,7 +18,59 @@ from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._pipeline_internals import _StageObservation
     from cuprum.events import ExecEvent
+
+
+class _FailingStdin:
+    """Test double for stdin writer failures."""
+
+    def __init__(
+        self,
+        *,
+        drain_error: BaseException | None = None,
+        wait_closed_error: BaseException | None = None,
+    ) -> None:
+        self.drain_error = drain_error
+        self.wait_closed_error = wait_closed_error
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        """Accept bytes like ``asyncio.StreamWriter.write``."""
+        _ = data
+
+    async def drain(self) -> None:
+        """Raise configured drain failure."""
+        if self.drain_error is not None:
+            raise self.drain_error
+
+    def close(self) -> None:
+        """Record close calls."""
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        """Raise configured close-wait failure."""
+        if self.wait_closed_error is not None:
+            raise self.wait_closed_error
+
+
+class _FakeProcess:
+    """Test double exposing the subprocess fields used by ``_write_stdin``."""
+
+    def __init__(self, stdin: _FailingStdin) -> None:
+        self.stdin = stdin
+        self.pid = 123
+
+
+class _FakeObservation:
+    """Collect emitted stdin error events."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, _EventDetails]] = []
+
+    def emit(self, phase: str, details: _EventDetails) -> None:
+        """Record emitted event details."""
+        self.events.append((phase, details))
 
 
 def _python_builder(
@@ -190,3 +245,49 @@ def test_observe_emits_stdin_error_event_when_process_closes_stdin_early() -> No
     first = stdin_error_events[0]
     assert first.pid is not None
     assert first.note is not None  # error type/detail should be present
+
+
+def test_write_stdin_observes_os_error_from_drain() -> None:
+    """Emit stdin_error details for non-broken-pipe OSError failures."""
+    stdin = _FailingStdin(drain_error=OSError("disk quota-ish"))
+    process = _FakeProcess(stdin)
+    observation = _FakeObservation()
+
+    asyncio.run(
+        _write_stdin(
+            typ.cast("asyncio.subprocess.Process", process),
+            b"payload",
+            typ.cast("_StageObservation", observation),
+        )
+    )
+
+    assert stdin.closed is True
+    assert observation.events == [
+        (
+            "stdin_error",
+            _EventDetails(pid=123, note="OSError: disk quota-ish"),
+        )
+    ]
+
+
+def test_write_stdin_observes_runtime_error_from_wait_closed() -> None:
+    """Emit stdin_error details when wait_closed fails."""
+    stdin = _FailingStdin(wait_closed_error=RuntimeError("loop closed"))
+    process = _FakeProcess(stdin)
+    observation = _FakeObservation()
+
+    asyncio.run(
+        _write_stdin(
+            typ.cast("asyncio.subprocess.Process", process),
+            b"payload",
+            typ.cast("_StageObservation", observation),
+        )
+    )
+
+    assert stdin.closed is True
+    assert observation.events == [
+        (
+            "stdin_error",
+            _EventDetails(pid=123, note="RuntimeError: loop closed"),
+        )
+    ]

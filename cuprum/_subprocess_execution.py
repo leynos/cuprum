@@ -9,7 +9,6 @@ timeout management, and execution lifecycle for SafeCmd.run().
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses as dc
 import sys
 import time
@@ -89,6 +88,21 @@ class _SubprocessTimeoutError(Exception):
         self.exited_at = details.exited_at
 
 
+def _emit_stdin_error(
+    process: asyncio.subprocess.Process,
+    observation: _StageObservation,
+    exc: BaseException,
+) -> None:
+    """Emit an observable diagnostic for stdin pipe write failures."""
+    observation.emit(
+        "stdin_error",
+        _EventDetails(
+            pid=process.pid,
+            note=f"{type(exc).__name__}: {exc!s}",
+        ),
+    )
+
+
 async def _spawn_subprocess(
     execution: _SubprocessExecution,
 ) -> asyncio.subprocess.Process:
@@ -123,18 +137,14 @@ async def _write_stdin(
     try:
         stdin.write(stdin_data)
         await stdin.drain()
-    except (BrokenPipeError, ConnectionResetError) as exc:
-        observation.emit(
-            "stdin_error",
-            _EventDetails(
-                pid=process.pid,
-                note=f"{type(exc).__name__}: {exc!s}",
-            ),
-        )
+    except (OSError, RuntimeError) as exc:
+        _emit_stdin_error(process, observation, exc)
     finally:
-        stdin.close()
-        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+        try:
+            stdin.close()
             await stdin.wait_closed()
+        except (OSError, RuntimeError) as exc:
+            _emit_stdin_error(process, observation, exc)
 
 
 def _spawn_stdin_writer(
