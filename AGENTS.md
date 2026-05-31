@@ -84,7 +84,7 @@
     - **Mermaid diagrams:** Passes validation using nixie (`make nixie`).
 - **Committing:**
   - Only changes that meet all quality gates should be committed.
-  - Write clear, descriptive commit messages that summarise the change,
+  - Write clear, descriptive commit messages that summarize the change,
     following:
     - **Imperative mood** in the subject line (for example, "Fix bug", "Add feature").
     - **Subject line length:** around 50 characters or fewer.
