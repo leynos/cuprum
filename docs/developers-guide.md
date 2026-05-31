@@ -356,7 +356,7 @@ executes:
    before raising `_SubprocessTimeoutError`.  On `asyncio.CancelledError`, the
    task is explicitly cancelled and gathered before re-raising.
 
-   `_build_stream_config(execution)` centralises the construction of the
+   `_build_stream_config(execution)` centralizes the construction of the
    `_StreamConfig` used by the streaming execution path.  Extracting it removes
    one branch from `_run_subprocess_with_streams` and makes the stdout-sink
    resolution logic testable in isolation.
