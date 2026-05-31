@@ -143,6 +143,67 @@ def _normalise_wheel_entry(name: str) -> str:
     return name
 
 
+def _locate_dist_info_wheel(entry_names: list[str]) -> str:
+    """Return the .dist-info/WHEEL entry name from a wheel archive's namelist.
+
+    Parameters
+    ----------
+    entry_names:
+        All entry names returned by ``zipfile.ZipFile.namelist()``.
+
+    Raises
+    ------
+    AssertionError
+        If no ``.dist-info/WHEEL`` entry is present.
+    """
+    wheel_name = next(
+        (name for name in entry_names if name.endswith(".dist-info/WHEEL")),
+        None,
+    )
+    if wheel_name is None:
+        msg = "wheel is missing .dist-info/WHEEL metadata"
+        raise AssertionError(msg)
+    return wheel_name
+
+
+def _parse_wheel_header(wheel_payload: str, whl_path: Path) -> tuple[str, str]:
+    """Extract the maturin generator string and Root-Is-Purelib value.
+
+    Parameters
+    ----------
+    wheel_payload:
+        Decoded text content of the ``.dist-info/WHEEL`` file.
+    whl_path:
+        Path to the wheel archive; used only in error messages.
+
+    Returns
+    -------
+    tuple[str, str]
+        ``(generator, root_is_purelib)`` extracted from the WHEEL headers.
+
+    Raises
+    ------
+    AssertionError
+        If either field cannot be parsed.
+    """
+    generator_match = _GENERATOR_RE.search(wheel_payload)
+    if generator_match is None:
+        msg = f"Could not parse maturin generator from WHEEL metadata: {whl_path}"
+        raise AssertionError(msg)
+    root_is_purelib = next(
+        (
+            line.removeprefix("Root-Is-Purelib: ")
+            for line in wheel_payload.splitlines()
+            if line.startswith("Root-Is-Purelib:")
+        ),
+        None,
+    )
+    if root_is_purelib is None:
+        msg = "wheel is missing Root-Is-Purelib metadata"
+        raise AssertionError(msg)
+    return generator_match.group(1), root_is_purelib
+
+
 def wheel_build_snapshot(whl_path: Path) -> dict[str, typ.Any]:
     """Return a normalised snapshot of wheel metadata and layout.
 
@@ -157,38 +218,17 @@ def wheel_build_snapshot(whl_path: Path) -> dict[str, typ.Any]:
     """
     with zipfile.ZipFile(whl_path) as archive:
         entry_names = archive.namelist()
-        wheel_name = next(
-            (name for name in entry_names if name.endswith(".dist-info/WHEEL")),
-            None,
-        )
-        if wheel_name is None:
-            msg = "wheel is missing .dist-info/WHEEL metadata"
-            raise AssertionError(msg)
+        wheel_name = _locate_dist_info_wheel(entry_names)
         metadata_name = wheel_name.replace("/WHEEL", "/METADATA")
         wheel_payload = archive.read(wheel_name).decode("utf-8")
         metadata_payload = archive.read(metadata_name).decode("utf-8")
-        generator_match = _GENERATOR_RE.search(wheel_payload)
-        if generator_match is None:
-            msg = f"Could not parse maturin generator from WHEEL metadata: {whl_path}"
-            raise AssertionError(msg)
-        root_is_purelib = next(
-            (
-                line.removeprefix("Root-Is-Purelib: ")
-                for line in wheel_payload.splitlines()
-                if line.startswith("Root-Is-Purelib:")
-            ),
-            None,
-        )
-        if root_is_purelib is None:
-            msg = "wheel is missing Root-Is-Purelib metadata"
-            raise AssertionError(msg)
-
-        return {
-            "generator": generator_match.group(1),
-            "metadata": _parse_metadata(metadata_payload),
-            "wheel": {
-                "root_is_purelib": root_is_purelib,
-                "tag": "<platform-tag>",
-            },
-            "entries": sorted(_normalise_wheel_entry(name) for name in entry_names),
-        }
+    generator, root_is_purelib = _parse_wheel_header(wheel_payload, whl_path)
+    return {
+        "generator": generator,
+        "metadata": _parse_metadata(metadata_payload),
+        "wheel": {
+            "root_is_purelib": root_is_purelib,
+            "tag": "<platform-tag>",
+        },
+        "entries": sorted(_normalise_wheel_entry(name) for name in entry_names),
+    }
