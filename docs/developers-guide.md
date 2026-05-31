@@ -326,7 +326,7 @@ change alters the architecture of the lint gate, update
 The `tests/helpers/maturin.py` module provides shared helpers for tests that
 validate the maturin version pin contract and native wheel build output.
 
-**Pin synchronization** (`test_maturin_pins_are_synchronised`) Asserts that the
+**Pin synchronization** (`test_maturin_pins_are_synchronized`) Asserts that the
 maturin version declared in `pyproject.toml`,
 `.github/workflows/build-wheels.yml`, and
 `.github/actions/build-wheels/action.yml` are identical. When updating the

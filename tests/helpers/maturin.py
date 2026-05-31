@@ -48,7 +48,7 @@ def _require_pin_match(match: re.Match[str] | None, location: str) -> str:
 
 
 def collect_maturin_pins(root: Path | None = None) -> dict[str, str]:
-    """Collect maturin version pins from the synchronised locations."""
+    """Collect maturin version pins from the synchronized locations."""
     base = root or repo_root()
     pyproject = (base / "pyproject.toml").read_text(encoding="utf-8")
     workflow = (base / ".github/workflows/build-wheels.yml").read_text(encoding="utf-8")

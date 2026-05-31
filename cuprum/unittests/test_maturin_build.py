@@ -1,4 +1,4 @@
-"""Unit tests for maturin pin synchronisation and wheel build output."""
+"""Unit tests for maturin pin synchronization and wheel build output."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
 
-def test_maturin_pins_are_synchronised() -> None:
+def test_maturin_pins_are_synchronized() -> None:
     """Maturin version pins stay aligned across CI and dev dependencies."""
     pins = collect_maturin_pins()
     assert len(set(pins.values())) == 1, f"Expected one maturin pin, found {pins!r}"
