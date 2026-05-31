@@ -18,6 +18,7 @@ from cuprum import ECHO, TimeoutExpired, sh
 from cuprum.sh import (
     CommandResult,
     ExecutionContext,
+    IOOptions,
     RunOutputOptions,
     StdinInput,
 )
@@ -66,6 +67,18 @@ def test_captures_output_and_exit_code(
     assert result.ok is True
     assert result.stdout == "hello"
     assert result.stderr == ""
+
+
+def test_io_options_warns_when_constructed() -> None:
+    """The backward-compatible IOOptions alias warns on construction."""
+    with pytest.warns(
+        DeprecationWarning,
+        match=r"IOOptions is deprecated; use RunOutputOptions instead",
+    ):
+        options = IOOptions(capture=False, echo=True)
+
+    assert options.capture is False
+    assert options.echo is True
 
 
 def test_captures_stderr_only(
