@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import shutil
 import subprocess  # noqa: S404 - tests invoke pinned maturin build commands.
@@ -95,7 +96,11 @@ def read_maturin_pins(root: Path) -> dict[str, str]:
 
 def toolchain_available() -> bool:
     """Return whether the Rust toolchain and maturin are available."""
-    return shutil.which("cargo") is not None and shutil.which("rustc") is not None
+    return (
+        shutil.which("cargo") is not None
+        and shutil.which("rustc") is not None
+        and importlib.util.find_spec("maturin") is not None
+    )
 
 
 def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
@@ -105,8 +110,6 @@ def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
     ------
     AssertionError
         If the build does not produce exactly one wheel.
-    FileNotFoundError
-        If the output directory cannot be created because a parent is missing.
     OSError
         If the output directory cannot be created or inspected.
     subprocess.CalledProcessError
