@@ -59,5 +59,7 @@ def test_maturin_wheel_build_snapshot(
 
     wheel_path = build_native_wheel_artifact(root, tmp_path / "wheelhouse")
     snapshot_payload = wheel_build_snapshot(wheel_path)
-    assert snapshot_payload["generator"] == expected
+    assert snapshot_payload["generator"] == expected, (
+        f"Expected generator {expected!r}, found {snapshot_payload['generator']!r}"
+    )
     assert snapshot_payload == snapshot
