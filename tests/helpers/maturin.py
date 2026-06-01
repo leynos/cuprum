@@ -28,7 +28,19 @@ _DIST_INFO_SUFFIXES: dict[str, str] = {
 
 
 def read_expected_maturin_version(root: Path) -> str:
-    """Read the maturin version pinned in ``pyproject.toml``."""
+    """Read the maturin version pinned in ``pyproject.toml``.
+
+    Raises
+    ------
+    AssertionError
+        If the maturin dependency pin is missing.
+    FileNotFoundError
+        If ``pyproject.toml`` is absent.
+    OSError
+        If ``pyproject.toml`` cannot be read.
+    UnicodeDecodeError
+        If ``pyproject.toml`` is not valid UTF-8.
+    """
     pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
     match = _MATURIN_PIN_RE.search(pyproject)
     if match is None:
@@ -46,7 +58,19 @@ def _require_pin_match(match: re.Match[str] | None, location: str) -> str:
 
 
 def read_maturin_pins(root: Path) -> dict[str, str]:
-    """Read maturin version pins from the synchronized locations."""
+    """Read maturin version pins from the synchronized locations.
+
+    Raises
+    ------
+    AssertionError
+        If any maturin version pin is missing.
+    FileNotFoundError
+        If any pin source file is absent.
+    OSError
+        If any pin source file cannot be read.
+    UnicodeDecodeError
+        If any pin source file is not valid UTF-8.
+    """
     pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
     workflow = (root / ".github/workflows/build-wheels.yml").read_text(encoding="utf-8")
     action = (root / ".github/actions/build-wheels/action.yml").read_text(
@@ -75,7 +99,19 @@ def toolchain_available() -> bool:
 
 
 def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
-    """Build a native wheel with the pinned maturin version."""
+    """Build a native wheel with the pinned maturin version.
+
+    Raises
+    ------
+    AssertionError
+        If the build does not produce exactly one wheel.
+    FileNotFoundError
+        If the output directory cannot be created because a parent is missing.
+    OSError
+        If the output directory cannot be created or inspected.
+    subprocess.CalledProcessError
+        If the maturin build command exits non-zero.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     command = [
         sys.executable,
