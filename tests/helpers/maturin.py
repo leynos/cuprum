@@ -94,12 +94,20 @@ def read_maturin_pins(root: Path) -> dict[str, str]:
     }
 
 
+def _maturin_module_available() -> bool:
+    """Return whether the maturin module can be resolved."""
+    try:
+        return importlib.util.find_spec("maturin") is not None
+    except ImportError:
+        return False
+
+
 def toolchain_available() -> bool:
     """Return whether the Rust toolchain and maturin are available."""
     return (
         shutil.which("cargo") is not None
         and shutil.which("rustc") is not None
-        and importlib.util.find_spec("maturin") is not None
+        and _maturin_module_available()
     )
 
 
