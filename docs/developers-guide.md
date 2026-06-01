@@ -362,10 +362,12 @@ executes:
 3. `_spawn_subprocess` opens `stdin=asyncio.subprocess.PIPE` when
    `stdin_data is not None`; otherwise `stdin=None` (inherit parent).
 4. `_spawn_stdin_writer` creates an `asyncio.Task` that calls `_write_stdin`,
-   which writes the bytes, drains the pipe, and closes it.  `BrokenPipeError`
-   and `ConnectionResetError` are caught and emitted as a `stdin_error` trace
-   event so operators can observe early-close scenarios without execution
-   disruption.
+   which writes the bytes, drains the pipe, and closes it.  `OSError` and
+   `RuntimeError` failures are logged to `cuprum.stdin` and emitted as a
+   `stdin_error` trace event so operators can observe early-close scenarios
+   without execution disruption.  Successful writes emit a `stdin` event with a
+   byte count.  The metrics adapter increments `cuprum_stdin_bytes_total` for
+   successful writes and `cuprum_stdin_errors_total` for failure events.
 5. In the streaming path (`_run_subprocess_with_streams`), the stdin writer
    task runs concurrently with the stdout/stderr consumer tasks.  On
    `TimeoutError`, `_handle_stream_timeout` cancels/gathers the stdin task
@@ -389,22 +391,3 @@ makes the stdout-sink resolution logic testable in isolation.
 
 Passing no `StdinInput` leaves subprocess stdin inherited from the parent
 process, preserving the pre-feature behaviour.
-
-## Development roadmap
-
-### 0.2.0 — Direct stdin input (issue `#30`)
-
-- `StdinInput` parameter object with mutual-exclusion enforcement and
-  `__post_init__` and `resolve(ctx)` encoding helper.
-- `_SubprocessExecution.stdin_data` field; `_spawn_subprocess` opens
-  `stdin=asyncio.subprocess.PIPE` only when data is present (falls back to
-  `None` to inherit parent stdin).
-- Concurrent stdin writer task (`_spawn_stdin_writer` / `_write_stdin`)
-  with `stdin_error` event emission on `BrokenPipeError` /
-  `ConnectionResetError`.
-- `_build_stream_config` and `_handle_stream_timeout` helpers to reduce
-  `_run_subprocess_with_streams` complexity.
-- `_execute_with_hooks` helper extracted from `SafeCmd.run`.
-- `RunOutputOptions` parameter object replacing flat `capture` / `echo`
-  kwargs on `SafeCmd.run` and `run_sync`.
-- `IOOptions` retained as a deprecated alias for `RunOutputOptions`.

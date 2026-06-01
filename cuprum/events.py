@@ -16,7 +16,15 @@ if typ.TYPE_CHECKING:
 
     from cuprum.program import Program
 
-type ExecPhase = typ.Literal["plan", "start", "stdout", "stderr", "exit", "stdin_error"]
+type ExecPhase = typ.Literal[
+    "plan",
+    "start",
+    "stdout",
+    "stderr",
+    "exit",
+    "stdin",
+    "stdin_error",
+]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -53,6 +61,8 @@ class ExecEvent:
     note:
         Optional human-readable diagnostic string for ancillary events
         such as ``stdin_error``.
+    byte_count:
+        Number of bytes written for byte-counted phases such as ``stdin``.
 
     """
 
@@ -68,6 +78,7 @@ class ExecEvent:
     duration_s: float | None
     tags: cabc.Mapping[str, object]
     note: str | None = None
+    byte_count: int | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]

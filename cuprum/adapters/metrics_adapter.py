@@ -5,6 +5,7 @@ execution in a format compatible with Prometheus client libraries. The
 adapter demonstrates how to collect:
 
 - **Counters**: Total executions, failures, output lines
+- **Byte counters**: Successful stdin bytes written
 - **Histograms**: Execution duration distribution
 
 The implementation uses protocol classes to remain decoupled from specific
@@ -175,6 +176,8 @@ class MetricsHook:
     - ``cuprum_duration_seconds``: Histogram of execution durations
     - ``cuprum_stdout_lines_total``: Counter of stdout lines emitted
     - ``cuprum_stderr_lines_total``: Counter of stderr lines emitted
+    - ``cuprum_stdin_bytes_total``: Counter of successful stdin bytes written
+    - ``cuprum_stdin_errors_total``: Counter of stdin writer failures
 
     All metrics include ``program`` and ``project`` labels.
 
@@ -209,36 +212,57 @@ class MetricsHook:
 
         match event.phase:
             case "start":
-                self._collector.inc_counter(
-                    "cuprum_executions_total",
-                    1.0,
-                    labels,
-                )
+                self._increment("cuprum_executions_total", labels=labels)
             case "stdout":
-                self._collector.inc_counter(
-                    "cuprum_stdout_lines_total",
-                    1.0,
-                    labels,
-                )
+                self._increment("cuprum_stdout_lines_total", labels=labels)
             case "stderr":
-                self._collector.inc_counter(
-                    "cuprum_stderr_lines_total",
-                    1.0,
-                    labels,
-                )
+                self._increment("cuprum_stderr_lines_total", labels=labels)
+            case "stdin_error":
+                self._increment("cuprum_stdin_errors_total", labels=labels)
+            case "stdin":
+                self._record_stdin_bytes(event, labels=labels)
             case "exit":
-                if event.exit_code is not None and event.exit_code != 0:
-                    self._collector.inc_counter(
-                        "cuprum_failures_total",
-                        1.0,
-                        labels,
-                    )
-                if event.duration_s is not None:
-                    self._collector.observe_histogram(
-                        "cuprum_duration_seconds",
-                        event.duration_s,
-                        labels,
-                    )
+                self._record_exit(event, labels=labels)
+
+    def _increment(
+        self,
+        name: str,
+        *,
+        labels: cabc.Mapping[str, str],
+        value: float = 1.0,
+    ) -> None:
+        """Increment a counter with the current event labels."""
+        self._collector.inc_counter(name, value, labels)
+
+    def _record_stdin_bytes(
+        self,
+        event: ExecEvent,
+        *,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Record stdin byte throughput when the event carries a byte count."""
+        if event.byte_count is not None:
+            self._increment(
+                "cuprum_stdin_bytes_total",
+                value=float(event.byte_count),
+                labels=labels,
+            )
+
+    def _record_exit(
+        self,
+        event: ExecEvent,
+        *,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Record exit-code and duration metrics for an exit event."""
+        if event.exit_code is not None and event.exit_code != 0:
+            self._increment("cuprum_failures_total", labels=labels)
+        if event.duration_s is not None:
+            self._collector.observe_histogram(
+                "cuprum_duration_seconds",
+                event.duration_s,
+                labels,
+            )
 
     @staticmethod
     def _extract_labels(event: ExecEvent) -> dict[str, str]:
