@@ -239,7 +239,7 @@ def test_observe_emits_stdin_error_event_when_process_closes_stdin_early(
         observation: _StageObservation,
     ) -> None:
         await asyncio.sleep(0)
-        assert stdin_data == b"x"
+        assert stdin_data == b"x", "stdin writer should receive the configured payload"
         observation.emit(
             "stdin_error",
             _EventDetails(pid=process.pid, note="BrokenPipeError: forced EPIPE"),
@@ -252,14 +252,20 @@ def test_observe_emits_stdin_error_event_when_process_closes_stdin_early(
             output=RunOutputOptions(capture=True),
         )
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, (
+        f"subprocess exited with non-zero code: {result.exit_code}"
+    )
     stdin_error_events = [ev for ev in events if ev.phase == "stdin_error"]
     assert stdin_error_events, (
-        "Expected at least one stdin_error event when the subprocess closes stdin early"
+        "expected at least one stdin_error event when subprocess closes stdin early"
     )
     first = stdin_error_events[0]
-    assert first.pid is not None
-    assert first.note is not None  # error type/detail should be present
+    assert first.pid is not None, (
+        "expected pid to be present on first stdin_error event"
+    )
+    assert first.note is not None, (
+        "expected error note/detail to be present on first stdin_error event"
+    )
 
 
 @pytest.mark.parametrize(
@@ -293,10 +299,12 @@ def test_write_stdin_observes_error_events(
         )
     )
 
-    assert failing_stdin.closed is True
+    assert failing_stdin.closed is True, (
+        "stdin must be closed even when drain/wait_closed fail"
+    )
     assert observation.events == [
         (
             "stdin_error",
             _EventDetails(pid=123, note=expected_note),
         )
-    ]
+    ], "Exactly one stdin_error event with the expected note must be emitted"
