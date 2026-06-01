@@ -26,7 +26,9 @@ dev = [
     "pytest-xdist",
     "syrupy",
     "ty",
-    "maturin==1.6.0",
+    # Keep in sync with .github/workflows/build-wheels.yml and
+    # .github/actions/build-wheels/action.yml.
+    "maturin==1.13.3",
 ]
 
 [tool.ruff]

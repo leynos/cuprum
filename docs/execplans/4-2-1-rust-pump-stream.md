@@ -168,19 +168,13 @@ Stage C: implement Rust `rust_pump_stream()` and Python shims.
 Extend the Rust module in `rust/cuprum-rust/src/lib.rs` to export
 `rust_pump_stream()`:
 
-- Signature:
+- Signature returning the total bytes transferred:
 
-  ```text
-  rust_pump_stream(
-      reader_fd: int,
-      writer_fd: int,
-      buffer_size: int = 65536,
-  ) -> int
+  ```python
+  rust_pump_stream(reader_fd: int, writer_fd: int, buffer_size: int = 65536) -> int
   ```
 
-  returning the total bytes transferred.
-- Validate `buffer_size > 0`, else
-  raise `ValueError`.
+- Validate `buffer_size > 0`, else raise `ValueError`.
 - Release the GIL with `Python::allow_threads` for the entire read/write loop.
 - Use a reusable buffer sized to `buffer_size`.
 - Avoid closing the reader FD by forgetting the `File` wrapper; allow the
@@ -298,7 +292,7 @@ Expected changes include:
 
 Rust function (PyO3-exposed):
 
-```text
+```python
 rust_pump_stream(reader_fd: int, writer_fd: int, buffer_size: int = 65536)
     -> int
 ```

@@ -320,6 +320,63 @@ When changing lint policy, update both `pyproject.toml` and this guide. If the
 change alters the architecture of the lint gate, update
 [ADR-003](adr-003-two-tier-python-linting.md) as well.
 
+
+## Maturin pin synchronization and native wheel tests
+
+The `tests/helpers/maturin.py` module provides shared helpers for tests that
+validate the maturin version pin contract and native wheel build output.
+
+**Pin synchronization** (`test_maturin_pins_are_synchronized`) Asserts that the
+maturin version declared in `pyproject.toml`,
+`.github/workflows/build-wheels.yml`, and
+`.github/actions/build-wheels/action.yml` are identical. When updating the
+maturin pin, update all three locations and run this test to confirm they are
+in step.
+
+**Installed version check** (`test_installed_maturin_matches_expected_pin`)
+Skipped automatically when `maturin` is not on `PATH`. When it is present,
+asserts that the installed version matches the pinned development dependency.
+
+**Wheel build snapshot** (`test_maturin_wheel_build_snapshot`) Requires the
+Rust toolchain (`cargo` and `rustc`) and is skipped on Python ≥ 3.15 until
+maturin adds support for that interpreter. Builds a native wheel into a
+temporary directory, extracts normalized metadata and layout information, and
+compares the result against a
+[syrupy](https://github.com/syrupy-project/syrupy) snapshot stored at
+`cuprum/unittests/__snapshots__/test_maturin_build.ambr`.
+
+To update the snapshot after a maturin or PyO3 bump, run:
+
+```bash
+uv run pytest cuprum/unittests/test_maturin_build.py \
+    --snapshot-update -k test_maturin_wheel_build_snapshot
+```
+
+## Compile-time UI tests (trybuild)
+
+The Rust crate at `rust/cuprum-rust/` uses
+[trybuild](https://github.com/dtolnay/trybuild) to validate PyO3 macro
+behaviour at compile time. Tests live under `rust/cuprum-rust/tests/ui/`:
+
+- `tests/ui/pass/` — Rust files that **must compile** without error.
+- `tests/ui/fail/` — Rust files that **must fail** compilation with diagnostics
+  matching the corresponding `.stderr` file.
+
+Run compile-time UI tests with:
+
+```bash
+cd rust && cargo test compile_time_ui
+```
+
+To update `.stderr` expectation files after a PyO3 or compiler upgrade:
+
+```bash
+cd rust && TRYBUILD=overwrite cargo test compile_time_ui
+```
+
+Inspect the updated `.stderr` files before committing to confirm that each fail
+test still represents a genuine compile-time error.
+
 ## Design decisions
 
 ### Deterministic fixtures over random data

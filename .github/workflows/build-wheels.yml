@@ -8,7 +8,8 @@ on:
         required: true
 
 env:
-  MATURIN_VERSION: "1.6.0"
+  # Keep in sync with .github/actions/build-wheels/action.yml and pyproject.toml.
+  MATURIN_VERSION: "1.13.3"
 
 jobs:
   build-pure-wheel:
