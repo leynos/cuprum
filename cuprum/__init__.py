@@ -60,10 +60,13 @@ from cuprum.rust import is_rust_available
 from cuprum.sh import (
     CommandResult,
     ExecutionContext,
+    IOOptions,
     Pipeline,
     PipelineResult,
+    RunOutputOptions,
     SafeCmd,
     SafeCmdBuilder,
+    StdinInput,
     TimeoutExpired,
 )
 
@@ -93,6 +96,7 @@ __all__ = [
     "ExecutionContext",
     "ForbiddenProgramError",
     "HookRegistration",
+    "IOOptions",
     "LoggingHookRegistration",
     "Pipeline",
     "PipelineResult",
@@ -100,9 +104,11 @@ __all__ = [
     "ProgramCatalogue",
     "ProgramEntry",
     "ProjectSettings",
+    "RunOutputOptions",
     "SafeCmd",
     "SafeCmdBuilder",
     "ScopeConfig",
+    "StdinInput",
     "TimeoutExpired",
     "UnknownProgramError",
     "after",

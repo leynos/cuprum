@@ -37,9 +37,9 @@ A user can observe success by:
 Hard invariants that must hold throughout implementation:
 
 - **No execution pipeline changes**: This task creates only the dispatcher
-  module. It must not modify `_subprocess_execution.py`,
-  `_pipeline_streams.py`, `_pipeline_internals.py`, `_process_lifecycle.py`, or
-  `sh.py`. Integration is a separate task.
+  module. It must not modify `_subprocess_execution.py`, `_pipeline_streams.py`,
+  `_pipeline_internals.py`, `_process_lifecycle.py`, or `sh.py`. Integration
+  is a separate task.
 - **No changes to existing modules**: `_rust_backend.py`, `_streams_rs.py`,
   `_streams.py`, and `rust.py` must not be modified. The dispatcher uses
   `_rust_backend.is_available()` as-is.

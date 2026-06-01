@@ -147,8 +147,9 @@ for final stdout or stderr consumption when all of the following are true:
 - the effective error policy is `replace`;
 - the stream exposes a suitable raw file descriptor or platform handle.
 
-This would accelerate large-output `SafeCmd.run(capture=True, echo=False)` and
-final pipeline output capture without changing public API semantics.
+This would accelerate large-output
+`SafeCmd.run(output=RunOutputOptions(capture=True, echo=False))` and final
+pipeline output capture without changing public API semantics.
 
 The dispatcher must fall back to `_consume_stream_without_lines()` for custom
 encodings, callbacks, echoing, missing descriptors, or any unsupported platform

@@ -227,26 +227,71 @@ and echo semantics and returns a structured `CommandResult`:
   - `stdout_sink` and `stderr_sink` route echoed output to alternative text
     streams when `echo=True`.
   - `encoding` and `errors` configure how captured output is decoded; defaults
-    are `"utf-8"` with `"replace"`.
+    are `"utf-8"` with `"replace"`. The same settings are used when
+    `StdinInput.text` is encoded for subprocess stdin.
 - `exit_code`, `pid`, and `ok` on the `CommandResult` make it easy to branch on
   success.
 
 ```python
-from cuprum import ECHO, ExecutionContext, sh
+from cuprum import ECHO, ExecutionContext, RunOutputOptions, sh
 
 
 async def greet() -> None:
     cmd = sh.make(ECHO)("-n", "hello runtime")
     ctx = ExecutionContext(env={"GREETING": "1"})
-    result = await cmd.run(echo=True, context=ctx)
+    result = await cmd.run(output=RunOutputOptions(echo=True), context=ctx)
     if not result.ok:
         raise RuntimeError(f"echo failed: {result.exit_code}")
     print(result.stdout)
 ```
 
+### Migrating from `capture`/`echo` keyword arguments
+
+Prior to this release, `run()` and `run_sync()` accepted `capture` and `echo`
+directly:
+
+```python
+# Before
+result = await cmd.run(capture=True, echo=False)
+result = cmd.run_sync(capture=False)
+```
+
+Group them into `RunOutputOptions`:
+
+```python
+# After
+from cuprum import RunOutputOptions
+
+result = await cmd.run(output=RunOutputOptions(capture=True, echo=False))
+result = cmd.run_sync(output=RunOutputOptions(capture=False))
+```
+
+`RunOutputOptions(capture=True, echo=False)` is the default; you only need to
+supply it explicitly when overriding either flag.
+
 If the awaiting task is cancelled while a command is running, Cuprum sends
 `SIGTERM` to the subprocess, waits for a short grace period, and then escalates
 to `SIGKILL` to ensure the child process is cleaned up.
+
+### Direct stdin input
+
+Use `StdinInput` on `run()` / `run_sync()` to feed data directly to a command's
+standard input without adding an extra allowlisted program to a pipeline.
+`StdinInput(text=...)` is encoded with the execution context's `encoding` and
+`errors` settings. `StdinInput(data=...)` writes the supplied bytes unchanged.
+Supplying both values is invalid.
+
+```python
+from cuprum import GIT, StdinInput, sh
+
+cmd = sh.make(GIT)("hash-object", "--stdin")
+result = cmd.run_sync(stdin=StdinInput(text="hello\n"))
+print(result.stdout)
+```
+
+If the subprocess closes its stdin pipe before all data is written (e.g. `head`
+reads only the first lines), the write failure is silently recorded as a
+`stdin_error` trace event and execution continues normally.
 
 ### Timeouts
 
@@ -284,20 +329,21 @@ using the same capture rules as successful runs.
 For scripts or contexts where async/await is not available, use `run_sync()`:
 
 ```python
-from cuprum import ECHO, ExecutionContext, sh
+from cuprum import ECHO, ExecutionContext, RunOutputOptions, sh
 
 
 def greet() -> None:
     cmd = sh.make(ECHO)("-n", "hello sync")
     ctx = ExecutionContext(env={"GREETING": "1"})
-    result = cmd.run_sync(echo=True, context=ctx)
+    result = cmd.run_sync(output=RunOutputOptions(echo=True), context=ctx)
     if not result.ok:
         raise RuntimeError(f"echo failed: {result.exit_code}")
     print(result.stdout)
 ```
 
-`run_sync()` accepts the same parameters as `run()` and returns an identical
-`CommandResult`. It drives the event loop internally via `asyncio.run()`.
+`run_sync()` accepts `RunOutputOptions` for synchronous output handling and
+returns the same `CommandResult` shape as `run()`. It drives the event loop
+internally via `asyncio.run()`.
 
 ## Execution context and hooks
 
@@ -645,8 +691,8 @@ The hook collects:
 
 All metrics include `program` and `project` labels.
 
-To integrate with a real metrics library like `prometheus_client`, implement
-the `MetricsCollector` protocol:
+To integrate with a real metrics library like `prometheus_client`, implement the
+`MetricsCollector` protocol:
 
 ```python
 from prometheus_client import Counter, Histogram
@@ -710,8 +756,8 @@ The hook creates spans with these attributes:
 - `cuprum.project`: Project name from tags
 - `cuprum.pipeline_stage_index`: Pipeline stage index (if applicable)
 
-Output lines (stdout/stderr) are recorded as span events when
-`record_output=True` (the default).
+Output lines (stdout/stderr) are recorded as span events when `record_io=True`
+(the default).
 
 To integrate with OpenTelemetry, implement the `Tracer` and `Span` protocols:
 
@@ -1057,9 +1103,9 @@ default selector mutates `CUPRUM_STREAM_BACKEND` process-wide while holding a
 backend lock, clears Cuprum's cached backend choice for the scoped run, and
 restores the original environment afterwards. It is intentionally non-reentrant
 on the same thread: nested selector activation raises `RuntimeError` rather
-than risking a stale environment value or backend cache leak. Avoid wrapping
-one `BackendSelector` activation inside another; start a separate worker
-process or let the outer selector own the full profiled run.
+than risking a stale environment value or backend cache leak. Avoid wrapping one
+`BackendSelector` activation inside another; start a separate worker process
+or let the outer selector own the full profiled run.
 
 Both backends are tested for behavioural parity across edge cases including
 empty streams, multi-byte UTF-8 at chunk boundaries, broken pipes (where the
@@ -1077,8 +1123,8 @@ content integrity across both Python and Rust pumping pathways.
 ### Benchmark suite
 
 Cuprum includes an opt-in benchmark suite for stream-performance tracking.
-Benchmark modules are intentionally excluded from normal `make test` runs
-unless `CUPRUM_RUN_BENCHMARKS=1` is set.
+Benchmark modules are intentionally excluded from normal `make test` runs unless
+`CUPRUM_RUN_BENCHMARKS=1` is set.
 
 Run microbenchmarks (pytest-benchmark):
 

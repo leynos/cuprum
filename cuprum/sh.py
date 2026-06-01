@@ -11,6 +11,7 @@ import asyncio
 import collections.abc as cabc
 import dataclasses as dc
 import typing as typ
+import warnings
 from pathlib import Path
 
 from cuprum._observability import (
@@ -232,6 +233,66 @@ class _ExecutionTracking:
 
 
 @dc.dataclass(frozen=True, slots=True)
+class StdinInput:
+    """Caller-provided data to write to a subprocess's stdin pipe.
+
+    Exactly one of *text* or *data* may be supplied.
+    """
+
+    text: str | None = None
+    data: bytes | None = None
+
+    def __post_init__(self) -> None:
+        """Reject ambiguous stdin payloads."""
+        if self.text is not None and self.data is not None:
+            msg = "text and data cannot both be provided"
+            raise ValueError(msg)
+
+    def resolve(self, ctx: ExecutionContext) -> bytes | None:
+        """Return the bytes payload, encoding *text* with *ctx* when needed.
+
+        Raises
+        ------
+        UnicodeEncodeError
+            When *text* cannot be encoded using ``ctx.encoding`` and
+            ``ctx.errors`` is ``"strict"`` (or another non-suppressing
+            error handler).
+        """
+        if self.text is not None:
+            return self.text.encode(ctx.encoding, ctx.errors)
+        return self.data
+
+
+@dc.dataclass(frozen=True, slots=True)
+class RunOutputOptions:
+    """Controls how a command's output streams are handled.
+
+    Attributes
+    ----------
+    capture:
+        When ``True`` capture stdout/stderr; otherwise discard them.
+    echo:
+        When ``True`` tee stdout/stderr to the parent process.
+    """
+
+    capture: bool = True
+    echo: bool = False
+
+
+@dc.dataclass(frozen=True, slots=True)
+class IOOptions(RunOutputOptions):
+    """Deprecated alias for command output stream options."""
+
+    def __post_init__(self) -> None:
+        """Emit a ``DeprecationWarning`` when ``IOOptions`` is constructed."""
+        warnings.warn(
+            "IOOptions is deprecated; use RunOutputOptions instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+
+@dc.dataclass(frozen=True, slots=True)
 class _IOBehaviour:
     """Runtime I/O behaviour flags for command execution."""
 
@@ -266,6 +327,26 @@ def _prepare_execution_observation(
     )
 
 
+async def _execute_with_hooks(
+    cmd: SafeCmd,
+    execution: _SubprocessExecution,
+    tracking: _ExecutionTracking,
+) -> CommandResult:
+    """Execute *execution*, dispatch after-hooks, and handle cancellation."""
+    try:
+        result = await _execute_subprocess(execution)
+        for hook in tracking.execution_hooks.after_hooks:
+            hook(cmd, result)
+    except asyncio.CancelledError:
+        await asyncio.shield(_wait_for_exec_hook_tasks(tracking.pending_tasks))
+        raise
+    except BaseException:
+        await _wait_for_exec_hook_tasks(tracking.pending_tasks)
+        raise
+    await _wait_for_exec_hook_tasks(tracking.pending_tasks)
+    return result
+
+
 @dc.dataclass(frozen=True, slots=True)
 class SafeCmd:
     """Typed representation of a curated command ready for execution."""
@@ -292,23 +373,23 @@ class SafeCmd:
     async def run(
         self,
         *,
-        capture: bool = True,
-        echo: bool = False,
+        output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
+        stdin: StdinInput | None = None,
     ) -> CommandResult:
         """Execute the command asynchronously with predictable cancellation.
 
         Parameters
         ----------
-        capture:
-            When ``True`` capture stdout/stderr; otherwise discard them.
-        echo:
-            When ``True`` tee stdout/stderr to the parent process.
+        output:
+            Optional ``RunOutputOptions`` controlling stdout/stderr handling.
         timeout:
             Optional wall-clock timeout in seconds; ``None`` disables timeouts.
         context:
             Optional execution settings such as env, cwd, and cancel grace.
+        stdin:
+            Optional ``StdinInput`` data to feed to the subprocess.
 
         Returns
         -------
@@ -321,15 +402,20 @@ class SafeCmd:
             If the program is not in the current context's allowlist.
         TimeoutExpired
             If the command exceeds the configured timeout.
+        UnicodeEncodeError
+            If ``stdin.text`` cannot be encoded with the active
+            ``ExecutionContext`` encoding and errors settings.
 
         """
+        out = output or RunOutputOptions()
         ctx = context or ExecutionContext()
+        stdin_data = stdin.resolve(ctx) if stdin is not None else None
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         tracking = _ExecutionTracking(
             execution_hooks=_run_before_hooks(self),
             pending_tasks=[],
         )
-        io_behaviour = _IOBehaviour(capture=capture, echo=echo)
+        io_behaviour = _IOBehaviour(capture=out.capture, echo=out.echo)
         observation = _prepare_execution_observation(
             self,
             ctx,
@@ -341,66 +427,44 @@ class SafeCmd:
         for hook in tracking.execution_hooks.before_hooks:
             hook(self)
 
-        try:
-            result = await _execute_subprocess(
-                _SubprocessExecution(
-                    cmd=self,
-                    ctx=ctx,
-                    capture=capture,
-                    echo=echo,
-                    timeout=effective_timeout,
-                    observation=observation,
-                ),
-            )
-            for hook in tracking.execution_hooks.after_hooks:
-                hook(self, result)
-        except asyncio.CancelledError:
-            await asyncio.shield(_wait_for_exec_hook_tasks(tracking.pending_tasks))
-            raise
-        except BaseException:
-            await _wait_for_exec_hook_tasks(tracking.pending_tasks)
-            raise
-
-        await _wait_for_exec_hook_tasks(tracking.pending_tasks)
-        return result
+        return await _execute_with_hooks(
+            self,
+            _SubprocessExecution(
+                cmd=self,
+                ctx=ctx,
+                capture=out.capture,
+                echo=out.echo,
+                timeout=effective_timeout,
+                observation=observation,
+                stdin_data=stdin_data,
+            ),
+            tracking,
+        )
 
     def run_sync(
         self,
         *,
-        capture: bool = True,
-        echo: bool = False,
+        output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
+        stdin: StdinInput | None = None,
     ) -> CommandResult:
-        """Execute the command synchronously with predictable semantics.
+        """Execute the command synchronously.
 
-        This method mirrors ``run()`` by driving the event loop internally.
-        All parameters and return semantics are identical.
+        Mirrors :meth:`run`; all parameters and return semantics are identical.
 
-        Parameters
-        ----------
-        capture:
-            When ``True`` capture stdout/stderr; otherwise discard them.
-        echo:
-            When ``True`` tee stdout/stderr to the parent process.
-        timeout:
-            Optional wall-clock timeout in seconds; ``None`` disables timeouts.
-        context:
-            Optional execution settings such as env, cwd, and cancel grace.
-
-        Returns
-        -------
-        CommandResult
-            Structured information about the completed process.
-
+        Raises
+        ------
+        ForbiddenProgramError
+            If the program is not in the current context's allowlist.
+        TimeoutExpired
+            If the command exceeds the configured timeout.
+        UnicodeEncodeError
+            If ``stdin.text`` cannot be encoded with the active
+            ``ExecutionContext`` encoding and errors settings.
         """
         return asyncio.run(
-            self.run(
-                capture=capture,
-                echo=echo,
-                timeout=timeout,
-                context=context,
-            ),
+            self.run(output=output, timeout=timeout, context=context, stdin=stdin),
         )
 
 
@@ -486,10 +550,13 @@ def make(
 __all__ = [
     "CommandResult",
     "ExecutionContext",
+    "IOOptions",
     "Pipeline",
     "PipelineResult",
+    "RunOutputOptions",
     "SafeCmd",
     "SafeCmdBuilder",
+    "StdinInput",
     "TimeoutExpired",
     "UnknownProgramError",
     "make",

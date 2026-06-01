@@ -5,6 +5,24 @@ commitments. Phases are ordered and build on one another. Steps group related
 workstreams. Tasks are measurable and must meet acceptance criteria to count as
 done.
 
+## 0.2.0 — Direct stdin input (issue `#30`)
+
+- [x] `StdinInput` parameter object with mutual-exclusion enforcement in
+  `__post_init__` and `resolve(ctx)` encoding helper.
+- [x] `_SubprocessExecution.stdin_data` field; `_spawn_subprocess` opens
+  `stdin=asyncio.subprocess.PIPE` only when data is present, falling back to
+  `None` to inherit parent stdin.
+- [x] Concurrent stdin writer task (`_spawn_stdin_writer` / `_write_stdin`)
+  with `stdin_error` event emission, `cuprum.stdin` logging, and
+  `cuprum_stdin_bytes_total` / `cuprum_stdin_errors_total` metrics for
+  throughput and failure tracking.
+- [x] `_build_stream_config` and `_handle_stream_timeout` helpers extracted to
+  reduce `_run_subprocess_with_streams` complexity.
+- [x] `_execute_with_hooks` helper extracted from `SafeCmd.run`.
+- [x] `RunOutputOptions` parameter object replacing flat `capture` / `echo`
+  kwargs on `SafeCmd.run` and `run_sync`.
+- [x] `IOOptions` retained as a deprecated alias for `RunOutputOptions`.
+
 ## 1. Foundation
 
 Focus: Establish the typed core, scoped safety model, and reliable

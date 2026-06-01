@@ -74,7 +74,15 @@ class _StageObservation:
 
     def emit(
         self,
-        phase: typ.Literal["plan", "start", "stdout", "stderr", "exit"],
+        phase: typ.Literal[
+            "plan",
+            "start",
+            "stdout",
+            "stderr",
+            "exit",
+            "stdin",
+            "stdin_error",
+        ],
         details: _EventDetails,
     ) -> None:
         if not self.hooks.observe_hooks:
@@ -93,6 +101,8 @@ class _StageObservation:
                 exit_code=details.exit_code,
                 duration_s=details.duration_s,
                 tags=self.tags,
+                note=details.note,
+                byte_count=details.byte_count,
             ),
             pending_tasks=self.pending_tasks,
         )
@@ -104,6 +114,8 @@ class _EventDetails:
     line: str | None = None
     exit_code: int | None = None
     duration_s: float | None = None
+    note: str | None = None
+    byte_count: int | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)

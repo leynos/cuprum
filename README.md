@@ -24,7 +24,7 @@ upgrade rather than a chore.
 ## Quick taste
 
 ```python
-from cuprum import ECHO, ExecutionContext, sh
+from cuprum import ECHO, ExecutionContext, RunOutputOptions, sh
 
 # Create a builder for a curated program
 echo = sh.make(ECHO)
@@ -33,7 +33,7 @@ echo = sh.make(ECHO)
 cmd = echo("-n", "hello, cuprum!")
 
 # Run it (async)
-result = await cmd.run(echo=True)
+result = await cmd.run(output=RunOutputOptions(echo=True))
 if result.ok:
     print(f"Output: {result.stdout}")
 

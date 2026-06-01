@@ -26,3 +26,8 @@ Feature: Execution runtime
     Given a simple safe echo command
     When I run the command synchronously
     Then the command result contains captured output
+
+  Scenario: Run passes direct stdin input to the command
+    Given a safe command that reads stdin
+    When I run the command with direct stdin text
+    Then the command result contains the stdin text

@@ -3,11 +3,14 @@
 This module encapsulates the low-level subprocess spawning, stream handling,
 timeout management, and execution lifecycle for SafeCmd.run().
 """
+# TODO: refactor into smaller submodules (stdin/runner), see issue #30.
+# pylint: disable=too-many-lines
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
+import logging
 import sys
 import time
 import typing as typ
@@ -21,6 +24,8 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
+
+_LOGGER = logging.getLogger("cuprum.stdin")
 
 
 async def _wait_for_exit_code(
@@ -44,6 +49,8 @@ async def _wait_for_exit_code(
     except asyncio.CancelledError:
         await _terminate_process(process, ctx.cancel_grace)
         if consumers:
+            for task in consumers:
+                task.cancel()
             await asyncio.gather(*consumers, return_exceptions=True)
         raise
     exited_at = time.perf_counter()
@@ -60,6 +67,7 @@ class _SubprocessExecution:
     echo: bool
     timeout: float | None
     observation: _StageObservation
+    stdin_data: bytes | None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -83,6 +91,35 @@ class _SubprocessTimeoutError(Exception):
         self.exited_at = details.exited_at
 
 
+def _emit_stdin_error(
+    process: asyncio.subprocess.Process,
+    observation: _StageObservation,
+    exc: BaseException,
+    *,
+    operation: str,
+) -> None:
+    """Emit an observable diagnostic for stdin pipe write failures."""
+    _LOGGER.warning(
+        "stdin_%s_failed pid=%s error=%s: %s",
+        operation,
+        process.pid,
+        type(exc).__name__,
+        exc,
+        extra={
+            "cuprum_pid": process.pid,
+            "cuprum_stdin_operation": operation,
+            "cuprum_error_type": type(exc).__name__,
+        },
+    )
+    observation.emit(
+        "stdin_error",
+        _EventDetails(
+            pid=process.pid,
+            note=f"{type(exc).__name__}: {exc!s}",
+        ),
+    )
+
+
 async def _spawn_subprocess(
     execution: _SubprocessExecution,
 ) -> asyncio.subprocess.Process:
@@ -99,9 +136,62 @@ async def _spawn_subprocess(
             if execution.capture or execution.echo
             else asyncio.subprocess.DEVNULL
         ),
+        stdin=(asyncio.subprocess.PIPE if execution.stdin_data is not None else None),
         env=_merge_env(execution.ctx.env),
         cwd=(str(execution.ctx.cwd) if execution.ctx.cwd is not None else None),
     )
+
+
+async def _write_stdin(
+    process: asyncio.subprocess.Process,
+    stdin_data: bytes,
+    observation: _StageObservation,
+) -> None:
+    """Write caller-provided stdin bytes and close the pipe."""
+    stdin = process.stdin
+    if stdin is None:
+        _LOGGER.debug("stdin_writer_skipped pid=%s reason=no_pipe", process.pid)
+        return
+    _LOGGER.debug(
+        "stdin_writer_write_start pid=%s bytes=%s",
+        process.pid,
+        len(stdin_data),
+        extra={"cuprum_pid": process.pid, "cuprum_stdin_bytes": len(stdin_data)},
+    )
+    try:
+        stdin.write(stdin_data)
+        await stdin.drain()
+        observation.emit(
+            "stdin",
+            _EventDetails(pid=process.pid, byte_count=len(stdin_data)),
+        )
+    except (OSError, RuntimeError) as exc:
+        _emit_stdin_error(process, observation, exc, operation="write")
+    finally:
+        try:
+            _LOGGER.debug("stdin_writer_close_start pid=%s", process.pid)
+            stdin.close()
+            await stdin.wait_closed()
+        except (OSError, RuntimeError) as exc:
+            _emit_stdin_error(process, observation, exc, operation="close")
+    _LOGGER.debug("stdin_writer_finished pid=%s", process.pid)
+
+
+def _spawn_stdin_writer(
+    process: asyncio.subprocess.Process,
+    stdin_data: bytes | None,
+    observation: _StageObservation,
+) -> asyncio.Task[None] | None:
+    """Start stdin writing when direct stdin data was supplied."""
+    if stdin_data is None:
+        return None
+    _LOGGER.debug(
+        "stdin_writer_task_start pid=%s bytes=%s",
+        process.pid,
+        len(stdin_data),
+        extra={"cuprum_pid": process.pid, "cuprum_stdin_bytes": len(stdin_data)},
+    )
+    return asyncio.create_task(_write_stdin(process, stdin_data, observation))
 
 
 def _create_stream_callback(
@@ -151,15 +241,9 @@ def _spawn_stream_consumers(
     )
 
 
-async def _run_subprocess_with_streams(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-    *,
-    pid: int | None,
-    timeout: float | None,
-) -> tuple[int, float, str | None, str | None]:
-    """Run subprocess with stream capture and timeout handling."""
-    stream_config = _StreamConfig(
+def _build_stream_config(execution: _SubprocessExecution) -> _StreamConfig:
+    """Build the stdout _StreamConfig for an execution context."""
+    return _StreamConfig(
         capture_output=execution.capture,
         echo_output=execution.echo,
         sink=(
@@ -170,7 +254,45 @@ async def _run_subprocess_with_streams(
         encoding=execution.ctx.encoding,
         errors=execution.ctx.errors,
     )
+
+
+async def _handle_stream_timeout(
+    exc: TimeoutError,
+    *,
+    stdin_task: asyncio.Task[None] | None,
+    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+    timeout: float | None,
+) -> typ.NoReturn:
+    """Clean up stdin/stream tasks on timeout and raise _SubprocessTimeoutError."""
+    if stdin_task is not None:
+        await asyncio.gather(stdin_task, return_exceptions=True)
+    stdout_text, stderr_text = await asyncio.gather(*consumers)
+    if timeout is None:
+        msg = "TimeoutError without a configured timeout"
+        raise RuntimeError(msg) from exc
+    raise _SubprocessTimeoutError(
+        _SubprocessTimeoutDetails(
+            timeout=timeout,
+            stdout=stdout_text,
+            stderr=stderr_text,
+            exited_at=time.perf_counter(),
+        ),
+    ) from exc
+
+
+async def _run_subprocess_with_streams(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+    *,
+    pid: int | None,
+    timeout: float | None,
+) -> tuple[int, float, str | None, str | None]:
+    """Run subprocess with stream capture and timeout handling."""
+    stream_config = _build_stream_config(execution)
     consumers = _spawn_stream_consumers(process, execution, stream_config, pid=pid)
+    stdin_task = _spawn_stdin_writer(
+        process, execution.stdin_data, execution.observation
+    )
     try:
         exit_code, exited_at = await _wait_for_exit_code(
             process,
@@ -179,19 +301,16 @@ async def _run_subprocess_with_streams(
             consumers=consumers,
         )
     except TimeoutError as exc:
-        stdout_text, stderr_text = await asyncio.gather(*consumers)
-        # Invariant: TimeoutError only raised when timeout is configured
-        if timeout is None:
-            msg = "TimeoutError without a configured timeout"
-            raise RuntimeError(msg) from exc
-        raise _SubprocessTimeoutError(
-            _SubprocessTimeoutDetails(
-                timeout=timeout,
-                stdout=stdout_text,
-                stderr=stderr_text,
-                exited_at=time.perf_counter(),
-            ),
-        ) from exc
+        await _handle_stream_timeout(
+            exc, stdin_task=stdin_task, consumers=consumers, timeout=timeout
+        )
+    except asyncio.CancelledError:
+        if stdin_task is not None:
+            stdin_task.cancel()
+            await asyncio.gather(stdin_task, return_exceptions=True)
+        raise
+    if stdin_task is not None:
+        await stdin_task
     stdout_text, stderr_text = await asyncio.gather(*consumers)
     return exit_code, exited_at, stdout_text, stderr_text
 
@@ -311,11 +430,18 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     stderr_text: str | None = None
     try:
         if not execution.capture and not execution.echo:
+            stdin_task = _spawn_stdin_writer(
+                process, execution.stdin_data, execution.observation
+            )
+            cleanup_tasks = (stdin_task,) if stdin_task is not None else ()
             exit_code, exited_at = await _wait_for_exit_code(
                 process,
                 execution.ctx,
                 timeout=execution.timeout,
+                consumers=cleanup_tasks,
             )
+            if stdin_task is not None:
+                await stdin_task
         else:
             (
                 exit_code,
@@ -367,10 +493,12 @@ __all__ = [
     "_SubprocessTimeoutDetails",
     "_SubprocessTimeoutError",
     "_TimeoutContext",
+    "_build_stream_config",
     "_create_stream_callback",
     "_emit_exit_event",
     "_execute_subprocess",
     "_get_exit_code",
+    "_handle_stream_timeout",
     "_handle_subprocess_timeout",
     "_raise_timeout_expired",
     "_resolve_timeout",

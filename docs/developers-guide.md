@@ -36,11 +36,15 @@ python -m benchmarks.deterministic_b64_fixture \
 
 ## Sink model (`benchmarks/sinks.py`)
 
+<!-- markdownlint-disable MD013 -->
+
 | Sink kind        | Implementation                                   | Cost model                                                                        |
 | ---------------- | ------------------------------------------------ | --------------------------------------------------------------------------------- |
 | `devnull`        | Operating system null device                     | Discards bytes without allocation.                                                |
 | `text_blackhole` | `TextBlackhole` text stream                      | Counts characters and exposes no `.buffer`, forcing the text branch.              |
 | `pty_blackhole`  | `PtyBlackhole` pseudo-terminal master/slave pair | Drains the master side from a daemon thread to simulate terminal-like throughput. |
+
+<!-- markdownlint-enable MD013 -->
 
 ## Worker (`benchmarks/tee_profile_worker.py`)
 
@@ -125,11 +129,15 @@ Profiler orchestration is decoupled from scenario execution through the
 Any object with a `run(scenario, *, scenario_dir, config)` method satisfies the
 protocol. Three concrete adapters are provided:
 
+<!-- markdownlint-disable MD013 -->
+
 | Adapter class    | `profiler` value | Behaviour                                                                                                                                         |
 | ---------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `_NoneProfiler`  | `"none"`         | Runs the worker directly and writes `notes.txt` explaining that profiler artefacts were not generated.                                            |
 | `_PerfProfiler`  | `"perf"`         | Records `perf.data`, generates `perf.report.txt` and `stacks.folded` via `inferno-collapse-perf`, and summarizes folded stacks to `summary.json`. |
 | `_PySpyProfiler` | `"py-spy"`       | Records a raw `py-spy` trace to `pyspy.raw`.                                                                                                      |
+
+<!-- markdownlint-enable MD013 -->
 
 `_profiler_for(name)` is the factory that maps a `ProfilerName` literal to its
 adapter. Adding a new profiler requires implementing the protocol and
@@ -139,6 +147,8 @@ registering it in `_profiler_for`.
 
 `TeeProfileScenario` is a frozen dataclass representing one fully resolved
 profiling scenario. Its fields are:
+
+<!-- markdownlint-disable MD013 -->
 
 | Field                 | Type           | Description                                                                     |
 | --------------------- | -------------- | ------------------------------------------------------------------------------- |
@@ -150,6 +160,8 @@ profiling scenario. Its fields are:
 | `with_line_callbacks` | `bool`         | Whether stdout-line observers are registered during the run.                    |
 | `backend`             | `BackendName`  | Stream backend: `"auto"`, `"python"`, or `"rust"`.                              |
 | `repeat_count`        | `int`          | Number of measured repetitions.                                                 |
+
+<!-- markdownlint-enable MD013 -->
 
 `as_dict()` returns a JSON-serializable dictionary. `worker_config()` converts
 the scenario into a `TeeProfileWorkerConfig`, optionally overriding
@@ -230,6 +242,8 @@ Ruff findings first, then rerun `make lint` to reach the Pylint tier.
 
 The root `Makefile` exposes the following lint-related variables:
 
+<!-- markdownlint-disable MD013 -->
+
 | Variable               | Default                                                                      | Purpose                                                                |
 | ---------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `PYLINT_PYTHON`        | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.     |
@@ -239,6 +253,8 @@ The root `Makefile` exposes the following lint-related variables:
 | `PYLINT`               | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                   |
 | `LOCAL_TOOL_ENV`       | Derived `PATH`                                                               | Adds local binary directories before invoking host tools such as Ruff. |
 | `UV_ENV`               | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.              |
+
+<!-- markdownlint-enable MD013 -->
 
 Override these variables only for local diagnosis. For example, to lint a
 single module with the configured second tier:
@@ -333,3 +349,45 @@ cyclomatic complexity while preserving exact error messages.
 The default scenario matrix order is fixed and documented. Callers, snapshot
 tests, and CI artefact directories all depend on it. It must not be reordered
 without updating snapshot files and any downstream tooling.
+
+## Subprocess stdin injection
+
+When `stdin: StdinInput` is passed to `SafeCmd.run()`, the following sequence
+executes:
+
+1. `StdinInput.resolve(ctx)` encodes `text` via the execution-context
+   encoding/errors, or returns `data` bytes unchanged.  Mutual exclusion is
+   enforced at `StdinInput` construction time by `__post_init__`.
+2. The resolved bytes are stored on `_SubprocessExecution.stdin_data`.
+3. `_spawn_subprocess` opens `stdin=asyncio.subprocess.PIPE` when
+   `stdin_data is not None`; otherwise `stdin=None` (inherit parent).
+4. `_spawn_stdin_writer` creates an `asyncio.Task` that calls `_write_stdin`,
+   which writes the bytes, drains the pipe, and closes it.  `OSError` and
+   `RuntimeError` failures are logged to `cuprum.stdin` and emitted as a
+   `stdin_error` trace event so operators can observe early-close scenarios
+   without execution disruption.  Successful writes emit a `stdin` event with a
+   byte count.  The metrics adapter increments `cuprum_stdin_bytes_total` for
+   successful writes and `cuprum_stdin_errors_total` for failure events.
+5. In the streaming path (`_run_subprocess_with_streams`), the stdin writer
+   task runs concurrently with the stdout/stderr consumer tasks.  On
+   `TimeoutError`, `_handle_stream_timeout` cancels/gathers the stdin task
+   before raising `_SubprocessTimeoutError`.  On `asyncio.CancelledError`, the
+   task is explicitly cancelled and gathered before re-raising.
+6. In the non-streaming path (`_execute_subprocess`), the same writer task is
+   created and awaited after `_wait_for_exit_code` completes.
+
+`_execute_with_hooks(cmd, execution, tracking)` is the single site that runs
+`_execute_subprocess`, iterates after-hooks, and co-ordinates cancellation-safe
+cleanup of pending hook tasks via `asyncio.shield`. It replaces the try/except
+ladder that previously lived inline in `SafeCmd.run`, keeping the public method
+to a minimal orchestration skeleton (plan event, before-hooks dispatch,
+delegation).
+
+`_build_stream_config(execution)` centralizes construction of the
+`_StreamConfig` used by the streaming execution path
+(`_run_subprocess_with_streams`). Extracting it removes one branch from that
+function, reducing its cyclomatic complexity below the CodeScene threshold, and
+makes the stdout-sink resolution logic testable in isolation.
+
+Passing no `StdinInput` leaves subprocess stdin inherited from the parent
+process, preserving the pre-feature behaviour.

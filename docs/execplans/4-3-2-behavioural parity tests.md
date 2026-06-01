@@ -254,9 +254,9 @@ Two independent stream implementations exist:
 ### Dispatch mechanism
 
 `cuprum/_pipeline_streams.py` contains `_pump_stream_dispatch(reader, writer)`
-which checks `get_stream_backend()`, and if `RUST` and FDs are extractable,
-runs `rust_pump_stream` via `loop.run_in_executor()`. Otherwise, it delegates
-to `_pump_stream(reader, writer)`.
+which checks `get_stream_backend()`, and if `RUST` and FDs are extractable, runs
+`rust_pump_stream` via `loop.run_in_executor()`. Otherwise, it delegates to
+`_pump_stream(reader, writer)`.
 
 The `stream_backend` fixture in `conftest.py:50-88` parametrizes tests with
 `python` and `rust` backend values, setting `CUPRUM_STREAM_BACKEND` via

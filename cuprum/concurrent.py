@@ -12,6 +12,7 @@ import dataclasses as dc
 import typing as typ
 
 from cuprum.context import current_context
+from cuprum.sh import RunOutputOptions
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -118,14 +119,11 @@ async def _run_with_semaphore(
     config: _ConcurrentRunConfig,
 ) -> CommandResult:
     """Execute a single command, optionally throttled by semaphore."""
+    output = RunOutputOptions(capture=config.capture, echo=config.echo)
     if semaphore is not None:
         async with semaphore:
-            return await cmd.run(
-                capture=config.capture, echo=config.echo, context=config.context
-            )
-    return await cmd.run(
-        capture=config.capture, echo=config.echo, context=config.context
-    )
+            return await cmd.run(output=output, context=config.context)
+    return await cmd.run(output=output, context=config.context)
 
 
 async def _run_collect_all(

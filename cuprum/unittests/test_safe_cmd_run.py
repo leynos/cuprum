@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections.abc as cabc
+import contextlib
 import io
 import os
 import sys
@@ -14,7 +15,13 @@ from pathlib import Path
 import pytest
 
 from cuprum import ECHO, TimeoutExpired, sh
-from cuprum.sh import CommandResult, ExecutionContext
+from cuprum.sh import (
+    CommandResult,
+    ExecutionContext,
+    IOOptions,
+    RunOutputOptions,
+    StdinInput,
+)
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
@@ -62,6 +69,18 @@ def test_captures_output_and_exit_code(
     assert result.stderr == ""
 
 
+def test_io_options_warns_when_constructed() -> None:
+    """The backward-compatible IOOptions alias warns on construction."""
+    with pytest.warns(
+        DeprecationWarning,
+        match=r"IOOptions is deprecated; use RunOutputOptions instead",
+    ):
+        options = IOOptions(capture=False, echo=True)
+
+    assert options.capture is False
+    assert options.echo is True
+
+
 def test_captures_stderr_only(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
@@ -94,7 +113,7 @@ def test_captures_and_echoes_stderr(
         'import sys; print("err", file=sys.stderr)',
     )
 
-    result = execute(command, {"echo": True})
+    result = execute(command, {"output": RunOutputOptions(echo=True)})
 
     captured = capsys.readouterr()
 
@@ -115,7 +134,7 @@ def test_echoes_when_requested(
     _, execute = execution_strategy
     command = sh.make(ECHO)("hello runtime")
 
-    result = execute(command, {"echo": True})
+    result = execute(command, {"output": RunOutputOptions(echo=True)})
 
     captured = capfd.readouterr()
     assert result.stdout is not None
@@ -184,7 +203,7 @@ def test_allows_disabling_capture(
     _, execute = execution_strategy
     command = sh.make(ECHO)("uncaptured output")
 
-    result = execute(command, {"capture": False})
+    result = execute(command, {"output": RunOutputOptions(capture=False)})
 
     assert result.exit_code == 0
     assert result.stdout is None
@@ -200,7 +219,10 @@ def test_timeout_raises_timeout_expired(
     command = python_builder("-c", "import time; time.sleep(2)")
 
     with pytest.raises(TimeoutExpired, match=r"timed out") as exc_info:
-        execute(command, {"timeout": 0.1, "capture": False})
+        execute(
+            command,
+            {"timeout": 0.1, "output": RunOutputOptions(capture=False)},
+        )
 
     assert exc_info.value.timeout == pytest.approx(0.1)
     assert exc_info.value.stdout is None
@@ -224,7 +246,7 @@ def test_echoes_to_custom_sinks(
     result = execute(
         command,
         {
-            "echo": True,
+            "output": RunOutputOptions(echo=True),
             "context": ExecutionContext(
                 stdout_sink=stdout_sink,
                 stderr_sink=stderr_sink,
@@ -270,6 +292,134 @@ def test_decodes_with_configured_encoding(
     assert result.stderr == ""
 
 
+def test_input_text_feeds_stdin(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Both run() and run_sync() feed text directly to stdin."""
+    _, execute = execution_strategy
+    command = python_builder("-c", "import sys; print(sys.stdin.read(), end='')")
+
+    result = execute(command, {"stdin": StdinInput(text="hello stdin\n")})
+
+    assert result.exit_code == 0
+    assert result.stdout == "hello stdin\n"
+    assert result.stderr == ""
+
+
+def test_input_bytes_feeds_raw_stdin(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Both run() and run_sync() feed bytes directly to stdin."""
+    _, execute = execution_strategy
+    command = python_builder(
+        "-c",
+        "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
+    )
+
+    result = execute(command, {"stdin": StdinInput(data=b"\x00raw\xff\n")})
+
+    assert result.exit_code == 0
+    assert result.stdout == "\x00raw\ufffd\n"
+    assert result.stderr == ""
+
+
+def test_input_text_uses_configured_encoding(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Text stdin is encoded using the execution context settings."""
+    _, execute = execution_strategy
+    command = python_builder(
+        "-c",
+        "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
+    )
+
+    result = execute(
+        command,
+        {
+            "stdin": StdinInput(text="\u2013"),
+            "context": ExecutionContext(encoding="cp1252", errors="strict"),
+        },
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == "\u2013"
+    assert result.stderr == ""
+
+
+def test_input_text_and_input_bytes_conflict(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Supplying both stdin forms raises a validation error."""
+    _ = python_builder, execution_strategy
+    with pytest.raises(
+        ValueError,
+        match=r"text and data cannot both be provided",
+    ):
+        StdinInput(text="hello", data=b"hello")
+
+
+def test_input_text_works_when_capture_is_disabled(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Stdin injection still works when stdout/stderr are not captured."""
+    _, execute = execution_strategy
+    command = python_builder(
+        "-c",
+        "import sys; sys.exit(0 if sys.stdin.read() == 'uncaptured' else 9)",
+    )
+
+    result = execute(
+        command,
+        {
+            "output": RunOutputOptions(capture=False),
+            "stdin": StdinInput(text="uncaptured"),
+        },
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout is None
+    assert result.stderr is None
+
+
+def test_nonzero_exit_code_is_captured_with_input_text(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Non-zero exits still include captured streams when stdin is supplied."""
+    _, execute = execution_strategy
+    command = python_builder(
+        "-c",
+        ("import sys; data = sys.stdin.read(); print(data, end=''); sys.exit(7)"),
+    )
+
+    result = execute(command, {"stdin": StdinInput(text="failure input")})
+
+    assert result.exit_code == 7
+    assert result.ok is False
+    assert result.stdout == "failure input"
+    assert result.stderr == ""
+
+
+def test_process_closing_stdin_early_is_handled(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """A process that ignores stdin does not fail the command run."""
+    _, execute = execution_strategy
+    command = python_builder("-c", "print('done')")
+
+    result = execute(command, {"stdin": StdinInput(text="ignored stdin")})
+
+    assert result.exit_code == 0
+    assert result.stdout == "done\n"
+    assert result.stderr == ""
+
+
 # -----------------------------------------------------------------------------
 # Async-only tests (cancellation semantics)
 # -----------------------------------------------------------------------------
@@ -309,7 +459,7 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
     async def orchestrate() -> int:
         task = asyncio.create_task(
             command.run(
-                capture=False,
+                output=RunOutputOptions(capture=False),
                 context=ExecutionContext(
                     env={"CUPRUM_PID_FILE": str(pid_file)},
                     cancel_grace=0.1,
@@ -500,7 +650,10 @@ def test_run_does_not_invoke_after_hooks_on_cancellation(
             )
         ):
             task = asyncio.create_task(
-                command.run(capture=False, context=ExecutionContext(cancel_grace=0.1)),
+                command.run(
+                    output=RunOutputOptions(capture=False),
+                    context=ExecutionContext(cancel_grace=0.1),
+                ),
             )
             await asyncio.sleep(0.1)  # Let the process start
             task.cancel()
@@ -509,3 +662,65 @@ def test_run_does_not_invoke_after_hooks_on_cancellation(
 
     asyncio.run(orchestrate())
     assert after_called is False
+
+
+@pytest.mark.parametrize("execution_strategy", ["async", "sync"])
+def test_stdin_input_with_timeout_escalation(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: str,
+) -> None:
+    """Stdin writer task is cleaned up when the command times out."""
+    command = python_builder(
+        "-c",
+        "import sys, time; sys.stdin.read(); time.sleep(10)",
+    )
+    execute = _execute_async if execution_strategy == "async" else _execute_sync
+    with pytest.raises(TimeoutExpired):
+        execute(
+            command,
+            {
+                "stdin": StdinInput(text="x"),
+                "timeout": 0.2,
+                "output": RunOutputOptions(capture=False),
+            },
+        )
+
+
+def test_stdin_input_cancellation_cleans_up_task(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """Cancelling a command with stdin data does not hang."""
+
+    async def _orchestrate() -> None:
+        command = python_builder(
+            "-c",
+            "import sys, time; sys.stdin.read(); time.sleep(30)",
+        )
+        task = asyncio.create_task(
+            command.run(
+                output=RunOutputOptions(capture=False),
+                stdin=StdinInput(text="payload"),
+            )
+        )
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+
+    asyncio.run(_orchestrate())
+
+
+@pytest.mark.parametrize("execution_strategy", ["async", "sync"])
+def test_input_text_encoding_failure_raises(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: str,
+) -> None:
+    """UnicodeEncodeError propagates when text cannot be encoded."""
+    command = python_builder("-c", "import sys; sys.stdin.read()")
+    ctx = ExecutionContext(encoding="ascii", errors="strict")
+    execute = _execute_async if execution_strategy == "async" else _execute_sync
+    with pytest.raises(UnicodeEncodeError):
+        execute(
+            command,
+            {"stdin": StdinInput(text="\u00e9 non-ASCII"), "context": ctx},
+        )

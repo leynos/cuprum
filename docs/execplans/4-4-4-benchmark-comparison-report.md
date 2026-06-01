@@ -1,9 +1,8 @@
 # Generate benchmark comparison report and workflow summary table (4.4.4)
 
-This ExecPlan (execution plan) is a living document. The sections
-`Constraints`, `Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`,
-`Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work
-proceeds.
+This ExecPlan (execution plan) is a living document. The sections `Constraints`,
+`Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`,
+and `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
 Status: COMPLETE
 
@@ -169,7 +168,7 @@ This task is complete only when:
 
 - Observation: `make test` initially failed on an unrelated timing assertion in
   `cuprum/unittests/test_concurrency.py::test_concurrency_none_allows_unlimited`
-   while several other gate commands were running concurrently. Impact: the
+  while several other gate commands were running concurrently. Impact: the
   final `make test` validation was rerun in isolation and passed cleanly; the
   `4.4.4` implementation did not require changes to concurrency code.
 

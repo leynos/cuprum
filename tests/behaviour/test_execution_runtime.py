@@ -12,7 +12,7 @@ import pytest
 from pytest_bdd import given, scenario, then, when
 
 from cuprum import ECHO, TimeoutExpired, sh
-from cuprum.sh import ExecutionContext
+from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
@@ -61,6 +61,14 @@ def test_sync_run_captures_output() -> None:
     """Behavioural coverage for sync capture semantics."""
 
 
+@scenario(
+    "../features/execution_runtime.feature",
+    "Run passes direct stdin input to the command",
+)
+def test_run_passes_direct_stdin_input() -> None:
+    """Behavioural coverage for direct stdin injection."""
+
+
 @pytest.fixture
 def behaviour_state() -> dict[str, object]:
     """Shared mutable state for behaviour scenarios."""
@@ -72,6 +80,16 @@ def given_simple_echo_command() -> SafeCmd:
     """Provide a SafeCmd that writes to stdout."""
     builder = sh.make(ECHO)
     return builder("-n", "behaviour")
+
+
+@given("a safe command that reads stdin", target_fixture="stdin_reader_command")
+def given_stdin_reader_command() -> SafeCmd:
+    """Provide a SafeCmd that echoes stdin to stdout."""
+    catalogue, python_program = python_catalogue()
+    return sh.make(python_program, catalogue=catalogue)(
+        "-c",
+        "import sys; print(sys.stdin.read(), end='')",
+    )
 
 
 @when(
@@ -92,11 +110,28 @@ def when_run_command_sync(simple_echo_command: SafeCmd) -> CommandResult:
     return simple_echo_command.run_sync()
 
 
+@when(
+    "I run the command with direct stdin text",
+    target_fixture="run_result",
+)
+def when_run_command_with_direct_stdin(stdin_reader_command: SafeCmd) -> CommandResult:
+    """Execute the SafeCmd with text fed directly to stdin."""
+    return stdin_reader_command.run_sync(stdin=StdinInput(text="behaviour stdin\n"))
+
+
 @then("the command result contains captured output")
 def then_command_result_has_output(run_result: CommandResult) -> None:
     """Validate captured stdout/stderr and exit code."""
     assert run_result.exit_code == 0
     assert run_result.stdout == "behaviour"
+    assert not run_result.stderr
+
+
+@then("the command result contains the stdin text")
+def then_command_result_has_stdin_text(run_result: CommandResult) -> None:
+    """Validate captured stdout from direct stdin input."""
+    assert run_result.exit_code == 0
+    assert run_result.stdout == "behaviour stdin\n"
     assert not run_result.stderr
 
 
@@ -138,7 +173,11 @@ def when_run_command_with_timeout(
 
     ctx = ExecutionContext(env={"CUPRUM_PID_FILE": str(pid_file)})
     with pytest.raises(TimeoutExpired, match=r"timed out") as exc_info:
-        command.run_sync(capture=False, timeout=timeout, context=ctx)
+        command.run_sync(
+            output=RunOutputOptions(capture=False),
+            timeout=timeout,
+            context=ctx,
+        )
 
     behaviour_state["timeout_error"] = exc_info.value
     behaviour_state["timeout_value"] = timeout
@@ -267,7 +306,7 @@ def _cancel_command_with_grace(
         )
         task = asyncio.create_task(
             command.run(
-                capture=False,
+                output=RunOutputOptions(capture=False),
                 context=ExecutionContext(
                     env={"CUPRUM_PID_FILE": str(pid_file)},
                     cancel_grace=grace,

@@ -24,6 +24,7 @@ from cuprum.adapters.tracing_adapter import (
 )
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
 from cuprum.context import ScopeConfig, scoped
+from cuprum.events import ExecEvent
 from cuprum.program import Program
 
 if typ.TYPE_CHECKING:
@@ -242,6 +243,56 @@ class TestMetricsHook:
             cmd.run_sync()
 
         assert metrics.counters.get("cuprum_failures_total") == pytest.approx(1.0)
+
+    def test_counts_stdin_errors(self) -> None:
+        """Hook increments stdin error counter on stdin_error events."""
+        metrics = InMemoryMetrics()
+        hook = MetricsHook(metrics)
+        program = Program(sys.executable)
+
+        hook(
+            ExecEvent(
+                phase="stdin_error",
+                program=program,
+                argv=(str(program), "-c", "pass"),
+                cwd=None,
+                env=None,
+                pid=123,
+                timestamp=0.0,
+                line=None,
+                exit_code=None,
+                duration_s=None,
+                tags={"project": "stdin-metrics"},
+                note="BrokenPipeError: forced EPIPE",
+            )
+        )
+
+        assert metrics.counters.get("cuprum_stdin_errors_total") == pytest.approx(1.0)
+
+    def test_counts_stdin_bytes(self) -> None:
+        """Hook increments stdin byte counter on stdin events."""
+        metrics = InMemoryMetrics()
+        hook = MetricsHook(metrics)
+        program = Program(sys.executable)
+
+        hook(
+            ExecEvent(
+                phase="stdin",
+                program=program,
+                argv=(str(program), "-c", "pass"),
+                cwd=None,
+                env=None,
+                pid=123,
+                timestamp=0.0,
+                line=None,
+                exit_code=None,
+                duration_s=None,
+                tags={"project": "stdin-metrics"},
+                byte_count=7,
+            )
+        )
+
+        assert metrics.counters.get("cuprum_stdin_bytes_total") == pytest.approx(7.0)
 
     def test_factory_function_returns_hook(self) -> None:
         """metrics_hook() factory returns a valid ExecHook."""
