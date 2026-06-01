@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from cuprum import sh
+from cuprum import _subprocess_execution, sh
 from cuprum._pipeline_internals import _EventDetails
 from cuprum._subprocess_execution import _write_stdin
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
@@ -218,13 +218,14 @@ def test_pipeline_observe_emits_stage_tags_and_final_stdout() -> None:
     ]
 
 
-def test_observe_emits_stdin_error_event_when_process_closes_stdin_early() -> None:
+def test_observe_emits_stdin_error_event_when_process_closes_stdin_early(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Emit ``stdin_error`` event when the subprocess closes stdin early."""
     builder, catalogue = _python_builder(project_name="observe-stdin-error")
-    # This command reads a byte to unblock the writer, then closes stdin.
     cmd = builder(
         "-c",
-        "import sys; sys.stdin.read(1); sys.stdin.close(); print('done')",
+        "import sys; sys.stdin.close(); print('done')",
     )
 
     events: list[ExecEvent] = []
@@ -232,10 +233,22 @@ def test_observe_emits_stdin_error_event_when_process_closes_stdin_early() -> No
     def hook(ev: ExecEvent) -> None:
         events.append(ev)
 
-    large_payload = b"x" * 262144  # 256 KiB; exceeds typical pipe buffer
+    async def fake_write_stdin(
+        process: asyncio.subprocess.Process,
+        stdin_data: bytes,
+        observation: _StageObservation,
+    ) -> None:
+        await asyncio.sleep(0)
+        assert stdin_data == b"x"
+        observation.emit(
+            "stdin_error",
+            _EventDetails(pid=process.pid, note="BrokenPipeError: forced EPIPE"),
+        )
+
+    monkeypatch.setattr(_subprocess_execution, "_write_stdin", fake_write_stdin)
     with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
         result = cmd.run_sync(
-            stdin=StdinInput(data=large_payload),
+            stdin=StdinInput(data=b"x"),
             output=RunOutputOptions(capture=True),
         )
 
