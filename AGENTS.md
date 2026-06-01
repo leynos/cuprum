@@ -242,7 +242,7 @@ project:
 - Use `pytest` fixtures for shared setup in Python work. Use `rstest` fixtures
   for shared setup in Rust work.
 - Replace duplicated tests with `#[rstest(...)]` parameterized cases in Rust and
-  equivalent fixture-driven parameterisation in Python.
+  equivalent fixture-driven parameterization in Python.
 - Prefer `mockall` for ad hoc mocks and stubs.
 - For testing reliant on environment variables, use dependency injection and the
   `mockable` crate where feasible. If mockable cannot be used, environment
