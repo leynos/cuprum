@@ -144,33 +144,36 @@ This repository is written in Rust and uses Cargo for building and dependency
 management. Contributors should follow these best practices when working on the
 project:
 
-- Run `make check-fmt`, `make lint`, and `make test` before committing. These
-  targets wrap the following commands, so contributors understand the exact
-  behaviour and policy enforced:
-  - `make check-fmt` executes:
+- Run `make -C rust check-fmt`, `make -C rust lint`, and `make -C rust test`
+  before committing Rust changes. These targets wrap the following commands, so
+  contributors understand the exact behaviour and policy enforced:
+  - `make -C rust check-fmt` executes:
 
     ```sh
-    cargo fmt --workspace -- --check
+    cargo fmt --all -- --check
     ```
 
-    validating formatting across the entire workspace without modifying files.
-  - `make lint` executes:
+    validating formatting across the Rust workspace without modifying files.
+  - `make -C rust lint` executes:
 
     ```sh
-    cargo clippy --workspace --all-targets --all-features -- -D warnings
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+    cargo clippy --all-targets --all-features -- -D warnings
+    whitaker --all -- --all-targets --all-features
     ```
 
     linting every target with all features enabled and denying all Clippy
     warnings.
-  - `make test` executes:
+  - `make -C rust test` executes `cargo nextest run` when `cargo-nextest` is
+    available, otherwise:
 
     ```sh
-    cargo test --workspace
+    RUSTFLAGS="-D warnings" cargo test --all-targets --all-features
     ```
 
-    running the full workspace test suite. Use `make fmt`
-    (`cargo fmt --workspace`) to apply formatting fixes reported by the
-    formatter check.
+    running the Rust test suite with warnings denied. Use `make -C rust fmt`
+    (`cargo fmt --all`) to apply formatting fixes reported by the formatter
+    check.
 - Clippy warnings MUST be disallowed.
 - Fix any warnings emitted during tests in code instead of silencing them.
 - Where a function is too long, extract meaningfully named helper functions
