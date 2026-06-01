@@ -62,4 +62,6 @@ def test_maturin_wheel_build_snapshot(
     assert snapshot_payload["generator"] == expected, (
         f"Expected generator {expected!r}, found {snapshot_payload['generator']!r}"
     )
-    assert snapshot_payload == snapshot
+    assert snapshot_payload == snapshot, (
+        "Built wheel metadata, file list, and build settings changed."
+    )

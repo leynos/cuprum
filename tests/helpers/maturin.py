@@ -179,7 +179,7 @@ def _parse_metadata(raw_metadata: str) -> dict[str, typ.Any]:
 
 
 def _normalise_wheel_entry(name: str) -> str:
-    """Normalise platform/version wheel entry names to stable placeholders."""
+    """Normalize platform/version wheel entry names to stable placeholders."""
     if _EXTENSION_MODULE_RE.match(name):
         return "cuprum/_rust_backend_native.cpython-<platform>.so"
     if "/sboms/" in name:
