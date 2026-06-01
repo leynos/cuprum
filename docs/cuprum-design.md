@@ -1959,6 +1959,14 @@ Both pathways are tested as first-class implementations:
 - property-based tests (Hypothesis) verify byte-preservation across randomized
   payloads and randomized chunk boundaries by asserting deterministic hex
   output through real pipeline execution under both backends;
+- pure line-splitting property tests in
+  `cuprum/unittests/test_line_splitting.py` cover `_split_complete_lines()` and
+  `_strip_line_ending()` from `cuprum/_streams.py`, proving that line-callback
+  text is not dropped, that recognised line endings are stripped consistently,
+  and that trailing partial lines remain buffered;
+- CrossHair symbolically checks bounded PEP 316 contracts for the same
+  line-splitting invariants. These checks are development-only and skip on
+  Python versions where CrossHair cannot trace the active bytecode set.
 - integration tests exercise pathway selection logic, including environment
   overrides, forced fallback when Rust FDs are unavailable, and `ImportError`
   propagation when Rust is explicitly requested but unavailable.

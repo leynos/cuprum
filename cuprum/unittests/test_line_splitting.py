@@ -1,4 +1,20 @@
-"""Property-based tests for pure stream line-splitting helpers."""
+r"""Property-based tests for pure stream line-splitting helpers.
+
+This module verifies the text-only helpers that support line callbacks in
+``cuprum._streams``.  The helpers are deliberately tested without subprocesses,
+asyncio streams, or backend dispatch so failures point at the line-splitting
+contract rather than at process I/O.
+
+``_split_complete_lines`` returns completed lines with their recognised line
+endings removed plus the final partial line, if any. ``_strip_line_ending``
+removes one trailing ``"\r\n"``, ``"\n"``, or ``"\r"`` sequence and leaves the
+rest of the text untouched.  The Hypothesis tests exercise generated text with
+mixed line endings to prove preservation, stable remainder handling, and
+idempotent stripping.  The CrossHair contracts symbolically check bounded
+versions of the same invariants; a confirmed result means the contract held for
+the explored symbolic state space, while a failure should be treated as a
+minimal counterexample for the pure helper rather than as stream-backend drift.
+"""
 
 from __future__ import annotations
 

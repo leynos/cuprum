@@ -1120,6 +1120,13 @@ run them through real pipelines, and assert byte-preservation by comparing
 deterministic hexadecimal output. This provides broad regression coverage for
 content integrity across both Python and Rust pumping pathways.
 
+Cuprum also tests the Python backend's pure line-callback splitting helpers
+directly. Those tests prove that completed lines and final partial lines
+account for all generated text, and that recognised line endings are stripped
+without editing the rest of the line. In development environments, CrossHair
+adds bounded symbolic checks for the same contracts; those checks are skipped
+on Python versions where CrossHair cannot trace the active bytecode.
+
 ### Benchmark suite
 
 Cuprum includes an opt-in benchmark suite for stream-performance tracking.
