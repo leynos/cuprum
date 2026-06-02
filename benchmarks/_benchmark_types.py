@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import pathlib as pth
+import sys
 import typing as typ
 
 _VALID_BACKENDS = {"python", "rust"}
@@ -281,8 +282,13 @@ class PipelineBenchmarkConfig:
         Measured iteration count for hyperfine.
     hyperfine_bin:
         Executable name or path for hyperfine.
+    python_bin:
+        Executable name or path for the Python interpreter used to run
+        ``benchmarks/pipeline_worker.py``. Benchmark commands use the
+        interpreter directly so ratchets do not measure ``uv run`` overhead.
     uv_bin:
-        Executable name or path for the ``uv`` launcher.
+        Deprecated compatibility setting. Scenario commands no longer use
+        ``uv run`` during measured benchmark iterations.
     dry_run:
         Whether to emit plan JSON without invoking hyperfine.
     rust_available:
@@ -313,7 +319,8 @@ class PipelineBenchmarkConfig:
     warmup: int
     runs: int
     hyperfine_bin: str = "hyperfine"
-    uv_bin: str = "uv"
+    python_bin: str = sys.executable
+    uv_bin: str | None = None
     dry_run: bool = False
     rust_available: bool = False
 
@@ -331,7 +338,9 @@ class PipelineBenchmarkConfig:
         )
         _validate_hyperfine_iterations(warmup=self.warmup, runs=self.runs)
         _validate_non_empty_string(self.hyperfine_bin, name="hyperfine_bin")
-        _validate_non_empty_string(self.uv_bin, name="uv_bin")
+        _validate_non_empty_string(self.python_bin, name="python_bin")
+        if self.uv_bin is not None:
+            _validate_non_empty_string(self.uv_bin, name="uv_bin")
         _validate_bool(self.dry_run, name="dry_run")
         _validate_bool(self.rust_available, name="rust_available")
 

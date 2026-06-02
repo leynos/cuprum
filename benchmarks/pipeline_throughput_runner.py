@@ -38,13 +38,11 @@ def _build_worker_command(
     *,
     scenario: PipelineBenchmarkScenario,
     worker_path: pth.Path,
-    uv_bin: str,
+    python_bin: str,
 ) -> list[str]:
     """Build the worker invocation for one benchmark scenario."""
     command = [
-        uv_bin,
-        "run",
-        "python",
+        python_bin,
         str(worker_path),
         "--payload-bytes",
         str(scenario.payload_bytes),
@@ -89,7 +87,7 @@ def build_hyperfine_command(*, config: PipelineBenchmarkConfig) -> list[str]:
         worker_command = _build_worker_command(
             scenario=scenario,
             worker_path=config.worker_path,
-            uv_bin=config.uv_bin,
+            python_bin=config.python_bin,
         )
         command.append(
             render_prefixed_command(
@@ -139,10 +137,10 @@ def _prepare_benchmark_command_config(
     *,
     config: PipelineBenchmarkConfig,
 ) -> PipelineBenchmarkConfig:
-    """Prepare command rendering config, resolving the `uv` launcher when needed."""
+    """Prepare command rendering config, resolving executables when needed."""
     if config.dry_run:
         return config
-    return dc.replace(config, uv_bin=_resolve_executable(config.uv_bin))
+    return dc.replace(config, python_bin=_resolve_executable(config.python_bin))
 
 
 def run_pipeline_benchmarks(

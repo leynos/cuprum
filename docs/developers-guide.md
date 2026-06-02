@@ -1,6 +1,5 @@
 # Developers' guide
 
-
 ## Stream line-splitting properties
 
 Line callbacks in the Python stream backend use two pure helpers from
@@ -355,7 +354,6 @@ The canonical lint configuration lives in `pyproject.toml`:
 When changing lint policy, update both `pyproject.toml` and this guide. If the
 change alters the architecture of the lint gate, update
 [ADR-003](adr-003-two-tier-python-linting.md) as well.
-
 
 ## Maturin pin synchronization and native wheel tests
 

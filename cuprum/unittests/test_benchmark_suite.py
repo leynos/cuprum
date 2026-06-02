@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import pathlib as pth
+import shlex
+import sys
 import typing as typ
 
 import pytest
@@ -92,6 +94,20 @@ def test_pipeline_benchmark_config_coerces_string_paths() -> None:
     assert isinstance(config.worker_path, pth.Path), (
         "expected worker_path to be normalized to pathlib.Path"
     )
+
+
+def test_pipeline_benchmark_config_accepts_legacy_uv_bin() -> None:
+    """Legacy ``uv_bin`` config remains accepted but is not benchmarked."""
+    config = PipelineBenchmarkConfig(
+        output_path=pth.Path("dist/benchmarks/bench.json"),
+        worker_path=pth.Path("benchmarks/pipeline_worker.py"),
+        scenarios=(),
+        warmup=0,
+        runs=1,
+        uv_bin="uv",
+    )
+
+    assert config.uv_bin == "uv"
 
 
 def test_pipeline_benchmark_config_rejects_non_pathlike_output_path() -> None:
@@ -202,6 +218,7 @@ def test_build_hyperfine_command_contains_export_runs_and_warmup(
         scenarios=scenarios,
         warmup=1,
         runs=2,
+        uv_bin="uv",
     )
     command = build_hyperfine_command(config=config)
 
@@ -213,6 +230,13 @@ def test_build_hyperfine_command_contains_export_runs_and_warmup(
     assert "--runs" in command, "expected hyperfine command to include runs"
     assert any("CUPRUM_STREAM_BACKEND=python" in token for token in command), (
         "expected at least one hyperfine scenario command to target python backend"
+    )
+    scenario_commands = command[7:]
+    assert all(
+        " uv run python " not in f" {scenario}" for scenario in scenario_commands
+    )
+    assert any(
+        shlex.quote(sys.executable) in scenario for scenario in scenario_commands
     )
 
 

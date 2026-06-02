@@ -1977,6 +1977,9 @@ Both pathways are tested as first-class implementations:
 - end-to-end throughput uses `hyperfine` through
   `benchmarks/pipeline_throughput.py`, which drives
   `benchmarks/pipeline_worker.py` for scenario execution and emits JSON output.
+  The rendered `hyperfine` scenario commands invoke the active Python
+  interpreter directly rather than `uv run`, so the Rust ratchet measures
+  pipeline worker execution instead of dependency-environment launcher overhead.
 - the throughput scenario matrix covers three payload sizes (small at 1 KB,
   medium at 1 MB, large at 100 MB), two pipeline depths (single-stage with zero
   passthrough stages, and multi-stage with one passthrough stage), and two

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess  # noqa: S404  # behavioural test intentionally invokes CLI process
 import sys
 import typing as typ
@@ -150,6 +151,15 @@ def then_benchmark_plan_includes_valid_command(
             "expected each benchmark plan command argument to be a string"
         )
         assert argument, "command arguments must be non-empty strings"
+
+    scenario_commands = command[7:]
+    assert scenario_commands, "expected benchmark plan to include scenario commands"
+    assert all(
+        " uv run python " not in f" {scenario}" for scenario in scenario_commands
+    )
+    assert any(
+        shlex.quote(sys.executable) in scenario for scenario in scenario_commands
+    )
 
 
 # -- Scenario matrix steps (4.4.2) -------------------------------------------
