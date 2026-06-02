@@ -27,6 +27,9 @@ from hypothesis import strategies as st
 
 from cuprum._testing import _split_complete_lines, _strip_line_ending
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 _IS_PYTHON_315 = sys.version_info[:2] == (3, 15)
 
 if _IS_PYTHON_315:
@@ -217,7 +220,7 @@ def _strip_line_ending_contract(line: str) -> None:
     ],
 )
 @pytest.mark.skipif(check_states is None, reason="CrossHair is not installed")
-def test_crosshair_contracts(contract: typ.Callable[..., None]) -> None:  # noqa: TID251
+def test_crosshair_contracts(contract: cabc.Callable[..., None]) -> None:
     """Property: CrossHair symbolically verifies line-splitting contracts."""
     check_states(
         contract,
