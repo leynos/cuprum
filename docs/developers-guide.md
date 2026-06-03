@@ -35,6 +35,29 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
+## Pipeline throughput benchmark configuration
+
+`PipelineBenchmarkConfig` controls the hyperfine-based end-to-end throughput
+suite in `benchmarks/pipeline_throughput.py`. Scenario commands run
+`benchmarks/pipeline_worker.py` with `python_bin`, which defaults to the active
+interpreter and is resolved to an absolute executable path before measured
+non-dry-run benchmarks. The measured command intentionally avoids `uv run` so
+the Rust ratchet measures worker pipeline throughput rather than environment
+startup overhead.
+
+The remaining fields follow the benchmark plan: `output_path` receives
+hyperfine JSON or dry-run plan JSON, `worker_path` points at the worker module,
+`scenarios` supplies the rendered command matrix, `warmup` and `runs` configure
+hyperfine iteration counts, `hyperfine_bin` selects the hyperfine executable,
+`dry_run` writes the plan without invoking hyperfine, and `rust_available`
+records whether Rust scenarios are included.
+
+`uv_bin` is a deprecated legacy field that remains accepted in the dataclass for
+backward compatibility, but current benchmark command construction ignores it
+entirely. Keep it unset in new usage and set `python_bin` when a specific
+interpreter is required. In dry-run mode, command rendering does not resolve
+`python_bin` via PATH.
+
 ## Profiling harness overview
 
 The profiling benchmark harness provides deterministic parent-side tee and
