@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import json
-import shlex
+import os
 import shutil
 import subprocess  # noqa: S404  # benchmark runner intentionally invokes external tooling
 import typing as typ
@@ -27,11 +27,55 @@ def render_prefixed_command(
     env: cabc.Mapping[str, str],
 ) -> str:
     """Render a shell command with deterministic environment prefixes."""
-    env_tokens = [f"{key}={shlex.quote(value)}" for key, value in sorted(env.items())]
-    command_text = shlex.join(list(command))
+    if os.name == "nt":
+        return _render_windows_command(command=command, env=env)
+    return _render_posix_command(command=command, env=env)
+
+
+def _render_posix_command(
+    *,
+    command: cabc.Sequence[str],
+    env: cabc.Mapping[str, str],
+) -> str:
+    """Render a POSIX shell command with environment prefixes."""
+    env_tokens = [
+        f"{key}={_quote_posix_shell_token(value)}" for key, value in sorted(env.items())
+    ]
+    command_text = " ".join(_quote_posix_shell_token(token) for token in command)
     if not env_tokens:
         return command_text
     return f"{' '.join(env_tokens)} {command_text}"
+
+
+def _render_windows_command(
+    *,
+    command: cabc.Sequence[str],
+    env: cabc.Mapping[str, str],
+) -> str:
+    """Render a cmd.exe command with environment prefixes."""
+    command_text = subprocess.list2cmdline(list(command))
+    if not env:
+        return command_text
+    env_tokens = [
+        f'set "{key}={_escape_windows_env_value(value)}"'
+        for key, value in sorted(env.items())
+    ]
+    return f"{' && '.join(env_tokens)} && {command_text}"
+
+
+def _quote_posix_shell_token(token: str) -> str:
+    """Quote one POSIX shell token without relying on platform shell helpers."""
+    safe_chars = frozenset(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%_+=:,./-",
+    )
+    if token and all(char in safe_chars for char in token):
+        return token
+    return "'" + token.replace("'", "'\"'\"'") + "'"
+
+
+def _escape_windows_env_value(value: str) -> str:
+    """Escape an environment value for cmd.exe ``set "KEY=value"`` syntax."""
+    return value.replace('"', '""')
 
 
 def _build_worker_command(

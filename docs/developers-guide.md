@@ -6,10 +6,10 @@ Line callbacks in the Python stream backend use two pure helpers from
 `cuprum/_streams.py`:
 
 - `_split_complete_lines(text)` splits text into completed lines, strips each
-  recognised line ending, and returns `(lines, remainder)`. The `remainder` is
+  recognized line ending, and returns `(lines, remainder)`. The `remainder` is
   the final partial line and never ends in `"\n"` or `"\r"`.
 - `_strip_line_ending(line)` removes at most one trailing `"\r\n"`, `"\n"`, or
-  `"\r"` sequence. It does not normalise or edit interior text.
+  `"\r"` sequence. It does not normalize or edit interior text.
 
 These helpers are re-exported from `cuprum/_testing.py` so tests can state the
 contract directly without driving subprocess I/O. Keep them private to the
@@ -17,8 +17,8 @@ package: they exist to make `_emit_completed_lines` small and testable, not as
 public user API.
 
 `cuprum/unittests/test_line_splitting.py` contains the direct property suite.
-Hypothesis generates text with mixed recognised line endings and checks that
-normalised text is preserved, the final remainder is partial, and stripping is
+Hypothesis generates text with mixed recognized line endings and checks that
+normalized text is preserved, the final remainder is partial, and stripping is
 idempotent. CrossHair runs PEP 316 (Python Enhancement Proposal 316) contracts
 over bounded symbolic inputs for the same invariants. CrossHair is a
 development dependency only; the tests skip the symbolic checks when CrossHair

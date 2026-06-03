@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import shlex
+import os
 import subprocess  # noqa: S404  # behavioural test intentionally invokes CLI process
 import sys
 import typing as typ
@@ -157,9 +157,17 @@ def then_benchmark_plan_includes_valid_command(
     assert all(
         " uv run python " not in f" {scenario}" for scenario in scenario_commands
     )
-    assert any(
-        shlex.quote(sys.executable) in scenario for scenario in scenario_commands
-    )
+    assert any(sys.executable in scenario for scenario in scenario_commands)
+    if os.name == "nt":
+        assert any(
+            scenario.startswith('set "CUPRUM_STREAM_BACKEND=')
+            for scenario in scenario_commands
+        )
+    else:
+        assert any(
+            scenario.startswith("CUPRUM_STREAM_BACKEND=")
+            for scenario in scenario_commands
+        )
 
 
 # -- Scenario matrix steps (4.4.2) -------------------------------------------

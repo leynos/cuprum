@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import pathlib as pth
-import shlex
 import sys
 import typing as typ
 
 import pytest
 
+import benchmarks.pipeline_throughput_runner as runner
 from benchmarks._test_constants import _SCENARIO_NAME_PATTERN
 from benchmarks.pipeline_throughput import (
     HyperfineConfig,
@@ -53,6 +53,29 @@ def test_render_prefixed_command_prefixes_env_and_quotes_tokens() -> None:
         "expected rendered command to include CUPRUM_STREAM_BACKEND prefix"
     )
     assert "'a b'" in rendered, "expected rendered command to quote spaced token"
+
+
+def test_render_prefixed_command_uses_windows_env_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows command rendering uses cmd.exe-compatible env assignment."""
+    monkeypatch.setattr(runner.os, "name", "nt")
+    command = [
+        r"C:\Python313\python.exe",
+        r"C:\benchmarks\pipeline_worker.py",
+        "--label",
+        "a b",
+    ]
+
+    rendered = render_prefixed_command(
+        command=command,
+        env={"CUPRUM_STREAM_BACKEND": "python"},
+    )
+
+    assert rendered.startswith('set "CUPRUM_STREAM_BACKEND=python" && '), (
+        "expected rendered command to use cmd.exe set syntax"
+    )
+    assert '"a b"' in rendered, "expected rendered command to quote spaced token"
 
 
 def test_render_prefixed_command_with_empty_env_returns_raw_command() -> None:
@@ -235,9 +258,7 @@ def test_build_hyperfine_command_contains_export_runs_and_warmup(
     assert all(
         " uv run python " not in f" {scenario}" for scenario in scenario_commands
     )
-    assert any(
-        shlex.quote(sys.executable) in scenario for scenario in scenario_commands
-    )
+    assert any(sys.executable in scenario for scenario in scenario_commands)
 
 
 def test_run_pipeline_benchmarks_dry_run_writes_json(tmp_path: pth.Path) -> None:

@@ -1962,7 +1962,7 @@ Both pathways are tested as first-class implementations:
 - pure line-splitting property tests in
   `cuprum/unittests/test_line_splitting.py` cover `_split_complete_lines()` and
   `_strip_line_ending()` from `cuprum/_streams.py`, proving that line-callback
-  text is not dropped, that recognised line endings are stripped consistently,
+  text is not dropped, that recognized line endings are stripped consistently,
   and that trailing partial lines remain buffered;
 - CrossHair symbolically checks bounded PEP 316 contracts for the same
   line-splitting invariants. These checks are development-only and skip on
