@@ -130,6 +130,12 @@
   tests. Cover happy paths, unhappy paths, and relevant edge cases.
 - Snapshot tests (using `syrupy`) should be provided where multivariant output
   format consistency is relevant to the requirements.
+- Snapshot tests must be meaningful, focused, and paired with semantic
+  assertions for behaviour that should not be hidden inside a blob comparison.
+  Avoid generic snapshots that only record "whatever happened"; redact
+  nondeterministic fields such as paths, timestamps, random IDs, durations, and
+  toolchain-specific noise; and keep compiler or UI snapshots narrow enough that
+  legitimate formatting or dependency changes do not create brittle failures.
 - Add end-to-end tests where a change affects externally observable workflows,
   integration contracts, persistence, command-line behaviour, network
   boundaries, user interface flows, or other system-level behaviour.
@@ -186,7 +192,10 @@ project:
   release using `rstest` and `rstest-bdd`. Cover happy paths, unhappy paths,
   and relevant edge cases.
 - For Rust: snapshot tests (using `insta`) should be provided where multivariant
-  output format consistency is relevant to the requirements.
+  output format consistency is relevant to the requirements. Apply the same
+  snapshot quality bar used for Python, including focused snapshots, explicit
+  redaction of nondeterministic fields, semantic assertions beside snapshots,
+  and avoidance of brittle or generic trybuild/compiler-output fixtures.
 - Add end-to-end tests where a change affects externally observable workflows,
   integration contracts, persistence, command-line behaviour, network
   boundaries, user interface flows, or other system-level behaviour.
