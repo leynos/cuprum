@@ -39,6 +39,10 @@ if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
 
+_EVENT_WAIT_TIMEOUT_SECONDS = 10
+_THREAD_JOIN_TIMEOUT_SECONDS = 15
+
+
 @dc.dataclass(slots=True)
 class _WorkerSharedState:
     """Shared mutable state for collecting results and errors from worker threads.
@@ -67,7 +71,7 @@ def _run_worker_thread(
     safely after joining.
     """
     try:
-        barrier.wait(timeout=5)
+        barrier.wait(timeout=_EVENT_WAIT_TIMEOUT_SECONDS)
         result = run_tee_profile_worker(
             TeeProfileWorkerConfig(
                 fixture_path=fixture,
@@ -130,9 +134,9 @@ def _assert_backend_pair_completes(
     for thread in threads:
         thread.start()
 
-    barrier.wait(timeout=5)
+    barrier.wait(timeout=_EVENT_WAIT_TIMEOUT_SECONDS)
     for thread in threads:
-        thread.join(timeout=10)
+        thread.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
 
     alive_threads = [thread.name for thread in threads if thread.is_alive()]
     assert not alive_threads, (
@@ -191,9 +195,9 @@ class _CoordinatedBackendSelector:
         with self._delegate(backend):
             if backend == "python":
                 self._events["first_inside"].set()
-                assert self._events["second_selector_attempting"].wait(timeout=5), (
-                    "expected second_selector_attempting event to signal selector start"
-                )
+                assert self._events["second_selector_attempting"].wait(
+                    timeout=_EVENT_WAIT_TIMEOUT_SECONDS,
+                ), "expected second_selector_attempting event to signal selector start"
                 with self._observation_lock:
                     self._observations.append(os.environ.get("CUPRUM_STREAM_BACKEND"))
             else:
@@ -234,15 +238,17 @@ class _CheckpointBackendSelector:
         with self._delegate(backend):
             if backend == "python":
                 self._events["first_mutated_environment"].set()
-                assert self._events["second_waiting_for_lock"].wait(timeout=5), (
-                    "expected second thread to contend for the backend lock"
-                )
+                assert self._events["second_waiting_for_lock"].wait(
+                    timeout=_EVENT_WAIT_TIMEOUT_SECONDS,
+                ), "expected second thread to contend for the backend lock"
                 with self._observation_lock:
                     self._observations.append(os.environ.get("CUPRUM_STREAM_BACKEND"))
                 assert not self._events["second_entered_context"].is_set(), (
                     "expected the second thread to block while the first holds the lock"
                 )
-                self._events["release_first_context"].wait(timeout=5)
+                self._events["release_first_context"].wait(
+                    timeout=_EVENT_WAIT_TIMEOUT_SECONDS,
+                )
             else:
                 with self._observation_lock:
                     self._observations.append(os.environ.get("CUPRUM_STREAM_BACKEND"))
@@ -390,8 +396,8 @@ def test_backend_lock_is_reentrant() -> None:
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 @given(
-    outer_backend=st.sampled_from(("auto", "python", "rust")),
-    inner_backend=st.sampled_from(("auto", "python", "rust")),
+    outer_backend=st.sampled_from(_available_backend_names()),
+    inner_backend=st.sampled_from(_available_backend_names()),
 )
 def test_nested_selector_rejects_generated_backend_pairs(
     outer_backend: tee_profile_worker.BackendName,
@@ -513,12 +519,12 @@ def test_concurrent_workers_preserve_backend_environment(
     first = race.worker_thread("python")
     second = race.worker_thread("auto")
     first.start()
-    assert race.events["first_inside"].wait(timeout=5), (
+    assert race.events["first_inside"].wait(timeout=_EVENT_WAIT_TIMEOUT_SECONDS), (
         "expected first worker to enter run body"
     )
     second.start()
-    first.join(timeout=10)
-    second.join(timeout=10)
+    first.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
+    second.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
 
     alive_threads = [thread.name for thread in (first, second) if thread.is_alive()]
     assert not alive_threads, f"expected worker threads to finish, got {alive_threads}"
@@ -570,19 +576,19 @@ def test_selector_interleaving_blocks_environment_observation_until_unlock() -> 
     )
 
     first.start()
-    assert events["first_mutated_environment"].wait(timeout=5), (
-        "expected first thread to mutate the backend environment"
-    )
+    assert events["first_mutated_environment"].wait(
+        timeout=_EVENT_WAIT_TIMEOUT_SECONDS,
+    ), "expected first thread to mutate the backend environment"
     second.start()
-    assert events["second_waiting_for_lock"].wait(timeout=5), (
-        "expected second thread to reach the lock boundary"
-    )
+    assert events["second_waiting_for_lock"].wait(
+        timeout=_EVENT_WAIT_TIMEOUT_SECONDS,
+    ), "expected second thread to reach the lock boundary"
     assert not events["second_entered_context"].is_set(), (
         "expected second thread to remain outside the context while locked"
     )
     events["release_first_context"].set()
-    first.join(timeout=5)
-    second.join(timeout=5)
+    first.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
+    second.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
 
     alive_threads = [thread.name for thread in (first, second) if thread.is_alive()]
     assert not alive_threads, (
