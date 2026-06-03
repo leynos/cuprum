@@ -74,11 +74,11 @@
   - **Formatting:** Adheres to formatting standards (`make check-fmt`; use
     `make fmt` to apply fixes).
   - **Typechecking:** Passes type checking (`make typecheck`).
-  - For Rust files:
-    - **Testing:** Passes relevant unit and behavioural tests (`make test`).
-    - **Linting:** Passes lint checks (`make lint`).
-    - **Formatting:** Adheres to formatting standards (`make check-fmt`; use
-      `make fmt` to apply fixes).
+- For Rust files:
+  - **Testing:** Passes relevant unit and behavioural tests (`make test`).
+  - **Linting:** Passes lint checks (`make lint`).
+  - **Formatting:** Adheres to formatting standards (`make check-fmt`; use
+    `make fmt` to apply fixes).
   - **Markdown files (`.md` only):**
     - **Linting:** Passes markdown lint checks (`make markdownlint`).
     - **Mermaid diagrams:** Passes validation using nixie (`make nixie`).
@@ -239,7 +239,7 @@ project:
 - Use NewTypes to model domain values and eliminate "integer soup". Reach for
   `newt-hype` when introducing many homogeneous wrappers that share behaviour.
   Add shims such as `From<&str>` and `AsRef<str>` for string-backed wrappers.
-  For path-centric wrappers implement `AsRef<Path>` with `into_inner()` and
+  For path-centric wrappers, implement `AsRef<Path>` with `into_inner()` and
   `to_path_buf()`, and avoid `impl From<Wrapper> for PathBuf` due to the orphan
   rule. Prefer explicit tuple structs whenever bespoke validation or trait
   tailoring is needed. Combine approaches: use `newt-hype` for the common case,
