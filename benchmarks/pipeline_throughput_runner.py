@@ -53,7 +53,7 @@ def _render_windows_command(
     env: cabc.Mapping[str, str],
 ) -> str:
     """Render a cmd.exe command with environment prefixes."""
-    command_text = subprocess.list2cmdline(list(command))
+    command_text = " ".join(_quote_windows_cmd_token(token) for token in command)
     if not env:
         return command_text
     env_tokens = [
@@ -76,6 +76,29 @@ def _quote_posix_shell_token(token: str) -> str:
 def _escape_windows_env_value(value: str) -> str:
     """Escape an environment value for cmd.exe ``set "KEY=value"`` syntax."""
     return value.replace('"', '""')
+
+
+def _quote_windows_cmd_token(token: str) -> str:
+    """Quote one token for a cmd.exe command string."""
+    safe_chars = frozenset(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:\\/-",
+    )
+    if token and all(char in safe_chars for char in token):
+        return token
+
+    quoted = ['"']
+    backslashes = 0
+    for char in token:
+        if char == "\\":
+            backslashes += 1
+            continue
+        if char == '"':
+            quoted.extend(("\\" * ((backslashes * 2) + 1), '"'))
+        else:
+            quoted.extend(("\\" * backslashes, char))
+        backslashes = 0
+    quoted.extend(("\\" * (backslashes * 2), '"'))
+    return "".join(quoted)
 
 
 def _build_worker_command(

@@ -64,7 +64,7 @@ def test_render_prefixed_command_uses_windows_env_prefix(
         r"C:\Python313\python.exe",
         r"C:\benchmarks\pipeline_worker.py",
         "--label",
-        "a b",
+        'a "b"',
     ]
 
     rendered = render_prefixed_command(
@@ -75,7 +75,9 @@ def test_render_prefixed_command_uses_windows_env_prefix(
     assert rendered.startswith('set "CUPRUM_STREAM_BACKEND=python" && '), (
         "expected rendered command to use cmd.exe set syntax"
     )
-    assert '"a b"' in rendered, "expected rendered command to quote spaced token"
+    assert r'"a \"b\""' in rendered, (
+        "expected rendered command to escape embedded quotes"
+    )
 
 
 def test_render_prefixed_command_with_empty_env_returns_raw_command() -> None:
