@@ -18,6 +18,7 @@ class PipelineWorkerConfig:
     payload_bytes: int
     stages: int
     with_line_callbacks: bool
+    iterations: int
 
     def __post_init__(self) -> None:
         """Validate worker invariants for direct callers and CLI usage."""
@@ -26,6 +27,9 @@ class PipelineWorkerConfig:
             raise ValueError(msg)
         if self.stages < _MIN_PIPELINE_STAGES:
             msg = f"stages must be >= {_MIN_PIPELINE_STAGES}, got {self.stages}"
+            raise ValueError(msg)
+        if self.iterations < 1:
+            msg = f"iterations must be >= 1, got {self.iterations}"
             raise ValueError(msg)
 
 
@@ -52,12 +56,19 @@ def _parse_args() -> PipelineWorkerConfig:
             "line processing overhead."
         ),
     )
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=1,
+        help="Number of pipeline runs to execute inside this worker process.",
+    )
     args = parser.parse_args()
 
     return PipelineWorkerConfig(
         payload_bytes=args.payload_bytes,
         stages=args.stages,
         with_line_callbacks=args.line_callbacks,
+        iterations=args.iterations,
     )
 
 
@@ -160,14 +171,15 @@ def run_pipeline_worker(config: PipelineWorkerConfig) -> int:
     """Execute one configured throughput benchmark pipeline run."""
     pipeline, python_program = _build_pipeline(config)
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        result = pipeline.run_sync(capture=False, echo=False)
+        for _ in range(config.iterations):
+            result = pipeline.run_sync(capture=False, echo=False)
+            if not result.ok:
+                failure = result.failure
+                if failure is None:
+                    return 1
+                return failure.exit_code
 
-    if result.ok:
-        return 0
-    failure = result.failure
-    if failure is None:
-        return 1
-    return failure.exit_code
+    return 0
 
 
 def main() -> int:

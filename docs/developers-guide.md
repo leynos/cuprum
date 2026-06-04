@@ -45,6 +45,13 @@ non-dry-run benchmarks. The measured command intentionally avoids `uv run` so
 the Rust ratchet measures worker pipeline throughput rather than environment
 startup overhead.
 
+Each worker process executes `worker_iterations` pipeline runs, defaulting to
+20. Hyperfine therefore measures a batched worker invocation rather than one
+cold pipeline execution, reducing Python interpreter startup noise in the
+ratchet. Dry-run plans record `benchmark_profile_version` and
+`worker_iterations`; ratchet comparison skips older baseline artefacts whose
+profile metadata does not match the current benchmark shape.
+
 The remaining fields follow the benchmark plan: `output_path` receives
 hyperfine JSON or dry-run plan JSON, `worker_path` points at the worker module,
 `scenarios` supplies the rendered command matrix, `warmup` and `runs` configure

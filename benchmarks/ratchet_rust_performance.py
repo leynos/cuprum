@@ -8,7 +8,6 @@ writes a structured comparison report.
 from __future__ import annotations
 
 import argparse
-import dataclasses as dc
 import json
 import math
 import pathlib as pth
@@ -20,87 +19,18 @@ from benchmarks._validation import (
     _require_mapping,
     _require_non_empty_string,
 )
-
-_FLOAT_TOLERANCE = 1e-12
-
-
-@dc.dataclass(frozen=True, slots=True)
-class ScenarioComparison:
-    """Comparison result for one Rust benchmark scenario."""
-
-    scenario_name: str
-    baseline_mean: float
-    candidate_mean: float
-    regression_ratio: float
-    max_regression: float
-
-    @property
-    def is_regression(self) -> bool:
-        """Return ``True`` when scenario regression exceeds threshold."""
-        return (self.regression_ratio - self.max_regression) > _FLOAT_TOLERANCE
-
-    def as_dict(self) -> dict[str, object]:
-        """Serialize the scenario comparison for JSON output."""
-        return {
-            "scenario_name": self.scenario_name,
-            "baseline_mean": self.baseline_mean,
-            "candidate_mean": self.candidate_mean,
-            "regression_ratio": self.regression_ratio,
-            "max_regression": self.max_regression,
-            "is_regression": self.is_regression,
-        }
-
-
-@dc.dataclass(frozen=True, slots=True)
-class ComparisonReport:
-    """Summary report for Rust benchmark regression comparison."""
-
-    max_regression: float
-    comparisons: tuple[ScenarioComparison, ...]
-
-    @property
-    def passed(self) -> bool:
-        """Return ``True`` when no scenario breaches the configured threshold."""
-        return all(not comparison.is_regression for comparison in self.comparisons)
-
-    @property
-    def regressions(self) -> tuple[ScenarioComparison, ...]:
-        """Return comparisons that breached the regression threshold."""
-        return tuple(
-            comparison for comparison in self.comparisons if comparison.is_regression
-        )
-
-    @property
-    def rust_scenarios_compared(self) -> int:
-        """Return the number of Rust scenarios included in the comparison."""
-        return len(self.comparisons)
-
-    @property
-    def worst_regression_ratio(self) -> float:
-        """Return the worst regression ratio across all compared scenarios."""
-        if not self.comparisons:
-            return 0.0
-        return max(comparison.regression_ratio for comparison in self.comparisons)
-
-    def as_dict(self) -> dict[str, object]:
-        """Serialize the report for JSON output."""
-        return {
-            "max_regression": self.max_regression,
-            "passed": self.passed,
-            "rust_scenarios_compared": self.rust_scenarios_compared,
-            "worst_regression_ratio": self.worst_regression_ratio,
-            "comparisons": [comparison.as_dict() for comparison in self.comparisons],
-            "regressions": [comparison.as_dict() for comparison in self.regressions],
-        }
-
-
-@dc.dataclass(frozen=True, slots=True)
-class BenchmarkRunPayload:
-    """Benchmark payload pair for one context (baseline or candidate)."""
-
-    plan: dict[str, object]
-    throughput: dict[str, object]
-    context_name: str
+from benchmarks.benchmark_profile import (
+    IncompatibleBenchmarkProfileError,
+    require_worker_iterations,
+    validate_matching_profiles,
+    validate_profile_version,
+    write_incompatible_profile_report,
+)
+from benchmarks.ratchet_types import (
+    BenchmarkRunPayload,
+    ComparisonReport,
+    ScenarioComparison,
+)
 
 
 def _load_json(path: pth.Path) -> dict[str, object]:
@@ -145,6 +75,8 @@ def _require_non_negative_float(value: object, *, name: str) -> float:
 def load_plan(path: pth.Path) -> dict[str, object]:
     """Load and minimally validate dry-run plan JSON payload."""
     payload = _load_json(path)
+    validate_profile_version(payload)
+    require_worker_iterations(payload)
     scenarios = _require_list(payload.get("scenarios"), name="scenarios")
 
     for index, scenario_value in enumerate(scenarios):
@@ -294,6 +226,10 @@ def compare_rust_regressions(
         max_regression,
         name="max_regression",
     )
+    validate_matching_profiles(
+        baseline_plan=baseline.plan,
+        candidate_plan=candidate.plan,
+    )
 
     baseline_rust_means = _extract_rust_means(
         plan_payload=baseline.plan,
@@ -375,6 +311,10 @@ def main() -> int:
             max_regression=args.max_regression,
         )
         write_report(report=report, output_path=args.output)
+    except IncompatibleBenchmarkProfileError as exc:
+        write_incompatible_profile_report(reason=str(exc), output_path=args.output)
+        print(f"benchmark ratchet skipped: {exc}")
+        return 0
     except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
         print(f"benchmark ratchet failed to evaluate inputs: {exc}", file=sys.stderr)
         return 2

@@ -1162,16 +1162,17 @@ UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
   --output /tmp/pipeline-throughput-plan.json
 ```
 
-Dry-run output includes scenario metadata, command lines, and whether the Rust
-extension is available in the current environment.
+Dry-run output includes scenario metadata, command lines, benchmark profile
+metadata, worker iteration count, and whether the Rust extension is available
+in the current environment.
 
 Interpretation notes:
 
 - pump-latency microbenchmarks reflect inter-stage pipeline transfer overhead;
 - consume-throughput microbenchmarks reflect captured stdout read/decode
   throughput (currently the Python consume path);
-- end-to-end hyperfine runs measure full worker-pipeline runtime and include a
-  Rust scenario only when the Rust extension is available.
+- end-to-end hyperfine runs measure batched worker-pipeline runtime and include
+  a Rust scenario only when the Rust extension is available.
 
 #### Scenario matrix
 
@@ -1313,6 +1314,8 @@ The continuous integration (CI) workflows run the following checks:
   - It benchmarks the current checkout in smoke mode.
   - It compares Rust means against the latest successful `main` baseline
     artefact when one exists.
+  - It skips comparison when the saved baseline uses an older benchmark profile
+    shape, because single-run and batched-worker timings are not comparable.
   - Its baseline fetch helper follows GitHub’s signed archive redirects
     without forwarding GitHub-only authentication headers to the storage host.
   - It generates a Python-versus-Rust comparison report from the candidate

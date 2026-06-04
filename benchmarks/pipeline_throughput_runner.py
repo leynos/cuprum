@@ -15,6 +15,7 @@ from benchmarks._benchmark_types import (
     PipelineBenchmarkRunResult,
     PipelineBenchmarkScenario,
 )
+from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -106,6 +107,7 @@ def _build_worker_command(
     scenario: PipelineBenchmarkScenario,
     worker_path: pth.Path,
     python_bin: str,
+    worker_iterations: int,
 ) -> list[str]:
     """Build the worker invocation for one benchmark scenario."""
     command = [
@@ -115,6 +117,8 @@ def _build_worker_command(
         str(scenario.payload_bytes),
         "--stages",
         str(scenario.stages),
+        "--iterations",
+        str(worker_iterations),
     ]
     if scenario.with_line_callbacks:
         command.append("--line-callbacks")
@@ -155,6 +159,7 @@ def build_hyperfine_command(*, config: PipelineBenchmarkConfig) -> list[str]:
             scenario=scenario,
             worker_path=config.worker_path,
             python_bin=config.python_bin,
+            worker_iterations=config.worker_iterations,
         )
         command.append(
             render_prefixed_command(
@@ -167,20 +172,20 @@ def build_hyperfine_command(*, config: PipelineBenchmarkConfig) -> list[str]:
 
 def _write_dry_run_payload(
     *,
-    output_path: pth.Path,
+    config: PipelineBenchmarkConfig,
     command: cabc.Sequence[str],
-    scenarios: cabc.Sequence[PipelineBenchmarkScenario],
-    rust_available: bool,
 ) -> None:
     """Write dry-run benchmark metadata to JSON."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    config.output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
+        "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
         "dry_run": True,
-        "rust_available": rust_available,
+        "rust_available": config.rust_available,
+        "worker_iterations": config.worker_iterations,
         "command": list(command),
-        "scenarios": [scenario.as_dict() for scenario in scenarios],
+        "scenarios": [scenario.as_dict() for scenario in config.scenarios],
     }
-    output_path.write_text(
+    config.output_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True),
         encoding="utf-8",
     )
@@ -219,10 +224,8 @@ def run_pipeline_benchmarks(
 
     if config.dry_run:
         _write_dry_run_payload(
-            output_path=config.output_path,
+            config=config,
             command=command,
-            scenarios=config.scenarios,
-            rust_available=config.rust_available,
         )
     else:
         _execute_hyperfine_benchmark(

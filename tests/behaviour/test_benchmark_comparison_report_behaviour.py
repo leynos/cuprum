@@ -10,6 +10,8 @@ import typing as typ
 import pytest
 from pytest_bdd import given, scenario, then, when
 
+from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+
 if typ.TYPE_CHECKING:
     import pathlib as pth
 
@@ -101,6 +103,8 @@ def _prepare_fixture_bundle(
     _write_json(
         candidate_plan_path,
         {
+            "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+            "worker_iterations": 20,
             "dry_run": True,
             "rust_available": True,
             "command": ["hyperfine", "placeholder"],

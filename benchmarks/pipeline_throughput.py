@@ -65,6 +65,12 @@ def _parse_args() -> argparse.Namespace:
         default=3,
         help="Number of measured runs for each hyperfine command.",
     )
+    parser.add_argument(
+        "--worker-iterations",
+        type=int,
+        default=20,
+        help="Number of pipeline executions inside each measured worker process.",
+    )
     return parser.parse_args()
 
 
@@ -86,6 +92,7 @@ def main() -> int:
         runs=args.runs,
         dry_run=args.dry_run,
         rust_available=rust_available,
+        worker_iterations=args.worker_iterations,
     )
     run_pipeline_benchmarks(config=config)
     return 0

@@ -7,6 +7,10 @@ import typing as typ
 
 import pytest
 
+from benchmarks.benchmark_profile import (
+    BENCHMARK_PROFILE_VERSION,
+    IncompatibleBenchmarkProfileError,
+)
 from benchmarks.ratchet_rust_performance import (
     BenchmarkRunPayload,
     ComparisonReport,
@@ -33,8 +37,10 @@ def _scenario_payload(*, name: str, backend: str) -> dict[str, object]:
 def _plan_payload() -> dict[str, object]:
     """Return a benchmark plan payload."""
     return {
+        "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
         "dry_run": True,
         "rust_available": True,
+        "worker_iterations": 20,
         "command": ["hyperfine", "placeholder"],
         "scenarios": [
             _scenario_payload(name="python-small-single-nocb", backend="python"),
@@ -105,10 +111,34 @@ def test_load_plan_rejects_missing_scenarios(tmp_path: pth.Path) -> None:
     path = _write_json(
         tmp_path=tmp_path,
         filename="plan.json",
-        payload={"dry_run": True, "command": ["hyperfine"]},
+        payload={
+            "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+            "dry_run": True,
+            "worker_iterations": 20,
+            "command": ["hyperfine"],
+        },
     )
 
     with pytest.raises(TypeError, match="scenarios"):
+        load_plan(path)
+
+
+def test_load_plan_rejects_legacy_profile_metadata(tmp_path: pth.Path) -> None:
+    """Old single-run benchmark plans are incompatible with batched results."""
+    path = _write_json(
+        tmp_path=tmp_path,
+        filename="plan.json",
+        payload={
+            "dry_run": True,
+            "rust_available": True,
+            "command": ["hyperfine", "placeholder"],
+            "scenarios": [
+                _scenario_payload(name="rust-small-single-nocb", backend="rust"),
+            ],
+        },
+    )
+
+    with pytest.raises(IncompatibleBenchmarkProfileError, match="missing"):
         load_plan(path)
 
 
@@ -178,8 +208,10 @@ def test_compare_rust_regressions_rejects_result_count_mismatch() -> None:
 def test_compare_rust_regressions_rejects_missing_rust_scenarios() -> None:
     """Ratchet should fail if there are no Rust scenarios to compare."""
     python_only_plan = {
+        "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
         "dry_run": True,
         "rust_available": False,
+        "worker_iterations": 20,
         "command": ["hyperfine", "placeholder"],
         "scenarios": [
             _scenario_payload(name="python-small-single-nocb", backend="python"),
@@ -210,8 +242,10 @@ def test_compare_rust_regressions_rejects_missing_rust_scenarios() -> None:
 def test_compare_rust_regressions_rejects_invalid_backend() -> None:
     """Scenario backends must stay within the supported benchmark set."""
     invalid_plan = {
+        "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
         "dry_run": True,
         "rust_available": True,
+        "worker_iterations": 20,
         "command": ["hyperfine", "placeholder"],
         "scenarios": [
             _scenario_payload(name="python-small-single-nocb", backend="python"),
@@ -238,8 +272,10 @@ def test_compare_rust_regressions_rejects_invalid_backend() -> None:
 def test_compare_rust_regressions_rejects_duplicate_rust_scenario_names() -> None:
     """Rust scenario names must remain unique for stable matching."""
     duplicate_plan = {
+        "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
         "dry_run": True,
         "rust_available": True,
+        "worker_iterations": 20,
         "command": ["hyperfine", "placeholder"],
         "scenarios": [
             _scenario_payload(name="python-small-single-nocb", backend="python"),

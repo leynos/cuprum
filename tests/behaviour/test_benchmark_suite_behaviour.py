@@ -11,6 +11,7 @@ import typing as typ
 import pytest
 
 from benchmarks._test_constants import _SCENARIO_NAME_PATTERN
+from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -109,6 +110,10 @@ def then_benchmark_plan_indicates_dry_run(
     assert benchmark_plan_payload.get("dry_run") is True, (
         "expected benchmark plan dry_run flag to be True"
     )
+    assert benchmark_plan_payload.get("benchmark_profile_version") == (
+        BENCHMARK_PROFILE_VERSION
+    )
+    assert benchmark_plan_payload.get("worker_iterations") == 20
 
 
 @then("the benchmark plan contains valid scenarios")
@@ -158,6 +163,7 @@ def then_benchmark_plan_includes_valid_command(
         " uv run python " not in f" {scenario}" for scenario in scenario_commands
     )
     assert any(sys.executable in scenario for scenario in scenario_commands)
+    assert any("--iterations 20" in scenario for scenario in scenario_commands)
     if os.name == "nt":
         assert any(
             scenario.startswith('set "CUPRUM_STREAM_BACKEND=')

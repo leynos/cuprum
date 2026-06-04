@@ -11,6 +11,7 @@ import pytest
 
 import benchmarks.pipeline_throughput_runner as runner
 from benchmarks._test_constants import _SCENARIO_NAME_PATTERN
+from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 from benchmarks.pipeline_throughput import (
     HyperfineConfig,
     PipelineBenchmarkConfig,
@@ -253,6 +254,9 @@ def test_build_hyperfine_command_contains_export_runs_and_warmup(
     assert "--export-json" in command, "expected hyperfine command to export JSON"
     assert "--warmup" in command, "expected hyperfine command to include warmup"
     assert "--runs" in command, "expected hyperfine command to include runs"
+    assert any("--iterations 20" in token for token in command), (
+        "expected worker commands to batch pipeline runs inside one process"
+    )
     assert any("CUPRUM_STREAM_BACKEND=python" in token for token in command), (
         "expected at least one hyperfine scenario command to target python backend"
     )
@@ -290,6 +294,8 @@ def test_run_pipeline_benchmarks_dry_run_writes_json(tmp_path: pth.Path) -> None
     payload = json.loads(output_path.read_text(encoding="utf-8"))
 
     assert payload["dry_run"] is True, "expected payload dry_run flag to be True"
+    assert payload["benchmark_profile_version"] == BENCHMARK_PROFILE_VERSION
+    assert payload["worker_iterations"] == 20
     assert "rust_available" in payload, (
         "expected payload to include rust_available metadata"
     )
