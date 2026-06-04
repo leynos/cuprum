@@ -134,8 +134,9 @@
   assertions for behaviour that should not be hidden inside a blob comparison.
   Avoid generic snapshots that only record "whatever happened"; redact
   nondeterministic fields such as paths, timestamps, random IDs, durations, and
-  toolchain-specific noise; and keep compiler or UI snapshots narrow enough that
-  legitimate formatting or dependency changes do not create brittle failures.
+  toolchain-specific noise; and keep compiler or UI snapshots narrow enough
+  that legitimate formatting or dependency changes do not create brittle
+  failures.
 - Add end-to-end tests where a change affects externally observable workflows,
   integration contracts, persistence, command-line behaviour, network
   boundaries, user interface flows, or other system-level behaviour.
@@ -150,17 +151,18 @@ This repository is written in Rust and uses Cargo for building and dependency
 management. Contributors should follow these best practices when working on the
 project:
 
-- Run `make -C rust check-fmt`, `make -C rust lint`, and `make -C rust test`
-  before committing Rust changes. These targets wrap the following commands, so
-  contributors understand the exact behaviour and policy enforced:
-  - `make -C rust check-fmt` executes:
+- Run `make check-fmt`, `make lint`, and `make test` before committing Rust
+  changes. These unified root targets run the Python gates and the following
+  Rust commands, so contributors understand the exact behaviour and policy
+  enforced:
+  - `make check-fmt` executes:
 
     ```sh
     cargo fmt --all -- --check
     ```
 
     validating formatting across the Rust workspace without modifying files.
-  - `make -C rust lint` executes:
+  - `make lint` executes:
 
     ```sh
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
@@ -170,16 +172,16 @@ project:
 
     linting every target with all features enabled and denying all Clippy
     warnings.
-  - `make -C rust test` executes `cargo nextest run` when `cargo-nextest` is
-    available, otherwise:
+  - `make test` executes `cargo nextest run` when `cargo-nextest` is available,
+    otherwise:
 
     ```sh
     RUSTFLAGS="-D warnings" cargo test --all-targets --all-features
     ```
 
-    running the Rust test suite with warnings denied. Use `make -C rust fmt`
+    running the Rust test suite with warnings denied. Use `make fmt`
     (`cargo fmt --all`) to apply formatting fixes reported by the formatter
-    check.
+    check alongside the Python and Markdown formatters.
 - Clippy warnings MUST be disallowed.
 - Fix any warnings emitted during tests in code instead of silencing them.
 - Where a function is too long, extract meaningfully named helper functions

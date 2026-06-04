@@ -15,9 +15,8 @@
 //! Splice requires at least one pipe endpoint. Regular files, most sockets,
 //! and other file descriptor types return `EINVAL` and trigger the fallback.
 
-use std::fs::File;
 use std::io;
-use std::os::unix::io::AsRawFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 
 use crate::io_utils::is_nonfatal_write_error;
 
@@ -41,8 +40,8 @@ const SPLICE_F_MORE: libc::c_uint = 0x04;
 /// - `Some(Err(e))`: Fatal I/O error occurred
 /// - `None`: splice not supported for these FDs; caller should use read/write
 pub(crate) fn try_splice_pump(
-    reader: &File,
-    writer: &File,
+    reader: &OwnedFd,
+    writer: &OwnedFd,
     chunk_size: usize,
 ) -> Option<Result<u64, io::Error>> {
     let reader_fd = reader.as_raw_fd();
@@ -82,7 +81,7 @@ fn splice_once(fd_in: libc::c_int, fd_out: libc::c_int, len: usize) -> Result<us
         Err(io::Error::last_os_error())
     } else {
         // Non-negative ssize_t fits in usize on Linux.
-        Ok(result as usize)
+        usize::try_from(result).map_err(|_| io::Error::other("splice length overflow"))
     }
 }
 

@@ -242,8 +242,8 @@ Key files for this task:
   `edition = "2024"` (requiring Rust 1.85+), PyO3 0.27.2, and `libc 0.2` on
   Linux.
 
-- `rust/Makefile` — Rust-specific build targets including `make build`,
-  `make test`, `make lint`, `make fmt`.
+- `Makefile` — unified Python, Rust, and documentation build targets including
+  `make build`, `make test`, `make lint`, and `make fmt`.
 
 ### Existing test patterns
 

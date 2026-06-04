@@ -9,7 +9,7 @@
 pub(crate) struct ValidUpTo(usize);
 
 impl ValidUpTo {
-    pub(crate) fn value(self) -> usize {
+    pub(crate) const fn value(self) -> usize {
         self.0
     }
 }
@@ -19,11 +19,11 @@ impl ValidUpTo {
 pub(crate) struct FinalChunk(bool);
 
 impl FinalChunk {
-    pub(crate) fn new(is_final: bool) -> Self {
+    pub(crate) const fn new(is_final: bool) -> Self {
         Self(is_final)
     }
 
-    pub(crate) fn is_final(self) -> bool {
+    pub(crate) const fn is_final(self) -> bool {
         self.0
     }
 }
@@ -68,7 +68,10 @@ fn append_valid_prefix(pending: &[u8], output: &mut String, valid_up_to: ValidUp
     }
     // SAFETY: `valid_up_to` comes from a `Utf8Error`, so this prefix is known
     // to be valid UTF-8.
-    let valid_prefix = unsafe { std::str::from_utf8_unchecked(&pending[..valid_up_to.value()]) };
+    let Some(prefix) = pending.get(..valid_up_to.value()) else {
+        return;
+    };
+    let valid_prefix = unsafe { std::str::from_utf8_unchecked(prefix) };
     output.push_str(valid_prefix);
 }
 
@@ -82,7 +85,7 @@ fn handle_utf8_error(
     final_chunk: FinalChunk,
 ) -> bool {
     let valid_up_to = err.valid_up_to();
-    let final_chunk = final_chunk.is_final();
+    let is_final_chunk = final_chunk.is_final();
     match err.error_len() {
         Some(error_len) => {
             output.push('\u{FFFD}');
@@ -98,7 +101,7 @@ fn handle_utf8_error(
             pending,
             output,
             ValidUpTo(valid_up_to),
-            FinalChunk::new(final_chunk),
+            FinalChunk::new(is_final_chunk),
         ),
     }
 }

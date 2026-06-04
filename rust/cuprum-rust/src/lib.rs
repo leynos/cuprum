@@ -1,16 +1,18 @@
 //! Optional Rust extension for Cuprum stream operations.
 //!
-//! This crate exposes a PyO3 module providing stream pump and consume
+//! This crate exposes a `PyO3` module providing stream pump and consume
 //! helpers alongside an availability check for the Rust backend.
 
-use std::fs::File;
-use std::io::{self, Read};
+use std::io;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 #[cfg(unix)]
-use std::os::fd::FromRawFd;
+use std::os::fd::{FromRawFd, OwnedFd};
+
+#[cfg(windows)]
+use std::fs::File;
 
 #[cfg(windows)]
 use std::os::windows::io::{FromRawHandle, RawHandle};
@@ -20,7 +22,7 @@ mod io_utils;
 mod splice;
 mod utf8;
 
-use io_utils::handle_write_result;
+use io_utils::{StreamHandle, handle_write_result, read_stream};
 use utf8::{FinalChunk, decode_utf8_replace};
 
 /// Report whether the Rust extension is available.
@@ -28,9 +30,8 @@ use utf8::{FinalChunk, decode_utf8_replace};
 /// # Returns
 /// `true` when the extension is successfully loaded.
 #[pyfunction]
-#[must_use]
-fn is_available(_py: Python<'_>) -> PyResult<bool> {
-    Ok(true)
+const fn is_available() -> bool {
+    true
 }
 
 /// Pump bytes between file descriptors outside the GIL.
@@ -45,19 +46,18 @@ fn is_available(_py: Python<'_>) -> PyResult<bool> {
 /// I/O failures.
 #[pyfunction]
 #[pyo3(signature = (reader_fd, writer_fd, buffer_size = 65536))]
-#[must_use]
 fn rust_pump_stream(
     py: Python<'_>,
     reader_fd: i64,
     writer_fd: i64,
     buffer_size: i64,
 ) -> PyResult<u64> {
-    let buffer_size = validate_buffer_size(buffer_size)?;
+    let validated_buffer_size = validate_buffer_size(buffer_size)?;
 
-    let reader_fd = ReaderFd(convert_fd(reader_fd)?);
-    let writer_fd = WriterFd(convert_fd(writer_fd)?);
+    let reader = ReaderFd(convert_fd(reader_fd)?);
+    let writer = WriterFd(convert_fd(writer_fd)?);
 
-    let result = py.detach(|| pump_stream(reader_fd, writer_fd, buffer_size));
+    let result = py.detach(|| pump_stream(reader, writer, validated_buffer_size));
     result.map_err(PyErr::from)
 }
 
@@ -78,17 +78,15 @@ fn rust_pump_stream(
 /// I/O failures.
 #[pyfunction]
 #[pyo3(signature = (reader_fd, buffer_size = 65536))]
-#[must_use]
 fn rust_consume_stream(py: Python<'_>, reader_fd: i64, buffer_size: i64) -> PyResult<String> {
-    let buffer_size = validate_buffer_size(buffer_size)?;
+    let validated_buffer_size = validate_buffer_size(buffer_size)?;
 
-    let reader_fd = ReaderFd(convert_fd(reader_fd)?);
-    let result = py.detach(|| consume_stream(reader_fd, buffer_size));
+    let reader = ReaderFd(convert_fd(reader_fd)?);
+    let result = py.detach(|| consume_stream(reader, validated_buffer_size));
     result.map_err(PyErr::from)
 }
 
 #[cfg(unix)]
-#[must_use]
 fn convert_fd(value: i64) -> PyResult<PlatformFd> {
     let fd =
         i32::try_from(value).map_err(|_| PyValueError::new_err("file descriptor out of range"))?;
@@ -101,7 +99,6 @@ fn convert_fd(value: i64) -> PyResult<PlatformFd> {
 }
 
 #[cfg(windows)]
-#[must_use]
 fn convert_fd(value: i64) -> PyResult<PlatformFd> {
     let handle_value = value as u64;
     if usize::BITS >= 64 {
@@ -112,10 +109,10 @@ fn convert_fd(value: i64) -> PyResult<PlatformFd> {
     Ok(truncated as usize)
 }
 
-/// Validate that buffer_size is positive and fits into a usize.
+/// Validate that `buffer_size` is positive and fits into a usize.
 ///
 /// # Errors
-/// Returns `PyValueError` if buffer_size is non-positive or out of range.
+/// Returns `PyValueError` if `buffer_size` is non-positive or out of range.
 fn validate_buffer_size(buffer_size: i64) -> PyResult<BufferSize> {
     if buffer_size <= 0 {
         return Err(PyValueError::new_err(
@@ -128,13 +125,13 @@ fn validate_buffer_size(buffer_size: i64) -> PyResult<BufferSize> {
 }
 
 #[cfg(unix)]
-fn file_from_raw(fd: PlatformFd) -> File {
+fn stream_from_raw(fd: PlatformFd) -> StreamHandle {
     // SAFETY: The caller ensures the fd is valid and owned by the caller.
-    unsafe { File::from_raw_fd(fd) }
+    unsafe { OwnedFd::from_raw_fd(fd) }
 }
 
 #[cfg(windows)]
-fn file_from_raw(handle: PlatformFd) -> File {
+fn stream_from_raw(handle: PlatformFd) -> StreamHandle {
     // SAFETY: The caller ensures the handle is valid and owned by the caller.
     unsafe { File::from_raw_handle(handle as RawHandle) }
 }
@@ -148,8 +145,8 @@ fn pump_stream(
     writer_fd: WriterFd,
     buffer_size: BufferSize,
 ) -> Result<u64, io::Error> {
-    let mut reader = file_from_raw(reader_fd.0);
-    let mut writer = file_from_raw(writer_fd.0);
+    let mut reader = stream_from_raw(reader_fd.0);
+    let mut writer = stream_from_raw(writer_fd.0);
     let result = pump_stream_files(&mut reader, &mut writer, buffer_size);
     // The caller owns the reader FD; avoid closing it here.
     // The writer FD is treated as consumed and closes on drop to signal EOF.
@@ -159,7 +156,7 @@ fn pump_stream(
 
 /// Consume bytes from a file descriptor and decode UTF-8 with replacement.
 fn consume_stream(reader_fd: ReaderFd, buffer_size: BufferSize) -> Result<String, io::Error> {
-    let mut reader = file_from_raw(reader_fd.0);
+    let mut reader = stream_from_raw(reader_fd.0);
     let result = consume_stream_files(&mut reader, buffer_size);
     // The caller owns the reader FD; avoid closing it here.
     std::mem::forget(reader);
@@ -182,14 +179,14 @@ struct WriterFd(PlatformFd);
 struct BufferSize(usize);
 
 impl BufferSize {
-    fn value(self) -> usize {
+    const fn value(self) -> usize {
         self.0
     }
 }
 
 fn pump_stream_files(
-    reader: &mut File,
-    writer: &mut File,
+    reader: &mut StreamHandle,
+    writer: &mut StreamHandle,
     buffer_size: BufferSize,
 ) -> Result<u64, io::Error> {
     // On Linux, attempt zero-copy splice first.
@@ -207,8 +204,8 @@ fn pump_stream_files(
 /// This is used when splice is not available (non-Linux) or when the file
 /// descriptors do not support splice (regular files, some sockets).
 fn pump_stream_files_readwrite(
-    reader: &mut File,
-    writer: &mut File,
+    reader: &mut StreamHandle,
+    writer: &mut StreamHandle,
     buffer_size: BufferSize,
 ) -> Result<u64, io::Error> {
     let mut buffer = vec![0_u8; buffer_size.value()];
@@ -216,7 +213,7 @@ fn pump_stream_files_readwrite(
     let mut writer_open = true;
 
     loop {
-        let read_len = reader.read(&mut buffer)?;
+        let read_len = read_stream(reader, &mut buffer)?;
         if read_len == 0 {
             break;
         }
@@ -224,7 +221,9 @@ fn pump_stream_files_readwrite(
             continue;
         }
 
-        let chunk = &buffer[..read_len];
+        let chunk = buffer
+            .get(..read_len)
+            .ok_or_else(|| io::Error::other("read length exceeded buffer"))?;
 
         writer_open = handle_write_result(writer, chunk, &mut total_written)?;
     }
@@ -232,17 +231,23 @@ fn pump_stream_files_readwrite(
     Ok(total_written)
 }
 
-fn consume_stream_files(reader: &mut File, buffer_size: BufferSize) -> Result<String, io::Error> {
+fn consume_stream_files(
+    reader: &mut StreamHandle,
+    buffer_size: BufferSize,
+) -> Result<String, io::Error> {
     let mut buffer = vec![0_u8; buffer_size.value()];
     let mut pending: Vec<u8> = Vec::new();
     let mut output = String::new();
 
     loop {
-        let read_len = reader.read(&mut buffer)?;
+        let read_len = read_stream(reader, &mut buffer)?;
         if read_len == 0 {
             break;
         }
-        pending.extend_from_slice(&buffer[..read_len]);
+        let chunk = buffer
+            .get(..read_len)
+            .ok_or_else(|| io::Error::other("read length exceeded buffer"))?;
+        pending.extend_from_slice(chunk);
         decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(false));
     }
 
