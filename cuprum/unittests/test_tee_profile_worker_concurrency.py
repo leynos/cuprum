@@ -179,6 +179,11 @@ def _backend_lists(
     return tuple(draw(st.lists(backend, min_size=thread_count, max_size=thread_count)))
 
 
+_backends_strategy: st.SearchStrategy[tee_profile_worker.BackendName] = st.deferred(
+    lambda: st.sampled_from(_available_backend_names())
+)
+
+
 def _assert_backend_pair_completes(
     backends: tuple[tee_profile_worker.BackendName, ...],
     fixture: pth.Path,
@@ -432,17 +437,20 @@ def _run_selector_context(
             errors.append(exc)
 
 
-_ALTERNATE_BACKEND: tee_profile_worker.BackendName = (
-    "rust" if tee_profile_worker._backend._check_rust_available() else "auto"
-)
+def _alternate_backend() -> tee_profile_worker.BackendName:
+    """Return the non-python backend available in this environment."""
+    return "rust" if tee_profile_worker._backend._check_rust_available() else "auto"
 
-_BACKEND_PAIRS: tuple[
+
+def _backend_pairs() -> tuple[
     tuple[tee_profile_worker.BackendName, tee_profile_worker.BackendName],
     ...,
-] = (
-    ("python", "python"),
-    ("python", _ALTERNATE_BACKEND),
-)
+]:
+    """Return parametrised backend pairs for concurrent-worker tests."""
+    return (
+        ("python", "python"),
+        ("python", _alternate_backend()),
+    )
 
 
 def test_backend_lock_is_reentrant() -> None:
@@ -463,10 +471,7 @@ def test_backend_lock_is_reentrant() -> None:
     deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
-@given(
-    outer_backend=st.sampled_from(_available_backend_names()),
-    inner_backend=st.sampled_from(_available_backend_names()),
-)
+@given(outer_backend=_backends_strategy, inner_backend=_backends_strategy)
 def test_nested_selector_rejects_generated_backend_pairs(
     outer_backend: tee_profile_worker.BackendName,
     inner_backend: tee_profile_worker.BackendName,
@@ -549,7 +554,7 @@ def test_nested_selector_logs_rejection_warning(
     )
 
 
-@pytest.mark.parametrize("backends", _BACKEND_PAIRS)
+@pytest.mark.parametrize("backends", _backend_pairs())
 def test_concurrent_workers_do_not_race(
     tmp_path: pth.Path,
     backends: tuple[tee_profile_worker.BackendName, tee_profile_worker.BackendName],
