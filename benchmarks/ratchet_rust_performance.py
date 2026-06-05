@@ -42,8 +42,14 @@ def _load_json(path: pth.Path) -> dict[str, object]:
     return typ.cast("dict[str, object]", payload)
 
 
-def _require_positive_float(value: object, *, name: str) -> float:
-    """Validate and return a positive float value."""
+def _require_float(
+    value: object,
+    *,
+    name: str,
+    minimum: float,
+    exclusive: bool,
+) -> float:
+    """Validate that *value* is a finite float satisfying a minimum bound."""
     if isinstance(value, bool) or not isinstance(value, int | float):
         msg = f"{name} must be a number"
         raise TypeError(msg)
@@ -51,25 +57,23 @@ def _require_positive_float(value: object, *, name: str) -> float:
     if not math.isfinite(validated):
         msg = f"{name} must be finite"
         raise ValueError(msg)
-    if validated <= 0.0:
+    if exclusive and validated <= minimum:
         msg = f"{name} must be > 0"
         raise ValueError(msg)
+    if not exclusive and validated < minimum:
+        msg = f"{name} must be >= 0"
+        raise ValueError(msg)
     return validated
+
+
+def _require_positive_float(value: object, *, name: str) -> float:
+    """Validate and return a positive float value."""
+    return _require_float(value, name=name, minimum=0.0, exclusive=True)
 
 
 def _require_non_negative_float(value: object, *, name: str) -> float:
     """Validate and return a non-negative float value."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        msg = f"{name} must be a number"
-        raise TypeError(msg)
-    validated = float(value)
-    if not math.isfinite(validated):
-        msg = f"{name} must be finite"
-        raise ValueError(msg)
-    if validated < 0.0:
-        msg = f"{name} must be >= 0"
-        raise ValueError(msg)
-    return validated
+    return _require_float(value, name=name, minimum=0.0, exclusive=False)
 
 
 def load_plan(path: pth.Path) -> dict[str, object]:
