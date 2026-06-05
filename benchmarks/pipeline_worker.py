@@ -4,11 +4,24 @@ from __future__ import annotations
 
 import argparse
 import dataclasses as dc
+import logging
 import sys
 
 from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
 
+_logger = logging.getLogger(__name__)
+
 _MIN_PIPELINE_STAGES = 2
+
+
+def _validate_iterations_range(iterations: int) -> None:
+    """Raise ``ValueError`` when *iterations* is outside the permitted range."""
+    if iterations < 1:
+        msg = f"iterations must be >= 1, got {iterations}"
+        raise ValueError(msg)
+    if iterations > 1000:  # noqa: PLR2004
+        msg = f"iterations must be <= 1000, got {iterations}"
+        raise ValueError(msg)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -18,6 +31,7 @@ class PipelineWorkerConfig:
     payload_bytes: int
     stages: int
     with_line_callbacks: bool
+    iterations: int
 
     def __post_init__(self) -> None:
         """Validate worker invariants for direct callers and CLI usage."""
@@ -27,6 +41,7 @@ class PipelineWorkerConfig:
         if self.stages < _MIN_PIPELINE_STAGES:
             msg = f"stages must be >= {_MIN_PIPELINE_STAGES}, got {self.stages}"
             raise ValueError(msg)
+        _validate_iterations_range(self.iterations)
 
 
 def _parse_args() -> PipelineWorkerConfig:
@@ -52,12 +67,19 @@ def _parse_args() -> PipelineWorkerConfig:
             "line processing overhead."
         ),
     )
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=1,
+        help="Number of pipeline runs to execute inside this worker process.",
+    )
     args = parser.parse_args()
 
     return PipelineWorkerConfig(
         payload_bytes=args.payload_bytes,
         stages=args.stages,
         with_line_callbacks=args.line_callbacks,
+        iterations=args.iterations,
     )
 
 
@@ -159,15 +181,34 @@ def _build_pipeline(config: PipelineWorkerConfig) -> tuple[sh.Pipeline, Program]
 def run_pipeline_worker(config: PipelineWorkerConfig) -> int:
     """Execute one configured throughput benchmark pipeline run."""
     pipeline, python_program = _build_pipeline(config)
+    _logger.debug(
+        "starting pipeline worker: iterations=%d, payload_bytes=%d, "
+        "stages=%d, with_line_callbacks=%s",
+        config.iterations,
+        config.payload_bytes,
+        config.stages,
+        config.with_line_callbacks,
+    )
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        result = pipeline.run_sync(capture=False, echo=False)
+        for i in range(config.iterations):
+            result = pipeline.run_sync(capture=False, echo=False)
+            if not result.ok:
+                failure = result.failure
+                exit_code = failure.exit_code if failure is not None else 1
+                _logger.warning(
+                    "pipeline iteration %d/%d failed: exit_code=%d",
+                    i + 1,
+                    config.iterations,
+                    exit_code,
+                )
+                return exit_code
 
-    if result.ok:
-        return 0
-    failure = result.failure
-    if failure is None:
-        return 1
-    return failure.exit_code
+    _logger.debug(
+        "pipeline worker completed: %d iteration(s) succeeded",
+        config.iterations,
+    )
+
+    return 0
 
 
 def main() -> int:

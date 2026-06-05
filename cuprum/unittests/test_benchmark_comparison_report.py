@@ -7,6 +7,7 @@ import typing as typ
 
 import pytest
 
+from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 from benchmarks.python_vs_rust_comparison_report import (
     BenchmarkComparisonRow,
     RatchetStatus,
@@ -42,6 +43,8 @@ def _scenario_payload(
 def _candidate_plan_payload() -> dict[str, object]:
     """Return a filtered candidate plan payload with paired backends."""
     return {
+        "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+        "worker_iterations": 20,
         "dry_run": True,
         "rust_available": True,
         "command": ["hyperfine", "placeholder"],

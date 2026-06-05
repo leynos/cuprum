@@ -1959,6 +1959,14 @@ Both pathways are tested as first-class implementations:
 - property-based tests (Hypothesis) verify byte-preservation across randomized
   payloads and randomized chunk boundaries by asserting deterministic hex
   output through real pipeline execution under both backends;
+- pure line-splitting property tests in
+  `cuprum/unittests/test_line_splitting.py` cover `_split_complete_lines()` and
+  `_strip_line_ending()` from `cuprum/_streams.py`, proving that line-callback
+  text is not dropped, that recognized line endings are stripped consistently,
+  and that trailing partial lines remain buffered;
+- CrossHair symbolically checks bounded PEP 316 contracts for the same
+  line-splitting invariants. These checks are development-only and skip on
+  Python versions where CrossHair cannot trace the active bytecode set.
 - integration tests exercise pathway selection logic, including environment
   overrides, forced fallback when Rust FDs are unavailable, and `ImportError`
   propagation when Rust is explicitly requested but unavailable.
@@ -1969,6 +1977,13 @@ Both pathways are tested as first-class implementations:
 - end-to-end throughput uses `hyperfine` through
   `benchmarks/pipeline_throughput.py`, which drives
   `benchmarks/pipeline_worker.py` for scenario execution and emits JSON output.
+  The rendered `hyperfine` scenario commands invoke the active Python
+  interpreter directly rather than `uv run`, so the Rust ratchet measures
+  pipeline worker execution instead of dependency-environment launcher overhead.
+  Each measured worker command runs a batch of pipeline executions inside one
+  worker process, and dry-run plans record a benchmark profile version plus the
+  worker iteration count so older single-run artefacts are not compared against
+  batched-worker results.
 - the throughput scenario matrix covers three payload sizes (small at 1 KB,
   medium at 1 MB, large at 100 MB), two pipeline depths (single-stage with zero
   passthrough stages, and multi-stage with one passthrough stage), and two

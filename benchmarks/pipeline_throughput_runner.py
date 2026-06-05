@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import dataclasses as dc
 import json
+import logging
+import os
 import shlex
 import shutil
 import subprocess  # noqa: S404  # benchmark runner intentionally invokes external tooling
@@ -15,10 +17,22 @@ from benchmarks._benchmark_types import (
     PipelineBenchmarkRunResult,
     PipelineBenchmarkScenario,
 )
+from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+
+_logger = logging.getLogger(__name__)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
+
+_WINDOWS_SAFE_CMD_TOKEN_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:\\/-",
+)
+
+
+def _is_windows_command_shell() -> bool:
+    """Return whether benchmark commands should be rendered for cmd.exe."""
+    return os.name == "nt"
 
 
 def render_prefixed_command(
@@ -27,29 +41,82 @@ def render_prefixed_command(
     env: cabc.Mapping[str, str],
 ) -> str:
     """Render a shell command with deterministic environment prefixes."""
+    if _is_windows_command_shell():
+        return _render_windows_command(command=command, env=env)
+    return _render_posix_command(command=command, env=env)
+
+
+def _render_posix_command(
+    *,
+    command: cabc.Sequence[str],
+    env: cabc.Mapping[str, str],
+) -> str:
+    """Render a POSIX shell command with environment prefixes."""
     env_tokens = [f"{key}={shlex.quote(value)}" for key, value in sorted(env.items())]
-    command_text = shlex.join(list(command))
+    command_text = shlex.join(command)
     if not env_tokens:
         return command_text
     return f"{' '.join(env_tokens)} {command_text}"
+
+
+def _render_windows_command(
+    *,
+    command: cabc.Sequence[str],
+    env: cabc.Mapping[str, str],
+) -> str:
+    """Render a cmd.exe command with environment prefixes."""
+    command_text = " ".join(_quote_windows_cmd_token(token) for token in command)
+    if not env:
+        return command_text
+    env_tokens = [
+        f'set "{key}={_escape_windows_env_value(value)}"'
+        for key, value in sorted(env.items())
+    ]
+    return f"{' && '.join(env_tokens)} && {command_text}"
+
+
+def _escape_windows_env_value(value: str) -> str:
+    """Escape an environment value for cmd.exe ``set "KEY=value"`` syntax."""
+    return value.replace('"', '""')
+
+
+def _quote_windows_cmd_token(token: str) -> str:
+    """Quote one token for a cmd.exe command string."""
+    if token and all(char in _WINDOWS_SAFE_CMD_TOKEN_CHARS for char in token):
+        return token
+
+    quoted = ['"']
+    backslashes = 0
+    for char in token:
+        if char == "\\":
+            backslashes += 1
+            continue
+        if char == '"':
+            quoted.extend(("\\" * ((backslashes * 2) + 1), '"'))
+        else:
+            quoted.extend(("\\" * backslashes, char))
+        backslashes = 0
+    quoted.extend(("\\" * (backslashes * 2), '"'))
+    return "".join(quoted)
 
 
 def _build_worker_command(
     *,
     scenario: PipelineBenchmarkScenario,
     worker_path: pth.Path,
-    uv_bin: str,
+    python_bin: str,
+    worker_iterations: int,
 ) -> list[str]:
     """Build the worker invocation for one benchmark scenario."""
     command = [
-        uv_bin,
-        "run",
-        "python",
+        python_bin,
         str(worker_path),
         "--payload-bytes",
         str(scenario.payload_bytes),
         "--stages",
         str(scenario.stages),
+        "--iterations",
+        str(worker_iterations),
     ]
     if scenario.with_line_callbacks:
         command.append("--line-callbacks")
@@ -89,7 +156,8 @@ def build_hyperfine_command(*, config: PipelineBenchmarkConfig) -> list[str]:
         worker_command = _build_worker_command(
             scenario=scenario,
             worker_path=config.worker_path,
-            uv_bin=config.uv_bin,
+            python_bin=config.python_bin,
+            worker_iterations=config.worker_iterations,
         )
         command.append(
             render_prefixed_command(
@@ -102,20 +170,25 @@ def build_hyperfine_command(*, config: PipelineBenchmarkConfig) -> list[str]:
 
 def _write_dry_run_payload(
     *,
-    output_path: pth.Path,
+    config: PipelineBenchmarkConfig,
     command: cabc.Sequence[str],
-    scenarios: cabc.Sequence[PipelineBenchmarkScenario],
-    rust_available: bool,
 ) -> None:
     """Write dry-run benchmark metadata to JSON."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    _logger.debug(
+        "writing dry-run payload: path=%s, worker_iterations=%d",
+        config.output_path,
+        config.worker_iterations,
+    )
+    config.output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
+        "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
         "dry_run": True,
-        "rust_available": rust_available,
+        "rust_available": config.rust_available,
+        "worker_iterations": config.worker_iterations,
         "command": list(command),
-        "scenarios": [scenario.as_dict() for scenario in scenarios],
+        "scenarios": [scenario.as_dict() for scenario in config.scenarios],
     }
-    output_path.write_text(
+    config.output_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True),
         encoding="utf-8",
     )
@@ -139,10 +212,12 @@ def _prepare_benchmark_command_config(
     *,
     config: PipelineBenchmarkConfig,
 ) -> PipelineBenchmarkConfig:
-    """Prepare command rendering config, resolving the `uv` launcher when needed."""
+    """Prepare command rendering config, resolving executables when needed."""
     if config.dry_run:
         return config
-    return dc.replace(config, uv_bin=_resolve_executable(config.uv_bin))
+    resolved = dc.replace(config, python_bin=_resolve_executable(config.python_bin))
+    _logger.debug("resolved python_bin: %r", resolved.python_bin)
+    return resolved
 
 
 def run_pipeline_benchmarks(
@@ -154,10 +229,8 @@ def run_pipeline_benchmarks(
 
     if config.dry_run:
         _write_dry_run_payload(
-            output_path=config.output_path,
+            config=config,
             command=command,
-            scenarios=config.scenarios,
-            rust_available=config.rust_available,
         )
     else:
         _execute_hyperfine_benchmark(

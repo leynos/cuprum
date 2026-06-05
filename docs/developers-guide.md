@@ -1,5 +1,70 @@
 # Developers' guide
 
+## Stream line-splitting properties
+
+Line callbacks in the Python stream backend use two pure helpers from
+`cuprum/_streams.py`:
+
+- `_split_complete_lines(text)` splits text into completed lines, strips each
+  recognized line ending, and returns `(lines, remainder)`. The `remainder` is
+  the final partial line and never ends in `"\n"` or `"\r"`.
+- `_strip_line_ending(line)` removes at most one trailing `"\r\n"`, `"\n"`, or
+  `"\r"` sequence. It does not normalize or edit interior text.
+
+These helpers are re-exported from `cuprum/_testing.py` so tests can state the
+contract directly without driving subprocess I/O. Keep them private to the
+package: they exist to make `_emit_completed_lines` small and testable, not as
+public user API.
+
+`cuprum/unittests/test_line_splitting.py` contains the direct property suite.
+Hypothesis generates text with mixed recognized line endings and checks that
+normalized text is preserved, the final remainder is partial, and stripping is
+idempotent. CrossHair runs PEP 316 (Python Enhancement Proposal 316) contracts
+over bounded symbolic inputs for the same invariants. CrossHair is a
+development dependency only; the tests skip the symbolic checks when CrossHair
+is unavailable and on Python 3.15, where CrossHair currently cannot trace the
+`CALL_KW` opcode.
+
+When changing `_emit_completed_lines`, `_split_complete_lines`, or
+`_strip_line_ending`, run:
+
+```bash
+uv run pytest -q cuprum/unittests/test_line_splitting.py
+```
+
+Run `make test` before committing so the stream behaviour and the pure helper
+contracts stay aligned.
+
+## Pipeline throughput benchmark configuration
+
+`PipelineBenchmarkConfig` controls the hyperfine-based end-to-end throughput
+suite in `benchmarks/pipeline_throughput.py`. Scenario commands run
+`benchmarks/pipeline_worker.py` with `python_bin`, which defaults to the active
+interpreter and is resolved to an absolute executable path before measured
+non-dry-run benchmarks. The measured command intentionally avoids `uv run` so
+the Rust ratchet measures worker pipeline throughput rather than environment
+startup overhead.
+
+Each worker process executes `worker_iterations` pipeline runs, defaulting to
+20. Hyperfine therefore measures a batched worker invocation rather than one
+cold pipeline execution, reducing Python interpreter startup noise in the
+ratchet. Dry-run plans record `benchmark_profile_version` and
+`worker_iterations`; ratchet comparison skips older baseline artefacts whose
+profile metadata does not match the current benchmark shape.
+
+The remaining fields follow the benchmark plan: `output_path` receives
+hyperfine JSON or dry-run plan JSON, `worker_path` points at the worker module,
+`scenarios` supplies the rendered command matrix, `warmup` and `runs` configure
+hyperfine iteration counts, `hyperfine_bin` selects the hyperfine executable,
+`dry_run` writes the plan without invoking hyperfine, and `rust_available`
+records whether Rust scenarios are included.
+
+`uv_bin` is a deprecated legacy field that remains accepted in the dataclass for
+backward compatibility, but current benchmark command construction ignores it
+entirely. Keep it unset in new usage and set `python_bin` when a specific
+interpreter is required. In dry-run mode, command rendering does not resolve
+`python_bin` via PATH.
+
 ## Profiling harness overview
 
 The profiling benchmark harness provides deterministic parent-side tee and
@@ -319,7 +384,6 @@ The canonical lint configuration lives in `pyproject.toml`:
 When changing lint policy, update both `pyproject.toml` and this guide. If the
 change alters the architecture of the lint gate, update
 [ADR-003](adr-003-two-tier-python-linting.md) as well.
-
 
 ## Maturin pin synchronization and native wheel tests
 

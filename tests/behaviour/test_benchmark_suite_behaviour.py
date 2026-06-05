@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess  # noqa: S404  # behavioural test intentionally invokes CLI process
 import sys
 import typing as typ
@@ -10,6 +11,7 @@ import typing as typ
 import pytest
 
 from benchmarks._test_constants import _SCENARIO_NAME_PATTERN
+from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -108,6 +110,10 @@ def then_benchmark_plan_indicates_dry_run(
     assert benchmark_plan_payload.get("dry_run") is True, (
         "expected benchmark plan dry_run flag to be True"
     )
+    assert benchmark_plan_payload.get("benchmark_profile_version") == (
+        BENCHMARK_PROFILE_VERSION
+    )
+    assert benchmark_plan_payload.get("worker_iterations") == 20
 
 
 @then("the benchmark plan contains valid scenarios")
@@ -136,6 +142,27 @@ def then_benchmark_plan_contains_valid_scenarios(
         )
 
 
+def _expected_backend_env_prefix() -> str:
+    """Return the platform-appropriate env-var prefix for scenario commands."""
+    if os.name == "nt":
+        return 'set "CUPRUM_STREAM_BACKEND='
+    return "CUPRUM_STREAM_BACKEND="
+
+
+def _scenario_worker_iterations(scenario: str) -> int | None:
+    """Return the worker iteration count embedded in a scenario command."""
+    parts = scenario.split()
+    for index, part in enumerate(parts):
+        if part != "--iterations" or index + 1 >= len(parts):
+            continue
+        try:
+            return int(parts[index + 1])
+        except ValueError as exc:
+            msg = f"scenario command has non-integer iterations value: {scenario!r}"
+            raise AssertionError(msg) from exc
+    return None
+
+
 @then("the benchmark plan includes a valid command")
 def then_benchmark_plan_includes_valid_command(
     benchmark_plan_payload: dict[str, object],
@@ -150,6 +177,35 @@ def then_benchmark_plan_includes_valid_command(
             "expected each benchmark plan command argument to be a string"
         )
         assert argument, "command arguments must be non-empty strings"
+
+    command_arguments = typ.cast("list[str]", command)
+    worker_iterations = benchmark_plan_payload.get("worker_iterations")
+    assert isinstance(worker_iterations, int), (
+        "benchmark plan worker_iterations must be an int"
+    )
+
+    scenario_commands = command_arguments[7:]
+    assert scenario_commands, "expected benchmark plan to include scenario commands"
+    assert all(
+        " uv run python " not in f" {scenario}" for scenario in scenario_commands
+    )
+    scenario_iterations = [
+        iterations
+        for scenario in scenario_commands
+        if (iterations := _scenario_worker_iterations(scenario)) is not None
+    ]
+    assert scenario_iterations, (
+        "expected at least one scenario command to specify --iterations"
+    )
+    assert all(iterations == worker_iterations for iterations in scenario_iterations), (
+        "expected worker_iterations in benchmark plan metadata to match "
+        "--iterations values in scenario commands"
+    )
+    assert any(sys.executable in scenario for scenario in scenario_commands)
+    assert any(
+        scenario.startswith(_expected_backend_env_prefix())
+        for scenario in scenario_commands
+    )
 
 
 # -- Scenario matrix steps (4.4.2) -------------------------------------------

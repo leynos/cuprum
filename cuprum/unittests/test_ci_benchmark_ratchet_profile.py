@@ -7,6 +7,7 @@ import typing as typ
 
 import pytest
 
+from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 from benchmarks.ci_benchmark_ratchet_profile import (
     build_hyperfine_command,
     load_plan_payload,
@@ -242,15 +243,48 @@ def test_write_filtered_plan_preserves_selected_scenarios(tmp_path: pth.Path) ->
 
     write_filtered_plan(
         filtered_plan_path=filtered_plan_path,
-        rust_available=True,
+        full_payload={
+            "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+            "rust_available": True,
+            "worker_iterations": 20,
+        },
         command=command,
         selected=selected,
     )
 
     payload = json.loads(filtered_plan_path.read_text(encoding="utf-8"))
     assert payload == {
+        "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
         "command": command,
         "dry_run": True,
         "rust_available": True,
         "scenarios": [scenario for scenario, _ in selected],
+        "worker_iterations": 20,
     }
+
+
+def test_write_filtered_plan_rejects_non_boolean_rust_available(
+    tmp_path: pth.Path,
+) -> None:
+    """The filtered plan must not coerce string ``rust_available`` values."""
+    with pytest.raises(TypeError, match="rust_available"):
+        write_filtered_plan(
+            filtered_plan_path=tmp_path / "plan.json",
+            full_payload={
+                "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+                "rust_available": "false",
+                "worker_iterations": 20,
+            },
+            command=["hyperfine", "rust cmd"],
+            selected=[
+                (
+                    _scenario(
+                        name="rust-small-single-nocb",
+                        backend="rust",
+                        payload_bytes=1024,
+                        stages=2,
+                    ),
+                    "rust cmd",
+                ),
+            ],
+        )

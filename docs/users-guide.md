@@ -227,8 +227,9 @@ and echo semantics and returns a structured `CommandResult`:
   - `stdout_sink` and `stderr_sink` route echoed output to alternative text
     streams when `echo=True`.
   - `encoding` and `errors` configure how captured output is decoded; defaults
-    are `"utf-8"` with `"replace"`. The same settings are used when
-    `StdinInput.text` is encoded for subprocess stdin.
+    are `"utf-8"` with `"replace"`.
+    The same settings are used when `StdinInput.text` is encoded for
+    subprocess stdin.
 - `exit_code`, `pid`, and `ok` on the `CommandResult` make it easy to branch on
   success.
 
@@ -1120,6 +1121,13 @@ run them through real pipelines, and assert byte-preservation by comparing
 deterministic hexadecimal output. This provides broad regression coverage for
 content integrity across both Python and Rust pumping pathways.
 
+Cuprum also tests the Python backend's pure line-callback splitting helpers
+directly. Those tests prove that completed lines and final partial lines
+account for all generated text, and that recognized line endings are stripped
+without editing the rest of the line. In development environments, CrossHair
+adds bounded symbolic checks for the same contracts; those checks are skipped
+on Python versions where CrossHair cannot trace the active bytecode.
+
 ### Benchmark suite
 
 Cuprum includes an opt-in benchmark suite for stream-performance tracking.
@@ -1151,19 +1159,33 @@ UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
   benchmarks/pipeline_throughput.py \
   --smoke \
   --dry-run \
+  --worker-iterations 20 \
   --output /tmp/pipeline-throughput-plan.json
 ```
 
-Dry-run output includes scenario metadata, command lines, and whether the Rust
-extension is available in the current environment.
+Dry-run output includes scenario metadata, command lines, benchmark profile
+metadata, worker iteration count, and whether the Rust extension is available
+in the current environment.
+
+The `--worker-iterations` option (default `20`) controls how many pipeline
+executions are batched inside a single measured worker process. Higher values
+reduce hyperfine timing overhead per pipeline run; the recorded mean is the
+total elapsed time for all iterations combined. The worker `--iterations` flag,
+which hyperfine scenario commands pass directly, mirrors this setting. Do not
+compare ratchet baselines produced with different `worker_iterations` values;
+the benchmark profile validation rejects mismatched plans automatically.
+
+Benchmark commands invoke the Python interpreter directly via `python_bin`
+(resolved from `sys.executable` at plan-generation time) rather than through
+`uv run`, so measured runtimes exclude launcher overhead.
 
 Interpretation notes:
 
 - pump-latency microbenchmarks reflect inter-stage pipeline transfer overhead;
 - consume-throughput microbenchmarks reflect captured stdout read/decode
   throughput (currently the Python consume path);
-- end-to-end hyperfine runs measure full worker-pipeline runtime and include a
-  Rust scenario only when the Rust extension is available.
+- end-to-end hyperfine runs measure batched worker-pipeline runtime and include
+  a Rust scenario only when the Rust extension is available.
 
 #### Scenario matrix
 
@@ -1305,6 +1327,8 @@ The continuous integration (CI) workflows run the following checks:
   - It benchmarks the current checkout in smoke mode.
   - It compares Rust means against the latest successful `main` baseline
     artefact when one exists.
+  - It skips comparison when the saved baseline uses an older benchmark profile
+    shape because single-run and batched-worker timings are not comparable.
   - Its baseline fetch helper follows GitHub’s signed archive redirects
     without forwarding GitHub-only authentication headers to the storage host.
   - It generates a Python-versus-Rust comparison report from the candidate

@@ -13,6 +13,7 @@ from benchmarks._validation import (
     _require_mapping,
     _require_non_empty_string,
 )
+from benchmarks.benchmark_profile import require_worker_iterations
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -111,14 +112,20 @@ def build_hyperfine_command(
 def write_filtered_plan(
     *,
     filtered_plan_path: pth.Path,
-    rust_available: bool,
+    full_payload: cabc.Mapping[str, object],
     command: list[str],
     selected: cabc.Sequence[tuple[cabc.Mapping[str, object], str]],
 ) -> None:
     """Write the filtered dry-run plan used by the benchmark ratchet."""
+    rust_available = _require_rust_available(full_payload)
     filtered_payload = {
+        "benchmark_profile_version": _require_non_empty_string(
+            full_payload.get("benchmark_profile_version"),
+            name="benchmark_profile_version",
+        ),
         "dry_run": True,
         "rust_available": rust_available,
+        "worker_iterations": require_worker_iterations(full_payload),
         "command": command,
         "scenarios": [scenario for scenario, _ in selected],
     }
@@ -126,6 +133,15 @@ def write_filtered_plan(
         json.dumps(filtered_payload, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+
+
+def _require_rust_available(payload: cabc.Mapping[str, object]) -> bool:
+    """Return validated ``rust_available`` metadata from a dry-run plan."""
+    value = payload.get("rust_available", False)
+    if not isinstance(value, bool):
+        msg = "rust_available must be a bool"
+        raise TypeError(msg)
+    return value
 
 
 def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
@@ -149,7 +165,7 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
     subprocess.run(command, check=True)  # noqa: S603 - commands come from our dry-run plan
     write_filtered_plan(
         filtered_plan_path=args.filtered_plan,
-        rust_available=bool(full_payload.get("rust_available", False)),
+        full_payload=full_payload,
         command=command,
         selected=selected,
     )

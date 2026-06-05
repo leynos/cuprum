@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import pathlib as pth
+import sys
 import typing as typ
 
 import pytest
 
+import benchmarks.pipeline_throughput_runner as runner
 from benchmarks._test_constants import _SCENARIO_NAME_PATTERN
+from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 from benchmarks.pipeline_throughput import (
     HyperfineConfig,
     PipelineBenchmarkConfig,
@@ -18,6 +21,7 @@ from benchmarks.pipeline_throughput import (
     render_prefixed_command,
     run_pipeline_benchmarks,
 )
+from benchmarks.pipeline_worker import PipelineWorkerConfig
 
 
 def test_default_pipeline_scenarios_include_python_backend() -> None:
@@ -51,6 +55,31 @@ def test_render_prefixed_command_prefixes_env_and_quotes_tokens() -> None:
         "expected rendered command to include CUPRUM_STREAM_BACKEND prefix"
     )
     assert "'a b'" in rendered, "expected rendered command to quote spaced token"
+
+
+def test_render_prefixed_command_uses_windows_env_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows command rendering uses cmd.exe-compatible env assignment."""
+    monkeypatch.setattr(runner, "_is_windows_command_shell", lambda: True)
+    command = [
+        r"C:\Python313\python.exe",
+        r"C:\benchmarks\pipeline_worker.py",
+        "--label",
+        'a "b"',
+    ]
+
+    rendered = render_prefixed_command(
+        command=command,
+        env={"CUPRUM_STREAM_BACKEND": "python"},
+    )
+
+    assert rendered.startswith('set "CUPRUM_STREAM_BACKEND=python" && '), (
+        "expected rendered command to use cmd.exe set syntax"
+    )
+    assert r'"a \"b\""' in rendered, (
+        "expected rendered command to escape embedded quotes"
+    )
 
 
 def test_render_prefixed_command_with_empty_env_returns_raw_command() -> None:
@@ -92,6 +121,44 @@ def test_pipeline_benchmark_config_coerces_string_paths() -> None:
     assert isinstance(config.worker_path, pth.Path), (
         "expected worker_path to be normalized to pathlib.Path"
     )
+
+
+def test_pipeline_benchmark_config_accepts_legacy_uv_bin() -> None:
+    """Legacy ``uv_bin`` config remains accepted but is not benchmarked."""
+    config = PipelineBenchmarkConfig(
+        output_path=pth.Path("dist/benchmarks/bench.json"),
+        worker_path=pth.Path("benchmarks/pipeline_worker.py"),
+        scenarios=(),
+        warmup=0,
+        runs=1,
+        uv_bin="uv",
+    )
+
+    assert config.uv_bin == "uv"
+
+
+def test_pipeline_benchmark_config_rejects_excessive_worker_iterations() -> None:
+    """Worker iteration count is capped to prevent runaway benchmark plans."""
+    with pytest.raises(ValueError, match="worker_iterations must be <= 1000"):
+        PipelineBenchmarkConfig(
+            output_path=pth.Path("dist/benchmarks/bench.json"),
+            worker_path=pth.Path("benchmarks/pipeline_worker.py"),
+            scenarios=(),
+            warmup=0,
+            runs=1,
+            worker_iterations=1001,
+        )
+
+
+def test_pipeline_worker_config_rejects_excessive_iterations() -> None:
+    """Worker iteration count is capped to prevent runaway worker processes."""
+    with pytest.raises(ValueError, match="iterations must be <= 1000"):
+        PipelineWorkerConfig(
+            payload_bytes=1024,
+            stages=2,
+            with_line_callbacks=False,
+            iterations=1001,
+        )
 
 
 def test_pipeline_benchmark_config_rejects_non_pathlike_output_path() -> None:
@@ -202,6 +269,7 @@ def test_build_hyperfine_command_contains_export_runs_and_warmup(
         scenarios=scenarios,
         warmup=1,
         runs=2,
+        uv_bin="uv",
     )
     command = build_hyperfine_command(config=config)
 
@@ -211,9 +279,17 @@ def test_build_hyperfine_command_contains_export_runs_and_warmup(
     assert "--export-json" in command, "expected hyperfine command to export JSON"
     assert "--warmup" in command, "expected hyperfine command to include warmup"
     assert "--runs" in command, "expected hyperfine command to include runs"
+    assert any("--iterations 20" in token for token in command), (
+        "expected worker commands to batch pipeline runs inside one process"
+    )
     assert any("CUPRUM_STREAM_BACKEND=python" in token for token in command), (
         "expected at least one hyperfine scenario command to target python backend"
     )
+    scenario_commands = command[7:]
+    assert all(
+        " uv run python " not in f" {scenario}" for scenario in scenario_commands
+    )
+    assert any(sys.executable in scenario for scenario in scenario_commands)
 
 
 def test_run_pipeline_benchmarks_dry_run_writes_json(tmp_path: pth.Path) -> None:
@@ -243,6 +319,8 @@ def test_run_pipeline_benchmarks_dry_run_writes_json(tmp_path: pth.Path) -> None
     payload = json.loads(output_path.read_text(encoding="utf-8"))
 
     assert payload["dry_run"] is True, "expected payload dry_run flag to be True"
+    assert payload["benchmark_profile_version"] == BENCHMARK_PROFILE_VERSION
+    assert payload["worker_iterations"] == 20
     assert "rust_available" in payload, (
         "expected payload to include rust_available metadata"
     )

@@ -5,8 +5,6 @@ command construction and dry-run payload generation. It defines immutable
 dataclasses for scenario/config/result values and a TypedDict for serializable
 scenario payloads.
 
-Utility
--------
 Use these symbols when constructing benchmark plans in application code or
 tests, and rely on their ``__post_init__`` methods for fail-fast validation of
 core invariants (for example: non-empty names, positive payload sizes, and
@@ -28,10 +26,13 @@ Validation helpers are defined alongside these dataclasses and are used by
 their ``__post_init__`` methods to enforce expected types and value ranges.
 """
 
+# pylint: disable=too-many-lines
+
 from __future__ import annotations
 
 import dataclasses as dc
 import pathlib as pth
+import sys
 import typing as typ
 
 _VALID_BACKENDS = {"python", "rust"}
@@ -281,12 +282,19 @@ class PipelineBenchmarkConfig:
         Measured iteration count for hyperfine.
     hyperfine_bin:
         Executable name or path for hyperfine.
+    python_bin:
+        Executable name or path for the Python interpreter used to run
+        ``benchmarks/pipeline_worker.py``. Benchmark commands use the
+        interpreter directly so ratchets do not measure ``uv run`` overhead.
     uv_bin:
-        Executable name or path for the ``uv`` launcher.
+        Deprecated compatibility setting. Scenario commands no longer use
+        ``uv run`` during measured benchmark iterations.
     dry_run:
         Whether to emit plan JSON without invoking hyperfine.
     rust_available:
         Whether Rust backend support is available in the current environment.
+    worker_iterations:
+        Number of pipeline executions performed inside one worker process.
 
     Raises
     ------
@@ -313,9 +321,11 @@ class PipelineBenchmarkConfig:
     warmup: int
     runs: int
     hyperfine_bin: str = "hyperfine"
-    uv_bin: str = "uv"
+    python_bin: str = sys.executable
+    uv_bin: str | None = None
     dry_run: bool = False
     rust_available: bool = False
+    worker_iterations: int = 20
 
     def __post_init__(self) -> None:
         """Validate benchmark configuration values."""
@@ -331,9 +341,23 @@ class PipelineBenchmarkConfig:
         )
         _validate_hyperfine_iterations(warmup=self.warmup, runs=self.runs)
         _validate_non_empty_string(self.hyperfine_bin, name="hyperfine_bin")
-        _validate_non_empty_string(self.uv_bin, name="uv_bin")
+        _validate_non_empty_string(self.python_bin, name="python_bin")
+        if self.uv_bin is not None:
+            _validate_non_empty_string(self.uv_bin, name="uv_bin")
         _validate_bool(self.dry_run, name="dry_run")
         _validate_bool(self.rust_available, name="rust_available")
+        validated_worker_iterations = _validate_int(
+            self.worker_iterations,
+            name="worker_iterations",
+        )
+        if validated_worker_iterations < 1:
+            msg = f"worker_iterations must be >= 1, got {validated_worker_iterations}"
+            raise ValueError(msg)
+        if validated_worker_iterations > 1000:  # noqa: PLR2004
+            msg = (
+                f"worker_iterations must be <= 1000, got {validated_worker_iterations}"
+            )
+            raise ValueError(msg)
 
 
 @dc.dataclass(frozen=True, slots=True)
