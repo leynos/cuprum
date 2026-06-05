@@ -441,7 +441,6 @@ with scoped(ScopeConfig()):
     assert not current_context().is_allowed(LS)
 ```
 
-
 ### Scoped environment overlays
 
 Use `env()` to overlay environment variables on top of the live `os.environ`
