@@ -102,15 +102,36 @@ async def _cleanup_pipeline_on_error(
     return await _collect_pipe_results(pipe_tasks)
 
 
-def _merge_env(extra: cabc.Mapping[str, str] | None) -> dict[str, str] | None:
-    """Overlay extra environment variables when provided."""
-    if extra is None:
-        return None
-    import os
+def _merge_env(
+    extra: cabc.Mapping[str, str] | None,
+    *,
+    include_context_overlay: bool = True,
+) -> dict[str, str] | None:
+    """Overlay environment variables on the live :func:`os.environ`.
 
-    merged = os.environ.copy()
-    merged |= extra
-    return merged
+    By default, the scoped overlay from the active :class:`CuprumContext`
+    (managed via :func:`cuprum.context.env`) is layered first, then ``extra``
+    — typically the per-call :attr:`ExecutionContext.env` — wins over it. The
+    process environment is read at spawn time (right now), so any updates
+    callers make to ``os.environ`` after Cuprum was imported are reflected in
+    the subprocess.
+
+    When both layers are empty the function returns ``None`` so the subprocess
+    inherits ``os.environ`` directly without an extra copy.
+
+    Parameters
+    ----------
+    extra:
+        Per-call overlay, usually :attr:`ExecutionContext.env`.
+    include_context_overlay:
+        Set to ``False`` to bypass the scoped overlay. Used by call sites
+        that resolve the overlay separately (for example to record the
+        effective overlay in observation events).
+    """
+    from cuprum.context import current_context, resolve_env
+
+    overlay = current_context().env_overlay if include_context_overlay else None
+    return resolve_env(overlay, extra)
 
 
 def _build_spawn_observations(
@@ -118,11 +139,15 @@ def _build_spawn_observations(
     config: _PipelineRunConfig,
 ) -> tuple[_StageObservation, ...]:
     from cuprum._pipeline_internals import _run_before_hooks, _StageObservation
+    from cuprum.context import _merge_env_overlays, current_context
 
     hooks_by_stage = tuple(_run_before_hooks(cmd) for cmd in parts)
     pending_tasks: list[asyncio.Task[None]] = []
     cwd = None if config.ctx.cwd is None else Path(config.ctx.cwd)
-    env_overlay = _freeze_str_mapping(config.ctx.env)
+    scoped_overlay = current_context().env_overlay
+    env_overlay = _freeze_str_mapping(
+        _merge_env_overlays(scoped_overlay, config.ctx.env),
+    )
     observations = tuple(
         _StageObservation(
             cmd=cmd,

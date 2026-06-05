@@ -441,6 +441,55 @@ with scoped(ScopeConfig()):
     assert not current_context().is_allowed(LS)
 ```
 
+
+### Scoped environment overlays
+
+Use `env()` to overlay environment variables on top of the live `os.environ`
+for the duration of a scope. The overlay is resolved at subprocess spawn time,
+not at registration time, so variables added to `os.environ` *after* the scope
+is entered (the common `monkeypatch.setenv` case under pytest) remain visible
+to subprocesses spawned inside the scope:
+
+```python
+import os
+
+from cuprum import GIT, ScopeConfig, env, scoped, sh
+
+os.environ["GIT_AUTHOR_NAME"] = "Cuprum"
+os.environ["GIT_AUTHOR_EMAIL"] = "cuprum@example.com"
+
+with scoped(ScopeConfig(allowlist=frozenset([GIT]))):
+    with env(PATH="/usr/bin:/usr/local/bin"):
+        # The subprocess sees PATH overlaid on the *live* os.environ,
+        # including GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL above.
+        sh.make(GIT)("commit", "--allow-empty", "-m", "noop").run_sync()
+```
+
+Precedence, from lowest to highest, is:
+
+1. The current process's `os.environ`, read at spawn time.
+2. The overlay registered via `env(...)` (later entries win when scopes
+   nest).
+3. The per-call `ExecutionContext.env` mapping.
+
+`env()` accepts both positional mappings and keyword arguments, mirroring
+`dict(...)`. The function returns an `EnvRegistration` handle which can be used
+as a context manager or detached manually:
+
+```python
+from cuprum import current_context, env
+
+reg = env({"DATABASE_URL": "sqlite:///tmp/test.db"}, LOG_LEVEL="DEBUG")
+try:
+    assert current_context().env_overlay["DATABASE_URL"].startswith("sqlite")
+finally:
+    reg.detach()
+```
+
+This intentionally departs from plumbum's `local.env`, which snapshots
+`os.environ` once at module import time and can therefore miss variables that
+are set later in the process.
+
 ### Before and after hooks
 
 Register hooks to run before or after command execution:

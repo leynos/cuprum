@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
+import os
 import typing as typ
 from contextvars import ContextVar, Token
+from types import MappingProxyType
 
 from cuprum.events import ExecHook
 
@@ -33,6 +35,70 @@ if typ.TYPE_CHECKING:
 
 type BeforeHook = cabc.Callable[[SafeCmd], None]
 type AfterHook = cabc.Callable[[SafeCmd, CommandResult], None]
+
+
+def _coerce_env_overlay(
+    overlay: cabc.Mapping[str, str] | None,
+) -> cabc.Mapping[str, str] | None:
+    """Return an immutable snapshot of an env overlay, or ``None``.
+
+    Overlays are stored as :class:`types.MappingProxyType` views of a frozen
+    ``dict`` so that ``CuprumContext`` stays effectively immutable. The overlay
+    itself is intentionally *not* materialised against :func:`os.environ`; the
+    live process environment is read at subprocess spawn time, after which the
+    overlay is layered on top.
+    """
+    if overlay is None:
+        return None
+    return MappingProxyType(dict(overlay))
+
+
+def _merge_env_overlays(
+    parent: cabc.Mapping[str, str] | None,
+    child: cabc.Mapping[str, str] | None,
+) -> cabc.Mapping[str, str] | None:
+    """Layer ``child`` over ``parent``; ``None`` means *inherit unchanged*.
+
+    Both layers are kept overlay-only — they never include a snapshot of
+    :func:`os.environ`. The live process environment is read at spawn time so
+    that callers can monkey-patch or otherwise mutate ``os.environ`` after
+    Cuprum has been imported and still have those updates visible to
+    subprocesses spawned inside the scope.
+    """
+    if parent is None and child is None:
+        return None
+    if parent is None:
+        return _coerce_env_overlay(child)
+    if child is None:
+        return parent
+    merged = dict(parent)
+    merged.update(child)
+    return MappingProxyType(merged)
+
+
+def resolve_env(
+    *layers: cabc.Mapping[str, str] | None,
+) -> dict[str, str] | None:
+    """Merge ``os.environ`` (read live) with the supplied overlay layers.
+
+    Layers are applied left-to-right; later values win. ``None`` layers are
+    skipped. When every layer is ``None`` the function returns ``None`` so that
+    callers may pass it through to ``subprocess`` APIs to mean
+    *inherit the parent environment unchanged*.
+
+    The first call to :func:`os.environ.copy` is deferred until at least one
+    overlay is non-empty, so the result reflects whatever the process
+    environment looks like at the moment of resolution — the exact behaviour
+    the issue requires.
+    """
+    if all(layer is None for layer in layers):
+        return None
+    merged: dict[str, str] = os.environ.copy()
+    for layer in layers:
+        if layer is None:
+            continue
+        merged.update(layer)
+    return merged
 
 
 class ForbiddenProgramError(PermissionError):
@@ -94,12 +160,18 @@ class ScopeConfig:
     after_hooks: tuple[AfterHook, ...] = ()
     observe_hooks: tuple[ExecHook, ...] = ()
     timeout: float | None = None
+    env_overlay: cabc.Mapping[str, str] | None = None
 
     def __post_init__(self) -> None:
         """Validate and coerce timeout after initialization."""
         validated = _validate_timeout(self.timeout, "ScopeConfig")
         # Use object.__setattr__ because the dataclass is frozen
         object.__setattr__(self, "timeout", validated)
+        object.__setattr__(
+            self,
+            "env_overlay",
+            _coerce_env_overlay(self.env_overlay),
+        )
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -127,12 +199,18 @@ class CuprumContext:
     after_hooks: tuple[AfterHook, ...] = ()
     observe_hooks: tuple[ExecHook, ...] = ()
     timeout: float | None = None
+    env_overlay: cabc.Mapping[str, str] | None = None
 
     def __post_init__(self) -> None:
         """Validate and coerce timeout after initialization."""
         validated = _validate_timeout(self.timeout, "CuprumContext")
         # Use object.__setattr__ because the dataclass is frozen
         object.__setattr__(self, "timeout", validated)
+        object.__setattr__(
+            self,
+            "env_overlay",
+            _coerce_env_overlay(self.env_overlay),
+        )
 
     def is_allowed(self, program: Program) -> bool:
         """Return True when the program is in the allowlist.
@@ -191,6 +269,7 @@ class CuprumContext:
         new_after = config.after_hooks + self.after_hooks
         new_observe = self.observe_hooks + config.observe_hooks
         new_timeout = self.timeout if config.timeout is None else config.timeout
+        new_env_overlay = _merge_env_overlays(self.env_overlay, config.env_overlay)
 
         return CuprumContext(
             allowlist=new_allowlist,
@@ -198,6 +277,7 @@ class CuprumContext:
             after_hooks=new_after,
             observe_hooks=new_observe,
             timeout=new_timeout,
+            env_overlay=new_env_overlay,
         )
 
     def with_allowlist(self, allowlist: frozenset[Program]) -> CuprumContext:
@@ -242,6 +322,22 @@ class CuprumContext:
     def without_program(self, program: Program) -> CuprumContext:
         """Return a context with the program removed from the allowlist."""
         return dc.replace(self, allowlist=self.allowlist - {program})
+
+    def with_env_overlay(
+        self,
+        overlay: cabc.Mapping[str, str] | None,
+    ) -> CuprumContext:
+        """Return a context whose env overlay is layered with ``overlay``.
+
+        Values in ``overlay`` win over earlier overlay entries, but no value
+        ever displaces the live :func:`os.environ`; the live process
+        environment is read at subprocess spawn time. Passing ``None`` returns
+        an unchanged copy.
+        """
+        return dc.replace(
+            self,
+            env_overlay=_merge_env_overlays(self.env_overlay, overlay),
+        )
 
 
 # Global ContextVar for the current execution context.
@@ -505,6 +601,111 @@ def after(hook: AfterHook) -> HookRegistration:
     return HookRegistration(hook, "after")
 
 
+class EnvRegistration:
+    """Registration handle for a scoped environment overlay.
+
+    Like :class:`AllowRegistration` and :class:`HookRegistration`, the handle
+    captures a :class:`~contextvars.Token` at creation time and uses it to
+    restore the previous context on :meth:`detach`. The overlay is layered on
+    top of any overlay already present in the current context; nested
+    registrations therefore behave as a stack.
+
+    The overlay itself is overlay-only. The live :func:`os.environ` is read at
+    subprocess spawn time (see :func:`resolve_env`), so any updates to the
+    process environment after the registration is created — for example via
+    ``pytest``'s ``monkeypatch.setenv`` — remain visible to subprocesses
+    spawned inside the scope. This is the behaviour the issue requires.
+    """
+
+    __slots__ = ("_detached", "_overlay", "_token")
+
+    def __init__(self, overlay: cabc.Mapping[str, str]) -> None:
+        """Layer ``overlay`` onto the current context's env overlay."""
+        self._overlay = _coerce_env_overlay(overlay)
+        self._detached = False
+        ctx = current_context()
+        new_ctx = ctx.with_env_overlay(self._overlay)
+        self._token: Token[CuprumContext] | None = _set_context(new_ctx)
+
+    @property
+    def overlay(self) -> cabc.Mapping[str, str] | None:
+        """Return the immutable overlay this registration applied."""
+        return self._overlay
+
+    def detach(self) -> None:
+        """Restore the original context via the captured token."""
+        if self._detached:
+            return
+        self._detached = True
+        if self._token is not None:
+            _reset_context(self._token)
+            self._token = None
+
+    def __enter__(self) -> EnvRegistration:
+        """Enter context manager; overlay is already applied."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        """Exit context manager; detach the overlay."""
+        self.detach()
+
+
+def env(
+    *overlays: cabc.Mapping[str, str],
+    **kwvars: str,
+) -> EnvRegistration:
+    """Overlay environment variables on top of the live :func:`os.environ`.
+
+    Mirrors :func:`dict` in how arguments are combined: positional mappings
+    are merged left-to-right and any keyword arguments win over them. Values
+    are not snapshot against ``os.environ`` — the live process environment is
+    read at subprocess spawn time so that variables set after Cuprum is
+    imported (for example by ``monkeypatch.setenv``) remain visible.
+
+    Parameters
+    ----------
+    overlays:
+        Zero or more ``Mapping[str, str]`` instances supplying overlay
+        entries. Useful when the variable name is not a valid Python
+        identifier.
+    kwvars:
+        Keyword pairs naming environment variables. Identifier-safe variable
+        names are typically expressed this way.
+
+    Returns
+    -------
+    EnvRegistration
+        A handle that can be detached or used as a context manager.
+
+    Example
+    -------
+    >>> import os
+    >>> os.environ["GIT_AUTHOR_NAME"] = "Cuprum"
+    >>> with env(PATH="/usr/bin"):
+    ...     # Subprocesses spawned here see PATH=/usr/bin overlaid on the
+    ...     # *live* os.environ, including GIT_AUTHOR_NAME.
+    ...     pass
+
+    Notes
+    -----
+    Identical to other registration helpers, ``env`` is bound to the
+    :class:`~contextvars.Context` in which it is created; detach in the same
+    logical context (thread or task) to avoid ``ValueError`` from
+    :meth:`~contextvars.ContextVar.reset`.
+    """
+    merged: dict[str, str] = {}
+    for overlay in overlays:
+        merged.update(overlay)
+    if kwvars:
+        merged.update(kwvars)
+    return EnvRegistration(merged)
+
+
 def observe(hook: ExecHook) -> HookRegistration:
     """Register a structured execution event hook in the current context.
 
@@ -528,6 +729,7 @@ __all__ = [
     "AllowRegistration",
     "BeforeHook",
     "CuprumContext",
+    "EnvRegistration",
     "ExecHook",
     "ForbiddenProgramError",
     "HookRegistration",
@@ -536,7 +738,9 @@ __all__ = [
     "allow",
     "before",
     "current_context",
+    "env",
     "get_context",
     "observe",
+    "resolve_env",
     "scoped",
 ]
