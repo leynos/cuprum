@@ -14,6 +14,16 @@ _logger = logging.getLogger(__name__)
 _MIN_PIPELINE_STAGES = 2
 
 
+def _validate_iterations_range(iterations: int) -> None:
+    """Raise ``ValueError`` when *iterations* is outside the permitted range."""
+    if iterations < 1:
+        msg = f"iterations must be >= 1, got {iterations}"
+        raise ValueError(msg)
+    if iterations > 1000:  # noqa: PLR2004
+        msg = f"iterations must be <= 1000, got {iterations}"
+        raise ValueError(msg)
+
+
 @dc.dataclass(frozen=True, slots=True)
 class PipelineWorkerConfig:
     """Configuration for a single pipeline throughput run."""
@@ -31,12 +41,7 @@ class PipelineWorkerConfig:
         if self.stages < _MIN_PIPELINE_STAGES:
             msg = f"stages must be >= {_MIN_PIPELINE_STAGES}, got {self.stages}"
             raise ValueError(msg)
-        if self.iterations < 1:
-            msg = f"iterations must be >= 1, got {self.iterations}"
-            raise ValueError(msg)
-        if self.iterations > 1000:  # noqa: PLR2004
-            msg = f"iterations must be <= 1000, got {self.iterations}"
-            raise ValueError(msg)
+        _validate_iterations_range(self.iterations)
 
 
 def _parse_args() -> PipelineWorkerConfig:
