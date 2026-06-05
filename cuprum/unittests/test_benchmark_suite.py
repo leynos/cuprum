@@ -21,6 +21,7 @@ from benchmarks.pipeline_throughput import (
     render_prefixed_command,
     run_pipeline_benchmarks,
 )
+from benchmarks.pipeline_worker import PipelineWorkerConfig
 
 
 def test_default_pipeline_scenarios_include_python_backend() -> None:
@@ -134,6 +135,30 @@ def test_pipeline_benchmark_config_accepts_legacy_uv_bin() -> None:
     )
 
     assert config.uv_bin == "uv"
+
+
+def test_pipeline_benchmark_config_rejects_excessive_worker_iterations() -> None:
+    """Worker iteration count is capped to prevent runaway benchmark plans."""
+    with pytest.raises(ValueError, match="worker_iterations must be <= 1000"):
+        PipelineBenchmarkConfig(
+            output_path=pth.Path("dist/benchmarks/bench.json"),
+            worker_path=pth.Path("benchmarks/pipeline_worker.py"),
+            scenarios=(),
+            warmup=0,
+            runs=1,
+            worker_iterations=1001,
+        )
+
+
+def test_pipeline_worker_config_rejects_excessive_iterations() -> None:
+    """Worker iteration count is capped to prevent runaway worker processes."""
+    with pytest.raises(ValueError, match="iterations must be <= 1000"):
+        PipelineWorkerConfig(
+            payload_bytes=1024,
+            stages=2,
+            with_line_callbacks=False,
+            iterations=1001,
+        )
 
 
 def test_pipeline_benchmark_config_rejects_non_pathlike_output_path() -> None:

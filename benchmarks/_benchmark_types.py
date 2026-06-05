@@ -26,6 +26,8 @@ Validation helpers are defined alongside these dataclasses and are used by
 their ``__post_init__`` methods to enforce expected types and value ranges.
 """
 
+# pylint: disable=too-many-lines
+
 from __future__ import annotations
 
 import dataclasses as dc
@@ -350,6 +352,11 @@ class PipelineBenchmarkConfig:
         )
         if validated_worker_iterations < 1:
             msg = f"worker_iterations must be >= 1, got {validated_worker_iterations}"
+            raise ValueError(msg)
+        if validated_worker_iterations > 1000:  # noqa: PLR2004
+            msg = (
+                f"worker_iterations must be <= 1000, got {validated_worker_iterations}"
+            )
             raise ValueError(msg)
 
 

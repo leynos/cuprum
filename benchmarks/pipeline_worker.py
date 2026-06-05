@@ -31,6 +31,9 @@ class PipelineWorkerConfig:
         if self.iterations < 1:
             msg = f"iterations must be >= 1, got {self.iterations}"
             raise ValueError(msg)
+        if self.iterations > 1000:  # noqa: PLR2004
+            msg = f"iterations must be <= 1000, got {self.iterations}"
+            raise ValueError(msg)
 
 
 def _parse_args() -> PipelineWorkerConfig:
