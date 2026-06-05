@@ -60,7 +60,7 @@ def test_render_prefixed_command_uses_windows_env_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Windows command rendering uses cmd.exe-compatible env assignment."""
-    monkeypatch.setattr(runner.os, "name", "nt")
+    monkeypatch.setattr(runner, "_is_windows_command_shell", lambda: True)
     command = [
         r"C:\Python313\python.exe",
         r"C:\benchmarks\pipeline_worker.py",

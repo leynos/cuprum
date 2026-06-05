@@ -21,6 +21,18 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
 
+_POSIX_SAFE_SHELL_TOKEN_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%_+=:,./-",
+)
+_WINDOWS_SAFE_CMD_TOKEN_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:\\/-",
+)
+
+
+def _is_windows_command_shell() -> bool:
+    """Return whether benchmark commands should be rendered for cmd.exe."""
+    return os.name == "nt"
+
 
 def render_prefixed_command(
     *,
@@ -28,7 +40,7 @@ def render_prefixed_command(
     env: cabc.Mapping[str, str],
 ) -> str:
     """Render a shell command with deterministic environment prefixes."""
-    if os.name == "nt":
+    if _is_windows_command_shell():
         return _render_windows_command(command=command, env=env)
     return _render_posix_command(command=command, env=env)
 
@@ -66,10 +78,7 @@ def _render_windows_command(
 
 def _quote_posix_shell_token(token: str) -> str:
     """Quote one POSIX shell token without relying on platform shell helpers."""
-    safe_chars = frozenset(
-        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%_+=:,./-",
-    )
-    if token and all(char in safe_chars for char in token):
+    if token and all(char in _POSIX_SAFE_SHELL_TOKEN_CHARS for char in token):
         return token
     return "'" + token.replace("'", "'\"'\"'") + "'"
 
@@ -81,10 +90,7 @@ def _escape_windows_env_value(value: str) -> str:
 
 def _quote_windows_cmd_token(token: str) -> str:
     """Quote one token for a cmd.exe command string."""
-    safe_chars = frozenset(
-        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:\\/-",
-    )
-    if token and all(char in safe_chars for char in token):
+    if token and all(char in _WINDOWS_SAFE_CMD_TOKEN_CHARS for char in token):
         return token
 
     quoted = ['"']
