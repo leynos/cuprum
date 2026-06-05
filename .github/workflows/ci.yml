@@ -12,6 +12,8 @@ permissions:
 jobs:
   lint-test:
     runs-on: ubuntu-latest
+    env:
+      WHITAKER_INSTALLER_REV: f768c2e53c47df13658af1168a67851d388750bf
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -29,6 +31,27 @@ jobs:
           for tool in mbake ty ruff; do uv tool install ${tool}; done
           npm install -g markdownlint-cli2
 
+      - name: Cache Whitaker installation
+        id: cache-whitaker
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        with:
+          path: |
+            ~/.cargo/bin/whitaker-installer
+            ~/.local/bin/whitaker
+            ~/.dylint_drivers
+            ~/.local/share/whitaker
+          key: whitaker-v2-${{ runner.os }}-${{ env.WHITAKER_INSTALLER_REV }}
+
+      - name: Install Whitaker
+        run: |
+          if [ "${{ steps.cache-whitaker.outputs.cache-hit }}" != "true" ]; then
+            cargo install --locked \
+              --git https://github.com/leynos/whitaker \
+              --rev "${WHITAKER_INSTALLER_REV}" \
+              whitaker-installer
+          fi
+          whitaker-installer --cranelift
+
       - name: Validate Makefile
         run: mbake validate Makefile
 
@@ -38,7 +61,7 @@ jobs:
       - name: Check formatting
         run: make check-fmt
 
-      - name: Run ruff
+      - name: Run lint
         run: make lint
 
   typecheck-test:
