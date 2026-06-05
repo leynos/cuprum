@@ -1159,12 +1159,25 @@ UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
   benchmarks/pipeline_throughput.py \
   --smoke \
   --dry-run \
+  --worker-iterations 20 \
   --output /tmp/pipeline-throughput-plan.json
 ```
 
 Dry-run output includes scenario metadata, command lines, benchmark profile
 metadata, worker iteration count, and whether the Rust extension is available
 in the current environment.
+
+The `--worker-iterations` option (default `20`) controls how many pipeline
+executions are batched inside a single measured worker process. Higher values
+reduce hyperfine timing overhead per pipeline run; the recorded mean is the
+total elapsed time for all iterations combined. The worker `--iterations` flag,
+which hyperfine scenario commands pass directly, mirrors this setting. Do not
+compare ratchet baselines produced with different `worker_iterations` values;
+the benchmark profile validation rejects mismatched plans automatically.
+
+Benchmark commands invoke the Python interpreter directly via `python_bin`
+(resolved from `sys.executable` at plan-generation time) rather than through
+`uv run`, so measured runtimes exclude launcher overhead.
 
 Interpretation notes:
 
