@@ -35,12 +35,82 @@ from benchmarks.tee_profile_worker import TeeProfileWorkerConfig, run_tee_profil
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
+    import types
 
     from syrupy.assertion import SnapshotAssertion
 
 
 _EVENT_WAIT_TIMEOUT_SECONDS = 10
 _THREAD_JOIN_TIMEOUT_SECONDS = 15
+
+
+class _RLockLike(typ.Protocol):
+    """Structural type for the ``RLock`` operations this test instruments."""
+
+    def acquire(self, *, blocking: bool = True, timeout: float = -1) -> bool: ...
+
+    def release(self) -> None: ...
+
+
+class _SignallingRLock:
+    """Signal when a blocking acquire observes lock contention."""
+
+    def __init__(
+        self,
+        delegate: _RLockLike,
+        contention_event: threading.Event,
+    ) -> None:
+        """Store the wrapped lock and contention signal.
+
+        Parameters
+        ----------
+        delegate
+            Lock object that receives all actual acquire and release calls.
+        contention_event
+            Event set after a blocking acquire attempt observes that the lock is
+            already held.
+        """
+        self._delegate = delegate
+        self._contention_event = contention_event
+
+    def acquire(self, *, blocking: bool = True, timeout: float = -1) -> bool:
+        """Acquire the wrapped lock, signalling first observed contention.
+
+        Parameters
+        ----------
+        blocking
+            Whether the wrapped acquire may block.
+        timeout
+            Maximum wait passed to the wrapped lock.
+
+        Returns
+        -------
+        bool
+            The wrapped lock acquisition result.
+        """
+        if blocking and timeout == -1:
+            if self._delegate.acquire(blocking=False):
+                self._delegate.release()
+            else:
+                self._contention_event.set()
+        if timeout == -1:
+            return self._delegate.acquire(blocking=blocking)
+        return self._delegate.acquire(blocking=blocking, timeout=timeout)
+
+    def release(self) -> None:
+        self._delegate.release()
+
+    def __enter__(self) -> _SignallingRLock:
+        self.acquire()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: types.TracebackType | None,
+    ) -> None:
+        self.release()
 
 
 @dc.dataclass(slots=True)
@@ -233,8 +303,6 @@ class _CheckpointBackendSelector:
         backend: tee_profile_worker.BackendName,
     ) -> cabc.Iterator[None]:
         """Coordinate lock contention at selector state-machine boundaries."""
-        if backend != "python":
-            self._events["second_waiting_for_lock"].set()
         with self._delegate(backend):
             if backend == "python":
                 self._events["first_mutated_environment"].set()
@@ -551,7 +619,9 @@ def test_concurrent_workers_preserve_backend_environment(
     )
 
 
-def test_selector_interleaving_blocks_environment_observation_until_unlock() -> None:
+def test_selector_interleaving_blocks_environment_observation_until_unlock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Checkpointed interleaving proves lock serialisation of env mutation."""
     events = {
         "first_mutated_environment": threading.Event(),
@@ -564,6 +634,14 @@ def test_selector_interleaving_blocks_environment_observation_until_unlock() -> 
     errors: list[BaseException] = []
     result_lock = threading.Lock()
     selector = _CheckpointBackendSelector(events, observations, observation_lock)
+    monkeypatch.setattr(
+        tee_profile_worker,
+        "_BACKEND_LOCK",
+        _SignallingRLock(
+            tee_profile_worker._BACKEND_LOCK,
+            events["second_waiting_for_lock"],
+        ),
+    )
     first = threading.Thread(
         target=_run_selector_context,
         args=(selector, "python", errors, result_lock),
