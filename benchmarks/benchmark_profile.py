@@ -48,14 +48,47 @@ def validate_matching_profiles(
     candidate_plan: cabc.Mapping[str, object],
 ) -> None:
     """Validate that benchmark profile metadata matches across both plans."""
-    baseline_iterations = baseline_plan.get("worker_iterations")
-    candidate_iterations = candidate_plan.get("worker_iterations")
+    baseline_profile = _require_profile_metadata(baseline_plan, context_name="baseline")
+    candidate_profile = _require_profile_metadata(
+        candidate_plan, context_name="candidate"
+    )
+    baseline_version, baseline_iterations = baseline_profile
+    candidate_version, candidate_iterations = candidate_profile
+    if baseline_version != candidate_version:
+        msg = (
+            "benchmark_profile_version must match across baseline and candidate "
+            f"runs: baseline={baseline_version!r}, candidate={candidate_version!r}"
+        )
+        raise IncompatibleBenchmarkProfileError(msg)
     if baseline_iterations != candidate_iterations:
         msg = (
             "worker_iterations must match across baseline and candidate runs: "
             f"baseline={baseline_iterations!r}, candidate={candidate_iterations!r}"
         )
         raise IncompatibleBenchmarkProfileError(msg)
+
+
+def _require_profile_metadata(
+    payload: cabc.Mapping[str, object],
+    *,
+    context_name: str,
+) -> tuple[str, int]:
+    """Return validated profile metadata for ``validate_matching_profiles``."""
+    profile_value = payload.get("benchmark_profile_version")
+    if not isinstance(profile_value, str) or not profile_value.strip():
+        msg = f"{context_name} benchmark_profile_version is missing"
+        raise IncompatibleBenchmarkProfileError(msg)
+    try:
+        validate_profile_version(payload)
+    except IncompatibleBenchmarkProfileError as exc:
+        msg = f"{context_name} {exc}"
+        raise IncompatibleBenchmarkProfileError(msg) from exc
+    try:
+        worker_iterations = require_worker_iterations(payload)
+    except (TypeError, ValueError) as exc:
+        msg = f"{context_name} {exc}"
+        raise IncompatibleBenchmarkProfileError(msg) from exc
+    return profile_value, worker_iterations
 
 
 def write_incompatible_profile_report(*, reason: str, output_path: pth.Path) -> None:

@@ -76,7 +76,10 @@ def load_plan(path: pth.Path) -> dict[str, object]:
     """Load and minimally validate dry-run plan JSON payload."""
     payload = _load_json(path)
     validate_profile_version(payload)
-    require_worker_iterations(payload)
+    try:
+        require_worker_iterations(payload)
+    except (TypeError, ValueError) as exc:
+        raise IncompatibleBenchmarkProfileError(str(exc)) from exc
     scenarios = _require_list(payload.get("scenarios"), name="scenarios")
 
     for index, scenario_value in enumerate(scenarios):

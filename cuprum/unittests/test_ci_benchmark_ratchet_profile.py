@@ -261,3 +261,30 @@ def test_write_filtered_plan_preserves_selected_scenarios(tmp_path: pth.Path) ->
         "scenarios": [scenario for scenario, _ in selected],
         "worker_iterations": 20,
     }
+
+
+def test_write_filtered_plan_rejects_non_boolean_rust_available(
+    tmp_path: pth.Path,
+) -> None:
+    """The filtered plan must not coerce string ``rust_available`` values."""
+    with pytest.raises(TypeError, match="rust_available"):
+        write_filtered_plan(
+            filtered_plan_path=tmp_path / "plan.json",
+            full_payload={
+                "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+                "rust_available": "false",
+                "worker_iterations": 20,
+            },
+            command=["hyperfine", "rust cmd"],
+            selected=[
+                (
+                    _scenario(
+                        name="rust-small-single-nocb",
+                        backend="rust",
+                        payload_bytes=1024,
+                        stages=2,
+                    ),
+                    "rust cmd",
+                ),
+            ],
+        )

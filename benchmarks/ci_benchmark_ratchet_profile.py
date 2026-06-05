@@ -13,6 +13,7 @@ from benchmarks._validation import (
     _require_mapping,
     _require_non_empty_string,
 )
+from benchmarks.benchmark_profile import require_worker_iterations
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -33,18 +34,6 @@ def load_plan_payload(full_plan_path: pth.Path) -> cabc.Mapping[str, object]:
         msg = "scenario count must match scenario command count"
         raise ValueError(msg)
     return full_payload
-
-
-def _require_worker_iterations(payload: cabc.Mapping[str, object]) -> int:
-    """Return the benchmark worker iteration count from a dry-run plan."""
-    value = payload.get("worker_iterations")
-    if isinstance(value, bool) or not isinstance(value, int):
-        msg = "worker_iterations must be an int"
-        raise TypeError(msg)
-    if value < 1:
-        msg = "worker_iterations must be >= 1"
-        raise ValueError(msg)
-    return value
 
 
 def _require_numeric_payload_bytes(value: object) -> int | float:
@@ -128,14 +117,15 @@ def write_filtered_plan(
     selected: cabc.Sequence[tuple[cabc.Mapping[str, object], str]],
 ) -> None:
     """Write the filtered dry-run plan used by the benchmark ratchet."""
+    rust_available = _require_rust_available(full_payload)
     filtered_payload = {
         "benchmark_profile_version": _require_non_empty_string(
             full_payload.get("benchmark_profile_version"),
             name="benchmark_profile_version",
         ),
         "dry_run": True,
-        "rust_available": bool(full_payload.get("rust_available", False)),
-        "worker_iterations": _require_worker_iterations(full_payload),
+        "rust_available": rust_available,
+        "worker_iterations": require_worker_iterations(full_payload),
         "command": command,
         "scenarios": [scenario for scenario, _ in selected],
     }
@@ -143,6 +133,15 @@ def write_filtered_plan(
         json.dumps(filtered_payload, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+
+
+def _require_rust_available(payload: cabc.Mapping[str, object]) -> bool:
+    """Return validated ``rust_available`` metadata from a dry-run plan."""
+    value = payload.get("rust_available", False)
+    if not isinstance(value, bool):
+        msg = "rust_available must be a bool"
+        raise TypeError(msg)
+    return value
 
 
 def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:

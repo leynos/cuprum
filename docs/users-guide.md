@@ -1315,7 +1315,7 @@ The continuous integration (CI) workflows run the following checks:
   - It compares Rust means against the latest successful `main` baseline
     artefact when one exists.
   - It skips comparison when the saved baseline uses an older benchmark profile
-    shape, because single-run and batched-worker timings are not comparable.
+    shape because single-run and batched-worker timings are not comparable.
   - Its baseline fetch helper follows GitHub’s signed archive redirects
     without forwarding GitHub-only authentication headers to the storage host.
   - It generates a Python-versus-Rust comparison report from the candidate

@@ -142,6 +142,29 @@ def test_load_plan_rejects_legacy_profile_metadata(tmp_path: pth.Path) -> None:
         load_plan(path)
 
 
+def test_load_plan_rejects_old_profile_version(tmp_path: pth.Path) -> None:
+    """Old benchmark profile versions are incompatible with current results."""
+    payload = _plan_payload()
+    payload["benchmark_profile_version"] = "pipeline-worker-single-run-v1"
+    path = _write_json(tmp_path=tmp_path, filename="plan.json", payload=payload)
+
+    with pytest.raises(IncompatibleBenchmarkProfileError, match="incompatible"):
+        load_plan(path)
+
+
+def test_load_plan_rejects_single_run_worker_iteration_metadata(
+    tmp_path: pth.Path,
+) -> None:
+    """Legacy single-run worker-iteration metadata is incompatible."""
+    payload = _plan_payload()
+    payload.pop("worker_iterations")
+    payload["worker_iteration"] = 1
+    path = _write_json(tmp_path=tmp_path, filename="plan.json", payload=payload)
+
+    with pytest.raises(IncompatibleBenchmarkProfileError, match="worker_iterations"):
+        load_plan(path)
+
+
 def test_load_throughput_rejects_missing_results(tmp_path: pth.Path) -> None:
     """Throughput payloads must include a results list."""
     path = _write_json(
