@@ -142,6 +142,13 @@ def then_benchmark_plan_contains_valid_scenarios(
         )
 
 
+def _expected_backend_env_prefix() -> str:
+    """Return the platform-appropriate env-var prefix for scenario commands."""
+    if os.name == "nt":
+        return 'set "CUPRUM_STREAM_BACKEND='
+    return "CUPRUM_STREAM_BACKEND="
+
+
 @then("the benchmark plan includes a valid command")
 def then_benchmark_plan_includes_valid_command(
     benchmark_plan_payload: dict[str, object],
@@ -164,16 +171,10 @@ def then_benchmark_plan_includes_valid_command(
     )
     assert any(sys.executable in scenario for scenario in scenario_commands)
     assert any("--iterations 20" in scenario for scenario in scenario_commands)
-    if os.name == "nt":
-        assert any(
-            scenario.startswith('set "CUPRUM_STREAM_BACKEND=')
-            for scenario in scenario_commands
-        )
-    else:
-        assert any(
-            scenario.startswith("CUPRUM_STREAM_BACKEND=")
-            for scenario in scenario_commands
-        )
+    assert any(
+        scenario.startswith(_expected_backend_env_prefix())
+        for scenario in scenario_commands
+    )
 
 
 # -- Scenario matrix steps (4.4.2) -------------------------------------------
