@@ -42,6 +42,23 @@ def _load_json(path: pth.Path) -> dict[str, object]:
     return typ.cast("dict[str, object]", payload)
 
 
+def _check_float_bound(
+    validated: float,
+    *,
+    name: str,
+    minimum: float,
+    exclusive: bool,
+) -> None:
+    """Raise ``ValueError`` when *validated* does not satisfy the minimum bound."""
+    if exclusive:
+        if validated <= minimum:
+            msg = f"{name} must be > 0"
+            raise ValueError(msg)
+    elif validated < minimum:
+        msg = f"{name} must be >= 0"
+        raise ValueError(msg)
+
+
 def _require_float(
     value: object,
     *,
@@ -57,12 +74,7 @@ def _require_float(
     if not math.isfinite(validated):
         msg = f"{name} must be finite"
         raise ValueError(msg)
-    if exclusive and validated <= minimum:
-        msg = f"{name} must be > 0"
-        raise ValueError(msg)
-    if not exclusive and validated < minimum:
-        msg = f"{name} must be >= 0"
-        raise ValueError(msg)
+    _check_float_bound(validated, name=name, minimum=minimum, exclusive=exclusive)
     return validated
 
 
