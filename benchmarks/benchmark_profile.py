@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import typing as typ
+
+_logger = logging.getLogger(__name__)
 
 BENCHMARK_PROFILE_VERSION = "pipeline-worker-batched-v1"
 
@@ -46,6 +49,7 @@ def _require_profile_version(
             if context_name is not None
             else "benchmark_profile_version is missing from benchmark plan"
         )
+        _logger.warning("benchmark profile incompatible: %s", msg)
         raise IncompatibleBenchmarkProfileError(msg)
     if profile_value != BENCHMARK_PROFILE_VERSION:
         prefix = f"{context_name} " if context_name is not None else ""
@@ -53,6 +57,7 @@ def _require_profile_version(
             f"{prefix}benchmark_profile_version is incompatible: "
             f"expected {BENCHMARK_PROFILE_VERSION!r}, got {profile_value!r}"
         )
+        _logger.warning("benchmark profile incompatible: %s", msg)
         raise IncompatibleBenchmarkProfileError(msg)
     return profile_value
 
@@ -74,12 +79,14 @@ def validate_matching_profiles(
             "benchmark_profile_version must match across baseline and candidate "
             f"runs: baseline={baseline_version!r}, candidate={candidate_version!r}"
         )
+        _logger.warning("benchmark profile mismatch: %s", msg)
         raise IncompatibleBenchmarkProfileError(msg)
     if baseline_iterations != candidate_iterations:
         msg = (
             "worker_iterations must match across baseline and candidate runs: "
             f"baseline={baseline_iterations!r}, candidate={candidate_iterations!r}"
         )
+        _logger.warning("benchmark profile mismatch: %s", msg)
         raise IncompatibleBenchmarkProfileError(msg)
 
 
@@ -94,12 +101,18 @@ def _require_profile_metadata(
         worker_iterations = require_worker_iterations(payload)
     except (TypeError, ValueError) as exc:
         msg = f"{context_name} {exc}"
+        _logger.warning("benchmark profile metadata error: %s", msg)
         raise IncompatibleBenchmarkProfileError(msg) from exc
     return profile_value, worker_iterations
 
 
 def write_incompatible_profile_report(*, reason: str, output_path: pth.Path) -> None:
     """Write a successful skip report when baseline data is not comparable."""
+    _logger.debug(
+        "writing incompatible profile report: path=%s, reason=%r",
+        output_path,
+        reason,
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "baseline_available": True,

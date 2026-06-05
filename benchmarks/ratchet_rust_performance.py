@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import pathlib as pth
-import sys
+import sys  # noqa: F401
 import typing as typ
 
 from benchmarks._validation import (
@@ -31,6 +32,8 @@ from benchmarks.ratchet_types import (
     ComparisonReport,
     ScenarioComparison,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 def _load_json(path: pth.Path) -> dict[str, object]:
@@ -91,11 +94,13 @@ def _require_non_negative_float(value: object, *, name: str) -> float:
 
 def load_plan(path: pth.Path) -> dict[str, object]:
     """Load and minimally validate dry-run plan JSON payload."""
+    _logger.debug("loading benchmark plan: path=%s", path)
     payload = _load_json(path)
     validate_profile_version(payload)
     try:
         require_worker_iterations(payload)
     except (TypeError, ValueError) as exc:
+        _logger.warning("benchmark plan worker_iterations invalid: %s", exc)
         raise IncompatibleBenchmarkProfileError(str(exc)) from exc
     scenarios = _require_list(payload.get("scenarios"), name="scenarios")
 
@@ -315,6 +320,10 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     """Execute benchmark ratchet comparison and return process exit code."""
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
     args = _parse_args()
     try:
         report = compare_rust_regressions(
@@ -333,24 +342,23 @@ def main() -> int:
         write_report(report=report, output_path=args.output)
     except IncompatibleBenchmarkProfileError as exc:
         write_incompatible_profile_report(reason=str(exc), output_path=args.output)
-        print(f"benchmark ratchet skipped: {exc}")
+        _logger.info("benchmark ratchet skipped: %s", exc)
         return 0
     except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
-        print(f"benchmark ratchet failed to evaluate inputs: {exc}", file=sys.stderr)
+        _logger.error("benchmark ratchet failed to evaluate inputs: %s", exc)  # noqa: TRY400
         return 2
 
     if report.passed:
-        print(
-            "benchmark ratchet passed: "
-            f"{report.rust_scenarios_compared} Rust scenarios compared",
+        _logger.info(
+            "benchmark ratchet passed: %d Rust scenarios compared",
+            report.rust_scenarios_compared,
         )
         return 0
 
-    print(
-        "benchmark ratchet failed: "
-        f"worst_regression_ratio={report.worst_regression_ratio:.6f}, "
-        f"max_regression={report.max_regression:.6f}",
-        file=sys.stderr,
+    _logger.error(
+        "benchmark ratchet failed: worst_regression_ratio=%.6f, max_regression=%.6f",
+        report.worst_regression_ratio,
+        report.max_regression,
     )
     return 1
 

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import argparse
 import dataclasses as dc
+import logging
 import sys
 
 from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
+
+_logger = logging.getLogger(__name__)
 
 _MIN_PIPELINE_STAGES = 2
 
@@ -173,14 +176,32 @@ def _build_pipeline(config: PipelineWorkerConfig) -> tuple[sh.Pipeline, Program]
 def run_pipeline_worker(config: PipelineWorkerConfig) -> int:
     """Execute one configured throughput benchmark pipeline run."""
     pipeline, python_program = _build_pipeline(config)
+    _logger.debug(
+        "starting pipeline worker: iterations=%d, payload_bytes=%d, "
+        "stages=%d, with_line_callbacks=%s",
+        config.iterations,
+        config.payload_bytes,
+        config.stages,
+        config.with_line_callbacks,
+    )
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        for _ in range(config.iterations):
+        for i in range(config.iterations):
             result = pipeline.run_sync(capture=False, echo=False)
             if not result.ok:
                 failure = result.failure
-                if failure is None:
-                    return 1
-                return failure.exit_code
+                exit_code = failure.exit_code if failure is not None else 1
+                _logger.warning(
+                    "pipeline iteration %d/%d failed: exit_code=%d",
+                    i + 1,
+                    config.iterations,
+                    exit_code,
+                )
+                return exit_code
+
+    _logger.debug(
+        "pipeline worker completed: %d iteration(s) succeeded",
+        config.iterations,
+    )
 
     return 0
 

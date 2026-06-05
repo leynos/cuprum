@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import json
+import logging
 import os
 import shlex
 import shutil
@@ -17,6 +18,8 @@ from benchmarks._benchmark_types import (
     PipelineBenchmarkScenario,
 )
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+
+_logger = logging.getLogger(__name__)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -171,6 +174,11 @@ def _write_dry_run_payload(
     command: cabc.Sequence[str],
 ) -> None:
     """Write dry-run benchmark metadata to JSON."""
+    _logger.debug(
+        "writing dry-run payload: path=%s, worker_iterations=%d",
+        config.output_path,
+        config.worker_iterations,
+    )
     config.output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
@@ -207,7 +215,9 @@ def _prepare_benchmark_command_config(
     """Prepare command rendering config, resolving executables when needed."""
     if config.dry_run:
         return config
-    return dc.replace(config, python_bin=_resolve_executable(config.python_bin))
+    resolved = dc.replace(config, python_bin=_resolve_executable(config.python_bin))
+    _logger.debug("resolved python_bin: %r", resolved.python_bin)
+    return resolved
 
 
 def run_pipeline_benchmarks(
