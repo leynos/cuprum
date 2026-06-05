@@ -149,6 +149,20 @@ def _expected_backend_env_prefix() -> str:
     return "CUPRUM_STREAM_BACKEND="
 
 
+def _scenario_worker_iterations(scenario: str) -> int | None:
+    """Return the worker iteration count embedded in a scenario command."""
+    parts = scenario.split()
+    for index, part in enumerate(parts):
+        if part != "--iterations" or index + 1 >= len(parts):
+            continue
+        try:
+            return int(parts[index + 1])
+        except ValueError as exc:
+            msg = f"scenario command has non-integer iterations value: {scenario!r}"
+            raise AssertionError(msg) from exc
+    return None
+
+
 @then("the benchmark plan includes a valid command")
 def then_benchmark_plan_includes_valid_command(
     benchmark_plan_payload: dict[str, object],
@@ -164,13 +178,30 @@ def then_benchmark_plan_includes_valid_command(
         )
         assert argument, "command arguments must be non-empty strings"
 
-    scenario_commands = command[7:]
+    command_arguments = typ.cast("list[str]", command)
+    worker_iterations = benchmark_plan_payload.get("worker_iterations")
+    assert isinstance(worker_iterations, int), (
+        "benchmark plan worker_iterations must be an int"
+    )
+
+    scenario_commands = command_arguments[7:]
     assert scenario_commands, "expected benchmark plan to include scenario commands"
     assert all(
         " uv run python " not in f" {scenario}" for scenario in scenario_commands
     )
+    scenario_iterations = [
+        iterations
+        for scenario in scenario_commands
+        if (iterations := _scenario_worker_iterations(scenario)) is not None
+    ]
+    assert scenario_iterations, (
+        "expected at least one scenario command to specify --iterations"
+    )
+    assert all(iterations == worker_iterations for iterations in scenario_iterations), (
+        "expected worker_iterations in benchmark plan metadata to match "
+        "--iterations values in scenario commands"
+    )
     assert any(sys.executable in scenario for scenario in scenario_commands)
-    assert any("--iterations 20" in scenario for scenario in scenario_commands)
     assert any(
         scenario.startswith(_expected_backend_env_prefix())
         for scenario in scenario_commands

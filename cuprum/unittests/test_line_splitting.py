@@ -166,6 +166,19 @@ def test_split_complete_lines_remainder_has_no_line_ending(text: str) -> None:
         )
 
 
+@pytest.mark.parametrize("text", ["a\vb", "a\x85b", "a\u2028b"])
+def test_split_complete_lines_handles_python_line_boundaries(text: str) -> None:
+    """Example: Python-recognized line boundaries delimit completed lines."""
+    split_lines = text.splitlines(keepends=True)
+    expected_lines = [_strip_line_ending(line) for line in split_lines[:-1]]
+    expected_remainder = split_lines[-1]
+
+    lines, remainder = _split_complete_lines(text)
+
+    assert lines == expected_lines
+    assert remainder == expected_remainder
+
+
 @_PROPERTY_SETTINGS
 @given(line=_line_with_optional_ending())
 def test_strip_line_ending_idempotent(line: str) -> None:

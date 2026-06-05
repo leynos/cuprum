@@ -50,12 +50,13 @@ def _check_float_bound(
     exclusive: bool,
 ) -> None:
     """Raise ``ValueError`` when *validated* does not satisfy the minimum bound."""
+    minimum_text = f"{minimum:g}"
     if exclusive:
         if validated <= minimum:
-            msg = f"{name} must be > 0"
+            msg = f"{name} must be > {minimum_text}"
             raise ValueError(msg)
     elif validated < minimum:
-        msg = f"{name} must be >= 0"
+        msg = f"{name} must be >= {minimum_text}"
         raise ValueError(msg)
 
 

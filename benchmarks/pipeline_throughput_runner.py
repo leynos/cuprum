@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses as dc
 import json
 import os
+import shlex
 import shutil
 import subprocess  # noqa: S404  # benchmark runner intentionally invokes external tooling
 import typing as typ
@@ -21,9 +22,6 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
 
-_POSIX_SAFE_SHELL_TOKEN_CHARS = frozenset(
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%_+=:,./-",
-)
 _WINDOWS_SAFE_CMD_TOKEN_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:\\/-",
 )
@@ -51,10 +49,8 @@ def _render_posix_command(
     env: cabc.Mapping[str, str],
 ) -> str:
     """Render a POSIX shell command with environment prefixes."""
-    env_tokens = [
-        f"{key}={_quote_posix_shell_token(value)}" for key, value in sorted(env.items())
-    ]
-    command_text = " ".join(_quote_posix_shell_token(token) for token in command)
+    env_tokens = [f"{key}={shlex.quote(value)}" for key, value in sorted(env.items())]
+    command_text = shlex.join(command)
     if not env_tokens:
         return command_text
     return f"{' '.join(env_tokens)} {command_text}"
@@ -74,13 +70,6 @@ def _render_windows_command(
         for key, value in sorted(env.items())
     ]
     return f"{' && '.join(env_tokens)} && {command_text}"
-
-
-def _quote_posix_shell_token(token: str) -> str:
-    """Quote one POSIX shell token without relying on platform shell helpers."""
-    if token and all(char in _POSIX_SAFE_SHELL_TOKEN_CHARS for char in token):
-        return token
-    return "'" + token.replace("'", "'\"'\"'") + "'"
 
 
 def _escape_windows_env_value(value: str) -> str:

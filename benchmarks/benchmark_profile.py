@@ -30,16 +30,31 @@ def require_worker_iterations(payload: cabc.Mapping[str, object]) -> int:
 
 def validate_profile_version(payload: cabc.Mapping[str, object]) -> None:
     """Validate that a benchmark plan uses the current profile version."""
+    _require_profile_version(payload, context_name=None)
+
+
+def _require_profile_version(
+    payload: cabc.Mapping[str, object],
+    *,
+    context_name: str | None,
+) -> str:
+    """Return validated benchmark profile version metadata."""
     profile_value = payload.get("benchmark_profile_version")
     if not isinstance(profile_value, str) or not profile_value.strip():
-        msg = "benchmark_profile_version is missing from benchmark plan"
+        msg = (
+            f"{context_name} benchmark_profile_version is missing"
+            if context_name is not None
+            else "benchmark_profile_version is missing from benchmark plan"
+        )
         raise IncompatibleBenchmarkProfileError(msg)
     if profile_value != BENCHMARK_PROFILE_VERSION:
+        prefix = f"{context_name} " if context_name is not None else ""
         msg = (
-            "benchmark_profile_version is incompatible: "
+            f"{prefix}benchmark_profile_version is incompatible: "
             f"expected {BENCHMARK_PROFILE_VERSION!r}, got {profile_value!r}"
         )
         raise IncompatibleBenchmarkProfileError(msg)
+    return profile_value
 
 
 def validate_matching_profiles(
@@ -74,15 +89,7 @@ def _require_profile_metadata(
     context_name: str,
 ) -> tuple[str, int]:
     """Return validated profile metadata for ``validate_matching_profiles``."""
-    profile_value = payload.get("benchmark_profile_version")
-    if not isinstance(profile_value, str) or not profile_value.strip():
-        msg = f"{context_name} benchmark_profile_version is missing"
-        raise IncompatibleBenchmarkProfileError(msg)
-    try:
-        validate_profile_version(payload)
-    except IncompatibleBenchmarkProfileError as exc:
-        msg = f"{context_name} {exc}"
-        raise IncompatibleBenchmarkProfileError(msg) from exc
+    profile_value = _require_profile_version(payload, context_name=context_name)
     try:
         worker_iterations = require_worker_iterations(payload)
     except (TypeError, ValueError) as exc:
