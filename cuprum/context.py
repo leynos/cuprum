@@ -53,7 +53,7 @@ def _coerce_env_overlay(
     return MappingProxyType(dict(overlay))
 
 
-def _merge_env_overlays(
+def merge_env_overlays(
     parent: cabc.Mapping[str, str] | None,
     child: cabc.Mapping[str, str] | None,
 ) -> cabc.Mapping[str, str] | None:
@@ -64,6 +64,10 @@ def _merge_env_overlays(
     that callers can monkey-patch or otherwise mutate ``os.environ`` after
     Cuprum has been imported and still have those updates visible to
     subprocesses spawned inside the scope.
+
+    Exposed as public API so that other cuprum modules — and downstream
+    code that builds custom observation tags — can merge overlay layers
+    without reaching for a private symbol.
     """
     if parent is None and child is None:
         return None
@@ -269,7 +273,7 @@ class CuprumContext:
         new_after = config.after_hooks + self.after_hooks
         new_observe = self.observe_hooks + config.observe_hooks
         new_timeout = self.timeout if config.timeout is None else config.timeout
-        new_env_overlay = _merge_env_overlays(self.env_overlay, config.env_overlay)
+        new_env_overlay = merge_env_overlays(self.env_overlay, config.env_overlay)
 
         return CuprumContext(
             allowlist=new_allowlist,
@@ -336,7 +340,7 @@ class CuprumContext:
         """
         return dc.replace(
             self,
-            env_overlay=_merge_env_overlays(self.env_overlay, overlay),
+            env_overlay=merge_env_overlays(self.env_overlay, overlay),
         )
 
 
@@ -740,6 +744,7 @@ __all__ = [
     "current_context",
     "env",
     "get_context",
+    "merge_env_overlays",
     "observe",
     "resolve_env",
     "scoped",

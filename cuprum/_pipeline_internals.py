@@ -23,7 +23,7 @@ from cuprum._pipeline_streams import (
     _PipelineRunConfig,
 )
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
-from cuprum.context import current_context
+from cuprum.context import current_context, merge_env_overlays
 from cuprum.events import ExecEvent
 
 if typ.TYPE_CHECKING:
@@ -237,13 +237,11 @@ def _build_pipeline_observations(
     *,
     pending_tasks: list[asyncio.Task[None]],
 ) -> tuple[_StageObservation, ...]:
-    from cuprum.context import _merge_env_overlays, current_context
-
     hooks_by_stage = tuple(_run_before_hooks(cmd) for cmd in parts)
     cwd = None if config.ctx.cwd is None else Path(config.ctx.cwd)
     scoped_overlay = current_context().env_overlay
     env_overlay = _freeze_str_mapping(
-        _merge_env_overlays(scoped_overlay, config.ctx.env),
+        merge_env_overlays(scoped_overlay, config.ctx.env),
     )
     return tuple(
         _StageObservation(

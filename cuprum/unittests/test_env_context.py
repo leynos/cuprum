@@ -254,6 +254,29 @@ def test_env_overlay_visible_to_pipeline_stage(
     assert result.stdout.strip() == "pipeline-value"
 
 
+def test_env_merge_order_and_kwarg_precedence() -> None:
+    """``env(...)`` merges mappings and kwargs with ``dict``-style semantics.
+
+    Later positional mappings override earlier ones and any keyword arguments
+    override every positional layer. The original mappings handed to the
+    helper must not be mutated, since :class:`EnvRegistration` stores a
+    defensive snapshot via :class:`types.MappingProxyType`.
+    """
+    first: dict[str, str] = {"A": "1"}
+    second: dict[str, str] = {"A": "2", "B": "2"}
+
+    with env(first, second, B="3", C="4"):
+        overlay = current_context().env_overlay
+        assert overlay is not None
+        assert dict(overlay) == {"A": "2", "B": "3", "C": "4"}
+
+    # Inputs must be unchanged.
+    assert first == {"A": "1"}
+    assert second == {"A": "2", "B": "2"}
+    # Context is restored on exit.
+    assert current_context().env_overlay is None
+
+
 def test_cuprum_context_with_env_overlay_is_immutable_proxy() -> None:
     """``CuprumContext.env_overlay`` returns a read-only mapping proxy."""
     ctx = CuprumContext().with_env_overlay({"CUPRUM_TEST_PROXY": "v"})
