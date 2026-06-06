@@ -79,9 +79,9 @@
   - **Linting:** Passes lint checks (`make lint`).
   - **Formatting:** Adheres to formatting standards (`make check-fmt`; use
     `make fmt` to apply fixes).
-  - **Markdown files (`.md` only):**
-    - **Linting:** Passes markdown lint checks (`make markdownlint`).
-    - **Mermaid diagrams:** Passes validation using nixie (`make nixie`).
+- For Markdown files (`.md` only):
+  - **Linting:** Passes markdown lint checks (`make markdownlint`).
+  - **Mermaid diagrams:** Passes validation using nixie (`make nixie`).
 - **Committing:**
   - Only changes that meet all quality gates should be committed.
   - Write clear, descriptive commit messages that summarize the change,
@@ -96,7 +96,8 @@
 ## Refactoring heuristics and workflow
 
 - **Recognizing refactoring needs:** regularly assess the codebase for potential
-  refactoring opportunities. Consider refactoring when you observe:
+  refactoring opportunities. Refactoring should be triggered when these
+  patterns are observed:
   - **Long methods/functions:** functions that are excessively long or try to do
     too many things.
   - **Duplicated code:** identical or very similar code blocks appearing in

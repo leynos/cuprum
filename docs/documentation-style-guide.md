@@ -11,7 +11,7 @@ consistent, and easy to maintain across projects.
   which denotes English for the Great Britain market in the Oxford style:
   - suffix -ize in words like _realize_ and _organization_ instead of
      -ise endings,
-  - suffix ‑lyse in words not traced to the Greek ‑izo, ‑izein suffixes,
+  - suffix ‑yse in words not traced to the Greek ‑izo, ‑izein suffixes,
      such as _analyse_, _paralyse_ and _catalyse_,
   - suffix -our in words such as _colour_, _behaviour_ and _neighbour_,
   - suffix -re in words such as _calibre_, _centre_ and _fibre_,

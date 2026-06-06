@@ -91,7 +91,7 @@ lint: ruff uv ## Run linters
 	  echo "whitaker is required for linting. Install it before running this target." >&2; \
 	  exit 1; \
 	fi
-	cd $(RUST_DIR) && whitaker --all -- $(CARGO_FLAGS)
+	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) whitaker --all -- $(CARGO_FLAGS)
 
 typecheck: build ## Run typechecking
 	$(UV_RUN_ENV) uv sync --group dev
