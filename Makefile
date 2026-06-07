@@ -3,6 +3,14 @@ NIXIE ?= nixie
 MDFORMAT_ALL ?= mdformat-all
 TOOLS = $(MDFORMAT_ALL) ruff $(MDLINT) uv
 VENV_TOOLS = pytest
+RUST_DIR ?= rust
+CARGO ?= cargo
+BUILD_JOBS ?=
+RUST_FLAGS ?= -D warnings
+RUSTDOC_FLAGS ?= -D warnings
+CARGO_FLAGS ?= --all-targets --all-features
+CLIPPY_FLAGS ?= $(CARGO_FLAGS) -- $(RUST_FLAGS)
+TEST_FLAGS ?= $(CARGO_FLAGS)
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
 LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
 LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
@@ -35,6 +43,7 @@ clean: ## Remove build artifacts
 	  .mypy_cache .pytest_cache .coverage coverage.* \
 	  lcov.info htmlcov .venv
 	find . -type d -name '__pycache__' -print0 | xargs -0 -r rm -rf
+	cd $(RUST_DIR) && $(CARGO) clean
 
 define ensure_tool
 	@$(LOCAL_TOOL_ENV) command -v $(1) >/dev/null 2>&1 || { \
@@ -65,15 +74,24 @@ endif
 fmt: ruff $(MDFORMAT_ALL) ## Format sources
 	$(LOCAL_TOOL_ENV) ruff format
 	$(LOCAL_TOOL_ENV) ruff check --select I --fix
+	cd $(RUST_DIR) && $(CARGO) fmt --all
 	$(LOCAL_TOOL_ENV) $(MDFORMAT_ALL)
 
 check-fmt: ruff ## Verify formatting
 	$(LOCAL_TOOL_ENV) ruff format --check
+	cd $(RUST_DIR) && $(CARGO) fmt --all -- --check
 	# mdformat-all doesn't currently do checking
 
 lint: ruff uv ## Run linters
 	$(LOCAL_TOOL_ENV) ruff check
 	$(PYLINT) $(PYLINT_TARGETS)
+	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps
+	cd $(RUST_DIR) && $(CARGO) clippy $(CLIPPY_FLAGS)
+	@if ! $(LOCAL_TOOL_ENV) command -v whitaker >/dev/null 2>&1; then \
+	  echo "whitaker is required for linting. Install it before running this target." >&2; \
+	  exit 1; \
+	fi
+	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) whitaker --all -- $(CARGO_FLAGS)
 
 typecheck: build ## Run typechecking
 	$(UV_RUN_ENV) uv sync --group dev
@@ -89,6 +107,12 @@ nixie: ## Validate Mermaid diagrams
 
 test: build uv $(VENV_TOOLS) ## Run tests
 	$(UV_RUN_ENV) uv run pytest -v -n auto
+	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
+	  cd $(RUST_DIR) && RUSTFLAGS="$(RUST_FLAGS)" $(CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
+	else \
+	  echo "cargo-nextest not found; falling back to cargo test." >&2; \
+	  cd $(RUST_DIR) && RUSTFLAGS="$(RUST_FLAGS)" $(CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
+	fi
 
 benchmark-micro: build uv ## Run pytest-benchmark microbenchmarks
 	mkdir -p dist/benchmarks
