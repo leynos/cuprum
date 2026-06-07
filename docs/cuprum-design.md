@@ -1979,11 +1979,11 @@ Both pathways are tested as first-class implementations:
   `benchmarks/pipeline_worker.py` for scenario execution and emits JSON output.
   The rendered `hyperfine` scenario commands invoke the active Python
   interpreter directly rather than `uv run`, so the Rust ratchet measures
-  pipeline worker execution instead of dependency-environment launcher overhead.
-  Each measured worker command runs a batch of pipeline executions inside one
-  worker process, and dry-run plans record a benchmark profile version plus the
-  worker iteration count so older single-run artefacts are not compared against
-  batched-worker results.
+  pipeline worker execution instead of dependency-environment launcher
+  overhead. Each measured worker command runs a batch of pipeline executions
+  inside one worker process, and dry-run plans record a benchmark profile
+  version plus the worker iteration count so older single-run artefacts are not
+  compared against batched-worker results.
 - the throughput scenario matrix covers three payload sizes (small at 1 KB,
   medium at 1 MB, large at 100 MB), two pipeline depths (single-stage with zero
   passthrough stages, and multi-stage with one passthrough stage), and two

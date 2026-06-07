@@ -74,7 +74,10 @@ def merge_env_overlays(
     if parent is None:
         return _coerce_env_overlay(child)
     if child is None:
-        return parent
+        # Even if ``parent`` is already a MappingProxyType from a prior
+        # coerce, callers may pass a plain dict; return an immutable
+        # snapshot so the result never aliases a caller-mutable object.
+        return _coerce_env_overlay(parent)
     merged = dict(parent)
     merged.update(child)
     return MappingProxyType(merged)

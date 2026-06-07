@@ -13,7 +13,7 @@ import typing as typ
 import pytest
 from pytest_bdd import given, scenario, then, when
 
-from cuprum.context import env
+from cuprum import env
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:

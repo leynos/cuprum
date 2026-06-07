@@ -46,7 +46,8 @@ the Rust ratchet measures worker pipeline throughput rather than environment
 startup overhead.
 
 Each worker process executes `worker_iterations` pipeline runs, defaulting to
-20. Hyperfine therefore measures a batched worker invocation rather than one
+
+1. Hyperfine therefore measures a batched worker invocation rather than one
 cold pipeline execution, reducing Python interpreter startup noise in the
 ratchet. Dry-run plans record `benchmark_profile_version` and
 `worker_iterations`; ratchet comparison skips older baseline artefacts whose
@@ -59,9 +60,9 @@ hyperfine iteration counts, `hyperfine_bin` selects the hyperfine executable,
 `dry_run` writes the plan without invoking hyperfine, and `rust_available`
 records whether Rust scenarios are included.
 
-`uv_bin` is a deprecated legacy field that remains accepted in the dataclass for
-backward compatibility, but current benchmark command construction ignores it
-entirely. Keep it unset in new usage and set `python_bin` when a specific
+`uv_bin` is a deprecated legacy field that remains accepted in the dataclass
+for backward compatibility, but current benchmark command construction ignores
+it entirely. Keep it unset in new usage and set `python_bin` when a specific
 interpreter is required. In dry-run mode, command rendering does not resolve
 `python_bin` via PATH.
 

@@ -21,6 +21,7 @@ from cuprum.context import (
     ScopeConfig,
     current_context,
     env,
+    merge_env_overlays,
     resolve_env,
     scoped,
 )
@@ -275,6 +276,24 @@ def test_env_merge_order_and_kwarg_precedence() -> None:
     assert second == {"A": "2", "B": "2"}
     # Context is restored on exit.
     assert current_context().env_overlay is None
+
+
+def test_merge_env_overlays_returns_immutable_snapshot_when_child_is_none() -> None:
+    """``merge_env_overlays(parent, None)`` must not alias ``parent``.
+
+    A caller passing a mutable mapping must not be able to mutate the result
+    afterwards and so break the overlay immutability contract.
+    """
+    parent: dict[str, str] = {"A": "1"}
+    merged = merge_env_overlays(parent, None)
+
+    assert merged is not None
+    assert dict(merged) == {"A": "1"}
+    with pytest.raises(TypeError):
+        merged["A"] = "mutated"  # type: ignore[index]
+
+    parent["A"] = "still-mutating-source"
+    assert merged["A"] == "1"
 
 
 def test_cuprum_context_with_env_overlay_is_immutable_proxy() -> None:
