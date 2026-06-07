@@ -148,9 +148,9 @@
 
 ## Rust specific guidance
 
-This repository is written in Rust and uses Cargo for building and dependency
-management. Contributors should follow these best practices when working on the
-project:
+This repository includes Rust components and uses Cargo for Rust building and
+dependency management. Contributors should follow these best practices when
+working on the Rust portions of the project:
 
 - Run `make check-fmt`, `make lint`, and `make test` before committing Rust
   changes. These unified root targets run the Python gates and the following
