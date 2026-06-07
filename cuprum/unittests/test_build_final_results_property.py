@@ -63,24 +63,42 @@ def partial_results_lists(draw: st.DrawFn) -> list[CommandResult | None]:
     )
 
 
+def _failure_indices_are_valid(
+    failures: list[int],
+    final_results: list[CommandResult],
+) -> bool:
+    """Return whether failure indices are in-bounds, sorted, and mark failed results."""
+    return (
+        all(0 <= idx < len(final_results) for idx in failures)
+        and all(not final_results[idx].ok for idx in failures)
+        and failures == sorted(failures)
+    )
+
+
+def _results_are_compacted(
+    final_results: list[CommandResult],
+    inputs: list[CommandResult | None],
+) -> bool:
+    """Return whether compacted results contain no cancelled entries in original order."""
+    expected = [r for r in inputs if r is not None]
+    return (
+        None not in final_results
+        and len(final_results) == len(expected)
+        and final_results == expected
+    )
+
+
 def _build_final_results_invariants_hold(
     inputs: list[CommandResult | None],
 ) -> bool:
     """Return whether the reducer satisfies its compaction invariants."""
     final_results, failures = _build_final_results(inputs)
-    expected_results = [result for result in inputs if result is not None]
-
-    return (
-        all(0 <= idx < len(final_results) for idx in failures)
-        and all(not final_results[idx].ok for idx in failures)
-        and failures == sorted(failures)
-        and None not in final_results
-        and len(final_results) == sum(1 for result in inputs if result is not None)
-        and final_results == expected_results
+    return _failure_indices_are_valid(failures, final_results) and _results_are_compacted(
+        final_results, inputs
     )
 
 
-def _assert_build_final_results_invariants(
+
     inputs: list[CommandResult | None],
 ) -> None:
     """Assert the reducer's compacted output and failure-index invariants."""
