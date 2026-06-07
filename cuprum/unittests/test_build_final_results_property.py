@@ -63,6 +63,48 @@ def partial_results_lists(draw: st.DrawFn) -> list[CommandResult | None]:
     )
 
 
+def _failure_indices_in_bounds(
+    failures: list[int],
+    final_results: list[CommandResult],
+) -> bool:
+    """Return whether every failure index addresses the compacted result list."""
+    return all(0 <= idx < len(final_results) for idx in failures)
+
+
+def _failure_indices_point_to_failures(
+    failures: list[int],
+    final_results: list[CommandResult],
+) -> bool:
+    """Return whether every failure index points at a failed command result."""
+    return all(not final_results[idx].ok for idx in failures)
+
+
+def _failure_indices_sorted(failures: list[int]) -> bool:
+    """Return whether failure indices are sorted in ascending order."""
+    return failures == sorted(failures)
+
+
+def _no_cancelled_entries(final_results: list[CommandResult]) -> bool:
+    """Return whether compacted results contain no cancelled entries."""
+    return None not in final_results
+
+
+def _result_count_matches(
+    final_results: list[CommandResult],
+    inputs: list[CommandResult | None],
+) -> bool:
+    """Return whether compacted result count matches completed inputs."""
+    return len(final_results) == sum(1 for r in inputs if r is not None)
+
+
+def _order_preserved(
+    final_results: list[CommandResult],
+    expected_results: list[CommandResult],
+) -> bool:
+    """Return whether compacted results preserve input order."""
+    return final_results == expected_results
+
+
 def _build_final_results_invariants_hold(
     inputs: list[CommandResult | None],
 ) -> bool:
@@ -71,12 +113,12 @@ def _build_final_results_invariants_hold(
     expected_results = [result for result in inputs if result is not None]
 
     return (
-        all(0 <= idx < len(final_results) for idx in failures)
-        and all(not final_results[idx].ok for idx in failures)
-        and failures == sorted(failures)
-        and None not in final_results
-        and len(final_results) == sum(1 for result in inputs if result is not None)
-        and final_results == expected_results
+        _failure_indices_in_bounds(failures, final_results)
+        and _failure_indices_point_to_failures(failures, final_results)
+        and _failure_indices_sorted(failures)
+        and _no_cancelled_entries(final_results)
+        and _result_count_matches(final_results, inputs)
+        and _order_preserved(final_results, expected_results)
     )
 
 
