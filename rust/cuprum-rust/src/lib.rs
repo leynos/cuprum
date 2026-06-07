@@ -92,13 +92,14 @@ fn rust_consume_stream(py: Python<'_>, reader_fd: i64, buffer_size: i64) -> PyRe
 
 #[cfg(unix)]
 fn convert_fd(value: i64) -> PyResult<PlatformFd> {
-    let handle_value = value as u64;
-    if usize::BITS >= 64 {
-        return Ok(handle_value as usize);
+    let fd =
+        i32::try_from(value).map_err(|_| PyValueError::new_err("file descriptor out of range"))?;
+    if fd < 0 {
+        return Err(PyValueError::new_err(
+            "file descriptor must be non-negative",
+        ));
     }
-    let truncated = u32::try_from(handle_value)
-        .map_err(|_| PyValueError::new_err("file handle out of range"))?;
-    Ok(truncated as usize)
+    Ok(fd)
 }
 
 #[cfg(windows)]
@@ -128,9 +129,9 @@ fn validate_buffer_size(buffer_size: i64) -> PyResult<BufferSize> {
 }
 
 #[cfg(unix)]
-fn stream_from_raw(handle: PlatformFd) -> StreamHandle {
-    // SAFETY: The caller ensures the handle is valid and owned by the caller.
-    unsafe { File::from_raw_handle(handle as RawHandle) }
+fn stream_from_raw(fd: PlatformFd) -> StreamHandle {
+    // SAFETY: The caller ensures the fd is valid and owned by the caller.
+    unsafe { OwnedFd::from_raw_fd(fd) }
 }
 
 #[cfg(windows)]
@@ -167,7 +168,7 @@ fn consume_stream(reader_fd: ReaderFd, buffer_size: BufferSize) -> Result<String
 }
 
 #[cfg(unix)]
-type PlatformFd = usize;
+type PlatformFd = i32;
 
 #[cfg(windows)]
 type PlatformFd = usize;
