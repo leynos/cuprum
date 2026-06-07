@@ -318,7 +318,6 @@ and tool-discovery recipes only. This supports non-interactive Continuous
 Integration/Continuous Delivery (CI/CD) hook environments without globally
 shadowing system tools for unrelated Makefile workflows.
 
-
 ## Rust property testing and verification
 
 Rust-level tests for `cuprum-rust` live with the crate under
