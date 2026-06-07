@@ -200,13 +200,17 @@ def test_resolve_env_reads_os_environ_live(
 
 
 def test_resolve_env_returns_none_when_no_layers() -> None:
-    """``resolve_env`` returns ``None`` when every layer is absent.
+    """``resolve_env`` returns ``None`` when every layer is absent or empty.
 
     Callers can then pass the result straight through to ``subprocess`` APIs
-    to mean *inherit the parent env*.
+    to mean *inherit the parent env*. Empty mappings are treated the same as
+    ``None`` so the helper does not copy ``os.environ`` when no layer
+    contributes anything.
     """
     assert resolve_env() is None
     assert resolve_env(None, None) is None
+    assert resolve_env({}) is None
+    assert resolve_env({}, None, {}) is None
 
 
 def test_resolve_env_layers_apply_left_to_right(

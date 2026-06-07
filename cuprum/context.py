@@ -88,21 +88,23 @@ def resolve_env(
 ) -> dict[str, str] | None:
     """Merge ``os.environ`` (read live) with the supplied overlay layers.
 
-    Layers are applied left-to-right; later values win. ``None`` layers are
-    skipped. When every layer is ``None`` the function returns ``None`` so that
-    callers may pass it through to ``subprocess`` APIs to mean
-    *inherit the parent environment unchanged*.
+    Layers are applied left-to-right; later values win. ``None`` *and empty*
+    layers are skipped — an empty overlay contributes nothing, so treating it
+    as a no-op avoids an unnecessary copy of :func:`os.environ` and lets the
+    subprocess inherit the parent environment directly. When every layer is
+    skipped the function returns ``None`` so callers may pass it through to
+    ``subprocess`` APIs to mean *inherit the parent environment unchanged*.
 
-    The first call to :func:`os.environ.copy` is deferred until at least one
+    The call to :func:`os.environ.copy` is deferred until at least one
     overlay is non-empty, so the result reflects whatever the process
     environment looks like at the moment of resolution — the exact behaviour
     the issue requires.
     """
-    if all(layer is None for layer in layers):
+    if all(not layer for layer in layers):
         return None
     merged: dict[str, str] = os.environ.copy()
     for layer in layers:
-        if layer is None:
+        if not layer:
             continue
         merged.update(layer)
     return merged
@@ -622,6 +624,22 @@ class EnvRegistration:
     process environment after the registration is created — for example via
     ``pytest``'s ``monkeypatch.setenv`` — remain visible to subprocesses
     spawned inside the scope. This is the behaviour the issue requires.
+
+    Token-based Restoration
+    -----------------------
+    Identical to :class:`AllowRegistration` and :class:`HookRegistration`,
+    :meth:`detach` resets the captured :class:`~contextvars.Token` and
+    therefore restores the exact context that existed when the registration
+    was created. Detach in LIFO order: detaching an outer registration before
+    an inner one resets the underlying ``ContextVar`` to the outer's snapshot
+    and silently discards the inner overlay along with any other context
+    updates layered after registration. Consumers that need finer control
+    should prefer ``with`` blocks, which already detach in LIFO order.
+
+    Detach in the same logical :class:`~contextvars.Context` (thread or
+    task) in which the registration was created. Resetting a
+    :class:`~contextvars.ContextVar` with a token from a different context
+    raises :class:`ValueError`.
     """
 
     __slots__ = ("_detached", "_overlay", "_token")
