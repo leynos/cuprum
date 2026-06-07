@@ -270,3 +270,53 @@ fn _rust_backend_native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResul
     module.add("__loader__", py.None())?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    mod unix {
+        use std::io;
+        use std::os::fd::{FromRawFd, OwnedFd};
+
+        use crate::io_utils::handle_write;
+        use crate::{BufferSize, consume_stream_files};
+
+        /// Open an anonymous pipe and return `(read_end, write_end)`.
+        #[must_use]
+        fn make_pipe() -> Result<(OwnedFd, OwnedFd), io::Error> {
+            let mut fds = [0i32; 2];
+            // SAFETY: `fds` is a valid two-element array. `pipe(2)` fills it
+            // with two freshly allocated, owned descriptors that we immediately
+            // wrap in `OwnedFd` to enforce drop-on-close semantics.
+            if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let [read_fd, write_fd] = fds;
+            // SAFETY: `read_fd` and `write_fd` are valid, open, owned
+            // descriptors returned by `pipe(2)` immediately above.
+            Ok(unsafe {
+                (
+                    OwnedFd::from_raw_fd(read_fd),
+                    OwnedFd::from_raw_fd(write_fd),
+                )
+            })
+        }
+
+        /// Tests the full consume-stream pipeline: bytes written to a pipe are
+        /// read by `consume_stream_files`, with invalid UTF-8 and a valid emoji
+        /// both handled correctly.
+        #[test]
+        fn consume_stream_replaces_invalid_utf8_and_passes_valid() -> Result<(), io::Error> {
+            let (mut reader, mut write_end) = make_pipe()?;
+            // "hello" + 0xFF (invalid) + " world" + 😀 (U+1F600, valid emoji)
+            handle_write(&mut write_end, b"hello\xff world\xf0\x9f\x98\x80")?;
+            drop(write_end);
+            let output = consume_stream_files(&mut reader, BufferSize(64))?;
+            insta::assert_snapshot!(
+                output,
+                @"hello\u{FFFD} world\u{1F600}"
+            );
+            Ok(())
+        }
+    }
+}

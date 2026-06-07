@@ -126,3 +126,68 @@ fn handle_incomplete_sequence(
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_ascii_passes_through() {
+        let mut pending = b"hello world".to_vec();
+        let mut output = String::new();
+        decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(true));
+        assert_eq!(output, "hello world", "valid ASCII must pass through unchanged");
+        assert!(pending.is_empty(), "pending must be empty after final chunk");
+    }
+
+    #[test]
+    fn invalid_bytes_are_replaced_with_replacement_char() {
+        let mut pending = b"\xff\xfe".to_vec();
+        let mut output = String::new();
+        decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(true));
+        assert_eq!(
+            output,
+            "\u{FFFD}\u{FFFD}",
+            "each invalid byte must produce one replacement character",
+        );
+    }
+
+    #[test]
+    fn incomplete_sequence_preserved_across_chunks() {
+        let mut pending = b"\xf0\x9f".to_vec(); // first two bytes of U+1F600 (😀)
+        let mut output = String::new();
+        decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(false));
+        assert!(output.is_empty(), "incomplete sequence must not appear in output");
+        assert_eq!(pending, b"\xf0\x9f", "incomplete sequence must remain in pending");
+    }
+
+    #[test]
+    fn incomplete_sequence_replaced_at_final_chunk() {
+        let mut pending = b"\xf0\x9f".to_vec(); // truncated emoji
+        let mut output = String::new();
+        decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(true));
+        assert_eq!(
+            output,
+            "\u{FFFD}",
+            "truncated sequence in final chunk must produce one replacement character",
+        );
+        assert!(pending.is_empty(), "pending must be empty after final chunk");
+    }
+
+    /// Tests multi-chunk incremental decoding to snapshot the cumulative output
+    /// that `consume_stream_files` would produce for a stream containing an
+    /// invalid byte followed by valid ASCII.
+    #[test]
+    fn incremental_replacement_output_matches_snapshot() {
+        let mut pending: Vec<u8> = Vec::new();
+        let mut output = String::new();
+
+        pending.extend_from_slice(b"hello\xff ");
+        decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(false));
+
+        pending.extend_from_slice(b"world");
+        decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(true));
+
+        insta::assert_snapshot!(output, @"hello\u{FFFD} world");
+    }
+}

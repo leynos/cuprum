@@ -416,6 +416,100 @@ uv run pytest cuprum/unittests/test_maturin_build.py \
     --snapshot-update -k test_maturin_wheel_build_snapshot
 ```
 
+## Rust quality gates
+
+Rust-specific quality checks are integrated into the root `Makefile`. Run all
+Rust and Python checks together from the repository root.
+
+### Formatting
+
+```bash
+make check-fmt   # verify: cargo fmt --all -- --check + ruff format --check
+make fmt         # apply:  cargo fmt --all + ruff format + mdformat-all
+```
+
+### Linting
+
+```bash
+make lint
+```
+
+`make lint` runs Ruff, PyPy-backed Pylint, then the following Rust commands in
+order:
+
+1. `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` — documentation must be
+   warning-free.
+2. `cargo clippy --all-targets --all-features -- -D warnings` — all Clippy
+   warnings are treated as errors.
+3. `whitaker --all -- --all-targets --all-features` — spell-checks
+   documentation strings. Requires `whitaker` to be installed (see CI for the
+   pinned revision).
+
+### Testing
+
+```bash
+make test
+```
+
+`make test` runs the Python test suite with pytest, then the Rust test suite.
+When `cargo-nextest` is on `PATH`, Rust tests run with
+`cargo nextest run --all-targets --all-features`; otherwise the fallback is
+`cargo test --all-targets --all-features`. In both cases `RUSTFLAGS="-D
+warnings"` is applied so that compiler warnings are treated as errors.
+
+## Rust I/O module and stream handle abstraction
+
+`rust/cuprum-rust/src/io_utils.rs` provides the platform-specific stream I/O
+primitives used by the stream pump and consume operations.
+
+### StreamHandle
+
+`StreamHandle` is a platform type alias defined conditionally:
+
+- **Unix:** `pub(crate) type StreamHandle = OwnedFd` — wraps an owned POSIX
+  file descriptor. Drop closes the descriptor.
+- **Windows:** `pub(crate) type StreamHandle = File` — wraps `std::fs::File`,
+  which owns a Windows HANDLE.
+
+Using `OwnedFd` on Unix rather than `File` lets the I/O helpers call
+`libc::read` and `libc::write` directly, which is necessary to handle
+`EINTR`-interrupted syscalls correctly. `File::read` and `File::write_all` on
+Unix wrap the low-level calls but do not retry on `EINTR` at the Rust layer.
+
+### read\_stream
+
+`read_stream(reader: &mut StreamHandle, buffer: &mut [u8]) -> Result<usize, io::Error>`
+
+Reads up to `buffer.len()` bytes from the stream.
+
+- **Unix:** delegates to the private `read_stream_unix`, which calls
+  `libc::read` in a loop and retries silently on `EINTR`. Any other error is
+  returned immediately.
+- **Windows:** delegates to `File::read`.
+
+### handle\_write and write\_all\_unix
+
+`handle_write(writer: &mut StreamHandle, chunk: &[u8]) -> Result<u64, io::Error>`
+
+Writes all bytes in `chunk` to the stream and returns the byte count as `u64`.
+
+- **Unix:** delegates to the private `write_all_unix`, which calls `libc::write`
+  in a loop. Partial writes advance the slice and continue. Zero-progress writes
+  return `WriteZero`. `EINTR` is retried silently. Other errors are returned.
+- **Windows:** delegates to `File::write_all`.
+
+`handle_write_result` wraps `handle_write`, accumulates the total byte count,
+and converts non-fatal errors (broken pipe, connection reset) into an `Ok(false)`
+return value so callers can drain the reader instead of propagating the error.
+
+### Platform notes
+
+The `libc` dependency is gated to `cfg(unix)`, matching the `target.'cfg(unix)'`
+Cargo target selector added in this codebase. Previously the gating was
+Linux-specific (`cfg(target_os = "linux")`). The broadened target lets the
+Unix descriptor helpers compile and run on macOS and other POSIX systems, not
+only Linux.
+
 ## Compile-time UI tests (trybuild)
 
 The Rust crate at `rust/cuprum-rust/` uses
@@ -426,16 +520,17 @@ behaviour at compile time. Tests live under `rust/cuprum-rust/tests/ui/`:
 - `tests/ui/fail/` — Rust files that **must fail** compilation with diagnostics
   matching the corresponding `.stderr` file.
 
-Run compile-time UI tests with:
+Run compile-time UI tests via the root test target:
 
 ```bash
-cd rust && cargo test compile_time_ui
+make test
 ```
 
-To update `.stderr` expectation files after a PyO3 or compiler upgrade:
+To update `.stderr` expectation files after a PyO3 or compiler upgrade, run the
+following from the `rust/` directory:
 
 ```bash
-cd rust && TRYBUILD=overwrite cargo test compile_time_ui
+TRYBUILD=overwrite cargo test compile_time_ui
 ```
 
 Inspect the updated `.stderr` files before committing to confirm that each fail
