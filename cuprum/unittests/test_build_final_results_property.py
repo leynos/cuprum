@@ -8,12 +8,20 @@ cuprum.unittests.test_build_final_results_property._assert_build_final_results_i
 from __future__ import annotations
 
 import importlib.util
+import sys
 
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from cuprum.concurrent import _build_final_results
 from cuprum.sh import CommandResult, Program
+
+if sys.version_info >= (3, 15):
+    pytest.skip(
+        "CrossHair does not support Python 3.15 CALL_KW tracing yet; see #109.",
+        allow_module_level=True,
+    )
 
 _MAX_TEXT_SIZE: int = 8
 _MAX_ARGV_SIZE: int = 4
