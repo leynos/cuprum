@@ -184,6 +184,19 @@ _backends_strategy: st.SearchStrategy[tee_profile_worker.BackendName] = st.defer
 )
 
 
+def _join_and_assert_finished(
+    *threads: threading.Thread,
+    context: str = "",
+) -> None:
+    """Join *threads* and assert all have stopped within the configured timeout."""
+    for thread in threads:
+        thread.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
+    alive = [thread.name for thread in threads if thread.is_alive()]
+    assert not alive, (
+        f"expected threads to finish{f' ({context})' if context else ''}, got {alive}"
+    )
+
+
 def _assert_backend_pair_completes(
     backends: tuple[tee_profile_worker.BackendName, ...],
     fixture: pth.Path,
@@ -596,11 +609,12 @@ def test_concurrent_workers_preserve_backend_environment(
         "expected first worker to enter run body"
     )
     second.start()
-    first.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
-    second.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
+    _join_and_assert_finished(
+        first,
+        second,
+        context="backend environment preservation",
+    )
 
-    alive_threads = [thread.name for thread in (first, second) if thread.is_alive()]
-    assert not alive_threads, f"expected worker threads to finish, got {alive_threads}"
     assert race.events["second_entered"].is_set(), (
         "expected second worker to enter selector"
     )
@@ -670,12 +684,10 @@ def test_selector_interleaving_blocks_environment_observation_until_unlock(
         "expected second thread to remain outside the context while locked"
     )
     events["release_first_context"].set()
-    first.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
-    second.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
-
-    alive_threads = [thread.name for thread in (first, second) if thread.is_alive()]
-    assert not alive_threads, (
-        f"expected selector threads to finish, got {alive_threads}"
+    _join_and_assert_finished(
+        first,
+        second,
+        context="selector interleaving",
     )
     assert not errors, f"expected no selector thread errors, got {errors!r}"
     with observation_lock:
