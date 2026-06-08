@@ -48,7 +48,7 @@ field carry an *overlay-only* mapping that is layered on top of the live
   (or `None`); empty mappings are treated as "no contribution".
 - `resolve_env(*layers)` (public) returns `os.environ.copy()` updated by
   every non-empty layer, in left-to-right order. When every layer is
-  `None` or empty the helper returns `None` so the caller can pass it
+  `None` or empty, the helper returns `None` so the caller can pass it
   straight through to `subprocess.Popen` to mean *inherit the parent
   environment unchanged* — this is also the path that avoids the
   redundant `os.environ` copy.
