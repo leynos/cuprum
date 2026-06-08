@@ -13,7 +13,7 @@ jobs:
   lint-test:
     runs-on: ubuntu-latest
     env:
-      WHITAKER_INSTALLER_REV: f768c2e53c47df13658af1168a67851d388750bf
+      WHITAKER_INSTALLER_REV: d5c691289f28929983ab59045fa3932b98ac851f # v0.2.5
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -48,7 +48,7 @@ jobs:
             ~/.local/bin/whitaker
             ~/.dylint_drivers
             ~/.local/share/whitaker
-          key: whitaker-v2-${{ runner.os }}-${{ env.WHITAKER_INSTALLER_REV }}
+          key: whitaker-v3-${{ runner.os }}-${{ env.WHITAKER_INSTALLER_REV }}
 
       - name: Install Whitaker
         run: |
