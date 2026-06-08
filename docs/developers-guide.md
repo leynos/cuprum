@@ -35,6 +35,56 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
+## Environment overlay resolution
+
+The user-facing `env(...)` context manager and the related `ScopeConfig`
+field carry an *overlay-only* mapping that is layered on top of the live
+`os.environ` at subprocess spawn time. The implementation sits in
+`cuprum/context.py` and is built on three cooperating helpers:
+
+- `merge_env_overlays(parent, child)` (public) returns an immutable
+  `MappingProxyType` whose entries are `parent` updated by `child`. Either
+  layer may be `None`, in which case the result is whichever layer is set
+  (or `None`); empty mappings are treated as "no contribution".
+- `resolve_env(*layers)` (public) returns `os.environ.copy()` updated by
+  every non-empty layer, in left-to-right order. When every layer is
+  `None` or empty the helper returns `None` so the caller can pass it
+  straight through to `subprocess.Popen` to mean *inherit the parent
+  environment unchanged* — this is also the path that avoids the
+  redundant `os.environ` copy.
+- `_coerce_env_overlay(overlay)` (internal) wraps any caller-supplied
+  mapping in `MappingProxyType(dict(overlay))` so the stored overlay
+  cannot be mutated through the original reference.
+
+The split between `merge_env_overlays` and `resolve_env` is deliberate.
+`merge_env_overlays` is the overlay-only merge used by observation
+tagging (`_StageObservation.env_overlay` and the `ExecEvent.env` field) —
+it must not include a snapshot of `os.environ`, otherwise structured
+event logs would carry the entire parent process environment on every
+emission. `resolve_env` is the spawn-time merge that *does* include
+`os.environ`; it is called from `_process_lifecycle._merge_env` for both
+the single-command and pipeline paths.
+
+The live-view contract from issue #101 is enforced at one place only:
+`resolve_env` reads `os.environ` at call time, not when the overlay is
+registered. Any code that touches the spawn path must therefore route
+through `resolve_env` (directly or via `_merge_env`) — never via a
+captured snapshot of `os.environ` at registration time.
+
+The `CuprumContext.env_overlay` field is a `MappingProxyType` (or
+`None`) and is itself part of the immutable context dataclass.
+`scoped(ScopeConfig(env_overlay=...))` and `env(...)` both build a new
+`CuprumContext` via `with_env_overlay`, capture the resulting
+`ContextVar` token, and reset it on scope exit; nested scopes therefore
+behave as a stack and are restricted by the same LIFO detach rule as
+`AllowRegistration` and `HookRegistration`.
+
+Property tests for the merge and resolve invariants live in
+`cuprum/unittests/test_env_context_properties.py`. They use
+[Hypothesis](https://hypothesis.readthedocs.io/) to exercise arbitrary
+layer counts, payload contents, and overlap patterns, and to confirm
+that the helpers never mutate caller-supplied mappings.
+
 ## Pipeline throughput benchmark configuration
 
 `PipelineBenchmarkConfig` controls the hyperfine-based end-to-end throughput

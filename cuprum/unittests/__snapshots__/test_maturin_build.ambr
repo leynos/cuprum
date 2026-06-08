@@ -59,6 +59,7 @@
       'cuprum/unittests/test_concurrency.py',
       'cuprum/unittests/test_context.py',
       'cuprum/unittests/test_env_context.py',
+      'cuprum/unittests/test_env_context_properties.py',
       'cuprum/unittests/test_fetch_main_benchmark_baseline.py',
       'cuprum/unittests/test_fixture_generation.py',
       'cuprum/unittests/test_folded_summary.py',
