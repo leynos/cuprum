@@ -15,6 +15,33 @@ Example:
 ...         ctx.is_allowed(ECHO)
 True
 
+Scoped environment overlays (issue #101): four public symbols layer
+environment variables on top of the live ``os.environ`` for subprocesses
+spawned inside the scope. ``env(*overlays, **kwvars)`` is a factory that
+returns an :class:`EnvRegistration` applying an immutable overlay to the
+active context, resolved live at subprocess spawn time against
+``os.environ``. :class:`EnvRegistration` is the handle returned by
+``env()``; it works as a context manager and exposes :meth:`detach` for
+explicit teardown. ``merge_env_overlays(parent, child)`` is the
+overlay-only merge that returns an immutable :class:`MappingProxyType`
+without reading ``os.environ`` — it is the helper used to record the
+effective overlay in observation events. ``resolve_env(*layers)`` is the
+spawn-time merge of ``os.environ`` with one or more overlay layers; it
+returns a plain ``dict`` or ``None`` when no layers contribute. Precedence
+at spawn time, from lowest to highest, is: live ``os.environ`` < scoped
+``env()`` overlays (innermost wins) < per-call ``ExecutionContext.env``.
+This deliberately diverges from plumbum's ``local.env``, which snapshots
+``os.environ`` at module import time and therefore misses variables added
+to the process environment after import. The :class:`CuprumContext` and
+:class:`ScopeConfig` dataclasses each carry an ``env_overlay`` field
+(``Mapping[str, str] | None``) that is coerced to an immutable proxy on
+construction.
+
+>>> from cuprum.context import env, current_context
+>>> with env(MY_VAR="hello"):
+...     current_context().env_overlay["MY_VAR"]
+'hello'
+
 """
 
 from __future__ import annotations

@@ -306,3 +306,15 @@ def test_cuprum_context_with_env_overlay_is_immutable_proxy() -> None:
     assert ctx.env_overlay is not None
     with pytest.raises(TypeError):
         ctx.env_overlay["CUPRUM_TEST_PROXY"] = "other"  # type: ignore[index]
+
+
+def test_env_restores_on_exception() -> None:
+    """``env(...)`` restores the previous context even when an exception is raised."""
+    original = current_context()
+    with (
+        pytest.raises(ValueError, match=r"test"),
+        env(CUPRUM_TEST_EXCEPTION_RESTORE="1"),
+    ):
+        raise ValueError("test")
+    assert current_context() is original
+    assert current_context().env_overlay is None
