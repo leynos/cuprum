@@ -39,6 +39,7 @@ from cuprum.catalogue import (
     ProjectSettings,
 )
 from cuprum.catalogue import UnknownProgramError as UnknownProgramError
+from cuprum.context import current_context, merge_env_overlays
 from cuprum.context import observe as observe
 from cuprum.context import scoped as scoped
 
@@ -308,7 +309,10 @@ def _prepare_execution_observation(
 ) -> _StageObservation:
     """Prepare the observation context for command execution."""
     cwd = Path(context.cwd) if context.cwd is not None else None
-    env_overlay = _freeze_str_mapping(context.env)
+    scoped_overlay = current_context().env_overlay
+    env_overlay = _freeze_str_mapping(
+        merge_env_overlays(scoped_overlay, context.env),
+    )
     tags = _merge_tags(
         {
             "project": cmd.project.name,
