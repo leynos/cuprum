@@ -13,7 +13,7 @@ jobs:
   lint-test:
     runs-on: ubuntu-latest
     env:
-      WHITAKER_INSTALLER_REV: d5c691289f28929983ab59045fa3932b98ac851f # v0.2.5
+      WHITAKER_INSTALLER_VERSION: '0.2.5'
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -32,12 +32,9 @@ jobs:
           npm install -g markdownlint-cli2
 
       - name: Install Rust toolchain
-        run: |
-          rustup toolchain install 1.85.0 \
-            --profile minimal \
-            --component rustfmt \
-            --component clippy
-          rustup default 1.85.0
+        uses: leynos/shared-actions/.github/actions/setup-rust@debf7d6e7036c06da51614019c9cb4a0e05cfad7 # v1.2.1
+        with:
+          toolchain: '1.92.0'
 
       - name: Cache Whitaker installation
         id: cache-whitaker
@@ -48,14 +45,14 @@ jobs:
             ~/.local/bin/whitaker
             ~/.dylint_drivers
             ~/.local/share/whitaker
-          key: whitaker-v3-${{ runner.os }}-${{ env.WHITAKER_INSTALLER_REV }}
+          key: whitaker-v4-${{ runner.os }}-${{ env.WHITAKER_INSTALLER_VERSION }}
 
       - name: Install Whitaker
         run: |
           if [ "${{ steps.cache-whitaker.outputs.cache-hit }}" != "true" ]; then
-            cargo install --locked \
+            cargo binstall --no-confirm --locked \
               --git https://github.com/leynos/whitaker \
-              --rev "${WHITAKER_INSTALLER_REV}" \
+              --version "${WHITAKER_INSTALLER_VERSION}" \
               whitaker-installer
           fi
           whitaker-installer --cranelift
