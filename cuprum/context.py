@@ -188,6 +188,10 @@ class ScopeConfig:
         Hooks invoked for structured execution events.
     timeout:
         Optional default timeout in seconds for calls within the scope.
+    env_overlay:
+        Optional immutable environment overlay layered over the live
+        ``os.environ`` at subprocess spawn time. When ``None``, no overlay
+        is applied within the scope.
 
     """
 
@@ -227,6 +231,10 @@ class CuprumContext:
     timeout:
         Optional default timeout in seconds applied when a call does not supply
         an explicit timeout.
+    env_overlay:
+        Optional immutable environment overlay layered over the live
+        ``os.environ`` when command environments are resolved. When ``None``,
+        no overlay is active on this context.
 
     """
 
