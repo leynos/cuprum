@@ -32,7 +32,7 @@ jobs:
           npm install -g markdownlint-cli2
 
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@debf7d6e7036c06da51614019c9cb4a0e05cfad7 # v1.2.1
+        uses: leynos/shared-actions/.github/actions/setup-rust@455d9ed03477c0026da96c2541ca26569a74acac
         with:
           toolchain: '1.92.0'
 
