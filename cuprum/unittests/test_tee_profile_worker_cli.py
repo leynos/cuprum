@@ -105,30 +105,38 @@ def test_worker_cli_runs_successfully_via_subprocess(tmp_path: pth.Path) -> None
     fixture = tmp_path / "fixture.b64"
     fixture.write_text("YWJjZGVm\n")
     output = tmp_path / "result.json"
-    completed = subprocess.run(  # noqa: S603
-        [
-            sys.executable,
-            "-m",
-            "benchmarks.tee_profile_worker",
-            "--fixture",
-            str(fixture),
-            "--stages",
-            "1",
-            "--mode",
-            "echo",
-            "--sink-kind",
-            "devnull",
-            "--backend",
-            "python",
-            "--repeat-count",
-            "1",
-            "--output",
-            str(output),
-        ],
-        check=False,
-    )
+    try:
+        completed = subprocess.run(  # noqa: S603
+            [
+                sys.executable,
+                "-m",
+                "benchmarks.tee_profile_worker",
+                "--fixture",
+                str(fixture),
+                "--stages",
+                "1",
+                "--mode",
+                "echo",
+                "--sink-kind",
+                "devnull",
+                "--backend",
+                "python",
+                "--repeat-count",
+                "1",
+                "--output",
+                str(output),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail(f"tee_profile_worker CLI timed out: {exc}")
 
-    assert completed.returncode == 0, f"expected exit 0, got {completed.returncode}"
+    assert completed.returncode == 0, (
+        f"expected exit 0, got {completed.returncode}: {completed.stderr!r}"
+    )
     assert output.exists(), "expected worker-result.json to be written"
     result = json.loads(output.read_text())
     assert result["status"] == "ok", f"expected worker status ok, got {result}"

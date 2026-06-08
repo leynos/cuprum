@@ -223,12 +223,8 @@ def _assert_backend_pair_completes(
         thread.start()
 
     barrier.wait(timeout=_EVENT_WAIT_TIMEOUT_SECONDS)
-    for thread in threads:
-        thread.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
-
-    alive_threads = [thread.name for thread in threads if thread.is_alive()]
-    assert not alive_threads, (
-        f"expected worker threads to finish for {backends}, got {alive_threads}"
+    _join_and_assert_finished(
+        *threads, context=f"backend pair completion for {backends}"
     )
     assert not shared.errors, f"expected no worker thread errors, got {shared.errors!r}"
     assert len(shared.results) == len(backends), (
@@ -332,8 +328,12 @@ class _CheckpointBackendSelector:
                 assert not self._events["second_entered_context"].is_set(), (
                     "expected the second thread to block while the first holds the lock"
                 )
-                self._events["release_first_context"].wait(
+                did_release = self._events["release_first_context"].wait(
                     timeout=_EVENT_WAIT_TIMEOUT_SECONDS,
+                )
+                assert did_release, (
+                    "expected release_first_context to be signalled before second "
+                    "observes env"
                 )
             else:
                 with self._observation_lock:
