@@ -116,15 +116,12 @@ def test_resolve_env_layers_apply_left_to_right(
 ) -> None:
     """``resolve_env`` resolves layers so the last writer of each key wins."""
     expected: dict[str, str] = {}
-    saw_non_empty = False
-    for layer in layers:
-        if not layer:
-            continue
-        saw_non_empty = True
+    non_empty = [layer for layer in layers if layer]
+    for layer in non_empty:
         expected.update(layer)
 
     merged = resolve_env(*layers)
-    if not saw_non_empty:
+    if not non_empty:
         assert merged is None
         return
 
@@ -133,10 +130,8 @@ def test_resolve_env_layers_apply_left_to_right(
     for key, value in expected.items():
         assert merged[key] == value
     # The live ``os.environ`` is preserved for keys no layer mentions.
-    for key, value in os.environ.items():
-        if key in expected:
-            continue
-        assert merged[key] == value
+    for key in os.environ.keys() - expected.keys():
+        assert merged[key] == os.environ[key]
 
 
 @settings(max_examples=100)
