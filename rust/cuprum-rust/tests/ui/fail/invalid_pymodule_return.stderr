@@ -1,12 +1,12 @@
 error[E0308]: mismatched types
-  --> tests/ui/fail/invalid_pymodule_return.rs:13:1
-   |
-13 | #[pymodule]
-   | ^^^^^^^^^^^
-   | |
-   | expected `Result<(), PyErr>`, found `i32`
-   | expected `Result<(), PyErr>` because of return type
-   |
-   = note: expected enum `Result<(), PyErr>`
-              found type `i32`
-   = note: this error originates in the attribute macro `pymodule` (in Nightly builds, run with -Z macro-backtrace for more info)
+ --> tests/ui/fail/invalid_pymodule_return.rs:8:1
+  |
+8 | #[pymodule]
+  | ^^^^^^^^^^^
+  | |
+  | expected `Result<(), PyErr>`, found `i32`
+  | expected `Result<(), PyErr>` because of return type
+  |
+  = note: expected enum `Result<(), PyErr>`
+             found type `i32`
+  = note: this error originates in the attribute macro `pymodule` (in Nightly builds, run with -Z macro-backtrace for more info)
