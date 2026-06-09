@@ -6,8 +6,7 @@
 use pyo3::prelude::*;
 
 #[pymodule]
-fn bad_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> i32 {
-    let _ = (_py, module);
+fn bad_module(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> i32 {
     0
 }
 
