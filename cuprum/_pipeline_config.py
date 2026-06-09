@@ -25,10 +25,12 @@ class _PipelineRunConfig:
 
     @property
     def capture_or_echo(self) -> bool:
+        """Return whether output must be consumed for capture or echo."""
         return self.capture or self.echo
 
     @property
     def stream_config(self) -> _StreamConfig:
+        """Build the stream configuration for the final pipeline stage."""
         return _StreamConfig(
             capture_output=self.capture,
             echo_output=self.echo,

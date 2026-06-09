@@ -30,16 +30,19 @@ if typ.TYPE_CHECKING:
 
 
 def _workflow_runs_payload(*run_ids: int) -> dict[str, object]:
+    """Return a stub GitHub workflow-runs API payload."""
     return {
         "workflow_runs": [{"id": run_id} for run_id in run_ids],
     }
 
 
 def _artifacts_payload(*, artifacts: list[dict[str, object]]) -> dict[str, object]:
+    """Return a stub GitHub run-artifacts API payload."""
     return {"artifacts": artifacts}
 
 
 def _main_cli_args(output_dir: pth.Path) -> list[str]:
+    """Return CLI arguments for invoking the baseline fetch command."""
     return [
         "--repository",
         "leynos/cuprum",
@@ -220,7 +223,10 @@ def test_load_json_response_retries_transient_urlopen_failures(
     auth_token = "".join(("tok", "en"))
 
     class _Response:
+        """Minimal stub of an HTTP response context manager."""
+
         def __enter__(self) -> _Response:
+            """Return the stub response for use as a context manager."""
             return self
 
         def __exit__(
@@ -229,16 +235,18 @@ def test_load_json_response_retries_transient_urlopen_failures(
             exc: object,
             traceback: object,
         ) -> None:
-            return None
+            """Exit the context manager without suppressing exceptions."""
 
         @staticmethod
         def read() -> bytes:
+            """Return canned JSON bytes for the workflow-runs response."""
             return b'{"workflow_runs": []}'
 
     attempts = 0
     timeouts: list[float] = []
 
     def fake_urlopen(request: object, *, timeout: float) -> _Response:
+        """Fail twice then return the stub response, recording timeouts."""
         nonlocal attempts
         del request
         attempts += 1
@@ -333,7 +341,10 @@ def test_download_bytes_uses_artifact_redirect_handler(
     """Artifact downloads should use the redirect policy that strips auth."""
 
     class _Response:
+        """Minimal stub of an HTTP response context manager."""
+
         def __enter__(self) -> _Response:
+            """Return the stub response for use as a context manager."""
             return self
 
         def __exit__(
@@ -342,19 +353,23 @@ def test_download_bytes_uses_artifact_redirect_handler(
             exc: object,
             traceback: object,
         ) -> None:
-            return None
+            """Exit the context manager without suppressing exceptions."""
 
         @staticmethod
         def read() -> bytes:
+            """Return canned archive bytes for the download response."""
             return b"archive-bytes"
 
     class _Opener:
+        """Minimal stub of a urllib opener returning the stub response."""
+
         @staticmethod
         def open(
             request: urllib.request.Request,
             *,
             timeout: float,
         ) -> _Response:
+            """Assert request auth and timeout, then return the stub response."""
             assert request.get_header("Authorization") == "Bearer token"
             assert math.isclose(timeout, 10.0)
             return _Response()
@@ -362,6 +377,7 @@ def test_download_bytes_uses_artifact_redirect_handler(
     def fake_build_opener(
         *handlers: urllib.request.BaseHandler,
     ) -> _Opener:
+        """Assert the redirect handler is installed, then return the stub opener."""
         assert any(
             isinstance(handler, _ArtifactArchiveRedirectHandler) for handler in handlers
         )
@@ -400,6 +416,7 @@ def test_find_latest_artifact_download_url_queries_workflow_and_artifacts(
     requested_urls: list[str] = []
 
     def fake_load_json_response(*, url: str, token: str) -> cabc.Mapping[str, object]:
+        """Record the requested URL and return the next queued payload."""
         del token
         requested_urls.append(url)
         return payloads.pop(0)

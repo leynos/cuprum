@@ -17,6 +17,7 @@ def test_is_available_returns_false_when_module_missing(
     """Probe returns False when the native module is absent."""
 
     def _raise_missing(_: str) -> types.ModuleType:
+        """Raise ModuleNotFoundError to simulate a missing native module."""
         raise ModuleNotFoundError(name="cuprum._rust_backend_native")
 
     monkeypatch.setattr(importlib, "import_module", _raise_missing)
@@ -32,8 +33,11 @@ def test_is_available_returns_true_when_module_present(
     """Probe returns True when the native module reports availability."""
 
     class _Native(types.SimpleNamespace):
+        """Stub native module that reports availability."""
+
         @staticmethod
         def is_available() -> bool:
+            """Report that the native backend is available."""
             return True
 
     monkeypatch.setattr(importlib, "import_module", lambda _: _Native())

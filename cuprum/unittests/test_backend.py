@@ -65,6 +65,7 @@ def test_auto_falls_back_on_import_error(
     monkeypatch.delenv(_ENV_VAR, raising=False)
 
     def _broken_probe() -> bool:
+        """Raise ImportError to simulate a broken native backend probe."""
         msg = "broken native module"
         raise ImportError(msg)
 
@@ -111,6 +112,7 @@ def test_forced_python_returns_python_without_probing(
     call_count = 0
 
     def _sentinel() -> bool:
+        """Fail if the availability probe is consulted in forced Python mode."""
         nonlocal call_count
         call_count += 1
         msg = "is_available must not be called in forced Python mode"
@@ -206,6 +208,7 @@ def test_availability_is_cached(
     call_count = 0
 
     def _counting_probe() -> bool:
+        """Count each invocation of the availability probe."""
         nonlocal call_count
         call_count += 1
         return False

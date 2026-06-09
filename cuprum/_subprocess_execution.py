@@ -84,6 +84,7 @@ class _SubprocessTimeoutError(Exception):
     """Internal wrapper for subprocess timeouts with captured output."""
 
     def __init__(self, details: _SubprocessTimeoutDetails) -> None:
+        """Store captured output and timing from the timed-out subprocess."""
         super().__init__(f"Execution exceeded {details.timeout}s timeout")
         self.timeout = details.timeout
         self.stdout = details.stdout

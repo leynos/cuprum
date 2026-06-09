@@ -34,6 +34,7 @@ if typ.TYPE_CHECKING:
 def _python_builder(
     *, project_name: str = "adapter-tests"
 ) -> tuple[cabc.Callable[..., sh.SafeCmd], ProgramCatalogue]:
+    """Build a Python command builder and catalogue for adapter tests."""
     python_program = Program(str(Path(sys.executable)))
     project = ProjectSettings(
         name=project_name,
@@ -328,6 +329,7 @@ class TestMetricsHook:
             """Collector that records metric name, value, and labels."""
 
             def __init__(self) -> None:
+                """Initialise an empty list to record metric calls."""
                 self.calls: list[tuple[str, float, dict[str, str]]] = []
 
             def inc_counter(
@@ -336,6 +338,7 @@ class TestMetricsHook:
                 value: float,
                 labels: dict[str, str],
             ) -> None:
+                """Record a counter increment with its name, value, and labels."""
                 self.calls.append((name, value, dict(labels)))
 
             def observe_histogram(
@@ -344,6 +347,7 @@ class TestMetricsHook:
                 value: float,
                 labels: dict[str, str],
             ) -> None:
+                """Record a histogram observation with its name, value, and labels."""
                 self.calls.append((name, value, dict(labels)))
 
         collector = LabelRecordingCollector()

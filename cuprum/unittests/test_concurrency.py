@@ -283,7 +283,10 @@ def test_before_hooks_fire_per_command() -> None:
     from cuprum import SafeCmd, before
 
     def make_tracker(calls: list[str]) -> cabc.Callable[[SafeCmd], None]:
+        """Build a before-hook that records each command's program."""
+
         def track_before(cmd: SafeCmd) -> None:
+            """Append the command's program to the tracked before-hook calls."""
             calls.append(str(cmd.program))
 
         return track_before
@@ -299,7 +302,10 @@ def test_after_hooks_fire_per_command() -> None:
     from cuprum import CommandResult, SafeCmd, after
 
     def make_tracker(calls: list[int]) -> cabc.Callable[[SafeCmd, CommandResult], None]:
+        """Build an after-hook that records each command's exit code."""
+
         def track_after(cmd: SafeCmd, result: CommandResult) -> None:
+            """Append the command's exit code to the tracked after-hook calls."""
             _ = cmd  # Unused
             calls.append(result.exit_code)
 
@@ -320,6 +326,7 @@ def test_observe_hooks_receive_events_per_command() -> None:
     events: list[ExecEvent] = []
 
     def track_events(ev: ExecEvent) -> None:
+        """Append each received execution event to the tracked list."""
         events.append(ev)
 
     with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), observe(track_events):
@@ -441,6 +448,7 @@ def test_async_run_concurrent() -> None:
     cmd2 = echo("-n", "async2")
 
     async def exercise() -> ConcurrentResult:
+        """Run the two echo commands concurrently within an allowlist scope."""
         with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
             return await run_concurrent(cmd1, cmd2)
 

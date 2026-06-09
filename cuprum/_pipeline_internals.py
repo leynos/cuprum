@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses as dc
 import sys
 import time
 import typing as typ
 from pathlib import Path
 
 from cuprum._observability import (
-    _emit_exec_event,
     _freeze_str_mapping,
     _merge_tags,
     _wait_for_exec_hook_tasks,
@@ -22,34 +20,32 @@ from cuprum._pipeline_streams import (
     _gather_optional_text_tasks,
     _PipelineRunConfig,
 )
+from cuprum._pipeline_types import (
+    _EventDetails,
+    _ExecutionHooks,
+    _PipelineOutputs,
+    _PipelineSpawnResult,
+    _PipelineStageResultInputs,
+    _StageObservation,
+)
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
 from cuprum.context import current_context, merge_env_overlays
-from cuprum.events import ExecEvent
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     import types
 
-    from cuprum.context import AfterHook, BeforeHook
-    from cuprum.events import ExecHook
     from cuprum.sh import CommandResult, PipelineResult, SafeCmd
 
 _MIN_PIPELINE_STAGES = 2
 
 
 def _sh_module() -> types.ModuleType:
+    """Return the imported ``cuprum.sh`` module or raise if it is absent."""
     module = sys.modules.get("cuprum.sh")
     if module is None:
         msg = "cuprum.sh must be imported before running pipelines"
         raise RuntimeError(msg)
     return module
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _ExecutionHooks:
-    before_hooks: tuple[BeforeHook, ...]
-    after_hooks: tuple[AfterHook, ...]
-    observe_hooks: tuple[ExecHook, ...]
 
 
 def _run_before_hooks(cmd: SafeCmd) -> _ExecutionHooks:
@@ -63,82 +59,13 @@ def _run_before_hooks(cmd: SafeCmd) -> _ExecutionHooks:
     )
 
 
-@dc.dataclass(frozen=True, slots=True)
-class _StageObservation:
-    cmd: SafeCmd
-    hooks: _ExecutionHooks
-    tags: cabc.Mapping[str, object]
-    cwd: Path | None
-    env_overlay: cabc.Mapping[str, str] | None
-    pending_tasks: list[asyncio.Task[None]]
-
-    def emit(
-        self,
-        phase: typ.Literal[
-            "plan",
-            "start",
-            "stdout",
-            "stderr",
-            "exit",
-            "stdin",
-            "stdin_error",
-        ],
-        details: _EventDetails,
-    ) -> None:
-        if not self.hooks.observe_hooks:
-            return
-        _emit_exec_event(
-            self.hooks.observe_hooks,
-            ExecEvent(
-                phase=phase,
-                program=self.cmd.program,
-                argv=self.cmd.argv_with_program,
-                cwd=self.cwd,
-                env=self.env_overlay,
-                pid=details.pid,
-                timestamp=time.time(),
-                line=details.line,
-                exit_code=details.exit_code,
-                duration_s=details.duration_s,
-                tags=self.tags,
-                note=details.note,
-                byte_count=details.byte_count,
-            ),
-            pending_tasks=self.pending_tasks,
-        )
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _EventDetails:
-    pid: int | None
-    line: str | None = None
-    exit_code: int | None = None
-    duration_s: float | None = None
-    note: str | None = None
-    byte_count: int | None = None
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _PipelineStageResultInputs:
-    wait_result: _PipelineWaitResult
-    stderr_by_stage: tuple[str | None, ...]
-    final_stdout: str | None
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _PipelineSpawnResult:
-    processes: list[asyncio.subprocess.Process]
-    stderr_tasks: list[asyncio.Task[str | None] | None]
-    stdout_task: asyncio.Task[str | None] | None
-    started_at: list[float]
-
-
 async def _await_pipeline_wait_result(
     spawn: _PipelineSpawnResult,
     config: _PipelineRunConfig,
     *,
     timeout_deadline: float | None,
 ) -> _PipelineWaitResult:
+    """Wait for the pipeline to finish, honouring any timeout deadline."""
     wait_timeout: float | None = None
     if timeout_deadline is not None:
         wait_timeout = max(0.0, timeout_deadline - time.monotonic())
@@ -169,15 +96,6 @@ async def _gather_pipeline_outputs(
     return stderr_by_stage, final_stdout
 
 
-@dc.dataclass(frozen=True, slots=True)
-class _PipelineOutputs:
-    """Captured outputs from pipeline execution."""
-
-    stderr_by_stage: tuple[str | None, ...]
-    final_stdout: str | None
-    capture: bool
-
-
 def _build_timeout_expired_error(
     parts: tuple[SafeCmd, ...],
     timeout: float,
@@ -201,6 +119,7 @@ async def _collect_pipeline_inputs(
     spawn: _PipelineSpawnResult,
     config: _PipelineRunConfig,
 ) -> _PipelineStageResultInputs:
+    """Await pipeline completion and collect outputs, mapping timeouts."""
     timeout = config.timeout
     timeout_deadline: float | None = None
     if timeout is not None:
@@ -237,6 +156,7 @@ def _build_pipeline_observations(
     *,
     pending_tasks: list[asyncio.Task[None]],
 ) -> tuple[_StageObservation, ...]:
+    """Build per-stage observation state for every command in the pipeline."""
     hooks_by_stage = tuple(_run_before_hooks(cmd) for cmd in parts)
     cwd = None if config.ctx.cwd is None else Path(config.ctx.cwd)
     scoped_overlay = current_context().env_overlay
@@ -268,6 +188,7 @@ def _build_pipeline_observations(
 def _emit_plan_events_and_run_before_hooks(
     observations: tuple[_StageObservation, ...],
 ) -> None:
+    """Emit plan events and run before hooks for every stage."""
     for obs in observations:
         obs.emit("plan", _EventDetails(pid=None))
         for hook in obs.hooks.before_hooks:
@@ -281,6 +202,7 @@ def _build_pipeline_stage_results(
     processes: list[asyncio.subprocess.Process],
     inputs: _PipelineStageResultInputs,
 ) -> list[CommandResult]:
+    """Emit exit events and assemble a command result per pipeline stage."""
     sh = _sh_module()
     stage_results: list[CommandResult] = []
     for idx, obs in enumerate(observations):
@@ -318,6 +240,7 @@ async def _finalize_pipeline_execution(
     stage_results: list[CommandResult],
     pending_tasks: list[asyncio.Task[None]],
 ) -> None:
+    """Run after hooks for every stage and drain pending observe tasks."""
     hooks_by_stage = tuple(obs.hooks for obs in observations)
     _run_pipeline_after_hooks(parts, hooks_by_stage, stage_results)
     await _wait_for_exec_hook_tasks(pending_tasks)

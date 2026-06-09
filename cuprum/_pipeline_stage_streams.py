@@ -59,6 +59,7 @@ def _create_stage_capture_tasks(
     if observation.hooks.observe_hooks:
 
         def stderr_on_line(line: str) -> None:
+            """Emit a stderr observe event for each captured line."""
             from cuprum._pipeline_internals import _EventDetails
 
             observation.emit(
@@ -81,6 +82,7 @@ def _create_stage_capture_tasks(
     if observation.hooks.observe_hooks:
 
         def stdout_on_line(line: str) -> None:
+            """Emit a stdout observe event for each captured line."""
             from cuprum._pipeline_internals import _EventDetails
 
             observation.emit(

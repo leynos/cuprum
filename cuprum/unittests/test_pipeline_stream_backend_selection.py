@@ -46,14 +46,17 @@ class _TransportWithoutPause:
     """Transport shim exposing fileno() and pipe info for tests."""
 
     def __init__(self, fd: int) -> None:
+        """Store the file descriptor backing this stub transport."""
         self._fd = fd
 
     def get_extra_info(self, name: str) -> object | None:
+        """Return stub transport info for the requested key."""
         if name != "pipe":
             return None
         return self
 
     def fileno(self) -> int:
+        """Return the file descriptor exposed by this stub transport."""
         return self._fd
 
 
@@ -61,6 +64,7 @@ class _ReaderWithoutPause:
     """Test reader object holding a transport without pause support."""
 
     def __init__(self, fd: int) -> None:
+        """Attach a pause-free transport built from the given descriptor."""
         self.transport = _TransportWithoutPause(fd)
 
 
@@ -68,6 +72,7 @@ class _WriterWithoutPause:
     """Test writer object holding a transport without pause support."""
 
     def __init__(self, fd: int) -> None:
+        """Attach a pause-free transport built from the given descriptor."""
         self.transport = _TransportWithoutPause(fd)
 
 
@@ -144,10 +149,12 @@ class TestPumpStreamDispatch:
             reader: asyncio.StreamReader | None,
             writer: asyncio.StreamWriter | None,
         ) -> None:
+            """Stand in for the Python pump and record that it ran."""
             await asyncio.sleep(0)
             calls["python_pump"] += 1
 
         def on_rust_fd_path_attempt() -> None:
+            """Record that the Rust FD-extraction path was attempted."""
             calls["rust_fd_path_attempts"] += 1
 
         configure_pump_stream_dispatch_for_testing(
@@ -175,6 +182,7 @@ class TestPumpStreamDispatch:
         """Return a fake ``rust_pump_stream`` that asserts FDs are blocking."""
 
         def _spy(reader_fd: int, writer_fd: int) -> int:
+            """Assert both descriptors are blocking, then record the call."""
             assert _pipeline_streams.os.get_blocking(reader_fd), (
                 "expected reader FD to be switched to blocking mode"
             )
@@ -229,6 +237,7 @@ class TestPumpStreamDispatch:
                 reader: asyncio.StreamReader | None,
                 writer: asyncio.StreamWriter | None,
             ) -> None:
+                """Stand in for the Python pump and record that it ran."""
                 await asyncio.sleep(0)
                 calls["python_pump"] += 1
 
@@ -278,6 +287,7 @@ class TestPumpStreamDispatch:
             reader: asyncio.StreamReader | None,
             writer: asyncio.StreamWriter | None,
         ) -> None:
+            """Stand in for the Python pump and record that it ran."""
             await asyncio.sleep(0)
             calls["python_pump"] += 1
 
@@ -298,6 +308,7 @@ class TestPumpStreamDispatch:
         writer: asyncio.StreamWriter | None,
         calls: dict[str, int],
     ) -> None:
+        """Stand in for the Python pump fallback and record that it ran."""
         del reader, writer
         await asyncio.sleep(0)
         calls["python_pump"] += 1
@@ -313,10 +324,12 @@ class TestPumpStreamDispatch:
         def fake_pause_reader_transport(
             reader: asyncio.StreamReader,
         ) -> cabc.Callable[[], None]:
+            """Record a pause and return a resume callback for the reader."""
             del reader
             call_order.append("pause")
 
             def _resume() -> None:
+                """Record that the reader transport was resumed."""
                 call_order.append("resume")
 
             return _resume
@@ -325,6 +338,7 @@ class TestPumpStreamDispatch:
             reader: asyncio.StreamReader,
             writer: asyncio.StreamWriter | None,
         ) -> None:
+            """Record that the reader buffer was drained."""
             del reader, writer
             await asyncio.sleep(0)
             call_order.append("drain")
@@ -393,6 +407,7 @@ class TestPumpStreamDispatch:
             calls = {"python_pump": 0}
 
             def fake_set_blocking(fd: int, blocking: object) -> None:
+                """Toggle blocking but fail when the writer FD is set blocking."""
                 if fd == read_fd and blocking is True:
                     original_set_blocking(
                         fd,
@@ -445,6 +460,7 @@ class TestPumpStreamDispatch:
             calls = {"rust_pump": 0, "python_pump": 0}
 
             def fake_rust_pump_stream(reader_fd: int, writer_fd: int) -> int:
+                """Stand in for the Rust pump and record that it ran."""
                 assert reader_fd == read_fd
                 assert writer_fd == write_fd
                 calls["rust_pump"] += 1

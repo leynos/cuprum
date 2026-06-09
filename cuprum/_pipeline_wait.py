@@ -19,6 +19,8 @@ from cuprum._process_lifecycle import (
 
 @dc.dataclass(frozen=True, slots=True)
 class _PipelineWaitResult:
+    """Exit codes and timing captured once a pipeline finishes waiting."""
+
     exit_codes: tuple[int, ...]
     failure_index: int | None
     started_at: tuple[float, ...]
@@ -27,6 +29,8 @@ class _PipelineWaitResult:
 
 @dc.dataclass(slots=True)
 class _PipelineWaitState:
+    """Mutable bookkeeping for awaiting all stages of a pipeline."""
+
     wait_tasks: list[asyncio.Task[int]]
     task_to_index: dict[asyncio.Task[int], int]
     exit_codes: list[int | None]
@@ -41,6 +45,7 @@ class _PipelineWaitState:
         *,
         started_at: list[float],
     ) -> _PipelineWaitState:
+        """Create wait state with one wait task per pipeline process."""
         wait_tasks = [asyncio.create_task(process.wait()) for process in processes]
         return cls(
             wait_tasks=wait_tasks,

@@ -127,6 +127,7 @@ def _pause_reader_transport(
         return None
 
     def _resume() -> None:
+        """Resume the paused reader transport, ignoring teardown errors."""
         with contextlib.suppress(RuntimeError, OSError):
             resume_reading()
 

@@ -22,11 +22,15 @@ from tests.helpers.catalogue import python_catalogue
 
 
 class _StubPumpReader:
+    """Stub stream reader yielding queued chunks then EOF."""
+
     def __init__(self, chunks: list[bytes]) -> None:
+        """Initialise the stub with the supplied queued chunks."""
         self._chunks = list(chunks)
         self.read_calls = 0
 
     async def read(self, _: int) -> bytes:
+        """Return the next queued chunk, or empty bytes when exhausted."""
         self.read_calls += 1
         await asyncio.sleep(0)
         if not self._chunks:
@@ -35,7 +39,10 @@ class _StubPumpReader:
 
 
 class _StubPumpWriter:
+    """Stub stream writer recording writes, drains, and closure."""
+
     def __init__(self, *, fail_on_drain_call: int | None = None) -> None:
+        """Initialise the stub, optionally failing on a given drain call."""
         self.data = bytearray()
         self.drain_calls = 0
         self.write_calls = 0
@@ -45,10 +52,12 @@ class _StubPumpWriter:
         self._fail_on_drain_call = fail_on_drain_call
 
     def write(self, chunk: bytes) -> None:
+        """Buffer the chunk and record the write call."""
         self.write_calls += 1
         self.data.extend(chunk)
 
     async def drain(self) -> None:
+        """Record the drain, optionally raising to simulate a broken pipe."""
         self.drain_calls += 1
         await asyncio.sleep(0)
         if self._fail_on_drain_call is None:
@@ -57,17 +66,23 @@ class _StubPumpWriter:
             raise BrokenPipeError
 
     def write_eof(self) -> None:
+        """Record that end-of-file was signalled to the writer."""
         self.write_eof_calls += 1
 
     def close(self) -> None:
+        """Mark the writer as closed."""
         self.closed = True
 
     async def wait_closed(self) -> None:
+        """Record that the caller awaited closure of the writer."""
         self.wait_closed_calls += 1
 
 
 class _StubSpawnProcess:
+    """Stub subprocess recording terminate, kill, and wait calls."""
+
     def __init__(self, pid: int) -> None:
+        """Initialise the stub process with the given PID."""
         self.pid = pid
         self.returncode: int | None = None
         self.stdout = None
@@ -78,12 +93,15 @@ class _StubSpawnProcess:
         self.wait_calls = 0
 
     def terminate(self) -> None:
+        """Record that the process was terminated."""
         self.terminate_calls += 1
 
     def kill(self) -> None:
+        """Record that the process was killed."""
         self.kill_calls += 1
 
     async def wait(self) -> int:
+        """Record the wait and return a default terminated exit code."""
         self.wait_calls += 1
         await asyncio.sleep(0)
         if self.returncode is None:
@@ -275,6 +293,7 @@ def test_pump_stream_drains_per_chunk() -> None:
     """Streaming between stages awaits drain for backpressure."""
 
     async def exercise() -> _StubPumpWriter:
+        """Drive the pump under test and capture the resulting writer."""
         reader = asyncio.StreamReader()
         writer = _StubPumpWriter()
         task = asyncio.create_task(
@@ -300,6 +319,7 @@ def test_pump_stream_handles_downstream_close_without_hanging() -> None:
     """_pump_stream drains stdout even if downstream closes mid-stream."""
 
     async def exercise() -> tuple[_StubPumpReader, _StubPumpWriter]:
+        """Pump through a writer that fails mid-stream and return both ends."""
         reader = _StubPumpReader([b"a" * _READ_SIZE, b"b" * _READ_SIZE, b"c"])
         writer = _StubPumpWriter(fail_on_drain_call=2)
         await _pump_stream(
@@ -336,6 +356,7 @@ def test_spawn_pipeline_processes_terminates_started_stages_on_failure(
         *_: object,
         **__: object,
     ) -> _StubSpawnProcess:
+        """Spawn the first stage, then fail subsequent spawn attempts."""
         nonlocal call_count
         call_count += 1
         await asyncio.sleep(0)
@@ -348,6 +369,7 @@ def test_spawn_pipeline_processes_terminates_started_stages_on_failure(
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
     async def exercise() -> None:
+        """Spawn the pipeline and assert the spawn failure propagates."""
         with pytest.raises(FileNotFoundError):
             await _spawn_pipeline_processes((first, second), config)
 
@@ -369,6 +391,8 @@ def test_pipeline_requires_at_least_two_stages() -> None:
 
 
 class _StubPipelineWaitProcess:
+    """Stub process modelling exit codes and readiness for wait tests."""
+
     def __init__(
         self,
         *,
@@ -376,6 +400,7 @@ class _StubPipelineWaitProcess:
         exit_code: int,
         ready: asyncio.Event | None = None,
     ) -> None:
+        """Initialise the stub with its PID, exit code, and ready event."""
         self.pid = pid
         self.returncode: int | None = None
         self.stdout = None
@@ -387,18 +412,21 @@ class _StubPipelineWaitProcess:
         self._ready = ready
 
     def terminate(self) -> None:
+        """Record termination and unblock any pending wait."""
         self.terminate_calls += 1
         self._exit_code = -15
         if self._ready is not None:
             self._ready.set()
 
     def kill(self) -> None:
+        """Record the kill and unblock any pending wait."""
         self.kill_calls += 1
         self._exit_code = -9
         if self._ready is not None:
             self._ready.set()
 
     async def wait(self) -> int:
+        """Await readiness if set, then return the recorded exit code."""
         if self._ready is not None:
             await self._ready.wait()
         await asyncio.sleep(0)

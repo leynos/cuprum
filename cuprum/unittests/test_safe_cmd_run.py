@@ -457,6 +457,7 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
     command = python_builder(str(script))
 
     async def orchestrate() -> int:
+        """Run the child, cancel it, and return its recorded PID."""
         task = asyncio.create_task(
             command.run(
                 output=RunOutputOptions(capture=False),
@@ -551,10 +552,12 @@ def test_run_invokes_before_hooks_in_fifo_order(
     call_order: list[int] = []
 
     def hook1(cmd: SafeCmd) -> None:
+        """Record this before hook as the first to run."""
         _ = cmd
         call_order.append(1)
 
     def hook2(cmd: SafeCmd) -> None:
+        """Record this before hook as the second to run."""
         _ = cmd
         call_order.append(2)
 
@@ -575,10 +578,12 @@ def test_run_invokes_after_hooks_in_lifo_order(
     call_order: list[int] = []
 
     def outer_hook(cmd: SafeCmd, result: CommandResult) -> None:
+        """Record the outer scope's after hook invocation."""
         _, _ = cmd, result
         call_order.append(1)
 
     def inner_hook(cmd: SafeCmd, result: CommandResult) -> None:
+        """Record the inner scope's after hook invocation."""
         _, _ = cmd, result
         call_order.append(2)
 
@@ -605,9 +610,11 @@ def test_run_passes_command_and_result_to_hooks(
     after_received: list[tuple[SafeCmd, CommandResult]] = []
 
     def before_hook(cmd: SafeCmd) -> None:
+        """Capture the command passed to the before hook."""
         before_received.append(cmd)
 
     def after_hook(cmd: SafeCmd, result: CommandResult) -> None:
+        """Capture the command and result passed to the after hook."""
         after_received.append((cmd, result))
 
     command = sh.make(ECHO)("-n", "test")
@@ -636,6 +643,7 @@ def test_run_does_not_invoke_after_hooks_on_cancellation(
     after_called = False
 
     def after_hook(cmd: SafeCmd, result: CommandResult) -> None:
+        """Record that the after hook was invoked."""
         nonlocal after_called
         _, _ = cmd, result
         after_called = True
@@ -644,6 +652,7 @@ def test_run_does_not_invoke_after_hooks_on_cancellation(
     command = python_builder("-c", "import time; time.sleep(10)")
 
     async def orchestrate() -> None:
+        """Start the command under a scope, then cancel it."""
         with scoped(
             ScopeConfig(
                 allowlist=frozenset([command.program]), after_hooks=(after_hook,)
@@ -692,6 +701,7 @@ def test_stdin_input_cancellation_cleans_up_task(
     """Cancelling a command with stdin data does not hang."""
 
     async def _orchestrate() -> None:
+        """Start a stdin-fed command and cancel it without hanging."""
         command = python_builder(
             "-c",
             "import sys, time; sys.stdin.read(); time.sleep(30)",

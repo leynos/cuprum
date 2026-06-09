@@ -23,6 +23,7 @@ def test_pty_blackhole_enter_cleans_up_when_fdopen_fails(
     monkeypatch.setattr(sinks.pty, "openpty", lambda: (master_fd, slave_fd))
 
     def fail_fdopen(*_args: object, **_kwargs: object) -> typ.NoReturn:
+        """Raise RuntimeError to simulate os.fdopen failing."""
         msg = "fdopen failed"
         raise RuntimeError(msg)
 
@@ -33,6 +34,7 @@ def test_pty_blackhole_enter_cleans_up_when_fdopen_fails(
         blackhole.__enter__()
 
     def fstat_error(fd: int) -> OSError:
+        """Return the OSError raised when fstat is called on a closed fd."""
         try:
             os.fstat(fd)
         except OSError as exc:

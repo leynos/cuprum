@@ -110,6 +110,7 @@ def structured_logging_hook(
     }
 
     def hook(event: ExecEvent) -> None:
+        """Log ``event`` at the level configured for its phase."""
         level = level_map.get(event.phase, logging.DEBUG)
         if not log.isEnabledFor(level):
             return

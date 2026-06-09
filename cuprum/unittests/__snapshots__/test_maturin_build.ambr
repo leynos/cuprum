@@ -16,6 +16,7 @@
       'cuprum/_pipeline_spawn.py',
       'cuprum/_pipeline_stage_streams.py',
       'cuprum/_pipeline_streams.py',
+      'cuprum/_pipeline_types.py',
       'cuprum/_pipeline_wait.py',
       'cuprum/_process_lifecycle.py',
       'cuprum/_rust_backend.py',

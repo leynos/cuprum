@@ -137,6 +137,7 @@ def _build_spawn_observations(
     parts: tuple[SafeCmd, ...],
     config: _PipelineRunConfig,
 ) -> tuple[_StageObservation, ...]:
+    """Build per-stage observation state for spawning a pipeline."""
     from cuprum._pipeline_internals import _run_before_hooks, _StageObservation
 
     hooks_by_stage = tuple(_run_before_hooks(cmd) for cmd in parts)

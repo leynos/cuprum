@@ -16,12 +16,14 @@ if typ.TYPE_CHECKING:
 def _freeze_str_mapping(
     mapping: cabc.Mapping[str, str] | None,
 ) -> cabc.Mapping[str, str] | None:
+    """Return a read-only copy of ``mapping``, or ``None`` when absent."""
     if mapping is None:
         return None
     return types.MappingProxyType(dict(mapping))
 
 
 def _merge_tags(*tags: cabc.Mapping[str, object] | None) -> cabc.Mapping[str, object]:
+    """Merge tag mappings left-to-right into a single read-only mapping."""
     merged: dict[str, object] = {}
     for mapping in tags:
         if not mapping:
@@ -44,6 +46,7 @@ def _emit_exec_event(
 
 
 async def _await_awaitable(awaitable: cabc.Awaitable[None]) -> None:
+    """Await ``awaitable`` so it can be wrapped in a task."""
     await awaitable
 
 
