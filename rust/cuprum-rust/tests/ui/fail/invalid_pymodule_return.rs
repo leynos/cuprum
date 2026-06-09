@@ -12,7 +12,7 @@ fn example() -> PyResult<i32> {
 
 #[pymodule]
 fn bad_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> i32 {
-    module.add_function(wrap_pyfunction!(example, module)?)?;
+    let _ = (_py, module);
     0
 }
 
