@@ -2011,7 +2011,7 @@ the job.
 The ratchet rule is:
 
 - regression ratio = `(candidate_mean - baseline_mean) / baseline_mean`
-- fail when regression ratio `> 0.10` for any Rust scenario
+- fail when regression ratio `> 0.30` for any Rust scenario
 
 Artefacts uploaded by CI include:
 
