@@ -8,7 +8,9 @@ import typing as typ
 from pathlib import Path
 
 from cuprum._observability import _freeze_str_mapping, _merge_tags
+from cuprum._pipeline_stage_streams import _get_stage_stream_fds
 from cuprum._pipeline_streams import _collect_pipe_results
+from cuprum._subprocess_context import _cwd_arg
 from cuprum.context import current_context, merge_env_overlays, resolve_env
 
 if typ.TYPE_CHECKING:
@@ -199,23 +201,18 @@ async def _spawn_pipeline_processes(
     last_idx = len(observations) - 1
     try:
         for idx, observation in enumerate(observations):
+            stream_fds = _get_stage_stream_fds(
+                idx,
+                last_idx,
+                capture_or_echo=config.capture_or_echo,
+            )
             process = await asyncio.create_subprocess_exec(
                 *observation.cmd.argv_with_program,
-                stdin=(
-                    asyncio.subprocess.DEVNULL if idx == 0 else asyncio.subprocess.PIPE
-                ),
-                stdout=(
-                    asyncio.subprocess.PIPE
-                    if idx != last_idx or config.capture_or_echo
-                    else asyncio.subprocess.DEVNULL
-                ),
-                stderr=(
-                    asyncio.subprocess.PIPE
-                    if config.capture_or_echo
-                    else asyncio.subprocess.DEVNULL
-                ),
+                stdin=stream_fds.stdin,
+                stdout=stream_fds.stdout,
+                stderr=stream_fds.stderr,
                 env=_merge_env(config.ctx.env),
-                cwd=str(config.ctx.cwd) if config.ctx.cwd is not None else None,
+                cwd=_cwd_arg(config.ctx.cwd),
             )
             processes.append(process)
             started_at.append(time.perf_counter())

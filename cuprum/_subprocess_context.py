@@ -5,6 +5,8 @@ from __future__ import annotations
 import typing as typ
 
 if typ.TYPE_CHECKING:
+    from pathlib import Path
+
     from cuprum.context import CuprumContext
     from cuprum.sh import ExecutionContext
 
@@ -21,6 +23,23 @@ def _current_context() -> CuprumContext:
     from cuprum.context import current_context
 
     return current_context()
+
+
+def _cwd_arg(cwd: str | Path | None) -> str | None:
+    """Return the ``cwd`` argument for ``asyncio.create_subprocess_exec``.
+
+    Canonical conversion shared by the single-command and pipeline spawn
+    sites so the optional working directory is rendered identically in both
+    paths.
+
+    Example
+    -------
+    >>> _cwd_arg(None) is None
+    True
+    >>> _cwd_arg(Path("/srv/data"))
+    '/srv/data'
+    """
+    return str(cwd) if cwd is not None else None
 
 
 def _resolve_timeout(
