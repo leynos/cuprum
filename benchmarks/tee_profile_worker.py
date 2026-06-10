@@ -179,9 +179,6 @@ class _MetricsState:
         )
 
 
-_metrics_state = _MetricsState(threading.local())
-
-
 class TeeProfileWorkerResult(typ.TypedDict):
     """Machine-readable tee profiling worker result payload."""
 
@@ -382,7 +379,11 @@ class _EnvBackendSelector:
     ) -> None:
         """Store selector collaborators used for timing and state tracking."""
         self._clock = clock if clock is not None else _default_clock
-        self._metrics = metrics_state if metrics_state is not None else _metrics_state
+        self._metrics = (
+            metrics_state
+            if metrics_state is not None
+            else _MetricsState(threading.local())
+        )
         self._selector_state = (
             selector_state if selector_state is not None else _selector_state
         )

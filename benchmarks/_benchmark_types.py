@@ -31,11 +31,14 @@ ranges.
 from __future__ import annotations
 
 import dataclasses as dc
+
+# ``pth`` is imported at runtime (not under ``TYPE_CHECKING``) so the public
+# dataclass annotations (``output_path: pth.Path`` and similar) remain
+# resolvable via ``typing.get_type_hints``; ``# noqa: TC003`` keeps ruff from
+# pushing it back into a type-checking block.
+import pathlib as pth  # noqa: TC003
 import sys
 import typing as typ
-
-if typ.TYPE_CHECKING:
-    import pathlib as pth
 
 from benchmarks._benchmark_type_validators import (
     _validate_backend as _validate_backend_value,
