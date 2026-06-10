@@ -29,6 +29,8 @@ open each document.
   backend.
 - [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md) -
   accepted decision for combining Ruff with Pylint under PyPy.
+- [ADR-004: Interrogate docstring-coverage gate][adr-004] - accepted decision
+  to enforce 100% docstring coverage as a third lint tier.
 
 ## Planning and validation references
 
@@ -40,4 +42,5 @@ open each document.
 - [Execution plans](execplans/) - task-specific implementation plans created
   when substantial work needs a durable plan.
 
+[adr-004]: adr-004-interrogate-docstring-gate.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
