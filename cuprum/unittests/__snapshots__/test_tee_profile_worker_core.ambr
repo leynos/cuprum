@@ -1,7 +1,4 @@
 # serializer version: 1
-# name: test_nested_selector_logs_rejection_warning
-  "Rejected re-entrant backend selector activation: backend='auto' thread_id=<redacted> selector_active=True"
-# ---
 # name: test_run_tee_profile_worker_snapshot
   dict({
     'backend': 'python',

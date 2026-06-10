@@ -294,6 +294,89 @@ methods:
 - `_validate_enum_fields` raises `ValueError` if `mode`, `sink_kind`, or
   `backend` are not members of the respective `_VALID_*` sets.
 
+### Worker test suite layout
+
+The worker test suite is split across three focused modules so that each file
+covers one boundary of behaviour:
+
+- `cuprum/unittests/test_tee_profile_worker_core.py` covers parent-side consume
+  hot-path execution, result accounting, and snapshotted worker output.
+- `cuprum/unittests/test_tee_profile_worker_cli.py` covers CLI invocation, the
+  JSON payload shape, and `TeeProfileWorkerConfig` validation errors.
+- `cuprum/unittests/test_tee_profile_worker_concurrency.py` covers reentrancy,
+  lock serialization, and concurrent-worker race-freedom for
+  `_EnvBackendSelector`.
+
+Keeping the three concerns in separate files makes the coverage boundary
+explicit: a change to command construction touches the core module, a change to
+the CLI contract touches the CLI module, and a change to backend locking or the
+selector state machine touches the concurrency module.
+
+### `_EnvBackendSelector` concurrency invariants
+
+`test_tee_profile_worker_concurrency.py` verifies the `_EnvBackendSelector`
+state machine that serializes process-local backend selection. The selector is
+backed by a process-wide reentrant lock (`_BACKEND_LOCK`) and a thread-local
+reentrancy guard; the tests assert the following invariants:
+
+1. `_BACKEND_LOCK` is held for the full duration of the selection context.
+2. `os.environ["CUPRUM_STREAM_BACKEND"]` is restored to its previous value on
+   context exit.
+3. Backend availability and dispatch caches are cleared on entry and on exit.
+4. Same-thread reentrancy is rejected before any nested environment mutation.
+
+These invariants mirror the state transitions a threading-level model checker
+would explore. Candidate full model-checking routes include `pynusmv` and
+translating the selector state machine to Promela for SPIN (Simple Promela
+Interpreter). Full tool integration is out of scope; the explicit checkpoint
+tests keep the observable states aligned with the model such tools would
+verify.
+
+#### Hypothesis property-based generation
+
+[Hypothesis](https://hypothesis.readthedocs.io/) generates the input domains
+that fixed examples cannot cover exhaustively:
+
+- `test_nested_selector_rejects_generated_backend_pairs` draws an outer and an
+  inner backend from the available set and asserts that same-thread nested
+  entry always raises `RuntimeError` before mutating backend state, regardless
+  of which backend pair is generated.
+- `test_generated_concurrent_workers_complete` draws a thread count (2–8) and a
+  same-length sequence of backend selections, then runs one worker per backend
+  concurrently and asserts every worker completes with `status == "ok"` and
+  `exit_code == 0`.
+
+The strategies sample only backends available in the current environment
+(`_available_backend_names`), so pure-Python installs omit the Rust backend
+from generated cases rather than skipping individual examples. Both generated
+tests set `deadline=None` because real worker execution time is not a useful
+signal for these properties, and suppress the `function_scoped_fixture` health
+check because each example reuses the per-test `tmp_path` fixture.
+
+#### Checkpointed interleaving tests
+
+Property generation establishes that races do not occur across the input
+domain; the checkpointed tests prove *why* by pinning a specific interleaving
+that would expose a missing lock. They inject a coordinating backend selector
+and a `_SignallingRLock` wrapper that signals when a blocking acquire first
+observes contention, then drive two worker threads through a deterministic
+schedule using `threading.Event` checkpoints:
+
+- `test_concurrent_workers_preserve_backend_environment` holds the lock in the
+  first ("python") worker while a second worker contends, and asserts the first
+  worker's view of `CUPRUM_STREAM_BACKEND` stays pinned to `"python"`.
+- `test_selector_interleaving_blocks_environment_observation_until_unlock`
+  asserts the second worker cannot enter its context — and therefore cannot
+  observe the environment — until the first worker releases the lock, yielding
+  the serialized observation sequence `["python", None]`.
+
+When changing `_EnvBackendSelector`, `_BACKEND_LOCK`, or the reentrancy guard,
+run:
+
+```bash
+uv run pytest cuprum/unittests/test_tee_profile_worker_concurrency.py
+```
+
 ## Folded-stack summarizer (`benchmarks/summarize_folded.py`)
 
 The folded-stack summarizer consumes one text file where each non-empty line
