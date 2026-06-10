@@ -294,7 +294,6 @@ methods:
 - `_validate_enum_fields` raises `ValueError` if `mode`, `sink_kind`, or
   `backend` are not members of the respective `_VALID_*` sets.
 
-
 ### Worker test suite layout
 
 The worker test suite is split across three focused modules so that each file
@@ -353,7 +352,6 @@ from generated cases rather than skipping individual examples. Both generated
 tests set `deadline=None` because real worker execution time is not a useful
 signal for these properties, and suppress the `function_scoped_fixture` health
 check because each example reuses the per-test `tmp_path` fixture.
-
 
 #### Checkpointed interleaving tests
 
