@@ -54,10 +54,15 @@ def read_expected_maturin_version(root: Path) -> str:
     return match.group(1)
 
 
-def _require_pin_match(match: re.Match[str] | None, location: str) -> str:
+def _require_pin_match(
+    match: re.Match[str] | None,
+    location: str,
+    *,
+    subject: str = "maturin version pin",
+) -> str:
     """Extract a version from a regex match or raise AssertionError with location."""
     if match is None:
-        msg = f"Could not locate maturin version pin in {location}"
+        msg = f"Could not locate {subject} in {location}"
         raise AssertionError(msg)
     return match.group(1)
 
@@ -104,6 +109,7 @@ def read_manylinux_aarch64_container_ref(root: Path) -> str:
     return _require_pin_match(
         _AARCH64_CONTAINER_PIN_RE.search(workflow),
         ".github/workflows/build-wheels.yml",
+        subject="MANYLINUX_AARCH64_CONTAINER pin",
     )
 
 

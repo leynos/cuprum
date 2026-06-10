@@ -627,7 +627,7 @@ in step.
 (`test_manylinux_aarch64_container_is_pinned_to_sha256` and
 `test_manylinux_aarch64_container_is_referenced_by_build_step`) Asserts that
 `MANYLINUX_AARCH64_CONTAINER` in `.github/workflows/build-wheels.yml` is pinned
-to a SHA-256 digest and that `build-wheels.yml` uses the pinned variable in
+to an SHA-256 digest and that `build-wheels.yml` uses the pinned variable in
 the Linux aarch64 maturin build step.
 
 When refreshing this container, update the value in
