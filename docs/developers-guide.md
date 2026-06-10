@@ -305,7 +305,7 @@ covers one boundary of behaviour:
 - `cuprum/unittests/test_tee_profile_worker_cli.py` covers CLI invocation, the
   JSON payload shape, and `TeeProfileWorkerConfig` validation errors.
 - `cuprum/unittests/test_tee_profile_worker_concurrency.py` covers reentrancy,
-  lock serialisation, and concurrent-worker race-freedom for
+  lock serialization, and concurrent-worker race-freedom for
   `_EnvBackendSelector`.
 
 Keeping the three concerns in separate files makes the coverage boundary
@@ -313,11 +313,10 @@ explicit: a change to command construction touches the core module, a change to
 the CLI contract touches the CLI module, and a change to backend locking or the
 selector state machine touches the concurrency module.
 
-
 ### `_EnvBackendSelector` concurrency invariants
 
 `test_tee_profile_worker_concurrency.py` verifies the `_EnvBackendSelector`
-state machine that serialises process-local backend selection. The selector is
+state machine that serializes process-local backend selection. The selector is
 backed by a process-wide reentrant lock (`_BACKEND_LOCK`) and a thread-local
 reentrancy guard; the tests assert the following invariants:
 
@@ -333,7 +332,6 @@ translating the selector state machine to Promela for SPIN (Simple Promela
 Interpreter). Full tool integration is out of scope; the explicit checkpoint
 tests keep the observable states aligned with the model such tools would
 verify.
-
 
 #### Hypothesis property-based generation
 
@@ -372,7 +370,7 @@ schedule using `threading.Event` checkpoints:
 - `test_selector_interleaving_blocks_environment_observation_until_unlock`
   asserts the second worker cannot enter its context — and therefore cannot
   observe the environment — until the first worker releases the lock, yielding
-  the serialised observation sequence `["python", None]`.
+  the serialized observation sequence `["python", None]`.
 
 When changing `_EnvBackendSelector`, `_BACKEND_LOCK`, or the reentrancy guard,
 run:
