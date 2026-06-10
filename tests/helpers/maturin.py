@@ -16,6 +16,10 @@ if typ.TYPE_CHECKING:
 _MATURIN_PIN_RE = re.compile(r"maturin==(\d+\.\d+\.\d+)")
 _WORKFLOW_PIN_RE = re.compile(r'MATURIN_VERSION:\s*"(\d+\.\d+\.\d+)"')
 _ACTION_PIN_RE = re.compile(r'default:\s*"(\d+\.\d+\.\d+)"')
+_AARCH64_CONTAINER_PIN_RE = re.compile(r"MANYLINUX_AARCH64_CONTAINER:\s*([^\s#]+)")
+_AARCH64_CONTAINER_USAGE_RE = re.compile(
+    r"container:\s*\$\{\{\s*env\.MANYLINUX_AARCH64_CONTAINER\s*\}\}"
+)
 _GENERATOR_RE = re.compile(r"^Generator:\s*maturin\s*\(([^)]+)\)\s*$", re.MULTILINE)
 _EXTENSION_MODULE_RE = re.compile(
     r"^cuprum/_rust_backend_native\.cpython-[^/]+\.so$",
@@ -92,6 +96,21 @@ def read_maturin_pins(root: Path) -> dict[str, str]:
             ".github/actions/build-wheels/action.yml",
         ),
     }
+
+
+def read_manylinux_aarch64_container_ref(root: Path) -> str:
+    """Read the pinned manylinux aarch64 container reference."""
+    workflow = (root / ".github/workflows/build-wheels.yml").read_text(encoding="utf-8")
+    return _require_pin_match(
+        _AARCH64_CONTAINER_PIN_RE.search(workflow),
+        ".github/workflows/build-wheels.yml",
+    )
+
+
+def workflow_uses_manylinux_aarch64_container_ref(root: Path) -> bool:
+    """Report whether the workflow references the pinned manylinux container."""
+    workflow = (root / ".github/workflows/build-wheels.yml").read_text(encoding="utf-8")
+    return _AARCH64_CONTAINER_USAGE_RE.search(workflow) is not None
 
 
 def _maturin_module_available() -> bool:

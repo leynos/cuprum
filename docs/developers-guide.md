@@ -623,6 +623,28 @@ maturin version declared in `pyproject.toml`,
 maturin pin, update all three locations and run this test to confirm they are
 in step.
 
+**Aarch64 manylinux container pin**
+(`test_manylinux_aarch64_container_is_pinned_to_sha256` and
+`test_manylinux_aarch64_container_is_referenced_by_build_step`) Asserts that
+`MANYLINUX_AARCH64_CONTAINER` in `.github/workflows/build-wheels.yml` is pinned
+to a SHA-256 digest and that `build-wheels.yml` uses the pinned variable in
+the Linux aarch64 maturin build step.
+
+When refreshing this container, update the value in
+`MANYLINUX_AARCH64_CONTAINER` to
+`ghcr.io/rust-cross/manylinux_2_28-cross@sha256:<digest>` and keep the inline
+comment to the original mutable reference:
+`# ghcr.io/rust-cross/manylinux_2_28-cross:aarch64`.
+
+To update the pinned digest, resolve the tag digest for
+`ghcr.io/rust-cross/manylinux_2_28-cross:aarch64`, replace only the value in
+`MANYLINUX_AARCH64_CONTAINER`, and rerun:
+
+```bash
+uv run pytest cuprum/unittests/test_maturin_build.py \
+    -k "manylinux_aarch64_container"
+```
+
 **Installed version check** (`test_installed_maturin_matches_expected_pin`)
 Skipped automatically when `maturin` is not on `PATH`. When it is present,
 asserts that the installed version matches the pinned development dependency.
