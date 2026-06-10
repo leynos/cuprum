@@ -37,53 +37,51 @@ contracts stay aligned.
 
 ## Environment overlay resolution
 
-The user-facing `env(...)` context manager and the related `ScopeConfig`
-field carry an *overlay-only* mapping that is layered on top of the live
-`os.environ` at subprocess spawn time. The implementation sits in
-`cuprum/context.py` and is built on three cooperating helpers:
+The user-facing `env(...)` context manager and the related `ScopeConfig` field
+carry an *overlay-only* mapping that is layered on top of the live `os.environ`
+at subprocess spawn time. The implementation sits in `cuprum/context.py` and is
+built on three cooperating helpers:
 
 - `merge_env_overlays(parent, child)` (public) returns an immutable
   `MappingProxyType` whose entries are `parent` updated by `child`. Either
-  layer may be `None`, in which case the result is whichever layer is set
-  (or `None`); empty mappings are treated as "no contribution".
+  layer may be `None`, in which case the result is whichever layer is set (or
+  `None`); empty mappings are treated as "no contribution".
 - `resolve_env(*layers)` (public) returns `os.environ.copy()` updated by
-  every non-empty layer, in left-to-right order. When every layer is
-  `None` or empty, the helper returns `None` so the caller can pass it
-  straight through to `subprocess.Popen` to mean *inherit the parent
-  environment unchanged* — this is also the path that avoids the
-  redundant `os.environ` copy.
+  every non-empty layer, in left-to-right order. When every layer is `None` or
+  empty, the helper returns `None` so the caller can pass it straight through to
+  `subprocess.Popen` to mean *inherit the parent environment unchanged* — this
+  is also the path that avoids the redundant `os.environ` copy.
 - `_coerce_env_overlay(overlay)` (internal) wraps any caller-supplied
-  mapping in `MappingProxyType(dict(overlay))` so the stored overlay
-  cannot be mutated through the original reference.
+  mapping in `MappingProxyType(dict(overlay))` so the stored overlay cannot be
+  mutated through the original reference.
 
 The split between `merge_env_overlays` and `resolve_env` is deliberate.
-`merge_env_overlays` is the overlay-only merge used by observation
-tagging (`_StageObservation.env_overlay` and the `ExecEvent.env` field) —
-it must not include a snapshot of `os.environ`, otherwise structured
-event logs would carry the entire parent process environment on every
-emission. `resolve_env` is the spawn-time merge that *does* include
-`os.environ`; it is called from `_process_lifecycle._merge_env` for both
-the single-command and pipeline paths.
+`merge_env_overlays` is the overlay-only merge used by observation tagging
+(`_StageObservation.env_overlay` and the `ExecEvent.env` field) — it must not
+include a snapshot of `os.environ`, otherwise structured event logs would carry
+the entire parent process environment on every emission. `resolve_env` is the
+spawn-time merge that *does* include `os.environ`; it is called from
+`_process_lifecycle._merge_env` for both the single-command and pipeline paths.
 
 The live-view contract from issue #101 is enforced at one place only:
 `resolve_env` reads `os.environ` at call time, not when the overlay is
-registered. Any code that touches the spawn path must therefore route
-through `resolve_env` (directly or via `_merge_env`) — never via a
-captured snapshot of `os.environ` at registration time.
+registered. Any code that touches the spawn path must therefore route through
+`resolve_env` (directly or via `_merge_env`) — never via a captured snapshot of
+`os.environ` at registration time.
 
-The `CuprumContext.env_overlay` field is a `MappingProxyType` (or
-`None`) and is itself part of the immutable context dataclass.
+The `CuprumContext.env_overlay` field is a `MappingProxyType` (or `None`) and
+is itself part of the immutable context dataclass.
 `scoped(ScopeConfig(env_overlay=...))` and `env(...)` both build a new
-`CuprumContext` via `with_env_overlay`, capture the resulting
-`ContextVar` token, and reset it on scope exit; nested scopes therefore
-behave as a stack and are restricted by the same LIFO detach rule as
-`AllowRegistration` and `HookRegistration`.
+`CuprumContext` via `with_env_overlay`, capture the resulting `ContextVar`
+token, and reset it on scope exit; nested scopes therefore behave as a stack
+and are restricted by the same LIFO detach rule as `AllowRegistration` and
+`HookRegistration`.
 
 Property tests for the merge and resolve invariants live in
 `cuprum/unittests/test_env_context_properties.py`. They use
-[Hypothesis](https://hypothesis.readthedocs.io/) to exercise arbitrary
-layer counts, payload contents, and overlap patterns, and to confirm
-that the helpers never mutate caller-supplied mappings.
+[Hypothesis](https://hypothesis.readthedocs.io/) to exercise arbitrary layer
+counts, payload contents, and overlap patterns, and to confirm that the helpers
+never mutate caller-supplied mappings.
 
 ## Pipeline throughput benchmark configuration
 
@@ -98,9 +96,9 @@ startup overhead.
 Each worker process executes `worker_iterations` pipeline runs (default: 20).
 Hyperfine therefore measures a batched worker invocation rather than one cold
 pipeline execution, reducing Python interpreter startup noise in the ratchet.
-Dry-run plans record `benchmark_profile_version` and
-`worker_iterations`; ratchet comparison skips older baseline artefacts whose
-profile metadata does not match the current benchmark shape.
+Dry-run plans record `benchmark_profile_version` and `worker_iterations`;
+ratchet comparison skips older baseline artefacts whose profile metadata does
+not match the current benchmark shape.
 
 The remaining fields follow the benchmark plan: `output_path` receives
 hyperfine JSON or dry-run plan JSON, `worker_path` points at the worker module,
@@ -329,8 +327,7 @@ These invariants mirror the state transitions a threading-level model checker
 would explore. Candidate full model-checking routes include `pynusmv` and
 translating the selector state machine to Promela for SPIN (Simple Promela
 Interpreter). Full tool integration is out of scope; the explicit checkpoint
-tests keep the observable states aligned with the model such tools would
-verify.
+tests keep the observable states aligned with the model such tools would verify.
 
 #### Hypothesis property-based generation
 
@@ -666,6 +663,32 @@ cyclomatic complexity while preserving exact error messages.
 The default scenario matrix order is fixed and documented. Callers, snapshot
 tests, and CI artefact directories all depend on it. It must not be reordered
 without updating snapshot files and any downstream tooling.
+
+## Pipeline stdio policy and cwd conversion
+
+Two canonical helpers own the subprocess spawn flags shared by the
+single-command and pipeline paths:
+
+- `_get_stage_stream_fds(idx, last_idx, capture_or_echo=...)` in
+  `cuprum/_pipeline_stage_streams.py` is the single source of truth for the
+  PIPE-versus-DEVNULL stdio selection when spawning pipeline stages. The first
+  stage reads stdin from `DEVNULL`, later stages from a `PIPE`; intermediate
+  stages always pipe stdout, while the final stage pipes stdout only when
+  output is captured or echoed; stderr is piped exactly when output is captured
+  or echoed. `_spawn_pipeline_processes` routes through this helper — do not
+  re-derive the flags inline at spawn sites.
+- `_cwd_arg(cwd)` in `cuprum/_subprocess_context.py` renders an optional
+  working directory (`str | Path | None`) into the `cwd` argument for
+  `asyncio.create_subprocess_exec`. Both `_spawn_subprocess` (single command)
+  and `_spawn_pipeline_processes` (pipeline) use it so the conversion cannot
+  drift between the two paths.
+
+Re-use policy: any new spawn site must call these helpers rather than copying
+the policy. Changes to stdio selection (for example, adding stdin handling to
+pipelines) belong in `_get_stage_stream_fds` so both paths and the exhaustive
+tests in `cuprum/unittests/test_stage_stream_fds.py` stay authoritative. That
+test module covers the full finite input domain (stage position × capture/echo)
+and asserts agreement with the single-command policy on the overlapping cases.
 
 ## Subprocess stdin injection
 

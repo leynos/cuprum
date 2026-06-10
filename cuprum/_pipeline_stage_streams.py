@@ -30,7 +30,30 @@ def _get_stage_stream_fds(
     *,
     capture_or_echo: bool,
 ) -> _StageStreamConfig:
-    """Determine stream file descriptors for a pipeline stage."""
+    """Determine stream file descriptors for a pipeline stage.
+
+    This is the canonical PIPE-versus-DEVNULL stdio policy for pipeline
+    spawning; ``_spawn_pipeline_processes`` must route through it rather
+    than re-deriving the flags inline. The policy is:
+
+    - ``stdin``: the first stage reads from ``DEVNULL``; later stages read
+      from a ``PIPE`` fed by the previous stage.
+    - ``stdout``: intermediate stages always write to a ``PIPE`` (the next
+      stage's stdin); the final stage writes to a ``PIPE`` only when output
+      is captured or echoed, otherwise ``DEVNULL``.
+    - ``stderr``: a ``PIPE`` when output is captured or echoed, otherwise
+      ``DEVNULL``.
+
+    Example
+    -------
+    >>> fds = _get_stage_stream_fds(0, 1, capture_or_echo=False)
+    >>> (fds.stdin, fds.stdout, fds.stderr) == (
+    ...     asyncio.subprocess.DEVNULL,
+    ...     asyncio.subprocess.PIPE,
+    ...     asyncio.subprocess.DEVNULL,
+    ... )
+    True
+    """
     stdin = asyncio.subprocess.DEVNULL if idx == 0 else asyncio.subprocess.PIPE
     stdout = (
         asyncio.subprocess.PIPE
