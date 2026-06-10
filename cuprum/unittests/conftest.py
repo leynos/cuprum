@@ -14,6 +14,7 @@ if typ.TYPE_CHECKING:
 _VOLATILE_KEYS: frozenset[str] = frozenset({
     "sha256",
     "wall_time_seconds",
+    "lock_wait_seconds",
     "output_bytes",
     "fixture_path",
     "wrapped_fixture_path",

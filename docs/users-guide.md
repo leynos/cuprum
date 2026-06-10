@@ -1156,6 +1156,16 @@ than risking a stale environment value or backend cache leak. Avoid wrapping one
 `BackendSelector` activation inside another; start a separate worker process
 or let the outer selector own the full profiled run.
 
+Worker results include selector observability fields:
+
+- `lock_wait_seconds` (float): cumulative seconds spent waiting to enter
+  `_BACKEND_LOCK` while forcing backend selection.
+- `reentrant_rejection_count` (int): count of nested selector activations
+  rejected on the current thread.
+
+Both values are emitted in `worker-result.json` and are most useful when
+investigating contention between concurrent benchmark runs.
+
 Both backends are tested for behavioural parity across edge cases including
 empty streams, multi-byte UTF-8 at chunk boundaries, broken pipes (where the
 downstream stage exits before the upstream finishes), and backpressure under
@@ -1226,6 +1236,11 @@ the benchmark profile validation rejects mismatched plans automatically.
 Benchmark commands invoke the Python interpreter directly via `python_bin`
 (resolved from `sys.executable` at plan-generation time) rather than through
 `uv run`, so measured runtimes exclude launcher overhead.
+
+Benchmark iteration options are intentionally bounded to prevent accidental
+resource exhaustion in local runs or CI jobs. Pipeline throughput runs accept
+`--warmup` and `--runs`; tee profiling runs accept `--warmup-count` and
+`--repeat-count`. Each value must be at most `1000`.
 
 Interpretation notes:
 

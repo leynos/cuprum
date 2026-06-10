@@ -230,6 +230,7 @@ def _strip_line_ending_contract(line: str) -> None:
     """
 
 
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "contract",
     [
@@ -239,14 +240,22 @@ def _strip_line_ending_contract(line: str) -> None:
 )
 @pytest.mark.skipif(check_states is None, reason="CrossHair is not installed")
 def test_crosshair_contracts(contract: cabc.Callable[..., None]) -> None:
-    """Property: CrossHair symbolically verifies line-splitting contracts."""
+    """Property: CrossHair symbolically verifies line-splitting contracts.
+
+    ``per_condition_timeout`` is a wall-clock budget. Confirming these
+    contracts exhausts the bounded symbolic state space in a few CPU-seconds,
+    but under the parallel ``-n auto`` test run the CrossHair worker competes
+    for CPU and needs more wall-clock time, so an over-tight budget yields a
+    flaky ``CANNOT_CONFIRM``. Use CrossHair's recommended confirmation budget
+    (it returns as soon as the space is exhausted, so unloaded runs stay fast)
+    and a per-test timeout above the global default to accommodate the slower
+    worst case under load.
+    """
     check_states(
         contract,
         MessageType.CONFIRMED,
         AnalysisOptionSet(
             analysis_kind=(AnalysisKind.PEP316,),
-            # Confirmation needs ~15s on a loaded 6-core host; 10s flaked under
-            # parallel pytest workers, so allow a generous margin.
             per_condition_timeout=60,
         ),
     )

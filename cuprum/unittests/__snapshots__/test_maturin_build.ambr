@@ -89,6 +89,7 @@
       'cuprum/unittests/test_tee_profile_worker_concurrent_workers.py',
       'cuprum/unittests/test_tee_profile_worker_core.py',
       'cuprum/unittests/test_tee_profile_worker_env_preservation.py',
+      'cuprum/unittests/test_tee_profile_worker_selector_metrics.py',
       'cuprum/unittests/test_tee_profile_worker_selector_reentrancy.py',
       'cuprum/unittests/test_timeout_resolution.py',
     ]),

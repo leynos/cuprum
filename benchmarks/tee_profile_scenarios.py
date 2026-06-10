@@ -21,6 +21,22 @@ type ProfilerName = typ.Literal["none", "perf", "py-spy"]
 _DEFAULT_OUTPUT_DIR = pth.Path("dist/profiles")
 _DEFAULT_FIXTURE = pth.Path("dist/fixtures/seed12345-nowrap.b64")
 _DEFAULT_WRAPPED_FIXTURE = pth.Path("dist/fixtures/seed12345-wrap76.b64")
+_MAX_PROFILE_ITERATIONS = 1000
+
+
+def _check_int_bound(
+    name: str,
+    value: int,
+    minimum: int,
+    maximum: int | None,
+) -> None:
+    """Raise ``ValueError`` if ``value`` is outside ``[minimum, maximum]``."""
+    if value < minimum:
+        msg = f"{name} must be >= {minimum}, got {value}"
+        raise ValueError(msg)
+    if maximum is not None and value > maximum:
+        msg = f"{name} must be <= {maximum}, got {value}"
+        raise ValueError(msg)
 
 
 def can_use_rust_backend() -> bool:
@@ -96,20 +112,20 @@ class TeeProfileDriverConfig:
     perf_call_graph: str = "dwarf,16384"
     scenario_name: str | None = None
 
-    def __post_init__(self) -> None:
-        """Validate driver configuration."""
-        int_bounds: tuple[tuple[str, int, int], ...] = (
-            ("warmup-count", self.warmup_count, 0),
-            ("repeat-count", self.repeat_count, 1),
-            ("perf-frequency", self.perf_frequency, 1),
-        )
-        for name, value, minimum in int_bounds:
-            if value < minimum:
-                msg = f"{name} must be >= {minimum}, got {value}"
-                raise ValueError(msg)
+    def _validate_numeric_bounds(self) -> None:
+        _check_int_bound("warmup-count", self.warmup_count, 0, _MAX_PROFILE_ITERATIONS)
+        _check_int_bound("repeat-count", self.repeat_count, 1, _MAX_PROFILE_ITERATIONS)
+        _check_int_bound("perf-frequency", self.perf_frequency, 1, None)
+
+    def _validate_string_fields(self) -> None:
         if not self.perf_call_graph.strip():
             msg = "perf-call-graph must be a non-empty string"
             raise ValueError(msg)
+
+    def __post_init__(self) -> None:
+        """Validate driver configuration."""
+        self._validate_numeric_bounds()
+        self._validate_string_fields()
 
 
 def _single_stage_no_callback_scenarios(

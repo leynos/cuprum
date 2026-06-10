@@ -120,6 +120,12 @@ Primary profiled runs produce:
   `inferno-collapse-perf`;
 - `summary.json`: ranked inclusive frames, leaf frames, and stacks.
 
+`worker-result.json` includes selector metrics alongside timing and throughput
+fields:
+
+- `lock_wait_seconds`: total time spent waiting for backend selection lock;
+- `reentrant_rejection_count`: count of rejected nested selector activations.
+
 Optional `py-spy` runs write `pyspy.raw`.
 
 ## Interpretation
