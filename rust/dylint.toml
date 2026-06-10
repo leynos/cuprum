@@ -1,0 +1,2 @@
+[no_std_fs_operations]
+excluded_crates = ["_rust_backend_native"]

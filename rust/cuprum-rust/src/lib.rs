@@ -27,10 +27,18 @@ use utf8::{FinalChunk, decode_utf8_replace};
 
 /// Report whether the Rust extension is available.
 ///
+/// This entry point is only reached once the native module has loaded, so it
+/// always reports `true`. The Python wrapper treats a failed import as
+/// "unavailable", so no runtime probing is needed here.
+///
 /// # Returns
-/// `true` when the extension is successfully loaded.
+/// `true` whenever the extension is loaded and callable.
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "runtime #[pyfunction] FFI boundary: the body is const-evaluable but the export must stay a runtime function, not a const item"
+)]
 #[pyfunction]
-const fn is_available() -> bool {
+fn is_available() -> bool {
     true
 }
 
