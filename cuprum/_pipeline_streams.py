@@ -18,12 +18,6 @@ from cuprum._pipeline_config import (
 from cuprum._pipeline_stage_streams import (
     _create_stage_capture_tasks as _create_stage_capture_tasks,
 )
-from cuprum._pipeline_stage_streams import (
-    _get_stage_stream_fds as _get_stage_stream_fds,
-)
-from cuprum._pipeline_stage_streams import (
-    _StageStreamConfig as _StageStreamConfig,
-)
 from cuprum._streams import _close_stream_writer, _pump_stream
 
 if typ.TYPE_CHECKING:
