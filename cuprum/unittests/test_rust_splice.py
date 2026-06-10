@@ -32,6 +32,7 @@ def _pump_payload_threaded(
     with _pipe_pair() as (in_read, in_write, out_read, out_write):
 
         def writer() -> None:
+            """Write the payload into the pipe from a worker thread."""
             view = memoryview(payload)
             while view:
                 written = os.write(in_write, view)
@@ -121,6 +122,7 @@ class TestSpliceOptimization:
         with _pipe_pair() as (src_read_fd, src_write_fd, dst_read_fd, dst_write_fd):
 
             def writer() -> None:
+                """Flood the source pipe with bytes from a worker thread."""
                 with contextlib.ExitStack() as stack:
                     stack.callback(_safe_close, src_write_fd)
                     remaining = total_bytes

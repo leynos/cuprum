@@ -419,11 +419,13 @@ class _ScopedContext:
     __slots__ = ("_ctx", "_token")
 
     def __init__(self, config: ScopeConfig) -> None:
+        """Narrow the current context with ``config`` for later entry."""
         parent = current_context()
         self._ctx = parent.narrow(config)
         self._token: Token[CuprumContext] | None = None
 
     def __enter__(self) -> CuprumContext:
+        """Activate the scoped context and return it."""
         self._token = _set_context(self._ctx)
         return self._ctx
 
@@ -433,6 +435,7 @@ class _ScopedContext:
         exc_val: BaseException | None,
         exc_tb: object,
     ) -> None:
+        """Restore the previous context on scope exit."""
         if self._token is not None:
             _reset_context(self._token)
 

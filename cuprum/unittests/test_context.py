@@ -259,14 +259,17 @@ def test_before_hooks_execute_in_registration_order() -> None:
     call_order: list[int] = []
 
     def hook1(cmd: object) -> None:
+        """Record this before hook as the first to run."""
         _ = cmd  # Unused
         call_order.append(1)
 
     def hook2(cmd: object) -> None:
+        """Record this before hook as the second to run."""
         _ = cmd  # Unused
         call_order.append(2)
 
     def hook3(cmd: object) -> None:
+        """Record this before hook as the third to run."""
         _ = cmd  # Unused
         call_order.append(3)
 
@@ -290,14 +293,17 @@ def test_after_hooks_execute_in_reverse_registration_order() -> None:
     call_order: list[int] = []
 
     def hook1(cmd: object, result: object) -> None:
+        """Record this after hook as the first registered."""
         _, _ = cmd, result  # Unused
         call_order.append(1)
 
     def hook2(cmd: object, result: object) -> None:
+        """Record this after hook as the second registered."""
         _, _ = cmd, result  # Unused
         call_order.append(2)
 
     def hook3(cmd: object, result: object) -> None:
+        """Record this after hook as the third registered."""
         _, _ = cmd, result  # Unused
         call_order.append(3)
 
@@ -326,6 +332,7 @@ def test_context_is_isolated_per_thread() -> None:
     results: dict[str, bool] = {}
 
     def thread_worker(name: str, programs: frozenset[Program]) -> None:
+        """Capture the allowlist decision observed inside the worker thread."""
         with scoped(ScopeConfig(allowlist=programs)):
             results[name] = current_context().is_allowed(ECHO)
 
@@ -349,11 +356,13 @@ def test_context_is_isolated_per_async_task() -> None:
     results: dict[str, bool] = {}
 
     async def task_worker(name: str, programs: frozenset[Program]) -> None:
+        """Capture the allowlist decision observed inside the async task."""
         with scoped(ScopeConfig(allowlist=programs)):
             await asyncio.sleep(0.01)  # Yield to allow interleaving
             results[name] = current_context().is_allowed(ECHO)
 
     async def run_tasks() -> None:
+        """Run both task workers concurrently to interleave their scopes."""
         await asyncio.gather(
             task_worker("task1", frozenset([ECHO])),
             task_worker("task2", frozenset([LS])),

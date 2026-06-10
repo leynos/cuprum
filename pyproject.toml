@@ -18,6 +18,7 @@ Repository = "https://github.com/leynos/cuprum"
 dev = [
     "crosshair-tool",
     "hypothesis",
+    "interrogate",
     "pytest",
     "pytest-benchmark",
     "pytest-bdd",

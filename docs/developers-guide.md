@@ -452,21 +452,26 @@ requires that surface.
 
 ## Python linting
 
-Cuprum uses a two-tier Python lint gate. Ruff is the first tier and remains the
-fast, broad lint pass for formatting-adjacent checks, import order, docstring
-rules, security checks, naming, complexity, and Ruff's native Pylint-derived
-rules. Pylint is the second tier and runs after Ruff through the
-`leynos/pylint-pypy-shim` package under PyPy.
+Cuprum uses a three-tier Python lint gate. Ruff is the first tier and remains
+the fast, broad lint pass for formatting-adjacent checks, import order,
+docstring *style*, security checks, naming, complexity, and Ruff's native
+Pylint-derived rules. `interrogate` is the second tier and enforces docstring
+*presence* at 100 per cent across the `cuprum` package. Pylint is the third
+tier and runs through the `leynos/pylint-pypy-shim` package under PyPy.
 
-The decision is recorded in
-[ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md). The
-short version is:
+The decisions are recorded in
+[ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md) and
+[ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md).
+The short version is:
 
-- Ruff owns fast feedback and the primary rule set.
+- Ruff owns fast feedback and the primary rule set, including docstring style.
+- `interrogate` owns docstring coverage: it fails the gate when any
+  documentable node — including nested closures, dunder methods, properties,
+  and stub classes — lacks a docstring that Ruff's `D` rules do not require.
 - Pylint owns selected checks that Ruff does not cover, especially logging
   interpolation, pattern matching, generator control flow, environment
   handling, subprocess safety, and selected readability checks.
-- Pylint runs through the PyPy shim so that the second tier is isolated from the
+- Pylint runs through the PyPy shim so that the third tier is isolated from the
   project virtual environment and matches the lint approach used by
   `leynos/episodic`.
 
@@ -479,11 +484,20 @@ make lint
 `make lint` performs the following commands in order:
 
 1. `ruff check`
-2. The PyPy-backed `pylint-pypy` command stored in `$(PYLINT)`, with
+2. `interrogate --fail-under 100 cuprum`
+3. The PyPy-backed `pylint-pypy` command stored in `$(PYLINT)`, with
    `$(PYLINT_TARGETS)` appended.
 
-Ruff must pass before Pylint runs. When investigating a lint failure, fix the
-Ruff findings first, then rerun `make lint` to reach the Pylint tier.
+Each tier must pass before the next runs. When investigating a lint failure,
+fix the Ruff findings first, then the `interrogate` gaps, then rerun
+`make lint` to reach the Pylint tier.
+
+Because `interrogate` requires a docstring on every documentable node,
+documenting a large module can take it over the project's 400-line ceiling
+enforced by Pylint's `too-many-lines`. Split the module by feature rather than
+suppressing the limit; this is why the pipeline dataclasses live in
+`cuprum/_pipeline_types.py` (re-exported from `cuprum/_pipeline_internals.py`)
+rather than inline.
 
 ### Lint Makefile variables
 

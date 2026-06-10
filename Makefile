@@ -84,6 +84,7 @@ check-fmt: ruff ## Verify formatting
 
 lint: ruff uv ## Run linters
 	$(LOCAL_TOOL_ENV) ruff check
+	$(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum
 	$(PYLINT) $(PYLINT_TARGETS)
 	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps
 	cd $(RUST_DIR) && $(CARGO) clippy $(CLIPPY_FLAGS)

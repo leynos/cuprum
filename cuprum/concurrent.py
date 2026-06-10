@@ -108,6 +108,7 @@ class _FirstFailureError(Exception):
     """Internal exception to signal first failure in fail-fast mode."""
 
     def __init__(self, index: int, result: CommandResult) -> None:
+        """Record the failing command index and its result."""
         super().__init__(f"Command at index {index} failed")
         self.index = index
         self.result = result
@@ -203,6 +204,7 @@ async def _run_fail_fast(
     results: list[CommandResult | None] = [None] * len(commands)
 
     async def run_indexed(idx: int, cmd: SafeCmd) -> None:
+        """Run one command and raise on the first non-zero exit."""
         result = await _run_with_semaphore(cmd, semaphore, config)
         results[idx] = result
         if not result.ok:

@@ -213,6 +213,7 @@ class TimeoutExpired(TimeoutError):  # noqa: N818  # match subprocess.TimeoutExp
         output: str | bytes | None = None,
         stderr: str | bytes | None = None,
     ) -> None:
+        """Store the command, timeout, and any captured output."""
         super().__init__(f"Command {cmd!r} timed out after {timeout} seconds")
         self.cmd = cmd
         self.timeout = timeout
@@ -545,6 +546,7 @@ def make(
     entry = catalogue.lookup(program)
 
     def builder(*args: _ArgValue, **kwargs: _ArgValue) -> SafeCmd:
+        """Coerce ``args``/``kwargs`` into a ``SafeCmd`` for the program."""
         argv = _coerce_argv(args, kwargs)
         return SafeCmd(program=entry.program, argv=argv, project=entry.project)
 

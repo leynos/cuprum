@@ -69,6 +69,7 @@ def force_python_pump_fallback(
         reader: asyncio.StreamReader | None,
         writer: asyncio.StreamWriter | None,
     ) -> None:
+        """Count this fallback invocation and delegate to the Python pump."""
         call_counter["calls"] += 1
         await _pump_stream(reader, writer)
 

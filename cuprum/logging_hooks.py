@@ -106,6 +106,7 @@ def _build_logging_hooks(
     lock = threading.Lock()
 
     def on_start(cmd: SafeCmd) -> None:
+        """Record the start time and log the command start event."""
         started_at = time.perf_counter()
         with lock:
             start_times[cmd] = started_at
@@ -118,6 +119,7 @@ def _build_logging_hooks(
             )
 
     def on_exit(cmd: SafeCmd, result: CommandResult) -> None:
+        """Log the command exit event with its measured duration."""
         if not logger.isEnabledFor(exit_level):
             return
         with lock:

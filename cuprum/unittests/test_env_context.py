@@ -35,10 +35,12 @@ type ExecuteFn = cabc.Callable[[SafeCmd, dict[str, typ.Any]], CommandResult]
 
 
 def _execute_async(cmd: SafeCmd, kwargs: dict[str, typ.Any]) -> CommandResult:
+    """Run the command on the asyncio event loop and return its result."""
     return asyncio.run(cmd.run(**kwargs))
 
 
 def _execute_sync(cmd: SafeCmd, kwargs: dict[str, typ.Any]) -> CommandResult:
+    """Run the command synchronously and return its result."""
     return cmd.run_sync(**kwargs)
 
 
