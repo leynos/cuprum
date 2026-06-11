@@ -541,37 +541,44 @@ def scoped(config: ScopeConfig) -> _ScopedContext:
     """
     return _ScopedContext(config)
 
+class _TokenRegistration:
+    """Canonical base for ContextVar-backed scope-registration handles.
 
-class AllowRegistration:
-    """Registration handle for dynamic allowlist extension.
-
-    Supports detach() and context manager usage for scoped allowing.
+    All scope-registration handles (allowlist extensions, hook
+    registrations, env overlays) derive from this base. Subclasses perform
+    only the context-derivation step in ``__init__`` and hand the derived
+    context to :meth:`_install`; the token capture, idempotent
+    :meth:`detach`, and context-manager protocol live here so the subtle
+    restoration discipline cannot drift between handle types.
 
     Token-based Restoration
     -----------------------
-    The registration captures a token at creation time. When detach() is called,
-    the original context is restored via the token, ensuring no context pollution
-    even when used outside scoped(ScopeConfig()) blocks. This means detach()
-    restores the exact context that existed when the registration was created,
-    regardless of subsequent context modifications. If multiple registrations are
-    created and detached in non-LIFO order, earlier tokens may restore states
-    that remove programs added by other registrations.
+    The registration captures a :class:`~contextvars.Token` when the derived
+    context is installed. When :meth:`detach` is called, the original context
+    is restored via the token, ensuring no context pollution even when used
+    outside ``scoped(ScopeConfig())`` blocks. This means :meth:`detach`
+    restores the exact context that existed when the registration was
+    created, regardless of subsequent context modifications. If multiple
+    registrations are created and detached in non-LIFO (last in, first out)
+    order, earlier tokens restore states that discard changes layered by
+    later registrations; prefer ``with`` blocks, which detach in LIFO order.
 
-    Detach in the same logical Context (thread or Task) in which the
-    registration was created. Resetting a ContextVar with a token from a
-    different Context raises ValueError and would break this guarantee.
+    Detach in the same logical :class:`~contextvars.Context` (thread or
+    task) in which the registration was created. Resetting a
+    :class:`~contextvars.ContextVar` with a token from a different context
+    raises :class:`ValueError`.
     """
 
-    __slots__ = ("_detached", "_programs", "_token")
+    __slots__ = ("_detached", "_token")
 
-    def __init__(self, *programs: Program) -> None:
-        """Create an allowlist registration and add programs to current context."""
-        self._programs = frozenset(programs)
+    def __init__(self) -> None:
+        """Initialise the handle in the attached, token-less state."""
         self._detached = False
-        # Add programs to current context and capture token for restoration
-        ctx = current_context()
-        new_ctx = dc.replace(ctx, allowlist=ctx.allowlist | self._programs)
-        self._token: Token[CuprumContext] | None = _set_context(new_ctx)
+        self._token: Token[CuprumContext] | None = None
+
+    def _install(self, new_ctx: CuprumContext) -> None:
+        """Set ``new_ctx`` as current and capture the restoration token."""
+        self._token = _set_context(new_ctx)
 
     def detach(self) -> None:
         """Restore the original context via the captured token."""
@@ -582,8 +589,8 @@ class AllowRegistration:
             _reset_context(self._token)
             self._token = None
 
-    def __enter__(self) -> AllowRegistration:
-        """Enter context manager; programs are already registered."""
+    def __enter__(self) -> typ.Self:
+        """Enter context manager; the registration is already installed."""
         return self
 
     def __exit__(
@@ -592,8 +599,24 @@ class AllowRegistration:
         exc_val: BaseException | None,
         exc_tb: object,
     ) -> None:
-        """Exit context manager; detach registered programs."""
+        """Exit context manager; detach the registration."""
         self.detach()
+class AllowRegistration(_TokenRegistration):
+    """Registration handle for dynamic allowlist extension.
+
+    Supports ``detach()`` and context-manager usage for scoped allowing. The
+    token-restoration discipline is documented on
+    :class:`_TokenRegistration`.
+    """
+
+    __slots__ = ("_programs",)
+
+    def __init__(self, *programs: Program) -> None:
+        """Create an allowlist registration and add programs to current context."""
+        super().__init__()
+        self._programs = frozenset(programs)
+        ctx = current_context()
+        self._install(dc.replace(ctx, allowlist=ctx.allowlist | self._programs))
 
 
 def allow(*programs: Program) -> AllowRegistration:
@@ -618,23 +641,14 @@ def allow(*programs: Program) -> AllowRegistration:
     return AllowRegistration(*programs)
 
 
-class HookRegistration:
-    """Registration handle for hooks with detach() and context manager support.
+class HookRegistration(_TokenRegistration):
+    """Registration handle for hooks with detach and context-manager support.
 
-    Token-based Restoration
-    -----------------------
-    The registration captures a token at creation time. When detach() is called,
-    the original context is restored via the token, ensuring no context pollution
-    even when used outside scoped(ScopeConfig()) blocks. This means detach()
-    restores the exact context that existed when the registration was created,
-    regardless of subsequent context modifications.
-
-    As with AllowRegistration, detach the hook only from the Context where
-    it was registered; using the token in a different Context will raise
-    ValueError in the standard library.
+    The token-restoration discipline is documented on
+    :class:`_TokenRegistration`.
     """
 
-    __slots__ = ("_detached", "_hook", "_hook_type", "_token")
+    __slots__ = ("_hook", "_hook_type")
 
     def __init__(
         self,
@@ -642,10 +656,9 @@ class HookRegistration:
         hook_type: typ.Literal["before", "after", "observe"],
     ) -> None:
         """Create a hook registration and add hook to current context."""
+        super().__init__()
         self._hook = hook
         self._hook_type = hook_type
-        self._detached = False
-        # Add hook to current context and capture token for restoration
         ctx = current_context()
         if hook_type == "before":
             new_ctx = ctx.with_before_hook(typ.cast("BeforeHook", hook))
@@ -653,29 +666,7 @@ class HookRegistration:
             new_ctx = ctx.with_after_hook(typ.cast("AfterHook", hook))
         else:
             new_ctx = ctx.with_observe_hook(typ.cast("ExecHook", hook))
-        self._token: Token[CuprumContext] | None = _set_context(new_ctx)
-
-    def detach(self) -> None:
-        """Restore the original context via the captured token."""
-        if self._detached:
-            return
-        self._detached = True
-        if self._token is not None:
-            _reset_context(self._token)
-            self._token = None
-
-    def __enter__(self) -> HookRegistration:
-        """Enter context manager; hook is already registered."""
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Exit context manager; detach registered hook."""
-        self.detach()
+        self._install(new_ctx)
 
 
 def before(hook: BeforeHook) -> HookRegistration:
@@ -728,74 +719,33 @@ def after(hook: AfterHook) -> HookRegistration:
     return HookRegistration(hook, "after")
 
 
-class EnvRegistration:
+class EnvRegistration(_TokenRegistration):
     """Registration handle for a scoped environment overlay.
 
-    Like :class:`AllowRegistration` and :class:`HookRegistration`, the handle
-    captures a :class:`~contextvars.Token` at creation time and uses it to
-    restore the previous context on :meth:`detach`. The overlay is layered on
-    top of any overlay already present in the current context; nested
-    registrations therefore behave as a stack.
+    The overlay is layered on top of any overlay already present in the
+    current context; nested registrations therefore behave as a stack. The
+    token-restoration discipline is documented on
+    :class:`_TokenRegistration`.
 
     The overlay itself is overlay-only. The live :func:`os.environ` is read at
     subprocess spawn time (see :func:`resolve_env`), so any updates to the
     process environment after the registration is created — for example via
     ``pytest``'s ``monkeypatch.setenv`` — remain visible to subprocesses
     spawned inside the scope. This is the behaviour the issue requires.
-
-    Token-based Restoration
-    -----------------------
-    Identical to :class:`AllowRegistration` and :class:`HookRegistration`,
-    :meth:`detach` resets the captured :class:`~contextvars.Token` and
-    therefore restores the exact context that existed when the registration
-    was created. Detach in LIFO order: detaching an outer registration before
-    an inner one resets the underlying ``ContextVar`` to the outer's snapshot
-    and silently discards the inner overlay along with any other context
-    updates layered after registration. Consumers that need finer control
-    should prefer ``with`` blocks, which already detach in LIFO order.
-
-    Detach in the same logical :class:`~contextvars.Context` (thread or
-    task) in which the registration was created. Resetting a
-    :class:`~contextvars.ContextVar` with a token from a different context
-    raises :class:`ValueError`.
     """
 
-    __slots__ = ("_detached", "_overlay", "_token")
+    __slots__ = ("_overlay",)
 
     def __init__(self, overlay: cabc.Mapping[str, str]) -> None:
         """Layer ``overlay`` onto the current context's env overlay."""
+        super().__init__()
         self._overlay = _coerce_env_overlay(overlay)
-        self._detached = False
-        ctx = current_context()
-        new_ctx = ctx.with_env_overlay(self._overlay)
-        self._token: Token[CuprumContext] | None = _set_context(new_ctx)
+        self._install(current_context().with_env_overlay(self._overlay))
 
     @property
     def overlay(self) -> cabc.Mapping[str, str] | None:
         """Return the immutable overlay this registration applied."""
         return self._overlay
-
-    def detach(self) -> None:
-        """Restore the original context via the captured token."""
-        if self._detached:
-            return
-        self._detached = True
-        if self._token is not None:
-            _reset_context(self._token)
-            self._token = None
-
-    def __enter__(self) -> EnvRegistration:
-        """Enter context manager; overlay is already applied."""
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Exit context manager; detach the overlay."""
-        self.detach()
 
 
 def env(
