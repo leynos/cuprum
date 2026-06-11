@@ -102,7 +102,7 @@ class ConcurrentResult:
     submission_indices: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
-        """Default ``submission_indices`` to the identity sequence."""
+        """Populate ``submission_indices`` with the identity when unset."""
         if not self.submission_indices and self.results:
             object.__setattr__(
                 self,
