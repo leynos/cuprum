@@ -165,7 +165,7 @@ rg -n "consume_stream" cuprum/_streams.py
 rg -n "rust_consume_stream" rust
 ```
 
-2. Add failing unit tests and run them.
+1. Add failing unit tests and run them.
 
 ```bash
 set -o pipefail
@@ -173,7 +173,7 @@ uv run pytest cuprum/unittests/test_rust_streams.py \
   | tee /tmp/test-rust-streams-unit.txt
 ```
 
-3. Add failing behavioural tests and run them.
+1. Add failing behavioural tests and run them.
 
 ```bash
 set -o pipefail
@@ -182,10 +182,10 @@ uv run pytest tests/behaviour/test_rust_streams_behaviour.py \
   | tee /tmp/test-rust-streams-bdd.txt
 ```
 
-4. Implement `rust_consume_stream()` in Rust and update Python shims/stubs if
+1. Implement `rust_consume_stream()` in Rust and update Python shims/stubs if
    needed.
 
-5. Re-run the new unit and behavioural tests.
+2. Re-run the new unit and behavioural tests.
 
 ```bash
 set -o pipefail
@@ -198,7 +198,7 @@ uv run pytest tests/behaviour/test_rust_streams_behaviour.py \
   | tee /tmp/test-rust-streams-bdd.txt
 ```
 
-6. Update documentation and roadmap, then run quality gates.
+1. Update documentation and roadmap, then run quality gates.
 
 ```bash
 set -o pipefail
@@ -214,7 +214,7 @@ set -o pipefail
 make test | tee /tmp/make-test.txt
 ```
 
-7. If docs changed, run markdown validation and Mermaid checks.
+1. If docs changed, run markdown validation and Mermaid checks.
 
 ```bash
 set -o pipefail
