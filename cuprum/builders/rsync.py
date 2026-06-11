@@ -27,6 +27,31 @@ class RsyncOptions:
     allow_relative: bool = False
 
 
+# Flag emission order is part of the argv contract: option attributes are
+# rendered in this sequence, ahead of the source and destination paths.
+_FLAG_ORDER: tuple[tuple[str, str], ...] = (
+    ("archive", "--archive"),
+    ("delete", "--delete"),
+    ("dry_run", "--dry-run"),
+    ("verbose", "--verbose"),
+    ("compress", "--compress"),
+)
+
+
+def _rsync_argv(
+    source: str | Path,
+    destination: str | Path,
+    options: RsyncOptions,
+) -> tuple[str, ...]:
+    """Build the immutable argv for ``rsync_sync`` without a catalogue."""
+    flags = tuple(flag for attr, flag in _FLAG_ORDER if getattr(options, attr))
+    paths = (
+        str(safe_path(source, allow_relative=options.allow_relative)),
+        str(safe_path(destination, allow_relative=options.allow_relative)),
+    )
+    return flags + paths
+
+
 def rsync_sync(
     source: str | Path,
     destination: str | Path,
@@ -34,29 +59,8 @@ def rsync_sync(
     options: RsyncOptions | None = None,
 ) -> SafeCmd:
     """Build an `rsync` synchronisation command."""
-    resolved_options = options or RsyncOptions()
-    args: list[str] = []
-    if resolved_options.archive:
-        args.append("--archive")
-    if resolved_options.delete:
-        args.append("--delete")
-    if resolved_options.dry_run:
-        args.append("--dry-run")
-    if resolved_options.verbose:
-        args.append("--verbose")
-    if resolved_options.compress:
-        args.append("--compress")
-
-    args.extend([
-        str(safe_path(source, allow_relative=resolved_options.allow_relative)),
-        str(
-            safe_path(
-                destination,
-                allow_relative=resolved_options.allow_relative,
-            )
-        ),
-    ])
-    return sh.make(RSYNC)(*args)
+    argv = _rsync_argv(source, destination, options or RsyncOptions())
+    return sh.make(RSYNC)(*argv)
 
 
 __all__ = ["RsyncOptions", "rsync_sync"]

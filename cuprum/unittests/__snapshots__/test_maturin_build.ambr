@@ -59,6 +59,7 @@
       'cuprum/unittests/test_benchmark_suite.py',
       'cuprum/unittests/test_build_final_results_property.py',
       'cuprum/unittests/test_builder_library.py',
+      'cuprum/unittests/test_builder_property_based.py',
       'cuprum/unittests/test_catalogue.py',
       'cuprum/unittests/test_ci_benchmark_ratchet_profile.py',
       'cuprum/unittests/test_concurrency.py',
