@@ -29,7 +29,6 @@ from cuprum._observability import (
     _resolve_env_overlay,
     _wait_for_exec_hook_tasks,
 )
-from cuprum._pipeline_spawn import _spawn_pipeline_processes
 from cuprum._pipeline_streams import (
     _cancel_stream_tasks,
     _create_pipe_tasks,
@@ -43,6 +42,7 @@ from cuprum._pipeline_types import (
     _PipelineSpawnResult,
     _PipelineStageResultInputs,
     _StageObservation,
+    _run_before_hooks,
 )
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
 from cuprum.context import current_context
@@ -53,6 +53,28 @@ if typ.TYPE_CHECKING:
     from cuprum.context import CuprumContext
     from cuprum.sh import CommandResult, PipelineResult, SafeCmd
 
+_MIN_PIPELINE_STAGES = 2
+_PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
+
+
+from cuprum._process_lifecycle import _spawn_pipeline_processes
+
+"""Internal pipeline execution coordination and fail-fast semantics.
+This module is the private machinery behind ``cuprum.sh``'s
+``Pipeline.run``/``run_sync``. It ties together allowlist enforcement
+completion waiting with optional timeouts, and per-stage
+``CommandResult`` assembly. It exists chiefly to centralise
+finalization: when a stage fails or an after-hook raises, pending
+observe-hook tasks must still be drained and every independent
+failure preserved, grouping after-hook and task failures into a
+``cuprum._pipeline_wait``, ``cuprum._observability``, and
+``cuprum.context``, and is invoked by ``cuprum.sh`` and
+``cuprum._subprocess_execution``/``_process_lifecycle``.
+"""
+if typ.TYPE_CHECKING:
+    import types
+    from cuprum.context import CuprumContext
+    from cuprum.sh import CommandResult, PipelineResult, SafeCmd
 _MIN_PIPELINE_STAGES = 2
 _PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
 

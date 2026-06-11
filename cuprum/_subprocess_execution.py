@@ -15,7 +15,6 @@ import sys
 import time
 import typing as typ
 
-from cuprum._pipeline_internals import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _terminate_process
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._subprocess_context import _cwd_arg, _resolve_timeout, _sh_module
@@ -26,6 +25,7 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
 
 _LOGGER = logging.getLogger("cuprum.stdin")
+from cuprum._pipeline_types import _EventDetails, _StageObservation
 
 
 async def _wait_for_exit_code(

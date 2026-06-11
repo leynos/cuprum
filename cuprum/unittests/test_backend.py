@@ -12,7 +12,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from cuprum import _rust_backend
+from cuprum import _backend, _rust_backend
 from cuprum import rust as rust_api
 from cuprum._backend import (
     StreamBackend,
@@ -195,7 +195,21 @@ def test_invalid_env_var_raises_value_error(
     with pytest.raises(ValueError, match="turbo"):
         get_stream_backend()
 
+def test_unhandled_backend_member_raises_assertion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A backend the dispatcher does not handle raises ``AssertionError``.
 
+    The ``match requested`` block must terminate in a ``case _`` raise so a
+    future :class:`StreamBackend` member cannot silently fall through and
+    return ``None`` typed as ``StreamBackend``. This simulates that gap by
+    forcing the resolver to see an out-of-band requested value.
+    """
+    sentinel = "experimental"
+    monkeypatch.setattr(_backend, "_read_backend_env", lambda: sentinel)
+
+    with pytest.raises(AssertionError, match="unreachable backend"):
+        get_stream_backend()
 @pytest.mark.parametrize(
     ("rust_available_str", "expected"),
     [

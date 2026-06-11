@@ -3,8 +3,9 @@
 These small dataclasses model the hooks, per-stage observation state, and
 captured results threaded through pipeline coordination. They live apart from
 ``cuprum._pipeline_internals`` so the coordination logic stays within the
-project file-size ceiling; that module re-exports them for backwards
-compatibility.
+project file-size ceiling and so spawn-side modules can import them at the
+top level without import cycles; ``cuprum._pipeline_internals`` re-exports
+them for backwards compatibility.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import time
 import typing as typ
 
 from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
+from cuprum.context import current_context
 from cuprum.events import ExecEvent
 
 if typ.TYPE_CHECKING:
@@ -34,6 +36,17 @@ class _ExecutionHooks:
     before_hooks: tuple[BeforeHook, ...]
     after_hooks: tuple[AfterHook, ...]
     observe_hooks: tuple[ExecHook, ...]
+
+
+def _run_before_hooks(cmd: SafeCmd) -> _ExecutionHooks:
+    """Collect hooks for a command after enforcing the current allowlist."""
+    ctx = current_context()
+    ctx.check_allowed(cmd.program)
+    return _ExecutionHooks(
+        before_hooks=ctx.before_hooks,
+        after_hooks=ctx.after_hooks,
+        observe_hooks=ctx.observe_hooks,
+    )
 
 
 @dc.dataclass(frozen=True, slots=True)
