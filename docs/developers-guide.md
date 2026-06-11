@@ -141,6 +141,29 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
+
+## `cuprum/context/` package layout
+
+`cuprum/context.py` exceeded the 400-line ceiling and mixed four concerns with
+different audiences and change cadences, so it is now a package whose public
+surface is re-exported unchanged from `cuprum/context/__init__.py`:
+
+- `cuprum/context/env_overlay.py` — pure overlay merging
+  (`merge_env_overlays`, `resolve_env`, `_coerce_env_overlay`); no `ContextVar`
+  dependency.
+- `cuprum/context/core.py` — the domain dataclasses (`CuprumContext`,
+  `ScopeConfig`), `ForbiddenProgramError`, timeout validation, and the hook
+  type aliases.
+- `cuprum/context/state.py` — the `ContextVar` plumbing (`current_context`,
+  `get_context`, and the internal set/reset helpers).
+- `cuprum/context/registration.py` — `scoped`, the `_TokenRegistration`
+  base, the registration handles, and the `allow`/`before`/`after`/`env`/
+  `observe` factories.
+
+Importers are unaffected: `from cuprum.context import …` continues to work for
+the whole public `__all__`. Keep each module under 400 lines; new context
+features go in the module matching their concern.
+
 ## Pipeline execution helper contracts
 
 Pipeline and command execution use small internal helpers whose names expose
@@ -284,6 +307,32 @@ properties and redacted per-phase syrupy snapshots.
 worker count to enable xdist explicitly. Set `BUILD_JOBS=-jN` to pass the same
 count to Rust test commands and, through `CARGO_JOB_ENV`, to both
 `RAYON_NUM_THREADS` and `CARGO_BUILD_JOBS`.
+
+
+## Canonical `_TokenRegistration` handle base
+
+All `ContextVar`-backed scope-registration handles — `AllowRegistration`,
+`HookRegistration`, and `EnvRegistration` in `cuprum/context/registration.py` —
+derive from one canonical `_TokenRegistration` base. The base owns the `_token`/
+`_detached` pair, the idempotent `detach()`, the context-manager protocol, and
+the `_install(new_ctx)` step that sets the derived context and captures the
+restoration token. Subclasses implement only the context-derivation step in
+`__init__`. The consolidated "Token-based Restoration" docstring lives on the
+base.
+
+Re-use policy: any new scope-registration handle must derive from
+`_TokenRegistration` and confine itself to deriving the new context; the
+restoration protocol is subtle (`ContextVar` token discipline), so a divergent
+copy is a latent correctness hazard. Note that `LoggingHookRegistration`
+(`cuprum/logging_hooks.py`) is a *pair* handle: it composes two
+`HookRegistration` instances and detaches them in reverse order; it
+deliberately carries no token of its own.
+
+`cuprum/unittests/test_token_registration_stateful.py` verifies the token
+discipline with a Hypothesis `RuleBasedStateMachine` driving randomized
+register/detach sequences across all token-backed handle types (nesting, context-manager
+exit, LIFO detach, double-detach), plus an example test pinning the
+documented non-LIFO hazard.
 
 ## Canonical stage-observation inputs
 
@@ -435,8 +484,8 @@ committing.
 
 The user-facing `env(...)` context manager and the related `ScopeConfig` field
 carry an *overlay-only* mapping that is layered on top of the live `os.environ`
-at subprocess spawn time. The implementation sits in `cuprum/context.py` and is
-built on three cooperating helpers:
+at subprocess spawn time. The implementation sits in
+`cuprum/context/env_overlay.py` and is built on three cooperating helpers:
 
 - `merge_env_overlays(parent, child)` (public) returns an immutable
   `MappingProxyType` whose entries are `parent` updated by `child`. Either
