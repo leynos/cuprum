@@ -25,7 +25,7 @@ from cuprum._testing import (
     _spawn_pipeline_processes,
     _wait_for_pipeline,
 )
-from cuprum.sh import Pipeline, PipelineResult
+from cuprum.sh import Pipeline, PipelineResult, RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 
 
@@ -215,7 +215,61 @@ def _run_test_pipeline(
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
         return pipeline.run_sync()
 
+def test_pipeline_run_sync_accepts_run_output_options(stream_backend: str) -> None:
+    """Pipeline.run_sync accepts ``output=RunOutputOptions`` like SafeCmd."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    echo = sh.make(ECHO)
 
+    pipeline = echo("-n", "unified") | python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read())",
+    )
+
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO, python_program]))):
+        result = pipeline.run_sync(output=RunOutputOptions(capture=True, echo=False))
+
+    assert result.ok is True
+    assert result.stdout == "unified"
+
+def test_pipeline_flat_capture_echo_kwargs_are_deprecated(
+    stream_backend: str,
+) -> None:
+    """The flat ``capture``/``echo`` kwargs still work but warn."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    echo = sh.make(ECHO)
+
+    pipeline = echo("-n", "legacy") | python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read())",
+    )
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([ECHO, python_program]))),
+        pytest.warns(DeprecationWarning, match="RunOutputOptions"),
+    ):
+        result = pipeline.run_sync(capture=True, echo=False)
+
+    assert result.ok is True
+    assert result.stdout == "legacy"
+
+def test_pipeline_rejects_output_combined_with_flat_kwargs() -> None:
+    """Supplying both ``output`` and the deprecated flags raises ValueError."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+
+    pipeline = python("-c", "print('a')") | python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read())",
+    )
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([python_program]))),
+        pytest.warns(DeprecationWarning, match="RunOutputOptions"),
+        pytest.raises(ValueError, match="not both"),
+    ):
+        pipeline.run_sync(output=RunOutputOptions(), capture=True)
 def test_pipeline_run_streams_stdout_between_stages(stream_backend: str) -> None:
     """Pipeline.run_sync streams stdout into the next stage stdin."""
     catalogue, python_program = python_catalogue()
@@ -254,7 +308,7 @@ def test_pipeline_timeout_raises_timeout_expired(stream_backend: str) -> None:
         scoped(ScopeConfig(allowlist=frozenset([python_program]))),
         pytest.raises(TimeoutExpired, match=r"timed out") as exc_info,
     ):
-        pipeline.run_sync(timeout=0.2, capture=False)
+        pipeline.run_sync(timeout=0.2, output=RunOutputOptions(capture=False))
 
     assert exc_info.value.timeout == pytest.approx(0.2)
     assert exc_info.value.output is None
