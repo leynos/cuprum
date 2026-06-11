@@ -1,6 +1,6 @@
 """cuprum package.
 
-Provides a typed programme catalogue system for managing curated, allowlisted
+Provides a typed program catalogue system for managing curated, allowlisted
 executables. Re-exports core types and the default catalogue for convenience.
 
 Example:
@@ -42,7 +42,6 @@ from cuprum.context import (
     BeforeHook,
     CuprumContext,
     EnvRegistration,
-    ExecHook,
     ForbiddenProgramError,
     HookRegistration,
     ScopeConfig,
@@ -57,7 +56,7 @@ from cuprum.context import (
     resolve_env,
     scoped,
 )
-from cuprum.events import ExecEvent
+from cuprum.events import ExecEvent, ExecHook
 from cuprum.logging_hooks import LoggingHookRegistration, logging_hook
 from cuprum.program import Program
 from cuprum.rust import is_rust_available

@@ -9,12 +9,16 @@ from pathlib import Path
 
 from cuprum._observability import _freeze_str_mapping, _merge_tags
 from cuprum._pipeline_streams import _collect_pipe_results
+from cuprum._pipeline_types import (
+    _EventDetails,
+    _run_before_hooks,
+    _StageObservation,
+)
 from cuprum.context import current_context, merge_env_overlays, resolve_env
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum._pipeline_internals import _StageObservation
     from cuprum._pipeline_streams import _PipelineRunConfig
     from cuprum.sh import SafeCmd
 
@@ -138,8 +142,6 @@ def _build_spawn_observations(
     config: _PipelineRunConfig,
 ) -> tuple[_StageObservation, ...]:
     """Build per-stage observation state for spawning a pipeline."""
-    from cuprum._pipeline_internals import _run_before_hooks, _StageObservation
-
     hooks_by_stage = tuple(_run_before_hooks(cmd) for cmd in parts)
     pending_tasks: list[asyncio.Task[None]] = []
     cwd = None if config.ctx.cwd is None else Path(config.ctx.cwd)
@@ -185,7 +187,6 @@ async def _spawn_pipeline_processes(
     list[float],
 ]:
     """Start subprocesses for each stage and wire up capture tasks."""
-    from cuprum._pipeline_internals import _EventDetails
     from cuprum._pipeline_streams import _create_stage_capture_tasks
 
     if observations is None:

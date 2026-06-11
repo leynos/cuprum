@@ -163,6 +163,11 @@ def get_stream_backend() -> StreamBackend:
             except ImportError:
                 pass
             return StreamBackend.PYTHON
+        case _:
+            # A new StreamBackend member must be handled explicitly above;
+            # falling off the end would silently return None.
+            msg = f"unreachable backend {requested!r}"
+            raise AssertionError(msg)
 
 
 __all__ = ["StreamBackend", "get_stream_backend"]

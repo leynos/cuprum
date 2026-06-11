@@ -13,7 +13,6 @@ from cuprum._observability import (
     _merge_tags,
     _wait_for_exec_hook_tasks,
 )
-from cuprum._pipeline_spawn import _spawn_pipeline_processes
 from cuprum._pipeline_streams import (
     _cancel_stream_tasks,
     _create_pipe_tasks,
@@ -26,9 +25,11 @@ from cuprum._pipeline_types import (
     _PipelineOutputs,
     _PipelineSpawnResult,
     _PipelineStageResultInputs,
+    _run_before_hooks,
     _StageObservation,
 )
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
+from cuprum._process_lifecycle import _spawn_pipeline_processes
 from cuprum.context import current_context, merge_env_overlays
 
 if typ.TYPE_CHECKING:
@@ -46,17 +47,6 @@ def _sh_module() -> types.ModuleType:
         msg = "cuprum.sh must be imported before running pipelines"
         raise RuntimeError(msg)
     return module
-
-
-def _run_before_hooks(cmd: SafeCmd) -> _ExecutionHooks:
-    """Collect hooks for a command after enforcing the current allowlist."""
-    ctx = current_context()
-    ctx.check_allowed(cmd.program)
-    return _ExecutionHooks(
-        before_hooks=ctx.before_hooks,
-        after_hooks=ctx.after_hooks,
-        observe_hooks=ctx.observe_hooks,
-    )
 
 
 async def _await_pipeline_wait_result(

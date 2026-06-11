@@ -40,8 +40,8 @@ class LoggingHookRegistration:
         if self.start_registration is not None:
             self.start_registration.detach()
         self._detached = True
-        self.exit_registration = None  # type: ignore[assignment]
-        self.start_registration = None  # type: ignore[assignment]
+        self.exit_registration = None
+        self.start_registration = None
 
     def __enter__(self) -> LoggingHookRegistration:
         """Return self to support context manager usage."""
