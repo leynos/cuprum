@@ -68,6 +68,12 @@ import dataclasses as dc
 import threading
 import typing as typ
 
+from cuprum.adapters._support import (
+    _event_common_fields,
+    _LockedStore,
+    _project_tag,
+)
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
@@ -194,11 +200,12 @@ class InMemorySpan:
 
 
 @dc.dataclass(slots=True)
-class InMemoryTracer:
+class InMemoryTracer(_LockedStore):
     """Reference in-memory tracer for testing and examples.
 
-    This tracer stores spans in memory for inspection. It is thread-safe
-    and suitable for unit testing but not for production use.
+    Storage and locking follow the shared :class:`~cuprum.adapters._support.
+    _LockedStore` contract: every mutator holds the lock, and ``reset()``
+    clears the store under it.
 
     Attributes
     ----------
@@ -208,7 +215,6 @@ class InMemoryTracer:
     """
 
     spans: list[InMemorySpan] = dc.field(default_factory=list)
-    _lock: threading.Lock = dc.field(default_factory=threading.Lock, repr=False)
 
     def start_span(
         self,
@@ -224,10 +230,9 @@ class InMemoryTracer:
             self.spans.append(span)
         return span
 
-    def reset(self) -> None:
-        """Clear all collected spans."""
-        with self._lock:
-            self.spans.clear()
+    def _clear(self) -> None:
+        """Clear all collected spans; called under the store lock."""
+        self.spans.clear()
 
 
 class TracingHook:
@@ -290,6 +295,10 @@ class TracingHook:
                     self._handle_output(event)
             case "exit":
                 self._handle_exit(event)
+            case _:
+                # Phases without span semantics (for example ``stdin``)
+                # deliberately record nothing.
+                pass
 
     def _handle_start(self, event: ExecEvent) -> None:
         """Start a new span for command execution."""
@@ -343,17 +352,13 @@ class TracingHook:
     @staticmethod
     def _build_attributes(event: ExecEvent) -> dict[str, object]:
         """Build initial span attributes from an event."""
-        attrs: dict[str, object] = {
-            "cuprum.program": str(event.program),
-            "cuprum.argv": list(event.argv),
-        }
-        if event.pid is not None:
-            attrs["cuprum.pid"] = event.pid
-        if event.cwd is not None:
-            attrs["cuprum.cwd"] = str(event.cwd)
+        attrs = dict(_event_common_fields(event, "cuprum.{}".format))
+        # Span attribute conventions prefer lists over tuples for sequences.
+        attrs["cuprum.argv"] = list(event.argv)
 
-        if "project" in event.tags:
-            attrs["cuprum.project"] = str(event.tags["project"])
+        project = _project_tag(event)
+        if project is not None:
+            attrs["cuprum.project"] = project
         if "pipeline_stage_index" in event.tags:
             attrs["cuprum.pipeline_stage_index"] = event.tags["pipeline_stage_index"]
         if "pipeline_stages" in event.tags:
