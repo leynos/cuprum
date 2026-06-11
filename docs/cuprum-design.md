@@ -382,20 +382,24 @@ class Pipeline(Generic[Out]):
     async def run(
         self,
         *,
-        capture: bool = True,  # capture final stage stdout and all stderr
-        echo: bool = False,  # echo captured streams to configured sinks
+        # capture: final stage stdout and all stderr; echo: tee to sinks.
+        output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
     ) -> PipelineResult: ...
     def run_sync(
         self,
         *,
-        capture: bool = True,  # capture final stage stdout and all stderr
-        echo: bool = False,  # echo captured streams to configured sinks
+        output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
     ) -> PipelineResult: ...
 ```
+
+`Pipeline.run` / `run_sync` share the `output: RunOutputOptions` calling
+convention with `SafeCmd.run` / `run_sync`. The flat `capture` / `echo` keyword
+arguments remain accepted for backwards compatibility but are deprecated and
+emit a `DeprecationWarning`.
 
 For the public design, the exact generic parameters are kept simple: we do
 **not** attempt to encode full pipeline structure at the type level.
@@ -423,8 +427,10 @@ class PipelineResult:
 
 Contract notes:
 
-- When `capture=True`, `PipelineResult.stdout` contains the final stage stdout.
-- When `capture=False`, `PipelineResult.stdout` is `None`.
+- When output capture is enabled (`RunOutputOptions(capture=True)`, the
+  default), `PipelineResult.stdout` contains the final stage stdout.
+- When capture is disabled (`RunOutputOptions(capture=False)`),
+  `PipelineResult.stdout` is `None`.
 - When a stage exits non-zero, Cuprum terminates the remaining pipeline stages
   and sets `PipelineResult.failure_index` to the stage that triggered
   termination.
@@ -1447,6 +1453,16 @@ than a rigid class diagram, and should favour boring, explicit implementations
 over cleverness—especially in the type‑system and configuration layers.
 
 ______________________________________________________________________
+
+
+## 13. Performance-Optimized Stream Operations
+
+Cuprum's stream operations route data through Python's asyncio event loop in
+small chunks. For typical command execution, this overhead is negligible.
+However, for high-throughput pipelines processing large data volumes, the
+overhead accumulates. This section describes an optional Rust extension that
+addresses these bottlenecks whilst preserving Cuprum's existing API and
+behavioural guarantees.
 
 ## 13. Performance-Optimized Stream Operations
 
