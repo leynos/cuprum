@@ -6,8 +6,11 @@ import typing as typ
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from cuprum.builders import (
+    Compression,
     RsyncOptions,
     TarCreateOptions,
     git_checkout,
@@ -158,7 +161,11 @@ def test_tar_create_builder_outputs_args(tmp_path: Path) -> None:
     """tar_create builds the expected argv ordering."""
     archive = tmp_path / "archive.tar.gz"
     sources = [tmp_path / "source-a", tmp_path / "source-b"]
-    cmd = tar_create(archive, sources, options=TarCreateOptions(gzip=True))
+    cmd = tar_create(
+        archive,
+        sources,
+        options=TarCreateOptions(compression=Compression.GZIP),
+    )
     assert cmd.argv == (
         "-c",
         "-z",
@@ -169,16 +176,63 @@ def test_tar_create_builder_outputs_args(tmp_path: Path) -> None:
     ), "tar_create argv mismatch"
 
 
-def test_tar_create_rejects_multiple_compression(tmp_path: Path) -> None:
-    """tar_create rejects multiple compression flags."""
+@pytest.mark.parametrize(
+    ("compression", "expected_flag"),
+    [
+        (Compression.NONE, None),
+        (Compression.GZIP, "-z"),
+        (Compression.BZIP2, "-j"),
+        (Compression.XZ, "-J"),
+    ],
+)
+def test_tar_create_maps_each_compression(
+    tmp_path: Path,
+    compression: Compression,
+    expected_flag: str | None,
+) -> None:
+    """Each Compression member maps to its single tar flag, or none."""
     archive = tmp_path / "archive.tar"
     source = tmp_path / "source"
-    with pytest.raises(ValueError, match="tar_create"):
-        tar_create(
-            archive,
-            [source],
-            options=TarCreateOptions(gzip=True, bzip2=True),
-        )
+    cmd = tar_create(
+        archive,
+        [source],
+        options=TarCreateOptions(compression=compression),
+    )
+    expected = ["-c"]
+    if expected_flag is not None:
+        expected.append(expected_flag)
+    expected.extend(["-f", archive.as_posix(), source.as_posix()])
+    assert cmd.argv == tuple(expected), "tar_create compression flag mismatch"
+
+
+_ALL_COMPRESSION_FLAGS = frozenset({"-z", "-j", "-J"})
+
+
+@given(compression=st.sampled_from(Compression))
+def test_tar_create_emits_at_most_one_compression_flag(
+    compression: Compression,
+) -> None:
+    """Property: no compression choice can produce two compression flags.
+
+    Modelling compression as a single enum makes the "two algorithms at once"
+    state unrepresentable, so the constructed argv may carry at most one of
+    the mutually-exclusive compression flags.
+
+    Parameters
+    ----------
+    compression : Compression
+        Generated compression member drawn from every enum value.
+    """
+    archive = Path("/srv/archive.tar")
+    cmd = tar_create(
+        archive,
+        [Path("/srv/source")],
+        options=TarCreateOptions(compression=compression),
+    )
+    flags_present = [arg for arg in cmd.argv if arg in _ALL_COMPRESSION_FLAGS]
+    assert len(flags_present) <= 1, "tar_create must emit at most one compression flag"
+    if compression is Compression.NONE:
+        assert not flags_present, "Compression.NONE must emit no compression flag"
 
 
 def test_tar_create_rejects_missing_sources(tmp_path: Path) -> None:
