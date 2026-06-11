@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from cuprum import _subprocess_execution, sh
+from cuprum import _subprocess_stdin, sh
 from cuprum._pipeline_internals import _EventDetails
-from cuprum._subprocess_execution import _write_stdin
+from cuprum._subprocess_stdin import _write_stdin
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
 from cuprum.context import ScopeConfig, current_context, scoped
 from cuprum.program import Program
@@ -255,7 +255,7 @@ def test_observe_emits_stdin_error_event_when_process_closes_stdin_early(
             _EventDetails(pid=process.pid, note="BrokenPipeError: forced EPIPE"),
         )
 
-    monkeypatch.setattr(_subprocess_execution, "_write_stdin", fake_write_stdin)
+    monkeypatch.setattr(_subprocess_stdin, "_write_stdin", fake_write_stdin)
     with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
         result = cmd.run_sync(
             stdin=StdinInput(data=b"x"),
