@@ -285,7 +285,7 @@ unless benchmark and profile data show all of the following:
 - no increase in captured-output memory beyond the expected captured payload;
 - no behavioural parity failures across existing unit, behavioural, and
   property-based stream tests;
-- no regression beyond the existing 10% Rust ratchet threshold in Continuous
+- no regression beyond the existing 30% Rust ratchet threshold in Continuous
   Integration (CI).
 
 ## Migration plan

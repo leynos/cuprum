@@ -213,7 +213,7 @@ Continuous Integration (CI) includes benchmark jobs that:
 
 - run on every pull request and main branch push;
 - compare Python and Rust pathway throughput;
-- fail if Rust pathway regresses beyond 10% threshold;
+- fail if Rust pathway regresses beyond 30% threshold;
 - generate comparison reports in GitHub Actions summary.
 
 Benchmark scenarios cover:

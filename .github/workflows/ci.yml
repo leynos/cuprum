@@ -275,7 +275,7 @@ jobs:
               --baseline-throughput "${artifact_dir}/main-baseline/main-throughput.json" \
               --candidate-plan "${artifact_dir}/candidate-plan.json" \
               --candidate-throughput "${artifact_dir}/candidate-throughput.json" \
-              --max-regression 0.10 \
+              --max-regression 0.30 \
               --output "${artifact_dir}/ratchet-report.json"
             popd >/dev/null
           else

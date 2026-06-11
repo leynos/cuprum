@@ -1389,7 +1389,7 @@ The continuous integration (CI) workflows run the following checks:
   - If no previous `main` baseline exists yet, it records a bootstrap skip
     report instead of failing the workflow.
   - It fails when any Rust scenario has
-    `(candidate_mean - baseline_mean) / baseline_mean > 0.10`.
+    `(candidate_mean - baseline_mean) / baseline_mean > 0.30`.
 
 The workflow summary table is derived from the filtered candidate smoke plan
 and throughput JSON. Rows are matched by the shared scenario label (

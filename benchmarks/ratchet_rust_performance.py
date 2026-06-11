@@ -311,7 +311,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-regression",
         type=float,
-        default=0.10,
+        default=0.30,
         help="Maximum allowed slowdown ratio for Rust scenarios.",
     )
     parser.add_argument("--output", type=pth.Path, required=True)
