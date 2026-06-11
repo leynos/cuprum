@@ -84,6 +84,7 @@
       'cuprum/unittests/test_rust_streams.py',
       'cuprum/unittests/test_safe_cmd_run.py',
       'cuprum/unittests/test_sh.py',
+      'cuprum/unittests/test_sh_property_based.py',
       'cuprum/unittests/test_sinks.py',
       'cuprum/unittests/test_stdin_property_based.py',
       'cuprum/unittests/test_stream_parity.py',
