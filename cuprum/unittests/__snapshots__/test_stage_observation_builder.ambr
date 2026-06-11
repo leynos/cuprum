@@ -1,0 +1,29 @@
+# serializer version: 1
+# name: test_stage_tag_snapshots_lock_the_wire_contract
+  dict({
+    'pipeline': list([
+      dict({
+        'capture': True,
+        'echo': False,
+        'pipeline_stage_index': 0,
+        'pipeline_stages': 2,
+        'project': 'core-ops',
+        'team': 'ops',
+      }),
+      dict({
+        'capture': True,
+        'echo': False,
+        'pipeline_stage_index': 1,
+        'pipeline_stages': 2,
+        'project': 'core-ops',
+        'team': 'ops',
+      }),
+    ]),
+    'single': dict({
+      'capture': True,
+      'echo': False,
+      'project': 'core-ops',
+      'team': 'ops',
+    }),
+  })
+# ---

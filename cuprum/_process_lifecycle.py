@@ -5,11 +5,9 @@ from __future__ import annotations
 import asyncio
 import time
 import typing as typ
-from pathlib import Path
 
-from cuprum._observability import _freeze_str_mapping, _merge_tags
 from cuprum._pipeline_streams import _collect_pipe_results
-from cuprum.context import current_context, merge_env_overlays, resolve_env
+from cuprum.context import current_context, resolve_env
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -137,36 +135,17 @@ def _build_spawn_observations(
     parts: tuple[SafeCmd, ...],
     config: _PipelineRunConfig,
 ) -> tuple[_StageObservation, ...]:
-    """Build per-stage observation state for spawning a pipeline."""
-    from cuprum._pipeline_internals import _run_before_hooks, _StageObservation
+    """Build per-stage observation state for spawning a pipeline.
 
-    hooks_by_stage = tuple(_run_before_hooks(cmd) for cmd in parts)
-    pending_tasks: list[asyncio.Task[None]] = []
-    cwd = None if config.ctx.cwd is None else Path(config.ctx.cwd)
-    scoped_overlay = current_context().env_overlay
-    env_overlay = _freeze_str_mapping(
-        merge_env_overlays(scoped_overlay, config.ctx.env),
-    )
-    observations = tuple(
-        _StageObservation(
-            cmd=cmd,
-            hooks=hooks,
-            tags=_merge_tags(
-                {
-                    "project": cmd.project.name,
-                    "capture": config.capture,
-                    "echo": config.echo,
-                    "pipeline_stage_index": idx,
-                    "pipeline_stages": len(parts),
-                },
-                config.ctx.tags,
-            ),
-            cwd=cwd,
-            env_overlay=env_overlay,
-            pending_tasks=pending_tasks,
-        )
-        for idx, (cmd, hooks) in enumerate(zip(parts, hooks_by_stage, strict=True))
-    )
+    Delegates to the canonical pipeline observation builder so the
+    env-overlay resolution and observation tag schema are computed in exactly
+    one place, then enforces this entry point's additional constraint: spawn
+    helpers must be handed explicit observations when observe hooks exist,
+    because the pending-task list created here is discarded.
+    """
+    from cuprum._pipeline_internals import _build_pipeline_observations
+
+    observations = _build_pipeline_observations(parts, config, pending_tasks=[])
     if any(obs.hooks.observe_hooks for obs in observations):
         msg = "spawn helpers require explicit observations when observe hooks exist"
         raise RuntimeError(msg)

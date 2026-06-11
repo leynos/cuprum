@@ -1,4 +1,11 @@
-"""Internal helpers for structured execution event emission."""
+"""Internal helpers for structured execution event emission.
+
+This module is the dependency-free home for the canonical stage-observation
+inputs shared by the single-command and pipeline execution paths:
+:func:`_resolve_env_overlay` and :func:`_base_stage_tags`. The observation tag
+schema is a wire contract for observability, so it is computed in exactly one
+place; the pipeline builders graft on only their stage-specific keys.
+"""
 
 from __future__ import annotations
 
@@ -7,10 +14,13 @@ import inspect
 import types
 import typing as typ
 
+from cuprum.context import current_context, merge_env_overlays
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.events import ExecEvent, ExecHook
+    from cuprum.sh import SafeCmd
 
 
 def _freeze_str_mapping(
@@ -30,6 +40,55 @@ def _merge_tags(*tags: cabc.Mapping[str, object] | None) -> cabc.Mapping[str, ob
             continue
         merged.update(mapping)
     return types.MappingProxyType(merged)
+
+
+def _resolve_env_overlay(
+    extra: cabc.Mapping[str, str] | None,
+) -> cabc.Mapping[str, str] | None:
+    """Resolve the effective observation env overlay for the active context.
+
+    This is the canonical computation shared by the single-command and
+    pipeline observation builders: the per-call overlay (typically
+    ``ExecutionContext.env``) is layered over the scoped overlay from the
+    active :class:`~cuprum.context.CuprumContext`, and the result is frozen.
+    The overlay stays overlay-only — ``os.environ`` is never included here;
+    the live environment is merged separately at spawn time by
+    :func:`cuprum.context.resolve_env`.
+
+    Example
+    -------
+    >>> _resolve_env_overlay(None) is None  # no scoped or per-call overlay
+    True
+    """
+    return _freeze_str_mapping(
+        merge_env_overlays(current_context().env_overlay, extra),
+    )
+
+
+def _base_stage_tags(
+    cmd: SafeCmd,
+    *,
+    capture: bool,
+    echo: bool,
+) -> dict[str, object]:
+    """Build the canonical base observation tags for one command stage.
+
+    This is the single source of truth for the shared tag schema
+    (``project``, ``capture``, ``echo``). The pipeline observation builder
+    grafts on only its stage-specific keys (``pipeline_stage_index``,
+    ``pipeline_stages``); per-call tags are merged over the base by callers
+    via :func:`_merge_tags`.
+
+    Example
+    -------
+    >>> _base_stage_tags(cmd, capture=True, echo=False)  # doctest: +SKIP
+    {'project': 'core-ops', 'capture': True, 'echo': False}
+    """
+    return {
+        "project": cmd.project.name,
+        "capture": capture,
+        "echo": echo,
+    }
 
 
 def _emit_exec_event(
@@ -73,8 +132,10 @@ async def _wait_for_exec_hook_tasks(pending_tasks: list[asyncio.Task[None]]) -> 
 
 
 __all__ = [
+    "_base_stage_tags",
     "_emit_exec_event",
     "_freeze_str_mapping",
     "_merge_tags",
+    "_resolve_env_overlay",
     "_wait_for_exec_hook_tasks",
 ]

@@ -9,8 +9,9 @@ import typing as typ
 from pathlib import Path
 
 from cuprum._observability import (
-    _freeze_str_mapping,
+    _base_stage_tags,
     _merge_tags,
+    _resolve_env_overlay,
     _wait_for_exec_hook_tasks,
 )
 from cuprum._pipeline_spawn import _spawn_pipeline_processes
@@ -29,7 +30,7 @@ from cuprum._pipeline_types import (
     _StageObservation,
 )
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
-from cuprum.context import current_context, merge_env_overlays
+from cuprum.context import current_context
 
 if typ.TYPE_CHECKING:
     import types
@@ -159,19 +160,14 @@ def _build_pipeline_observations(
     """Build per-stage observation state for every command in the pipeline."""
     hooks_by_stage = tuple(_run_before_hooks(cmd) for cmd in parts)
     cwd = None if config.ctx.cwd is None else Path(config.ctx.cwd)
-    scoped_overlay = current_context().env_overlay
-    env_overlay = _freeze_str_mapping(
-        merge_env_overlays(scoped_overlay, config.ctx.env),
-    )
+    env_overlay = _resolve_env_overlay(config.ctx.env)
     return tuple(
         _StageObservation(
             cmd=cmd,
             hooks=hooks,
             tags=_merge_tags(
+                _base_stage_tags(cmd, capture=config.capture, echo=config.echo),
                 {
-                    "project": cmd.project.name,
-                    "capture": config.capture,
-                    "echo": config.echo,
                     "pipeline_stage_index": idx,
                     "pipeline_stages": len(parts),
                 },
