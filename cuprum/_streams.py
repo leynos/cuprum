@@ -138,21 +138,31 @@ async def _pump_stream(
         await _close_stream_writer(writer)
         return
 
-    downstream_open = writer is not None
-    while True:
-        chunk = await reader.read(_READ_SIZE)
-        if not chunk:
-            break
-        if downstream_open and writer is not None:
-            outcome = await _write_to_stream_writer(writer, chunk)
-            if outcome is _WriteOutcome.CLOSED:
-                # Downstream closed early: stop writing but keep draining the
-                # reader so upstream stages do not block on a full pipe.
-                downstream_open = False
-
+    await _relay_chunks(reader, writer)
     await _close_stream_writer(writer)
 
+async def _relay_chunks(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter | None,
+) -> None:
+    """Copy chunks downstream until EOF, draining after an early close.
 
+    When the writer is absent or reports :attr:`_WriteOutcome.CLOSED`, the
+    reader is still consumed to EOF so upstream stages do not block on a
+    full pipe.
+    """
+    while writer is not None:
+        chunk = await reader.read(_READ_SIZE)
+        if not chunk:
+            return
+        if await _write_to_stream_writer(writer, chunk) is _WriteOutcome.CLOSED:
+            break
+    await _drain_stream_reader(reader)
+
+async def _drain_stream_reader(reader: asyncio.StreamReader) -> None:
+    """Consume the reader to EOF, discarding the data."""
+    while await reader.read(_READ_SIZE):
+        pass
 async def _write_to_stream_writer(
     writer: asyncio.StreamWriter,
     chunk: bytes,
