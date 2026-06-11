@@ -75,24 +75,25 @@ class _StageObservation:
         """Emit an observe event for ``phase`` when observe hooks are set."""
         if not self.hooks.observe_hooks:
             return
-        _emit_exec_event(
-            self.hooks.observe_hooks,
-            ExecEvent(
-                phase=phase,
-                program=self.cmd.program,
-                argv=self.cmd.argv_with_program,
-                cwd=self.cwd,
-                env=self.env_overlay,
-                pid=details.pid,
-                timestamp=time.time(),
-                line=details.line,
-                exit_code=details.exit_code,
-                duration_s=details.duration_s,
-                tags=self.tags,
-                note=details.note,
-                byte_count=details.byte_count,
+        self.pending_tasks.extend(
+            _emit_exec_event(
+                self.hooks.observe_hooks,
+                ExecEvent(
+                    phase=phase,
+                    program=self.cmd.program,
+                    argv=self.cmd.argv_with_program,
+                    cwd=self.cwd,
+                    env=self.env_overlay,
+                    pid=details.pid,
+                    timestamp=time.time(),
+                    line=details.line,
+                    exit_code=details.exit_code,
+                    duration_s=details.duration_s,
+                    tags=self.tags,
+                    note=details.note,
+                    byte_count=details.byte_count,
+                ),
             ),
-            pending_tasks=self.pending_tasks,
         )
 
 

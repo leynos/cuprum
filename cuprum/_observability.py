@@ -35,14 +35,20 @@ def _merge_tags(*tags: cabc.Mapping[str, object] | None) -> cabc.Mapping[str, ob
 def _emit_exec_event(
     hooks: tuple[ExecHook, ...],
     event: ExecEvent,
-    *,
-    pending_tasks: list[asyncio.Task[None]],
-) -> None:
-    """Invoke observe hooks and schedule async hooks as background tasks."""
+) -> list[asyncio.Task[None]]:
+    """Invoke observe hooks and return any scheduled async-hook tasks.
+
+    Synchronous hooks run inline. Hooks that return an awaitable are scheduled
+    as background tasks; those tasks are returned so the caller can extend its
+    own pending-task collection. Returns an empty list when no hook scheduled
+    work.
+    """
+    scheduled: list[asyncio.Task[None]] = []
     for hook in hooks:
         result = hook(event)
         if inspect.isawaitable(result):
-            pending_tasks.append(asyncio.create_task(_await_awaitable(result)))
+            scheduled.append(asyncio.create_task(_await_awaitable(result)))
+    return scheduled
 
 
 async def _await_awaitable(awaitable: cabc.Awaitable[None]) -> None:
@@ -54,8 +60,9 @@ async def _wait_for_exec_hook_tasks(pending_tasks: list[asyncio.Task[None]]) -> 
     """Await background observe-hook tasks and surface the first failure.
 
     Observe hooks may return awaitables; those awaitables are scheduled as tasks
-    by ``_emit_exec_event`` and added to ``pending_tasks``. This helper awaits
-    all pending tasks and re-raises the first ``BaseException`` encountered.
+    by ``_emit_exec_event``, whose return value the caller extends onto its
+    ``pending_tasks`` collection. This helper awaits all pending tasks and
+    re-raises the first ``BaseException`` encountered.
 
     Notes
     -----

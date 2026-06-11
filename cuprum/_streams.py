@@ -5,6 +5,7 @@ from __future__ import annotations
 import codecs
 import contextlib
 import dataclasses as dc
+import enum
 import typing as typ
 
 if typ.TYPE_CHECKING:
@@ -12,6 +13,25 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 _READ_SIZE = 4096
+
+
+class _WriteOutcome(enum.Enum):
+    """Whether a downstream writer is still accepting data after a write.
+
+    Used by :func:`_write_to_stream_writer` to report broken-pipe state as a
+    value rather than overloading a ``StreamWriter | None`` return, so the
+    caller retains ownership of the writer and decides when to close it.
+
+    Members
+    -------
+    OPEN
+        The write succeeded and the downstream writer remains open.
+    CLOSED
+        The downstream closed early (broken pipe); stop writing to it.
+    """
+
+    OPEN = "open"
+    CLOSED = "closed"
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -124,30 +144,38 @@ async def _pump_stream(
         await _close_stream_writer(writer)
         return
 
-    active_writer = writer
+    downstream_open = writer is not None
     while True:
         chunk = await reader.read(_READ_SIZE)
         if not chunk:
             break
-        active_writer = await _write_to_stream_writer(active_writer, chunk)
+        if downstream_open and writer is not None:
+            outcome = await _write_to_stream_writer(writer, chunk)
+            if outcome is _WriteOutcome.CLOSED:
+                # Downstream closed early: stop writing but keep draining the
+                # reader so upstream stages do not block on a full pipe.
+                downstream_open = False
 
-    await _close_stream_writer(active_writer)
+    await _close_stream_writer(writer)
 
 
 async def _write_to_stream_writer(
-    writer: asyncio.StreamWriter | None,
+    writer: asyncio.StreamWriter,
     chunk: bytes,
-) -> asyncio.StreamWriter | None:
-    """Write a chunk to a writer, returning None when downstream closes."""
-    if writer is None:
-        return None
+) -> _WriteOutcome:
+    """Write a chunk and report whether the downstream writer stays open.
+
+    The writer is owned by the caller and is intentionally *not* closed here;
+    a broken pipe is reported as :attr:`_WriteOutcome.CLOSED` so the caller can
+    stop writing while continuing to drain upstream and close the writer once
+    at the end.
+    """
     try:
         writer.write(chunk)
         await writer.drain()
     except (BrokenPipeError, ConnectionResetError):
-        await _close_stream_writer(writer)
-        return None
-    return writer
+        return _WriteOutcome.CLOSED
+    return _WriteOutcome.OPEN
 
 
 async def _close_stream_writer(writer: asyncio.StreamWriter | None) -> None:

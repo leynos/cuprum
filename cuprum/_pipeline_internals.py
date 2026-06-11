@@ -34,6 +34,7 @@ from cuprum.context import current_context, merge_env_overlays
 if typ.TYPE_CHECKING:
     import types
 
+    from cuprum.context import CuprumContext
     from cuprum.sh import CommandResult, PipelineResult, SafeCmd
 
 _MIN_PIPELINE_STAGES = 2
@@ -48,10 +49,23 @@ def _sh_module() -> types.ModuleType:
     return module
 
 
-def _run_before_hooks(cmd: SafeCmd) -> _ExecutionHooks:
-    """Collect hooks for a command after enforcing the current allowlist."""
-    ctx = current_context()
-    ctx.check_allowed(cmd.program)
+def _enforce_allowlist(cmd: SafeCmd) -> None:
+    """Enforce the active allowlist for ``cmd``.
+
+    This is a command: its purpose is the side effect of rejecting a program
+    that the current context does not permit. It raises
+    :class:`~cuprum.context.ForbiddenProgramError` for a forbidden program and
+    returns ``None`` otherwise.
+    """
+    current_context().check_allowed(cmd.program)
+
+
+def _collect_hooks(ctx: CuprumContext) -> _ExecutionHooks:
+    """Return the before/after/observe hooks registered on ``ctx``.
+
+    This is a pure query with no side effects; allowlist enforcement is the
+    separate responsibility of :func:`_enforce_allowlist`.
+    """
     return _ExecutionHooks(
         before_hooks=ctx.before_hooks,
         after_hooks=ctx.after_hooks,
@@ -157,9 +171,12 @@ def _build_pipeline_observations(
     pending_tasks: list[asyncio.Task[None]],
 ) -> tuple[_StageObservation, ...]:
     """Build per-stage observation state for every command in the pipeline."""
-    hooks_by_stage = tuple(_run_before_hooks(cmd) for cmd in parts)
+    for cmd in parts:
+        _enforce_allowlist(cmd)
+    ctx = current_context()
+    hooks_by_stage = tuple(_collect_hooks(ctx) for _ in parts)
     cwd = None if config.ctx.cwd is None else Path(config.ctx.cwd)
-    scoped_overlay = current_context().env_overlay
+    scoped_overlay = ctx.env_overlay
     env_overlay = _freeze_str_mapping(
         merge_env_overlays(scoped_overlay, config.ctx.env),
     )
