@@ -22,9 +22,10 @@ from cuprum._observability import (
 )
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
+    _collect_hooks,
+    _enforce_allowlist,
     _EventDetails,
     _ExecutionHooks,
-    _run_before_hooks,
     _run_pipeline,
     _StageObservation,
 )
@@ -480,8 +481,9 @@ class SafeCmd:
         ctx = context or ExecutionContext()
         stdin_data = stdin.resolve(ctx) if stdin is not None else None
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
+        _enforce_allowlist(self)
         tracking = _ExecutionTracking(
-            execution_hooks=_run_before_hooks(self),
+            execution_hooks=_collect_hooks(current_context()),
             pending_tasks=[],
         )
         observation = _prepare_execution_observation(
