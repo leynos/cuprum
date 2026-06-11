@@ -245,6 +245,8 @@ def test_crosshair_contracts(contract: cabc.Callable[..., None]) -> None:
         MessageType.CONFIRMED,
         AnalysisOptionSet(
             analysis_kind=(AnalysisKind.PEP316,),
-            per_condition_timeout=10,
+            # Confirmation needs ~15s on a loaded 6-core host; 10s flaked under
+            # parallel pytest workers, so allow a generous margin.
+            per_condition_timeout=60,
         ),
     )

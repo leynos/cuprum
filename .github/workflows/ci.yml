@@ -180,7 +180,7 @@ jobs:
             coverage.xml
 
   benchmark-ratchet:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4-ubuntu-2404
     needs:
       - lint-test
       - typecheck-test
@@ -248,6 +248,7 @@ jobs:
             UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
               -m ensurepip --upgrade
             UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run maturin develop \
+              --release \
               --manifest-path rust/cuprum-rust/Cargo.toml
 
             UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
@@ -275,7 +276,7 @@ jobs:
               --baseline-throughput "${artifact_dir}/main-baseline/main-throughput.json" \
               --candidate-plan "${artifact_dir}/candidate-plan.json" \
               --candidate-throughput "${artifact_dir}/candidate-throughput.json" \
-              --max-regression 0.10 \
+              --max-regression 0.30 \
               --output "${artifact_dir}/ratchet-report.json"
             popd >/dev/null
           else

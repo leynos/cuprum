@@ -9,11 +9,17 @@ _FLOAT_TOLERANCE = 1e-12
 
 @dc.dataclass(frozen=True, slots=True)
 class ScenarioComparison:
-    """Comparison result for one Rust benchmark scenario."""
+    """Comparison result for one matched Rust/Python scenario pair.
+
+    The baseline and candidate values are within-run ``rust_mean /
+    python_mean`` ratios, so the regression ratio tracks how the Rust
+    backend's relative performance changed rather than absolute wall-clock
+    differences between runner machines.
+    """
 
     scenario_name: str
-    baseline_mean: float
-    candidate_mean: float
+    baseline_ratio: float
+    candidate_ratio: float
     regression_ratio: float
     max_regression: float
 
@@ -26,8 +32,8 @@ class ScenarioComparison:
         """Serialize the scenario comparison for JSON output."""
         return {
             "scenario_name": self.scenario_name,
-            "baseline_mean": self.baseline_mean,
-            "candidate_mean": self.candidate_mean,
+            "baseline_ratio": self.baseline_ratio,
+            "candidate_ratio": self.candidate_ratio,
             "regression_ratio": self.regression_ratio,
             "max_regression": self.max_regression,
             "is_regression": self.is_regression,

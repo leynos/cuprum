@@ -1372,9 +1372,11 @@ The continuous integration (CI) workflows run the following checks:
 - Formatting and lint checks run on Python 3.13.
 - Coverage upload (artifact + optional CodeScene upload) runs on Python 3.13.
 - Benchmark ratchet runs on pull requests and pushes to `main`:
-  - It benchmarks the current checkout in smoke mode.
-  - It compares Rust means against the latest successful `main` baseline
-    artefact when one exists.
+  - It benchmarks the current checkout in smoke mode with a release build of
+    the Rust extension.
+  - It compares each scenario's within-run `rust_mean / python_mean` ratio
+    against the latest successful `main` baseline artefact when one exists, so
+    runner-speed differences between CI jobs cancel out.
   - It skips comparison when the saved baseline uses an older benchmark profile
     shape because single-run and batched-worker timings are not comparable.
   - Its baseline fetch helper follows GitHub’s signed archive redirects
@@ -1388,8 +1390,9 @@ The continuous integration (CI) workflows run the following checks:
     next baseline artefact for future runs.
   - If no previous `main` baseline exists yet, it records a bootstrap skip
     report instead of failing the workflow.
-  - It fails when any Rust scenario has
-    `(candidate_mean - baseline_mean) / baseline_mean > 0.10`.
+  - It fails when any scenario pair has
+    `(candidate_ratio - baseline_ratio) / baseline_ratio > 0.30`, where each
+    ratio is `rust_mean / python_mean` from the same benchmark run.
 
 The workflow summary table is derived from the filtered candidate smoke plan
 and throughput JSON. Rows are matched by the shared scenario label (
