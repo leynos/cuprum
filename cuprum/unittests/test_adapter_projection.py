@@ -53,6 +53,22 @@ def _events(draw: st.DrawFn) -> ExecEvent:
     )
 
 
+def _expected_projection(event: ExecEvent) -> dict[str, object]:
+    """Mirror the projection contract: ``None`` omitted, ``cwd`` stringified."""
+    expected: dict[str, object] = {
+        "program": str(event.program),
+        "argv": event.argv,
+    }
+    present = (
+        (field, getattr(event, field))
+        for field in _OPTIONAL_FIELDS
+        if getattr(event, field) is not None
+    )
+    for field, value in present:
+        expected[field] = str(value) if field == "cwd" else value
+    return expected
+
+
 @given(event=_events())
 def test_projection_includes_exactly_the_non_none_fields(event: ExecEvent) -> None:
     """Property: the canonical projection omits exactly the ``None`` fields.
@@ -64,15 +80,10 @@ def test_projection_includes_exactly_the_non_none_fields(event: ExecEvent) -> No
     """
     projected = dict(_event_common_fields(event, lambda field: field))
 
-    assert projected["program"] == str(event.program)
-    assert projected["argv"] == event.argv
-    for field in _OPTIONAL_FIELDS:
-        value = getattr(event, field)
-        if value is None:
-            assert field not in projected, f"{field} must be omitted when None"
-        else:
-            expected = str(value) if field == "cwd" else value
-            assert projected[field] == expected
+    assert projected == _expected_projection(event), (
+        "projection must carry program, argv, and exactly the non-None "
+        "optional fields (cwd stringified)"
+    )
 
 
 @given(event=_events())
