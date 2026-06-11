@@ -47,9 +47,13 @@ _THREAD_JOIN_TIMEOUT_SECONDS = 15
 class _RLockLike(typ.Protocol):
     """Structural type for the ``RLock`` operations this test instruments."""
 
-    def acquire(self, *, blocking: bool = True, timeout: float = -1) -> bool: ...
+    def acquire(self, *, blocking: bool = True, timeout: float = -1) -> bool:
+        """Acquire the lock using the subset of ``RLock`` arguments under test."""
+        ...
 
-    def release(self) -> None: ...
+    def release(self) -> None:
+        """Release a lock previously acquired by the current thread."""
+        ...
 
 
 class _SignallingRLock:
@@ -98,9 +102,11 @@ class _SignallingRLock:
         return self._delegate.acquire(blocking=blocking, timeout=timeout)
 
     def release(self) -> None:
+        """Release the wrapped lock."""
         self._delegate.release()
 
     def __enter__(self) -> _SignallingRLock:
+        """Acquire the wrapped lock for context manager use."""
         self.acquire()
         return self
 
@@ -110,6 +116,7 @@ class _SignallingRLock:
         exc_value: BaseException | None,
         traceback: types.TracebackType | None,
     ) -> None:
+        """Release the wrapped lock when leaving a context manager block."""
         self.release()
 
 
