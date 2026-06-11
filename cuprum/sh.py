@@ -15,8 +15,9 @@ import warnings
 from pathlib import Path
 
 from cuprum._observability import (
-    _freeze_str_mapping,
+    _base_stage_tags,
     _merge_tags,
+    _resolve_env_overlay,
     _wait_for_exec_hook_tasks,
 )
 from cuprum._pipeline_internals import (
@@ -39,7 +40,6 @@ from cuprum.catalogue import (
     ProjectSettings,
 )
 from cuprum.catalogue import UnknownProgramError as UnknownProgramError
-from cuprum.context import current_context, merge_env_overlays
 from cuprum.context import observe as observe
 from cuprum.context import scoped as scoped
 
@@ -377,16 +377,13 @@ def _prepare_execution_observation(
 ) -> _StageObservation:
     """Prepare the observation context for command execution."""
     cwd = Path(context.cwd) if context.cwd is not None else None
-    scoped_overlay = current_context().env_overlay
-    env_overlay = _freeze_str_mapping(
-        merge_env_overlays(scoped_overlay, context.env),
-    )
+    env_overlay = _resolve_env_overlay(context.env)
     tags = _merge_tags(
-        {
-            "project": cmd.project.name,
-            "capture": output.capture,
-            "echo": output.echo,
-        },
+        _base_stage_tags(
+            cmd,
+            capture=output.capture,
+            echo=output.echo,
+        ),
         context.tags,
     )
     return _StageObservation(

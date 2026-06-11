@@ -86,6 +86,35 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
+
+## Canonical stage-observation inputs
+
+The observation tag schema is a wire contract for observability, so the
+env-overlay resolution and base tag construction shared by the single-command
+and pipeline paths live in exactly one place, `cuprum/_observability.py`:
+
+- `_resolve_env_overlay(extra)` layers the per-call overlay (typically
+  `ExecutionContext.env`) over the scoped overlay from the active
+  `CuprumContext` and freezes the result. It stays overlay-only — `os.environ`
+  is merged separately at spawn time by `resolve_env`.
+- `_base_stage_tags(cmd, capture=…, echo=…)` builds the shared tag schema
+  (`project`, `capture`, `echo`). The pipeline observation builder grafts on
+  only its stage-specific keys (`pipeline_stage_index`, `pipeline_stages`);
+  per-call tags are merged over the base via `_merge_tags`.
+
+Re-use policy: the three call sites — `_prepare_execution_observation`
+(`cuprum/sh.py`), `_build_pipeline_observations`
+(`cuprum/_pipeline_internals.py`), and `_build_spawn_observations`
+(`cuprum/_process_lifecycle.py`, which now delegates to the pipeline builder
+and adds only its no-observe-hooks assertion) — must route through these
+helpers. A new shared tag is added once, in `_base_stage_tags`, or it will
+silently diverge between the single-command and pipeline telemetry.
+
+`cuprum/unittests/test_stage_observation_builder.py` pins the contract with
+Hypothesis properties (overlay resolution matches `merge_env_overlays`
+semantics and stays immutable; both paths agree on the shared tag keys) and a
+syrupy snapshot of representative single-command and pipeline tag dictionaries.
+
 ## Context allowlist internals
 
 `CuprumContext` stores an `allowlist` plus the internal
