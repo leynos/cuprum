@@ -49,6 +49,7 @@
       'cuprum/unittests/__snapshots__/test_profile_driver.ambr',
       'cuprum/unittests/__snapshots__/test_tee_profile_worker_core.ambr',
       'cuprum/unittests/__snapshots__/test_tee_profile_worker_selector_reentrancy.ambr',
+      'cuprum/unittests/_tee_profile_worker_test_helpers.py',
       'cuprum/unittests/conftest.py',
       'cuprum/unittests/test_adapters.py',
       'cuprum/unittests/test_backend.py',

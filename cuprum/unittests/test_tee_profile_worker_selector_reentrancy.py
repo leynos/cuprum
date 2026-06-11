@@ -68,7 +68,7 @@ def test_nested_selector_raises_runtime_error_and_recovers(
     )
     expected_warning = "Rejected re-entrant backend selector activation"
     selector = tee_profile_worker._EnvBackendSelector()
-    with selector("python"):  # noqa: SIM117
+    with selector("python"):  # noqa: SIM117 - nested so caplog captures warning.
         with caplog.at_level(logging.WARNING):
             with pytest.raises(RuntimeError, match=expected_message):
                 with selector("auto"):
