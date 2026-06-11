@@ -104,7 +104,29 @@ def read_maturin_pins(root: Path) -> dict[str, str]:
 
 
 def read_manylinux_aarch64_container_ref(root: Path) -> str:
-    """Read the pinned manylinux aarch64 container reference."""
+    """Read the pinned manylinux aarch64 container reference.
+
+    Parameters
+    ----------
+    root
+        Repository root containing ``.github/workflows/build-wheels.yml``.
+
+    Returns
+    -------
+    str
+        The pinned ``MANYLINUX_AARCH64_CONTAINER`` image reference.
+
+    Raises
+    ------
+    AssertionError
+        If the ``MANYLINUX_AARCH64_CONTAINER`` pin is missing.
+    FileNotFoundError
+        If ``.github/workflows/build-wheels.yml`` is absent.
+    OSError
+        If ``.github/workflows/build-wheels.yml`` cannot be read.
+    UnicodeDecodeError
+        If ``.github/workflows/build-wheels.yml`` is not valid UTF-8.
+    """
     workflow = (root / ".github/workflows/build-wheels.yml").read_text(encoding="utf-8")
     return _require_pin_match(
         _AARCH64_CONTAINER_PIN_RE.search(workflow),
@@ -114,7 +136,28 @@ def read_manylinux_aarch64_container_ref(root: Path) -> str:
 
 
 def workflow_uses_manylinux_aarch64_container_ref(root: Path) -> bool:
-    """Report whether the workflow references the pinned manylinux container."""
+    """Report whether the workflow references the pinned manylinux container.
+
+    Parameters
+    ----------
+    root
+        Repository root containing ``.github/workflows/build-wheels.yml``.
+
+    Returns
+    -------
+    bool
+        ``True`` when the Linux aarch64 build step uses
+        ``env.MANYLINUX_AARCH64_CONTAINER``; otherwise ``False``.
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``.github/workflows/build-wheels.yml`` is absent.
+    OSError
+        If ``.github/workflows/build-wheels.yml`` cannot be read.
+    UnicodeDecodeError
+        If ``.github/workflows/build-wheels.yml`` is not valid UTF-8.
+    """
     workflow = (root / ".github/workflows/build-wheels.yml").read_text(encoding="utf-8")
     return _AARCH64_CONTAINER_USAGE_RE.search(workflow) is not None
 
