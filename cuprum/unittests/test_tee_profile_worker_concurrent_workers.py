@@ -113,10 +113,14 @@ def _assert_backend_pair_completes(
     for thread in threads:
         thread.start()
 
-    barrier.wait(timeout=_EVENT_WAIT_TIMEOUT_SECONDS)
-    _join_and_assert_finished(
-        *threads, context=f"backend pair completion for {backends}"
-    )
+    try:
+        barrier.wait(timeout=_EVENT_WAIT_TIMEOUT_SECONDS)
+    finally:
+        # A broken or timed-out barrier must still join the daemon workers so
+        # they cannot leak into subsequent tests or Hypothesis examples.
+        _join_and_assert_finished(
+            *threads, context=f"backend pair completion for {backends}"
+        )
     assert not shared.errors, f"expected no worker thread errors, got {shared.errors!r}"
     assert len(shared.results) == len(backends), (
         f"expected one result per worker, got {shared.results}"
