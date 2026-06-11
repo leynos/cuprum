@@ -720,6 +720,27 @@ and tool-discovery recipes only. This supports non-interactive Continuous
 Integration/Continuous Delivery (CI/CD) hook environments without globally
 shadowing system tools for unrelated Makefile workflows.
 
+
+## Rust error taxonomy (`PumpError`)
+
+The `cuprum-rust` crate reports stream pump and consume failures through one
+semantic error enum, `PumpError` (`rust/cuprum-rust/src/errors.rs`), derived
+with `thiserror`:
+
+- `LengthOverflow` — an integer length conversion overflowed its target
+  type ("impossible" on supported platforms, kept observable rather than
+  silently truncating).
+- `BufferRangeExceeded` — a computed range exceeded the backing buffer.
+- `Io(io::Error)` — an operating-system I/O failure (transparent wrapper).
+
+Conversion to a Python exception happens in exactly one place
+(`From<PumpError> for PyErr`): `Io` maps through `pyo3`'s standard `io::Error`
+translation, and the overflow variants surface as `OSError`. The non-fatal
+write classification (broken pipe / connection reset) lives on the enum as
+`PumpError::is_nonfatal_write`, replacing the free function the splice and
+read/write paths previously shared. New failure conditions get a variant here
+rather than a stringly-typed `io::Error::other(...)`.
+
 ## Rust property testing and verification
 
 Rust-level tests for `cuprum-rust` live with the crate under

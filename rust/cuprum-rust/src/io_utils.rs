@@ -2,9 +2,12 @@
 //!
 //! This module provides helpers for reading and writing descriptor-backed
 //! streams with proper error handling, including detection of non-fatal write
-//! errors like broken pipes.
+//! errors like broken pipes. Failures are reported through the crate's
+//! canonical [`PumpError`] taxonomy.
 
 use std::io;
+
+use crate::errors::PumpError;
 
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -25,7 +28,7 @@ pub(crate) type StreamHandle = File;
 pub(crate) fn read_stream(
     reader: &mut StreamHandle,
     buffer: &mut [u8],
-) -> Result<usize, io::Error> {
+) -> Result<usize, PumpError> {
     #[cfg(unix)]
     {
         read_stream_unix(reader, buffer)
@@ -33,31 +36,19 @@ pub(crate) fn read_stream(
 
     #[cfg(windows)]
     {
-        reader.read(buffer)
+        reader.read(buffer).map_err(PumpError::from)
     }
 }
 
 /// Write all bytes from a chunk to the writer, returning bytes written.
-pub(crate) fn handle_write(writer: &mut StreamHandle, chunk: &[u8]) -> Result<u64, io::Error> {
+pub(crate) fn handle_write(writer: &mut StreamHandle, chunk: &[u8]) -> Result<u64, PumpError> {
     #[cfg(unix)]
     write_all_unix(writer, chunk)?;
 
     #[cfg(windows)]
-    writer.write_all(chunk)?;
+    writer.write_all(chunk).map_err(PumpError::from)?;
 
-    u64::try_from(chunk.len()).map_err(|_| io::Error::other("write length overflow"))
-}
-
-/// Check if an error is a non-fatal write condition (broken pipe).
-///
-/// These errors indicate the write end closed, which is expected when
-/// downstream processes exit early. The caller should drain the reader
-/// and return successfully rather than propagating the error.
-pub(crate) fn is_nonfatal_write_error(err: &io::Error) -> bool {
-    matches!(
-        err.kind(),
-        io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
-    )
+    u64::try_from(chunk.len()).map_err(|_| PumpError::LengthOverflow)
 }
 
 /// Attempt to write a chunk and update the total written count.
@@ -69,14 +60,14 @@ pub(crate) fn handle_write_result(
     writer: &mut StreamHandle,
     chunk: &[u8],
     total_written: &mut u64,
-) -> Result<bool, io::Error> {
+) -> Result<bool, PumpError> {
     match handle_write(writer, chunk) {
         Ok(bytes) => {
             *total_written = total_written.saturating_add(bytes);
             Ok(true)
         }
         Err(err) => {
-            if is_nonfatal_write_error(&err) {
+            if err.is_nonfatal_write() {
                 Ok(false)
             } else {
                 Err(err)
@@ -86,7 +77,7 @@ pub(crate) fn handle_write_result(
 }
 
 #[cfg(unix)]
-fn read_stream_unix(reader: &StreamHandle, buffer: &mut [u8]) -> Result<usize, io::Error> {
+fn read_stream_unix(reader: &StreamHandle, buffer: &mut [u8]) -> Result<usize, PumpError> {
     loop {
         // SAFETY: `buffer` is valid for writes of `buffer.len()` bytes, and
         // `reader` owns a valid descriptor for the duration of this call.
@@ -99,18 +90,18 @@ fn read_stream_unix(reader: &StreamHandle, buffer: &mut [u8]) -> Result<usize, i
         };
 
         if read_len >= 0 {
-            return usize::try_from(read_len).map_err(|_| io::Error::other("read length overflow"));
+            return usize::try_from(read_len).map_err(|_| PumpError::LengthOverflow);
         }
 
         let err = io::Error::last_os_error();
         if err.kind() != io::ErrorKind::Interrupted {
-            return Err(err);
+            return Err(PumpError::from(err));
         }
     }
 }
 
 #[cfg(unix)]
-fn write_all_unix(writer: &StreamHandle, mut chunk: &[u8]) -> Result<(), io::Error> {
+fn write_all_unix(writer: &StreamHandle, mut chunk: &[u8]) -> Result<(), PumpError> {
     while !chunk.is_empty() {
         // SAFETY: `chunk` is valid for reads of `chunk.len()` bytes, and
         // `writer` owns a valid descriptor for the duration of this call.
@@ -123,24 +114,23 @@ fn write_all_unix(writer: &StreamHandle, mut chunk: &[u8]) -> Result<(), io::Err
         };
 
         if written > 0 {
-            let written_len =
-                usize::try_from(written).map_err(|_| io::Error::other("write length overflow"))?;
+            let written_len = usize::try_from(written).map_err(|_| PumpError::LengthOverflow)?;
             chunk = chunk
                 .get(written_len..)
-                .ok_or_else(|| io::Error::other("write length exceeded buffer"))?;
+                .ok_or(PumpError::BufferRangeExceeded)?;
             continue;
         }
 
         if written == 0 {
-            return Err(io::Error::new(
+            return Err(PumpError::from(io::Error::new(
                 io::ErrorKind::WriteZero,
                 "failed to write whole buffer",
-            ));
+            )));
         }
 
         let err = io::Error::last_os_error();
         if err.kind() != io::ErrorKind::Interrupted {
-            return Err(err);
+            return Err(PumpError::from(err));
         }
     }
 

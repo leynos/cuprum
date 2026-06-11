@@ -18,7 +18,7 @@
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};
 
-use crate::io_utils::is_nonfatal_write_error;
+use crate::errors::PumpError;
 
 /// Flag for splice: move pages instead of copying (advisory).
 const SPLICE_F_MOVE: libc::c_uint = 0x01;
@@ -43,7 +43,7 @@ pub(crate) fn try_splice_pump(
     reader: &OwnedFd,
     writer: &OwnedFd,
     chunk_size: usize,
-) -> Option<Result<u64, io::Error>> {
+) -> Option<Result<u64, PumpError>> {
     let reader_fd = reader.as_raw_fd();
     let writer_fd = writer.as_raw_fd();
 
@@ -52,7 +52,7 @@ pub(crate) fn try_splice_pump(
         Ok(0) => Some(Ok(0)), // EOF on first call
         Ok(n) => Some(splice_loop(reader_fd, writer_fd, chunk_size, n)),
         Err(e) if is_splice_unsupported(&e) => None, // Fall back to read/write
-        Err(e) if is_nonfatal_write_error(&e) => {
+        Err(e) if e.is_nonfatal_write() => {
             // Broken pipe on first call: drain reader to avoid upstream deadlock.
             drain_reader(reader_fd, chunk_size);
             Some(Ok(0))
@@ -62,7 +62,7 @@ pub(crate) fn try_splice_pump(
 }
 
 /// Perform a single splice call.
-fn splice_once(fd_in: libc::c_int, fd_out: libc::c_int, len: usize) -> Result<usize, io::Error> {
+fn splice_once(fd_in: libc::c_int, fd_out: libc::c_int, len: usize) -> Result<usize, PumpError> {
     let flags = SPLICE_F_MOVE | SPLICE_F_MORE;
 
     // SAFETY: splice is a well-defined syscall; null offsets are valid for pipes.
@@ -78,10 +78,10 @@ fn splice_once(fd_in: libc::c_int, fd_out: libc::c_int, len: usize) -> Result<us
     };
 
     if result < 0 {
-        Err(io::Error::last_os_error())
+        Err(PumpError::from(io::Error::last_os_error()))
     } else {
         // Non-negative ssize_t fits in usize on Linux.
-        usize::try_from(result).map_err(|_| io::Error::other("splice length overflow"))
+        usize::try_from(result).map_err(|_| PumpError::LengthOverflow)
     }
 }
 
@@ -91,7 +91,7 @@ fn splice_loop(
     fd_out: libc::c_int,
     chunk_size: usize,
     initial_bytes: usize,
-) -> Result<u64, io::Error> {
+) -> Result<u64, PumpError> {
     let mut total = initial_bytes as u64;
 
     loop {
@@ -100,7 +100,7 @@ fn splice_loop(
             Ok(n) => {
                 total = total.saturating_add(n as u64);
             }
-            Err(e) if is_nonfatal_write_error(&e) => {
+            Err(e) if e.is_nonfatal_write() => {
                 // Broken pipe: drain reader and return bytes written so far.
                 drain_reader(fd_in, chunk_size);
                 break;
@@ -136,6 +136,6 @@ fn drain_reader(fd_in: libc::c_int, chunk_size: usize) {
 /// Other errors such as `EBADF` (bad file descriptor) or `ESPIPE` (illegal
 /// seek) are configuration or programming errors that should propagate to the
 /// caller rather than being masked by a fallback that will likely also fail.
-fn is_splice_unsupported(err: &io::Error) -> bool {
-    err.raw_os_error() == Some(libc::EINVAL)
+fn is_splice_unsupported(err: &PumpError) -> bool {
+    matches!(err, PumpError::Io(io_err) if io_err.raw_os_error() == Some(libc::EINVAL))
 }
