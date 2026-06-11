@@ -8,7 +8,10 @@ import typing as typ
 
 _logger = logging.getLogger(__name__)
 
-BENCHMARK_PROFILE_VERSION = "pipeline-worker-batched-v1"
+# v2: the Rust extension is benchmarked as a release build and the ratchet
+# compares within-run Rust/Python ratios, so baselines measured under the v1
+# debug-build absolute-time profile are not comparable.
+BENCHMARK_PROFILE_VERSION = "pipeline-worker-release-ratio-v2"
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc

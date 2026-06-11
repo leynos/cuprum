@@ -1,8 +1,11 @@
 """Compare baseline and candidate benchmark runs for Rust regressions.
 
 This module loads dry-run plan JSON and hyperfine throughput JSON from two
-benchmark runs (baseline and candidate), compares Rust scenario means, and
-writes a structured comparison report.
+benchmark runs (baseline and candidate), compares the Rust-to-Python mean
+ratio for each matched scenario pair, and writes a structured comparison
+report. Ratcheting on the within-run ratio rather than absolute wall-clock
+means cancels out runner-speed differences and interpreter startup overhead
+between the two CI jobs that produced the runs.
 """
 
 from __future__ import annotations
@@ -143,13 +146,29 @@ def _validate_backend(backend: str, *, index: int) -> None:
         raise ValueError(msg)
 
 
-def _extract_rust_entry(
+def _comparison_id_for_scenario(*, scenario_name: str, backend: str) -> str:
+    """Return the backend-independent comparison identifier for one scenario."""
+    prefix = f"{backend}-"
+    if not scenario_name.startswith(prefix):
+        msg = (
+            f"scenario name {scenario_name!r} must start with expected backend "
+            f"prefix {prefix!r}"
+        )
+        raise ValueError(msg)
+    comparison_id = scenario_name.removeprefix(prefix)
+    if not comparison_id:
+        msg = f"scenario name {scenario_name!r} must include a comparison label"
+        raise ValueError(msg)
+    return comparison_id
+
+
+def _extract_scenario_entry(
     *,
     index: int,
     scenario_value: object,
     result_value: object,
-) -> tuple[str, float] | None:
-    """Return ``(scenario_name, mean)`` for a Rust entry, or ``None`` for non-Rust."""
+) -> tuple[str, str, float]:
+    """Return ``(comparison_id, backend, mean)`` for one paired entry."""
     scenario = _require_mapping(scenario_value, name=f"scenarios[{index}]")
     result = _require_mapping(result_value, name=f"results[{index}]")
 
@@ -160,48 +179,56 @@ def _extract_rust_entry(
         scenario.get("name"), name=f"scenarios[{index}].name"
     )
     _validate_backend(backend, index=index)
-
-    if backend != "rust":
-        return None
+    comparison_id = _comparison_id_for_scenario(
+        scenario_name=scenario_name,
+        backend=backend,
+    )
 
     mean = _require_positive_float(result.get("mean"), name=f"results[{index}].mean")
-    return scenario_name, mean
+    return comparison_id, backend, mean
 
 
-def _collect_rust_means(
+def _collect_backend_means(
     scenarios: list[object],
     results: list[object],
-) -> dict[str, float]:
-    """Iterate paired scenarios/results and accumulate Rust means.
+) -> dict[str, dict[str, float]]:
+    """Group mean runtimes by comparison identifier and backend.
 
-    Raises ``ValueError`` on duplicate Rust scenario names.
+    Raises ``ValueError`` when a comparison group contains duplicate entries
+    for the same backend.
     """
-    rust_means: dict[str, float] = {}
+    grouped: dict[str, dict[str, float]] = {}
     for index, (scenario_value, result_value) in enumerate(
         zip(scenarios, results, strict=True)
     ):
-        entry = _extract_rust_entry(
+        comparison_id, backend, mean = _extract_scenario_entry(
             index=index,
             scenario_value=scenario_value,
             result_value=result_value,
         )
-        if entry is None:
-            continue
-        scenario_name, mean = entry
-        if scenario_name in rust_means:
-            msg = f"duplicate Rust scenario name: {scenario_name!r}"
+        group = grouped.setdefault(comparison_id, {})
+        if backend in group:
+            msg = (
+                f"comparison group {comparison_id!r} contains duplicate "
+                f"{backend!r} scenario entries"
+            )
             raise ValueError(msg)
-        rust_means[scenario_name] = mean
-    return rust_means
+        group[backend] = mean
+    return grouped
 
 
-def _extract_rust_means(
+def _extract_rust_python_ratios(
     *,
     plan_payload: dict[str, object],
     throughput_payload: dict[str, object],
     context_name: str,
 ) -> dict[str, float]:
-    """Map Rust scenario names to mean runtimes for one benchmark run."""
+    """Map comparison identifiers to within-run Rust/Python mean ratios.
+
+    Each ratio divides the Rust scenario mean by the matched Python scenario
+    mean from the same benchmark run, so runner speed and interpreter startup
+    overhead cancel out of the cross-run comparison.
+    """
     scenarios = _require_list(plan_payload.get("scenarios"), name="scenarios")
     results = _require_list(throughput_payload.get("results"), name="results")
 
@@ -212,28 +239,47 @@ def _extract_rust_means(
         )
         raise ValueError(msg)
 
-    rust_means = _collect_rust_means(scenarios, results)
+    grouped = _collect_backend_means(scenarios, results)
 
-    if not rust_means:
+    ratios: dict[str, float] = {}
+    for comparison_id in sorted(grouped):
+        group = grouped[comparison_id]
+        python_mean = group.get("python")
+        rust_mean = group.get("rust")
+        if python_mean is None:
+            msg = (
+                f"{context_name}: comparison group {comparison_id!r} is missing "
+                "its Python scenario"
+            )
+            raise ValueError(msg)
+        if rust_mean is None:
+            msg = (
+                f"{context_name}: comparison group {comparison_id!r} is missing "
+                "its Rust scenario"
+            )
+            raise ValueError(msg)
+        ratios[comparison_id] = rust_mean / python_mean
+
+    if not ratios:
         msg = f"{context_name}: Rust scenarios are required for ratchet comparison"
         raise ValueError(msg)
 
-    return rust_means
+    return ratios
 
 
-def _validate_matching_rust_scenarios(
+def _validate_matching_comparison_groups(
     *,
-    baseline_rust_means: dict[str, float],
-    candidate_rust_means: dict[str, float],
+    baseline_ratios: dict[str, float],
+    candidate_ratios: dict[str, float],
 ) -> None:
-    """Validate that baseline and candidate have the same Rust scenarios."""
-    baseline_names = set(baseline_rust_means)
-    candidate_names = set(candidate_rust_means)
+    """Validate that baseline and candidate have the same comparison groups."""
+    baseline_names = set(baseline_ratios)
+    candidate_names = set(candidate_ratios)
     if baseline_names != candidate_names:
         missing_from_candidate = sorted(baseline_names - candidate_names)
         missing_from_baseline = sorted(candidate_names - baseline_names)
         msg = (
-            "Rust scenario sets must match across baseline and candidate runs: "
+            "comparison groups must match across baseline and candidate runs: "
             f"missing_from_candidate={missing_from_candidate}, "
             f"missing_from_baseline={missing_from_baseline}"
         )
@@ -246,7 +292,7 @@ def compare_rust_regressions(
     candidate: BenchmarkRunPayload,
     max_regression: float,
 ) -> ComparisonReport:
-    """Compare Rust scenario means and evaluate the regression threshold."""
+    """Compare within-run Rust/Python ratios and evaluate the threshold."""
     validated_max_regression = _require_non_negative_float(
         max_regression,
         name="max_regression",
@@ -256,31 +302,31 @@ def compare_rust_regressions(
         candidate_plan=candidate.plan,
     )
 
-    baseline_rust_means = _extract_rust_means(
+    baseline_ratios = _extract_rust_python_ratios(
         plan_payload=baseline.plan,
         throughput_payload=baseline.throughput,
         context_name=baseline.context_name,
     )
-    candidate_rust_means = _extract_rust_means(
+    candidate_ratios = _extract_rust_python_ratios(
         plan_payload=candidate.plan,
         throughput_payload=candidate.throughput,
         context_name=candidate.context_name,
     )
-    _validate_matching_rust_scenarios(
-        baseline_rust_means=baseline_rust_means,
-        candidate_rust_means=candidate_rust_means,
+    _validate_matching_comparison_groups(
+        baseline_ratios=baseline_ratios,
+        candidate_ratios=candidate_ratios,
     )
 
     comparisons: list[ScenarioComparison] = []
-    for scenario_name in sorted(baseline_rust_means):
-        baseline_mean = baseline_rust_means[scenario_name]
-        candidate_mean = candidate_rust_means[scenario_name]
-        regression_ratio = (candidate_mean - baseline_mean) / baseline_mean
+    for scenario_name in sorted(baseline_ratios):
+        baseline_ratio = baseline_ratios[scenario_name]
+        candidate_ratio = candidate_ratios[scenario_name]
+        regression_ratio = (candidate_ratio - baseline_ratio) / baseline_ratio
         comparisons.append(
             ScenarioComparison(
                 scenario_name=scenario_name,
-                baseline_mean=baseline_mean,
-                candidate_mean=candidate_mean,
+                baseline_ratio=baseline_ratio,
+                candidate_ratio=candidate_ratio,
                 regression_ratio=regression_ratio,
                 max_regression=validated_max_regression,
             ),
@@ -312,7 +358,10 @@ def _parse_args() -> argparse.Namespace:
         "--max-regression",
         type=float,
         default=0.30,
-        help="Maximum allowed slowdown ratio for Rust scenarios.",
+        help=(
+            "Maximum allowed relative increase in the within-run Rust/Python "
+            "mean ratio for any scenario pair."
+        ),
     )
     parser.add_argument("--output", type=pth.Path, required=True)
     return parser.parse_args()

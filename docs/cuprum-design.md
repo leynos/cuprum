@@ -1995,8 +1995,9 @@ Both pathways are tested as first-class implementations:
   `python-small-single-nocb` or `rust-large-multi-cb`).
 
 CI includes a benchmark ratchet job on pull requests and pushes to `main`. The
-job executes smoke-mode throughput benchmarks for the current checkout and
-compares Rust scenario means against the latest successful `main` baseline
+job executes smoke-mode throughput benchmarks for the current checkout (with a
+release build of the Rust extension) and compares each scenario's within-run
+Rust-to-Python mean ratio against the latest successful `main` baseline
 artefact. On pushes to `main`, the new smoke benchmark output is uploaded as
 the next baseline artefact for future runs. When no prior `main` baseline is
 available yet, the job writes a skip report instead of failing the workflow.
@@ -2010,8 +2011,13 @@ the job.
 
 The ratchet rule is:
 
-- regression ratio = `(candidate_mean - baseline_mean) / baseline_mean`
-- fail when regression ratio `> 0.30` for any Rust scenario
+- scenario ratio = `rust_mean / python_mean` within one benchmark run
+- regression ratio = `(candidate_ratio - baseline_ratio) / baseline_ratio`
+- fail when regression ratio `> 0.30` for any scenario pair
+
+Comparing within-run ratios rather than absolute wall-clock means cancels out
+runner-speed differences and interpreter startup overhead between the two CI
+jobs that produced the baseline and candidate runs.
 
 Artefacts uploaded by CI include:
 

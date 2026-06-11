@@ -113,15 +113,17 @@ def _prepare_fixture_bundle(
     candidate_throughput_path = tmp_path / "candidate-throughput.json"
     report_path = tmp_path / "ratchet-report.json"
 
+    # The candidate run doubles the Python mean (a uniformly slower runner);
+    # only the Rust/Python ratio relative to the baseline's 1.0 should count.
     _write_json(path=baseline_plan_path, payload=_plan_payload())
     _write_json(
         path=baseline_throughput_path,
-        payload=_throughput_payload(python_mean=0.2, rust_mean=1.0),
+        payload=_throughput_payload(python_mean=1.0, rust_mean=1.0),
     )
     _write_json(path=candidate_plan_path, payload=_plan_payload())
     _write_json(
         path=candidate_throughput_path,
-        payload=_throughput_payload(python_mean=5.0, rust_mean=candidate_rust_mean),
+        payload=_throughput_payload(python_mean=2.0, rust_mean=candidate_rust_mean),
     )
 
     return {
@@ -138,8 +140,8 @@ def _prepare_fixture_bundle(
     target_fixture="ratchet_fixture_bundle",
 )
 def given_candidate_within_threshold(tmp_path: pth.Path) -> FixtureBundle:
-    """Create fixture JSON files with a 10% Rust slowdown (passes)."""
-    return _prepare_fixture_bundle(tmp_path=tmp_path, candidate_rust_mean=1.10)
+    """Create fixture JSON files with a 10% Rust/Python ratio increase (passes)."""
+    return _prepare_fixture_bundle(tmp_path=tmp_path, candidate_rust_mean=2.20)
 
 
 @given(
@@ -147,8 +149,8 @@ def given_candidate_within_threshold(tmp_path: pth.Path) -> FixtureBundle:
     target_fixture="ratchet_fixture_bundle",
 )
 def given_candidate_exceeds_threshold(tmp_path: pth.Path) -> FixtureBundle:
-    """Create fixture JSON files with a 25% Rust slowdown (fails)."""
-    return _prepare_fixture_bundle(tmp_path=tmp_path, candidate_rust_mean=1.25)
+    """Create fixture JSON files with a 25% Rust/Python ratio increase (fails)."""
+    return _prepare_fixture_bundle(tmp_path=tmp_path, candidate_rust_mean=2.50)
 
 
 @given(

@@ -96,6 +96,9 @@ startup overhead.
 Each worker process executes `worker_iterations` pipeline runs (default: 20).
 Hyperfine therefore measures a batched worker invocation rather than one cold
 pipeline execution, reducing Python interpreter startup noise in the ratchet.
+The ratchet itself compares each scenario's within-run `rust_mean /
+python_mean` ratio between the baseline and candidate runs, so runner-speed
+differences and residual startup overhead cancel out of the comparison.
 Dry-run plans record `benchmark_profile_version` and `worker_iterations`;
 ratchet comparison skips older baseline artefacts whose profile metadata does
 not match the current benchmark shape.

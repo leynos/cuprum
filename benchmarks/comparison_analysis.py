@@ -12,7 +12,11 @@ from benchmarks._validation import (
     _require_mapping,
     _require_non_empty_string,
 )
-from benchmarks.ratchet_rust_performance import _require_positive_float
+from benchmarks.ratchet_rust_performance import (
+    _comparison_id_for_scenario,
+    _require_positive_float,
+    _validate_backend,
+)
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -100,32 +104,6 @@ class _ScenarioEntry:
 
     scenario_name: str
     mean: float
-
-
-def _validate_backend(backend: str, *, index: int) -> None:
-    """Validate that *backend* is one of the supported benchmark backends."""
-    if backend not in {"python", "rust"}:
-        msg = (
-            f"scenarios[{index}].backend must be either 'python' or 'rust', "
-            f"got {backend!r}"
-        )
-        raise ValueError(msg)
-
-
-def _comparison_id_for_scenario(*, scenario_name: str, backend: str) -> str:
-    """Return the backend-independent comparison identifier for one scenario."""
-    prefix = f"{backend}-"
-    if not scenario_name.startswith(prefix):
-        msg = (
-            f"scenario name {scenario_name!r} must start with expected backend "
-            f"prefix {prefix!r}"
-        )
-        raise ValueError(msg)
-    comparison_id = scenario_name.removeprefix(prefix)
-    if not comparison_id:
-        msg = f"scenario name {scenario_name!r} must include a comparison label"
-        raise ValueError(msg)
-    return comparison_id
 
 
 def _build_row(

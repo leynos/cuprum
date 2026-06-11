@@ -178,21 +178,34 @@ def test_load_throughput_rejects_missing_results(tmp_path: pth.Path) -> None:
 
 
 def test_compare_rust_regressions_passes_within_threshold() -> None:
-    """A Rust slowdown at or under 10% should pass the ratchet."""
+    """A Rust/Python ratio increase at or under 10% should pass the ratchet."""
     report = _run_comparison(
         baseline=_RunMeans(python=0.50, rust=1.00),
-        candidate=_RunMeans(python=1.50, rust=1.10),
+        candidate=_RunMeans(python=0.50, rust=1.10),
     )
 
     assert report.passed is True
     assert report.rust_scenarios_compared == 1
     assert len(report.comparisons) == 1
-    assert report.comparisons[0].scenario_name == "rust-small-single-nocb"
+    assert report.comparisons[0].scenario_name == "small-single-nocb"
+    assert report.comparisons[0].baseline_ratio == pytest.approx(2.0)
+    assert report.comparisons[0].candidate_ratio == pytest.approx(2.2)
     assert report.comparisons[0].regression_ratio == pytest.approx(0.10)
 
 
+def test_compare_rust_regressions_ignores_runner_speed_differences() -> None:
+    """Uniform runner slowdowns cancel out of the within-run ratio."""
+    report = _run_comparison(
+        baseline=_RunMeans(python=0.50, rust=1.00),
+        candidate=_RunMeans(python=1.00, rust=2.00),
+    )
+
+    assert report.passed is True
+    assert report.comparisons[0].regression_ratio == pytest.approx(0.0)
+
+
 def test_compare_rust_regressions_fails_beyond_threshold() -> None:
-    """A Rust slowdown above 10% should fail the ratchet."""
+    """A Rust/Python ratio increase above 10% should fail the ratchet."""
     report = _run_comparison(
         baseline=_RunMeans(python=0.25, rust=1.00),
         candidate=_RunMeans(python=0.25, rust=1.25),
@@ -201,7 +214,7 @@ def test_compare_rust_regressions_fails_beyond_threshold() -> None:
     assert report.passed is False
     assert report.worst_regression_ratio == pytest.approx(0.25)
     assert len(report.regressions) == 1
-    assert report.regressions[0].scenario_name == "rust-small-single-nocb"
+    assert report.regressions[0].scenario_name == "small-single-nocb"
 
 
 def test_compare_rust_regressions_rejects_result_count_mismatch() -> None:
@@ -222,6 +235,40 @@ def test_compare_rust_regressions_rejects_result_count_mismatch() -> None:
             candidate=BenchmarkRunPayload(
                 plan=_plan_payload(),
                 throughput=candidate_throughput,
+                context_name="candidate",
+            ),
+            max_regression=0.10,
+        )
+
+
+def test_compare_rust_regressions_rejects_missing_python_scenarios() -> None:
+    """Each Rust scenario must have a matched Python scenario for its ratio."""
+    rust_only_plan = {
+        "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+        "dry_run": True,
+        "rust_available": True,
+        "worker_iterations": 20,
+        "command": ["hyperfine", "placeholder"],
+        "scenarios": [
+            _scenario_payload(name="rust-small-single-nocb", backend="rust"),
+        ],
+    }
+    rust_only_throughput = {
+        "results": [
+            {"command": "rust-run", "mean": 1.0},
+        ],
+    }
+
+    with pytest.raises(ValueError, match="missing its Python scenario"):
+        compare_rust_regressions(
+            baseline=BenchmarkRunPayload(
+                plan=rust_only_plan,
+                throughput=rust_only_throughput,
+                context_name="baseline",
+            ),
+            candidate=BenchmarkRunPayload(
+                plan=rust_only_plan,
+                throughput=rust_only_throughput,
                 context_name="candidate",
             ),
             max_regression=0.10,
@@ -314,7 +361,7 @@ def test_compare_rust_regressions_rejects_duplicate_rust_scenario_names() -> Non
         ],
     }
 
-    with pytest.raises(ValueError, match="duplicate Rust scenario name"):
+    with pytest.raises(ValueError, match="duplicate 'rust' scenario entries"):
         compare_rust_regressions(
             baseline=BenchmarkRunPayload(
                 plan=duplicate_plan,
