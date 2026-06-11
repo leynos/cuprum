@@ -37,53 +37,51 @@ contracts stay aligned.
 
 ## Environment overlay resolution
 
-The user-facing `env(...)` context manager and the related `ScopeConfig`
-field carry an *overlay-only* mapping that is layered on top of the live
-`os.environ` at subprocess spawn time. The implementation sits in
-`cuprum/context.py` and is built on three cooperating helpers:
+The user-facing `env(...)` context manager and the related `ScopeConfig` field
+carry an *overlay-only* mapping that is layered on top of the live `os.environ`
+at subprocess spawn time. The implementation sits in `cuprum/context.py` and is
+built on three cooperating helpers:
 
 - `merge_env_overlays(parent, child)` (public) returns an immutable
   `MappingProxyType` whose entries are `parent` updated by `child`. Either
-  layer may be `None`, in which case the result is whichever layer is set
-  (or `None`); empty mappings are treated as "no contribution".
+  layer may be `None`, in which case the result is whichever layer is set (or
+  `None`); empty mappings are treated as "no contribution".
 - `resolve_env(*layers)` (public) returns `os.environ.copy()` updated by
-  every non-empty layer, in left-to-right order. When every layer is
-  `None` or empty, the helper returns `None` so the caller can pass it
-  straight through to `subprocess.Popen` to mean *inherit the parent
-  environment unchanged* — this is also the path that avoids the
-  redundant `os.environ` copy.
+  every non-empty layer, in left-to-right order. When every layer is `None` or
+  empty, the helper returns `None` so the caller can pass it straight through to
+  `subprocess.Popen` to mean *inherit the parent environment unchanged* — this
+  is also the path that avoids the redundant `os.environ` copy.
 - `_coerce_env_overlay(overlay)` (internal) wraps any caller-supplied
-  mapping in `MappingProxyType(dict(overlay))` so the stored overlay
-  cannot be mutated through the original reference.
+  mapping in `MappingProxyType(dict(overlay))` so the stored overlay cannot be
+  mutated through the original reference.
 
 The split between `merge_env_overlays` and `resolve_env` is deliberate.
-`merge_env_overlays` is the overlay-only merge used by observation
-tagging (`_StageObservation.env_overlay` and the `ExecEvent.env` field) —
-it must not include a snapshot of `os.environ`, otherwise structured
-event logs would carry the entire parent process environment on every
-emission. `resolve_env` is the spawn-time merge that *does* include
-`os.environ`; it is called from `_process_lifecycle._merge_env` for both
-the single-command and pipeline paths.
+`merge_env_overlays` is the overlay-only merge used by observation tagging
+(`_StageObservation.env_overlay` and the `ExecEvent.env` field) — it must not
+include a snapshot of `os.environ`, otherwise structured event logs would carry
+the entire parent process environment on every emission. `resolve_env` is the
+spawn-time merge that *does* include `os.environ`; it is called from
+`_process_lifecycle._merge_env` for both the single-command and pipeline paths.
 
 The live-view contract from issue #101 is enforced at one place only:
 `resolve_env` reads `os.environ` at call time, not when the overlay is
-registered. Any code that touches the spawn path must therefore route
-through `resolve_env` (directly or via `_merge_env`) — never via a
-captured snapshot of `os.environ` at registration time.
+registered. Any code that touches the spawn path must therefore route through
+`resolve_env` (directly or via `_merge_env`) — never via a captured snapshot of
+`os.environ` at registration time.
 
-The `CuprumContext.env_overlay` field is a `MappingProxyType` (or
-`None`) and is itself part of the immutable context dataclass.
+The `CuprumContext.env_overlay` field is a `MappingProxyType` (or `None`) and
+is itself part of the immutable context dataclass.
 `scoped(ScopeConfig(env_overlay=...))` and `env(...)` both build a new
-`CuprumContext` via `with_env_overlay`, capture the resulting
-`ContextVar` token, and reset it on scope exit; nested scopes therefore
-behave as a stack and are restricted by the same LIFO detach rule as
-`AllowRegistration` and `HookRegistration`.
+`CuprumContext` via `with_env_overlay`, capture the resulting `ContextVar`
+token, and reset it on scope exit; nested scopes therefore behave as a stack
+and are restricted by the same LIFO detach rule as `AllowRegistration` and
+`HookRegistration`.
 
 Property tests for the merge and resolve invariants live in
 `cuprum/unittests/test_env_context_properties.py`. They use
-[Hypothesis](https://hypothesis.readthedocs.io/) to exercise arbitrary
-layer counts, payload contents, and overlap patterns, and to confirm
-that the helpers never mutate caller-supplied mappings.
+[Hypothesis](https://hypothesis.readthedocs.io/) to exercise arbitrary layer
+counts, payload contents, and overlap patterns, and to confirm that the helpers
+never mutate caller-supplied mappings.
 
 ## Pipeline throughput benchmark configuration
 
@@ -98,9 +96,9 @@ startup overhead.
 Each worker process executes `worker_iterations` pipeline runs (default: 20).
 Hyperfine therefore measures a batched worker invocation rather than one cold
 pipeline execution, reducing Python interpreter startup noise in the ratchet.
-Dry-run plans record `benchmark_profile_version` and
-`worker_iterations`; ratchet comparison skips older baseline artefacts whose
-profile metadata does not match the current benchmark shape.
+Dry-run plans record `benchmark_profile_version` and `worker_iterations`;
+ratchet comparison skips older baseline artefacts whose profile metadata does
+not match the current benchmark shape.
 
 The remaining fields follow the benchmark plan: `output_path` receives
 hyperfine JSON or dry-run plan JSON, `worker_path` points at the worker module,
@@ -296,28 +294,41 @@ methods:
 
 ### Worker test suite layout
 
-The worker test suite is split across three focused modules so that each file
-covers one boundary of behaviour:
+The worker test suite is split across focused modules so that each file covers
+one boundary of behaviour:
 
 - `cuprum/unittests/test_tee_profile_worker_core.py` covers parent-side consume
   hot-path execution, result accounting, and snapshotted worker output.
 - `cuprum/unittests/test_tee_profile_worker_cli.py` covers CLI invocation, the
   JSON payload shape, and `TeeProfileWorkerConfig` validation errors.
-- `cuprum/unittests/test_tee_profile_worker_concurrency.py` covers reentrancy,
-  lock serialization, and concurrent-worker race-freedom for
-  `_EnvBackendSelector`.
+- The `_EnvBackendSelector` concurrency coverage is itself split across four
+  modules sharing one scaffolding module, keeping each file's responsibility
+  count within the cohesion budget:
+  - `cuprum/unittests/test_tee_profile_worker_lock_reentrancy.py` — the
+    `_BACKEND_LOCK` `RLock` reentrancy guarantee.
+  - `cuprum/unittests/test_tee_profile_worker_selector_reentrancy.py` —
+    same-thread re-entrant selector rejection, recovery, and the structured
+    warning log (snapshot).
+  - `cuprum/unittests/test_tee_profile_worker_concurrency.py` — concurrent
+    `run_tee_profile_worker` race-freedom across backend pairs.
+  - `cuprum/unittests/test_tee_profile_worker_env_preservation.py` —
+    `CUPRUM_STREAM_BACKEND` preservation under concurrent, interleaved access.
+  - `cuprum/unittests/_tee_profile_worker_test_helpers.py` — shared selectors,
+    worker runners, thread helpers, and Hypothesis strategies imported by the
+    four test modules.
 
-Keeping the three concerns in separate files makes the coverage boundary
-explicit: a change to command construction touches the core module, a change to
-the CLI contract touches the CLI module, and a change to backend locking or the
-selector state machine touches the concurrency module.
+Keeping the concerns in separate files makes the coverage boundary explicit: a
+change to command construction touches the core module, a change to the CLI
+contract touches the CLI module, and a change to backend locking or the
+selector state machine touches one of the four concurrency modules (with shared
+scaffolding in the helpers module).
 
 ### `_EnvBackendSelector` concurrency invariants
 
-`test_tee_profile_worker_concurrency.py` verifies the `_EnvBackendSelector`
-state machine that serializes process-local backend selection. The selector is
-backed by a process-wide reentrant lock (`_BACKEND_LOCK`) and a thread-local
-reentrancy guard; the tests assert the following invariants:
+The four concurrency modules verify the `_EnvBackendSelector` state machine
+that serializes process-local backend selection. The selector is backed by a
+process-wide reentrant lock (`_BACKEND_LOCK`) and a thread-local reentrancy
+guard; the tests assert the following invariants:
 
 1. `_BACKEND_LOCK` is held for the full duration of the selection context.
 2. `os.environ["CUPRUM_STREAM_BACKEND"]` is restored to its previous value on
@@ -329,8 +340,7 @@ These invariants mirror the state transitions a threading-level model checker
 would explore. Candidate full model-checking routes include `pynusmv` and
 translating the selector state machine to Promela for SPIN (Simple Promela
 Interpreter). Full tool integration is out of scope; the explicit checkpoint
-tests keep the observable states aligned with the model such tools would
-verify.
+tests keep the observable states aligned with the model such tools would verify.
 
 #### Hypothesis property-based generation
 
@@ -371,10 +381,13 @@ schedule using `threading.Event` checkpoints:
   the serialized observation sequence `["python", None]`.
 
 When changing `_EnvBackendSelector`, `_BACKEND_LOCK`, or the reentrancy guard,
-run:
+run the four concurrency modules together:
 
 ```bash
-uv run pytest cuprum/unittests/test_tee_profile_worker_concurrency.py
+uv run pytest cuprum/unittests/test_tee_profile_worker_lock_reentrancy.py \
+  cuprum/unittests/test_tee_profile_worker_selector_reentrancy.py \
+  cuprum/unittests/test_tee_profile_worker_concurrency.py \
+  cuprum/unittests/test_tee_profile_worker_env_preservation.py
 ```
 
 ## Folded-stack summarizer (`benchmarks/summarize_folded.py`)
