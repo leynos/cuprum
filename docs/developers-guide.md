@@ -301,31 +301,31 @@ one boundary of behaviour:
   hot-path execution, result accounting, and snapshotted worker output.
 - `cuprum/unittests/test_tee_profile_worker_cli.py` covers CLI invocation, the
   JSON payload shape, and `TeeProfileWorkerConfig` validation errors.
-- The `_EnvBackendSelector` concurrency coverage is itself split across four
-  modules sharing one scaffolding module, keeping each file's responsibility
-  count within the cohesion budget:
-  - `cuprum/unittests/test_tee_profile_worker_lock_reentrancy.py` — the
-    `_BACKEND_LOCK` `RLock` reentrancy guarantee.
-  - `cuprum/unittests/test_tee_profile_worker_selector_reentrancy.py` —
-    same-thread re-entrant selector rejection, recovery, and the structured
-    warning log (snapshot).
-  - `cuprum/unittests/test_tee_profile_worker_concurrency.py` — concurrent
-    `run_tee_profile_worker` race-freedom across backend pairs.
+- The `_EnvBackendSelector` concurrency coverage is itself split across three
+  modules sharing common scaffolding, keeping each file's responsibility count
+  within the cohesion budget:
+  - `cuprum/unittests/test_tee_profile_worker_selector_reentrancy.py` — the
+    `_BACKEND_LOCK` `RLock` reentrancy guarantee, plus same-thread re-entrant
+    selector rejection, recovery, and the structured warning log (snapshot).
+  - `cuprum/unittests/test_tee_profile_worker_concurrent_workers.py` —
+    concurrent `run_tee_profile_worker` race-freedom across backend pairs.
   - `cuprum/unittests/test_tee_profile_worker_env_preservation.py` —
     `CUPRUM_STREAM_BACKEND` preservation under concurrent, interleaved access.
-  - `cuprum/unittests/_tee_profile_worker_test_helpers.py` — shared selectors,
-    worker runners, thread helpers, and Hypothesis strategies imported by the
-    four test modules.
+  - `cuprum/unittests/_tee_profile_worker_test_helpers.py` — the instrumented
+    lock, coordinating backend selectors, and race harness used by the
+    env-preservation tests; timeout constants, backend-availability helpers,
+    Hypothesis backend strategies, and the thread join/assert helper live in
+    `cuprum/unittests/conftest.py`.
 
 Keeping the concerns in separate files makes the coverage boundary explicit: a
 change to command construction touches the core module, a change to the CLI
 contract touches the CLI module, and a change to backend locking or the
-selector state machine touches one of the four concurrency modules (with shared
-scaffolding in the helpers module).
+selector state machine touches one of the three concurrency modules (with
+shared scaffolding in the helpers module and `conftest.py`).
 
 ### `_EnvBackendSelector` concurrency invariants
 
-The four concurrency modules verify the `_EnvBackendSelector` state machine
+The three concurrency modules verify the `_EnvBackendSelector` state machine
 that serializes process-local backend selection. The selector is backed by a
 process-wide reentrant lock (`_BACKEND_LOCK`) and a thread-local reentrancy
 guard; the tests assert the following invariants:
@@ -381,12 +381,11 @@ schedule using `threading.Event` checkpoints:
   the serialized observation sequence `["python", None]`.
 
 When changing `_EnvBackendSelector`, `_BACKEND_LOCK`, or the reentrancy guard,
-run the four concurrency modules together:
+run the three concurrency modules together:
 
 ```bash
-uv run pytest cuprum/unittests/test_tee_profile_worker_lock_reentrancy.py \
-  cuprum/unittests/test_tee_profile_worker_selector_reentrancy.py \
-  cuprum/unittests/test_tee_profile_worker_concurrency.py \
+uv run pytest cuprum/unittests/test_tee_profile_worker_selector_reentrancy.py \
+  cuprum/unittests/test_tee_profile_worker_concurrent_workers.py \
   cuprum/unittests/test_tee_profile_worker_env_preservation.py
 ```
 
