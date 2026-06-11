@@ -26,9 +26,11 @@ class _SequenceClock:
     """Deterministic clock that returns configured values in order."""
 
     def __init__(self, values: list[float]) -> None:
+        """Store the deterministic timestamp sequence for later calls."""
         self._values = iter(values)
 
     def __call__(self) -> float:
+        """Return the next configured timestamp."""
         return next(self._values)
 
 
@@ -145,6 +147,7 @@ def test_metrics_are_thread_local() -> None:
     snapshots: dict[str, tee_profile_worker._SelectorMetrics] = {}
 
     def record_active_thread_metrics() -> None:
+        """Populate metrics on a non-main thread for isolation checks."""
         metrics_state.reset()
         metrics_state.add_lock_wait(0.5)
         metrics_state.increment_rejections()

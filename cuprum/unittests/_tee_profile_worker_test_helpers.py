@@ -147,6 +147,11 @@ class _BaseBackendSelector(abc.ABC):
         """Return an instrumented backend-selection context manager."""
         return self._activate(backend)
 
+    @property
+    def metrics_state(self) -> tee_profile_worker._MetricsState:
+        """Return the delegate metrics state used by worker result assembly."""
+        return self._delegate.metrics_state
+
     @abc.abstractmethod
     @contextlib.contextmanager
     def _activate(
