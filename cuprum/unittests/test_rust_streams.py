@@ -308,3 +308,37 @@ class TestRustConsumeStream:
             _safe_close(write_fd)
             with pytest.raises(ValueError, match="buffer_size"):
                 rust_streams.rust_consume_stream(read_fd, buffer_size=0)
+
+
+def test_rust_consume_stream_is_annotated_not_integrated() -> None:
+    """``rust_consume_stream`` is documented as implemented-but-not-integrated.
+
+    ADR-002 defers consume-side dispatch to evidence-gated Phase 2 work
+    (issue #127). This guard keeps the annotation and reality in lockstep:
+    the docstring must carry the not-integrated marker, and no production
+    module may reference the symbol. Wiring a ``_consume_stream_dispatch``
+    later must remove both the marker and this guard together.
+    """
+    import pathlib
+
+    from cuprum import _streams_rs
+
+    docstring = _streams_rs.rust_consume_stream.__doc__ or ""
+    assert "not yet integrated" in docstring, (
+        "rust_consume_stream must declare its not-integrated status"
+    )
+
+    module_file = _streams_rs.__file__
+    assert module_file is not None, "_streams_rs must be a file-backed module"
+    package_root = pathlib.Path(module_file).parent
+    referencing = sorted(
+        path.name
+        for path in package_root.rglob("*.py")
+        if "unittests" not in path.parts
+        and path.name != "_streams_rs.py"
+        and "rust_consume_stream" in path.read_text(encoding="utf-8")
+    )
+    assert referencing == [], (
+        "production code now references rust_consume_stream; revisit the "
+        f"ADR-002 Phase 2 decision and this guard: {referencing}"
+    )

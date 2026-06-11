@@ -3,6 +3,14 @@
 This module provides a thin wrapper around the optional Rust extension. Import
 or use it only when the Rust backend is installed.
 
+Integration status: ``rust_pump_stream`` is wired into production through
+``_pump_stream_dispatch`` (``cuprum/_pipeline_streams.py``).
+``rust_consume_stream`` is **implemented but not yet integrated** — no
+production code routes a consume through it; every consume currently uses the
+pure-Python ``_consume_stream``. Consume-side dispatch is deliberately
+deferred, evidence-gated work tracked as Phase 2 of ADR-002
+(``docs/adr-002-additional-rust-components.md``).
+
 Example
 -------
 bytes_written = rust_pump_stream(reader_fd, writer_fd, buffer_size=65536)
@@ -96,6 +104,13 @@ def rust_consume_stream(
 
     This helper always decodes UTF-8 and replaces invalid sequences with the
     Unicode replacement character.
+
+    .. note:: Implemented but not yet integrated. No production code path
+       routes a consume through this function; the pump side has a
+       ``_pump_stream_dispatch`` counterpart, but consume dispatch is
+       deferred, evidence-gated work (ADR-002, Phase 2). The function is
+       exercised directly by tests and remains available for downstream
+       experimentation.
 
     Parameters
     ----------
