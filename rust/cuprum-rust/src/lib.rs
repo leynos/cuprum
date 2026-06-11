@@ -3,8 +3,6 @@
 //! This crate exposes a `PyO3` module providing stream pump and consume
 //! helpers alongside an availability check for the Rust backend.
 
-use std::io;
-
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -17,11 +15,13 @@ use std::fs::File;
 #[cfg(windows)]
 use std::os::windows::io::{FromRawHandle, RawHandle};
 
+mod errors;
 mod io_utils;
 #[cfg(target_os = "linux")]
 mod splice;
 mod utf8;
 
+use errors::PumpError;
 use io_utils::{StreamHandle, handle_write_result, read_stream};
 use utf8::{FinalChunk, decode_utf8_replace};
 
@@ -152,7 +152,7 @@ fn pump_stream(
     reader_fd: ReaderFd,
     writer_fd: WriterFd,
     buffer_size: BufferSize,
-) -> Result<u64, io::Error> {
+) -> Result<u64, PumpError> {
     let mut reader = stream_from_raw(reader_fd.0);
     let mut writer = stream_from_raw(writer_fd.0);
     let result = pump_stream_files(&mut reader, &mut writer, buffer_size);
@@ -163,7 +163,7 @@ fn pump_stream(
 }
 
 /// Consume bytes from a file descriptor and decode UTF-8 with replacement.
-fn consume_stream(reader_fd: ReaderFd, buffer_size: BufferSize) -> Result<String, io::Error> {
+fn consume_stream(reader_fd: ReaderFd, buffer_size: BufferSize) -> Result<String, PumpError> {
     let mut reader = stream_from_raw(reader_fd.0);
     let result = consume_stream_files(&mut reader, buffer_size);
     // The caller owns the reader FD; avoid closing it here.
@@ -196,7 +196,7 @@ fn pump_stream_files(
     reader: &mut StreamHandle,
     writer: &mut StreamHandle,
     buffer_size: BufferSize,
-) -> Result<u64, io::Error> {
+) -> Result<u64, PumpError> {
     // On Linux, attempt zero-copy splice first.
     #[cfg(target_os = "linux")]
     if let Some(result) = splice::try_splice_pump(reader, writer, buffer_size.value()) {
@@ -215,7 +215,7 @@ fn pump_stream_files_readwrite(
     reader: &mut StreamHandle,
     writer: &mut StreamHandle,
     buffer_size: BufferSize,
-) -> Result<u64, io::Error> {
+) -> Result<u64, PumpError> {
     let mut buffer = vec![0_u8; buffer_size.value()];
     let mut total_written = 0_u64;
     let mut writer_open = true;
@@ -231,7 +231,7 @@ fn pump_stream_files_readwrite(
 
         let chunk = buffer
             .get(..read_len)
-            .ok_or_else(|| io::Error::other("read length exceeded buffer"))?;
+            .ok_or(PumpError::BufferRangeExceeded)?;
 
         writer_open = handle_write_result(writer, chunk, &mut total_written)?;
     }
@@ -242,7 +242,7 @@ fn pump_stream_files_readwrite(
 fn consume_stream_files(
     reader: &mut StreamHandle,
     buffer_size: BufferSize,
-) -> Result<String, io::Error> {
+) -> Result<String, PumpError> {
     let mut buffer = vec![0_u8; buffer_size.value()];
     let mut pending: Vec<u8> = Vec::new();
     let mut output = String::new();
@@ -254,7 +254,7 @@ fn consume_stream_files(
         }
         let chunk = buffer
             .get(..read_len)
-            .ok_or_else(|| io::Error::other("read length exceeded buffer"))?;
+            .ok_or(PumpError::BufferRangeExceeded)?;
         pending.extend_from_slice(chunk);
         decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(false));
     }
