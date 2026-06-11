@@ -241,11 +241,13 @@ class TracingHook:
 
     - ``cuprum.program``: The program being executed
     - ``cuprum.argv``: Full argument vector
-    - ``cuprum.pid``: Process ID
+    - ``cuprum.pid``: Process ID (when available)
+    - ``cuprum.cwd``: Working directory (when set)
     - ``cuprum.exit_code``: Exit code (set on exit)
     - ``cuprum.duration_s``: Duration in seconds (set on exit)
-    - ``cuprum.project``: Project name from tags
-    - ``cuprum.pipeline_stage_index``: Pipeline stage index (if applicable)
+    - ``cuprum.project``: Project name from tags (when present)
+    - ``cuprum.pipeline_stage_index``: Pipeline stage index (when present)
+    - ``cuprum.pipeline_stages``: Total pipeline stage count (when present)
 
     Parameters
     ----------
@@ -292,7 +294,16 @@ class TracingHook:
                 self._handle_exit(event)
 
     def _handle_start(self, event: ExecEvent) -> None:
-        """Start a new span for command execution."""
+        """Start a new span for command execution.
+
+        Spans are keyed on ``event.pid``. PIDs are unique among *running*
+        processes, so a live collision cannot occur; however, a recycled PID
+        following a missed or out-of-order ``exit`` event would otherwise
+        overwrite — and silently orphan — the previous, still-open span. Guard
+        against that by ending any still-open span for the PID before
+        installing the new one, so every span is terminated exactly once and
+        later output/exit events attach to the correct execution.
+        """
         if event.pid is None:
             return
 
@@ -301,7 +312,14 @@ class TracingHook:
         span = self._tracer.start_span(span_name, attributes)
 
         with self._lock:
+            stale = self._active_spans.get(event.pid)
             self._active_spans[event.pid] = span
+
+        if stale is not None:
+            # A span for this PID was never closed (missed/out-of-order exit).
+            # End it as unknown rather than leaking it on the recycled PID.
+            stale.set_status(ok=False)
+            stale.end()
 
     def _handle_output(self, event: ExecEvent) -> None:
         """Record output as a span event."""

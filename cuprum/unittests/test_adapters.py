@@ -664,3 +664,91 @@ class TestTracingHook:
         assert span.attributes.get("cuprum.pipeline_stage_index") == 1
         assert span.attributes.get("cuprum.pipeline_stages") == 3
         assert span.attributes.get("cuprum.project") == "pipeline-test"
+
+    @staticmethod
+    def _exec_event(
+        phase: str,
+        pid: int,
+        *,
+        exit_code: int | None = None,
+        duration_s: float | None = None,
+    ) -> ExecEvent:
+        """Build a minimal ``ExecEvent`` for direct hook dispatch."""
+        return ExecEvent(
+            phase=typ.cast("typ.Any", phase),
+            program=Program("cat"),
+            argv=("cat",),
+            cwd=None,
+            env=None,
+            pid=pid,
+            timestamp=0.0,
+            line=None,
+            exit_code=exit_code,
+            duration_s=duration_s,
+            tags={},
+        )
+
+    def test_recycled_pid_does_not_orphan_previous_span(self) -> None:
+        """A recycled PID after a missed exit closes the stale span."""
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+
+        # First execution starts but its exit event is missed (e.g. dropped).
+        hook(self._exec_event("start", pid=1234))
+        # The PID is recycled by a second execution before the first closed.
+        hook(self._exec_event("start", pid=1234))
+        # The second execution exits cleanly.
+        hook(self._exec_event("exit", pid=1234, exit_code=0, duration_s=0.1))
+
+        assert len(tracer.spans) == 2, "each execution must produce its own span"
+        assert all(span.ended for span in tracer.spans), (
+            "no span may be left open/orphaned when a PID is recycled"
+        )
+        stale, current = tracer.spans
+        assert stale.status_ok is False, (
+            "the span with the missed exit must be ended as unknown/failed"
+        )
+        assert current.status_ok is True, (
+            "the recycled-PID execution must retain its own clean exit status"
+        )
+
+    def test_documented_attributes_match_build_attributes(self) -> None:
+        """The class docstring lists exactly the attributes the code can emit.
+
+        Keeps the documented span-attribute contract in lockstep with
+        ``_build_attributes`` plus the exit-time attributes, so the two cannot
+        drift (the omission of ``cuprum.cwd`` / ``cuprum.pipeline_stages`` that
+        motivated issue #122).
+        """
+        import re
+
+        documented = set(
+            re.findall(r"``(cuprum\.[a-z_]+)``", TracingHook.__doc__ or ""),
+        )
+
+        # Every attribute the hook can attach: start-time (from
+        # _build_attributes over a fully-populated event) plus exit-time.
+        start_event = ExecEvent(
+            phase="start",
+            program=Program("cat"),
+            argv=("cat",),
+            cwd=Path("/srv/work"),
+            env=None,
+            pid=4321,
+            timestamp=0.0,
+            line=None,
+            exit_code=None,
+            duration_s=None,
+            tags={
+                "project": "doc-lockstep",
+                "pipeline_stage_index": 0,
+                "pipeline_stages": 2,
+            },
+        )
+        emitted = set(TracingHook._build_attributes(start_event))
+        emitted |= {"cuprum.exit_code", "cuprum.duration_s"}
+
+        assert documented == emitted, (
+            "TracingHook docstring attributes must match the emitted set; "
+            f"documented-only={documented - emitted}, code-only={emitted - documented}"
+        )
