@@ -302,6 +302,14 @@ Route eligible capture-only streams through `rust_consume_stream()`. Add unit,
 behavioural, and property tests that prove parity for stdout, stderr, empty
 streams, invalid UTF-8, large payloads, and forced Python fallback.
 
+**Status (issue #127):** deliberately deferred until the Phase 1 measurement
+schema lands. `rust_consume_stream()` ships in the wheel and is exercised by
+tests, but no production code routes a consume through it; the symbol is
+annotated as "implemented but not yet integrated" in `cuprum/_streams_rs.py`
+and the users' guide so it is not mistaken for a wired bridge. A guard test
+(`cuprum/unittests/test_rust_streams.py`) fails if production code starts
+referencing the symbol without revisiting this decision.
+
 ### Phase 3: Raw sink echo and tee helper
 
 Add the Rust raw sink helper behind capability checks. Extend the profiling
