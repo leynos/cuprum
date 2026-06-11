@@ -82,13 +82,33 @@ class ConcurrentResult:
         may be a subset of the originally submitted commands.
     failures:
         Indices into ``results`` for commands that exited non-zero, in
-        ascending order. Note: these are indices into the ``results``
-        tuple, not the original submission indices.
+        ascending order. These are positions within the (possibly compacted)
+        ``results`` tuple, **not** original submission positions; in fail-fast
+        mode ``results`` omits cancelled commands, so a ``failures`` index does
+        not equal the submitted command's position. Use
+        :attr:`failure_submission_indices` for the submission-stable mapping.
+    submission_indices:
+        Original submission index of each entry in ``results``, parallel to it.
+        In collect-all mode this is the identity ``(0, 1, …, n-1)``; in
+        fail-fast mode it lists the submission positions of the completed
+        commands. Lets callers map any result — or failure — back to the
+        command they submitted, uniformly across both execution modes. Defaults
+        to the identity sequence when not supplied.
 
     """
 
     results: tuple[CommandResult, ...]
     failures: tuple[int, ...] = ()
+    submission_indices: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Default ``submission_indices`` to the identity sequence."""
+        if not self.submission_indices and self.results:
+            object.__setattr__(
+                self,
+                "submission_indices",
+                tuple(range(len(self.results))),
+            )
 
     @property
     def ok(self) -> bool:
@@ -101,6 +121,16 @@ class ConcurrentResult:
         if not self.failures:
             return None
         return self.results[self.failures[0]]
+
+    @property
+    def failure_submission_indices(self) -> tuple[int, ...]:
+        """Original submission indices of failed commands, ascending.
+
+        Unlike :attr:`failures` (positions within the compacted ``results``),
+        these are stable across both collect-all and fail-fast modes: each
+        value is the position at which the failing command was submitted.
+        """
+        return tuple(self.submission_indices[index] for index in self.failures)
 
 
 class _FirstFailureError(Exception):
@@ -124,7 +154,41 @@ async def _run_with_semaphore(
             return await cmd.run(output=config.output, context=config.context)
     return await cmd.run(output=config.output, context=config.context)
 
+def _collect_results_and_failures(
+    indexed_results: cabc.Iterable[tuple[int, CommandResult | None]],
+) -> tuple[list[CommandResult], list[int], list[int]]:
+    """Compact completed results, recording submission and failure indices.
 
+    This is the single canonical "append result, record index if not ok" loop
+    shared by the collect-all and fail-fast paths, so the two cannot drift.
+
+    Parameters
+    ----------
+    indexed_results:
+        Pairs of ``(submission_index, result)``. A ``None`` result marks a
+        command that was cancelled (fail-fast) and is skipped.
+
+    Returns
+    -------
+    tuple[list[CommandResult], list[int], list[int]]
+        ``(results, submission_indices, failures)`` where ``results`` holds the
+        completed commands in encounter order, ``submission_indices`` is the
+        original submission index of each entry in ``results``, and
+        ``failures`` holds positions within ``results`` for non-zero exits, in
+        ascending order.
+    """
+    results: list[CommandResult] = []
+    submission_indices: list[int] = []
+    failures: list[int] = []
+    for submission_index, result in indexed_results:
+        if result is None:
+            continue
+        position = len(results)
+        results.append(result)
+        submission_indices.append(submission_index)
+        if not result.ok:
+            failures.append(position)
+    return results, submission_indices, failures
 async def _run_collect_all(
     commands: cabc.Sequence[SafeCmd],
     semaphore: asyncio.Semaphore | None,
@@ -139,44 +203,45 @@ async def _run_collect_all(
     # Gather results, capturing exceptions
     raw_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Process results and identify failures
-    results: list[CommandResult] = []
-    failures: list[int] = []
-
     # Re-raise the first BaseException to propagate critical exceptions like
     # CancelledError immediately. This is an intentional trade-off: any
     # subsequent exceptions from other tasks are dropped and not preserved
     # for diagnostics, but it ensures cancellation signals propagate promptly.
-    for idx, raw in enumerate(raw_results):
+    completed: list[CommandResult | None] = []
+    for raw in raw_results:
         if isinstance(raw, BaseException):
             raise raw
-        results.append(raw)
-        if not raw.ok:
-            failures.append(idx)
+        completed.append(raw)
 
+    results, submission_indices, failures = _collect_results_and_failures(
+        enumerate(completed),
+    )
     return ConcurrentResult(
         results=tuple(results),
         failures=tuple(failures),
+        submission_indices=tuple(submission_indices),
     )
 
 
 def _build_final_results(
     results: list[CommandResult | None],
-) -> tuple[list[CommandResult], list[int]]:
-    """Build final results and remapped failure indices from partial results.
+) -> tuple[list[CommandResult], list[int], list[int]]:
+    """Build final results, submission indices, and failures from partial results.
 
     Parameters
     ----------
     results:
-        List of CommandResult or None for cancelled commands.
+        List of CommandResult or None for cancelled commands, indexed by
+        original submission position.
 
     Returns
     -------
-    tuple[list[CommandResult], list[int]]
-        Tuple of (final_results, remapped_failures) where final_results contains
-        only completed commands and remapped_failures contains indices into
-        final_results (not original positions) for failed commands, in ascending
-        order.
+    tuple[list[CommandResult], list[int], list[int]]
+        ``(final_results, submission_indices, failures)`` where ``final_results``
+        contains only completed commands, ``submission_indices`` records each
+        completed command's original submission position, and ``failures``
+        contains indices into ``final_results`` (not original positions) for
+        failed commands, in ascending order.
 
     post: all(result is not None for result in __return__[0])
     post: __return__[0] == [result for result in results if result is not None]
@@ -186,18 +251,7 @@ def _build_final_results(
     post: __return__[1] == sorted(__return__[1])
 
     """
-    final_results: list[CommandResult] = []
-    failures: list[int] = []
-
-    for result in results:
-        if result is not None:
-            compacted_idx = len(final_results)
-            final_results.append(result)
-            if not result.ok:
-                failures.append(compacted_idx)
-
-    # failures are already in ascending order since we process sequentially
-    return final_results, failures
+    return _collect_results_and_failures(enumerate(results))
 
 
 async def _run_fail_fast(
@@ -223,11 +277,12 @@ async def _run_fail_fast(
         # Expected when a command fails; continue to build result
         pass
 
-    final_results, failures = _build_final_results(results)
+    final_results, submission_indices, failures = _build_final_results(results)
 
     return ConcurrentResult(
         results=tuple(final_results),
         failures=tuple(failures),
+        submission_indices=tuple(submission_indices),
     )
 
 
