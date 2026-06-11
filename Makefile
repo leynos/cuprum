@@ -1,8 +1,8 @@
 MDLINT ?= markdownlint-cli2
 NIXIE ?= nixie
 MDFORMAT_ALL ?= mdformat-all
-TOOLS = $(MDFORMAT_ALL) ruff $(MDLINT) uv
-VENV_TOOLS = pytest
+TOOLS = $(MDFORMAT_ALL) $(MDLINT) uv
+VENV_TOOLS = pytest ruff
 RUST_DIR ?= rust
 CARGO ?= cargo
 BUILD_JOBS ?=
@@ -72,18 +72,18 @@ $(VENV_TOOLS): ## Verify required CLI tools in venv
 endif
 
 fmt: ruff $(MDFORMAT_ALL) ## Format sources
-	$(LOCAL_TOOL_ENV) ruff format
-	$(LOCAL_TOOL_ENV) ruff check --select I --fix
+	$(UV_RUN_ENV) uv run ruff format
+	$(UV_RUN_ENV) uv run ruff check --select I --fix
 	cd $(RUST_DIR) && $(CARGO) fmt --all
 	$(LOCAL_TOOL_ENV) $(MDFORMAT_ALL)
 
 check-fmt: ruff ## Verify formatting
-	$(LOCAL_TOOL_ENV) ruff format --check
+	$(UV_RUN_ENV) uv run ruff format --check
 	cd $(RUST_DIR) && $(CARGO) fmt --all -- --check
 	# mdformat-all doesn't currently do checking
 
 lint: ruff uv ## Run linters
-	$(LOCAL_TOOL_ENV) ruff check
+	$(UV_RUN_ENV) uv run ruff check
 	$(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum
 	$(PYLINT) $(PYLINT_TARGETS)
 	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps
