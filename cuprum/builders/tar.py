@@ -66,13 +66,12 @@ def _get_compression_flag(options: TarCreateOptions) -> str:
     return _COMPRESSION_FLAGS[options.compression]
 
 
-def tar_create(
+def _tar_create_argv(
     archive: str | Path,
     sources: cabc.Sequence[str | Path],
-    *,
-    options: TarCreateOptions | None = None,
-) -> SafeCmd:
-    """Build a `tar` create command."""
+    options: TarCreateOptions,
+) -> tuple[str, ...]:
+    """Build the immutable argv for ``tar_create`` without a catalogue."""
     if not sources:
         msg = "tar_create requires at least one source path"
         raise ValueError(msg)
@@ -80,32 +79,48 @@ def tar_create(
         msg = "tar_create requires a sequence of source paths, not a single path"
         raise TypeError(msg)
 
-    resolved_options = options or TarCreateOptions()
-    compression_flag = _get_compression_flag(resolved_options)
-
+    compression_flag = _get_compression_flag(options)
     args: list[str] = ["-c"]
     if compression_flag:
         args.append(compression_flag)
 
     args.extend([
         "-f",
-        str(
-            safe_path(
-                archive,
-                allow_relative=resolved_options.allow_relative,
-            )
-        ),
+        str(safe_path(archive, allow_relative=options.allow_relative)),
     ])
     args.extend(
-        str(
-            safe_path(
-                source,
-                allow_relative=resolved_options.allow_relative,
-            )
-        )
+        str(safe_path(source, allow_relative=options.allow_relative))
         for source in sources
     )
-    return sh.make(TAR)(*args)
+    return tuple(args)
+
+
+def tar_create(
+    archive: str | Path,
+    sources: cabc.Sequence[str | Path],
+    *,
+    options: TarCreateOptions | None = None,
+) -> SafeCmd:
+    """Build a `tar` create command."""
+    argv = _tar_create_argv(archive, sources, options or TarCreateOptions())
+    return sh.make(TAR)(*argv)
+
+
+def _tar_extract_argv(
+    archive: str | Path,
+    destination: str | Path | None,
+    *,
+    allow_relative: bool,
+) -> tuple[str, ...]:
+    """Build the immutable argv for ``tar_extract`` without a catalogue."""
+    args: list[str] = [
+        "-x",
+        "-f",
+        str(safe_path(archive, allow_relative=allow_relative)),
+    ]
+    if destination is not None:
+        args.extend(["-C", str(safe_path(destination, allow_relative=allow_relative))])
+    return tuple(args)
 
 
 def tar_extract(
@@ -115,14 +130,8 @@ def tar_extract(
     allow_relative: bool = False,
 ) -> SafeCmd:
     """Build a `tar` extract command."""
-    args: list[str] = [
-        "-x",
-        "-f",
-        str(safe_path(archive, allow_relative=allow_relative)),
-    ]
-    if destination is not None:
-        args.extend(["-C", str(safe_path(destination, allow_relative=allow_relative))])
-    return sh.make(TAR)(*args)
+    argv = _tar_extract_argv(archive, destination, allow_relative=allow_relative)
+    return sh.make(TAR)(*argv)
 
 
 __all__ = ["Compression", "TarCreateOptions", "tar_create", "tar_extract"]
