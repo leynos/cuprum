@@ -15,6 +15,12 @@ def is_available() -> bool:
 
     Notes
     -----
+    This is the raw, uncached import probe. It does *not* honour the backend
+    availability cache or the ``set_rust_availability_for_testing`` override;
+    callers that need the value governing dispatch must use
+    :func:`cuprum.rust.is_rust_available` (or
+    :func:`cuprum._backend._check_rust_available`) instead.
+
     Only missing-module errors for ``cuprum._rust_backend_native`` are treated
     as a signal that the extension is unavailable. Other import failures are
     re-raised so extension load errors remain visible.

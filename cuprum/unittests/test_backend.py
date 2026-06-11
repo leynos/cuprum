@@ -9,7 +9,9 @@ from cuprum._backend import (
     StreamBackend,
     _check_rust_available,
     get_stream_backend,
+    set_rust_availability_for_testing,
 )
+from cuprum.rust import is_rust_available
 
 _ENV_VAR = "CUPRUM_STREAM_BACKEND"
 
@@ -219,6 +221,46 @@ def test_availability_is_cached(
     get_stream_backend()
 
     assert call_count == 1, "expected availability check to be called once"
+
+
+# -- public probe agrees with dispatch ----------------------------------------
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_public_probe_agrees_with_dispatch_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    available: bool,
+) -> None:
+    """The public ``is_rust_available`` agrees with the dispatch resolver.
+
+    Both must observe the same cached availability so a documented public
+    caller never disagrees with the backend the dispatcher actually selects.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to override the raw import probe.
+    available : bool
+        Generated availability the raw probe should report.
+    """
+    monkeypatch.delenv(_ENV_VAR, raising=False)
+    monkeypatch.setattr(_rust_backend, "is_available", lambda: available)
+
+    assert is_rust_available() is _check_rust_available(), (
+        "public probe must return the cached dispatch availability"
+    )
+
+
+def test_public_probe_honours_test_override() -> None:
+    """The public probe reflects ``set_rust_availability_for_testing``."""
+    set_rust_availability_for_testing(is_available=True)
+    assert is_rust_available() is True, "override should force availability"
+
+    set_rust_availability_for_testing(is_available=False)
+    assert is_rust_available() is False, "override should force unavailability"
+
+    set_rust_availability_for_testing(is_available=None)
 
 
 def test_cache_clear_allows_recheck(

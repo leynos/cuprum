@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import _rust_backend
+from cuprum._backend import _check_rust_available
 
 
 def is_rust_available() -> bool:
@@ -16,11 +16,16 @@ def is_rust_available() -> bool:
 
     Notes
     -----
-    This function is a public wrapper around
-    :func:`cuprum._rust_backend.is_available`, which performs the underlying
-    import probe.
+    This is the single public entry point for the extension-availability
+    question. It delegates to :func:`cuprum._backend._check_rust_available`,
+    the same cached, override-aware resolver that governs stream-backend
+    dispatch, so the answer observed through this public API always agrees
+    with the backend the dispatcher actually selects — including the
+    ``set_rust_availability_for_testing`` override. The raw, uncached import
+    probe lives in :func:`cuprum._rust_backend.is_available`; prefer this
+    wrapper unless a deliberately uncached check is required.
     """
-    return _rust_backend.is_available()
+    return _check_rust_available()
 
 
 __all__ = ["is_rust_available"]
