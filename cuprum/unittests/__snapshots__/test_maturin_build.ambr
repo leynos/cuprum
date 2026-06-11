@@ -88,6 +88,8 @@
       'cuprum/unittests/test_tee_profile_worker_cli.py',
       'cuprum/unittests/test_tee_profile_worker_concurrency.py',
       'cuprum/unittests/test_tee_profile_worker_core.py',
+      'cuprum/unittests/test_tee_profile_worker_env_preservation.py',
+      'cuprum/unittests/test_tee_profile_worker_reentrancy.py',
       'cuprum/unittests/test_timeout_resolution.py',
     ]),
     'generator': '1.13.3',
