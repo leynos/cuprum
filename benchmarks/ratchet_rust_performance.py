@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import math
 import pathlib as pth
 import sys  # noqa: F401
 import typing as typ
@@ -22,6 +21,8 @@ from benchmarks._validation import (
     _require_list,
     _require_mapping,
     _require_non_empty_string,
+    _require_non_negative_float,
+    _require_positive_float,
 )
 from benchmarks.benchmark_profile import (
     IncompatibleBenchmarkProfileError,
@@ -46,53 +47,6 @@ def _load_json(path: pth.Path) -> dict[str, object]:
         msg = f"expected a JSON object in {path}, got {type(payload).__name__}"
         raise TypeError(msg)
     return typ.cast("dict[str, object]", payload)
-
-
-def _check_float_bound(
-    validated: float,
-    *,
-    name: str,
-    minimum: float,
-    exclusive: bool,
-) -> None:
-    """Raise ``ValueError`` when *validated* does not satisfy the minimum bound."""
-    minimum_text = f"{minimum:g}"
-    if exclusive:
-        if validated <= minimum:
-            msg = f"{name} must be > {minimum_text}"
-            raise ValueError(msg)
-    elif validated < minimum:
-        msg = f"{name} must be >= {minimum_text}"
-        raise ValueError(msg)
-
-
-def _require_float(
-    value: object,
-    *,
-    name: str,
-    minimum: float,
-    exclusive: bool,
-) -> float:
-    """Validate that *value* is a finite float satisfying a minimum bound."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        msg = f"{name} must be a number"
-        raise TypeError(msg)
-    validated = float(value)
-    if not math.isfinite(validated):
-        msg = f"{name} must be finite"
-        raise ValueError(msg)
-    _check_float_bound(validated, name=name, minimum=minimum, exclusive=exclusive)
-    return validated
-
-
-def _require_positive_float(value: object, *, name: str) -> float:
-    """Validate and return a positive float value."""
-    return _require_float(value, name=name, minimum=0.0, exclusive=True)
-
-
-def _require_non_negative_float(value: object, *, name: str) -> float:
-    """Validate and return a non-negative float value."""
-    return _require_float(value, name=name, minimum=0.0, exclusive=False)
 
 
 def load_plan(path: pth.Path) -> dict[str, object]:

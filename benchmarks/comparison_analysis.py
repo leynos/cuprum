@@ -11,10 +11,10 @@ from benchmarks._validation import (
     _require_list,
     _require_mapping,
     _require_non_empty_string,
+    _require_positive_float,
 )
 from benchmarks.ratchet_rust_performance import (
     _comparison_id_for_scenario,
-    _require_positive_float,
     _validate_backend,
 )
 
