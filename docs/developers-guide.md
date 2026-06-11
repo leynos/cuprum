@@ -31,9 +31,14 @@ Hypothesis generates text with mixed recognized line endings and checks that
 normalized text is preserved, the final remainder is partial, and stripping is
 idempotent. CrossHair runs PEP 316 (Python Enhancement Proposal 316) contracts
 over bounded symbolic inputs for the same invariants. CrossHair is a
-development dependency only; the tests skip the symbolic checks when CrossHair
-is unavailable and on Python 3.15, where CrossHair currently cannot trace the
-`CALL_KW` opcode.
+development dependency only; the tests skip the symbolic checks whenever
+CrossHair cannot run on the active interpreter. Rather than hard-coding a
+Python-version gate, the suite probes CrossHair at import time and degrades to
+skipping if it raises — covering both a missing dev dependency (`ImportError`)
+and an interpreter whose opcode set CrossHair cannot yet trace
+(`crosshair.tracers.TraceException`, as with the `CALL_KW` gap on early Python
+3.15 betas, issue #109). The probe self-resolves once CrossHair supports the
+interpreter; `crosshair-tool` 0.0.104 already handles `CALL_KW`.
 
 When changing `_emit_completed_lines`, `_split_complete_lines`, or
 `_strip_line_ending`, run:

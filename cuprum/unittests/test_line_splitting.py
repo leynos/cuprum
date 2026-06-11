@@ -18,7 +18,6 @@ minimal counterexample for the pure helper rather than as stream-backend drift.
 
 from __future__ import annotations
 
-import sys
 import typing as typ
 
 import pytest
@@ -30,24 +29,27 @@ from cuprum._testing import _split_complete_lines, _strip_line_ending
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-_IS_PYTHON_315 = sys.version_info[:2] == (3, 15)
-
-if _IS_PYTHON_315:
+# CrossHair's C-level tracer must support every bytecode opcode the running
+# interpreter emits. On a Python whose opcode set CrossHair does not yet
+# handle, importing the integration raises ``crosshair.tracers.TraceException``
+# (not ``ImportError``) — this was the ``CALL_KW`` gap on early 3.15 betas
+# (issue #109). Probe for a usable CrossHair here and degrade to skipping the
+# symbolic checks if it cannot trace this interpreter, rather than hard-coding a
+# version gate that must be revised by hand each time CrossHair catches up. As
+# of crosshair-tool 0.0.104, ``CALL_KW`` is supported, so this probe succeeds on
+# the supported interpreters.
+try:
+    import crosshair.core_and_libs  # noqa: F401
+    from crosshair.options import AnalysisKind, AnalysisOptionSet
+    from crosshair.statespace import MessageType
+    from crosshair.test_util import check_states
+except Exception:  # noqa: BLE001 - any CrossHair init failure means "unavailable"
+    # Covers both missing dev deps (ImportError) and an interpreter whose
+    # opcode set CrossHair cannot yet trace (TraceException).
     AnalysisOptionSet = typ.cast("typ.Any", None)
     AnalysisKind = typ.cast("typ.Any", None)
     MessageType = typ.cast("typ.Any", None)
     check_states = typ.cast("typ.Any", None)
-else:
-    try:
-        import crosshair.core_and_libs  # noqa: F401
-        from crosshair.options import AnalysisKind, AnalysisOptionSet
-        from crosshair.statespace import MessageType
-        from crosshair.test_util import check_states
-    except ImportError:  # pragma: no cover - exercised only without dev deps
-        AnalysisOptionSet = typ.cast("typ.Any", None)
-        AnalysisKind = typ.cast("typ.Any", None)
-        MessageType = typ.cast("typ.Any", None)
-        check_states = typ.cast("typ.Any", None)
 
 _LINE_ENDINGS: tuple[str, str, str] = ("\r\n", "\n", "\r")
 _PYTHON_LINE_BOUNDARIES: str = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
