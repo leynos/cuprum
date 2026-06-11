@@ -171,6 +171,50 @@ def _collect_backend_means(
     return grouped
 
 
+def _compute_group_ratio(
+    *,
+    context_name: str,
+    comparison_id: str,
+    group: dict[str, float],
+) -> float:
+    """Return the Rust/Python mean ratio for one comparison group."""
+    python_mean = group.get("python")
+    rust_mean = group.get("rust")
+    if python_mean is None:
+        msg = (
+            f"{context_name}: comparison group {comparison_id!r} is missing "
+            "its Python scenario"
+        )
+        raise ValueError(msg)
+    if rust_mean is None:
+        msg = (
+            f"{context_name}: comparison group {comparison_id!r} is missing "
+            "its Rust scenario"
+        )
+        raise ValueError(msg)
+    return rust_mean / python_mean
+
+
+def _build_ratio_map(
+    *,
+    context_name: str,
+    grouped: dict[str, dict[str, float]],
+) -> dict[str, float]:
+    """Build a sorted comparison-id → Rust/Python ratio map."""
+    ratios = {
+        comparison_id: _compute_group_ratio(
+            context_name=context_name,
+            comparison_id=comparison_id,
+            group=group,
+        )
+        for comparison_id, group in sorted(grouped.items())
+    }
+    if not ratios:
+        msg = f"{context_name}: Rust scenarios are required for ratchet comparison"
+        raise ValueError(msg)
+    return ratios
+
+
 def _extract_rust_python_ratios(
     *,
     plan_payload: dict[str, object],
@@ -195,30 +239,7 @@ def _extract_rust_python_ratios(
 
     grouped = _collect_backend_means(scenarios, results)
 
-    ratios: dict[str, float] = {}
-    for comparison_id in sorted(grouped):
-        group = grouped[comparison_id]
-        python_mean = group.get("python")
-        rust_mean = group.get("rust")
-        if python_mean is None:
-            msg = (
-                f"{context_name}: comparison group {comparison_id!r} is missing "
-                "its Python scenario"
-            )
-            raise ValueError(msg)
-        if rust_mean is None:
-            msg = (
-                f"{context_name}: comparison group {comparison_id!r} is missing "
-                "its Rust scenario"
-            )
-            raise ValueError(msg)
-        ratios[comparison_id] = rust_mean / python_mean
-
-    if not ratios:
-        msg = f"{context_name}: Rust scenarios are required for ratchet comparison"
-        raise ValueError(msg)
-
-    return ratios
+    return _build_ratio_map(context_name=context_name, grouped=grouped)
 
 
 def _validate_matching_comparison_groups(
