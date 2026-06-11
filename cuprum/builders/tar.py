@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import enum
 import typing as typ
 from pathlib import Path
 
@@ -16,6 +17,39 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import SafeCmd
 
 
+class Compression(enum.Enum):
+    """Compression algorithm for ``tar_create``.
+
+    Modelling compression as a single enum makes the "exactly one algorithm"
+    invariant unrepresentable as an invalid state: the previous design used
+    three mutually-exclusive booleans that had to be reconciled at runtime.
+
+    Members
+    -------
+    NONE
+        No compression (the default); ``tar_create`` emits no flag.
+    GZIP
+        gzip compression (``-z``).
+    BZIP2
+        bzip2 compression (``-j``).
+    XZ
+        xz compression (``-J``).
+    """
+
+    NONE = "none"
+    GZIP = "gzip"
+    BZIP2 = "bzip2"
+    XZ = "xz"
+
+
+_COMPRESSION_FLAGS: dict[Compression, str] = {
+    Compression.NONE: "",
+    Compression.GZIP: "-z",
+    Compression.BZIP2: "-j",
+    Compression.XZ: "-J",
+}
+
+
 @dc.dataclass(frozen=True, slots=True)
 class TarCreateOptions:
     """Optional flags for tar_create.
@@ -23,29 +57,13 @@ class TarCreateOptions:
     The allow_relative flag applies to both archive and source paths.
     """
 
-    gzip: bool = False
-    bzip2: bool = False
-    xz: bool = False
+    compression: Compression = Compression.NONE
     allow_relative: bool = False
 
 
 def _get_compression_flag(options: TarCreateOptions) -> str:
-    """Return the compression flag for tar_create, if any."""
-    compression_flags = [
-        options.gzip,
-        options.bzip2,
-        options.xz,
-    ]
-    if sum(1 for flag in compression_flags if flag) > 1:
-        msg = "Select only one compression option for tar_create"
-        raise ValueError(msg)
-    if options.gzip:
-        return "-z"
-    if options.bzip2:
-        return "-j"
-    if options.xz:
-        return "-J"
-    return ""
+    """Return the compression flag for tar_create, or ``""`` for none."""
+    return _COMPRESSION_FLAGS[options.compression]
 
 
 def tar_create(
@@ -107,4 +125,4 @@ def tar_extract(
     return sh.make(TAR)(*args)
 
 
-__all__ = ["TarCreateOptions", "tar_create", "tar_extract"]
+__all__ = ["Compression", "TarCreateOptions", "tar_create", "tar_extract"]
