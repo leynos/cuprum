@@ -34,7 +34,7 @@ from cuprum.context import (
 )
 
 if typ.TYPE_CHECKING:
-    from cuprum.context import _TokenRegistration
+    from cuprum.context.registration import _TokenRegistration
 
 
 def _noop_before(_cmd: object) -> None:
