@@ -119,6 +119,32 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
+
+## Canonical stream-drain loop
+
+`cuprum._streams._drain(stream, config, *, on_chunk=None)` is the single
+read/echo/buffer loop behind both consume variants. It reads in `_READ_SIZE`
+chunks, extends the capture buffer when capturing, echoes each chunk to the
+configured sink when echoing, and hands the chunk to the optional `on_chunk`
+callback for variant-specific processing:
+
+- `_consume_stream_without_lines` calls `_drain` with no callback.
+- `_consume_stream_with_lines` supplies an `on_chunk` callback that feeds the
+  incremental decoder and emits completed lines, then flushes the decoder tail
+  after the drain returns.
+
+Re-use policy: the public entry point remains `_consume_stream`, which
+dispatches between the two variants on whether an `on_line` callback was
+supplied. Any fix to the read/echo/capture mechanics belongs in `_drain` so the
+capture path and the line-emitting path cannot silently diverge; new consume
+variants must layer behaviour through `on_chunk` rather than copying the loop.
+
+`cuprum/unittests/test_stream_drain_property_based.py` holds the property
+suite: Hypothesis generates byte payloads split at arbitrary boundaries
+(including split multi-byte UTF-8 sequences and invalid bytes) and asserts that
+capture equals a whole-payload reference decode, that both variants capture
+identically, and that line emission is boundary-insensitive.
+
 ### Canonical adapter event projection and locked-store base
 
 `cuprum/adapters/_support.py` keeps the three telemetry adapters from

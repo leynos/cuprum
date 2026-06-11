@@ -37,14 +37,25 @@ async def _consume_stream(
     return await _consume_stream_with_lines(stream, config, on_line=on_line)
 
 
-async def _consume_stream_without_lines(
-    stream: asyncio.StreamReader | None,
+async def _drain(
+    stream: asyncio.StreamReader,
     config: _StreamConfig,
+    *,
+    on_chunk: cabc.Callable[[bytes], None] | None = None,
 ) -> str | None:
-    """Read from a subprocess stream without emitting line callbacks."""
-    if stream is None:
-        return "" if config.capture_output else None
+    """Run the canonical read/echo/buffer loop over *stream*.
 
+    This is the single source of truth for the consume mechanics shared by
+    :func:`_consume_stream_without_lines` and
+    :func:`_consume_stream_with_lines`: read in ``_READ_SIZE`` chunks, extend
+    the capture buffer when capturing, echo each chunk to the configured sink
+    when echoing, then hand the chunk to ``on_chunk`` for variant-specific
+    processing (for example incremental line decoding). Fixes to the loop must
+    be made here so the capture path and the line-emitting path cannot drift.
+
+    Returns the captured text decoded with the configured encoding/errors, or
+    ``None`` when capture is disabled.
+    """
     buffer = bytearray() if config.capture_output else None
     while True:
         chunk = await stream.read(_READ_SIZE)
@@ -59,10 +70,22 @@ async def _consume_stream_without_lines(
                 encoding=config.encoding,
                 errors=config.errors,
             )
+        if on_chunk is not None:
+            on_chunk(chunk)
 
     if buffer is None:
         return None
     return buffer.decode(config.encoding, errors=config.errors)
+
+
+async def _consume_stream_without_lines(
+    stream: asyncio.StreamReader | None,
+    config: _StreamConfig,
+) -> str | None:
+    """Read from a subprocess stream without emitting line callbacks."""
+    if stream is None:
+        return "" if config.capture_output else None
+    return await _drain(stream, config)
 
 
 async def _consume_stream_with_lines(
@@ -75,28 +98,19 @@ async def _consume_stream_with_lines(
     if stream is None:
         return "" if config.capture_output else None
 
-    buffer = bytearray() if config.capture_output else None
     decoder_factory = codecs.getincrementaldecoder(config.encoding)
     decoder = decoder_factory(errors=config.errors)
     pending_text = ""
 
-    while True:
-        chunk = await stream.read(_READ_SIZE)
-        if not chunk:
-            break
-        if buffer is not None:
-            buffer.extend(chunk)
-        if config.echo_output:
-            _write_chunk(
-                config.sink,
-                chunk,
-                encoding=config.encoding,
-                errors=config.errors,
-            )
+    def feed_decoder(chunk: bytes) -> None:
+        """Feed a chunk to the incremental decoder and emit complete lines."""
+        nonlocal pending_text
         pending_text = _emit_completed_lines(
             pending_text + decoder.decode(chunk),
             on_line=on_line,
         )
+
+    captured = await _drain(stream, config, on_chunk=feed_decoder)
 
     pending_text = _emit_completed_lines(
         pending_text + decoder.decode(b"", final=True),
@@ -105,9 +119,7 @@ async def _consume_stream_with_lines(
     if pending_text:
         on_line(_strip_line_ending(pending_text))
 
-    if buffer is None:
-        return None
-    return buffer.decode(config.encoding, errors=config.errors)
+    return captured
 
 
 async def _pump_stream(
