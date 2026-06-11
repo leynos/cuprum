@@ -78,16 +78,22 @@ pub(crate) fn handle_write_result(
 
 #[cfg(unix)]
 fn read_stream_unix(reader: &StreamHandle, buffer: &mut [u8]) -> Result<usize, PumpError> {
+    read_raw_fd(reader.as_raw_fd(), buffer)
+}
+
+/// Read from a raw descriptor, retrying on `EINTR`.
+///
+/// This is the canonical Unix read policy shared by the stream read path and
+/// the splice drain: interrupted reads retry, end of file returns zero, and
+/// every other error propagates.
+#[cfg(unix)]
+pub(crate) fn read_raw_fd(fd: libc::c_int, buffer: &mut [u8]) -> Result<usize, PumpError> {
     loop {
         // SAFETY: `buffer` is valid for writes of `buffer.len()` bytes, and
-        // `reader` owns a valid descriptor for the duration of this call.
-        let read_len = unsafe {
-            libc::read(
-                reader.as_raw_fd(),
-                buffer.as_mut_ptr().cast::<libc::c_void>(),
-                buffer.len(),
-            )
-        };
+        // the caller guarantees `fd` stays valid for the duration of this
+        // call.
+        let read_len =
+            unsafe { libc::read(fd, buffer.as_mut_ptr().cast::<libc::c_void>(), buffer.len()) };
 
         if read_len >= 0 {
             return usize::try_from(read_len).map_err(|_| PumpError::LengthOverflow);
