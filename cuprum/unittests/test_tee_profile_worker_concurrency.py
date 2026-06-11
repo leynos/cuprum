@@ -349,23 +349,12 @@ class _CheckpointBackendSelector:
             yield
 
 
-@dc.dataclass(frozen=True, slots=True)
-class _SelectorThreadState:
-    """Shared state for workers using an injected backend selector."""
-
-    fixture: pth.Path
-    backend_selector: tee_profile_worker.BackendSelector
-    events: dict[str, threading.Event]
-    result_lock: threading.Lock
-    results: list[tee_profile_worker.TeeProfileWorkerResult]
-    errors: list[BaseException]
-
-
 class _BackendEnvironmentRace:
     """Own coordination state for the backend environment preservation test."""
 
     def __init__(self, fixture: pth.Path) -> None:
         """Initialise events, result capture, and the injected selector."""
+        self.fixture = fixture
         self.events = {
             "first_inside": threading.Event(),
             "second_selector_attempting": threading.Event(),
@@ -376,18 +365,10 @@ class _BackendEnvironmentRace:
         self.results: list[tee_profile_worker.TeeProfileWorkerResult] = []
         self.errors: list[BaseException] = []
         self.result_lock = threading.Lock()
-        selector = _CoordinatedBackendSelector(
+        self.selector = _CoordinatedBackendSelector(
             self.events,
             self.observations,
             self.observation_lock,
-        )
-        self.thread_state = _SelectorThreadState(
-            fixture,
-            selector,
-            self.events,
-            self.result_lock,
-            self.results,
-            self.errors,
         )
 
     def worker_thread(
@@ -397,7 +378,7 @@ class _BackendEnvironmentRace:
         """Create a worker thread for the requested backend."""
         return threading.Thread(
             target=_run_worker_with_selector,
-            args=(self.thread_state, backend),
+            args=(self, backend),
             daemon=True,
         )
 
@@ -418,14 +399,14 @@ class _BackendEnvironmentRace:
 
 
 def _run_worker_with_selector(
-    state: _SelectorThreadState,
+    race: _BackendEnvironmentRace,
     backend: tee_profile_worker.BackendName,
 ) -> None:
     """Run a worker with selector-internal timing and capture thread failures."""
     try:
         result = run_tee_profile_worker(
             TeeProfileWorkerConfig(
-                fixture_path=state.fixture,
+                fixture_path=race.fixture,
                 stages=1,
                 mode="tee",
                 sink_kind="devnull",
@@ -433,13 +414,13 @@ def _run_worker_with_selector(
                 backend=backend,
                 repeat_count=1,
             ),
-            backend_selector=state.backend_selector,
+            backend_selector=race.selector,
         )
-        with state.result_lock:
-            state.results.append(result)
+        with race.result_lock:
+            race.results.append(result)
     except BaseException as exc:  # noqa: BLE001 - thread failures must surface.
-        with state.result_lock:
-            state.errors.append(exc)
+        with race.result_lock:
+            race.errors.append(exc)
 
 
 def _run_selector_context(
