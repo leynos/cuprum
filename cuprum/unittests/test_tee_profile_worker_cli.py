@@ -141,3 +141,9 @@ def test_worker_cli_runs_successfully_via_subprocess(tmp_path: pth.Path) -> None
     result = json.loads(output.read_text())
     assert result["status"] == "ok", f"expected worker status ok, got {result}"
     assert result["exit_code"] == 0, f"expected worker exit code 0, got {result}"
+    assert result["reentrant_rejection_count"] == 0, (
+        f"expected no reentrant rejections in a single-selector run, got {result}"
+    )
+    assert result["lock_wait_seconds"] >= 0.0, (
+        f"expected non-negative selector lock-wait seconds, got {result}"
+    )

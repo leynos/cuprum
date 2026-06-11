@@ -7,12 +7,15 @@ extracted from ``benchmarks._benchmark_types``,
 validation limits, error semantics, and fallibility contracts stay consistent
 across pipeline-throughput and tee-profile configuration surfaces.
 
-Each helper validates a single value: it returns that value unchanged (often
-narrowed to a concrete type) when the input is acceptable, raises ``TypeError``
-for values of the wrong type, and raises ``ValueError`` for values that are out
-of range or otherwise unsupported. The dataclasses call these helpers from their
-``__post_init__`` methods so invalid configuration fails fast at construction
-time.
+Each helper validates a single value and returns it unchanged (often narrowed
+to a concrete type) when the input is acceptable. On invalid input a helper
+raises either ``TypeError`` or ``ValueError`` according to its own contract:
+some reject wrong types with ``TypeError`` (for example ``_validate_int``),
+while others raise ``ValueError`` for an unsupported type/value combination or
+an out-of-range value (for example ``_validate_backend`` rejects a non-string
+backend, and ``_validate_payload_bytes`` rejects a non-positive size, both with
+``ValueError``). The dataclasses call these helpers from their ``__post_init__``
+methods so invalid configuration fails fast at construction time.
 
 Examples
 --------

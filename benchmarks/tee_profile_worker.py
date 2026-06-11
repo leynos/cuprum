@@ -593,6 +593,10 @@ def _build_worker_result(
     metrics: _SelectorMetrics,
 ) -> TeeProfileWorkerResult:
     """Assemble a ``TeeProfileWorkerResult`` from accumulated run data."""
+    # Capture the elapsed worker-run time before any result-assembly work so
+    # that ``_manifest_hash`` I/O and ``_scenario_label`` do not inflate the
+    # measured ``wall_time_seconds``.
+    wall_time_seconds = timing.timer() - timing.started
     return {
         "scenario": _scenario_label(config),
         "fixture_path": str(config.fixture_path),
@@ -603,7 +607,7 @@ def _build_worker_result(
         "with_line_callbacks": config.with_line_callbacks,
         "backend": config.backend,
         "repeat_count": config.repeat_count,
-        "wall_time_seconds": timing.timer() - timing.started,
+        "wall_time_seconds": wall_time_seconds,
         "lock_wait_seconds": metrics.lock_wait_seconds,
         "reentrant_rejection_count": metrics.reentrant_rejection_count,
         "status": totals.status,

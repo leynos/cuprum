@@ -7,6 +7,7 @@ import pathlib as pth
 import sys
 import typing as typ
 
+from benchmarks._benchmark_type_validators import _validate_int
 from benchmarks.tee_profile_worker import TeeProfileWorkerConfig
 from cuprum import is_rust_available
 
@@ -30,7 +31,13 @@ def _check_int_bound(
     minimum: int,
     maximum: int | None,
 ) -> None:
-    """Raise ``ValueError`` if ``value`` is outside ``[minimum, maximum]``."""
+    """Validate ``value`` is an ``int`` within ``[minimum, maximum]``.
+
+    Raises ``TypeError`` (via the shared :func:`_validate_int`) for non-integer
+    or ``bool`` inputs so the type contract matches the other benchmark
+    configuration validators, then ``ValueError`` if the value is out of range.
+    """
+    _validate_int(value, name=name)
     if value < minimum:
         msg = f"{name} must be >= {minimum}, got {value}"
         raise ValueError(msg)
