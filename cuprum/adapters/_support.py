@@ -47,7 +47,7 @@ def _event_common_fields(
 
     Example
     -------
-    >>> dict(_event_common_fields(event, "cuprum_{}".format))  # doctest: +SKIP
+    >>> dict(_event_common_fields(event, _prefixed("cuprum_")))  # doctest: +SKIP
     {'cuprum_program': 'echo', 'cuprum_argv': ('echo', 'hi'), 'cuprum_pid': 42}
     """
     yield name("program"), str(event.program)
@@ -62,6 +62,16 @@ def _event_common_fields(
         yield name("duration_s"), event.duration_s
     if event.line is not None:
         yield name("line"), event.line
+
+
+def _prefixed(prefix: str) -> cabc.Callable[[str], str]:
+    """Return a key-naming function that prepends ``prefix`` to field names."""
+
+    def build(field: str) -> str:
+        """Prefix ``field`` with the adapter's key convention."""
+        return f"{prefix}{field}"
+
+    return build
 
 
 def _project_tag(event: ExecEvent) -> str | None:
@@ -102,5 +112,6 @@ class _LockedStore:
 __all__ = [
     "_LockedStore",
     "_event_common_fields",
+    "_prefixed",
     "_project_tag",
 ]

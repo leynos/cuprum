@@ -71,6 +71,7 @@ import typing as typ
 from cuprum.adapters._support import (
     _event_common_fields,
     _LockedStore,
+    _prefixed,
     _project_tag,
 )
 
@@ -352,7 +353,7 @@ class TracingHook:
     @staticmethod
     def _build_attributes(event: ExecEvent) -> dict[str, object]:
         """Build initial span attributes from an event."""
-        attrs = dict(_event_common_fields(event, "cuprum.{}".format))
+        attrs = dict(_event_common_fields(event, _prefixed("cuprum.")))
         # Span attribute conventions prefer lists over tuples for sequences.
         attrs["cuprum.argv"] = list(event.argv)
 

@@ -31,7 +31,7 @@ import json
 import logging
 import typing as typ
 
-from cuprum.adapters._support import _event_common_fields
+from cuprum.adapters._support import _event_common_fields, _prefixed
 
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook
@@ -133,7 +133,7 @@ def _build_extra(event: ExecEvent) -> dict[str, object]:
     ``cuprum_tags`` keys.
     """
     extra: dict[str, object] = {"cuprum_phase": event.phase}
-    extra.update(_event_common_fields(event, "cuprum_{}".format))
+    extra.update(_event_common_fields(event, _prefixed("cuprum_")))
     extra["cuprum_tags"] = dict(event.tags)
     return extra
 
