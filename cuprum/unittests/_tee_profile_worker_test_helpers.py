@@ -8,6 +8,7 @@ harness that owns the shared events, observations, and result capture.
 
 from __future__ import annotations
 
+import abc
 import contextlib
 import dataclasses as dc
 import os
@@ -137,8 +138,8 @@ def _run_worker_with_selector(
             state.errors.append(exc)
 
 
-class _CoordinatedBackendSelector:
-    """Record backend environment values while delegating to the real selector."""
+class _BaseBackendSelector(abc.ABC):
+    """Share coordination state and dispatch for instrumented selectors."""
 
     def __init__(
         self,
@@ -156,8 +157,24 @@ class _CoordinatedBackendSelector:
         self,
         backend: tee_profile_worker.BackendName,
     ) -> contextlib.AbstractContextManager[None]:
-        """Return a coordinated backend-selection context manager."""
+        """Return an instrumented backend-selection context manager."""
         return self._activate(backend)
+
+    @abc.abstractmethod
+    @contextlib.contextmanager
+    def _activate(
+        self,
+        backend: tee_profile_worker.BackendName,
+    ) -> cabc.Iterator[None]:
+        """Coordinate selector behaviour at backend state-machine boundaries."""
+        ...  # pragma: no cover
+
+
+class _CoordinatedBackendSelector(_BaseBackendSelector):
+    """Record backend environment values while delegating to the real selector.
+
+    Coordination state and dispatch are inherited from ``_BaseBackendSelector``.
+    """
 
     @contextlib.contextmanager
     def _activate(
@@ -188,27 +205,11 @@ class _CoordinatedBackendSelector:
             yield
 
 
-class _CheckpointBackendSelector:
-    """Expose selector state transitions for interleaving assertions."""
+class _CheckpointBackendSelector(_BaseBackendSelector):
+    """Expose selector state transitions for interleaving assertions.
 
-    def __init__(
-        self,
-        events: dict[str, threading.Event],
-        observations: list[str | None],
-        observation_lock: threading.Lock,
-    ) -> None:
-        """Store interleaving checkpoints and observed backend env values."""
-        self._events = events
-        self._observations = observations
-        self._observation_lock = observation_lock
-        self._delegate = tee_profile_worker._EnvBackendSelector()
-
-    def __call__(
-        self,
-        backend: tee_profile_worker.BackendName,
-    ) -> contextlib.AbstractContextManager[None]:
-        """Return a checkpointed backend-selection context manager."""
-        return self._activate(backend)
+    Coordination state and dispatch are inherited from ``_BaseBackendSelector``.
+    """
 
     @contextlib.contextmanager
     def _activate(
