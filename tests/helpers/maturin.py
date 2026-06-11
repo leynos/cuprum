@@ -16,9 +16,13 @@ if typ.TYPE_CHECKING:
 _MATURIN_PIN_RE = re.compile(r"maturin==(\d+\.\d+\.\d+)")
 _WORKFLOW_PIN_RE = re.compile(r'MATURIN_VERSION:\s*"(\d+\.\d+\.\d+)"')
 _ACTION_PIN_RE = re.compile(r'default:\s*"(\d+\.\d+\.\d+)"')
-_AARCH64_CONTAINER_PIN_RE = re.compile(r"MANYLINUX_AARCH64_CONTAINER:\s*([^\s#]+)")
+_AARCH64_CONTAINER_PIN_RE = re.compile(
+    r"^\s*MANYLINUX_AARCH64_CONTAINER:\s*([^\s#]+)(?:\s+#.*)?$",
+    re.MULTILINE,
+)
 _AARCH64_CONTAINER_USAGE_RE = re.compile(
-    r"container:\s*\$\{\{\s*env\.MANYLINUX_AARCH64_CONTAINER\s*\}\}"
+    r"^\s*container:\s*\$\{\{\s*env\.MANYLINUX_AARCH64_CONTAINER\s*\}\}\s*$",
+    re.MULTILINE,
 )
 _GENERATOR_RE = re.compile(r"^Generator:\s*maturin\s*\(([^)]+)\)\s*$", re.MULTILINE)
 _EXTENSION_MODULE_RE = re.compile(
