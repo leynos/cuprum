@@ -205,9 +205,10 @@ mod tests {
         let outcome = try_splice_pump(&source_read, &sink_write, 4096);
         drop(sink_write); // EOF for the verification read.
 
+        let expected_len = unwrap_ok(u64::try_from(payload.len()));
         match outcome {
             Some(Ok(transferred)) => {
-                assert_eq!(transferred, payload.len() as u64);
+                assert_eq!(transferred, expected_len);
             }
             other => panic!("expected Some(Ok(_)) from pipe splice, got {other:?}"),
         }

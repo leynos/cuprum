@@ -110,13 +110,13 @@ fn convert_fd(value: i64) -> PyResult<PlatformFd> {
 
 #[cfg(windows)]
 fn convert_fd(value: i64) -> PyResult<PlatformFd> {
-    let handle_value = value as u64;
-    if usize::BITS >= 64 {
-        return Ok(handle_value as usize);
+    // Reject negative handles for symmetry with the Unix arm: Python hands
+    // over non-negative handle values, and reinterpreting a negative i64 as
+    // a pointer-sized handle would silently address nonsense.
+    if value < 0 {
+        return Err(PyValueError::new_err("file handle must be non-negative"));
     }
-    let truncated = u32::try_from(handle_value)
-        .map_err(|_| PyValueError::new_err("file handle out of range"))?;
-    Ok(truncated as usize)
+    usize::try_from(value).map_err(|_| PyValueError::new_err("file handle out of range"))
 }
 
 /// Validate that `buffer_size` is positive and fits into a usize.
@@ -142,6 +142,9 @@ fn stream_from_raw(fd: PlatformFd) -> StreamHandle {
 
 #[cfg(windows)]
 fn stream_from_raw(handle: PlatformFd) -> StreamHandle {
+    // The usize-to-pointer cast is a deliberate, documented reinterpretation:
+    // Windows handles are pointer-sized opaque values, so this widens or
+    // narrows nothing.
     // SAFETY: The caller ensures the handle is valid and owned by the caller.
     unsafe { File::from_raw_handle(handle as RawHandle) }
 }
