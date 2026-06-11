@@ -1,4 +1,10 @@
-"""Tests that ``_EnvBackendSelector`` preserves ``CUPRUM_STREAM_BACKEND`` under concurrent access."""  # noqa: E501
+"""Backend-environment isolation and lock-serialisation tests.
+
+These tests inject coordinating backend selectors so concurrent workers can be
+driven through precise interleavings, proving that ``_BACKEND_LOCK`` serialises
+backend-environment mutation and that each worker observes only its own pinned
+``CUPRUM_STREAM_BACKEND`` value.
+"""
 
 from __future__ import annotations
 
@@ -7,18 +13,34 @@ import typing as typ
 
 from benchmarks import tee_profile_worker
 from cuprum.unittests._tee_profile_worker_test_helpers import (
-    _EVENT_WAIT_TIMEOUT_SECONDS,
     _BackendEnvironmentRace,
     _CheckpointBackendSelector,
-    _join_and_assert_finished,
-    _run_selector_context,
     _SignallingRLock,
+)
+from cuprum.unittests.conftest import (
+    _EVENT_WAIT_TIMEOUT_SECONDS,
+    _join_and_assert_finished,
 )
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
 
     import pytest
+
+
+def _run_selector_context(
+    selector: tee_profile_worker.BackendSelector,
+    backend: tee_profile_worker.BackendName,
+    errors: list[BaseException],
+    result_lock: threading.Lock,
+) -> None:
+    """Enter a selector context and capture thread failures."""
+    try:
+        with selector(backend):
+            pass
+    except BaseException as exc:  # noqa: BLE001 - thread failures must surface.
+        with result_lock:
+            errors.append(exc)
 
 
 def test_concurrent_workers_preserve_backend_environment(

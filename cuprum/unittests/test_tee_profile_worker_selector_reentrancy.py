@@ -1,4 +1,10 @@
-"""Tests that ``_EnvBackendSelector`` rejects and recovers from same-thread re-entrant activation."""  # noqa: E501
+"""Lock and selector reentrancy tests for ``_EnvBackendSelector``.
+
+These tests verify that ``_BACKEND_LOCK`` tolerates same-thread re-acquisition
+while the ``_EnvBackendSelector`` rejects nested same-thread activation before it
+mutates the backend environment, recovering cleanly and emitting a structured
+warning for each rejection.
+"""
 
 from __future__ import annotations
 
@@ -11,10 +17,23 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from benchmarks import tee_profile_worker
-from cuprum.unittests._tee_profile_worker_test_helpers import _backends_strategy
+from cuprum.unittests.conftest import _backends_strategy
 
 if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
+
+
+def test_backend_lock_is_reentrant() -> None:
+    """The backend lock can be acquired twice by the same thread."""
+    with tee_profile_worker._BACKEND_LOCK:
+        # A plain Lock would deadlock on this same-thread second acquisition;
+        # RLock tracks ownership and recursion depth, so it succeeds here.
+        acquired = tee_profile_worker._BACKEND_LOCK.acquire(
+            blocking=True,
+            timeout=0.5,
+        )
+        assert acquired, "expected same-thread backend lock acquisition to succeed"
+        tee_profile_worker._BACKEND_LOCK.release()
 
 
 @settings(
@@ -49,7 +68,7 @@ def test_nested_selector_raises_runtime_error_and_recovers(
     )
     expected_warning = "Rejected re-entrant backend selector activation"
     selector = tee_profile_worker._EnvBackendSelector()
-    with selector("python"):  # noqa: SIM117
+    with selector("python"):  # noqa: SIM117 - nested so caplog captures warning.
         with caplog.at_level(logging.WARNING):
             with pytest.raises(RuntimeError, match=expected_message):
                 with selector("auto"):
