@@ -31,6 +31,8 @@ import json
 import logging
 import typing as typ
 
+from cuprum.adapters._support import _event_common_fields
+
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook
 
@@ -123,23 +125,16 @@ def structured_logging_hook(
 
 
 def _build_extra(event: ExecEvent) -> dict[str, object]:
-    """Build structured extra data for a log record."""
-    extra: dict[str, object] = {
-        "cuprum_phase": event.phase,
-        "cuprum_program": str(event.program),
-        "cuprum_argv": event.argv,
-        "cuprum_tags": dict(event.tags),
-    }
-    if event.pid is not None:
-        extra["cuprum_pid"] = event.pid
-    if event.cwd is not None:
-        extra["cuprum_cwd"] = str(event.cwd)
-    if event.exit_code is not None:
-        extra["cuprum_exit_code"] = event.exit_code
-    if event.duration_s is not None:
-        extra["cuprum_duration_s"] = event.duration_s
-    if event.line is not None:
-        extra["cuprum_line"] = event.line
+    """Build structured extra data for a log record.
+
+    The common field set comes from the canonical
+    :func:`~cuprum.adapters._support._event_common_fields` projection; this
+    adapter adds only its backend-specific ``cuprum_phase`` and
+    ``cuprum_tags`` keys.
+    """
+    extra: dict[str, object] = {"cuprum_phase": event.phase}
+    extra.update(_event_common_fields(event, "cuprum_{}".format))
+    extra["cuprum_tags"] = dict(event.tags)
     return extra
 
 
