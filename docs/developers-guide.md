@@ -436,7 +436,6 @@ write classification (broken pipe / connection reset) lives on the enum as
 read/write paths previously shared. New failure conditions get a variant here
 rather than a stringly-typed `io::Error::other(...)`.
 
-
 ## Rust splice-loop and drain contract
 
 The Linux zero-copy path in `rust/cuprum-rust/src/splice.rs` follows one
