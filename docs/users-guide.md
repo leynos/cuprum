@@ -1163,8 +1163,11 @@ Worker results include selector observability fields:
 - `reentrant_rejection_count` (int): count of nested selector activations
   rejected on the current thread.
 
-Both values are emitted in `worker-result.json` and are most useful when
-investigating contention between concurrent benchmark runs.
+Both values are cleared at the start of every worker run, so
+`worker-result.json` reports per-invocation totals rather than process-lifetime
+aggregates. When comparing repeated benchmark runs, treat `lock_wait_seconds`
+and `reentrant_rejection_count` as metrics for that single worker invocation's
+`_BACKEND_LOCK` selector context.
 
 Both backends are tested for behavioural parity across edge cases including
 empty streams, multi-byte UTF-8 at chunk boundaries, broken pipes (where the
@@ -1335,8 +1338,8 @@ extension.
 
 **Missing wheels on unsupported platforms.** Pre-built native wheels are
 published for common platforms: Linux (x86_64, aarch64), macOS (x86_64, arm64),
-and Windows (x86_64). On other platforms, `pip install cuprum` installs the
-pure Python wheel automatically. The pure Python wheel provides the same
+and Windows (x86_64, arm64). On other platforms, `pip install cuprum` installs
+the pure Python wheel automatically. The pure Python wheel provides the same
 functionality without Rust acceleration. Contributors who want Rust
 acceleration on unsupported platforms can build from source using the
 prerequisites described above and running `maturin develop`.

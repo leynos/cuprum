@@ -72,14 +72,17 @@ class _SignallingRLock:
         bool
             The wrapped lock acquisition result.
         """
-        if blocking and timeout == -1:
-            if self._delegate.acquire(blocking=False):
-                self._delegate.release()
-            else:
-                self._contention_event.set()
+        if not blocking:
+            return self._delegate.acquire(blocking=False)
+
+        if self._delegate.acquire(blocking=False):
+            self._delegate.release()
+        else:
+            self._contention_event.set()
+
         if timeout == -1:
-            return self._delegate.acquire(blocking=blocking)
-        return self._delegate.acquire(blocking=blocking, timeout=timeout)
+            return self._delegate.acquire(blocking=True)
+        return self._delegate.acquire(blocking=True, timeout=timeout)
 
     def release(self) -> None:
         """Release the wrapped lock."""

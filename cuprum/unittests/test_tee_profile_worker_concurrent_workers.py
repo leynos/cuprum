@@ -26,6 +26,7 @@ if typ.TYPE_CHECKING:
     import pathlib as pth
 
     from benchmarks import tee_profile_worker
+    from _pytest.mark.structures import ParameterSet
 
 
 @dc.dataclass(slots=True)
@@ -78,13 +79,23 @@ def _run_worker_thread(
 
 
 def _backend_pairs() -> tuple[
-    tuple[tee_profile_worker.BackendName, tee_profile_worker.BackendName],
+    tuple[tee_profile_worker.BackendName, tee_profile_worker.BackendName]
+    | ParameterSet,
     ...,
 ]:
     """Return parametrised backend pairs for concurrent-worker tests."""
+    try:
+        alternate_backend = _alternate_backend()
+    except RuntimeError as exc:
+        alternate_pair = pytest.param(
+            ("python", "rust"),
+            marks=pytest.mark.skip(reason=str(exc)),
+        )
+    else:
+        alternate_pair = ("python", alternate_backend)
     return (
         ("python", "python"),
-        ("python", _alternate_backend()),
+        alternate_pair,
     )
 
 

@@ -7,7 +7,10 @@ import pathlib as pth
 import sys
 import typing as typ
 
-from benchmarks._benchmark_type_validators import _validate_int
+from benchmarks._benchmark_type_validators import (
+    _validate_iteration_count,
+    _validate_minimum_int,
+)
 from benchmarks.tee_profile_worker import TeeProfileWorkerConfig
 from cuprum import is_rust_available
 
@@ -22,28 +25,6 @@ type ProfilerName = typ.Literal["none", "perf", "py-spy"]
 _DEFAULT_OUTPUT_DIR = pth.Path("dist/profiles")
 _DEFAULT_FIXTURE = pth.Path("dist/fixtures/seed12345-nowrap.b64")
 _DEFAULT_WRAPPED_FIXTURE = pth.Path("dist/fixtures/seed12345-wrap76.b64")
-_MAX_PROFILE_ITERATIONS = 1000
-
-
-def _check_int_bound(
-    name: str,
-    value: int,
-    minimum: int,
-    maximum: int | None,
-) -> None:
-    """Validate ``value`` is an ``int`` within ``[minimum, maximum]``.
-
-    Raises ``TypeError`` (via the shared :func:`_validate_int`) for non-integer
-    or ``bool`` inputs so the type contract matches the other benchmark
-    configuration validators, then ``ValueError`` if the value is out of range.
-    """
-    _validate_int(value, name=name)
-    if value < minimum:
-        msg = f"{name} must be >= {minimum}, got {value}"
-        raise ValueError(msg)
-    if maximum is not None and value > maximum:
-        msg = f"{name} must be <= {maximum}, got {value}"
-        raise ValueError(msg)
 
 
 def can_use_rust_backend() -> bool:
@@ -120,9 +101,21 @@ class TeeProfileDriverConfig:
     scenario_name: str | None = None
 
     def _validate_numeric_bounds(self) -> None:
-        _check_int_bound("warmup-count", self.warmup_count, 0, _MAX_PROFILE_ITERATIONS)
-        _check_int_bound("repeat-count", self.repeat_count, 1, _MAX_PROFILE_ITERATIONS)
-        _check_int_bound("perf-frequency", self.perf_frequency, 1, None)
+        _validate_iteration_count(
+            self.warmup_count,
+            name="warmup-count",
+            min_value=0,
+        )
+        _validate_iteration_count(
+            self.repeat_count,
+            name="repeat-count",
+            min_value=1,
+        )
+        _validate_minimum_int(
+            self.perf_frequency,
+            name="perf-frequency",
+            min_value=1,
+        )
 
     def _validate_string_fields(self) -> None:
         if not self.perf_call_graph.strip():

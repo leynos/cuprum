@@ -94,6 +94,15 @@ def _validate_iteration_count(
     return validated
 
 
+def _validate_minimum_int(value: object, *, name: str, min_value: int) -> int:
+    """Validate one integer count against a lower bound."""
+    validated = _validate_int(value, name=name)
+    if validated < min_value:
+        msg = f"{name} must be >= {min_value}, got {validated}"
+        raise ValueError(msg)
+    return validated
+
+
 def _validate_hyperfine_iterations(*, warmup: object, runs: object) -> None:
     """Validate hyperfine warmup and run counts."""
     _validate_iteration_count(warmup, name="warmup", min_value=0)
@@ -147,6 +156,7 @@ __all__ = [
     "_validate_hyperfine_iterations",
     "_validate_int",
     "_validate_iteration_count",
+    "_validate_minimum_int",
     "_validate_non_empty_string",
     "_validate_path",
     "_validate_payload_bytes",
