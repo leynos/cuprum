@@ -30,7 +30,7 @@ dev = [
     "ty",
     # Keep in sync with .github/workflows/build-wheels.yml and
     # .github/actions/build-wheels/action.yml.
-    "maturin==1.13.3",
+    "maturin==1.14.0",
 ]
 
 [tool.ruff]
