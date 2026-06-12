@@ -1059,7 +1059,6 @@ The default scenario matrix order is fixed and documented. Callers, snapshot
 tests, and CI artefact directories all depend on it. It must not be reordered
 without updating snapshot files and any downstream tooling.
 
-
 ## Pipeline stdio policy and cwd conversion
 
 Two canonical helpers own the subprocess spawn flags shared by the
