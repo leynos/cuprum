@@ -153,6 +153,17 @@ def test_narrowed_empty_allowlist_remains_restricted() -> None:
         narrowed.check_allowed(ECHO)
 
 
+def test_with_allowlist_preserves_empty_restricted_allowlist() -> None:
+    """with_allowlist() does not make a restricted empty allowlist permissive."""
+    parent = CuprumContext(allowlist=frozenset([ECHO]))
+    empty = parent.narrow(ScopeConfig(allowlist=frozenset()))
+    replaced = empty.with_allowlist(frozenset())
+
+    assert replaced.allowlist == frozenset()
+    with pytest.raises(ForbiddenProgramError):
+        replaced.check_allowed(ECHO)
+
+
 @pytest.mark.crosshair
 @_PROPERTY_SETTINGS
 @given(parent=cuprum_st.allowlists(), config=cuprum_st.optional_allowlists())

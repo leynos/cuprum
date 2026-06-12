@@ -378,9 +378,10 @@ When you call `SafeCmd.run()` or `run_sync()`, Cuprum automatically:
 
 **Empty allowlist behaviour:** When no context is established, all programs are
 permitted. This permissive default is intentional to ease adoption but weakens
-safety; establish an explicit allowlist via `scoped(ScopeConfig())` to enforce
-policy once onboarded. An empty allowlist produced by narrowing an explicit
-scope remains restrictive and permits no programs.
+safety. `scoped(ScopeConfig())` remains permissive; establish an explicit
+allowlist via `scoped(ScopeConfig(allowlist=...))` to enforce policy once
+onboarded. An empty allowlist produced by narrowing an explicit scope remains
+restrictive and permits no programs.
 
 ### Scoped contexts
 
