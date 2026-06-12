@@ -2,8 +2,8 @@
 
 This document records the first full run of the tee hot-path profiling harness
 (`benchmarks/`) and the hotspot verdicts it produced. It is the Phase 1
-baseline evidence called for by
-[ADR-002](adr-002-additional-rust-components.md), and it gates the Phase 2
+baseline evidence called for by Architectural Decision Record (ADR) 002
+([ADR-002](adr-002-additional-rust-components.md)), and it gates the Phase 2
 decision on issue [#127](https://github.com/leynos/cuprum/issues/127)
 (capture-only consume dispatch through `rust_consume_stream`).
 
@@ -46,6 +46,12 @@ fixture).
 | `echo-devnull-nocb-s4-python` | 42.47 s   | 0.14 GiB/s  | Python pump    |
 | `echo-devnull-nocb-s4-rust`   | 7.78 s    | 0.77 GiB/s  | Rust pump      |
 
+The `echo-pty-nocb-s1` scenario echoes into a pseudo-terminal (PTY) sink. The
+line-callback scenario (`-cb-`) uses the wrap-76 fixture, whose 2,175,740,011
+output bytes divide into 28,256,364 lines of 76 characters plus a newline;
+three measured repeats therefore emit 84,769,092 callback invocations (the
+`stdout_line_count` total in `worker-result.json`).
+
 ## Hypothesis verdicts
 
 The harness README frames six questions. The verdicts below cite the `perf`
@@ -54,9 +60,24 @@ py-spy line-level drill-downs.
 
 ### 1. Does the 4 KiB read loop dominate tee time?
 
-**Partially confirmed.** A read-size sweep (monkeypatching
-`cuprum._streams._READ_SIZE`, three repeats each) shows a ~20% improvement that
-plateaus at 16 KiB:
+**Partially confirmed.** A read-size sweep shows a ~20% improvement that
+plateaus at 16 KiB. The sweep used a throwaway inline driver (no harness
+changes): set `cuprum._streams._READ_SIZE` before invoking the worker with the
+same arguments as the scenario, three repeats per point (one repeat for the
+callback row):
+
+```bash
+.venv/bin/python -c "
+import sys
+sys.argv = ['w', '--fixture', 'dist/fixtures/seed12345-nowrap.b64',
+            '--stages', '1', '--mode', 'echo', '--sink-kind', 'devnull',
+            '--backend', 'auto', '--repeat', '3']
+import cuprum._streams as s
+s._READ_SIZE = 65536  # the swept value
+from benchmarks import tee_profile_worker as w
+w.main()
+"
+```
 
 | Mode                        | 4 KiB   | 16 KiB | 64 KiB  | 256 KiB |
 | --------------------------- | ------- | ------ | ------- | ------- |
@@ -80,10 +101,10 @@ baseline. Flush-per-chunk adds syscalls but is not where the time goes.
 
 ### 3. Does the text sink path add substantial decode/write overhead?
 
-**Refuted.** The text-branch scenario is *faster* than the fd-backed sink (5.63
-s vs 6.80 s): per-chunk UTF-8 decode of ASCII base64 is cheaper than the extra
-`write(2)`+flush syscalls to `/dev/null`. Decode cost is negligible
-(`decoder.decode` is 0.24% even in the callback-heavy capture).
+**Refuted.** The text-branch scenario is *faster* than the file-descriptor (fd)
+backed sink (5.63 s vs 6.80 s): per-chunk UTF-8 decode of ASCII base64 is
+cheaper than the extra `write(2)`+flush syscalls to `/dev/null`. Decode cost is
+negligible (`decoder.decode` is 0.24% even in the callback-heavy capture).
 
 ### 4. Does `capture=True` materially increase cost?
 
@@ -136,20 +157,20 @@ frames. The Rust backend collapses that to ~1 s (7.78 s total);
 
 ## Incidental findings
 
-- **FD-close race on the Rust pump path.** The
+- **File-descriptor (FD) close race on the Rust pump path.** The
   `echo-devnull-nocb-s4-rust` run logged repeated
   `OSError: [Errno 9] Bad file descriptor` from
   `_UnixWritePipeTransport._call_connection_lost` during shutdown. This matches
   the file-descriptor ownership risk recorded in ADR-002 and is adjacent to
   issues #124/#125. The run still completed with exit code 0, so the failure is
   currently silent. Worth an issue.
-- **`perf script` drops Python JIT frames on this distro.** Distro perf
-  6.12 resolves `py::` trampoline symbols in `perf report` but not in
-  `perf script`, so the generated `stacks.folded` and `summary.json` contain no
-  Python-level frames (a minimal single-process capture does not reproduce
-  this; the harness's multi-process captures do). Until this is understood,
-  treat `summary.json` as a native-frame ranking and use `perf.report.txt` plus
-  a py-spy raw capture for Python-level attribution.
+- **`perf script` drops Python just-in-time (JIT) trampoline frames on this
+  distro.** Distro perf 6.12 resolves `py::` trampoline symbols in
+  `perf report` but not in `perf script`, so the generated `stacks.folded` and
+  `summary.json` contain no Python-level frames (a minimal single-process
+  capture does not reproduce this; the harness's multi-process captures do).
+  Until this is understood, treat `summary.json` as a native-frame ranking and
+  use `perf.report.txt` plus a py-spy raw capture for Python-level attribution.
 - **Trampoline self-time is thin everywhere.** Python functions carry
   tiny self percentages in perf because most interpreter work lands in native
   CPython symbols (`_PyEval`/tail-call dispatch, allocator). This is expected;
