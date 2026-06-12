@@ -502,7 +502,7 @@ make lint
 `make lint` performs the following commands in order:
 
 1. `$(RUFF) check`
-2. `uv run interrogate --fail-under 100 cuprum`
+2. `$(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum`
 3. The PyPy-backed `pylint-pypy` command stored in `$(PYLINT)`, with
    `$(PYLINT_TARGETS)` appended.
 
