@@ -522,7 +522,6 @@ and tool-discovery recipes only. This supports non-interactive Continuous
 Integration/Continuous Delivery (CI/CD) hook environments without globally
 shadowing system tools for unrelated Makefile workflows.
 
-
 ## Rust error taxonomy (`PumpError`)
 
 The `cuprum-rust` crate reports stream pump and consume failures through one
