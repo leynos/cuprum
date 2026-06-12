@@ -15,6 +15,7 @@ UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
 LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
 LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
 UV_RUN_ENV = $(LOCAL_TOOL_ENV) $(UV_ENV)
+RUFF = $(UV_RUN_ENV) uv run ruff
 PYLINT_PYTHON ?= pypy
 PYLINT_TARGETS ?= benchmarks conftest.py cuprum tests
 PYLINT_PYPY_SHIM_REF ?= 726d09f968b4d729ee4b29c71fc732e744854f3b
@@ -77,18 +78,18 @@ $(VENV_TOOLS): ## Verify required CLI tools in venv
 endif
 
 fmt: ruff $(MDFORMAT_ALL) ## Format sources
-	$(UV_RUN_ENV) uv run ruff format
-	$(UV_RUN_ENV) uv run ruff check --select I --fix
+	$(RUFF) format
+	$(RUFF) check --select I --fix
 	cd $(RUST_DIR) && $(CARGO) fmt --all
 	$(LOCAL_TOOL_ENV) $(MDFORMAT_ALL)
 
 check-fmt: ruff ## Verify formatting
-	$(UV_RUN_ENV) uv run ruff format --check
+	$(RUFF) format --check
 	cd $(RUST_DIR) && $(CARGO) fmt --all -- --check
 	# mdformat-all doesn't currently do checking
 
 lint: ruff uv ## Run linters
-	$(UV_RUN_ENV) uv run ruff check
+	$(RUFF) check
 	$(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum
 	$(PYLINT) $(PYLINT_TARGETS)
 	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps
