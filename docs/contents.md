@@ -31,6 +31,8 @@ open each document.
   accepted decision for combining Ruff with Pylint under PyPy.
 - [ADR-004: Interrogate docstring-coverage gate][adr-004] - accepted decision
   to enforce 100% docstring coverage as a third lint tier.
+- [Tee hot-path profiling baseline (2026-06-12)][tee-baseline] - measured
+  hotspot verdicts from the tee profiling harness, gating ADR-002 Phase 2.
 
 ## Planning and validation references
 
@@ -44,3 +46,4 @@ open each document.
 
 [adr-004]: adr-004-interrogate-docstring-gate.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
+[tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md
