@@ -43,9 +43,14 @@ try:
     from crosshair.options import AnalysisKind, AnalysisOptionSet
     from crosshair.statespace import MessageType
     from crosshair.test_util import check_states
-except Exception:  # noqa: BLE001 - any CrossHair init failure means "unavailable"
-    # Covers both missing dev deps (ImportError) and an interpreter whose
-    # opcode set CrossHair cannot yet trace (TraceException).
+except BaseException as _crosshair_exc:
+    # ``crosshair.tracers.TraceException`` subclasses ``BaseException`` (not
+    # ``Exception``) and is raised while importing the tracer module itself,
+    # so it cannot be named here without re-triggering the failing import.
+    # Re-raise genuine control-flow exceptions and treat anything else
+    # (ImportError, TraceException) as "CrossHair unavailable".
+    if isinstance(_crosshair_exc, KeyboardInterrupt | SystemExit | GeneratorExit):
+        raise
     AnalysisOptionSet = typ.cast("typ.Any", None)
     AnalysisKind = typ.cast("typ.Any", None)
     MessageType = typ.cast("typ.Any", None)
