@@ -202,7 +202,6 @@ It is intentionally not re-entrant: a thread-local guard detects nested entry
 on the same thread, logs the rejected backend and thread identifier, and raises
 `RuntimeError` before mutating backend state.
 
-
 ### Selector observability metrics
 
 `TeeProfileWorkerResult` includes selector metrics gathered while activating
