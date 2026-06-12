@@ -25,8 +25,9 @@ from cuprum.unittests.conftest import (
 if typ.TYPE_CHECKING:
     import pathlib as pth
 
-    from benchmarks import tee_profile_worker
     from _pytest.mark.structures import ParameterSet
+
+    from benchmarks import tee_profile_worker
 
 
 @dc.dataclass(slots=True)
