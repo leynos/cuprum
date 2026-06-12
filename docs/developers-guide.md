@@ -96,12 +96,12 @@ startup overhead.
 Each worker process executes `worker_iterations` pipeline runs (default: 20).
 Hyperfine therefore measures a batched worker invocation rather than one cold
 pipeline execution, reducing Python interpreter startup noise in the ratchet.
-The ratchet itself compares each scenario's within-run `rust_mean /
-python_mean` ratio between the baseline and candidate runs, so runner-speed
-differences and residual startup overhead cancel out of the comparison.
-Dry-run plans record `benchmark_profile_version` and `worker_iterations`;
-ratchet comparison skips older baseline artefacts whose profile metadata does
-not match the current benchmark shape.
+The ratchet itself compares each scenario's within-run
+`rust_mean / python_mean` ratio between the baseline and candidate runs, so
+runner-speed differences and residual startup overhead cancel out of the
+comparison. Dry-run plans record `benchmark_profile_version` and
+`worker_iterations`; ratchet comparison skips older baseline artefacts whose
+profile metadata does not match the current benchmark shape.
 
 The remaining fields follow the benchmark plan: `output_path` receives
 hyperfine JSON or dry-run plan JSON, `worker_path` points at the worker module,
@@ -489,6 +489,9 @@ The short version is:
 - Pylint runs through the PyPy shim so that the third tier is isolated from the
   project virtual environment and matches the lint approach used by
   `leynos/episodic`.
+- `$(PYLINT)` pins Pylint itself with
+  `--with 'pylint==$(PYLINT_VERSION)'` because the shim revision and Pylint
+  package version are separate sources of lint behaviour.
 
 Run the complete lint gate with:
 
@@ -498,14 +501,22 @@ make lint
 
 `make lint` performs the following commands in order:
 
-1. `ruff check`
-2. `interrogate --fail-under 100 cuprum`
+1. `$(RUFF) check`
+2. `$(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum`
 3. The PyPy-backed `pylint-pypy` command stored in `$(PYLINT)`, with
    `$(PYLINT_TARGETS)` appended.
 
 Each tier must pass before the next runs. When investigating a lint failure,
 fix the Ruff findings first, then the `interrogate` gaps, then rerun
 `make lint` to reach the Pylint tier.
+
+Ruff must be invoked through the project virtual environment, not as a floating
+host tool. The `RUFF` variable expands to `$(UV_RUN_ENV) uv run ruff`, and the
+`ruff` probe lives in `VENV_TOOLS` so `make` verifies that the locked
+dependency from `uv.lock` is available before running `fmt`, `check-fmt`, or
+`lint`. Continuous Integration (CI) and local runs must keep using this
+`uv run` path for Ruff linting and formatting so preview-rule changes only
+arrive through an explicit lockfile update.
 
 Because `interrogate` requires a docstring on every documentable node,
 documenting a large module can take it over the project's 400-line ceiling
@@ -520,15 +531,19 @@ The root `Makefile` exposes the following lint-related variables:
 
 <!-- markdownlint-disable MD013 -->
 
-| Variable               | Default                                                                      | Purpose                                                                |
-| ---------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `PYLINT_PYTHON`        | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.     |
-| `PYLINT_TARGETS`       | `benchmarks conftest.py cuprum tests`                                        | Directories and files passed to `pylint-pypy`.                         |
-| `PYLINT_PYPY_SHIM_REF` | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                          |
-| `PYLINT_PYPY_SHIM`     | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                  |
-| `PYLINT`               | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                   |
-| `LOCAL_TOOL_ENV`       | Derived `PATH`                                                               | Adds local binary directories before invoking host tools such as Ruff. |
-| `UV_ENV`               | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.              |
+| Variable               | Default                                                                      | Purpose                                                                    |
+| ---------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `VENV_TOOLS`           | `pytest ruff`                                                                | Tools that must resolve through `uv run` from the locked virtualenv.       |
+| `RUFF`                 | `$(UV_RUN_ENV) uv run ruff`                                                  | Locked Ruff command used by `fmt`, `check-fmt`, and `lint`.                |
+| `PYLINT_PYTHON`        | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.         |
+| `PYLINT_TARGETS`       | `benchmarks conftest.py cuprum tests`                                        | Directories and files passed to `pylint-pypy`.                             |
+| `PYLINT_PYPY_SHIM_REF` | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                              |
+| `PYLINT_PYPY_SHIM`     | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                      |
+| `PYLINT_VERSION`       | `4.0.5`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.         |
+| `PYLINT`               | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                       |
+| `LOCAL_TOOL_ENV`       | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools. |
+| `UV_ENV`               | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                  |
+| `UV_RUN_ENV`           | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment for locked `uv run` commands such as `$(RUFF)`.         |
 
 <!-- markdownlint-enable MD013 -->
 

@@ -13,6 +13,8 @@ jobs:
   lint-test:
     runs-on: ubuntu-latest
     env:
+      MBAKE_VERSION: '1.4.6'
+      TY_VERSION: '0.0.8'
       WHITAKER_INSTALLER_VERSION: '0.2.5'
     steps:
       - name: Check out repository
@@ -28,7 +30,8 @@ jobs:
 
       - name: Install CLI tools
         run: |
-          for tool in mbake ty ruff; do uv tool install ${tool}; done
+          uv tool install "mbake==${MBAKE_VERSION}"
+          uv tool install "ty==${TY_VERSION}"
           npm install -g markdownlint-cli2
 
       - name: Install Rust toolchain
