@@ -489,6 +489,9 @@ The short version is:
 - Pylint runs through the PyPy shim so that the third tier is isolated from the
   project virtual environment and matches the lint approach used by
   `leynos/episodic`.
+- `$(PYLINT)` pins Pylint itself with
+  `--with 'pylint==$(PYLINT_VERSION)'` because the shim revision and Pylint
+  package version are separate sources of lint behaviour.
 
 Run the complete lint gate with:
 
@@ -536,6 +539,7 @@ The root `Makefile` exposes the following lint-related variables:
 | `PYLINT_TARGETS`       | `benchmarks conftest.py cuprum tests`                                        | Directories and files passed to `pylint-pypy`.                             |
 | `PYLINT_PYPY_SHIM_REF` | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                              |
 | `PYLINT_PYPY_SHIM`     | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                      |
+| `PYLINT_VERSION`       | `4.0.5`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.         |
 | `PYLINT`               | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                       |
 | `LOCAL_TOOL_ENV`       | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools. |
 | `UV_ENV`               | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                  |
