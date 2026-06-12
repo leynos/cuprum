@@ -751,7 +751,6 @@ The default scenario matrix order is fixed and documented. Callers, snapshot
 tests, and CI artefact directories all depend on it. It must not be reordered
 without updating snapshot files and any downstream tooling.
 
-
 ## Output-behaviour carrier
 
 `RunOutputOptions` (`capture`, `echo`) is the single canonical carrier for a
