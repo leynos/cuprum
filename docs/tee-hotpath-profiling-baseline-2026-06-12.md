@@ -20,6 +20,8 @@ decision on issue [#127](https://github.com/leynos/cuprum/issues/127)
 | Sampling      | `perf record -F 999 -g --call-graph dwarf,16384`           |
 | Corroboration | py-spy 100-200 Hz, parent process only                     |
 
+_Table 1: Profiling environment._
+
 Fixtures were generated with `benchmarks/deterministic_b64_fixture.py`
 (algorithm `sha256-counter-v1`, seed 12345, 1.5 GiB raw):
 
@@ -45,6 +47,8 @@ fixture).
 | `echo-devnull-cb-s1`          | 312.11 s  | 0.019 GiB/s | 84.77 M lines  |
 | `echo-devnull-nocb-s4-python` | 42.47 s   | 0.14 GiB/s  | Python pump    |
 | `echo-devnull-nocb-s4-rust`   | 7.78 s    | 0.77 GiB/s  | Rust pump      |
+
+_Table 2: Scenario wall times and throughput._
 
 The `echo-pty-nocb-s1` scenario echoes into a pseudo-terminal (PTY) sink. The
 line-callback scenario (`-cb-`) uses the wrap-76 fixture, whose 2,175,740,011
@@ -85,6 +89,8 @@ w.main()
 | tee                         | 13.50 s | —      | 10.98 s | —       |
 | echo + callbacks (1 repeat) | ~104 s  | —      | 88.2 s  | —       |
 
+_Table 3: Wall time by `_READ_SIZE` across modes._
+
 The remaining cost is kernel pipe transfer and `memmove`
 (`__memmove_avx_unaligned_erms` is 37% of leaf samples in the baseline, with
 ~42% unresolved kernel leaf time at `perf_event_paranoid=2`). Raising
@@ -101,7 +107,7 @@ baseline. Flush-per-chunk adds syscalls but is not where the time goes.
 
 ### 3. Does the text sink path add substantial decode/write overhead?
 
-**Refuted.** The text-branch scenario is *faster* than the file-descriptor (fd)
+**Refuted.** The text-branch scenario is _faster_ than the file-descriptor (fd)
 backed sink (5.63 s vs 6.80 s): per-chunk UTF-8 decode of ASCII base64 is
 cheaper than the extra `write(2)`+flush syscalls to `/dev/null`. Decode cost is
 negligible (`decoder.decode` is 0.24% even in the callback-heavy capture).
@@ -136,6 +142,8 @@ chain decomposes as:
 | ~8%  | `inspect.isawaitable` per hook call (`_emit_exec_event`)                       |
 | ~3%  | `SafeCmd.argv_with_program` recomputed per line                                |
 | ~1%  | the benchmark's own counting callback                                          |
+
+_Table 4: Per-line dispatch cost breakdown._
 
 Every output line builds a fresh `ExecEvent` carrying programme, argv, cwd,
 env, pid, and a wall-clock timestamp, then runs awaitable detection per hook.
