@@ -125,6 +125,35 @@ Linux `perf` as the primary profiler, supports optional `py-spy` corroboration,
 and can run unprofiled smoke scenarios when only command construction and
 worker behaviour need to be checked.
 
+### Profiling prerequisites and build settings
+
+Linux is the reference platform for profiler artefacts. Symbol-quality and
+sampling settings must match those used to collect the baseline, otherwise the
+call graphs lose Rust and Python frames:
+
+- Build the native extension with frame pointers so `perf` can unwind mixed
+  Python and Rust stacks: `RUSTFLAGS="-C force-frame-pointers=yes"` before
+  `maturin develop --release`.
+- Export `PYTHONPERFSUPPORT=1` so CPython emits `perf` map entries for
+  interpreted frames.
+- Sample with `perf record -F 999 -g --call-graph dwarf,16384`. DWARF
+  unwinding is more robust than frame-pointer-only unwinding for the mixed
+  stacks here; the driver applies these defaults and exposes `--perf-frequency`
+  and `--perf-call-graph` overrides.
+- Install `perf`, `inferno-collapse-perf`, and optionally `py-spy` on `PATH`.
+
+These settings, the deterministic fixtures, and the full reproduction sequence
+are recorded in
+[the tee hot-path profiling baseline](tee-hotpath-profiling-baseline-2026-06-12.md).
+The harness reproduction entrypoint is:
+
+```bash
+export RUSTFLAGS="-C force-frame-pointers=yes"
+export PYTHONPERFSUPPORT=1
+uv run maturin develop --release --manifest-path rust/cuprum-rust/Cargo.toml
+uv run python benchmarks/profile_tee_hotpath.py --profiler perf run
+```
+
 ## Fixture generation (`benchmarks/deterministic_b64_fixture.py`)
 
 `FixtureConfig` describes deterministic fixture generation with three fields:
