@@ -90,6 +90,7 @@ def _join_and_assert_finished(
         f"expected threads to finish{f' ({context})' if context else ''}, got {alive}"
     )
 
+
 def pytest_configure(config: pytest.Config) -> None:
     """Register local pytest markers."""
     config.addinivalue_line(
