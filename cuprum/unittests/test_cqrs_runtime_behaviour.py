@@ -333,6 +333,30 @@ def test_pump_stream_logs_discarded_bytes_after_downstream_close(
     )
 
 
+def test_pump_stream_omits_downstream_close_log_without_writer(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Missing writers drain quietly without reporting downstream closure."""
+
+    async def exercise() -> _StubPumpReader:
+        """Pump with no writer so the reader is simply drained."""
+        reader = _StubPumpReader([b"a" * 8, b"b" * 8])
+        await _pump_stream(typ.cast("asyncio.StreamReader", reader), None)
+        return reader
+
+    with caplog.at_level(logging.DEBUG, logger="cuprum.streams"):
+        reader = asyncio.run(exercise())
+
+    close_records = [
+        record
+        for record in caplog.records
+        if record.name == "cuprum.streams"
+        and "stream_downstream_closed" in record.message
+    ]
+    assert reader.read_calls == 3, "pump should drain all chunks plus EOF"
+    assert not close_records, "missing writer should not log downstream closure"
+
+
 @given(
     chunks=st.lists(st.binary(min_size=1, max_size=64), min_size=0, max_size=8),
     fail_on_drain_call=st.integers(min_value=1, max_value=10),
