@@ -7,7 +7,6 @@ the [design document](cuprum-design.md); for where code lives, see the
 [repository layout](repository-layout.md); and for accepted architectural
 decisions, see [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md).
 
-
 ## Rust dependency management
 
 When editing `Cargo.toml`, dependencies must use explicit semver-compatible
