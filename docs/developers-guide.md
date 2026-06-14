@@ -147,9 +147,9 @@ call graphs lose Rust and Python frames:
   graphs this harness needs; kernel symbols remain unresolved at that level
   (raw addresses in the call trees). Check the current level with
   `cat /proc/sys/kernel/perf_event_paranoid`. If sampling is denied, either
-  lower it for the session (`sudo sysctl -w kernel.perf_event_paranoid=2`, or a
-  lower value such as `1` or `-1` to resolve kernel frames too) or grant
-  `CAP_PERFMON` to the `perf` invocation.
+  lower it on the host (`sudo sysctl -w kernel.perf_event_paranoid=2`, or a
+  lower value such as `1` or `-1` if kernel frames are also required), or grant
+  `CAP_PERFMON` to the `perf` binary (for example with `setcap`).
 - Install `perf`, `inferno-collapse-perf`, and optionally `py-spy` on `PATH`.
 
 These settings, the deterministic fixtures, and the full reproduction sequence
@@ -495,7 +495,8 @@ toolchain library directory from the installed version rather than hard-coding
 it:
 
 ```bash
-LD_LIBRARY_PATH="$HOME/.kani/kani-$(cargo kani --version | awk '{print $2}')/toolchain/lib" \
+cd rust && \
+  LD_LIBRARY_PATH="$HOME/.kani/kani-$(cargo kani --version | awk '{print $2}')/toolchain/lib" \
   cargo kani --package cuprum-rust
 ```
 
