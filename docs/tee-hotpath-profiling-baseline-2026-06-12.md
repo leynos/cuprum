@@ -73,7 +73,7 @@ same arguments as the scenario, three repeats per point (one repeat for the
 callback row):
 
 ```bash
-.venv/bin/python -c "
+uv run python -c "
 import sys
 sys.argv = ['w', '--fixture', 'dist/fixtures/seed12345-nowrap.b64',
             '--stages', '1', '--mode', 'echo', '--sink-kind', 'devnull',
@@ -223,4 +223,31 @@ uv run python benchmarks/deterministic_b64_fixture.py --seed 12345 \
   --manifest dist/fixtures/seed12345-wrap76.json
 
 uv run python benchmarks/profile_tee_hotpath.py --profiler perf run
+```
+
+The py-spy corroboration captures (the parent-only folded stacks under
+`dist/profiles/pyspy/` that back the hypothesis 4 and 5 drill-downs) were taken
+separately, outside the driver, so py-spy attaches directly to the worker
+interpreter rather than to `uv run` or the writer subprocess. Resolve the venv
+interpreter portably with `sys.executable`:
+
+```bash
+PYTHON=$(uv run python -c "import sys; print(sys.executable)")
+
+py-spy record --format raw --rate 200 \
+  --output dist/profiles/pyspy/tee-devnull-nocb-s1.folded \
+  -- "$PYTHON" -m benchmarks.tee_profile_worker \
+     --fixture dist/fixtures/seed12345-nowrap.b64 \
+     --stages 1 --mode tee --sink-kind devnull --backend auto --repeat 1
+
+py-spy record --format raw --rate 100 \
+  --output dist/profiles/pyspy/echo-devnull-cb-s1.folded \
+  -- "$PYTHON" -m benchmarks.tee_profile_worker \
+     --fixture dist/fixtures/seed12345-wrap76.b64 \
+     --stages 1 --mode echo --sink-kind devnull --line-callbacks \
+     --backend auto --repeat 1
+
+uv run python benchmarks/summarize_folded.py \
+  dist/profiles/pyspy/echo-devnull-cb-s1.folded \
+  --output dist/profiles/pyspy/echo-devnull-cb-s1.summary.json
 ```
