@@ -102,10 +102,10 @@ Stream pumping continues to drain the upstream reader after
 `_write_to_stream_writer` reports `_WriteOutcome.CLOSED`.  `_pump_stream`
 closes the writer in a `finally` block, so writer cleanup runs after success,
 exceptions, and cancellation.  Tests cover this contract at three levels:
-direct helper tests in `cuprum/unittests/test_cqrs_helpers.py`, generated
-stream-drain properties in `cuprum/unittests/test_pipeline.py`, and
-end-to-end command and pipeline runs through `SafeCmd.run_sync()` and
-`Pipeline.run_sync()`.
+    direct helper tests in `cuprum/unittests/test_cqrs_helpers.py`, runtime
+    behaviour and stream-drain properties in
+    `cuprum/unittests/test_cqrs_runtime_behaviour.py`, and observe-task
+    assertions in `cuprum/unittests/test_observe.py`.
 
 ## Context allowlist internals
 

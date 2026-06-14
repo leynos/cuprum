@@ -163,7 +163,7 @@ async def _relay_chunks(
     reader is still consumed to EOF so upstream stages do not block on a
     full pipe.
     """
-    has_downstream_closed = writer is None
+    has_downstream_closed = False
     while writer is not None:
         chunk = await reader.read(_READ_SIZE)
         if not chunk:
