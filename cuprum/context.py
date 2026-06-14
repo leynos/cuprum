@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
+import logging
 import os
 import typing as typ
 from contextvars import ContextVar, Token
@@ -58,6 +59,8 @@ from cuprum.events import ExecHook
 if typ.TYPE_CHECKING:
     from cuprum.program import Program
     from cuprum.sh import CommandResult, SafeCmd
+
+_logger = logging.getLogger(__name__)
 
 
 type BeforeHook = cabc.Callable[[SafeCmd], None]
@@ -330,6 +333,15 @@ class CuprumContext:
             return  # Empty allowlist permits all programs
         if not self.is_allowed(program):
             msg = f"Program '{program}' is not allowed in the current context"
+            _logger.warning(
+                "Program %s denied by context allowlist restricted_state=%s",
+                program,
+                self._allowlist_is_restricted,
+                extra={
+                    "operation": program,
+                    "restricted_state": self._allowlist_is_restricted,
+                },
+            )
             raise ForbiddenProgramError(msg)
 
     def narrow(self, config: ScopeConfig) -> CuprumContext:

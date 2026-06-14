@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import logging
 import typing as typ
 from unittest import mock
 
@@ -526,12 +527,29 @@ def test_context_is_isolated_per_async_task() -> None:
 # =============================================================================
 
 
-def test_forbidden_program_error_raised_for_disallowed() -> None:
-    """check_allowed raises ForbiddenProgramError for disallowed programs."""
-    ctx = CuprumContext(allowlist=frozenset([ECHO]))
+def test_forbidden_program_error_raised_for_disallowed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """check_allowed raises and logs denied programs."""
+    ctx = CuprumContext().narrow(ScopeConfig(allowlist=frozenset([ECHO])))
+
+    caplog.set_level(logging.WARNING, logger="cuprum.context")
+
     with pytest.raises(ForbiddenProgramError) as exc_info:
         ctx.check_allowed(LS)
+
     assert "ls" in str(exc_info.value).lower()
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "cuprum.context" and record.levelno == logging.WARNING
+    ]
+    assert len(records) == 1
+    record = typ.cast("typ.Any", records[0])
+    assert "ls" in record.getMessage()
+    assert "restricted_state=True" in record.getMessage()
+    assert record.operation == LS
+    assert record.restricted_state is True
 
 
 def test_check_allowed_passes_for_allowed_program() -> None:
