@@ -11,6 +11,7 @@ from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 from benchmarks.ci_benchmark_ratchet_profile import (
     build_hyperfine_command,
     load_plan_payload,
+    main,
     select_ci_ratchet_scenarios,
     write_filtered_plan,
 )
@@ -261,6 +262,48 @@ def test_write_filtered_plan_preserves_selected_scenarios(tmp_path: pth.Path) ->
         "scenarios": [scenario for scenario, _ in selected],
         "worker_iterations": 20,
     }
+
+
+def test_main_rejects_non_bool_rust_availability(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The CLI helper should reject malformed dry-run plan metadata."""
+    full_plan_path = tmp_path / "full-plan.json"
+    filtered_plan_path = tmp_path / "filtered-plan.json"
+    throughput_path = tmp_path / "throughput.json"
+    full_plan_path.write_text(
+        json.dumps({
+            "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+            "dry_run": True,
+            "rust_available": "false",
+            "worker_iterations": 20,
+            "command": ["a", "b", "c", "d", "e", "f", "g", "rust cmd"],
+            "scenarios": [
+                _scenario(
+                    name="rust-small-single-nocb",
+                    backend="rust",
+                    payload_bytes=1024,
+                    stages=2,
+                )
+            ],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "benchmarks.ci_benchmark_ratchet_profile.subprocess.run",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(TypeError, match="rust_available must be a bool"):
+        main([
+            "--full-plan",
+            str(full_plan_path),
+            "--filtered-plan",
+            str(filtered_plan_path),
+            "--throughput",
+            str(throughput_path),
+        ])
 
 
 def test_write_filtered_plan_rejects_non_boolean_rust_available(

@@ -215,6 +215,16 @@ def test_profile_matrix_stops_after_first_worker_failure(
             id="repeat-zero",
         ),
         pytest.param(
+            {"warmup_count": 1001},
+            "warmup-count must be <= 1000",
+            id="warmup-too-large",
+        ),
+        pytest.param(
+            {"repeat_count": 1001},
+            "repeat-count must be <= 1000",
+            id="repeat-too-large",
+        ),
+        pytest.param(
             {"perf_frequency": 0},
             "perf-frequency must be >= 1",
             id="perf-freq-zero",

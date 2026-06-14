@@ -1761,6 +1761,28 @@ nested selector use visible in CLI and CI logs while keeping recovery simple:
 after the exception, the outer selector still restores `CUPRUM_STREAM_BACKEND`
 and refreshes the cached backend choice.
 
+#### Selector observability metrics
+
+Each `_EnvBackendSelector` instance owns a `_MetricsState` object backed by
+`threading.local`. `_MetricsState` accumulates two per-run counters that are
+exposed through the `BackendSelector.metrics_state` protocol property:
+
+- **`lock_wait_seconds`** – total wall-clock time the current thread spent
+  waiting to acquire `_BACKEND_LOCK` during this worker run.
+- **`reentrant_rejection_count`** – number of nested selector activations that
+  were rejected on the current thread.
+
+`run_tee_profile_worker` calls `selector.metrics_state.reset()` before starting
+the repeat loop and reads a snapshot afterwards; the snapshot values appear
+verbatim in `TeeProfileWorkerResult` as `lock_wait_seconds` and
+`reentrant_rejection_count`. Both counters are therefore scoped to a single
+worker invocation and do not accumulate across calls.
+
+`_EnvBackendSelector` accepts an optional `clock` parameter (a zero-argument
+callable returning `float`) so tests can inject a deterministic time source.
+The selector records `clock()` before and after each `_BACKEND_LOCK` acquisition
+and adds the difference to `metrics_state.lock_wait_seconds`.
+
 For screen readers: The following flowchart illustrates the backend selection
 algorithm, showing how the environment variable and availability checks
 determine which pathway is used.

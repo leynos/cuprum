@@ -105,6 +105,23 @@ def test_hyperfine_config_rejects_non_positive_runs() -> None:
         HyperfineConfig(warmup=0, runs=0)
 
 
+@pytest.mark.parametrize(
+    ("warmup", "runs", "fragment"),
+    [
+        pytest.param(1001, 1, "warmup must be <= 1000", id="warmup-too-large"),
+        pytest.param(0, 1001, "runs must be <= 1000", id="runs-too-large"),
+    ],
+)
+def test_hyperfine_config_rejects_excessive_iterations(
+    warmup: int,
+    runs: int,
+    fragment: str,
+) -> None:
+    """Hyperfine iteration counts should have a practical upper bound."""
+    with pytest.raises(ValueError, match=fragment):
+        HyperfineConfig(warmup=warmup, runs=runs)
+
+
 def test_pipeline_benchmark_config_coerces_string_paths() -> None:
     """Config path fields accept strings and are normalized to ``Path``."""
     config = PipelineBenchmarkConfig(
@@ -200,6 +217,17 @@ def test_pipeline_benchmark_config_rejects_non_pathlike_output_path() -> None:
             },
             "backend must be one of",
             id="invalid_backend",
+        ),
+        pytest.param(
+            {
+                "name": "pipeline-unhashable",
+                "backend": [],  # type: ignore[arg-type]
+                "payload_bytes": 1024,
+                "stages": 2,
+                "with_line_callbacks": False,
+            },
+            "backend must be one of",
+            id="unhashable_backend",
         ),
         pytest.param(
             {

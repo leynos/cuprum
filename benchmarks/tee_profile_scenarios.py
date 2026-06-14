@@ -7,6 +7,10 @@ import pathlib as pth
 import sys
 import typing as typ
 
+from benchmarks._benchmark_type_validators import (
+    _validate_iteration_count,
+    _validate_minimum_int,
+)
 from benchmarks.tee_profile_worker import TeeProfileWorkerConfig
 from cuprum import is_rust_available
 
@@ -96,20 +100,32 @@ class TeeProfileDriverConfig:
     perf_call_graph: str = "dwarf,16384"
     scenario_name: str | None = None
 
-    def __post_init__(self) -> None:
-        """Validate driver configuration."""
-        int_bounds: tuple[tuple[str, int, int], ...] = (
-            ("warmup-count", self.warmup_count, 0),
-            ("repeat-count", self.repeat_count, 1),
-            ("perf-frequency", self.perf_frequency, 1),
+    def _validate_numeric_bounds(self) -> None:
+        _validate_iteration_count(
+            self.warmup_count,
+            name="warmup-count",
+            min_value=0,
         )
-        for name, value, minimum in int_bounds:
-            if value < minimum:
-                msg = f"{name} must be >= {minimum}, got {value}"
-                raise ValueError(msg)
+        _validate_iteration_count(
+            self.repeat_count,
+            name="repeat-count",
+            min_value=1,
+        )
+        _validate_minimum_int(
+            self.perf_frequency,
+            name="perf-frequency",
+            min_value=1,
+        )
+
+    def _validate_string_fields(self) -> None:
         if not self.perf_call_graph.strip():
             msg = "perf-call-graph must be a non-empty string"
             raise ValueError(msg)
+
+    def __post_init__(self) -> None:
+        """Validate driver configuration."""
+        self._validate_numeric_bounds()
+        self._validate_string_fields()
 
 
 def _single_stage_no_callback_scenarios(

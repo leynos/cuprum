@@ -64,6 +64,7 @@ type WorkerCommandResult = sh.CommandResult | sh.PipelineResult
 _VALID_MODES = {"echo", "capture", "tee"}
 _VALID_SINKS = {"devnull", "text_blackhole", "pty_blackhole"}
 _VALID_BACKENDS = {"auto", "python", "rust"}
+_MAX_REPEAT_COUNT = 1000
 _REENTRANT_SELECTOR_MESSAGE = (
     "_EnvBackendSelector is not re-entrant; nested calls are forbidden"
 )
@@ -74,8 +75,14 @@ class BackendSelector(typ.Protocol):
     """Interface for activating a named stream backend for a context.
 
     Implementations must be usable as a context manager that sets the backend
-    on entry and restores the previous state on exit.
+    on entry and restores the previous state on exit. Metrics state is exposed
+    explicitly so worker result assembly does not depend on module globals.
     """
+
+    @property
+    def metrics_state(self) -> _MetricsState:
+        """Return the metrics accumulator owned by this selector."""
+        ...
 
     def __call__(self, backend: BackendName) -> contextlib.AbstractContextManager[None]:
         """Return a context manager that activates *backend*."""
@@ -126,6 +133,52 @@ class _BackendSelectorState:
 _selector_state = _BackendSelectorState(_lock_state)
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _SelectorMetrics:
+    """Thread-local selector observability metrics."""
+
+    lock_wait_seconds: float = 0.0
+    reentrant_rejection_count: int = 0
+
+
+class _MetricsState:
+    """Accumulate selector metrics for the current thread."""
+
+    # Why keep this small wrapper instead of inlining thread-local fields:
+    # CodeScene separately asked for explicit selector metrics ownership.
+    # ``BackendSelector.metrics_state`` declares this type as the protocol
+    # boundary, and property tests exercise its accumulation/reset invariants.
+    # Removing it would hide the dependency again and drop that coverage.
+
+    def __init__(self, state: threading.local) -> None:
+        """Store the thread-local state object used by metrics."""
+        self._state = state
+
+    def reset(self) -> None:
+        """Clear accumulated metrics for the current thread."""
+        self._state.lock_wait_seconds = 0.0
+        self._state.reentrant_rejection_count = 0
+
+    def add_lock_wait(self, seconds: float) -> None:
+        """Accumulate backend-lock wait duration."""
+        self._state.lock_wait_seconds = self.snapshot().lock_wait_seconds + seconds
+
+    def increment_rejections(self) -> int:
+        """Increment and return the reentrant-rejection count."""
+        count = self.snapshot().reentrant_rejection_count + 1
+        self._state.reentrant_rejection_count = count
+        return count
+
+    def snapshot(self) -> _SelectorMetrics:
+        """Return current-thread selector metrics."""
+        return _SelectorMetrics(
+            lock_wait_seconds=float(getattr(self._state, "lock_wait_seconds", 0.0)),
+            reentrant_rejection_count=int(
+                getattr(self._state, "reentrant_rejection_count", 0),
+            ),
+        )
+
+
 class TeeProfileWorkerResult(typ.TypedDict):
     """Machine-readable tee profiling worker result payload."""
 
@@ -139,6 +192,8 @@ class TeeProfileWorkerResult(typ.TypedDict):
     backend: BackendName
     repeat_count: int
     wall_time_seconds: float
+    lock_wait_seconds: float
+    reentrant_rejection_count: int
     status: typ.Literal["ok", "failed"]
     exit_code: int
     captured_output_length: int
@@ -181,6 +236,11 @@ class TeeProfileWorkerConfig:
         if self.repeat_count < 1:
             msg = f"repeat-count must be >= 1, got {self.repeat_count}"
             raise ValueError(msg)
+        if self.repeat_count > _MAX_REPEAT_COUNT:
+            msg = (
+                f"repeat-count must be <= {_MAX_REPEAT_COUNT}, got {self.repeat_count}"
+            )
+            raise ValueError(msg)
 
     def _validate_enum_fields(self) -> None:
         """Validate enum-like worker fields."""
@@ -207,6 +267,35 @@ class _WorkerCommand:
 
     cmd: sh.SafeCmd | sh.Pipeline
     allowlist: frozenset[Program]
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _RunTotals:
+    """Accumulated totals from one worker repeat loop."""
+
+    # Why not inline this into ``_build_worker_result``: this type, together
+    # with ``_TimingContext``, keeps that helper's argument list at four.
+    # Inlining either grouping would re-trigger the PLR0913/CodeScene finding
+    # that this PR already resolved, so this indirection is structural.
+
+    captured_output_length: int
+    stdout_line_count: int
+    exit_code: int
+    status: typ.Literal["ok", "failed"]
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _TimingContext:
+    """Wall-clock callable and the timestamp at which the worker run started."""
+
+    # ``timer`` and ``started`` are a single timing concept. The wrapper keeps
+    # that coupling explicit and shares the same "do not inline" rationale as
+    # ``_RunTotals``: suppressing complexity findings for these bounded helper
+    # types is preferable to regressing an already-resolved argument-count
+    # diagnostic or weakening testability.
+
+    timer: Clock
+    started: float
 
 
 def _writer_script() -> str:
@@ -281,6 +370,29 @@ class _EnvBackendSelector:
     the rejected backend and thread identifier.
     """
 
+    def __init__(
+        self,
+        *,
+        clock: Clock | None = None,
+        metrics_state: _MetricsState | None = None,
+        selector_state: _BackendSelectorState | None = None,
+    ) -> None:
+        """Store selector collaborators used for timing and state tracking."""
+        self._clock = clock if clock is not None else _default_clock
+        self._metrics = (
+            metrics_state
+            if metrics_state is not None
+            else _MetricsState(threading.local())
+        )
+        self._selector_state = (
+            selector_state if selector_state is not None else _selector_state
+        )
+
+    @property
+    def metrics_state(self) -> _MetricsState:
+        """Return the metrics accumulator owned by this selector."""
+        return self._metrics
+
     def __call__(
         self,
         backend: BackendName,
@@ -288,21 +400,34 @@ class _EnvBackendSelector:
         """Return a context manager that activates *backend*."""
         return self._activate(backend)
 
-    @staticmethod
     @contextlib.contextmanager
-    def _activate(backend: BackendName) -> cabc.Iterator[None]:
+    def _activate(self, backend: BackendName) -> cabc.Iterator[None]:
         """Select the stream backend for parent-side pipeline pumping."""
+        lock_start = self._clock()
         with _BACKEND_LOCK:
-            if not _selector_state.enter():
+            lock_end = self._clock()
+            if not self._selector_state.enter():
+                rejection_count = self._metrics.increment_rejections()
                 _logger.warning(
                     "Rejected re-entrant backend selector activation: "
                     "backend=%r thread_id=%s selector_active=%s",
                     backend,
                     threading.get_ident(),
-                    _selector_state.is_active,
+                    self._selector_state.is_active,
                 )
+                if rejection_count > 1:
+                    _logger.error(
+                        "Repeated re-entrant backend selector rejection: "
+                        "backend=%r thread_id=%s reentrant_rejection_count=%s",
+                        backend,
+                        threading.get_ident(),
+                        rejection_count,
+                    )
                 raise RuntimeError(_REENTRANT_SELECTOR_MESSAGE)
 
+            # Record the lock wait only for activations that actually enter, so
+            # rejected re-entrant attempts do not inflate ``lock_wait_seconds``.
+            self._metrics.add_lock_wait(lock_end - lock_start)
             try:
                 previous = os.environ.get("CUPRUM_STREAM_BACKEND")
                 try:
@@ -321,10 +446,7 @@ class _EnvBackendSelector:
                     _backend._check_rust_available.cache_clear()
                     _backend.get_stream_backend.cache_clear()
             finally:
-                _selector_state.exit()
-
-
-_default_backend_selector: BackendSelector = _EnvBackendSelector()
+                self._selector_state.exit()
 
 
 def _capture_and_echo_flags(mode: TeeMode) -> tuple[bool, bool]:
@@ -438,6 +560,63 @@ def _run_once(config: TeeProfileWorkerConfig) -> tuple[int, int, int]:
     return captured_len, _result_exit_code(result), line_count
 
 
+def _run_repeat_loop(
+    config: TeeProfileWorkerConfig,
+    selector: BackendSelector,
+) -> _RunTotals:
+    """Execute the configured repeat loop and return accumulated totals."""
+    total_captured_len = 0
+    total_line_count = 0
+    exit_code = 0
+    status: typ.Literal["ok", "failed"] = "ok"
+    with selector(config.backend):
+        for _ in range(config.repeat_count):
+            captured_len, exit_code, line_count = _run_once(config)
+            total_captured_len += captured_len
+            total_line_count += line_count
+            if exit_code != 0:
+                status = "failed"
+                break
+    return _RunTotals(
+        captured_output_length=total_captured_len,
+        stdout_line_count=total_line_count,
+        exit_code=exit_code,
+        status=status,
+    )
+
+
+def _build_worker_result(
+    config: TeeProfileWorkerConfig,
+    *,
+    timing: _TimingContext,
+    totals: _RunTotals,
+    metrics: _SelectorMetrics,
+) -> TeeProfileWorkerResult:
+    """Assemble a ``TeeProfileWorkerResult`` from accumulated run data."""
+    # Capture the elapsed worker-run time before any result-assembly work so
+    # that ``_manifest_hash`` I/O and ``_scenario_label`` do not inflate the
+    # measured ``wall_time_seconds``.
+    wall_time_seconds = timing.timer() - timing.started
+    return {
+        "scenario": _scenario_label(config),
+        "fixture_path": str(config.fixture_path),
+        "fixture_manifest_hash": _manifest_hash(config.fixture_path),
+        "stages": config.stages,
+        "mode": config.mode,
+        "sink_kind": config.sink_kind,
+        "with_line_callbacks": config.with_line_callbacks,
+        "backend": config.backend,
+        "repeat_count": config.repeat_count,
+        "wall_time_seconds": wall_time_seconds,
+        "lock_wait_seconds": metrics.lock_wait_seconds,
+        "reentrant_rejection_count": metrics.reentrant_rejection_count,
+        "status": totals.status,
+        "exit_code": totals.exit_code,
+        "captured_output_length": totals.captured_output_length,
+        "stdout_line_count": totals.stdout_line_count,
+    }
+
+
 def run_tee_profile_worker(
     config: TeeProfileWorkerConfig,
     *,
@@ -466,43 +645,28 @@ def run_tee_profile_worker(
         ``fixture_manifest_hash`` (str or None), ``stages`` (int), ``mode``
         (str), ``sink_kind`` (str), ``with_line_callbacks`` (bool),
         ``backend`` (str), ``repeat_count`` (int), ``wall_time_seconds``
-        (float), ``status`` (``"ok"`` or ``"failed"``), ``exit_code`` (int),
+        (float), ``lock_wait_seconds`` (float),
+        ``reentrant_rejection_count`` (int), ``status`` (``"ok"`` or
+        ``"failed"``), ``exit_code`` (int),
         ``captured_output_length`` (int), and ``stdout_line_count`` (int).
     """
-    selector = (
-        backend_selector if backend_selector is not None else _default_backend_selector
-    )
     timer = clock if clock is not None else _default_clock
-    started = timer()
-    total_captured_len = 0
-    total_line_count = 0
-    exit_code = 0
-    status: typ.Literal["ok", "failed"] = "ok"
-    with selector(config.backend):
-        for _ in range(config.repeat_count):
-            captured_len, exit_code, line_count = _run_once(config)
-            total_captured_len += captured_len
-            total_line_count += line_count
-            if exit_code != 0:
-                status = "failed"
-                break
-    wall_time = timer() - started
-    return {
-        "scenario": _scenario_label(config),
-        "fixture_path": str(config.fixture_path),
-        "fixture_manifest_hash": _manifest_hash(config.fixture_path),
-        "stages": config.stages,
-        "mode": config.mode,
-        "sink_kind": config.sink_kind,
-        "with_line_callbacks": config.with_line_callbacks,
-        "backend": config.backend,
-        "repeat_count": config.repeat_count,
-        "wall_time_seconds": wall_time,
-        "status": status,
-        "exit_code": exit_code,
-        "captured_output_length": total_captured_len,
-        "stdout_line_count": total_line_count,
-    }
+    selector = (
+        backend_selector
+        if backend_selector is not None
+        else _EnvBackendSelector(clock=timer)
+    )
+    metrics_state = selector.metrics_state
+    metrics_state.reset()
+    timing = _TimingContext(timer=timer, started=timer())
+    totals = _run_repeat_loop(config, selector)
+    metrics = metrics_state.snapshot()
+    return _build_worker_result(
+        config,
+        timing=timing,
+        totals=totals,
+        metrics=metrics,
+    )
 
 
 def _scenario_label(config: TeeProfileWorkerConfig) -> str:

@@ -22,21 +22,37 @@ Examples
 ... )
 >>> config = HyperfineConfig(warmup=1, runs=3)
 
-Validation helpers are defined alongside these dataclasses and are used by
-their ``__post_init__`` methods to enforce expected types and value ranges.
+Validation helpers are imported from
+:mod:`benchmarks._benchmark_type_validators`; the dataclasses' ``__post_init__``
+methods call those imported functions to enforce expected types and value
+ranges.
 """
-
-# pylint: disable=too-many-lines
 
 from __future__ import annotations
 
 import dataclasses as dc
-import pathlib as pth
+
+# ``pth`` is imported at runtime (not under ``TYPE_CHECKING``) so the public
+# dataclass annotations (``output_path: pth.Path`` and similar) remain
+# resolvable via ``typing.get_type_hints``; the TC003 suppression keeps ruff from
+# pushing it back into a type-checking block.
+import pathlib as pth  # noqa: TC003
 import sys
 import typing as typ
 
-_VALID_BACKENDS = {"python", "rust"}
-_MIN_PIPELINE_STAGES = 2
+from benchmarks._benchmark_type_validators import (
+    _validate_backend as _validate_backend_value,
+)
+from benchmarks._benchmark_type_validators import (
+    _validate_bool,
+    _validate_hyperfine_iterations,
+    _validate_iteration_count,
+    _validate_non_empty_string,
+    _validate_path,
+    _validate_payload_bytes,
+    _validate_scenario_name,
+    _validate_stages,
+)
 
 BackendName = typ.Literal["python", "rust"]
 
@@ -179,89 +195,9 @@ class HyperfineConfig:
         _validate_hyperfine_iterations(warmup=self.warmup, runs=self.runs)
 
 
-def _validate_int(value: object, *, name: str) -> int:
-    """Validate integer values and reject booleans."""
-    if not isinstance(value, int) or isinstance(value, bool):
-        msg = f"{name} must be an int, got {type(value).__name__}"
-        raise TypeError(msg)
-    return value
-
-
-def _validate_bool(value: object, *, name: str) -> bool:
-    """Validate boolean values."""
-    if not isinstance(value, bool):
-        msg = f"{name} must be a bool, got {type(value).__name__}"
-        raise TypeError(msg)
-    return value
-
-
-def _validate_non_empty_string(value: object, *, name: str) -> str:
-    """Validate non-empty string values."""
-    if not isinstance(value, str) or not value.strip():
-        msg = f"{name} must be a non-empty string"
-        raise ValueError(msg)
-    return value
-
-
-def _validate_path(value: object, *, name: str) -> pth.Path:
-    """Validate path-like values and normalise them as ``pathlib.Path``."""
-    if isinstance(value, pth.Path):
-        return value
-    try:
-        return pth.Path(typ.cast("typ.Any", value))
-    except TypeError as exc:
-        msg = (
-            f"{name} must be a pathlib.Path or path-like value, "
-            f"got {type(value).__name__}"
-        )
-        raise TypeError(msg) from exc
-
-
-def _validate_hyperfine_iterations(*, warmup: object, runs: object) -> None:
-    """Validate hyperfine warmup and run counts."""
-    validated_warmup = _validate_int(warmup, name="warmup")
-    if validated_warmup < 0:
-        msg = f"warmup must be >= 0, got {validated_warmup}"
-        raise ValueError(msg)
-
-    validated_runs = _validate_int(runs, name="runs")
-    if validated_runs < 1:
-        msg = f"runs must be >= 1, got {validated_runs}"
-        raise ValueError(msg)
-
-
-def _validate_scenario_name(value: object) -> str:
-    """Validate that a scenario name is a non-empty string."""
-    if not isinstance(value, str) or not value.strip():
-        msg = "name must be a non-empty string"
-        raise ValueError(msg)
-    return value
-
-
-def _validate_payload_bytes(value: object) -> int:
-    """Validate that scenario payload size is a positive integer."""
-    payload_bytes = _validate_int(value, name="payload_bytes")
-    if payload_bytes <= 0:
-        msg = f"payload_bytes must be > 0, got {payload_bytes}"
-        raise ValueError(msg)
-    return payload_bytes
-
-
-def _validate_stages(value: object) -> int:
-    """Validate that scenario stage count meets the minimum threshold."""
-    stages = _validate_int(value, name="stages")
-    if stages < _MIN_PIPELINE_STAGES:
-        msg = f"stages must be >= {_MIN_PIPELINE_STAGES}, got {stages}"
-        raise ValueError(msg)
-    return stages
-
-
-def _validate_backend(value: BackendName) -> BackendName:
+def _validate_backend(value: object) -> BackendName:
     """Validate that a scenario backend is one of the supported values."""
-    if value not in _VALID_BACKENDS:
-        msg = f"backend must be one of {sorted(_VALID_BACKENDS)}, got {value!r}"
-        raise ValueError(msg)
-    return value
+    return typ.cast("BackendName", _validate_backend_value(value))
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -346,18 +282,11 @@ class PipelineBenchmarkConfig:
             _validate_non_empty_string(self.uv_bin, name="uv_bin")
         _validate_bool(self.dry_run, name="dry_run")
         _validate_bool(self.rust_available, name="rust_available")
-        validated_worker_iterations = _validate_int(
+        _validate_iteration_count(
             self.worker_iterations,
             name="worker_iterations",
+            min_value=1,
         )
-        if validated_worker_iterations < 1:
-            msg = f"worker_iterations must be >= 1, got {validated_worker_iterations}"
-            raise ValueError(msg)
-        if validated_worker_iterations > 1000:  # noqa: PLR2004
-            msg = (
-                f"worker_iterations must be <= 1000, got {validated_worker_iterations}"
-            )
-            raise ValueError(msg)
 
 
 @dc.dataclass(frozen=True, slots=True)

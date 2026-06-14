@@ -1,5 +1,12 @@
 # Developers' guide
 
+This guide is for maintainers. It captures the operational scope for build,
+test, lint, release, debugging, and extension workflows and acts as the source
+of truth for day-to-day contributor expectations. For the system design, see
+the [design document](cuprum-design.md); for where code lives, see the
+[repository layout](repository-layout.md); and for accepted architectural
+decisions, see [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md).
+
 ## Stream line-splitting properties
 
 Line callbacks in the Python stream backend use two pure helpers from
@@ -195,6 +202,20 @@ It is intentionally not re-entrant: a thread-local guard detects nested entry
 on the same thread, logs the rejected backend and thread identifier, and raises
 `RuntimeError` before mutating backend state.
 
+### Selector observability metrics
+
+`TeeProfileWorkerResult` includes selector metrics gathered while activating
+the backend. The metrics are thread-local, reset for each worker run, and
+reported with the rest of the worker payload.
+
+| Field                       | Type    | Description                                                                          |
+| --------------------------- | ------- | ------------------------------------------------------------------------------------ |
+| `lock_wait_seconds`         | `float` | Cumulative time spent blocking on `_BACKEND_LOCK` during selector activation.        |
+| `reentrant_rejection_count` | `int`   | Count of selector re-entrancy violations detected and rejected on the worker thread. |
+
+*Table: Selector observability metrics reported in each
+`TeeProfileWorkerResult`, with field name, type, and what each value records.*
+
 ## Scenario driver (`benchmarks/profile_tee_hotpath.py`)
 
 `benchmarks/profile_tee_hotpath.py` remains the public driver and module entry
@@ -319,12 +340,17 @@ one boundary of behaviour:
     env-preservation tests; timeout constants, backend-availability helpers,
     Hypothesis backend strategies, and the thread join/assert helper live in
     `cuprum/unittests/conftest.py`.
+- `cuprum/unittests/test_tee_profile_worker_selector_metrics.py` covers the
+  selector observability metrics (`lock_wait_seconds`,
+  `reentrant_rejection_count`): their accumulation, thread-locality, reset per
+  run, and presence in the worker result payload.
 
 Keeping the concerns in separate files makes the coverage boundary explicit: a
 change to command construction touches the core module, a change to the CLI
-contract touches the CLI module, and a change to backend locking or the
-selector state machine touches one of the three concurrency modules (with
-shared scaffolding in the helpers module and `conftest.py`).
+contract touches the CLI module, a change to backend locking or the selector
+state machine touches one of the three concurrency modules (with shared
+scaffolding in the helpers module and `conftest.py`), and a change to selector
+metrics touches the metrics module.
 
 ### `_EnvBackendSelector` concurrency invariants
 

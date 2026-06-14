@@ -14,6 +14,7 @@ if typ.TYPE_CHECKING:
 _VOLATILE_KEYS: frozenset[str] = frozenset({
     "sha256",
     "wall_time_seconds",
+    "lock_wait_seconds",
     "output_bytes",
     "fixture_path",
     "wrapped_fixture_path",
@@ -47,7 +48,10 @@ def _available_backend_names() -> tuple[tee_profile_worker.BackendName, ...]:
 
 def _alternate_backend() -> tee_profile_worker.BackendName:
     """Return the non-python backend available in this environment."""
-    return "rust" if tee_profile_worker._backend._check_rust_available() else "auto"
+    if tee_profile_worker._backend._check_rust_available():
+        return "rust"
+    msg = "Rust backend is unavailable; no non-python backend can be selected"
+    raise RuntimeError(msg)
 
 
 @st.composite
