@@ -147,7 +147,7 @@ call graphs lose Rust and Python frames:
   graphs this harness needs; kernel symbols remain unresolved at that level
   (raw addresses in the call trees). Check the current level with
   `cat /proc/sys/kernel/perf_event_paranoid`. If sampling is denied, either
-  lower it for the session (`sudo sysctl kernel.perf_event_paranoid=2`, or a
+  lower it for the session (`sudo sysctl -w kernel.perf_event_paranoid=2`, or a
   lower value such as `1` or `-1` to resolve kernel frames too) or grant
   `CAP_PERFMON` to the `perf` invocation.
 - Install `perf`, `inferno-collapse-perf`, and optionally `py-spy` on `PATH`.
