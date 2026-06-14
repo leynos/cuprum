@@ -8,16 +8,17 @@ mod unix {
 
     use crate::convert_platform_fd;
 
+    fn check_accepted(input: i64, expected: i32) {
+        match convert_platform_fd(input) {
+            Ok(fd) => assert_eq!(fd, expected),
+            Err(err) => panic!("{input} should be accepted: {err}"),
+        }
+    }
+
     #[test]
     fn convert_fd_accepts_valid_descriptors() {
-        match convert_platform_fd(0) {
-            Ok(fd) => assert_eq!(fd, 0),
-            Err(err) => panic!("zero descriptor should be accepted: {err}"),
-        }
-        match convert_platform_fd(i64::from(i32::MAX)) {
-            Ok(fd) => assert_eq!(fd, i32::MAX),
-            Err(err) => panic!("i32::MAX descriptor should be accepted: {err}"),
-        }
+        check_accepted(0, 0);
+        check_accepted(i64::from(i32::MAX), i32::MAX);
     }
 
     #[test]
@@ -73,16 +74,17 @@ mod windows {
 
     use crate::convert_platform_fd;
 
+    fn check_accepted(input: i64, expected: usize) {
+        match convert_platform_fd(input) {
+            Ok(handle) => assert_eq!(handle, expected),
+            Err(err) => panic!("{input} should be accepted: {err}"),
+        }
+    }
+
     #[test]
     fn convert_fd_accepts_valid_handles() {
-        match convert_platform_fd(0) {
-            Ok(handle) => assert_eq!(handle, 0_usize),
-            Err(err) => panic!("zero handle should be accepted: {err}"),
-        }
-        match convert_platform_fd(i64::from(u16::MAX)) {
-            Ok(handle) => assert_eq!(handle, usize::from(u16::MAX)),
-            Err(err) => panic!("u16::MAX handle should be accepted: {err}"),
-        }
+        check_accepted(0, 0_usize);
+        check_accepted(i64::from(u16::MAX), usize::from(u16::MAX));
     }
 
     #[test]
