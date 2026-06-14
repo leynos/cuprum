@@ -132,6 +132,45 @@ Linux `perf` as the primary profiler, supports optional `py-spy` corroboration,
 and can run unprofiled smoke scenarios when only command construction and
 worker behaviour need to be checked.
 
+### Profiling prerequisites and build settings
+
+Linux is the reference platform for profiler artefacts. Symbol-quality and
+sampling settings must match those used to collect the baseline, otherwise the
+call graphs lose Rust and Python frames:
+
+- Build the native extension with frame pointers so `perf` can unwind mixed
+  Python and Rust stacks: set `RUSTFLAGS="-C force-frame-pointers=yes"`, then
+  run
+  `uv run maturin develop --release --manifest-path rust/cuprum-rust/Cargo.toml`
+  from the repository root (as in the reproduction block below).
+- Export `PYTHONPERFSUPPORT=1` so CPython emits `perf` map entries for
+  interpreted frames.
+- Sample with `perf record -F 999 -g --call-graph dwarf,16384`. DWARF
+  unwinding is more robust than frame-pointer-only unwinding for the mixed
+  stacks here; the driver applies these defaults and exposes `--perf-frequency`
+  and `--perf-call-graph` overrides.
+- Grant `perf` permission to collect user-space samples. The baseline was
+  taken at `perf_event_paranoid=2`, which is sufficient for the user-space call
+  graphs this harness needs; kernel symbols remain unresolved at that level
+  (raw addresses in the call trees). Check the current level with
+  `cat /proc/sys/kernel/perf_event_paranoid`. If sampling is denied, either
+  lower it on the host (`sudo sysctl -w kernel.perf_event_paranoid=2`, or a
+  lower value such as `1` or `-1` if kernel frames are also required), or grant
+  `CAP_PERFMON` to the `perf` binary (for example with `setcap`).
+- Install `perf`, `inferno-collapse-perf`, and optionally `py-spy` on `PATH`.
+
+These settings, the deterministic fixtures, and the full reproduction sequence
+are recorded in
+[the tee hot-path profiling baseline](tee-hotpath-profiling-baseline-2026-06-12.md).
+The harness reproduction entrypoint is:
+
+```bash
+export RUSTFLAGS="-C force-frame-pointers=yes"
+export PYTHONPERFSUPPORT=1
+uv run maturin develop --release --manifest-path rust/cuprum-rust/Cargo.toml
+uv run python benchmarks/profile_tee_hotpath.py --profiler perf run
+```
+
 ## Fixture generation (`benchmarks/deterministic_b64_fixture.py`)
 
 `FixtureConfig` describes deterministic fixture generation with three fields:
@@ -476,12 +515,14 @@ make lint
 ```
 
 Run Kani separately because it is a bounded model checker rather than a normal
-unit-test runner. The Kani installer places the verifier under `~/.kani`; on
-this system the dynamic library path is required when invoking the crate
-harnesses:
+unit-test runner. The Kani installer places the verifier under `~/.kani`; the
+dynamic library path is required when invoking the crate harnesses. Resolve the
+toolchain library directory from the installed version rather than hard-coding
+it:
 
 ```bash
-LD_LIBRARY_PATH=/home/leynos/.kani/kani-0.67.0/toolchain/lib \
+cd rust && \
+  LD_LIBRARY_PATH="$HOME/.kani/kani-$(cargo kani --version | awk '{print $2}')/toolchain/lib" \
   cargo kani --package cuprum-rust
 ```
 

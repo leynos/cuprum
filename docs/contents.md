@@ -41,6 +41,9 @@ open each document.
   local Continuous Integration (CI) reproduction notes for workflow debugging.
 - [Execution plans](execplans/) - task-specific implementation plans created
   when substantial work needs a durable plan.
+- [Tee hot-path profiling baseline (2026-06-12)][tee-baseline] - measured
+  hotspot verdicts from the tee profiling harness, gating ADR-002 Phase 2.
 
 [adr-004]: adr-004-interrogate-docstring-gate.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
+[tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md
