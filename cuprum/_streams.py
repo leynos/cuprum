@@ -6,6 +6,7 @@ import codecs
 import contextlib
 import dataclasses as dc
 import enum
+import logging
 import typing as typ
 
 if typ.TYPE_CHECKING:
@@ -13,6 +14,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 _READ_SIZE = 4096
+_LOGGER = logging.getLogger("cuprum.streams")
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -141,6 +143,7 @@ async def _pump_stream(
     try:
         await _relay_chunks(reader, writer)
     finally:
+        _LOGGER.debug("stream_writer_close_start")
         await _close_stream_writer(writer)
 
 async def _relay_chunks(
@@ -153,18 +156,28 @@ async def _relay_chunks(
     reader is still consumed to EOF so upstream stages do not block on a
     full pipe.
     """
+    has_downstream_closed = writer is None
     while writer is not None:
         chunk = await reader.read(_READ_SIZE)
         if not chunk:
             return
         if await _write_to_stream_writer(writer, chunk) is _WriteOutcome.CLOSED:
+            has_downstream_closed = True
             break
-    await _drain_stream_reader(reader)
+    discarded_bytes = await _drain_stream_reader(reader)
+    if has_downstream_closed:
+        _LOGGER.debug(
+            "stream_downstream_closed discarded_bytes=%s",
+            discarded_bytes,
+            extra={"cuprum_discarded_bytes": discarded_bytes},
+        )
 
-async def _drain_stream_reader(reader: asyncio.StreamReader) -> None:
-    """Consume the reader to EOF, discarding the data."""
-    while await reader.read(_READ_SIZE):
-        pass
+async def _drain_stream_reader(reader: asyncio.StreamReader) -> int:
+    """Consume the reader to EOF, discarding the data and returning byte count."""
+    discarded_bytes = 0
+    while chunk := await reader.read(_READ_SIZE):
+        discarded_bytes += len(chunk)
+    return discarded_bytes
 async def _write_to_stream_writer(
     writer: asyncio.StreamWriter,
     chunk: bytes,
@@ -180,6 +193,11 @@ async def _write_to_stream_writer(
         writer.write(chunk)
         await writer.drain()
     except (BrokenPipeError, ConnectionResetError):
+        _LOGGER.debug(
+            "stream_write_closed bytes=%s",
+            len(chunk),
+            extra={"cuprum_attempted_bytes": len(chunk)},
+        )
         return _WriteOutcome.CLOSED
     return _WriteOutcome.OPEN
 

@@ -226,6 +226,33 @@ def test_observe_tags_reflect_run_output_options(
         assert event.tags["capture"] is output.capture
         assert event.tags["echo"] is output.echo
 
+def test_pipeline_awaits_scheduled_observe_tasks_before_return() -> None:
+    """Pipeline execution awaits async observe hooks before returning."""
+    builder, catalogue = _python_builder(project_name="observe-async-pipeline")
+    stage1 = builder("-c", "print('hello')")
+    stage2 = builder(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read().upper())",
+    )
+    completed_exit_stages: list[int] = []
+
+    async def hook(event: ExecEvent) -> None:
+        """Record exit events after an async scheduling boundary."""
+        if event.phase != "exit":
+            return
+        await asyncio.sleep(0)
+        completed_exit_stages.append(
+            typ.cast("int", event.tags["pipeline_stage_index"])
+        )
+
+    with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
+        result = (stage1 | stage2).run_sync()
+
+    assert result.ok is True, "pipeline should complete successfully"
+    assert sorted(completed_exit_stages) == [0, 1], (
+        "pipeline should await scheduled async exit observe tasks before returning"
+    )
+
 
 def test_pipeline_observe_emits_stage_tags_and_env_overlay() -> None:
     """Pipeline observation events retain tags and env overlays per stage."""

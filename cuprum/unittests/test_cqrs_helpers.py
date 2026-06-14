@@ -13,12 +13,16 @@ These cover the three helpers split or reshaped to obey CQRS:
 from __future__ import annotations
 
 import asyncio
+import logging
 import typing as typ
 
 import pytest
 
 from cuprum import ECHO, LS, sh
-from cuprum._observability import _emit_exec_event, _wait_for_exec_hook_tasks
+from cuprum._observability import (
+    _emit_exec_event,
+    _wait_for_exec_hook_tasks,
+)
 from cuprum._pipeline_internals import _collect_hooks, _enforce_allowlist
 from cuprum._pipeline_types import _EventDetails, _ExecutionHooks, _StageObservation
 from cuprum._streams import _write_to_stream_writer, _WriteOutcome
@@ -152,7 +156,9 @@ def test_emit_exec_event_returns_scheduled_async_tasks() -> None:
     asyncio.run(run())
 
 
-def test_stage_observation_preserves_scheduled_tasks_when_later_hook_fails() -> None:
+def test_stage_observation_preserves_scheduled_tasks_when_later_hook_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Tasks scheduled before a hook failure remain pending for the caller."""
 
     async def run() -> None:
@@ -181,13 +187,19 @@ def test_stage_observation_preserves_scheduled_tasks_when_later_hook_fails() -> 
             pending_tasks=pending_tasks,
         )
 
-        with pytest.raises(_SyncObserveHookError):
+        with (
+            caplog.at_level(logging.WARNING, logger="cuprum.observe"),
+            pytest.raises(_SyncObserveHookError),
+        ):
             observation.emit("start", _EventDetails(pid=123))
 
         assert len(pending_tasks) == 1, "scheduled tasks must survive hook failure"
         with pytest.raises(_AsyncObserveHookError):
             await _wait_for_exec_hook_tasks(pending_tasks)
         assert pending_tasks == [], "wait helper should clear completed pending tasks"
+        assert any(
+            "observe_hook_failed" in record.message for record in caplog.records
+        ), "synchronous observe hook failures should be logged"
 
     asyncio.run(run())
 

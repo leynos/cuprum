@@ -21,6 +21,7 @@ if typ.TYPE_CHECKING:
 
     from cuprum.events import ExecEvent, ExecHook
     from cuprum.sh import SafeCmd
+import logging
 
 
 def _merge_tags(*tags: cabc.Mapping[str, object] | None) -> cabc.Mapping[str, object]:
@@ -64,21 +65,83 @@ def _emit_exec_event(
     as background tasks; those tasks are returned so the caller can extend its
     own pending-task collection. Returns an empty list when no hook scheduled
     work.
+
+    Raises
+    ------
+    _ExecEventEmissionError
+        When a hook raises while handling ``event``. The exception carries any
+        async-hook tasks scheduled before the failing hook so callers can keep
+        awaiting them during cleanup.
     """
     scheduled: list[asyncio.Task[None]] = []
     for hook in hooks:
         try:
             result = hook(event)
         except BaseException as exc:
+            _LOGGER.warning(
+                "observe_hook_failed phase=%s program=%s error=%s",
+                event.phase,
+                event.program,
+                type(exc).__name__,
+                exc_info=(type(exc), exc, exc.__traceback__),
+                extra={
+                    "cuprum_phase": event.phase,
+                    "cuprum_program": str(event.program),
+                    "cuprum_error_type": type(exc).__name__,
+                    "cuprum_scheduled_task_count": len(scheduled),
+                },
+            )
             raise _ExecEventEmissionError(exc, scheduled) from exc
         if inspect.isawaitable(result):
-            scheduled.append(asyncio.create_task(_await_awaitable(result)))
+            scheduled.append(
+                asyncio.create_task(
+                    _await_awaitable(result, event.phase),
+                    name=f"cuprum.observe.{event.phase}",
+                )
+            )
+            _LOGGER.debug(
+                "observe_hook_task_scheduled phase=%s program=%s count=%s",
+                event.phase,
+                event.program,
+                len(scheduled),
+                extra={
+                    "cuprum_phase": event.phase,
+                    "cuprum_program": str(event.program),
+                    "cuprum_scheduled_task_count": len(scheduled),
+                },
+            )
     return scheduled
 
 
-async def _await_awaitable(awaitable: cabc.Awaitable[None]) -> None:
+async def _await_awaitable(
+    awaitable: cabc.Awaitable[None],
+    phase: str,
+) -> None:
     """Await ``awaitable`` so it can be wrapped in a task."""
-    await awaitable
+    _LOGGER.debug(
+        "observe_hook_task_started phase=%s",
+        phase,
+        extra={"cuprum_phase": phase},
+    )
+    try:
+        await awaitable
+    except BaseException as exc:
+        _LOGGER.warning(
+            "observe_hook_task_failed phase=%s error=%s",
+            phase,
+            type(exc).__name__,
+            exc_info=(type(exc), exc, exc.__traceback__),
+            extra={
+                "cuprum_phase": phase,
+                "cuprum_error_type": type(exc).__name__,
+            },
+        )
+        raise
+    _LOGGER.debug(
+        "observe_hook_task_finished phase=%s",
+        phase,
+        extra={"cuprum_phase": phase},
+    )
 
 
 async def _wait_for_exec_hook_tasks(pending_tasks: list[asyncio.Task[None]]) -> None:
@@ -101,6 +164,12 @@ async def _wait_for_exec_hook_tasks(pending_tasks: list[asyncio.Task[None]]) -> 
     pending_tasks.clear()
     for result in results:
         if isinstance(result, BaseException):
+            _LOGGER.warning(
+                "observe_hook_pending_task_failed error=%s",
+                type(result).__name__,
+                exc_info=(type(result), result, result.__traceback__),
+                extra={"cuprum_error_type": type(result).__name__},
+            )
             raise result
 
 
