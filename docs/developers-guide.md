@@ -89,14 +89,16 @@ from a worker thread; marshal back to the execution loop first.
 
 Private helpers emit diagnostic logs rather than installing a global metrics or
 tracing backend.  Hook scheduling and hook failures use the `cuprum.observe`
-logger with structured `extra` fields such as `cuprum_phase`,
-`cuprum_program`, `cuprum_error_type`, and
-`cuprum_scheduled_task_count`.  Stream early-close decisions use the
-`cuprum.streams` logger and include `cuprum_discarded_bytes` when upstream
-bytes are drained after the downstream writer has closed.  User-facing metrics
-and spans remain the responsibility of observe-hook adapters such as
-`MetricsHook` and `TracingHook`, which consume `ExecEvent` values without
-coupling core execution to a telemetry vendor.
+logger with structured `extra` fields such as `cuprum_phase`, `cuprum_program`,
+`cuprum_error_type`, and `cuprum_scheduled_task_count`.  Stream early-close
+decisions use warning-level records on the `cuprum.streams` logger and include
+`cuprum_discarded_bytes` when upstream bytes are drained after the downstream
+writer has closed. Suppressed writer cleanup failures remain debug-level
+diagnostics with `cuprum_operation` and `cuprum_error_type`, because they are
+expected during already-closed pipe teardown.  User-facing metrics and spans
+remain the responsibility of observe-hook adapters such as `MetricsHook` and
+`TracingHook`, which consume `ExecEvent` values without coupling core execution
+to a telemetry vendor.
 
 Stream pumping continues to drain the upstream reader after
 `_write_to_stream_writer` reports `_WriteOutcome.CLOSED`.  `_pump_stream`

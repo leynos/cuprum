@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import codecs
-import contextlib
 import dataclasses as dc
 import enum
 import logging
@@ -173,7 +172,7 @@ async def _relay_chunks(
             break
     discarded_bytes = await _drain_stream_reader(reader)
     if has_downstream_closed:
-        _LOGGER.debug(
+        _LOGGER.warning(
             "stream_downstream_closed discarded_bytes=%s",
             discarded_bytes,
             extra={"cuprum_discarded_bytes": discarded_bytes},
@@ -203,7 +202,7 @@ async def _write_to_stream_writer(
         writer.write(chunk)
         await writer.drain()
     except (BrokenPipeError, ConnectionResetError):
-        _LOGGER.debug(
+        _LOGGER.warning(
             "stream_write_closed bytes=%s",
             len(chunk),
             extra={"cuprum_attempted_bytes": len(chunk)},
@@ -216,27 +215,46 @@ async def _close_stream_writer(writer: asyncio.StreamWriter | None) -> None:
     """Close a writer, swallowing errors from already-closed pipes."""
     if writer is None:
         return
-    with contextlib.suppress(
+    try:
+        writer.write_eof()
+    except (
         AttributeError,
         NotImplementedError,
         BrokenPipeError,
         ConnectionResetError,
-    ):
-        writer.write_eof()
+    ) as exc:
+        _log_suppressed_stream_close_error("write_eof", exc)
     try:
         writer.close()
-    except (BrokenPipeError, ConnectionResetError):
+    except (BrokenPipeError, ConnectionResetError) as exc:
+        _log_suppressed_stream_close_error("close", exc)
         return
     wait_closed = getattr(writer, "wait_closed", None)
     if wait_closed is None:
         return
-    with contextlib.suppress(
+    try:
+        await wait_closed()
+    except (
         AttributeError,
         NotImplementedError,
         BrokenPipeError,
         ConnectionResetError,
-    ):
-        await wait_closed()
+    ) as exc:
+        _log_suppressed_stream_close_error("wait_closed", exc)
+
+
+def _log_suppressed_stream_close_error(operation: str, exc: BaseException) -> None:
+    """Log a cleanup error that cannot safely be raised during pipe teardown."""
+    _LOGGER.debug(
+        "stream_writer_close_suppressed operation=%s error=%s",
+        operation,
+        type(exc).__name__,
+        exc_info=(type(exc), exc, exc.__traceback__),
+        extra={
+            "cuprum_operation": operation,
+            "cuprum_error_type": type(exc).__name__,
+        },
+    )
 
 
 def _write_chunk(

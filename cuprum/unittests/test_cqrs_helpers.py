@@ -25,7 +25,7 @@ from cuprum._observability import (
 )
 from cuprum._pipeline_internals import _collect_hooks, _enforce_allowlist
 from cuprum._pipeline_types import _EventDetails, _ExecutionHooks, _StageObservation
-from cuprum._streams import _write_to_stream_writer, _WriteOutcome
+from cuprum._streams import _close_stream_writer, _write_to_stream_writer, _WriteOutcome
 from cuprum.context import (
     ForbiddenProgramError,
     ScopeConfig,
@@ -230,6 +230,39 @@ class _RecordingWriter:
         self.closed = True
 
 
+class _ClosingWriter:
+    """Stream writer stand-in with configurable cleanup failures."""
+
+    def __init__(
+        self,
+        *,
+        write_eof_error: BaseException | None = None,
+        close_error: BaseException | None = None,
+        wait_closed_error: BaseException | None = None,
+    ) -> None:
+        """Store configured cleanup failures."""
+        self.write_eof_error = write_eof_error
+        self.close_error = close_error
+        self.wait_closed_error = wait_closed_error
+        self.closed = False
+
+    def write_eof(self) -> None:
+        """Signal EOF, optionally raising a configured cleanup error."""
+        if self.write_eof_error is not None:
+            raise self.write_eof_error
+
+    def close(self) -> None:
+        """Close the writer, optionally raising a configured cleanup error."""
+        self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
+
+    async def wait_closed(self) -> None:
+        """Wait for closure, optionally raising a configured cleanup error."""
+        if self.wait_closed_error is not None:
+            raise self.wait_closed_error
+
+
 @pytest.mark.parametrize(
     ("fail", "expected_outcome"),
     [
@@ -256,4 +289,52 @@ def test_write_to_stream_writer_reports_outcome(
 
     assert asyncio.run(run()) is expected_outcome, (
         "write helper should report the expected downstream outcome"
+    )
+
+
+@pytest.mark.parametrize(
+    ("writer", "expected_operation", "expected_error"),
+    [
+        pytest.param(
+            _ClosingWriter(write_eof_error=BrokenPipeError()),
+            "write_eof",
+            "BrokenPipeError",
+            id="write-eof",
+        ),
+        pytest.param(
+            _ClosingWriter(close_error=ConnectionResetError()),
+            "close",
+            "ConnectionResetError",
+            id="close",
+        ),
+        pytest.param(
+            _ClosingWriter(wait_closed_error=BrokenPipeError()),
+            "wait_closed",
+            "BrokenPipeError",
+            id="wait-closed",
+        ),
+    ],
+)
+def test_close_stream_writer_logs_suppressed_cleanup_errors(
+    caplog: pytest.LogCaptureFixture,
+    writer: _ClosingWriter,
+    expected_operation: str,
+    expected_error: str,
+) -> None:
+    """Suppressed stream cleanup errors are still visible in diagnostics."""
+    with caplog.at_level(logging.DEBUG, logger="cuprum.streams"):
+        asyncio.run(_close_stream_writer(typ.cast("typ.Any", writer)))
+
+    matching_records = [
+        record
+        for record in caplog.records
+        if "stream_writer_close_suppressed" in record.message
+    ]
+    assert matching_records, "suppressed cleanup errors should be logged"
+    last_record = matching_records[-1]
+    assert vars(last_record)["cuprum_operation"] == expected_operation, (
+        "cleanup log should identify the suppressed operation"
+    )
+    assert vars(last_record)["cuprum_error_type"] == expected_error, (
+        "cleanup log should identify the suppressed error type"
     )
