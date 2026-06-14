@@ -1,4 +1,17 @@
-"""Context helpers for subprocess execution."""
+"""Context and working-directory helpers for subprocess execution.
+
+This module gathers the shared, context-aware utilities used when spawning
+subprocesses, so the single-command and pipeline spawn paths stay in
+agreement:
+
+- ``_cwd_arg`` is the canonical conversion of an optional working directory
+  into the ``cwd`` argument accepted by ``asyncio.create_subprocess_exec``,
+  used by both the single-command and pipeline spawn sites.
+- ``_resolve_timeout`` resolves the effective timeout from the explicit,
+  per-call execution-context, and ambient scoped values, in that order.
+- ``_sh_module`` and ``_current_context`` are lazy-import shims that break the
+  circular imports between this module and ``cuprum.sh``/``cuprum.context``.
+"""
 
 from __future__ import annotations
 
