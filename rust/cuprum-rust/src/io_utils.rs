@@ -24,6 +24,11 @@ pub(crate) type StreamHandle = OwnedFd;
 #[cfg(windows)]
 pub(crate) type StreamHandle = File;
 
+pub(crate) enum WriteOutcome {
+    Complete(u64),
+    NonFatalShortWrite(u64),
+}
+
 /// Read bytes from the stream into the buffer.
 pub(crate) fn read_stream(
     reader: &mut StreamHandle,
@@ -40,15 +45,18 @@ pub(crate) fn read_stream(
     }
 }
 
-/// Write all bytes from a chunk to the writer, returning bytes written.
-pub(crate) fn handle_write(writer: &mut StreamHandle, chunk: &[u8]) -> Result<u64, PumpError> {
+/// Write all bytes from a chunk to the writer, returning the write outcome.
+pub(crate) fn handle_write(
+    writer: &mut StreamHandle,
+    chunk: &[u8],
+) -> Result<WriteOutcome, PumpError> {
     #[cfg(unix)]
-    write_all_unix(writer, chunk)?;
+    let outcome = write_all_unix(writer, chunk)?;
 
     #[cfg(windows)]
-    writer.write_all(chunk).map_err(PumpError::from)?;
+    let outcome = write_all_windows(writer, chunk)?;
 
-    u64::try_from(chunk.len()).map_err(|_| PumpError::LengthOverflow)
+    Ok(outcome)
 }
 
 /// Attempt to write a chunk and update the total written count.
@@ -62,9 +70,13 @@ pub(crate) fn handle_write_result(
     total_written: &mut u64,
 ) -> Result<bool, PumpError> {
     match handle_write(writer, chunk) {
-        Ok(bytes) => {
+        Ok(WriteOutcome::Complete(bytes)) => {
             *total_written = total_written.saturating_add(bytes);
             Ok(true)
+        }
+        Ok(WriteOutcome::NonFatalShortWrite(bytes)) => {
+            *total_written = total_written.saturating_add(bytes);
+            Ok(false)
         }
         Err(err) => {
             if err.is_nonfatal_write() {
@@ -107,7 +119,9 @@ pub(crate) fn read_raw_fd(fd: libc::c_int, buffer: &mut [u8]) -> Result<usize, P
 }
 
 #[cfg(unix)]
-fn write_all_unix(writer: &StreamHandle, mut chunk: &[u8]) -> Result<(), PumpError> {
+fn write_all_unix(writer: &StreamHandle, mut chunk: &[u8]) -> Result<WriteOutcome, PumpError> {
+    let mut total_written = 0_u64;
+
     while !chunk.is_empty() {
         // SAFETY: `chunk` is valid for reads of `chunk.len()` bytes, and
         // `writer` owns a valid descriptor for the duration of this call.
@@ -121,9 +135,7 @@ fn write_all_unix(writer: &StreamHandle, mut chunk: &[u8]) -> Result<(), PumpErr
 
         if written > 0 {
             let written_len = usize::try_from(written).map_err(|_| PumpError::LengthOverflow)?;
-            chunk = chunk
-                .get(written_len..)
-                .ok_or(PumpError::BufferRangeExceeded)?;
+            record_write_progress(&mut chunk, written_len, &mut total_written)?;
             continue;
         }
 
@@ -136,9 +148,58 @@ fn write_all_unix(writer: &StreamHandle, mut chunk: &[u8]) -> Result<(), PumpErr
 
         let err = io::Error::last_os_error();
         if err.kind() != io::ErrorKind::Interrupted {
-            return Err(PumpError::from(err));
+            return map_short_write_error(err, total_written);
         }
     }
 
+    Ok(WriteOutcome::Complete(total_written))
+}
+
+#[cfg(windows)]
+fn write_all_windows(
+    writer: &mut StreamHandle,
+    mut chunk: &[u8],
+) -> Result<WriteOutcome, PumpError> {
+    let mut total_written = 0_u64;
+
+    while !chunk.is_empty() {
+        match writer.write(chunk) {
+            Ok(0) => {
+                return Err(PumpError::from(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to write whole buffer",
+                )));
+            }
+            Ok(written_len) => {
+                record_write_progress(&mut chunk, written_len, &mut total_written)?;
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => {
+                return map_short_write_error(err, total_written);
+            }
+        }
+    }
+
+    Ok(WriteOutcome::Complete(total_written))
+}
+
+fn record_write_progress(
+    chunk: &mut &[u8],
+    written_len: usize,
+    total_written: &mut u64,
+) -> Result<(), PumpError> {
+    let written_len_u64 = u64::try_from(written_len).map_err(|_| PumpError::LengthOverflow)?;
+    *total_written = total_written.saturating_add(written_len_u64);
+    *chunk = chunk
+        .get(written_len..)
+        .ok_or(PumpError::BufferRangeExceeded)?;
     Ok(())
+}
+
+fn map_short_write_error(err: io::Error, total_written: u64) -> Result<WriteOutcome, PumpError> {
+    let pump_error = PumpError::from(err);
+    if pump_error.is_nonfatal_write() {
+        return Ok(WriteOutcome::NonFatalShortWrite(total_written));
+    }
+    Err(pump_error)
 }
