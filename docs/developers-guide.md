@@ -876,15 +876,25 @@ without updating snapshot files and any downstream tooling.
 
 ## Output behaviour carrier
 
-`RunOutputOptions` (`capture`, `echo`) is the canonical carrier for `SafeCmd`
-output-stream behaviour. `SafeCmd.run` / `run_sync` accept it via the `output`
-parameter and pass it straight through to `_prepare_execution_observation`,
-which reads `output.capture` / `output.echo` for the observation tags. There is
-no parallel internal `(capture, echo)` value object: the former `_IOBehaviour`
-was redundant with `RunOutputOptions` and has been removed. `IOOptions` remains
-only as a deprecated subclass alias that emits a `DeprecationWarning`. New code
-— internal or public — should carry output behaviour as a `RunOutputOptions`,
-not as loose `capture` / `echo` flags.
+`RunOutputOptions` (`capture`, `echo`) is the canonical carrier for command
+output behaviour. Public command execution should accept or construct this
+object rather than threading separate `capture` and `echo` keyword arguments
+through new APIs. Keep that pairing intact so stdout/stderr handling stays
+explicit, testable, and compatible with the `IOOptions` deprecation path.
+
+`SafeCmd.run` / `run_sync` accept `RunOutputOptions` via the `output` parameter
+and pass it straight through to `_prepare_execution_observation`, which reads
+`output.capture` / `output.echo` for the observation tags. There is no parallel
+internal `(capture, echo)` value object: the former `_IOBehaviour` was
+redundant with `RunOutputOptions` and has been removed. `IOOptions` remains
+only as a deprecated subclass alias that emits a `DeprecationWarning`.
+
+Internal adapters may translate legacy or aggregate configuration into
+`RunOutputOptions` at the boundary. For example, the concurrent runner converts
+its `_ConcurrentRunConfig` flags into `RunOutputOptions` once before calling
+`SafeCmd.run`. Avoid reintroducing parallel output-option structures unless a
+new boundary genuinely has different semantics; in that case, document the
+translation rule here and cover it with behavioural tests.
 
 `Pipeline.run` and `Pipeline.run_sync` currently retain `capture` and `echo`
 keyword arguments for compatibility; migration to `output=RunOutputOptions` is
