@@ -367,7 +367,8 @@ on the same thread, logs the rejected backend and thread identifier, and raises
 
 `TeeProfileWorkerResult` includes selector metrics gathered while activating
 the backend. The metrics are thread-local, reset for each worker run, and
-reported with the rest of the worker payload.
+reported with the rest of the worker payload. They represent per-invocation
+totals for `TeeProfileWorkerResult`, not process-lifetime aggregates.
 
 | Field                       | Type    | Description                                                                          |
 | --------------------------- | ------- | ------------------------------------------------------------------------------------ |

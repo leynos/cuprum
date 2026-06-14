@@ -1,4 +1,8 @@
-"""Shared Hypothesis strategies for Cuprum unit tests."""
+"""Shared Hypothesis strategies for context helper-property tests.
+
+The strategies generate bounded Program, allowlist, timeout, and hook values
+used by the CuprumContext property suite and optional CrossHair-backed runs.
+"""
 
 from __future__ import annotations
 

@@ -316,9 +316,10 @@ class CuprumContext:
     def is_allowed(self, program: Program) -> bool:
         """Return True when the program is in the allowlist.
 
-        Note: An empty allowlist returns False for all programs, but
-        check_allowed() treats an empty allowlist as permissive.
-        Use check_allowed() for enforcement with permissive defaults.
+        This method only checks membership and returns False for empty
+        allowlists. Use check_allowed() for enforcement; it applies the
+        two-mode empty-allowlist policy, permitting empty unrestricted
+        contexts and denying empty restricted contexts.
         """
         return program in self.allowlist
 
@@ -328,6 +329,9 @@ class CuprumContext:
         When the allowlist is empty and unrestricted, all programs are
         permitted (permissive default). When the allowlist is empty and
         restricted, all programs are denied.
+
+        A warning log with operation and restricted_state fields is emitted
+        before raising ForbiddenProgramError.
         """
         if not self.allowlist and not self._allowlist_is_restricted:
             return  # Empty allowlist permits all programs

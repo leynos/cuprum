@@ -8,7 +8,15 @@ import typing as typ
 
 import pytest
 
-from cuprum import ECHO, ScopeConfig, TimeoutExpired, scoped, sh
+from cuprum import (
+    ECHO,
+    LS,
+    ForbiddenProgramError,
+    ScopeConfig,
+    TimeoutExpired,
+    scoped,
+    sh,
+)
 from cuprum._testing import (
     _READ_SIZE,
     _PipelineWaitResult,
@@ -158,6 +166,19 @@ def test_pipeline_can_append_stages() -> None:
     pipeline = first | second | third
 
     assert pipeline.parts == (first, second, third)
+
+
+def test_pipeline_run_sync_enforces_scoped_allowlist() -> None:
+    """Pipeline execution rejects stages outside the active allowlist."""
+    echo = sh.make(ECHO)
+    ls = sh.make(LS)
+    pipeline = echo("hello") | ls()
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([ECHO]))),
+        pytest.raises(ForbiddenProgramError, match="ls"),
+    ):
+        pipeline.run_sync()
 
 
 def _run_test_pipeline(

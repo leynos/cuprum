@@ -376,12 +376,13 @@ When you call `SafeCmd.run()` or `run_sync()`, Cuprum automatically:
 3. Invokes all registered after hooks (in LIFO order) after the process
    completes.
 
-**Empty allowlist behaviour:** When no context is established, all programs are
-permitted. This permissive default is intentional to ease adoption but weakens
-safety. `scoped(ScopeConfig())` remains permissive; establish an explicit
-allowlist via `scoped(ScopeConfig(allowlist=...))` to enforce policy once
-onboarded. An empty allowlist produced by narrowing an explicit scope remains
-restrictive and permits no programs.
+**Empty allowlist behaviour:** When no parent context is established,
+`scoped(ScopeConfig())` is the permissive root context (all programs allowed),
+which supports adoption by defaulting to non-restrictive execution for
+first-time callers.
+Nested `scoped(ScopeConfig())` calls inherit the current parent policy, so they
+cannot widen permissions. If an explicit empty allowlist is introduced in an
+already restricted path, that scope remains restrictive and permits no programs.
 
 ### Scoped contexts
 
@@ -404,11 +405,9 @@ with scoped(ScopeConfig(allowlist=frozenset([ECHO, LS]))) as ctx:
 
 Key properties of `scoped(ScopeConfig())`:
 
-- When the parent allowlist is empty, the provided allowlist becomes the new
-  base unless that empty allowlist was produced by narrowing an explicit
-  restricted scope.
-- When the parent has programs, the new allowlist is intersected (can only
-  narrow, never widen).
+- At root/no-parent, `ScopeConfig()` remains permissive by default.
+- In nested scopes, `ScopeConfig()` inherits the parent allowlist and therefore
+  remains restricted when the parent is restricted.
 - Context is automatically restored when the block exits, even on exception.
 
 ### Accessing the current context
@@ -1185,19 +1184,6 @@ on the same thread: nested selector activation raises `RuntimeError` rather
 than risking a stale environment value or backend cache leak. Avoid wrapping one
 `BackendSelector` activation inside another; start a separate worker process
 or let the outer selector own the full profiled run.
-
-Worker results include selector observability fields:
-
-- `lock_wait_seconds` (float): cumulative seconds spent waiting to enter
-  `_BACKEND_LOCK` while forcing backend selection.
-- `reentrant_rejection_count` (int): count of nested selector activations
-  rejected on the current thread.
-
-Both values are cleared at the start of every worker run, so
-`worker-result.json` reports per-invocation totals rather than process-lifetime
-aggregates. When comparing repeated benchmark runs, treat `lock_wait_seconds`
-and `reentrant_rejection_count` as metrics for that single worker invocation's
-`_BACKEND_LOCK` selector context.
 
 Both backends are tested for behavioural parity across edge cases including
 empty streams, multi-byte UTF-8 at chunk boundaries, broken pipes (where the

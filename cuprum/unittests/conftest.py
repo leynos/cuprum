@@ -1,4 +1,9 @@
-"""Shared test helpers for the tee profiling benchmark harness."""
+"""Shared pytest configuration and helpers for Cuprum unit tests.
+
+The module imports hypothesis_crosshair_provider so Hypothesis can use the
+CrossHair backend, registers the local ``crosshair`` Hypothesis profile, and
+declares the matching pytest marker for symbolic helper-property checks.
+"""
 
 from __future__ import annotations
 
