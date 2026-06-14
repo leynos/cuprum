@@ -138,8 +138,10 @@ async def _pump_stream(
         await _close_stream_writer(writer)
         return
 
-    await _relay_chunks(reader, writer)
-    await _close_stream_writer(writer)
+    try:
+        await _relay_chunks(reader, writer)
+    finally:
+        await _close_stream_writer(writer)
 
 async def _relay_chunks(
     reader: asyncio.StreamReader,
