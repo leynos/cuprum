@@ -45,6 +45,73 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
+
+## Context allowlist internals
+
+`CuprumContext` stores an `allowlist` plus the internal
+`_allowlist_is_restricted` marker. The marker distinguishes the permissive
+default context from a context that has deliberately narrowed to an empty
+allowlist. It defaults to `False` on the default context and becomes `True`
+when narrowing receives an explicit `ScopeConfig.allowlist`, or when direct
+allowlist replacement installs a non-empty allowlist. Once a context is already
+restricted, replacing the allowlist with `frozenset()` preserves that marker so
+the context cannot be widened back to the permissive default by accident.
+
+`check_allowed()` therefore has two empty-allowlist modes. Empty and
+unrestricted means *no policy has been established yet*, so every program is
+permitted for the adoption-friendly default. Empty and restricted means a
+policy has been established and then narrowed to no programs, so every program
+is denied. Keeping that bit separate from the set contents prevents permission
+broadening regressions where `frozenset()` could otherwise mean both "allow
+everything" and "deny everything".
+
+`narrow()` handles allowlists in three cases:
+
+- An empty unrestricted parent uses the provided allowlist directly, creating
+  the first explicit base scope.
+- An empty restricted parent stays empty, preserving the deny-all result of
+  earlier narrowing.
+- A non-empty parent intersects its allowlist with the provided allowlist, so
+  nested scopes can remove programs but cannot add new ones.
+
+`with_allowlist()` is the direct replacement path. It intentionally treats a
+non-empty replacement as restricted because an explicit allowlist policy now
+exists. If the current context is already restricted, an empty replacement keeps
+the restricted marker so direct replacement cannot turn a deny-all context into
+the permissive default.
+
+The allowlist, hook, and timeout rules are split into pure helpers so the
+invariants can be tested directly:
+
+- `_narrow_allowlist(parent, config, parent_is_restricted=...)` returns the
+  narrowed allowlist for the three parent/config cases without mutating either
+  input.
+- `_is_narrowed_allowlist_restricted(config, parent_is_restricted=...)`
+  returns whether the child context should enforce allowlist policy after
+  narrowing.
+- `_merge_before_hooks(parent, config)` appends scoped before hooks after
+  parent hooks so execution stays FIFO.
+- `_merge_after_hooks(parent, config)` prepends scoped after hooks before
+  parent hooks so teardown stays LIFO.
+- `_merge_observe_hooks(parent, config)` appends scoped observation hooks after
+  parent hooks so execution stays FIFO.
+- `_validate_timeout(timeout, class_name)` coerces non-negative timeout values
+  to `float`, preserves `None`, and rejects negative values.
+- `_resolve_narrowed_timeout(parent, config)` inherits the parent timeout when
+  the scoped config is silent and otherwise uses the scoped value.
+
+Context property tests live in `cuprum/unittests/test_context.py`. Run them
+directly with:
+
+```bash
+uv run pytest -q cuprum/unittests/test_context.py
+```
+
+The same test module marks pure-helper properties for optional CrossHair
+execution. The `crosshair` Hypothesis profile is registered in
+`cuprum/unittests/conftest.py`; using it requires the
+`hypothesis-crosshair` package from the dev dependency group.
+
 ## `rust_consume_stream` integration status
 
 `rust_consume_stream` is implemented, tested, and exported, but production
