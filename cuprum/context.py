@@ -322,9 +322,9 @@ class CuprumContext:
     def check_allowed(self, program: Program) -> None:
         """Raise ForbiddenProgramError if program is not allowed.
 
-        When the allowlist is empty, all programs are permitted (permissive
-        default). This allows gradual adoption: code can run without explicit
-        context setup, and scoped(ScopeConfig()) can later establish restrictions.
+        When the allowlist is empty and unrestricted, all programs are
+        permitted (permissive default). When the allowlist is empty and
+        restricted, all programs are denied.
         """
         if not self.allowlist and not self._allowlist_is_restricted:
             return  # Empty allowlist permits all programs
@@ -347,10 +347,11 @@ class CuprumContext:
 
         Notes
         -----
-        When the parent has an empty allowlist, the provided allowlist is used
-        directly to establish a base scope. When the parent has programs, the
-        new allowlist is intersected to enforce narrowing (can only remove, not
-        add programs). This ensures safety while allowing initial setup.
+        When the parent has an empty *unrestricted* allowlist, the provided
+        allowlist is used directly to establish a base scope. When the parent
+        is restricted and empty, narrowing keeps it empty. When the parent has
+        programs, the new allowlist is intersected to enforce narrowing (can
+        only remove, not add programs).
 
         """
         is_restricted = _is_narrowed_allowlist_restricted(
