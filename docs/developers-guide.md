@@ -489,12 +489,13 @@ make lint
 ```
 
 Run Kani separately because it is a bounded model checker rather than a normal
-unit-test runner. The Kani installer places the verifier under `~/.kani`; on
-this system the dynamic library path is required when invoking the crate
-harnesses:
+unit-test runner. The Kani installer places the verifier under `~/.kani`; the
+dynamic library path is required when invoking the crate harnesses. Resolve the
+toolchain library directory from the installed version rather than hard-coding
+it:
 
 ```bash
-LD_LIBRARY_PATH=/home/leynos/.kani/kani-0.67.0/toolchain/lib \
+LD_LIBRARY_PATH="$HOME/.kani/kani-$(cargo kani --version | awk '{print $2}')/toolchain/lib" \
   cargo kani --package cuprum-rust
 ```
 
