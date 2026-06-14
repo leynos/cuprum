@@ -1,0 +1,154 @@
+"""Stateful tests for the canonical ``_TokenRegistration`` handle base.
+
+All scope-registration handles (`AllowRegistration`, `HookRegistration`,
+`EnvRegistration`) share one token-restoration implementation (#113). The
+Hypothesis ``RuleBasedStateMachine`` below drives randomized sequences of
+nested registrations and LIFO detaches across the handle types and asserts
+the ``ContextVar`` is always restored to the exact prior context — token
+discipline holds under nesting and double-detach. Out-of-order detach (a
+documented hazard, not an error) is pinned by a separate example test.
+"""
+
+from __future__ import annotations
+
+import collections.abc as cabc
+import typing as typ
+
+from hypothesis import settings
+from hypothesis import strategies as st
+from hypothesis.stateful import RuleBasedStateMachine, invariant, precondition, rule
+
+from cuprum import ECHO, LS
+from cuprum.context import (
+    AllowRegistration,
+    CuprumContext,
+    EnvRegistration,
+    HookRegistration,
+    ScopeConfig,
+    allow,
+    before,
+    current_context,
+    env,
+    observe,
+    scoped,
+)
+
+if typ.TYPE_CHECKING:
+    from cuprum.context.registration import _TokenRegistration
+
+
+def _noop_before(_cmd: object) -> None:
+    """Before-hook that records nothing."""
+
+
+def _noop_observe(_event: object) -> None:
+    """Observe-hook that records nothing."""
+
+
+type _Handle = AllowRegistration | HookRegistration | EnvRegistration
+type _HandleFactory = cabc.Callable[[], _Handle]
+
+_FACTORIES: tuple[tuple[str, _HandleFactory], ...] = (
+    ("allow", lambda: allow(ECHO)),
+    ("allow-two", lambda: allow(ECHO, LS)),
+    ("before", lambda: before(_noop_before)),
+    ("observe", lambda: observe(_noop_observe)),
+    ("env", lambda: env(CUPRUM_TEST_FLAG="1")),
+    ("env-mapping", lambda: env({"CUPRUM_TEST_OTHER": "2"})),
+)
+
+
+class TokenRegistrationMachine(RuleBasedStateMachine):
+    """Drive nested register/detach sequences across all handle types."""
+
+    def __init__(self) -> None:
+        """Record the baseline context and an empty handle stack."""
+        super().__init__()
+        self._baseline: CuprumContext = current_context()
+        # Stack of (handle, context-before-registration) pairs.
+        self._stack: list[tuple[_TokenRegistration, CuprumContext]] = []
+
+    @rule(choice=st.integers(min_value=0, max_value=len(_FACTORIES) - 1))
+    def register(self, choice: int) -> None:
+        """Create a registration of the chosen kind, recording the prior context."""
+        prior = current_context()
+        _name, factory = _FACTORIES[choice]
+        handle = factory()
+        self._stack.append((handle, prior))
+        assert current_context() is not prior, (
+            "registering a handle must install a derived context"
+        )
+
+    @precondition(lambda self: self._stack)
+    @rule()
+    def detach_innermost(self) -> None:
+        """Detach the most recent registration; the prior context returns."""
+        handle, prior = self._stack.pop()
+        handle.detach()
+        assert current_context() is prior, (
+            "detach must restore the exact context captured at registration"
+        )
+
+    @precondition(lambda self: self._stack)
+    @rule()
+    def double_detach_is_idempotent(self) -> None:
+        """Detaching the innermost handle twice changes nothing further."""
+        handle, prior = self._stack.pop()
+        handle.detach()
+        after_first = current_context()
+        handle.detach()
+        assert current_context() is after_first, "second detach must be a no-op"
+        assert after_first is prior
+
+    @invariant()
+    def stack_depth_matches_context_nesting(self) -> None:
+        """With an empty stack the baseline context is active again."""
+        if not self._stack:
+            assert current_context() is self._baseline
+
+    def teardown(self) -> None:
+        """Detach any remaining handles in LIFO order."""
+        while self._stack:
+            handle, _prior = self._stack.pop()
+            handle.detach()
+
+
+TestTokenRegistrationMachine = TokenRegistrationMachine.TestCase
+TestTokenRegistrationMachine.settings = settings(
+    max_examples=40,
+    stateful_step_count=20,
+    deadline=None,
+)
+
+
+def test_out_of_order_detach_restores_outer_snapshot() -> None:
+    """Example: non-LIFO detach restores the outer snapshot, as documented.
+
+    Detaching an outer registration while an inner one is still attached
+    resets the ``ContextVar`` to the outer handle's snapshot, discarding the
+    inner overlay — the documented hazard that motivates preferring ``with``
+    blocks. The experiment runs inside a ``scoped`` guard so the leaked
+    state cannot pollute other tests: the late ``inner.detach()`` restores
+    inner's own snapshot (which still carries the outer overlay), and only
+    the scope exit returns to the baseline.
+    """
+    with scoped(ScopeConfig()):
+        baseline = current_context()
+        outer = env(CUPRUM_TEST_OUTER="outer")
+        inner = env(CUPRUM_TEST_INNER="inner")
+
+        outer.detach()
+
+        restored = current_context()
+        assert restored is baseline, (
+            "outer detach must restore the pre-outer snapshot, discarding inner"
+        )
+        overlay = restored.env_overlay or {}
+        assert "CUPRUM_TEST_INNER" not in overlay
+
+        # The inner detach stays safe (idempotent token discipline) but
+        # restores its own snapshot — the context with the outer overlay
+        # attached. This is exactly the documented non-LIFO hazard.
+        inner.detach()
+        leaked = current_context().env_overlay or {}
+        assert leaked.get("CUPRUM_TEST_OUTER") == "outer"
