@@ -359,8 +359,16 @@ mod tests {
 
         {
             // SAFETY: duplicating an owned descriptor for a scoped writer.
-            let mut writer =
-                unsafe { std::fs::File::from_raw_fd(libc::dup(write_end.as_raw_fd())) };
+            let duplicated_fd = unsafe { libc::dup(write_end.as_raw_fd()) };
+            assert_ne!(
+                duplicated_fd,
+                -1,
+                "dup(2) failed: {}",
+                io::Error::last_os_error(),
+            );
+            // SAFETY: `duplicated_fd` was checked for `dup(2)` failure above
+            // and is now owned by this scoped `File`.
+            let mut writer = unsafe { std::fs::File::from_raw_fd(duplicated_fd) };
             match writer.write_all(b"ping") {
                 Ok(()) => {}
                 Err(err) => panic!("pipe write failed: {err}"),
