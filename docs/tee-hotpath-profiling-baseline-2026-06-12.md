@@ -52,9 +52,11 @@ _Table 2: Scenario wall times and throughput._
 
 The `echo-pty-nocb-s1` scenario echoes into a pseudo-terminal (PTY) sink. The
 line-callback scenario (`-cb-`) uses the wrap-76 fixture, whose 2,175,740,011
-output bytes divide into 28,256,364 lines of 76 characters plus a newline;
-three measured repeats therefore emit 84,769,092 callback invocations (the
-`stdout_line_count` total in `worker-result.json`).
+output bytes are 28,256,363 full lines of 76 characters plus a newline
+(28,256,363 × 77 bytes) followed by a final partial line of 60 bytes with no
+trailing newline. Each repeat therefore emits 28,256,364 lines, and three
+measured repeats yield 84,769,092 callback invocations (the `stdout_line_count`
+total in `worker-result.json`).
 
 ## Hypothesis verdicts
 

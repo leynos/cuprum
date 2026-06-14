@@ -132,8 +132,10 @@ sampling settings must match those used to collect the baseline, otherwise the
 call graphs lose Rust and Python frames:
 
 - Build the native extension with frame pointers so `perf` can unwind mixed
-  Python and Rust stacks: `RUSTFLAGS="-C force-frame-pointers=yes"` before
-  `maturin develop --release`.
+  Python and Rust stacks: set `RUSTFLAGS="-C force-frame-pointers=yes"`, then
+  run
+  `uv run maturin develop --release --manifest-path rust/cuprum-rust/Cargo.toml`
+  from the repository root (as in the reproduction block below).
 - Export `PYTHONPERFSUPPORT=1` so CPython emits `perf` map entries for
   interpreted frames.
 - Sample with `perf record -F 999 -g --call-graph dwarf,16384`. DWARF
