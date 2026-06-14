@@ -1538,7 +1538,7 @@ flowchart TD
     subgraph Rust Pathway
         H[cuprum._streams_rs]
         I[rust_pump_stream]
-        J[rust_consume_stream]
+        J[rust_consume_stream implemented, not integrated]
     end
 
     A --> B
@@ -1549,13 +1549,18 @@ flowchart TD
     E --> F
     E --> G
     H --> I
-    H --> J
+    H -. exposes .-> J
+    J -. Phase 2 candidate .-> G
 ```
 
 ### 13.3 API Boundary
 
 The Rust extension exposes three functions via PyO3. As of 4.2.2,
 `rust_pump_stream`, `rust_consume_stream`, and `is_available` are implemented.
+Only `rust_pump_stream` is currently routed by production dispatch.
+`rust_consume_stream` is implemented, tested, and exported for direct internal
+experimentation, but stdout and stderr consumption still uses the Python
+implementation until ADR-002 Phase 2 lands.
 
 ```python
 # cuprum/_streams_rs.pyi (type stubs)
@@ -1627,6 +1632,16 @@ def is_available() -> bool:
 `rust_consume_stream` performs incremental UTF-8 decoding with a pending byte
 buffer so that chunk boundaries do not affect output. Invalid byte sequences
 are replaced with the Unicode replacement character (U+FFFD).
+
+The Phase 1 tee hot-path profiling baseline
+([2026-06-12](tee-hotpath-profiling-baseline-2026-06-12.md)) supports wiring a
+future capture-only dispatcher: the measured tee scenario spends about 51% of
+parent CPU in capture double-touch (`bytearray` growth plus final full-buffer
+decode), which is the overhead `rust_consume_stream` targets. That evidence
+does not broaden the first integration boundary. The Phase 2 dispatcher should
+select Rust only for fd-backed, UTF-8/replace, capture-only streams with no
+echo sink and no line callbacks, and should keep Python fallback as the
+behavioural reference.
 
 For screen readers: The following sequence diagram shows the Python-to-Rust
 call flow for `rust_consume_stream`, including buffer validation, file
@@ -1729,6 +1744,11 @@ Cuprum selects the stream backend at runtime using the following precedence:
    - if extraction fails for either side, dispatch falls back to Python
      `_pump_stream()` for that transfer.
 
+Final stdout and stderr consumption currently bypasses this Rust dispatch
+pathway. `rust_consume_stream()` remains a Phase 2 candidate behind the
+ADR-002 measurement and parity-test gates, so backend selection does not change
+capture semantics yet.
+
 This strategy ensures:
 
 - existing pure Python installations continue to work unchanged;
@@ -1810,7 +1830,7 @@ and call is_available"]
     E --> I["Use cuprum._streams
 (_pump_stream / _consume_stream)"]
     H --> J["Use cuprum._streams_rs
-(rust_pump_stream / rust_consume_stream)"]
+(rust_pump_stream for pipeline pump)"]
 
     I --> K["Return result to caller"]
     J --> K
@@ -1831,6 +1851,15 @@ The following table summarizes when each pathway is recommended:
 
 Current Rust acceleration applies to inter-stage pipeline pumping, not
 stdout/stderr capture.
+
+The `rust_consume_stream()` helper targets a measured capture-only hotspot but
+is not yet integrated. The tee profiling baseline found that capture plus echo
+is 2.1 times slower than echo-only for the large deterministic fixture, with
+about half of parent CPU in Python buffer growth and final decode. It also
+found that line-callback workloads are dominated by Python event construction,
+and that pseudo-terminal echo cost is mostly kernel-side. Those findings keep
+the first consume integration scoped to capture-only streams and leave
+callbacks, echo sinks, and terminal-specific work on later phases.
 
 The Rust pathway provides the greatest benefit for:
 
