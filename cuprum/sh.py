@@ -42,6 +42,9 @@ from cuprum.catalogue import UnknownProgramError as UnknownProgramError
 from cuprum.context import current_context, merge_env_overlays
 from cuprum.context import observe as observe
 from cuprum.context import scoped as scoped
+
+# Program must be imported at runtime rather than under TYPE_CHECKING
+# because test modules instantiate CommandResult with Program values directly.
 from cuprum.program import Program  # noqa: TC001
 
 type _ArgValue = str | int | float | bool | Path
