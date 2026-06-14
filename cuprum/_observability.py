@@ -13,6 +13,20 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook
 
 
+class _ExecEventEmissionError(Exception):
+    """Carry scheduled observe-hook tasks when later hook emission fails."""
+
+    def __init__(
+        self,
+        error: BaseException,
+        scheduled_tasks: list[asyncio.Task[None]],
+    ) -> None:
+        """Store ``error`` and tasks scheduled before it was raised."""
+        super().__init__(str(error))
+        self.error = error
+        self.scheduled_tasks = scheduled_tasks
+
+
 def _freeze_str_mapping(
     mapping: cabc.Mapping[str, str] | None,
 ) -> cabc.Mapping[str, str] | None:
@@ -45,7 +59,10 @@ def _emit_exec_event(
     """
     scheduled: list[asyncio.Task[None]] = []
     for hook in hooks:
-        result = hook(event)
+        try:
+            result = hook(event)
+        except BaseException as exc:
+            raise _ExecEventEmissionError(exc, scheduled) from exc
         if inspect.isawaitable(result):
             scheduled.append(asyncio.create_task(_await_awaitable(result)))
     return scheduled
@@ -80,6 +97,7 @@ async def _wait_for_exec_hook_tasks(pending_tasks: list[asyncio.Task[None]]) -> 
 
 
 __all__ = [
+    "_ExecEventEmissionError",
     "_emit_exec_event",
     "_freeze_str_mapping",
     "_merge_tags",
