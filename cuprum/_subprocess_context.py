@@ -30,13 +30,14 @@ def _cwd_arg(cwd: str | Path | None) -> str | None:
 
     Canonical conversion shared by the single-command and pipeline spawn
     sites so the optional working directory is rendered identically in both
-    paths.
+    paths. A ``Path`` argument is rendered via ``str`` exactly as a string
+    argument is; see ``test_cwd_arg_conversion`` for the exhaustive cases.
 
     Example
     -------
     >>> _cwd_arg(None) is None
     True
-    >>> _cwd_arg(Path("/srv/data"))
+    >>> _cwd_arg("/srv/data")
     '/srv/data'
     """
     return str(cwd) if cwd is not None else None

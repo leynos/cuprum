@@ -99,7 +99,8 @@ def test_final_stage_agrees_with_single_process_policy(
 def test_intermediate_stage_always_pipes_stdout() -> None:
     """Example: intermediate stages pipe stdout regardless of capture/echo."""
     for capture_or_echo in (False, True):
-        fds = _get_stage_stream_fds(0, 1, capture_or_echo=capture_or_echo)
+        # Three-stage pipeline: stage 1 is intermediate between 0 and 2.
+        fds = _get_stage_stream_fds(1, 2, capture_or_echo=capture_or_echo)
         assert fds.stdout == _PIPE
 
 
