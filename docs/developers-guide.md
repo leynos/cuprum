@@ -7,6 +7,17 @@ the [design document](cuprum-design.md); for where code lives, see the
 [repository layout](repository-layout.md); and for accepted architectural
 decisions, see [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md).
 
+
+## Rust dependency management
+
+When editing `Cargo.toml`, dependencies must use explicit semver-compatible
+caret requirements only (for example `"1.2.3"`). Do not use wildcards such as
+`*` or open-ended ranges such as `>=` or `~`.
+
+When updating Rust dependencies, keep the requested version aligned to the
+patch baseline already present in `Cargo.lock`. This keeps lockfile updates
+focused, small, and easy to review.
+
 ## Stream line-splitting properties
 
 Line callbacks in the Python stream backend use two pure helpers from

@@ -46,6 +46,15 @@ impl PumpError {
             )
         )
     }
+
+    /// Return the Python `OSError` message for semantic non-I/O variants.
+    pub(crate) const fn py_os_error_message(&self) -> Option<&'static str> {
+        match self {
+            Self::LengthOverflow => Some("integer length conversion overflowed"),
+            Self::BufferRangeExceeded => Some("computed range exceeded the buffer bounds"),
+            Self::Io(_) => None,
+        }
+    }
 }
 
 impl From<PumpError> for PyErr {
@@ -53,7 +62,7 @@ impl From<PumpError> for PyErr {
         match err {
             PumpError::Io(io_err) => io_err.into(),
             other @ (PumpError::LengthOverflow | PumpError::BufferRangeExceeded) => {
-                PyOSError::new_err(other.to_string())
+                PyOSError::new_err(other.py_os_error_message().unwrap_or("stream pump failed"))
             }
         }
     }
@@ -108,6 +117,22 @@ mod tests {
         assert_eq!(
             PumpError::BufferRangeExceeded.to_string(),
             "computed range exceeded the buffer bounds",
+        );
+    }
+
+    #[test]
+    fn semantic_overflow_errors_define_py_os_error_messages() {
+        assert_eq!(
+            PumpError::LengthOverflow.py_os_error_message(),
+            Some("integer length conversion overflowed"),
+        );
+        assert_eq!(
+            PumpError::BufferRangeExceeded.py_os_error_message(),
+            Some("computed range exceeded the buffer bounds"),
+        );
+        assert_eq!(
+            PumpError::from(io::Error::other("boom")).py_os_error_message(),
+            None,
         );
     }
 }
