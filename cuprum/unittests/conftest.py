@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typing as typ
 
-import hypothesis_crosshair_provider  # noqa: F401
+import hypothesis_crosshair_provider  # noqa: F401  # Registers CrossHair backend provider on import.
 from hypothesis import settings
 from hypothesis import strategies as st
 
