@@ -67,7 +67,10 @@ def _emit_exec_event(
     """
     scheduled: list[asyncio.Task[None]] = []
     for hook in hooks:
-        result = hook(event)
+        try:
+            result = hook(event)
+        except BaseException as exc:
+            raise _ExecEventEmissionError(exc, scheduled) from exc
         if inspect.isawaitable(result):
             scheduled.append(asyncio.create_task(_await_awaitable(result)))
     return scheduled
@@ -102,9 +105,25 @@ async def _wait_for_exec_hook_tasks(pending_tasks: list[asyncio.Task[None]]) -> 
 
 
 __all__ = [
+    "_ExecEventEmissionError",
     "_base_stage_tags",
     "_emit_exec_event",
+    "_freeze_str_mapping",
     "_merge_tags",
     "_resolve_env_overlay",
     "_wait_for_exec_hook_tasks",
 ]
+
+
+class _ExecEventEmissionError(Exception):
+    """Carry scheduled observe-hook tasks when later hook emission fails."""
+
+    def __init__(
+        self,
+        error: BaseException,
+        scheduled_tasks: list[asyncio.Task[None]],
+    ) -> None:
+        """Store ``error`` and tasks scheduled before it was raised."""
+        super().__init__(str(error))
+        self.error = error
+        self.scheduled_tasks = scheduled_tasks

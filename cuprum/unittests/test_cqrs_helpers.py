@@ -18,8 +18,9 @@ import typing as typ
 import pytest
 
 from cuprum import ECHO, LS, sh
-from cuprum._observability import _emit_exec_event
+from cuprum._observability import _emit_exec_event, _wait_for_exec_hook_tasks
 from cuprum._pipeline_internals import _collect_hooks, _enforce_allowlist
+from cuprum._pipeline_types import _EventDetails, _ExecutionHooks, _StageObservation
 from cuprum._streams import _write_to_stream_writer, _WriteOutcome
 from cuprum.context import (
     ForbiddenProgramError,
@@ -29,6 +30,14 @@ from cuprum.context import (
     scoped,
 )
 from cuprum.events import ExecEvent
+
+
+class _AsyncObserveHookError(Exception):
+    """Test exception raised by a scheduled async observe hook."""
+
+
+class _SyncObserveHookError(Exception):
+    """Test exception raised by a later synchronous observe hook."""
 
 
 def _echo_cmd() -> sh.SafeCmd:
@@ -131,6 +140,46 @@ def test_emit_exec_event_returns_scheduled_async_tasks() -> None:
         assert len(scheduled) == 1, "one async hook should schedule one task"
         await asyncio.gather(*scheduled)
         assert ran.is_set(), "scheduled task must run the async hook"
+
+    asyncio.run(run())
+
+
+def test_stage_observation_preserves_scheduled_tasks_when_later_hook_fails() -> None:
+    """Tasks scheduled before a hook failure remain pending for the caller."""
+
+    async def run() -> None:
+        """Emit through stage observation and await the preserved task."""
+        pending_tasks: list[asyncio.Task[None]] = []
+
+        async def async_hook(_event: ExecEvent) -> None:
+            """Raise from an async hook that was scheduled before failure."""
+            await asyncio.sleep(0)
+            raise _AsyncObserveHookError
+
+        def failing_hook(_event: ExecEvent) -> None:
+            """Raise synchronously after the async hook schedules work."""
+            raise _SyncObserveHookError
+
+        observation = _StageObservation(
+            cmd=_echo_cmd(),
+            hooks=_ExecutionHooks(
+                before_hooks=(),
+                after_hooks=(),
+                observe_hooks=(async_hook, failing_hook),
+            ),
+            tags={},
+            cwd=None,
+            env_overlay=None,
+            pending_tasks=pending_tasks,
+        )
+
+        with pytest.raises(_SyncObserveHookError):
+            observation.emit("start", _EventDetails(pid=123))
+
+        assert len(pending_tasks) == 1, "scheduled tasks must survive hook failure"
+        with pytest.raises(_AsyncObserveHookError):
+            await _wait_for_exec_hook_tasks(pending_tasks)
+        assert pending_tasks == []
 
     asyncio.run(run())
 

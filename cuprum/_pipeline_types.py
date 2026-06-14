@@ -13,7 +13,7 @@ import dataclasses as dc
 import time
 import typing as typ
 
-from cuprum._observability import _emit_exec_event
+from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
 from cuprum.events import ExecEvent
 
 if typ.TYPE_CHECKING:
@@ -75,26 +75,27 @@ class _StageObservation:
         """Emit an observe event for ``phase`` when observe hooks are set."""
         if not self.hooks.observe_hooks:
             return
-        self.pending_tasks.extend(
-            _emit_exec_event(
-                self.hooks.observe_hooks,
-                ExecEvent(
-                    phase=phase,
-                    program=self.cmd.program,
-                    argv=self.cmd.argv_with_program,
-                    cwd=self.cwd,
-                    env=self.env_overlay,
-                    pid=details.pid,
-                    timestamp=time.time(),
-                    line=details.line,
-                    exit_code=details.exit_code,
-                    duration_s=details.duration_s,
-                    tags=self.tags,
-                    note=details.note,
-                    byte_count=details.byte_count,
-                ),
-            ),
+        event = ExecEvent(
+            phase=phase,
+            program=self.cmd.program,
+            argv=self.cmd.argv_with_program,
+            cwd=self.cwd,
+            env=self.env_overlay,
+            pid=details.pid,
+            timestamp=time.time(),
+            line=details.line,
+            exit_code=details.exit_code,
+            duration_s=details.duration_s,
+            tags=self.tags,
+            note=details.note,
+            byte_count=details.byte_count,
         )
+        try:
+            scheduled_tasks = _emit_exec_event(self.hooks.observe_hooks, event)
+        except _ExecEventEmissionError as exc:
+            self.pending_tasks.extend(exc.scheduled_tasks)
+            raise exc.error from exc
+        self.pending_tasks.extend(scheduled_tasks)
 
 
 @dc.dataclass(frozen=True, slots=True)
