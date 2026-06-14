@@ -51,7 +51,9 @@ def _echo_cmd() -> sh.SafeCmd:
 def test_enforce_allowlist_permits_allowed_program() -> None:
     """``_enforce_allowlist`` returns ``None`` for an allowed program."""
     with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
-        assert _enforce_allowlist(_echo_cmd()) is None
+        assert _enforce_allowlist(_echo_cmd()) is None, (
+            "allowed programs should pass allowlist enforcement without a result"
+        )
 
 
 def test_enforce_allowlist_rejects_forbidden_program() -> None:
@@ -75,8 +77,12 @@ def test_collect_hooks_is_a_pure_query() -> None:
         ctx = current_context()
         hooks = _collect_hooks(ctx)
 
-    assert hooks.before_hooks == ctx.before_hooks
-    assert noop in hooks.before_hooks
+    assert hooks.before_hooks == ctx.before_hooks, (
+        "collected before hooks should match the current context"
+    )
+    assert noop in hooks.before_hooks, (
+        "collected before hooks should include the registered hook"
+    )
 
 
 def test_enforce_and_collect_are_independent() -> None:
@@ -85,7 +91,9 @@ def test_enforce_and_collect_are_independent() -> None:
         ctx = current_context()
         # Collecting hooks for a forbidden command does not raise; only the
         # explicit command step enforces the allowlist.
-        assert _collect_hooks(ctx).before_hooks == ()
+        assert _collect_hooks(ctx).before_hooks == (), (
+            "collecting hooks should not enforce a forbidden command"
+        )
         with pytest.raises(ForbiddenProgramError):
             _enforce_allowlist(_echo_cmd())
 
@@ -120,8 +128,8 @@ def test_emit_exec_event_returns_empty_for_sync_hooks() -> None:
 
     scheduled = _emit_exec_event((sync_hook,), _event())
 
-    assert scheduled == []
-    assert len(calls) == 1
+    assert scheduled == [], "synchronous observe hooks should schedule no tasks"
+    assert len(calls) == 1, "synchronous observe hook should be called once"
 
 
 def test_emit_exec_event_returns_scheduled_async_tasks() -> None:
@@ -179,7 +187,7 @@ def test_stage_observation_preserves_scheduled_tasks_when_later_hook_fails() -> 
         assert len(pending_tasks) == 1, "scheduled tasks must survive hook failure"
         with pytest.raises(_AsyncObserveHookError):
             await _wait_for_exec_hook_tasks(pending_tasks)
-        assert pending_tasks == []
+        assert pending_tasks == [], "wait helper should clear completed pending tasks"
 
     asyncio.run(run())
 
@@ -210,30 +218,30 @@ class _RecordingWriter:
         self.closed = True
 
 
-def test_write_to_stream_writer_reports_open_on_success() -> None:
-    """A successful write reports ``OPEN`` and forwards the chunk."""
+@pytest.mark.parametrize(
+    ("fail", "expected_outcome"),
+    [
+        pytest.param(False, _WriteOutcome.OPEN, id="open-writer"),
+        pytest.param(True, _WriteOutcome.CLOSED, id="broken-pipe"),
+    ],
+)
+def test_write_to_stream_writer_reports_outcome(
+    *,
+    fail: bool,
+    expected_outcome: _WriteOutcome,
+) -> None:
+    """Writes report downstream state without closing the writer."""
 
     async def run() -> _WriteOutcome:
-        """Write one chunk to a healthy writer."""
-        writer = _RecordingWriter(fail=False)
+        """Write one chunk to a configurable writer."""
+        writer = _RecordingWriter(fail=fail)
         outcome = await _write_to_stream_writer(typ.cast("typ.Any", writer), b"payload")
-        assert writer.chunks == [b"payload"]
-        assert not writer.closed, "helper must not close the caller-owned writer"
-        return outcome
-
-    assert asyncio.run(run()) is _WriteOutcome.OPEN
-
-
-def test_write_to_stream_writer_reports_closed_on_broken_pipe() -> None:
-    """A broken pipe reports ``CLOSED`` without closing the writer."""
-
-    async def run() -> _WriteOutcome:
-        """Write one chunk to a writer whose drain breaks."""
-        writer = _RecordingWriter(fail=True)
-        outcome = await _write_to_stream_writer(typ.cast("typ.Any", writer), b"payload")
+        assert writer.chunks == [b"payload"], "writer should receive the payload chunk"
         assert not writer.closed, (
             "helper must leave writer ownership and closure to the caller"
         )
         return outcome
 
-    assert asyncio.run(run()) is _WriteOutcome.CLOSED
+    assert asyncio.run(run()) is expected_outcome, (
+        "write helper should report the expected downstream outcome"
+    )
