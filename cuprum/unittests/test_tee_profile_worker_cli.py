@@ -61,6 +61,11 @@ def test_worker_cli_reports_config_errors(
             id="repeat-count-zero",
         ),
         pytest.param(
+            {"repeat_count": 1001},
+            "repeat-count must be <= 1000",
+            id="repeat-count-too-large",
+        ),
+        pytest.param(
             {"mode": "invalid"},
             "mode must be one of",
             id="invalid-mode",
