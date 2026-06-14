@@ -12,6 +12,8 @@ import pytest
 
 from tests.helpers.docs import repo_root
 from tests.helpers.maturin import (
+    _AARCH64_CONTAINER_PIN_RE,
+    _AARCH64_CONTAINER_USAGE_RE,
     build_native_wheel_artifact,
     read_expected_maturin_version,
     read_manylinux_aarch64_container_ref,
@@ -62,6 +64,45 @@ def test_manylinux_aarch64_container_is_referenced_by_build_step() -> None:
     assert workflow_uses_manylinux_aarch64_container_ref(repo_root()), (
         "Expected build-wheels.yml to reference env.MANYLINUX_AARCH64_CONTAINER"
     )
+
+
+@pytest.mark.parametrize(
+    "container_ref",
+    [
+        "ghcr.io/rust-cross/manylinux_2_28-cross:aarch64",
+        "ghcr.io/rust-cross/manylinux_2_28-cross:latest",
+        "ghcr.io/rust-cross/manylinux_2_28-cross@sha256:tooshort",
+        "ghcr.io/rust-cross/manylinux_2_28-cross@sha256:" + "g" * 64,
+        "",
+    ],
+)
+def test_manylinux_aarch64_container_ref_rejects_mutable_tag(
+    container_ref: str,
+) -> None:
+    """Aarch64 manylinux container refs reject mutable or invalid pins."""
+    assert _MANYLINUX_CONTAINER_SHA256_RE.fullmatch(container_ref) is None
+
+
+def test_manylinux_aarch64_container_pin_regex_rejects_missing_comment() -> None:
+    """Aarch64 manylinux container pins require the source-tag comment."""
+    yaml_line = (
+        "MANYLINUX_AARCH64_CONTAINER: "
+        "ghcr.io/rust-cross/manylinux_2_28-cross@sha256:"
+        "4864c3e931d790def6dba05cbf133b236b242d0c732f77546c68663c7923116e"
+    )
+
+    assert _AARCH64_CONTAINER_PIN_RE.search(yaml_line) is None
+
+
+def test_manylinux_aarch64_container_usage_regex_rejects_literal_image() -> None:
+    """Aarch64 manylinux container usage requires the pinned env variable."""
+    yaml_line = (
+        "        container: "
+        "ghcr.io/rust-cross/manylinux_2_28-cross@sha256:"
+        "4864c3e931d790def6dba05cbf133b236b242d0c732f77546c68663c7923116e"
+    )
+
+    assert _AARCH64_CONTAINER_USAGE_RE.search(yaml_line) is None
 
 
 # pytest-timeout arms SIGALRM in the *parent* process; pytest-forked blocks the

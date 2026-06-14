@@ -17,7 +17,7 @@ _MATURIN_PIN_RE = re.compile(r"maturin==(\d+\.\d+\.\d+)")
 _WORKFLOW_PIN_RE = re.compile(r'MATURIN_VERSION:\s*"(\d+\.\d+\.\d+)"')
 _ACTION_PIN_RE = re.compile(r'default:\s*"(\d+\.\d+\.\d+)"')
 _AARCH64_CONTAINER_PIN_RE = re.compile(
-    r"^\s*MANYLINUX_AARCH64_CONTAINER:\s*([^\s#]+)(?:\s+#.*)?$",
+    r"^\s*MANYLINUX_AARCH64_CONTAINER:\s*([^\s#]+)\s+#\s*\S.*$",
     re.MULTILINE,
 )
 _AARCH64_CONTAINER_USAGE_RE = re.compile(
