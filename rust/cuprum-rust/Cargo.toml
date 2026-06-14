@@ -19,6 +19,7 @@ libc = "0.2.186"
 
 [dev-dependencies]
 proptest = "1.11.0"
+rstest = "0.26.1"
 trybuild = { version = "1.0.116", features = ["diff"] }
 
 [lints]

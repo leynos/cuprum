@@ -5,6 +5,18 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::with_borrowed_reader;
+use rstest::{fixture, rstest};
+
+struct BorrowedReaderPipe {
+    read_end: OwnedFd,
+    write_end: OwnedFd,
+    raw_fd: i32,
+}
+
+enum BorrowedReaderScenario {
+    Panic,
+    Success,
+}
 
 fn make_pipe() -> (OwnedFd, OwnedFd) {
     let mut fds = [0_i32; 2];
@@ -17,16 +29,57 @@ fn make_pipe() -> (OwnedFd, OwnedFd) {
 }
 
 fn fd_is_open(fd: i32) -> bool {
-    // SAFETY: F_GETFD on an arbitrary integer is safe; it reports EBADF for
-    // descriptors that are not open.
-    unsafe { libc::fcntl(fd, libc::F_GETFD) != -1 }
+    loop {
+        // SAFETY: F_GETFD on an arbitrary integer is safe; it reports EBADF
+        // for descriptors that are not open.
+        let result = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if result != -1 {
+            return true;
+        }
+
+        if io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+            return false;
+        }
+    }
 }
 
-#[test]
-fn borrowed_reader_stays_open_after_panicking_operation() {
-    let (read_end, _write_end) = make_pipe();
+#[fixture]
+fn borrowed_reader_pipe() -> BorrowedReaderPipe {
+    let (read_end, write_end) = make_pipe();
     let raw_fd = read_end.as_raw_fd();
 
+    BorrowedReaderPipe {
+        read_end,
+        write_end,
+        raw_fd,
+    }
+}
+
+#[rstest]
+#[case::panicking_operation(BorrowedReaderScenario::Panic)]
+#[case::successful_operation(BorrowedReaderScenario::Success)]
+fn borrowed_reader_stays_open_after_operation(
+    borrowed_reader_pipe: BorrowedReaderPipe,
+    #[case] scenario: BorrowedReaderScenario,
+) {
+    let BorrowedReaderPipe {
+        read_end,
+        write_end,
+        raw_fd,
+    } = borrowed_reader_pipe;
+
+    match scenario {
+        BorrowedReaderScenario::Panic => assert_panicking_reader_keeps_fd_open(raw_fd),
+        BorrowedReaderScenario::Success => {
+            assert_successful_reader_keeps_fd_usable(raw_fd, write_end);
+        }
+    }
+
+    assert!(fd_is_open(raw_fd), "the borrowed FD must remain open");
+    drop(read_end);
+}
+
+fn assert_panicking_reader_keeps_fd_open(raw_fd: i32) {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         with_borrowed_reader(raw_fd, |_reader| -> () {
             panic!("simulated failure inside the borrowed scope");
@@ -34,20 +87,9 @@ fn borrowed_reader_stays_open_after_panicking_operation() {
     }));
 
     assert!(outcome.is_err(), "the panic must propagate to the caller");
-    assert!(
-        fd_is_open(raw_fd),
-        "a panicking operation must not close the caller-owned FD",
-    );
-    // `read_end` now drops and closes the FD exactly once, proving the guard
-    // did not already close it (a double close would surface as EBADF under
-    // stricter runtimes).
 }
 
-#[test]
-fn borrowed_reader_stays_open_and_usable_after_success() {
-    let (read_end, write_end) = make_pipe();
-    let raw_fd = read_end.as_raw_fd();
-
+fn assert_successful_reader_keeps_fd_usable(raw_fd: i32, write_end: OwnedFd) {
     {
         // SAFETY: duplicating an owned descriptor for a scoped writer.
         let duplicated_fd = unsafe { libc::dup(write_end.as_raw_fd()) };
@@ -80,5 +122,4 @@ fn borrowed_reader_stays_open_and_usable_after_success() {
     });
 
     assert_eq!(collected, b"ping");
-    assert!(fd_is_open(raw_fd), "the borrowed FD must remain open");
 }
