@@ -92,6 +92,14 @@ def _failure_indices_sorted(failures: list[int]) -> bool:
     return failures == sorted(failures)
 
 
+def _failures_are_exhaustive(
+    failures: list[int],
+    final_results: list[CommandResult],
+) -> bool:
+    """Return whether failures contains exactly the indices of every non-ok result."""
+    return failures == sorted(i for i, r in enumerate(final_results) if not r.ok)
+
+
 def _no_cancelled_entries(final_results: list[CommandResult]) -> bool:
     """Return whether compacted results contain no cancelled entries."""
     return None not in final_results
@@ -124,6 +132,7 @@ def _build_final_results_invariants_hold(
         _failure_indices_in_bounds(failures, final_results)
         and _failure_indices_point_to_failures(failures, final_results)
         and _failure_indices_sorted(failures)
+        and _failures_are_exhaustive(failures, final_results)
         and _no_cancelled_entries(final_results)
         and _result_count_matches(final_results, inputs)
         and _order_preserved(final_results, expected_results)
