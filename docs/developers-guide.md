@@ -140,6 +140,14 @@ call graphs lose Rust and Python frames:
   unwinding is more robust than frame-pointer-only unwinding for the mixed
   stacks here; the driver applies these defaults and exposes `--perf-frequency`
   and `--perf-call-graph` overrides.
+- Grant `perf` permission to collect user-space samples. The baseline was
+  taken at `perf_event_paranoid=2`, which is sufficient for the user-space call
+  graphs this harness needs; kernel symbols remain unresolved at that level
+  (raw addresses in the call trees). Check the current level with
+  `cat /proc/sys/kernel/perf_event_paranoid`. If sampling is denied, either
+  lower it for the session (`sudo sysctl kernel.perf_event_paranoid=2`, or a
+  lower value such as `1` or `-1` to resolve kernel frames too) or grant
+  `CAP_PERFMON` to the `perf` invocation.
 - Install `perf`, `inferno-collapse-perf`, and optionally `py-spy` on `PATH`.
 
 These settings, the deterministic fixtures, and the full reproduction sequence
