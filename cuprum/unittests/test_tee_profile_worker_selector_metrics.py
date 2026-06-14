@@ -17,8 +17,12 @@ from hypothesis import strategies as st
 
 from benchmarks import tee_profile_worker
 from benchmarks.tee_profile_worker import TeeProfileWorkerConfig, run_tee_profile_worker
+from cuprum.unittests import (
+    _tee_profile_worker_test_helpers as _tee_profile_worker_test_helpers,
+)
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib as pth
 
 
@@ -139,6 +143,58 @@ def test_worker_accumulates_repeat_counters(tmp_path: pth.Path) -> None:
     assert result["stdout_line_count"] == 3, (
         f"expected line callbacks to accumulate across repeats, got {result}"
     )
+
+
+def test_worker_resets_prepopulated_selector_metrics(
+    tmp_path: pth.Path,
+) -> None:
+    """run_tee_profile_worker resets stale metrics carried by the selector."""
+
+    class _PassthroughBackendSelector(
+        _tee_profile_worker_test_helpers._BaseBackendSelector,
+    ):
+        """Delegate directly while exposing the helper selector metrics state."""
+
+        def __init__(self) -> None:
+            """Initialise the helper base with deterministic selector timing."""
+            super().__init__({}, [], threading.Lock())
+            self._delegate = tee_profile_worker._EnvBackendSelector(
+                clock=_SequenceClock([0.0, 0.0]),
+            )
+
+        @contextlib.contextmanager
+        def _activate(
+            self,
+            backend: tee_profile_worker.BackendName,
+        ) -> cabc.Iterator[None]:
+            """Enter the real selector without adding coordination events."""
+            with self._delegate(backend):
+                yield
+
+    fixture = tmp_path / "fixture_reset_metrics.b64"
+    fixture.write_text("YWJjZGVm\n")
+    selector = _PassthroughBackendSelector()
+
+    selector.metrics_state.add_lock_wait(99.0)
+    selector.metrics_state.increment_rejections()
+    selector.metrics_state.increment_rejections()
+
+    config = tee_profile_worker.TeeProfileWorkerConfig(
+        fixture_path=fixture,
+        stages=1,
+        mode="echo",
+        sink_kind="devnull",
+        with_line_callbacks=False,
+        backend="python",
+        repeat_count=1,
+    )
+    result = tee_profile_worker.run_tee_profile_worker(
+        config,
+        backend_selector=selector,
+    )
+
+    assert result["lock_wait_seconds"] == pytest.approx(0.0, abs=1e-6)
+    assert result["reentrant_rejection_count"] == 0
 
 
 def test_metrics_are_thread_local() -> None:
