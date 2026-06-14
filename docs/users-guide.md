@@ -1089,8 +1089,10 @@ for the internal stream dispatcher and may change without notice.
 unlike the pump side (which is routed through a Rust-then-Python dispatcher),
 no production code path routes stream consumption through it, and every consume
 uses the pure-Python implementation regardless of the selected backend.
-Consume-side dispatch is deferred, evidence-gated work tracked as Phase 2 of
-ADR-002.
+Consume-side dispatch is evidence-gated Phase 2 work in ADR-002. The tee
+hot-path profiling baseline now supports a future capture-only dispatcher, but
+that dispatcher has not landed yet and will be limited to fd-backed,
+UTF-8/replace, capture-only streams without echo sinks or line callbacks.
 
 The Rust consume helper always decodes UTF-8 with replacement semantics for
 invalid sequences. Other encodings or error modes require the Python

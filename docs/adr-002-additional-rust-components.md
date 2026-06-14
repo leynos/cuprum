@@ -302,13 +302,31 @@ Route eligible capture-only streams through `rust_consume_stream()`. Add unit,
 behavioural, and property tests that prove parity for stdout, stderr, empty
 streams, invalid UTF-8, large payloads, and forced Python fallback.
 
-**Status (issue #127):** deliberately deferred until the Phase 1 measurement
-schema lands. `rust_consume_stream()` ships in the wheel and is exercised by
-tests, but no production code routes a consume through it; the symbol is
-annotated as "implemented but not yet integrated" in `cuprum/_streams_rs.py`
-and the users' guide so it is not mistaken for a wired bridge. A guard test
+**Status (issue #127):** implemented but not yet integrated. The Phase 1 tee
+hot-path profiling baseline now supports capture-only consume dispatch:
+capture double-touch accounts for about 51% of parent CPU in the measured tee
+scenario, comfortably above the 20% acceptance threshold. The first dispatcher
+must still remain narrower than the public helper: fd-backed, UTF-8/replace,
+capture-only streams with no echo sink and no line callbacks.
+
+`rust_consume_stream()` ships in the wheel and is exercised by tests, but no
+production code routes a consume through it; the symbol is annotated as
+"implemented but not yet integrated" in `cuprum/_streams_rs.py` and the users'
+guide so it is not mistaken for a wired bridge. A guard test
 (`cuprum/unittests/test_rust_streams.py`) fails if production code starts
-referencing the symbol without revisiting this decision.
+referencing the symbol without revisiting this decision. Phase 2 integration
+should remove that marker only alongside the dispatcher, fallback path, and the
+Python/Rust parity property tests tracked by issue #90.
+
+The same profiling baseline records adjacent work that should not be folded
+into the initial `rust_consume_stream()` dispatcher:
+
+- increasing `_READ_SIZE` to 16-64 KiB is a cheap Python-path improvement that
+  stacks with Rust consume dispatch;
+- line-callback workloads are dominated by Python observe-hook event
+  construction and should be optimized separately;
+- pseudo-terminal echo cost is mostly kernel-side, so raw-sink Rust helpers
+  should not be expected to remove that cost.
 
 ### Phase 3: Raw sink echo and tee helper
 
