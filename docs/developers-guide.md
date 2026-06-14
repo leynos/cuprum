@@ -35,6 +35,47 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
+## Fail-fast reducer properties
+
+`_build_final_results` in `cuprum/concurrent.py` is the pure reducer that
+compacts fail-fast concurrent command results.  It drops `None` (cancelled)
+entries and remaps failure indices to the compacted result list.  The reducer
+carries explicit postcondition-style contracts in its docstring:
+
+- `final_results` contains only non-`None` entries (cancelled slots removed).
+- `len(final_results)` equals the number of non-`None` entries in `inputs`.
+- Every index in `failures` is within `[0, len(final_results))`.
+- `failures` is sorted in ascending order.
+- Every index in `failures` points at an entry with `ok == False`.
+- `failures` contains *all* such indices — no non-ok entry is omitted.
+- The relative order of non-`None` inputs is preserved in `final_results`.
+
+These invariants are verified at two levels:
+
+- **Hypothesis** (`cuprum/unittests/test_build_final_results_property.py`)
+  generates up to 50 compact `CommandResult | None` lists and asserts
+  `_build_final_results_invariants_hold` over each.  Run:
+
+  ```bash
+  uv run pytest -q cuprum/unittests/test_build_final_results_property.py
+  ```
+
+- **CrossHair** performs bounded symbolic verification over the assertion
+  target.  Run:
+
+  ```bash
+  uv run crosshair check \
+    cuprum.unittests.test_build_final_results_property._assert_build_final_results_invariants \
+    --analysis_kind asserts
+  ```
+
+  CrossHair is a development dependency only.  The property module skips
+  symbolic checks on Python 3.15, where CrossHair cannot yet trace the
+  `CALL_KW` opcode (tracked in issue `#109`).
+
+When changing `_build_final_results`, run both verification paths before
+committing.
+
 ## Environment overlay resolution
 
 The user-facing `env(...)` context manager and the related `ScopeConfig` field
