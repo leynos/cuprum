@@ -186,13 +186,31 @@ mod tests {
 
     fn write_all_to(fd: &OwnedFd, payload: &[u8]) {
         // SAFETY: duplicating an owned descriptor for a scoped File wrapper.
-        let mut file = unsafe { File::from_raw_fd(libc::dup(fd.as_raw_fd())) };
+        let duplicated_fd = unsafe { libc::dup(fd.as_raw_fd()) };
+        assert_ne!(
+            duplicated_fd,
+            -1,
+            "dup(2) failed: {}",
+            io::Error::last_os_error(),
+        );
+        // SAFETY: `duplicated_fd` was checked for `dup(2)` failure above and
+        // is now owned by this scoped `File`.
+        let mut file = unsafe { File::from_raw_fd(duplicated_fd) };
         unwrap_ok(file.write_all(payload));
     }
 
     fn read_all_from(fd: &OwnedFd) -> Vec<u8> {
         // SAFETY: duplicating an owned descriptor for a scoped File wrapper.
-        let mut file = unsafe { File::from_raw_fd(libc::dup(fd.as_raw_fd())) };
+        let duplicated_fd = unsafe { libc::dup(fd.as_raw_fd()) };
+        assert_ne!(
+            duplicated_fd,
+            -1,
+            "dup(2) failed: {}",
+            io::Error::last_os_error(),
+        );
+        // SAFETY: `duplicated_fd` was checked for `dup(2)` failure above and
+        // is now owned by this scoped `File`.
+        let mut file = unsafe { File::from_raw_fd(duplicated_fd) };
         let mut collected = Vec::new();
         unwrap_ok(file.read_to_end(&mut collected));
         collected

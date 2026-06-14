@@ -10,6 +10,17 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md)
 - [ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md)
 
+
+## Rust dependency management
+
+When editing `Cargo.toml`, dependencies must use explicit semver-compatible
+caret requirements only (for example `"1.2.3"`). Do not use wildcards such as
+`*` or open-ended ranges such as `>=` or `~`.
+
+When updating Rust dependencies, keep the requested version aligned to the
+patch baseline already present in `Cargo.lock`. This keeps lockfile updates
+focused, small, and easy to review.
+
 ## Tar and rsync builder helpers
 
 `TarCreateOptions.compression` in `cuprum/builders/tar.py` selects one member
