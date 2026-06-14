@@ -63,23 +63,28 @@ pub(crate) fn try_splice_pump(
 fn splice_once(fd_in: libc::c_int, fd_out: libc::c_int, len: usize) -> Result<usize, PumpError> {
     let flags = SPLICE_F_MOVE | SPLICE_F_MORE;
 
-    // SAFETY: splice is a well-defined syscall; null offsets are valid for pipes.
-    let result = unsafe {
-        libc::splice(
-            fd_in,
-            std::ptr::null_mut(), // No offset for pipes
-            fd_out,
-            std::ptr::null_mut(), // No offset for pipes
-            len,
-            flags,
-        )
-    };
+    loop {
+        // SAFETY: splice is a well-defined syscall; null offsets are valid for pipes.
+        let result = unsafe {
+            libc::splice(
+                fd_in,
+                std::ptr::null_mut(), // No offset for pipes
+                fd_out,
+                std::ptr::null_mut(), // No offset for pipes
+                len,
+                flags,
+            )
+        };
 
-    if result < 0 {
-        Err(PumpError::from(io::Error::last_os_error()))
-    } else {
-        // Non-negative ssize_t fits in usize on Linux.
-        usize::try_from(result).map_err(|_| PumpError::LengthOverflow)
+        if result >= 0 {
+            // Non-negative ssize_t fits in usize on Linux.
+            return usize::try_from(result).map_err(|_| PumpError::LengthOverflow);
+        }
+
+        let err = io::Error::last_os_error();
+        if err.kind() != io::ErrorKind::Interrupted {
+            return Err(PumpError::from(err));
+        }
     }
 }
 
