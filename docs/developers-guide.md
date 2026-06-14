@@ -636,6 +636,12 @@ When refreshing this container, update the value in
 comment to the original mutable reference:
 `# ghcr.io/rust-cross/manylinux_2_28-cross:aarch64`.
 
+The deterministic tests assert that the live workflow value is correctly
+formed and consumed by the aarch64 build step. The property-based tests prove
+that the shared regex accepts every valid 64-character hexadecimal digest and
+rejects the unbounded space of mutable tags and truncated digests, giving
+confidence beyond any single example.
+
 To update the pinned digest, resolve the tag digest for
 `ghcr.io/rust-cross/manylinux_2_28-cross:aarch64`, replace only the value in
 `MANYLINUX_AARCH64_CONTAINER`, and rerun:
