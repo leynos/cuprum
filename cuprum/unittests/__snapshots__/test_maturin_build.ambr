@@ -68,6 +68,7 @@
       'cuprum/unittests/test_folded_summary.py',
       'cuprum/unittests/test_line_splitting.py',
       'cuprum/unittests/test_logging_hook.py',
+      'cuprum/unittests/test_manylinux_container_ref_properties.py',
       'cuprum/unittests/test_maturin_build.py',
       'cuprum/unittests/test_observe.py',
       'cuprum/unittests/test_performance_guidance_docs.py',
