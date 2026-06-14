@@ -109,8 +109,8 @@ def test_intermediate_stage_always_pipes_stdout() -> None:
     [
         (None, None),
         ("/srv/data", "/srv/data"),
-        (Path("/srv/data"), "/srv/data"),
-        (Path("relative/dir"), "relative/dir"),
+        (Path("/srv/data"), str(Path("/srv/data"))),
+        (Path("relative/dir"), str(Path("relative/dir"))),
         ("", ""),
     ],
 )
