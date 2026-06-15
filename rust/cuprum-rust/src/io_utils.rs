@@ -25,12 +25,13 @@ pub(crate) type StreamHandle = OwnedFd;
 pub(crate) type StreamHandle = File;
 
 /// Result of a single write attempt on the stream.
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum WriteOutcome {
     /// The full chunk was written successfully; contains the byte count.
     Complete(u64),
-    /// A non-fatal pipe closure occurred after this many bytes were written.
-    ///
-    /// This covers broken pipes and connection resets after partial progress.
+    /// The write stopped due to a non-fatal broken-pipe/connection-reset error.
+    /// The value is the number of bytes accepted before that error occurred,
+    /// and it may be zero.
     NonFatalShortWrite(u64),
 }
 
@@ -105,7 +106,7 @@ fn read_stream_unix(reader: &StreamHandle, buffer: &mut [u8]) -> Result<usize, P
 /// every other error propagates.
 #[cfg(unix)]
 pub(crate) fn read_raw_fd(fd: libc::c_int, buffer: &mut [u8]) -> Result<usize, PumpError> {
-    loop {
+    read_raw_fd_with(|| {
         // SAFETY: `buffer` is valid for writes of `buffer.len()` bytes, and
         // the caller guarantees `fd` stays valid for the duration of this
         // call.
@@ -113,12 +114,24 @@ pub(crate) fn read_raw_fd(fd: libc::c_int, buffer: &mut [u8]) -> Result<usize, P
             unsafe { libc::read(fd, buffer.as_mut_ptr().cast::<libc::c_void>(), buffer.len()) };
 
         if read_len >= 0 {
-            return usize::try_from(read_len).map_err(|_| PumpError::LengthOverflow);
+            Ok(read_len)
+        } else {
+            Err(io::Error::last_os_error())
         }
+    })
+}
 
-        let err = io::Error::last_os_error();
-        if err.kind() != io::ErrorKind::Interrupted {
-            return Err(PumpError::from(err));
+#[cfg(unix)]
+fn read_raw_fd_with(
+    mut read_once: impl FnMut() -> Result<libc::ssize_t, io::Error>,
+) -> Result<usize, PumpError> {
+    loop {
+        match read_once() {
+            Ok(read_len) => {
+                return usize::try_from(read_len).map_err(|_| PumpError::LengthOverflow);
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => return Err(PumpError::from(err)),
         }
     }
 }
@@ -207,4 +220,178 @@ fn map_short_write_error(err: io::Error, total_written: u64) -> Result<WriteOutc
         return Ok(WriteOutcome::NonFatalShortWrite(total_written));
     }
     Err(pump_error)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Direct tests for descriptor-backed I/O helper contracts.
+
+    use std::fmt::Debug;
+    use std::io::{self, Write};
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    use super::{
+        PumpError, WriteOutcome, handle_write, handle_write_result, map_short_write_error,
+        read_raw_fd, read_raw_fd_with, read_stream,
+    };
+
+    fn pipe_pair() -> (OwnedFd, OwnedFd) {
+        let mut fds = [0_i32; 2];
+        // SAFETY: `fds` is a valid two-element array for `pipe(2)` to fill.
+        let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        assert_eq!(rc, 0, "pipe(2) failed: {}", io::Error::last_os_error());
+
+        // SAFETY: on success `pipe(2)` returned two freshly opened FDs that
+        // this process exclusively owns.
+        unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) }
+    }
+
+    fn write_all_to(fd: &OwnedFd, payload: &[u8]) {
+        // SAFETY: duplicating an owned descriptor for a scoped File wrapper.
+        let duplicated_fd = unsafe { libc::dup(fd.as_raw_fd()) };
+        assert_ne!(
+            duplicated_fd,
+            -1,
+            "dup(2) failed: {}",
+            io::Error::last_os_error(),
+        );
+        // SAFETY: `duplicated_fd` was checked for `dup(2)` failure above and
+        // is now owned by this scoped `File`.
+        let mut file = unsafe { std::fs::File::from_raw_fd(duplicated_fd) };
+        unwrap_ok(file.write_all(payload));
+    }
+
+    fn unwrap_ok<T, E: Debug>(result: Result<T, E>) -> T {
+        match result {
+            Ok(value) => value,
+            Err(err) => panic!("expected Ok(..), got Err({err:?})"),
+        }
+    }
+
+    fn unwrap_err<T: Debug, E>(result: Result<T, E>) -> E {
+        match result {
+            Ok(value) => panic!("expected Err(..), got Ok({value:?})"),
+            Err(err) => err,
+        }
+    }
+
+    #[test]
+    fn read_stream_reads_pipe_bytes() {
+        let (mut read_end, write_end) = pipe_pair();
+        write_all_to(&write_end, b"chunk");
+        drop(write_end);
+        let mut buffer = [0_u8; 8];
+
+        let read_len = unwrap_ok(read_stream(&mut read_end, &mut buffer));
+
+        assert_eq!(read_len, 5);
+        assert_eq!(buffer.get(..read_len), Some(&b"chunk"[..]));
+    }
+
+    #[test]
+    fn read_stream_reports_unreadable_descriptor() {
+        let (_read_end, mut write_end) = pipe_pair();
+        let mut buffer = [0_u8; 8];
+
+        let err = unwrap_err(read_stream(&mut write_end, &mut buffer));
+
+        assert!(matches!(err, PumpError::Io(_)));
+    }
+
+    #[test]
+    fn read_raw_fd_reports_eof() {
+        let (read_end, write_end) = pipe_pair();
+        drop(write_end);
+        let mut buffer = [0_u8; 8];
+
+        let read_len = unwrap_ok(read_raw_fd(read_end.as_raw_fd(), &mut buffer));
+
+        assert_eq!(read_len, 0);
+    }
+
+    #[test]
+    fn read_raw_fd_retries_after_interruption() {
+        let mut attempts = 0_u8;
+
+        let read_len = unwrap_ok(read_raw_fd_with(|| {
+            attempts = attempts.saturating_add(1);
+            if attempts == 1 {
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            Ok(0)
+        }));
+
+        assert_eq!(read_len, 0);
+        assert_eq!(attempts, 2);
+    }
+
+    #[test]
+    fn handle_write_returns_complete_outcome() {
+        let (read_end, mut write_end) = pipe_pair();
+
+        let outcome = unwrap_ok(handle_write(&mut write_end, b"chunk"));
+
+        assert_eq!(outcome, WriteOutcome::Complete(5));
+        drop(read_end);
+    }
+
+    #[test]
+    fn handle_write_reports_unwritable_descriptor() {
+        let (mut read_end, _write_end) = pipe_pair();
+
+        let err = unwrap_err(handle_write(&mut read_end, b"chunk"));
+
+        assert!(matches!(err, PumpError::Io(_)));
+    }
+
+    #[test]
+    fn handle_write_result_updates_total_on_success() {
+        let (read_end, mut write_end) = pipe_pair();
+        let mut total_written = 7_u64;
+
+        let should_continue = unwrap_ok(handle_write_result(
+            &mut write_end,
+            b"chunk",
+            &mut total_written,
+        ));
+
+        assert!(should_continue);
+        assert_eq!(total_written, 12);
+        drop(read_end);
+    }
+
+    #[test]
+    fn handle_write_result_preserves_total_on_fatal_error() {
+        let (mut read_end, _write_end) = pipe_pair();
+        let mut total_written = 7_u64;
+
+        let err = unwrap_err(handle_write_result(
+            &mut read_end,
+            b"chunk",
+            &mut total_written,
+        ));
+
+        assert!(matches!(err, PumpError::Io(_)));
+        assert_eq!(total_written, 7);
+    }
+
+    #[test]
+    fn nonfatal_short_write_records_accepted_bytes() {
+        let outcome = unwrap_ok(map_short_write_error(
+            io::Error::from(io::ErrorKind::BrokenPipe),
+            3,
+        ));
+
+        assert_eq!(outcome, WriteOutcome::NonFatalShortWrite(3));
+    }
+
+    #[test]
+    fn fatal_short_write_errors_propagate() {
+        let err = unwrap_err(map_short_write_error(
+            io::Error::from(io::ErrorKind::PermissionDenied),
+            3,
+        ));
+
+        assert!(matches!(err, PumpError::Io(_)));
+    }
 }
