@@ -279,8 +279,8 @@ result = cmd.run_sync(output=RunOutputOptions(capture=False))
 `IOOptions(capture=..., echo=...)` usage with
 `RunOutputOptions(capture=..., echo=...)` passed as `output=...`.
 
-`RunOutputOptions(capture=True, echo=False)` is the default; you only need to
-supply it explicitly when overriding either flag.
+`RunOutputOptions(capture=True, echo=False)` is the default. Supply it
+explicitly only when overriding either flag.
 
 If the awaiting task is cancelled while a command is running, Cuprum sends
 `SIGTERM` to the subprocess, waits for a short grace period, and then escalates
