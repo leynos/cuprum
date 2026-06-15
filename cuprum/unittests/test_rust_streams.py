@@ -10,9 +10,11 @@ pytest cuprum/unittests/test_rust_streams.py
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import errno
 import os
+import pathlib
 import typing as typ
 
 import pytest
@@ -73,6 +75,48 @@ def _consume_payload(
             "str",
             streams.rust_consume_stream(read_fd, **forwarded_kwargs),
         )
+
+
+def _module_references_symbol(path: pathlib.Path, symbol: str) -> bool:
+    """Return whether *path* contains executable references to *symbol*."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return any(_node_references_symbol(node, symbol) for node in ast.walk(tree))
+
+
+def _node_references_symbol(node: ast.AST, symbol: str) -> bool:
+    """Return whether an AST node references *symbol* as a Python symbol."""
+    if isinstance(node, ast.Name):
+        return node.id == symbol
+    if isinstance(node, ast.Attribute):
+        return node.attr == symbol
+    if isinstance(node, ast.alias):
+        return symbol in {node.name, node.asname}
+    return False
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_reference"),
+    [
+        ('"""rust_consume_stream is mentioned here."""\n', "ignored"),
+        ("# rust_consume_stream is mentioned here.\n", "ignored"),
+        ("rust_consume_stream(reader_fd)\n", "referenced"),
+        ("streams.rust_consume_stream(reader_fd)\n", "referenced"),
+        ("from cuprum._streams_rs import rust_consume_stream\n", "referenced"),
+    ],
+)
+def test_module_references_symbol_ignores_non_code_text(
+    tmp_path: pathlib.Path,
+    source: str,
+    expected_reference: typ.Literal["ignored", "referenced"],
+) -> None:
+    """The production-reference guard detects symbols, not raw text."""
+    module_path = tmp_path / "candidate.py"
+    module_path.write_text(source, encoding="utf-8")
+
+    has_reference = expected_reference == "referenced"
+    assert (
+        _module_references_symbol(module_path, "rust_consume_stream") is has_reference
+    )
 
 
 @pytest.mark.parametrize(
@@ -319,8 +363,6 @@ def test_rust_consume_stream_is_annotated_not_integrated() -> None:
     module may reference the symbol. Wiring a ``_consume_stream_dispatch``
     later must remove both the marker and this guard together.
     """
-    import pathlib
-
     from cuprum import _streams_rs
 
     docstring = _streams_rs.rust_consume_stream.__doc__ or ""
@@ -336,7 +378,7 @@ def test_rust_consume_stream_is_annotated_not_integrated() -> None:
         for path in package_root.rglob("*.py")
         if "unittests" not in path.parts
         and path.name != "_streams_rs.py"
-        and "rust_consume_stream" in path.read_text(encoding="utf-8")
+        and _module_references_symbol(path, "rust_consume_stream")
     )
     assert referencing == [], (
         "production code now references rust_consume_stream; revisit the "

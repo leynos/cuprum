@@ -105,12 +105,14 @@ def rust_consume_stream(
     This helper always decodes UTF-8 and replaces invalid sequences with the
     Unicode replacement character.
 
-    .. note:: Implemented but not yet integrated. No production code path
-       routes a consume through this function; the pump side has a
-       ``_pump_stream_dispatch`` counterpart, but consume dispatch is
-       deferred, evidence-gated work (ADR-002, Phase 2). The function is
-       exercised directly by tests and remains available for downstream
-       experimentation.
+    Notes
+    -----
+    Implemented but not yet integrated. No production code path routes a
+    consume through this function; the pump side has a
+    ``_pump_stream_dispatch`` counterpart, but consume dispatch is
+    deferred, evidence-gated work (ADR-002, Phase 2). The function is
+    exercised directly by tests and remains available for downstream
+    experimentation.
 
     Parameters
     ----------
