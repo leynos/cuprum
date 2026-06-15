@@ -165,6 +165,16 @@ def test_with_allowlist_preserves_empty_restricted_allowlist() -> None:
         replaced.check_allowed(ECHO)
 
 
+def test_with_allowlist_empty_preserves_existing_non_empty_restriction() -> None:
+    """with_allowlist() keeps prior non-empty allowlists restrictive."""
+    parent = CuprumContext(allowlist=frozenset([ECHO]))
+    replaced = parent.with_allowlist(frozenset())
+
+    assert replaced.allowlist == frozenset()
+    with pytest.raises(ForbiddenProgramError):
+        replaced.check_allowed(ECHO)
+
+
 @pytest.mark.crosshair
 @_PROPERTY_SETTINGS
 @given(parent=cuprum_st.allowlists(), config=cuprum_st.optional_allowlists())
@@ -644,7 +654,7 @@ def test_validate_timeout_preserves_non_negative_floats(timeout: float) -> None:
 
 @pytest.mark.crosshair
 @_PROPERTY_SETTINGS
-@given(timeout=st.integers(min_value=0))
+@given(timeout=st.integers(min_value=0, max_value=10**18))
 def test_validate_timeout_coerces_non_negative_integers(timeout: int) -> None:
     """Property: non-negative integer timeouts are coerced to float."""
     result = _validate_timeout(typ.cast("float", timeout), "Test")

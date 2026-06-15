@@ -446,9 +446,9 @@ with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
 For manual control, use the `AllowRegistration` handle directly:
 
 ```python
-from cuprum import LS, allow, current_context, ScopeConfig, scoped
+from cuprum import ECHO, LS, allow, current_context, ScopeConfig, scoped
 
-with scoped(ScopeConfig()):
+with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
     reg = allow(LS)
     assert current_context().is_allowed(LS)
     reg.detach()  # Remove LS from allowlist

@@ -52,10 +52,10 @@ contracts stay aligned.
 `_allowlist_is_restricted` marker. The marker distinguishes the permissive
 default context from a context that has deliberately narrowed to an empty
 allowlist. It defaults to `False` on the default context and becomes `True`
-when narrowing receives an explicit `ScopeConfig.allowlist`, or when direct
-allowlist replacement installs a non-empty allowlist. Once a context is already
-restricted, replacing the allowlist with `frozenset()` preserves that marker so
-the context cannot be widened back to the permissive default by accident.
+when narrowing receives an explicit `ScopeConfig.allowlist`. Direct allowlist
+replacement also preserves restriction when the previous context already had an
+explicit policy. Replacing that allowlist with `frozenset()` therefore cannot
+widen the context back to the permissive default by accident.
 
 `check_allowed()` therefore has two empty-allowlist modes. Empty and
 unrestricted means *no policy has been established yet*, so every program is
@@ -74,10 +74,9 @@ everything" and "deny everything".
 - A non-empty parent intersects its allowlist with the provided allowlist, so
   nested scopes can remove programs but cannot add new ones.
 
-`with_allowlist()` is the direct replacement path. It intentionally treats a
-non-empty replacement as restricted because an explicit allowlist policy now
-exists. If the current context is already restricted, an empty replacement keeps
-the restricted marker so direct replacement cannot turn a deny-all context into
+`with_allowlist()` is the direct replacement path. It preserves restriction
+when the current context already has an explicit policy, even if the replacement
+allowlist is empty, so direct replacement cannot turn a deny-all context into
 the permissive default.
 
 The allowlist, hook, and timeout rules are split into pure helpers so the

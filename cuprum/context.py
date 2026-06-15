@@ -399,7 +399,8 @@ class CuprumContext:
         return dc.replace(
             self,
             allowlist=allowlist,
-            _allowlist_is_restricted=self._allowlist_is_restricted or bool(allowlist),
+            _allowlist_is_restricted=self._allowlist_is_restricted
+            or bool(self.allowlist),
         )
 
     def with_before_hook(self, hook: BeforeHook) -> CuprumContext:
