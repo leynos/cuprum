@@ -557,7 +557,10 @@ host tool. The `RUFF` variable expands to `$(UV_RUN_ENV) uv run ruff`, and the
 dependency from `uv.lock` is available before running `fmt`, `check-fmt`, or
 `lint`. Continuous Integration (CI) and local runs must keep using this
 `uv run` path for Ruff linting and formatting so preview-rule changes only
-arrive through an explicit lockfile update.
+arrive through an explicit lockfile update. `interrogate` is also invoked via
+`uv run` in the `lint` recipe, but it is not included in `VENV_TOOLS` and so
+is not gated by the probe; it relies on `uv sync` having installed it into the
+locked virtualenv.
 
 Because `interrogate` requires a docstring on every documentable node,
 documenting a large module can take it over the project's 400-line ceiling
