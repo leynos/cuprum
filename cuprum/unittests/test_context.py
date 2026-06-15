@@ -175,6 +175,27 @@ def test_with_allowlist_empty_preserves_existing_non_empty_restriction() -> None
         replaced.check_allowed(ECHO)
 
 
+def test_with_allowlist_non_empty_replacement_is_restricted() -> None:
+    """with_allowlist() marks explicit non-empty replacements as restricted."""
+    replaced = CuprumContext().with_allowlist(frozenset([ECHO]))
+    emptied = replaced.without_program(ECHO)
+
+    assert emptied.allowlist == frozenset()
+    with pytest.raises(ForbiddenProgramError):
+        emptied.check_allowed(ECHO)
+
+
+def test_with_program_and_without_program_preserve_restriction() -> None:
+    """Program mutation helpers maintain explicit allowlist policy."""
+    ctx = CuprumContext().with_program(ECHO)
+    emptied = ctx.without_program(ECHO)
+
+    assert ctx.is_allowed(ECHO) is True
+    assert emptied.allowlist == frozenset()
+    with pytest.raises(ForbiddenProgramError):
+        emptied.check_allowed(ECHO)
+
+
 @pytest.mark.crosshair
 @_PROPERTY_SETTINGS
 @given(parent=cuprum_st.allowlists(), config=cuprum_st.optional_allowlists())

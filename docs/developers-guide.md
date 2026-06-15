@@ -52,7 +52,8 @@ contracts stay aligned.
 `_allowlist_is_restricted` marker. The marker distinguishes the permissive
 default context from a context that has deliberately narrowed to an empty
 allowlist. It defaults to `False` on the default context and becomes `True`
-when narrowing receives an explicit `ScopeConfig.allowlist`. Direct allowlist
+for explicit narrowing, when `ScopeConfig.allowlist` is provided, or when
+`with_allowlist()` receives a non-empty replacement. Direct allowlist
 replacement also preserves restriction when the previous context already had an
 explicit policy. Replacing that allowlist with `frozenset()` therefore cannot
 widen the context back to the permissive default by accident.
@@ -76,8 +77,9 @@ everything" and "deny everything".
 
 `with_allowlist()` is the direct replacement path. It preserves restriction
 when the current context already has an explicit policy, even if the replacement
-allowlist is empty, so direct replacement cannot turn a deny-all context into
-the permissive default.
+allowlist is empty, and a non-empty replacement establishes an explicit policy by
+setting restriction. So direct replacement cannot turn a deny-all context into the
+permissive default.
 
 The allowlist, hook, and timeout rules are split into pure helpers so the
 invariants can be tested directly:

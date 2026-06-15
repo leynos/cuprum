@@ -400,7 +400,8 @@ class CuprumContext:
             self,
             allowlist=allowlist,
             _allowlist_is_restricted=self._allowlist_is_restricted
-            or bool(self.allowlist),
+            or bool(self.allowlist)
+            or bool(allowlist),
         )
 
     def with_before_hook(self, hook: BeforeHook) -> CuprumContext:
@@ -432,11 +433,11 @@ class CuprumContext:
 
     def with_program(self, program: Program) -> CuprumContext:
         """Return a context with the program added to the allowlist."""
-        return dc.replace(self, allowlist=self.allowlist | {program})
+        return self.with_allowlist(self.allowlist | {program})
 
     def without_program(self, program: Program) -> CuprumContext:
         """Return a context with the program removed from the allowlist."""
-        return dc.replace(self, allowlist=self.allowlist - {program})
+        return self.with_allowlist(self.allowlist - {program})
 
     def with_env_overlay(
         self,

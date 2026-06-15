@@ -386,8 +386,8 @@ already restricted path, that scope remains restrictive and permits no programs.
 
 ### Scoped contexts
 
-Use `scoped(ScopeConfig())` to establish a narrowed execution context within a
-code block:
+Use `scoped(ScopeConfig(allowlist=...))` to establish a narrowed execution
+context within a code block:
 
 ```python
 from cuprum import ECHO, LS, ScopeConfig, scoped
