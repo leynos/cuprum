@@ -344,18 +344,25 @@ mod tests {
         assert!(matches!(err, PumpError::Io(_)));
     }
 
+    /// Call [`handle_write_result`] with `b"chunk"` starting from
+    /// `initial_total` and return both the call's result and the
+    /// (possibly updated) total.
+    fn run_handle_write_result(
+        writer: &mut OwnedFd,
+        initial_total: u64,
+    ) -> (Result<bool, PumpError>, u64) {
+        let mut total_written = initial_total;
+        let result = handle_write_result(writer, b"chunk", &mut total_written);
+        (result, total_written)
+    }
+
     #[test]
     fn handle_write_result_updates_total_on_success() {
         let (read_end, mut write_end) = pipe_pair();
-        let mut total_written = 7_u64;
 
-        let should_continue = unwrap_ok(handle_write_result(
-            &mut write_end,
-            b"chunk",
-            &mut total_written,
-        ));
+        let (result, total_written) = run_handle_write_result(&mut write_end, 7);
 
-        assert!(should_continue);
+        assert!(unwrap_ok(result));
         assert_eq!(total_written, 12);
         drop(read_end);
     }
@@ -363,15 +370,10 @@ mod tests {
     #[test]
     fn handle_write_result_preserves_total_on_fatal_error() {
         let (mut read_end, _write_end) = pipe_pair();
-        let mut total_written = 7_u64;
 
-        let err = unwrap_err(handle_write_result(
-            &mut read_end,
-            b"chunk",
-            &mut total_written,
-        ));
+        let (result, total_written) = run_handle_write_result(&mut read_end, 7);
 
-        assert!(matches!(err, PumpError::Io(_)));
+        assert!(matches!(unwrap_err(result), PumpError::Io(_)));
         assert_eq!(total_written, 7);
     }
 
