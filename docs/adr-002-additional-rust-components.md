@@ -303,11 +303,15 @@ behavioural, and property tests that prove parity for stdout, stderr, empty
 streams, invalid UTF-8, large payloads, and forced Python fallback.
 
 **Status (issue #127):** implemented but not yet integrated. The Phase 1 tee
-hot-path profiling baseline now supports capture-only consume dispatch:
-capture double-touch accounts for about 51% of parent CPU in the measured tee
-scenario, comfortably above the 20% acceptance threshold. The first dispatcher
-must still remain narrower than the public helper: fd-backed, UTF-8/replace,
-capture-only streams with no echo sink and no line callbacks.
+hot-path profiling baseline provides hotspot evidence for capture-only consume
+dispatch: capture double-touch accounts for about 51% of parent CPU in the
+measured tee scenario. This evidence justifies the Phase 2 dispatcher
+experiment, but it does not satisfy the wall-time acceptance gate by itself;
+that gate still requires a Rust-versus-Python dispatcher benchmark showing at
+least 20% lower median wall time for the targeted heavy scenario, plus the
+regression checks listed above. The first dispatcher must still remain narrower
+than the public helper: fd-backed, UTF-8/replace, capture-only streams with no
+echo sink and no line callbacks.
 
 `rust_consume_stream()` ships in the wheel and is exercised by tests, but no
 production code routes a consume through it; the symbol is annotated as
