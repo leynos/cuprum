@@ -17,7 +17,7 @@ from cuprum import (
     scoped,
     sh,
 )
-from cuprum._testing import (
+from cuprum import ECHO, ScopeConfig, TimeoutExpired, _process_lifecycle, scoped, sh
     _READ_SIZE,
     _PipelineWaitResult,
     _prepare_pipeline_config,
@@ -25,8 +25,11 @@ from cuprum._testing import (
     _spawn_pipeline_processes,
     _wait_for_pipeline,
 )
+from cuprum._pipeline_stage_streams import _get_stage_stream_fds
+from cuprum._testing import (
 from cuprum.sh import Pipeline, PipelineResult
 from tests.helpers.catalogue import python_catalogue
+from unittest import mock
 
 
 class _StubPumpReader:
@@ -600,3 +603,53 @@ def test_wait_for_pipeline_fail_fast_scenarios(
             process,
             should_terminate=(idx in scenario.terminated_stages),
         )
+
+@pytest.mark.parametrize("capture_or_echo", [True, False])
+def test_spawn_pipeline_processes_routes_through_get_stage_stream_fds(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    capture_or_echo: bool,
+) -> None:
+    """Spawning a pipeline delegates stdio selection to _get_stage_stream_fds.
+
+    The spawn path must call the canonical helper once per stage with the
+    stage's ``(idx, last_idx)`` indices and the config's ``capture_or_echo``
+    flag, rather than re-deriving the PIPE/DEVNULL policy inline.
+    """
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    # No-op stages: portable across Linux, macOS, and Windows, and they exit
+    # immediately so the spawned processes are trivial to reap.
+    stage_0 = python("-c", "")
+    stage_1 = python("-c", "")
+    config = _prepare_pipeline_config(
+        capture=capture_or_echo, echo=False, timeout=None, context=None
+    )
+
+    # Record every delegation while still returning a real _StageStreamConfig
+    # so the remaining spawn path succeeds unchanged.
+    recorder = mock.MagicMock(side_effect=_get_stage_stream_fds)
+    monkeypatch.setattr(_process_lifecycle, "_get_stage_stream_fds", recorder)
+
+    async def exercise() -> None:
+        """Spawn the two-stage pipeline, then reap the started processes."""
+        (
+            processes,
+            stderr_tasks,
+            stdout_task,
+            _started_at,
+        ) = await _spawn_pipeline_processes((stage_0, stage_1), config)
+        for process in processes:
+            await _terminate_process(process, config.ctx.cancel_grace)
+        pending = [task for task in (*stderr_tasks, stdout_task) if task is not None]
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        asyncio.run(exercise())
+
+    assert recorder.call_args_list == [
+        mock.call(0, 1, capture_or_echo=capture_or_echo),
+        mock.call(1, 1, capture_or_echo=capture_or_echo),
+    ]
