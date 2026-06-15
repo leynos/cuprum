@@ -24,8 +24,13 @@ pub(crate) type StreamHandle = OwnedFd;
 #[cfg(windows)]
 pub(crate) type StreamHandle = File;
 
+/// Result of a single write attempt on the stream.
 pub(crate) enum WriteOutcome {
+    /// The full chunk was written successfully; contains the byte count.
     Complete(u64),
+    /// A non-fatal pipe closure occurred after this many bytes were written.
+    ///
+    /// This covers broken pipes and connection resets after partial progress.
     NonFatalShortWrite(u64),
 }
 
