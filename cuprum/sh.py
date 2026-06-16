@@ -295,19 +295,11 @@ class IOOptions(RunOutputOptions):
         )
 
 
-@dc.dataclass(frozen=True, slots=True)
-class _IOBehaviour:
-    """Runtime I/O behaviour flags for command execution."""
-
-    capture: bool
-    echo: bool
-
-
 def _prepare_execution_observation(
     cmd: SafeCmd,
     context: ExecutionContext,
     tracking: _ExecutionTracking,
-    io_behaviour: _IOBehaviour,
+    output: RunOutputOptions,
 ) -> _StageObservation:
     """Prepare the observation context for command execution."""
     cwd = Path(context.cwd) if context.cwd is not None else None
@@ -318,8 +310,8 @@ def _prepare_execution_observation(
     tags = _merge_tags(
         {
             "project": cmd.project.name,
-            "capture": io_behaviour.capture,
-            "echo": io_behaviour.echo,
+            "capture": output.capture,
+            "echo": output.echo,
         },
         context.tags,
     )
@@ -421,12 +413,11 @@ class SafeCmd:
             execution_hooks=_run_before_hooks(self),
             pending_tasks=[],
         )
-        io_behaviour = _IOBehaviour(capture=out.capture, echo=out.echo)
         observation = _prepare_execution_observation(
             self,
             ctx,
             tracking,
-            io_behaviour,
+            out,
         )
 
         observation.emit("plan", _EventDetails(pid=None))

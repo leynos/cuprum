@@ -190,6 +190,43 @@ def test_observe_emits_stdout_stderr_timing_and_tags(tmp_path: Path) -> None:
     assert start_event.tags["run_id"] == "unit"
 
 
+@pytest.mark.parametrize("execution_strategy", ["async", "sync"])
+@pytest.mark.parametrize(
+    "output",
+    [
+        pytest.param(RunOutputOptions(capture=False, echo=False), id="discard"),
+        pytest.param(RunOutputOptions(capture=False, echo=True), id="echo"),
+        pytest.param(RunOutputOptions(capture=True, echo=False), id="capture"),
+        pytest.param(RunOutputOptions(capture=True, echo=True), id="tee"),
+    ],
+)
+def test_observe_tags_reflect_run_output_options(
+    output: RunOutputOptions,
+    execution_strategy: typ.Literal["async", "sync"],
+) -> None:
+    """Observation tags expose the selected ``RunOutputOptions`` values."""
+    builder, catalogue = _python_builder(project_name="observe-output-options")
+    cmd = builder("-c", "pass")
+    events: list[ExecEvent] = []
+
+    def hook(ev: ExecEvent) -> None:
+        """Record an emitted execution event."""
+        events.append(ev)
+
+    with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
+        if execution_strategy == "async":
+            result = asyncio.run(cmd.run(output=output))
+        else:
+            result = cmd.run_sync(output=output)
+
+    assert result.exit_code == 0
+    tagged_events = [ev for ev in events if ev.phase in {"plan", "start", "exit"}]
+    assert [ev.phase for ev in tagged_events] == ["plan", "start", "exit"]
+    for event in tagged_events:
+        assert event.tags["capture"] is output.capture
+        assert event.tags["echo"] is output.echo
+
+
 def test_pipeline_observe_emits_stage_tags_and_final_stdout() -> None:
     """Pipeline execution emits per-stage events with stage tags."""
     builder, catalogue = _python_builder(project_name="observe-pipeline")

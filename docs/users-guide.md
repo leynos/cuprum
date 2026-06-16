@@ -211,10 +211,11 @@ Notes:
 `SafeCmd.run` executes curated commands asynchronously with predictable capture
 and echo semantics and returns a structured `CommandResult`:
 
-- `stdout` and `stderr` are captured by default. Set `capture=False` to stream
-  only; the result will carry `None` for output fields.
-- `echo=True` tees stdout/stderr to the parent process while still capturing
-  them when `capture=True`.
+- `stdout` and `stderr` are captured by default. Set
+  `output=RunOutputOptions(capture=False)` to stream only; the result will carry
+  `None` for output fields.
+- `output=RunOutputOptions(echo=True)` tees stdout/stderr to the parent process
+  while still capturing them when `capture=True`.
 - Pass an `ExecutionContext` via the `context` parameter to override execution
   details:
   - `env` overlays key/value pairs on top of the current environment without
@@ -248,6 +249,12 @@ async def greet() -> None:
 
 ### Migrating from `capture`/`echo` keyword arguments
 
+`IOOptions` is a deprecated alias for `RunOutputOptions`; keep using
+`RunOutputOptions` in new code.
+
+`Pipeline.run()` and `Pipeline.run_sync()` keep legacy `capture` / `echo`
+keyword arguments until issue #95 lands.
+
 Prior to this release, `run()` and `run_sync()` accepted `capture` and `echo`
 directly:
 
@@ -267,8 +274,13 @@ result = await cmd.run(output=RunOutputOptions(capture=True, echo=False))
 result = cmd.run_sync(output=RunOutputOptions(capture=False))
 ```
 
-`RunOutputOptions(capture=True, echo=False)` is the default; you only need to
-supply it explicitly when overriding either flag.
+`IOOptions` remains available only as a compatibility alias and emits a
+`DeprecationWarning` on construction; migrate by replacing any
+`IOOptions(capture=..., echo=...)` usage with
+`RunOutputOptions(capture=..., echo=...)` passed as `output=...`.
+
+`RunOutputOptions(capture=True, echo=False)` is the default. Supply it
+explicitly only when overriding either flag.
 
 If the awaiting task is cancelled while a command is running, Cuprum sends
 `SIGTERM` to the subprocess, waits for a short grace period, and then escalates
