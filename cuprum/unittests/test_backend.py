@@ -1,4 +1,8 @@
-"""Unit tests for backend dispatch and Rust-availability unification."""
+"""Unit tests for stream backend dispatch and Rust availability resolution.
+
+The tests pin the contract between the raw Rust import probe, the cached
+dispatch resolver, and the public Rust availability helper.
+"""
 
 from __future__ import annotations
 
