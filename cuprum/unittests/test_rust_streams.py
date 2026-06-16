@@ -25,7 +25,7 @@ if typ.TYPE_CHECKING:
     from types import ModuleType
 
 
-class _ModuleReferenceScanError(AssertionError):
+class _ModuleReferenceScanError(Exception):
     """Raised when a module cannot be inspected for production references."""
 
     def __init__(self, path: pathlib.Path, symbol: str) -> None:
@@ -389,14 +389,22 @@ def test_rust_consume_stream_not_referenced_in_production() -> None:
     module_file = _streams_rs.__file__
     assert module_file is not None, "_streams_rs must be a file-backed module"
     package_root = pathlib.Path(module_file).parent
-    referencing = sorted(
-        path.name
-        for path in package_root.rglob("*.py")
-        if "unittests" not in path.parts
-        and path.name != "_streams_rs.py"
-        and _module_references_symbol(path, "rust_consume_stream")
+    scan_errors: list[str] = []
+    referencing: list[str] = []
+    for path in package_root.rglob("*.py"):
+        if "unittests" in path.parts or path.name == "_streams_rs.py":
+            continue
+        try:
+            if _module_references_symbol(path, "rust_consume_stream"):
+                referencing.append(path.name)
+        except _ModuleReferenceScanError as exc:
+            scan_errors.append(str(exc))
+
+    assert scan_errors == [], (
+        "could not inspect one or more production modules; "
+        f"fix the underlying read/parse errors: {scan_errors}"
     )
-    assert referencing == [], (
+    assert sorted(referencing) == [], (
         "production code now references rust_consume_stream; revisit the "
-        f"ADR-002 Phase 2 decision and this guard: {referencing}"
+        f"ADR-002 Phase 2 decision and this guard: {sorted(referencing)}"
     )
