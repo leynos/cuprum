@@ -45,7 +45,6 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
-
 ## Context allowlist internals
 
 `CuprumContext` stores an `allowlist` plus the internal
