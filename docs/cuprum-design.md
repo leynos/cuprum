@@ -1887,18 +1887,19 @@ pathway. The following behaviours are only available via the Python backend:
 
 - **Teeing to sinks (`echo=True`):** The Python pathway can write chunks to a
   `sink` (e.g. `sys.stdout`) whilst simultaneously capturing output. The Rust
-  extension does not support this; when `echo=True`, the dispatcher routes
-  to Python.
+  extension does not support this; `echo=True` keeps consumption on the Python
+  path.
 
 - **Custom encodings:** The Rust extension always decodes as UTF-8 with
   replacement semantics. Other encodings or error modes require the Python
   pathway.
 
 Only pump-side routing has Rust backing today: `_pump_stream_dispatch` can use
-Rust for inter-stage pipe transfer, but final stdout/stderr consume still routes
-through the Python `_consume_stream` path. There is no production
-`_consume_stream_dispatch` for `rust_consume_stream()` yet, so callers do not
-need to manage consume routing explicitly.
+Rust for inter-stage pipe transfer, but final stdout/stderr consumption still
+uses the Python `_consume_stream` path directly. Phase 2 deferment remains in
+force until a production `_consume_stream_dispatch` for `rust_consume_stream()`
+is wired and tested, so callers do not need to manage consume routing
+explicitly.
 
 ### 13.6 Thread Safety and Asyncio Integration
 
