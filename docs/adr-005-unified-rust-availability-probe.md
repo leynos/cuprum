@@ -4,7 +4,12 @@ _____________________________________________________________________
 
 ## Status
 
-Accepted
+Accepted on 2026-06-16. This ADR records the decision to unify Rust
+availability probing behind the cached dispatcher resolver.
+
+## Date
+
+2026-06-16
 
 _____________________________________________________________________
 

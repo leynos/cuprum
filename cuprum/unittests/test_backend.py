@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from cuprum import _rust_backend
+from cuprum import rust as rust_api
 from cuprum._backend import (
     StreamBackend,
     _check_rust_available,
@@ -238,37 +239,33 @@ def test_public_probe_agrees_with_dispatch_resolver(
 ) -> None:
     """The public ``is_rust_available`` agrees with the dispatch resolver.
 
-    Both call paths must observe the same cached result so callers never see
-    divergent truth values between the public probe and dispatch internals.
+    The public helper must delegate to the same resolver object imported by the
+    public Rust module, not the raw Rust import probe.
 
     Parameters
     ----------
     monkeypatch : pytest.MonkeyPatch
-        Fixture used to override the raw import probe.
+        Fixture used to override the public module's resolver binding.
     available : bool
-        Generated availability the raw probe should report.
+        Generated availability the resolver should report.
     """
-    monkeypatch.delenv(_ENV_VAR, raising=False)
-    _check_rust_available.cache_clear()
     call_count = 0
 
-    def _counting_probe() -> bool:
-        """Return a deterministic availability and count probe calls."""
+    def _counting_resolver() -> bool:
+        """Return deterministic availability and count public resolver calls."""
         nonlocal call_count
         call_count += 1
         return available
 
-    monkeypatch.setattr(_rust_backend, "is_available", _counting_probe)
+    monkeypatch.delenv(_ENV_VAR, raising=False)
+    monkeypatch.setattr(rust_api, "_check_rust_available", _counting_resolver)
 
     for _ in range(2):
         assert is_rust_available() is available, (
-            "public probe must return cached dispatch availability"
-        )
-        assert _check_rust_available() is available, (
-            "dispatch resolver must return the same cached result"
+            "public probe must return the dispatch resolver availability"
         )
 
-    assert call_count == 1, "availability probe should run only once after caching"
+    assert call_count == 2, "public probe should call the dispatch resolver each time"
 
 
 def test_public_probe_honours_test_override() -> None:
