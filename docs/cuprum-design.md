@@ -1870,7 +1870,7 @@ The Rust pathway provides the greatest benefit for:
 The Python pathway remains preferable when:
 
 - line-by-line observation hooks (`on_line`) are registered;
-- teeing to sinks (`echo_output`) is required;
+- teeing to sinks (`echo=True`) is required;
 - stdout/stderr capture behaviour must exactly follow the current Python decode
   and sink-handling path;
 - debugging requires visibility into the event loop;
@@ -1885,18 +1885,20 @@ pathway. The following behaviours are only available via the Python backend:
   requires Python callbacks for each decoded line. When an `on_line` handler is
   registered, the dispatcher automatically routes to the Python pathway.
 
-- **Teeing to sinks (`echo_output`):** The Python pathway can write chunks to a
+- **Teeing to sinks (`echo=True`):** The Python pathway can write chunks to a
   `sink` (e.g. `sys.stdout`) whilst simultaneously capturing output. The Rust
-  extension does not support this; when `echo_io=True`, the dispatcher routes
+  extension does not support this; when `echo=True`, the dispatcher routes
   to Python.
 
 - **Custom encodings:** The Rust extension always decodes as UTF-8 with
   replacement semantics. Other encodings or error modes require the Python
   pathway.
 
-The dispatcher in `cuprum/_backend.py` inspects the stream configuration and
-automatically selects the Python pathway when any unsupported feature is
-requested. Callers do not need to manage this routing explicitly.
+Only pump-side routing has Rust backing today: `_pump_stream_dispatch` can use
+Rust for inter-stage pipe transfer, but final stdout/stderr consume still routes
+through the Python `_consume_stream` path. There is no production
+`_consume_stream_dispatch` for `rust_consume_stream()` yet, so callers do not
+need to manage consume routing explicitly.
 
 ### 13.6 Thread Safety and Asyncio Integration
 

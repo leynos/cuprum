@@ -25,6 +25,14 @@ if typ.TYPE_CHECKING:
     from types import ModuleType
 
 
+class _ModuleReferenceScanError(AssertionError):
+    """Raised when a module cannot be inspected for production references."""
+
+    def __init__(self, path: pathlib.Path, symbol: str) -> None:
+        """Describe the module reference scan failure."""
+        super().__init__(f"cannot inspect {path} for {symbol!r} production references")
+
+
 def _pump_payload(
     streams: ModuleType,
     payload: bytes,
@@ -79,7 +87,11 @@ def _consume_payload(
 
 def _module_references_symbol(path: pathlib.Path, symbol: str) -> bool:
     """Return whether *path* contains executable references to *symbol*."""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    try:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+    except (OSError, SyntaxError, UnicodeDecodeError) as exc:
+        raise _ModuleReferenceScanError(path, symbol) from exc
     return any(_node_references_symbol(node, symbol) for node in ast.walk(tree))
 
 
@@ -102,16 +114,22 @@ def _node_references_symbol(node: ast.AST, symbol: str) -> bool:
         ("rust_consume_stream(reader_fd)\n", "referenced"),
         ("streams.rust_consume_stream(reader_fd)\n", "referenced"),
         ("from cuprum._streams_rs import rust_consume_stream\n", "referenced"),
+        ("if rust_consume_stream(\n", "invalid"),
     ],
 )
 def test_module_references_symbol_ignores_non_code_text(
     tmp_path: pathlib.Path,
     source: str,
-    expected_reference: typ.Literal["ignored", "referenced"],
+    expected_reference: typ.Literal["ignored", "referenced", "invalid"],
 ) -> None:
     """The production-reference guard detects symbols, not raw text."""
     module_path = tmp_path / "candidate.py"
     module_path.write_text(source, encoding="utf-8")
+
+    if expected_reference == "invalid":
+        with pytest.raises(AssertionError, match="cannot inspect"):
+            _module_references_symbol(module_path, "rust_consume_stream")
+        return
 
     has_reference = expected_reference == "referenced"
     assert (
