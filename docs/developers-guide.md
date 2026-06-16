@@ -73,7 +73,7 @@ variants must layer behaviour through `on_chunk` rather than copying the loop.
 
 `cuprum/unittests/test_stream_drain_property_based.py` holds the property
 suite: Hypothesis generates byte payloads split at arbitrary boundaries
-(including split multi-byte UTF-8 sequences and invalid bytes) and asserts that
+(including split multibyte UTF-8 sequences and invalid bytes) and asserts that
 capture equals a whole-payload reference decode, that both variants capture
 identically, and that line emission is boundary-insensitive.
 

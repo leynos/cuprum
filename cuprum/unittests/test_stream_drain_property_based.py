@@ -108,7 +108,11 @@ def test_drain_capture_matches_reference_decode(
     """
     payload, chunks = case
     captured = _consume(chunks, _config())
-    assert captured == payload.decode("utf-8", errors="replace")
+    expected = payload.decode("utf-8", errors="replace")
+    assert captured == expected, (
+        "drained capture must match whole-payload decode for "
+        f"payload={payload!r}, chunks={chunks!r}"
+    )
 
 
 @given(case=_payload_and_cuts())
@@ -125,10 +129,13 @@ def test_with_and_without_lines_capture_identically(
     case : tuple[bytes, list[bytes]]
         Generated payload and an arbitrary chunking of it.
     """
-    _payload, chunks = case
+    payload, chunks = case
     plain = _consume(list(chunks), _config())
     with_lines = _consume(list(chunks), _config(), on_line=lambda _line: None)
-    assert plain == with_lines
+    assert plain == with_lines, (
+        "line-emitting and plain variants must capture identical text for "
+        f"payload={payload!r}, chunks={chunks!r}"
+    )
 
 
 @given(case=_payload_and_cuts())
@@ -153,7 +160,10 @@ def test_line_emission_is_boundary_insensitive(
     _consume([payload] if payload else [], _config(), on_line=whole_lines.append)
     _consume(chunks, _config(), on_line=split_lines.append)
 
-    assert split_lines == whole_lines
+    assert split_lines == whole_lines, (
+        "line emission must be independent of chunk boundaries for "
+        f"payload={payload!r}, chunks={chunks!r}"
+    )
 
 
 @given(case=_payload_and_cuts())
@@ -165,7 +175,7 @@ def test_echo_writes_all_bytes_to_sink(case: tuple[bytes, list[bytes]]) -> None:
     case : tuple[bytes, list[bytes]]
         Generated payload and an arbitrary chunking of it.
     """
-    _payload, chunks = case
+    payload, chunks = case
     config = _config(capture=False, echo=True)
     captured = _consume(chunks, config)
 
@@ -176,4 +186,7 @@ def test_echo_writes_all_bytes_to_sink(case: tuple[bytes, list[bytes]]) -> None:
     # per-chunk decoding may replace split sequences differently, so compare
     # against the same per-chunk reference rather than a whole-payload decode.
     expected = "".join(chunk.decode("utf-8", errors="replace") for chunk in chunks)
-    assert sink.getvalue() == expected
+    assert sink.getvalue() == expected, (
+        "echo sink must receive every chunk in order for "
+        f"payload={payload!r}, chunks={chunks!r}"
+    )
