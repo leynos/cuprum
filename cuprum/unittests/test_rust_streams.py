@@ -354,21 +354,19 @@ class TestRustConsumeStream:
                 rust_streams.rust_consume_stream(read_fd, buffer_size=0)
 
 
-def test_rust_consume_stream_is_annotated_not_integrated() -> None:
-    """``rust_consume_stream`` is documented as implemented-but-not-integrated.
-
-    ADR-002 defers consume-side dispatch to evidence-gated Phase 2 work
-    (issue #127). This guard keeps the annotation and reality in lockstep:
-    the docstring must carry the not-integrated marker, and no production
-    module may reference the symbol. Wiring a ``_consume_stream_dispatch``
-    later must remove both the marker and this guard together.
-    """
+def test_rust_consume_stream_docstring_not_integrated() -> None:
+    """``rust_consume_stream`` documents its deferred integration status."""
     from cuprum import _streams_rs
 
     docstring = _streams_rs.rust_consume_stream.__doc__ or ""
     assert "not yet integrated" in docstring, (
         "rust_consume_stream must declare its not-integrated status"
     )
+
+
+def test_rust_consume_stream_not_referenced_in_production() -> None:
+    """Production code does not route consumes through ``rust_consume_stream``."""
+    from cuprum import _streams_rs
 
     module_file = _streams_rs.__file__
     assert module_file is not None, "_streams_rs must be a file-backed module"
