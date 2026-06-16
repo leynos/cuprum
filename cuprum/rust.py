@@ -1,4 +1,8 @@
-"""Public helpers for the optional Rust extension."""
+"""Public Rust-availability entry points for Cuprum.
+
+This module intentionally exposes only the cached, dispatch-aligned probe via
+``is_rust_available()``.
+"""
 
 from __future__ import annotations
 
