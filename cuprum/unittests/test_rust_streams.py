@@ -127,7 +127,7 @@ def test_module_references_symbol_ignores_non_code_text(
     module_path.write_text(source, encoding="utf-8")
 
     if expected_reference == "invalid":
-        with pytest.raises(AssertionError, match="cannot inspect"):
+        with pytest.raises(_ModuleReferenceScanError, match="cannot inspect"):
             _module_references_symbol(module_path, "rust_consume_stream")
         return
 
