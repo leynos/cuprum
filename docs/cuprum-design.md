@@ -1883,7 +1883,7 @@ pathway. The following behaviours are only available via the Python backend:
 
 - **Line callbacks (`on_line`):** The `_consume_stream_with_lines()` code path
   requires Python callbacks for each decoded line. When an `on_line` handler is
-  registered, the dispatcher automatically routes to the Python pathway.
+  registered, stream consumption stays on the Python pathway.
 
 - **Teeing to sinks (`echo=True`):** The Python pathway can write chunks to a
   `sink` (e.g. `sys.stdout`) whilst simultaneously capturing output. The Rust
