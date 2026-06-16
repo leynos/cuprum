@@ -19,6 +19,7 @@ minimal counterexample for the pure helper rather than as stream-backend drift.
 from __future__ import annotations
 
 import typing as typ
+import warnings
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -28,6 +29,29 @@ from cuprum._testing import _split_complete_lines, _strip_line_ending
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+
+def _is_expected_crosshair_unavailable(error: BaseException) -> bool:
+    """Return whether a CrossHair probe failure means tests should skip."""
+    return (
+        isinstance(error, ImportError) or error.__class__.__name__ == "TraceException"
+    )
+
+
+def _crosshair_unavailable_reason(error: BaseException) -> str:
+    """Return a diagnostic reason for a known CrossHair probe failure."""
+    return f"CrossHair unavailable: {error.__class__.__name__}: {error}"
+
+
+def _crosshair_probe_failure_reason(error: BaseException) -> str:
+    """Return a skip reason for expected probe failures and raise the rest."""
+    if isinstance(error, KeyboardInterrupt | SystemExit | GeneratorExit):
+        raise error
+    is_expected_unavailable = _is_expected_crosshair_unavailable(error)
+    if not is_expected_unavailable:
+        raise error
+    return _crosshair_unavailable_reason(error)
+
 
 # CrossHair's C-level tracer must support every bytecode opcode the running
 # interpreter emits. On a Python whose opcode set CrossHair does not yet
@@ -47,14 +71,21 @@ except BaseException as _crosshair_exc:
     # ``crosshair.tracers.TraceException`` subclasses ``BaseException`` (not
     # ``Exception``) and is raised while importing the tracer module itself,
     # so it cannot be named here without re-triggering the failing import.
-    # Re-raise genuine control-flow exceptions and treat anything else
-    # (ImportError, TraceException) as "CrossHair unavailable".
+    # Re-raise genuine control-flow exceptions and any unexpected failure so
+    # the probe only degrades for known CrossHair compatibility cases.
     if isinstance(_crosshair_exc, KeyboardInterrupt | SystemExit | GeneratorExit):
         raise
+    is_expected_unavailable = _is_expected_crosshair_unavailable(_crosshair_exc)
+    if not is_expected_unavailable:
+        raise
+    _CROSSHAIR_UNAVAILABLE_REASON = _crosshair_unavailable_reason(_crosshair_exc)
+    warnings.warn(_CROSSHAIR_UNAVAILABLE_REASON, RuntimeWarning, stacklevel=2)
     AnalysisOptionSet = typ.cast("typ.Any", None)
     AnalysisKind = typ.cast("typ.Any", None)
     MessageType = typ.cast("typ.Any", None)
     check_states = typ.cast("typ.Any", None)
+else:
+    _CROSSHAIR_UNAVAILABLE_REASON = "CrossHair is not installed"
 
 _LINE_ENDINGS: tuple[str, str, str] = ("\r\n", "\n", "\r")
 _PYTHON_LINE_BOUNDARIES: str = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
@@ -94,6 +125,55 @@ def _split_preserves_normalised_text(text: str) -> bool:
     return len(_normalise_line_endings(text)) == (
         sum(len(line) + 1 for line in lines) + len(remainder)
     )
+
+
+class _UnexpectedProbeFailure(BaseException):
+    """Test double for unexpected CrossHair probe failures."""
+
+
+def _trace_exception(message: str) -> BaseException:
+    """Build a test double named like CrossHair's tracer exception."""
+    trace_exception_type = type("TraceException", (BaseException,), {})
+    return trace_exception_type(message)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(ImportError("crosshair missing"), id="import_error"),
+        pytest.param(_trace_exception("unsupported opcode"), id="trace_exception"),
+    ],
+)
+def test_crosshair_probe_accepts_expected_unavailability(
+    error: BaseException,
+) -> None:
+    """Probe helper classifies known CrossHair availability failures."""
+    assert _is_expected_crosshair_unavailable(error)
+
+
+def test_crosshair_probe_rejects_unexpected_failures() -> None:
+    """Probe helper leaves unexpected import failures visible."""
+    failure = _UnexpectedProbeFailure("unexpected probe failure")
+
+    with pytest.raises(_UnexpectedProbeFailure) as exc_info:
+        _crosshair_probe_failure_reason(failure)
+
+    assert exc_info.value is failure
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(ImportError("crosshair missing"), id="import_error"),
+        pytest.param(_trace_exception("unsupported opcode"), id="trace_exception"),
+    ],
+)
+def test_crosshair_probe_reason_names_failure(error: BaseException) -> None:
+    """Probe diagnostic records the expected failure class and message."""
+    reason = _crosshair_probe_failure_reason(error)
+
+    assert error.__class__.__name__ in reason
+    assert str(error) in reason
 
 
 @st.composite
@@ -245,7 +325,7 @@ def _strip_line_ending_contract(line: str) -> None:
         pytest.param(_strip_line_ending_contract, id="strip_line_ending"),
     ],
 )
-@pytest.mark.skipif(check_states is None, reason="CrossHair is not installed")
+@pytest.mark.skipif(check_states is None, reason=_CROSSHAIR_UNAVAILABLE_REASON)
 def test_crosshair_contracts(contract: cabc.Callable[..., None]) -> None:
     """Property: CrossHair symbolically verifies line-splitting contracts.
 

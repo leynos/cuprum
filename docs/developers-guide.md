@@ -34,11 +34,12 @@ over bounded symbolic inputs for the same invariants. CrossHair is a
 development dependency only; the tests skip the symbolic checks whenever
 CrossHair cannot run on the active interpreter. Rather than hard-coding a
 Python-version gate, the suite probes CrossHair at import time and degrades to
-skipping if it raises — covering both a missing dev dependency (`ImportError`)
-and an interpreter whose opcode set CrossHair cannot yet trace
+skipping only for expected availability failures: a missing dev dependency
+(`ImportError`) or an interpreter whose opcode set CrossHair cannot yet trace
 (`crosshair.tracers.TraceException`, as with the `CALL_KW` gap on early Python
-3.15 betas, issue #109). The probe self-resolves once CrossHair supports the
-interpreter; `crosshair-tool` 0.0.104 already handles `CALL_KW`.
+3.15 betas, issue #109). Any other probe exception is allowed to propagate so
+unexpected import failures stay visible. The probe self-resolves once CrossHair
+supports the interpreter; `crosshair-tool` 0.0.104 already handles `CALL_KW`.
 
 When changing `_emit_completed_lines`, `_split_complete_lines`, or
 `_strip_line_ending`, run:
