@@ -309,7 +309,7 @@ measured tee scenario. This evidence justifies the Phase 2 dispatcher
 experiment, but it does not satisfy the wall-time acceptance gate by itself;
 that gate still requires a Rust-versus-Python dispatcher benchmark showing at
 least 20% lower median wall time for the targeted heavy scenario, plus the
-regression checks listed above. The first dispatcher must still remain narrower
+regression checks listed above. The first dispatcher must remain narrower
 than the public helper: fd-backed, UTF-8/replace, capture-only streams with no
 echo sink and no line callbacks.
 
