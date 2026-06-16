@@ -42,6 +42,17 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
+
+## `rust_consume_stream` integration status
+
+`rust_consume_stream` is implemented, tested, and exported, but not yet routed
+through production consume paths.
+Integration is deferred to
+[ADR-002: Additional Rust components](adr-002-additional-rust-components.md)
+(Phase 2). The rationale is to keep consume dispatch on hold until the
+ADR-002 Phase 2 stack is complete, including dispatcher wiring, the Python
+fallback path, and parity/property coverage.
+
 ## Fail-fast reducer properties
 
 `_build_final_results` in `cuprum/concurrent.py` is the pure reducer that
