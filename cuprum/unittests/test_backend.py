@@ -1,4 +1,4 @@
-"""Unit tests for the stream backend dispatcher."""
+"""Unit tests for backend dispatch and Rust-availability unification."""
 
 from __future__ import annotations
 
@@ -234,8 +234,8 @@ def test_public_probe_agrees_with_dispatch_resolver(
 ) -> None:
     """The public ``is_rust_available`` agrees with the dispatch resolver.
 
-    Both must observe the same cached availability so a documented public
-    caller never disagrees with the backend the dispatcher actually selects.
+    Both call paths must observe the same cached result so callers never see
+    divergent truth values between the public probe and dispatch internals.
 
     Parameters
     ----------
@@ -245,22 +245,39 @@ def test_public_probe_agrees_with_dispatch_resolver(
         Generated availability the raw probe should report.
     """
     monkeypatch.delenv(_ENV_VAR, raising=False)
-    monkeypatch.setattr(_rust_backend, "is_available", lambda: available)
+    _check_rust_available.cache_clear()
+    call_count = 0
 
-    assert is_rust_available() is _check_rust_available(), (
-        "public probe must return the cached dispatch availability"
-    )
+    def _counting_probe() -> bool:
+        """Return a deterministic availability and count probe calls."""
+        nonlocal call_count
+        call_count += 1
+        return available
+
+    monkeypatch.setattr(_rust_backend, "is_available", _counting_probe)
+
+    for _ in range(2):
+        assert is_rust_available() is available, (
+            "public probe must return cached dispatch availability"
+        )
+        assert _check_rust_available() is available, (
+            "dispatch resolver must return the same cached result"
+        )
+
+    assert call_count == 1, "availability probe should run only once after caching"
 
 
 def test_public_probe_honours_test_override() -> None:
     """The public probe reflects ``set_rust_availability_for_testing``."""
-    set_rust_availability_for_testing(is_available=True)
-    assert is_rust_available() is True, "override should force availability"
+    _check_rust_available.cache_clear()
+    try:
+        set_rust_availability_for_testing(is_available=True)
+        assert is_rust_available() is True, "override should force availability"
 
-    set_rust_availability_for_testing(is_available=False)
-    assert is_rust_available() is False, "override should force unavailability"
-
-    set_rust_availability_for_testing(is_available=None)
+        set_rust_availability_for_testing(is_available=False)
+        assert is_rust_available() is False, "override should force unavailability"
+    finally:
+        set_rust_availability_for_testing(is_available=None)
 
 
 def test_cache_clear_allows_recheck(

@@ -1,4 +1,9 @@
-"""Optional Rust backend availability probe."""
+"""Raw availability probe for the optional Rust extension.
+
+This module holds only the uncached import-level check used by the unified
+resolver. The dispatch-aligned result lives in
+``cuprum._backend._check_rust_available()``.
+"""
 
 from __future__ import annotations
 

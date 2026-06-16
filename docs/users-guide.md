@@ -1113,9 +1113,14 @@ directly, and the pure Python wheel is built with `uv_build`.
 
 It is possible to check whether the optional extension is available in the
 current environment using the public helper `cuprum.is_rust_available()`, which
-wraps the internal probe `_rust_backend.is_available()`. The module
-`cuprum._rust_backend` is private and not semver-stable, so production code
-should avoid calling `_rust_backend.is_available()` directly:
+runs the same cached resolver used by stream backend dispatch:
+`_backend._check_rust_available()`. That cached resolver honours
+`set_rust_availability_for_testing()` for deterministic tests and caches the
+result for the lifetime of the process.
+
+The module `cuprum._rust_backend` is private and not semver-stable, so
+production code should avoid calling `_rust_backend.is_available()` directly
+except when explicitly testing the raw import probe:
 
 ```python
 import cuprum as c

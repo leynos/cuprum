@@ -161,6 +161,9 @@ scenarios whilst maintaining pure Python as a first-class pathway.
 - [x] 4.2.4. Create `cuprum/_backend.py` dispatcher with
   `CUPRUM_STREAM_BACKEND` environment variable support (`auto`, `rust`,
   `python`); cache availability check results for performance.
+  - [x] Issue `#128`: route `cuprum.is_rust_available()` through the same
+    cached resolver used by dispatch to eliminate divergent availability
+    results.
 
 ### 4.3. Test infrastructure
 
