@@ -321,8 +321,10 @@ step 4.4.
   - Requires phase 5 and 6.1.1.
   - Success: the benchmark reports median wall time for both paths and publishes
     it to the workflow summary; the gate passes only when the Rust median is at
-    least 20% lower, and the verdict (pass or fail) is recorded in
-    adr-002-additional-rust-components.md.
+    least 20% lower on the eligible path, small-output fallback scenarios stay
+    within a 5% median wall-time regression budget, Python/Rust parity is
+    confirmed before any Rust routing, and the verdict (pass or fail) is recorded
+    in adr-002-additional-rust-components.md.
 
 ### 6.3. Wire `_consume_stream_dispatch` and route capture through it
 
@@ -368,7 +370,7 @@ gate fell. See adr-002-additional-rust-components.md Phase 2, cuprum-design.md
 §13, and docs/users-guide.md.
 
 - [ ] 6.4.1. Record the phase 6 outcome in the documentation set.
-  - Requires 6.2.1 and 6.3.2.
+  - Requires 6.2.1 in all cases. The passed-gate branch also requires 6.3.2.
   - If the gate passed: mark ADR-002 Phase 2 as integrated, update the design-doc
     §13 diagrams and prose, and describe the consume eligibility conditions and
     transparent fallback in the users' guide.
