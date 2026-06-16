@@ -262,6 +262,7 @@ def test_pipeline_observe_emits_stage_tags_and_final_stdout() -> None:
         and typ.cast("int", ev.tags["pipeline_stage_index"]) == 1
     ]
 
+
 def test_pipeline_awaits_scheduled_observe_tasks_before_return() -> None:
     """Pipeline execution awaits async observe hooks before returning."""
     builder, catalogue = _python_builder(project_name="observe-async-pipeline")
@@ -288,6 +289,8 @@ def test_pipeline_awaits_scheduled_observe_tasks_before_return() -> None:
     assert sorted(completed_exit_stages) == [0, 1], (
         "pipeline should await scheduled async exit observe tasks before returning"
     )
+
+
 def test_observe_emits_stdin_error_event_when_process_closes_stdin_early(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
