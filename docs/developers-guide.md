@@ -111,7 +111,7 @@ the entire parent process environment on every emission. `resolve_env` is the
 spawn-time merge that *does* include `os.environ`; it is called from
 `_process_lifecycle._merge_env` for both the single-command and pipeline paths.
 
-The live-view contract from issue #101 is enforced at one place only:
+The live-view contract from issue #100 is enforced at one place only:
 `resolve_env` reads `os.environ` at call time, not when the overlay is
 registered. Any code that touches the spawn path must therefore route through
 `resolve_env` (directly or via `_merge_env`) — never via a captured snapshot of

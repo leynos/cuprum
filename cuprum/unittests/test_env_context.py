@@ -1,6 +1,6 @@
 """Unit tests for the scoped ``env`` context manager.
 
-The tests pin down the contract spelled out in issue #101: the overlay laid on
+The tests pin down the contract spelled out in issue #100: the overlay laid on
 top of :func:`os.environ` must be applied *live* at subprocess spawn time, so
 that variables added to ``os.environ`` after Cuprum was imported (the typical
 ``pytest`` ``monkeypatch.setenv`` case) remain visible inside the scope.
@@ -87,7 +87,7 @@ def test_env_overlay_does_not_snapshot_os_environ(
 ) -> None:
     """Live ``os.environ`` updates inside the scope must reach the subprocess.
 
-    This is the live-view contract from issue #101. Plumbum's ``local.env``
+    This is the live-view contract from issue #100. Plumbum's ``local.env``
     snapshots ``os.environ`` at module import, which is what made
     ``GIT_AUTHOR_NAME`` invisible to ``git commit`` in the original report.
     The test enters the scope, *then* mutates ``os.environ``, and the

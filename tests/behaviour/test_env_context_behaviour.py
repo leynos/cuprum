@@ -1,6 +1,6 @@
 """Behavioural tests for the scoped ``env`` context manager.
 
-These scenarios exercise the user-visible contract from issue #101: variables
+These scenarios exercise the user-visible contract from issue #100: variables
 written into ``os.environ`` after Cuprum is imported (the common
 ``monkeypatch.setenv`` case) must still be visible to subprocesses spawned
 inside a ``with env(...)`` block.
