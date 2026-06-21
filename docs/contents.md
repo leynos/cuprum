@@ -7,6 +7,8 @@ open each document.
 
 - [Documentation contents](contents.md) - the canonical index for project
   documentation.
+- [Changelog](../CHANGELOG.md) - consumer-facing release notes and migration
+  impact summaries.
 - [Users' guide](users-guide.md) - user-facing command-building, catalogue,
   runtime, pipeline, and Rust backend behaviour.
 - [Developers' guide](developers-guide.md) - maintainer workflows for profiling,

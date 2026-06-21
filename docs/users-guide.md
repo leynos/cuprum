@@ -455,6 +455,12 @@ with scoped(ScopeConfig()):
 
 ### Scoped environment overlays
 
+**Breaking behaviour note:** `env(...)` resolves overlays against the live
+`os.environ` when a subprocess is spawned, not against an import-time or
+scope-entry snapshot. Code that relied on snapshot semantics should pass stable
+values explicitly through `env(...)` or the per-call `ExecutionContext.env`
+mapping.
+
 Use `env()` to overlay environment variables on top of the live `os.environ`
 for the duration of a scope. The overlay is resolved at subprocess spawn time,
 not at registration time, so variables added to `os.environ` *after* the scope
