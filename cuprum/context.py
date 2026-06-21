@@ -15,7 +15,7 @@ Example:
 ...         ctx.is_allowed(ECHO)
 True
 
-Scoped environment overlays (issue #101): four public symbols layer
+Scoped environment overlays (issue #100): four public symbols layer
 environment variables on top of the live ``os.environ`` for subprocesses
 spawned inside the scope. ``env(*overlays, **kwvars)`` is a factory that
 returns an :class:`EnvRegistration` applying an immutable overlay to the
