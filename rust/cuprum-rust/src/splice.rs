@@ -18,7 +18,8 @@
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};
 
-use crate::io_utils::is_nonfatal_write_error;
+use crate::errors::PumpError;
+use crate::io_utils::read_raw_fd;
 
 /// Flag for splice: move pages instead of copying (advisory).
 const SPLICE_F_MOVE: libc::c_uint = 0x01;
@@ -43,26 +44,23 @@ pub(crate) fn try_splice_pump(
     reader: &OwnedFd,
     writer: &OwnedFd,
     chunk_size: usize,
-) -> Option<Result<u64, io::Error>> {
+) -> Option<Result<u64, PumpError>> {
     let reader_fd = reader.as_raw_fd();
     let writer_fd = writer.as_raw_fd();
 
-    // Attempt first splice to detect support.
-    match splice_once(reader_fd, writer_fd, chunk_size) {
-        Ok(0) => Some(Ok(0)), // EOF on first call
-        Ok(n) => Some(splice_loop(reader_fd, writer_fd, chunk_size, n)),
-        Err(e) if is_splice_unsupported(&e) => None, // Fall back to read/write
-        Err(e) if is_nonfatal_write_error(&e) => {
-            // Broken pipe on first call: drain reader to avoid upstream deadlock.
-            drain_reader(reader_fd, chunk_size);
-            Some(Ok(0))
-        }
-        Err(e) => Some(Err(e)), // Fatal error
+    // The first splice call detects support: `EINVAL` here means the FD
+    // types cannot splice and the caller must fall back to read/write. Once
+    // a splice has succeeded, `EINVAL` can no longer mean "unsupported", so
+    // the loop below treats it as fatal like any other error.
+    let first = splice_once(reader_fd, writer_fd, chunk_size);
+    if matches!(&first, Err(e) if is_splice_unsupported(e)) {
+        return None;
     }
+    Some(splice_loop(reader_fd, writer_fd, chunk_size, first))
 }
 
 /// Perform a single splice call.
-fn splice_once(fd_in: libc::c_int, fd_out: libc::c_int, len: usize) -> Result<usize, io::Error> {
+fn splice_once(fd_in: libc::c_int, fd_out: libc::c_int, len: usize) -> Result<usize, PumpError> {
     let flags = SPLICE_F_MOVE | SPLICE_F_MORE;
 
     // SAFETY: splice is a well-defined syscall; null offsets are valid for pipes.
@@ -78,35 +76,44 @@ fn splice_once(fd_in: libc::c_int, fd_out: libc::c_int, len: usize) -> Result<us
     };
 
     if result < 0 {
-        Err(io::Error::last_os_error())
+        Err(PumpError::from(io::Error::last_os_error()))
     } else {
         // Non-negative ssize_t fits in usize on Linux.
-        usize::try_from(result).map_err(|_| io::Error::other("splice length overflow"))
+        usize::try_from(result).map_err(|_| PumpError::LengthOverflow)
     }
 }
 
-/// Continue splicing until EOF or error.
+/// Splice until EOF or error, starting from a pre-computed first outcome.
+///
+/// This is the single canonical accumulation loop: every iteration —
+/// including the first, whose outcome the caller supplies after the
+/// support-detection check — is handled by the same `Ok(0)` / `Ok(n)` /
+/// non-fatal / fatal arms. A non-fatal write error (broken pipe) drains the
+/// reader so upstream does not block, then reports the bytes transferred so
+/// far.
 fn splice_loop(
     fd_in: libc::c_int,
     fd_out: libc::c_int,
     chunk_size: usize,
-    initial_bytes: usize,
-) -> Result<u64, io::Error> {
-    let mut total = initial_bytes as u64;
+    mut outcome: Result<usize, PumpError>,
+) -> Result<u64, PumpError> {
+    let mut total = 0_u64;
 
     loop {
-        match splice_once(fd_in, fd_out, chunk_size) {
+        match outcome {
             Ok(0) => break, // EOF
             Ok(n) => {
-                total = total.saturating_add(n as u64);
+                let chunk = u64::try_from(n).map_err(|_| PumpError::LengthOverflow)?;
+                total = total.saturating_add(chunk);
             }
-            Err(e) if is_nonfatal_write_error(&e) => {
+            Err(e) if e.is_nonfatal_write() => {
                 // Broken pipe: drain reader and return bytes written so far.
-                drain_reader(fd_in, chunk_size);
+                drain_reader(fd_in, chunk_size)?;
                 break;
             }
             Err(e) => return Err(e),
         }
+        outcome = splice_once(fd_in, fd_out, chunk_size);
     }
 
     Ok(total)
@@ -116,14 +123,16 @@ fn splice_loop(
 ///
 /// This matches the behaviour of the read/write fallback: when the writer
 /// breaks, we continue reading until EOF to ensure the upstream process
-/// does not block on a full pipe buffer.
-fn drain_reader(fd_in: libc::c_int, chunk_size: usize) {
-    let mut buf = vec![0u8; chunk_size];
+/// does not block on a full pipe buffer. The drain routes through the
+/// canonical raw-fd read helper, so interrupted reads (`EINTR`) retry
+/// instead of silently ending the drain, end of file terminates it, and
+/// any other error propagates.
+fn drain_reader(fd_in: libc::c_int, chunk_size: usize) -> Result<(), PumpError> {
+    let mut buf = vec![0_u8; chunk_size];
     loop {
-        // SAFETY: read is a well-defined syscall.
-        let n = unsafe { libc::read(fd_in, buf.as_mut_ptr().cast(), buf.len()) };
-        if n <= 0 {
-            break;
+        let n = read_raw_fd(fd_in, &mut buf)?;
+        if n == 0 {
+            return Ok(());
         }
     }
 }
@@ -136,6 +145,130 @@ fn drain_reader(fd_in: libc::c_int, chunk_size: usize) {
 /// Other errors such as `EBADF` (bad file descriptor) or `ESPIPE` (illegal
 /// seek) are configuration or programming errors that should propagate to the
 /// caller rather than being masked by a fallback that will likely also fail.
-fn is_splice_unsupported(err: &io::Error) -> bool {
-    err.raw_os_error() == Some(libc::EINVAL)
+fn is_splice_unsupported(err: &PumpError) -> bool {
+    matches!(err, PumpError::Io(io_err) if io_err.raw_os_error() == Some(libc::EINVAL))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Behavioural tests for the unified splice loop and the EINTR-correct
+    //! drain: full transfer between pipes, fallback signalling for
+    //! unsupported descriptor types, and broken-pipe draining.
+
+    use std::fmt::Debug;
+    use std::fs::File;
+    use std::io::{self, Read, Write};
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    use super::{drain_reader, try_splice_pump};
+
+    fn unwrap_ok<T, E: Debug>(result: Result<T, E>) -> T {
+        match result {
+            Ok(value) => value,
+            Err(err) => panic!("unexpected error: {err:?}"),
+        }
+    }
+
+    fn make_pipe() -> (OwnedFd, OwnedFd) {
+        let mut fds = [0_i32; 2];
+        // SAFETY: `fds` is a valid two-element array for `pipe(2)` to fill.
+        let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        assert_eq!(rc, 0, "pipe(2) failed: {}", io::Error::last_os_error());
+        // SAFETY: on success `pipe(2)` returned two freshly opened FDs that
+        // this process exclusively owns.
+        unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) }
+    }
+
+    fn write_all_to(fd: &OwnedFd, payload: &[u8]) {
+        // SAFETY: duplicating an owned descriptor for a scoped File wrapper.
+        let mut file = unsafe { File::from_raw_fd(libc::dup(fd.as_raw_fd())) };
+        unwrap_ok(file.write_all(payload));
+    }
+
+    fn read_all_from(fd: &OwnedFd) -> Vec<u8> {
+        // SAFETY: duplicating an owned descriptor for a scoped File wrapper.
+        let mut file = unsafe { File::from_raw_fd(libc::dup(fd.as_raw_fd())) };
+        let mut collected = Vec::new();
+        unwrap_ok(file.read_to_end(&mut collected));
+        collected
+    }
+
+    #[test]
+    fn splice_transfers_all_bytes_between_pipes() {
+        let (source_read, source_write) = make_pipe();
+        let (sink_read, sink_write) = make_pipe();
+        let payload = b"unified splice loop payload";
+
+        write_all_to(&source_write, payload);
+        drop(source_write); // EOF for the splice loop.
+
+        let outcome = try_splice_pump(&source_read, &sink_write, 4096);
+        drop(sink_write); // EOF for the verification read.
+
+        match outcome {
+            Some(Ok(transferred)) => {
+                assert_eq!(transferred, payload.len() as u64);
+            }
+            other => panic!("expected Some(Ok(_)) from pipe splice, got {other:?}"),
+        }
+        assert_eq!(read_all_from(&sink_read), payload);
+    }
+
+    #[test]
+    fn unsupported_descriptors_signal_fallback() {
+        let dir = std::env::temp_dir();
+        let reader_path = dir.join("cuprum-splice-test-reader");
+        let writer_path = dir.join("cuprum-splice-test-writer");
+        unwrap_ok(std::fs::write(&reader_path, b"file payload"));
+        let reader = OwnedFd::from(unwrap_ok(File::open(&reader_path)));
+        let writer = OwnedFd::from(unwrap_ok(File::create(&writer_path)));
+
+        // Two regular files cannot splice; the first call must signal the
+        // read/write fallback rather than erroring.
+        let outcome = try_splice_pump(&reader, &writer, 4096);
+        assert!(
+            outcome.is_none(),
+            "expected fallback signal, got {outcome:?}"
+        );
+
+        unwrap_ok(std::fs::remove_file(&reader_path));
+        unwrap_ok(std::fs::remove_file(&writer_path));
+    }
+
+    #[test]
+    fn broken_pipe_drains_reader_and_reports_transferred_bytes() {
+        let (source_read, source_write) = make_pipe();
+        let (sink_read, sink_write) = make_pipe();
+        let payload = b"bytes that can no longer be delivered";
+
+        write_all_to(&source_write, payload);
+        drop(source_write);
+        drop(sink_read); // Break the downstream pipe before pumping.
+
+        let outcome = try_splice_pump(&source_read, &sink_write, 4096);
+        match outcome {
+            Some(Ok(0)) => {}
+            other => panic!("expected Some(Ok(0)) after broken pipe, got {other:?}"),
+        }
+
+        // The drain must have consumed the source to EOF so upstream writers
+        // cannot block on a full pipe buffer.
+        let leftover = read_all_from(&source_read);
+        assert!(
+            leftover.is_empty(),
+            "reader must be drained, got {leftover:?}"
+        );
+    }
+
+    #[test]
+    fn drain_reader_consumes_to_eof() {
+        let (read_end, write_end) = make_pipe();
+        write_all_to(&write_end, b"residual data");
+        drop(write_end);
+
+        unwrap_ok(drain_reader(read_end.as_raw_fd(), 8));
+
+        let leftover = read_all_from(&read_end);
+        assert!(leftover.is_empty(), "drain must consume the pipe to EOF");
+    }
 }
