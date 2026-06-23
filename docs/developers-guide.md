@@ -145,6 +145,27 @@ suite: Hypothesis generates byte payloads split at arbitrary boundaries
 capture equals a whole-payload reference decode, that both variants capture
 identically, and that line emission is boundary-insensitive.
 
+
+### Concurrency model
+
+Each `_drain()` invocation is self-contained. It owns its capture buffer
+(`bytearray`) and, when an `on_chunk` callback is supplied by the line-emitting
+variant, that callback owns its own `codecs.IncrementalDecoder`. Concurrent
+stdout and stderr drains therefore do not share mutable capture or decoder
+state.
+
+The echo sink (`config.sink`) may be shared between concurrent drains when
+stdout and stderr are both echoed. Writes to that sink interleave only at
+`await` points: once a drain starts writing a single decoded chunk, there is no
+intermediate `await` before that chunk write finishes.
+
+Cancellation is fail-fast. If an `asyncio.Task` wrapping `_drain()` is
+cancelled, `asyncio.CancelledError` propagates from `stream.read()` and any
+bytes captured by that invocation so far are discarded.
+
+Callers must not share one `asyncio.StreamReader` between two `_drain()`
+invocations. Each invocation must receive its own reader.
+
 ### Canonical adapter event projection and locked-store base
 
 `cuprum/adapters/_support.py` keeps the three telemetry adapters from

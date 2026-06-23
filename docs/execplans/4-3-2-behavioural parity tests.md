@@ -88,7 +88,7 @@ Hard invariants that must hold throughout implementation:
   - Severity: medium
   - Likelihood: medium
   - Mitigation: Use payloads significantly larger than `_READ_SIZE` containing
-    many multi-byte characters so splits are statistically guaranteed. A
+    many multibyte characters so splits are statistically guaranteed. A
     secondary mitigation is dedicated unit tests for each UTF-8 byte width.
 
 - **Risk**: Broken pipe tests may produce non-deterministic behaviour because
@@ -182,7 +182,7 @@ Hard invariants that must hold throughout implementation:
 
 Implementation completed successfully:
 
-- Created 4 BDD scenarios verifying parity for empty streams, multi-byte
+- Created 4 BDD scenarios verifying parity for empty streams, multibyte
   UTF-8, broken pipes, and backpressure (8 test runs: 4 Python + 4 Rust, with
   Rust skipped when extension unavailable)
 - Created 8 unit tests with finer granularity (16 test runs: 8 Python +
@@ -305,7 +305,7 @@ Create `tests/helpers/parity.py` with shared infrastructure:
 
 - `parity_catalogue()` -- builds catalogue with Python + cat + echo
 - `run_parity_pipeline(pipeline, allowlist)` -- runs within scoped config
-- `utf8_stress_payload(n_chars=32768)` -- deterministic multi-byte UTF-8
+- `utf8_stress_payload(n_chars=32768)` -- deterministic multibyte UTF-8
   string using fixed seed `random.Random(20260217)`, cycling through 1, 2, 3,
   and 4-byte characters, encoded size exceeding 80 KB
 
@@ -379,7 +379,7 @@ All commands run from `/home/user/project`.
 
 - Empty stream pipeline produces `stdout == ""` and `ok is True` under both
   backends.
-- UTF-8 pipeline with multi-byte characters produces byte-identical stdout
+- UTF-8 pipeline with multibyte characters produces byte-identical stdout
   under both backends.
 - Broken pipe pipeline completes without deadlock under both backends.
 - Backpressure pipeline with 1 MB payload produces byte-identical stdout
@@ -391,6 +391,8 @@ All commands run from `/home/user/project`.
 All steps can be repeated safely. Writing files is idempotent. Tests can be
 re-run at any time. Cache clearing in `_clear_backend_cache` autouse fixture
 prevents cross-test pollution.
+
+## Artefacts and notes
 
 ## Artefacts and notes
 
@@ -440,7 +442,7 @@ prevents cross-test pollution.
         """Execute a pipeline within a scoped allowlist."""
 
     def utf8_stress_payload(n_chars: int = 32768) -> str:
-        """Generate a deterministic multi-byte UTF-8 stress payload."""
+        """Generate a deterministic multibyte UTF-8 stress payload."""
 
 ### Dependencies
 

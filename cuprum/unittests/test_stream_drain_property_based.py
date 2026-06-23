@@ -4,7 +4,7 @@ The ``_drain`` coroutine is the single read/echo/buffer loop shared by
 ``_consume_stream_without_lines`` and ``_consume_stream_with_lines`` (#115).
 These tests drive ``_consume_stream`` directly with a stub reader yielding
 arbitrary byte payloads split at arbitrary chunk boundaries — including split
-multi-byte UTF-8 sequences and invalid bytes — and assert that:
+multibyte UTF-8 sequences and invalid bytes — and assert that:
 
 - the captured text equals a whole-payload reference decode for both variants;
 - the two variants capture identical text (the parity the canonical loop
@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import io
 import typing as typ
+from collections import Counter
 
 from hypothesis import given
 from hypothesis import strategies as st
@@ -84,6 +85,11 @@ def _config(*, capture: bool = True, echo: bool = False) -> _StreamConfig:
     )
 
 
+def _decode_chunks(chunks: cabc.Sequence[bytes]) -> str:
+    """Decode chunks using the same per-chunk policy as a text echo sink."""
+    return "".join(chunk.decode("utf-8", errors="replace") for chunk in chunks)
+
+
 def _consume(
     chunks: cabc.Sequence[bytes],
     config: _StreamConfig,
@@ -145,7 +151,7 @@ def test_line_emission_is_boundary_insensitive(
     """Property: emitted lines do not depend on chunk boundaries.
 
     Feeding the payload as one chunk and as the generated arbitrary chunking
-    must produce the same emitted line sequence, even when multi-byte UTF-8
+    must produce the same emitted line sequence, even when multibyte UTF-8
     sequences or invalid bytes are split across boundaries.
 
     Parameters
@@ -185,8 +191,118 @@ def test_echo_writes_all_bytes_to_sink(case: tuple[bytes, list[bytes]]) -> None:
     # The sink has no .buffer, so _write_chunk decodes each chunk separately;
     # per-chunk decoding may replace split sequences differently, so compare
     # against the same per-chunk reference rather than a whole-payload decode.
-    expected = "".join(chunk.decode("utf-8", errors="replace") for chunk in chunks)
+    expected = _decode_chunks(chunks)
     assert sink.getvalue() == expected, (
         "echo sink must receive every chunk in order for "
         f"payload={payload!r}, chunks={chunks!r}"
+    )
+
+
+@given(case_a=_payload_and_cuts(), case_b=_payload_and_cuts())
+def test_concurrent_drains_capture_independently(
+    case_a: tuple[bytes, list[bytes]],
+    case_b: tuple[bytes, list[bytes]],
+) -> None:
+    """Property: concurrent drains keep their captures independent.
+
+    Parameters
+    ----------
+    case_a : tuple[bytes, list[bytes]]
+        First generated payload and an arbitrary chunking of it.
+    case_b : tuple[bytes, list[bytes]]
+        Second generated payload and an arbitrary chunking of it.
+    """
+    payload_a, chunks_a = case_a
+    payload_b, chunks_b = case_b
+
+    async def consume_pair() -> tuple[str | None, str | None]:
+        """Run both stream consumers concurrently in one event loop."""
+        reader_a = typ.cast("asyncio.StreamReader", _ChunkedReader(chunks_a))
+        reader_b = typ.cast("asyncio.StreamReader", _ChunkedReader(chunks_b))
+        task_a = asyncio.create_task(_consume_stream(reader_a, _config()))
+        task_b = asyncio.create_task(_consume_stream(reader_b, _config()))
+        return await asyncio.gather(task_a, task_b)
+
+    captured_a, captured_b = asyncio.run(consume_pair())
+    expected_a = payload_a.decode("utf-8", errors="replace")
+    expected_b = payload_b.decode("utf-8", errors="replace")
+
+    assert captured_a == expected_a, (
+        "first concurrent drain must capture only its own decoded payload for "
+        f"payload_a={payload_a!r}, chunks_a={chunks_a!r}, "
+        f"payload_b={payload_b!r}, chunks_b={chunks_b!r}"
+    )
+    assert captured_b == expected_b, (
+        "second concurrent drain must capture only its own decoded payload for "
+        f"payload_a={payload_a!r}, chunks_a={chunks_a!r}, "
+        f"payload_b={payload_b!r}, chunks_b={chunks_b!r}"
+    )
+
+
+@given(case_a=_payload_and_cuts(), case_b=_payload_and_cuts())
+def test_concurrent_echo_drains_sink_receives_all_bytes(
+    case_a: tuple[bytes, list[bytes]],
+    case_b: tuple[bytes, list[bytes]],
+) -> None:
+    """Property: concurrent echo drains write all decoded chunks to one sink.
+
+    Parameters
+    ----------
+    case_a : tuple[bytes, list[bytes]]
+        First generated payload and an arbitrary chunking of it.
+    case_b : tuple[bytes, list[bytes]]
+        Second generated payload and an arbitrary chunking of it.
+    """
+    payload_a, chunks_a = case_a
+    payload_b, chunks_b = case_b
+    sink = io.StringIO()
+
+    async def consume_pair() -> tuple[str | None, str | None]:
+        """Run both echoing stream consumers against the shared sink."""
+        reader_a = typ.cast("asyncio.StreamReader", _ChunkedReader(chunks_a))
+        reader_b = typ.cast("asyncio.StreamReader", _ChunkedReader(chunks_b))
+        config_a = _StreamConfig(
+            capture_output=False,
+            echo_output=True,
+            sink=sink,
+            encoding="utf-8",
+            errors="replace",
+        )
+        config_b = _StreamConfig(
+            capture_output=False,
+            echo_output=True,
+            sink=sink,
+            encoding="utf-8",
+            errors="replace",
+        )
+        task_a = asyncio.create_task(_consume_stream(reader_a, config_a))
+        task_b = asyncio.create_task(_consume_stream(reader_b, config_b))
+        return await asyncio.gather(task_a, task_b)
+
+    captured_a, captured_b = asyncio.run(consume_pair())
+    actual = sink.getvalue()
+    expected = _decode_chunks(chunks_a) + _decode_chunks(chunks_b)
+
+    assert captured_a is None, (
+        "first concurrent echo drain must not capture when capture is disabled "
+        f"for payload_a={payload_a!r}, chunks_a={chunks_a!r}, "
+        f"payload_b={payload_b!r}, chunks_b={chunks_b!r}"
+    )
+    assert captured_b is None, (
+        "second concurrent echo drain must not capture when capture is disabled "
+        f"for payload_a={payload_a!r}, chunks_a={chunks_a!r}, "
+        f"payload_b={payload_b!r}, chunks_b={chunks_b!r}"
+    )
+    assert len(actual) == len(expected), (
+        "shared echo sink must receive every decoded chunk from both drains "
+        f"for payload_a={payload_a!r}, chunks_a={chunks_a!r}, "
+        f"payload_b={payload_b!r}, chunks_b={chunks_b!r}, "
+        f"actual={actual!r}, expected={expected!r}"
+    )
+    assert Counter(actual) == Counter(expected), (
+        "shared echo sink must receive a permutation of decoded chunks from "
+        "both drains "
+        f"for payload_a={payload_a!r}, chunks_a={chunks_a!r}, "
+        f"payload_b={payload_b!r}, chunks_b={chunks_b!r}, "
+        f"actual={actual!r}, expected={expected!r}"
     )
