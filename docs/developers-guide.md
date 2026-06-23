@@ -522,6 +522,44 @@ and tool-discovery recipes only. This supports non-interactive Continuous
 Integration/Continuous Delivery (CI/CD) hook environments without globally
 shadowing system tools for unrelated Makefile workflows.
 
+## Rust error taxonomy (`PumpError`)
+
+The `cuprum-rust` crate reports stream pump and consume failures through one
+semantic error enum, `PumpError` (`rust/cuprum-rust/src/errors.rs`), derived
+with `thiserror`:
+
+- `LengthOverflow` — an integer length conversion overflowed its target
+  type ("impossible" on supported platforms, kept observable rather than
+  silently truncating).
+- `BufferRangeExceeded` — a computed range exceeded the backing buffer.
+- `Io(io::Error)` — an operating-system I/O failure (transparent wrapper).
+
+Conversion to a Python exception happens in exactly one place
+(`From<PumpError> for PyErr`): `Io` maps through `pyo3`'s standard `io::Error`
+translation, and the overflow variants surface as `OSError`. The non-fatal
+write classification (broken pipe / connection reset) lives on the enum as
+`PumpError::is_nonfatal_write`, replacing the free function the splice and
+read/write paths previously shared. New failure conditions get a variant here
+rather than a stringly-typed `io::Error::other(...)`.
+
+## Rust splice-loop and drain contract
+
+The Linux zero-copy path in `rust/cuprum-rust/src/splice.rs` follows one
+canonical loop. `try_splice_pump` performs the first `splice_once` solely to
+detect support: `EINVAL` on that first call signals unsupported descriptor
+types and the read/write fallback. Every outcome thereafter — including the
+first call's, which is fed into the loop — is handled by the same arms: `Ok(0)`
+ends the transfer, `Ok(n)` accumulates, a non-fatal write error (broken pipe /
+connection reset) drains the reader and reports the bytes transferred so far,
+and anything else propagates.
+
+`drain_reader` routes through the canonical raw-fd read helper
+(`io_utils::read_raw_fd`), so it shares the Unix read policy with the
+read/write fallback: interrupted reads (`EINTR`) retry instead of silently
+ending the drain, end of file terminates it, and other errors propagate.
+Behavioural tests in the module cover full pipe-to-pipe transfer, the fallback
+signal for regular files, broken-pipe draining, and the drain's EOF termination.
+
 ## Rust property testing and verification
 
 Rust-level tests for `cuprum-rust` live with the crate under

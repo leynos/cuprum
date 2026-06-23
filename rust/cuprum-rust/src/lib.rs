@@ -3,10 +3,10 @@
 //! This crate exposes a `PyO3` module providing stream pump and consume
 //! helpers alongside an availability check for the Rust backend.
 
-use std::io;
-
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+
+use std::mem::ManuallyDrop;
 
 #[cfg(unix)]
 use std::os::fd::{FromRawFd, OwnedFd};
@@ -17,11 +17,13 @@ use std::fs::File;
 #[cfg(windows)]
 use std::os::windows::io::{FromRawHandle, RawHandle};
 
+mod errors;
 mod io_utils;
 #[cfg(target_os = "linux")]
 mod splice;
 mod utf8;
 
+use errors::PumpError;
 use io_utils::{StreamHandle, handle_write_result, read_stream};
 use utf8::{FinalChunk, decode_utf8_replace};
 
@@ -144,31 +146,50 @@ fn stream_from_raw(handle: PlatformFd) -> StreamHandle {
     unsafe { File::from_raw_handle(handle as RawHandle) }
 }
 
+/// Run `operation` against a `StreamHandle` borrowed from a caller-owned FD.
+///
+/// This is the canonical "borrow this FD without owning it" helper: the
+/// handle is wrapped in [`ManuallyDrop`], so it is **never** closed when the
+/// scope ends — including during unwinding from a panicking `operation`.
+/// The previous pattern (a trailing `std::mem::forget` after the inner call)
+/// was skipped on unwind, closing the caller-owned descriptor and exposing
+/// the Python side to a double close.
+///
+/// There is deliberately no writer variant: the writer FD handed to
+/// [`pump_stream`] is *consumed* — it must close (on drop, including during
+/// unwinding) to signal EOF downstream.
+///
+/// SAFETY: the caller must guarantee that `fd` is a valid open descriptor
+/// (or handle on Windows) for the duration of the call, and that ownership
+/// remains with the caller; the helper guarantees it never closes `fd`.
+fn with_borrowed_reader<T>(fd: PlatformFd, operation: impl FnOnce(&mut StreamHandle) -> T) -> T {
+    let mut handle = ManuallyDrop::new(stream_from_raw(fd));
+    // `ManuallyDrop` suppresses the close in every exit path, so no
+    // drop-guard or forget call is required even if `operation` panics.
+    operation(&mut handle)
+}
+
 /// Pump bytes between file descriptors with explicit ownership semantics.
 ///
 /// The reader FD is borrowed and left open. The writer FD is treated as
-/// consumed and closes on drop to signal EOF downstream.
+/// consumed and closes on drop to signal EOF downstream — including when
+/// the pump unwinds.
 fn pump_stream(
     reader_fd: ReaderFd,
     writer_fd: WriterFd,
     buffer_size: BufferSize,
-) -> Result<u64, io::Error> {
-    let mut reader = stream_from_raw(reader_fd.0);
+) -> Result<u64, PumpError> {
     let mut writer = stream_from_raw(writer_fd.0);
-    let result = pump_stream_files(&mut reader, &mut writer, buffer_size);
-    // The caller owns the reader FD; avoid closing it here.
-    // The writer FD is treated as consumed and closes on drop to signal EOF.
-    std::mem::forget(reader);
-    result
+    with_borrowed_reader(reader_fd.0, |reader| {
+        pump_stream_files(reader, &mut writer, buffer_size)
+    })
 }
 
 /// Consume bytes from a file descriptor and decode UTF-8 with replacement.
-fn consume_stream(reader_fd: ReaderFd, buffer_size: BufferSize) -> Result<String, io::Error> {
-    let mut reader = stream_from_raw(reader_fd.0);
-    let result = consume_stream_files(&mut reader, buffer_size);
-    // The caller owns the reader FD; avoid closing it here.
-    std::mem::forget(reader);
-    result
+fn consume_stream(reader_fd: ReaderFd, buffer_size: BufferSize) -> Result<String, PumpError> {
+    with_borrowed_reader(reader_fd.0, |reader| {
+        consume_stream_files(reader, buffer_size)
+    })
 }
 
 #[cfg(unix)]
@@ -196,7 +217,7 @@ fn pump_stream_files(
     reader: &mut StreamHandle,
     writer: &mut StreamHandle,
     buffer_size: BufferSize,
-) -> Result<u64, io::Error> {
+) -> Result<u64, PumpError> {
     // On Linux, attempt zero-copy splice first.
     #[cfg(target_os = "linux")]
     if let Some(result) = splice::try_splice_pump(reader, writer, buffer_size.value()) {
@@ -215,7 +236,7 @@ fn pump_stream_files_readwrite(
     reader: &mut StreamHandle,
     writer: &mut StreamHandle,
     buffer_size: BufferSize,
-) -> Result<u64, io::Error> {
+) -> Result<u64, PumpError> {
     let mut buffer = vec![0_u8; buffer_size.value()];
     let mut total_written = 0_u64;
     let mut writer_open = true;
@@ -231,7 +252,7 @@ fn pump_stream_files_readwrite(
 
         let chunk = buffer
             .get(..read_len)
-            .ok_or_else(|| io::Error::other("read length exceeded buffer"))?;
+            .ok_or(PumpError::BufferRangeExceeded)?;
 
         writer_open = handle_write_result(writer, chunk, &mut total_written)?;
     }
@@ -242,7 +263,7 @@ fn pump_stream_files_readwrite(
 fn consume_stream_files(
     reader: &mut StreamHandle,
     buffer_size: BufferSize,
-) -> Result<String, io::Error> {
+) -> Result<String, PumpError> {
     let mut buffer = vec![0_u8; buffer_size.value()];
     let mut pending: Vec<u8> = Vec::new();
     let mut output = String::new();
@@ -254,7 +275,7 @@ fn consume_stream_files(
         }
         let chunk = buffer
             .get(..read_len)
-            .ok_or_else(|| io::Error::other("read length exceeded buffer"))?;
+            .ok_or(PumpError::BufferRangeExceeded)?;
         pending.extend_from_slice(chunk);
         decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(false));
     }
@@ -277,4 +298,87 @@ fn _rust_backend_native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResul
     module.add("__package__", "cuprum")?;
     module.add("__loader__", py.None())?;
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    //! Unit tests for the borrowed-FD ownership contract: the caller-owned
+    //! reader descriptor stays open after normal completion and — critically
+    //! — after a panicking inner operation (no close-on-unwind).
+
+    use std::io::{self, Read, Write};
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use super::with_borrowed_reader;
+
+    fn make_pipe() -> (OwnedFd, OwnedFd) {
+        let mut fds = [0_i32; 2];
+        // SAFETY: `fds` is a valid two-element array for `pipe(2)` to fill.
+        let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        assert_eq!(rc, 0, "pipe(2) failed: {}", io::Error::last_os_error());
+        // SAFETY: on success `pipe(2)` returned two freshly opened FDs that
+        // this process exclusively owns.
+        unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) }
+    }
+
+    fn fd_is_open(fd: i32) -> bool {
+        // SAFETY: F_GETFD on an arbitrary integer is safe; it reports EBADF
+        // for descriptors that are not open.
+        unsafe { libc::fcntl(fd, libc::F_GETFD) != -1 }
+    }
+
+    #[test]
+    fn borrowed_reader_stays_open_after_panicking_operation() {
+        let (read_end, _write_end) = make_pipe();
+        let raw_fd = read_end.as_raw_fd();
+
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            with_borrowed_reader(raw_fd, |_reader| -> () {
+                panic!("simulated failure inside the borrowed scope");
+            });
+        }));
+
+        assert!(outcome.is_err(), "the panic must propagate to the caller");
+        assert!(
+            fd_is_open(raw_fd),
+            "a panicking operation must not close the caller-owned FD",
+        );
+        // `read_end` now drops and closes the FD exactly once, proving the
+        // guard did not already close it (a double close would surface as
+        // EBADF under stricter runtimes).
+    }
+
+    #[test]
+    fn borrowed_reader_stays_open_and_usable_after_success() {
+        let (read_end, write_end) = make_pipe();
+        let raw_fd = read_end.as_raw_fd();
+
+        {
+            // SAFETY: duplicating an owned descriptor for a scoped writer.
+            let mut writer =
+                unsafe { std::fs::File::from_raw_fd(libc::dup(write_end.as_raw_fd())) };
+            match writer.write_all(b"ping") {
+                Ok(()) => {}
+                Err(err) => panic!("pipe write failed: {err}"),
+            }
+        }
+        drop(write_end);
+
+        let collected = with_borrowed_reader(raw_fd, |reader| {
+            // SAFETY: reading through the borrowed handle's raw descriptor.
+            let mut file = unsafe {
+                std::mem::ManuallyDrop::new(std::fs::File::from_raw_fd(reader.as_raw_fd()))
+            };
+            let mut data = Vec::new();
+            match file.read_to_end(&mut data) {
+                Ok(_) => {}
+                Err(err) => panic!("pipe read failed: {err}"),
+            }
+            data
+        });
+
+        assert_eq!(collected, b"ping");
+        assert!(fd_is_open(raw_fd), "the borrowed FD must remain open");
+    }
 }
