@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import codecs
 import dataclasses as dc
 import enum
@@ -9,10 +10,10 @@ import logging
 import typing as typ
 
 if typ.TYPE_CHECKING:
-    import asyncio
     import collections.abc as cabc
 
 _READ_SIZE = 4096
+_POST_CLOSE_DRAIN_TIMEOUT_S = 0.25
 _LOGGER = logging.getLogger("cuprum.streams")
 
 
@@ -170,13 +171,13 @@ async def _relay_chunks(
         if await _write_to_stream_writer(writer, chunk) is _WriteOutcome.CLOSED:
             has_downstream_closed = True
             break
-    discarded_bytes = await _drain_stream_reader(reader)
     if has_downstream_closed:
         _LOGGER.warning(
             "stream_downstream_closed discarded_bytes=%s",
-            discarded_bytes,
-            extra={"cuprum_discarded_bytes": discarded_bytes},
+            0,
+            extra={"cuprum_discarded_bytes": 0},
         )
+    await _drain_stream_reader_bounded(reader)
 
 
 async def _drain_stream_reader(reader: asyncio.StreamReader) -> int:
@@ -185,6 +186,22 @@ async def _drain_stream_reader(reader: asyncio.StreamReader) -> int:
     while chunk := await reader.read(_READ_SIZE):
         discarded_bytes += len(chunk)
     return discarded_bytes
+
+
+async def _drain_stream_reader_bounded(reader: asyncio.StreamReader) -> int:
+    """Best-effort drain after downstream closure without waiting forever."""
+    try:
+        return await asyncio.wait_for(
+            _drain_stream_reader(reader),
+            timeout=_POST_CLOSE_DRAIN_TIMEOUT_S,
+        )
+    except TimeoutError:
+        _LOGGER.debug(
+            "stream_reader_drain_timeout timeout_s=%s",
+            _POST_CLOSE_DRAIN_TIMEOUT_S,
+            extra={"cuprum_timeout_s": _POST_CLOSE_DRAIN_TIMEOUT_S},
+        )
+        return 0
 
 
 async def _write_to_stream_writer(

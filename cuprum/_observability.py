@@ -71,7 +71,9 @@ def _emit_exec_event(
     for hook in hooks:
         try:
             result = hook(event)
-        except BaseException as exc:
+        except asyncio.CancelledError as exc:
+            raise _ExecEventEmissionError(exc, scheduled) from exc
+        except Exception as exc:
             _LOGGER.warning(
                 "observe_hook_failed phase=%s program=%s error=%s",
                 event.phase,
@@ -119,7 +121,9 @@ async def _await_awaitable(
     )
     try:
         await awaitable
-    except BaseException as exc:
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
         _LOGGER.warning(
             "observe_hook_task_failed phase=%s error=%s",
             phase,

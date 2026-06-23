@@ -70,6 +70,22 @@ class _StubPumpReader:
         return self._chunks.pop(0)
 
 
+class _NeverEndingPumpReader:
+    """Stub stream reader that emits once and never reaches EOF."""
+
+    def __init__(self) -> None:
+        """Initialise the reader."""
+        self.read_calls = 0
+
+    async def read(self, _: int) -> bytes:
+        """Return one chunk, then wait forever unless the pump cancels the read."""
+        self.read_calls += 1
+        if self.read_calls == 1:
+            return b"first"
+        await asyncio.sleep(3600)
+        return b"more"
+
+
 class _StubPumpWriter:
     """Stub stream writer recording writes, drains, and closure."""
 
@@ -328,8 +344,8 @@ def test_pump_stream_logs_discarded_bytes_after_downstream_close(
     ]
     assert discarded_records, "early downstream close should log discarded bytes"
     last_discard = discarded_records[-1]
-    assert vars(last_discard)["cuprum_discarded_bytes"] == 1, (
-        "discarded byte log should count the drained remainder"
+    assert vars(last_discard)["cuprum_discarded_bytes"] == 0, (
+        "early-close telemetry should happen before best-effort draining"
     )
 
 
@@ -355,6 +371,24 @@ def test_pump_stream_omits_downstream_close_log_without_writer(
     ]
     assert reader.read_calls == 3, "pump should drain all chunks plus EOF"
     assert not close_records, "missing writer should not log downstream closure"
+
+
+def test_pump_stream_does_not_hang_when_upstream_never_ends() -> None:
+    """Early downstream closure performs bounded draining only."""
+
+    async def exercise() -> _NeverEndingPumpReader:
+        """Pump from a reader that never produces EOF."""
+        reader = _NeverEndingPumpReader()
+        writer = _StubPumpWriter(fail_on_drain_call=1)
+        await _pump_stream(
+            typ.cast("asyncio.StreamReader", reader),
+            typ.cast("asyncio.StreamWriter", writer),
+        )
+        return reader
+
+    reader = asyncio.run(asyncio.wait_for(exercise(), timeout=1.0))
+
+    assert reader.read_calls == 2, "pump should cancel the bounded drain read"
 
 
 @given(
