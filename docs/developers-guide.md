@@ -122,7 +122,7 @@ contracts stay aligned.
 
 ## Canonical adapter event projection and locked-store base
 
-The telemetry adapters share two pieces of scaffolding from
+The telemetry adapters share scaffolding from
 `cuprum/adapters/_support.py`:
 
 - `_event_common_fields(event, name)` is the single source of truth for
@@ -131,9 +131,10 @@ The telemetry adapters share two pieces of scaffolding from
   yields `pid`, `cwd`, `exit_code`, `duration_s`, and `line` only when not
   `None`. Each adapter supplies a key-naming function, so backend-specific
   conventions (`cuprum.` span attributes versus `cuprum_` log extras) stay
-  local while the include-when-set logic cannot drift. `_project_tag(event)` is
-  the companion helper for the `project` tag used by the tracing attributes and
-  metrics labels.
+  local while the include-when-set logic cannot drift. `_prefixed(prefix)`
+  builds the simple prefixing key-namer used by prefixed adapters.
+  `_project_tag(event)` is the companion helper for the `project` tag used by
+  the tracing attributes and metrics labels.
 - `_LockedStore` is the base for the in-memory reference collectors
   (`InMemoryMetrics`, `InMemoryTracer`). It owns the `threading.Lock` and the
   lock-guarded `reset()`; subclasses implement `_clear()` (run while the lock
