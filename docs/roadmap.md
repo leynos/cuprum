@@ -235,9 +235,10 @@ adr-002-additional-rust-components.md Proposal 3.
   - Update `test_stream_preserves_random_payloads_around_python_read_size_boundary`
     (`cuprum/unittests/test_stream_property_based.py:120`) to exercise chunk
     boundaries around the new size.
-  - Success: the `tee-devnull-nocb-s1` scenario wall time falls by roughly 20%
-    against the recorded baseline with no parity regressions, and the chosen
-    value plus its measurement are recorded alongside the baseline document.
+  - Success: the `tee-devnull-nocb-s1` scenario median wall time is at least 20%
+    lower than tee-hotpath-profiling-baseline-2026-06-12.md §1 (Table 3), with
+    no parity regressions, and the chosen value plus its benchmark artefact are
+    recorded alongside the baseline document.
 
 ### 5.2. Make per-line event emission cheap for line-callback workloads
 
@@ -251,15 +252,18 @@ opt-in. See tee-hotpath-profiling-baseline-2026-06-12.md §5 (Table 4).
   per-line path in `_StageObservation.emit` (`cuprum/_pipeline_types.py:62`),
   precomputing programme, argv (`SafeCmd.argv_with_program`, `cuprum/sh.py:363`),
   cwd, env, and pid once per stream rather than per line.
-  - Success: per-line emission no longer reconstructs invariant fields, and the
-    callback scenario's dataclass-construction share (about 39% per the baseline)
-    drops measurably while emitted event payloads are unchanged.
+  - Success: per-line emission no longer reconstructs invariant fields, the
+    callback scenario's dataclass-construction share falls from the 39% baseline
+    to no more than 10% in a committed profiler artefact, and emitted event
+    payloads are unchanged.
 - [ ] 5.2.2. Remove the per-hook `inspect.isawaitable` call from the per-line
   path in `_emit_exec_event` (`cuprum/_observability.py:35`) by classifying each
   hook as sync or async once at registration.
   - Requires 5.2.1.
-  - Success: known-sync hooks dispatch without per-line awaitable detection, and
-    async hooks retain identical scheduling behaviour.
+  - Success: known-sync hooks dispatch without per-line awaitable detection,
+    async hooks retain identical scheduling behaviour, and a committed profiler
+    artefact shows `inspect.isawaitable` contributes 0 sampled frames in the
+    per-line hot path.
 - [ ] 5.2.3. Add a combinatorial event-parity suite proving the optimized path is
   behaviour-preserving across the hook-type and stream-mode matrix.
   - Requires 5.2.1 and 5.2.2.
@@ -318,7 +322,7 @@ step 4.4.
 - [ ] 6.2.1. Add a Rust-versus-Python consume dispatcher benchmark for the
   fd-backed, UTF-8/replace, capture-only, no-echo, no-callback scenario, measured
   against the phase 5 tuned baseline.
-  - Requires phase 5 and 6.1.1.
+  - Requires phase 5, 6.1.1, and 6.1.2.
   - Success: the benchmark reports median wall time for both paths and publishes
     it to the workflow summary; the gate passes only when the Rust median is at
     least 20% lower on the eligible path, small-output fallback scenarios stay

@@ -390,15 +390,21 @@ def test_rust_consume_stream_not_referenced_in_production() -> None:
     assert module_file is not None, "_streams_rs must be a file-backed module"
     package_root = pathlib.Path(module_file).parent
     scan_errors: list[str] = []
-    referencing: list[str] = []
+    referencing: list[pathlib.Path] = []
     for path in package_root.rglob("*.py"):
         if "unittests" in path.parts or path.name == "_streams_rs.py":
             continue
         try:
             if _module_references_symbol(path, "rust_consume_stream"):
-                referencing.append(path.name)
+                referencing.append(path.relative_to(package_root))
         except _ModuleReferenceScanError as exc:
-            scan_errors.append(str(exc))
+            cause = exc.__cause__
+            cause_context = (
+                f"; caused by {type(cause).__name__}: {cause}"
+                if cause is not None
+                else ""
+            )
+            scan_errors.append(f"{exc}{cause_context}")
 
     assert scan_errors == [], (
         "could not inspect one or more production modules; "

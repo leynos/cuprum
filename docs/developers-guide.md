@@ -8,7 +8,7 @@ the [design document](cuprum-design.md); for where code lives, see the
 decisions, see
 [ADR-002: Additional Rust components](adr-002-additional-rust-components.md),
 [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md), and
-[ADR-004: Interrogate docstring gate](adr-004-interrogate-docstring-gate.md).
+[ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md).
 
 ## Stream line-splitting properties
 
