@@ -31,6 +31,9 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 
+_CROSSHAIR_PROBE_EXCEPTIONS: tuple[type[BaseException], ...] = (BaseException,)
+
+
 def _is_expected_crosshair_unavailable(error: BaseException) -> bool:
     """Return whether a CrossHair probe failure means tests should skip."""
     return (
@@ -53,6 +56,21 @@ def _crosshair_probe_failure_reason(error: BaseException) -> str:
     return _crosshair_unavailable_reason(error)
 
 
+def _crosshair_unavailable_bindings(
+    error: BaseException,
+) -> tuple[str, typ.Any, typ.Any, typ.Any, typ.Any]:
+    """Return fallback CrossHair bindings for an expected probe failure."""
+    reason = _crosshair_probe_failure_reason(error)
+    warnings.warn(reason, RuntimeWarning, stacklevel=2)
+    return (
+        reason,
+        typ.cast("typ.Any", None),
+        typ.cast("typ.Any", None),
+        typ.cast("typ.Any", None),
+        typ.cast("typ.Any", None),
+    )
+
+
 # CrossHair's C-level tracer must support every bytecode opcode the running
 # interpreter emits. On a Python whose opcode set CrossHair does not yet
 # handle, importing the integration raises ``crosshair.tracers.TraceException``
@@ -67,23 +85,19 @@ try:
     from crosshair.options import AnalysisKind, AnalysisOptionSet
     from crosshair.statespace import MessageType
     from crosshair.test_util import check_states
-except BaseException as _crosshair_exc:
+except _CROSSHAIR_PROBE_EXCEPTIONS as _crosshair_exc:
     # ``crosshair.tracers.TraceException`` subclasses ``BaseException`` (not
     # ``Exception``) and is raised while importing the tracer module itself,
     # so it cannot be named here without re-triggering the failing import.
     # Re-raise genuine control-flow exceptions and any unexpected failure so
     # the probe only degrades for known CrossHair compatibility cases.
-    if isinstance(_crosshair_exc, KeyboardInterrupt | SystemExit | GeneratorExit):
-        raise
-    is_expected_unavailable = _is_expected_crosshair_unavailable(_crosshair_exc)
-    if not is_expected_unavailable:
-        raise
-    _CROSSHAIR_UNAVAILABLE_REASON = _crosshair_unavailable_reason(_crosshair_exc)
-    warnings.warn(_CROSSHAIR_UNAVAILABLE_REASON, RuntimeWarning, stacklevel=2)
-    AnalysisOptionSet = typ.cast("typ.Any", None)
-    AnalysisKind = typ.cast("typ.Any", None)
-    MessageType = typ.cast("typ.Any", None)
-    check_states = typ.cast("typ.Any", None)
+    (
+        _CROSSHAIR_UNAVAILABLE_REASON,
+        AnalysisOptionSet,
+        AnalysisKind,
+        MessageType,
+        check_states,
+    ) = _crosshair_unavailable_bindings(_crosshair_exc)
 else:
     _CROSSHAIR_UNAVAILABLE_REASON = "CrossHair is not installed"
 
@@ -174,6 +188,30 @@ def test_crosshair_probe_reason_names_failure(error: BaseException) -> None:
 
     assert error.__class__.__name__ in reason
     assert str(error) in reason
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(ImportError("crosshair missing"), id="import_error"),
+        pytest.param(_trace_exception("unsupported opcode"), id="trace_exception"),
+    ],
+)
+def test_crosshair_probe_fallback_disables_symbolic_checks(
+    error: BaseException,
+) -> None:
+    """Probe fallback records expected failures and clears CrossHair bindings."""
+    with pytest.warns(RuntimeWarning, match=error.__class__.__name__):
+        reason, options, kind, message_type, state_checker = (
+            _crosshair_unavailable_bindings(error)
+        )
+
+    assert error.__class__.__name__ in reason
+    assert str(error) in reason
+    assert options is None
+    assert kind is None
+    assert message_type is None
+    assert state_checker is None
 
 
 @st.composite
