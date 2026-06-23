@@ -71,12 +71,12 @@ supplied. Any fix to the read/echo/capture mechanics belongs in `_drain` so the
 capture path and the line-emitting path cannot silently diverge; new consume
 variants must layer behaviour through `on_chunk` rather than copying the loop.
 
-`cuprum/unittests/test_stream_drain_property_based.py` holds the property
-suite: Hypothesis generates byte payloads split at arbitrary boundaries
-(including split multibyte UTF-8 sequences and invalid bytes) and asserts that
-capture equals a whole-payload reference decode, that both variants capture
-identically, and that line emission is boundary-insensitive.
-
+`cuprum/unittests/test_stream_property_based.py` and
+`tests/behaviour/test_stream_property_preservation_behaviour.py` hold the
+public-boundary property coverage: Hypothesis generates byte payloads split at
+arbitrary boundaries and asserts that real subprocess pipelines preserve
+payloads, keep final stdout and stderr captures independent, and echo all
+stdout and stderr text when both streams share one sink.
 
 ### Concurrency model
 

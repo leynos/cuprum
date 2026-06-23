@@ -86,7 +86,6 @@
       'cuprum/unittests/test_sh.py',
       'cuprum/unittests/test_sinks.py',
       'cuprum/unittests/test_stdin_property_based.py',
-      'cuprum/unittests/test_stream_drain_property_based.py',
       'cuprum/unittests/test_stream_parity.py',
       'cuprum/unittests/test_stream_property_based.py',
       'cuprum/unittests/test_tee_profile_worker_cli.py',
