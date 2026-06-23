@@ -107,7 +107,10 @@ def test_adapters_agree_on_common_keys_modulo_prefix(event: ExecEvent) -> None:
         for key in _build_extra(event)
         if key not in {"cuprum_phase", "cuprum_tags"}
     }
-    assert extra_keys == canonical
+    assert extra_keys == canonical, (
+        "logging extras must expose exactly the canonical common fields after "
+        "removing their backend prefix"
+    )
 
     attr_keys = {
         key.removeprefix("cuprum.")
@@ -119,11 +122,23 @@ def test_adapters_agree_on_common_keys_modulo_prefix(event: ExecEvent) -> None:
             "cuprum.pipeline_stages",
         }
     }
-    assert attr_keys == canonical
+    assert attr_keys == canonical, (
+        "tracing attributes must expose exactly the canonical common fields "
+        "after removing their backend prefix"
+    )
 
     labels = MetricsHook._extract_labels(event)
-    assert set(labels) == {"program", "project"}
-    assert labels["program"] == str(event.program)
+    assert set(labels) == {"program", "project"}, (
+        "metrics labels must stay limited to the low-cardinality program and "
+        "project fields"
+    )
+    assert labels["program"] == str(event.program), (
+        "metrics labels must stringify the event program when it is present"
+    )
+    assert labels["project"] == str(event.tags.get("project") or "unknown"), (
+        "metrics labels must stringify the project tag and fall back to "
+        "'unknown' when the tag is absent"
+    )
 
 
 def _representative_event(phase: str) -> ExecEvent:
@@ -178,4 +193,6 @@ def test_projection_snapshots_lock_the_wire_contract(
         "tracing_attributes": _redact(TracingHook._build_attributes(event)),
         "metrics_labels": _redact(dict(MetricsHook._extract_labels(event))),
     }
-    assert projections == snapshot
+    assert projections == snapshot, (
+        "per-phase adapter projections must match the redacted wire-contract snapshot"
+    )

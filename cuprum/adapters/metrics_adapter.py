@@ -293,7 +293,7 @@ class MetricsHook:
         """
         common = dict(_event_common_fields(event, lambda field: field))
         return {
-            "program": str(common["program"]),
+            "program": str(common.get("program") or "unknown"),
             "project": _project_tag(event) or "unknown",
         }
 
