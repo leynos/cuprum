@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.28.3", features = ["extension-module"] }
+thiserror = "2.0.17"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
