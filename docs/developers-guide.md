@@ -536,7 +536,6 @@ uv run pytest cuprum/unittests/test_tee_profile_worker_selector_reentrancy.py \
   cuprum/unittests/test_tee_profile_worker_env_preservation.py
 ```
 
-
 ## Rust availability probe stack
 
 The Rust availability API uses a single source of truth:
