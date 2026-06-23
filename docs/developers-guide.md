@@ -582,8 +582,9 @@ toolchain library directory from the installed version rather than hard-coding
 it:
 
 ```bash
+KANI_VERSION=$(cargo kani --version | awk '{print $2}')
 cd rust && \
-  LD_LIBRARY_PATH="$HOME/.kani/kani-$(cargo kani --version | awk '{print $2}')/toolchain/lib" \
+  LD_LIBRARY_PATH="$HOME/.kani/kani-${KANI_VERSION}/toolchain/lib" \
   cargo kani --package cuprum-rust
 ```
 
