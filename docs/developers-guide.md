@@ -145,6 +145,8 @@ public-boundary property coverage: Hypothesis generates byte payloads split at
 arbitrary boundaries and asserts that real subprocess pipelines preserve
 payloads, keep final stdout and stderr captures independent, and echo all
 stdout and stderr text when both streams share one sink.
+`cuprum/unittests/test_stream_drain.py` keeps focused direct coverage for the
+canonical helper contract and the two `_consume_stream` variants.
 
 ### Concurrency model
 
