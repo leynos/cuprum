@@ -149,10 +149,10 @@ stdout and stderr text when both streams share one sink.
 ### Concurrency model
 
 Each `_drain()` invocation is self-contained. It owns its capture buffer
-(`bytearray`) and, when an `on_chunk` callback is supplied by the line-emitting
-variant, that callback owns its own `codecs.IncrementalDecoder`. Concurrent
-stdout and stderr drains therefore do not share mutable capture or decoder
-state.
+(`bytearray`) and, in the line-emitting variant, its own
+`codecs.IncrementalDecoder`. The `on_chunk` callback closes over that decoder
+and acts only as the chunk delivery hook. Concurrent stdout and stderr drains
+therefore do not share mutable capture or decoder state.
 
 The echo sink (`config.sink`) may be shared between concurrent drains when
 stdout and stderr are both echoed. Writes to that sink interleave only at

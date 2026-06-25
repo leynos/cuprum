@@ -168,25 +168,23 @@ def _payload_and_chunk_sizes(draw: st.DrawFn) -> tuple[bytes, tuple[int, ...]]:
 
 def _stdout_stderr_sink_script() -> str:
     """Return Python code that writes derived data to stdout and stderr."""
-    return "\n".join(
-        [
-            "import base64",
-            "import sys",
-            "data = sys.stdin.buffer.read()",
-            "stdout = data.hex().encode('ascii')",
-            "stderr = base64.b64encode(data[::-1])",
-            "split_stdout = len(stdout) // 2",
-            "split_stderr = len(stderr) // 2",
-            "sys.stdout.buffer.write(stdout[:split_stdout])",
-            "sys.stdout.buffer.flush()",
-            "sys.stderr.buffer.write(stderr[:split_stderr])",
-            "sys.stderr.buffer.flush()",
-            "sys.stdout.buffer.write(stdout[split_stdout:])",
-            "sys.stdout.buffer.flush()",
-            "sys.stderr.buffer.write(stderr[split_stderr:])",
-            "sys.stderr.buffer.flush()",
-        ],
-    )
+    return """
+import base64
+import sys
+data = sys.stdin.buffer.read()
+stdout = data.hex().encode('ascii')
+stderr = base64.b64encode(data[::-1])
+split_stdout = len(stdout) // 2
+split_stderr = len(stderr) // 2
+sys.stdout.buffer.write(stdout[:split_stdout])
+sys.stdout.buffer.flush()
+sys.stderr.buffer.write(stderr[:split_stderr])
+sys.stderr.buffer.flush()
+sys.stdout.buffer.write(stdout[split_stdout:])
+sys.stdout.buffer.flush()
+sys.stderr.buffer.write(stderr[split_stderr:])
+sys.stderr.buffer.flush()
+"""
 
 
 def _run_echoing_stdout_stderr_pipeline(
