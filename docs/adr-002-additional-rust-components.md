@@ -302,6 +302,36 @@ Route eligible capture-only streams through `rust_consume_stream()`. Add unit,
 behavioural, and property tests that prove parity for stdout, stderr, empty
 streams, invalid UTF-8, large payloads, and forced Python fallback.
 
+**Status (issue #127):** implemented but not yet integrated. The Phase 1 tee
+hot-path profiling baseline provides hotspot evidence for capture-only consume
+dispatch: capture double-touch accounts for about 51% of parent CPU in the
+measured tee scenario. This evidence justifies the Phase 2 dispatcher
+experiment, but it does not satisfy the wall-time acceptance gate by itself;
+that gate still requires a Rust-versus-Python dispatcher benchmark showing at
+least 20% lower median wall time for the targeted heavy scenario, plus the
+regression checks listed above. The first dispatcher must remain narrower
+than the public helper: fd-backed, UTF-8/replace, capture-only streams with no
+echo sink and no line callbacks.
+
+`rust_consume_stream()` ships in the wheel and is exercised by tests, but
+production code does not route stream consumption through it yet. The symbol is
+annotated as "implemented but not yet integrated" in `cuprum/_streams_rs.py` and
+the users' guide so it is not mistaken for a wired bridge. A guard test
+(`cuprum/unittests/test_rust_streams.py`) fails if production code starts
+referencing the symbol without revisiting this decision. Phase 2 integration
+should remove that marker only alongside the dispatcher, fallback path, and the
+Python/Rust parity property tests tracked by issue #90.
+
+The same profiling baseline records adjacent work that should not be folded
+into the initial `rust_consume_stream()` dispatcher:
+
+- increasing `_READ_SIZE` to 16-64 KiB is a cheap Python-path improvement that
+  stacks with Rust consume dispatch;
+- line-callback workloads are dominated by Python observe-hook event
+  construction and should be optimized separately;
+- pseudo-terminal echo cost is mostly kernel-side, so raw-sink Rust helpers
+  should not be expected to remove that cost.
+
 ### Phase 3: Raw sink echo and tee helper
 
 Add the Rust raw sink helper behind capability checks. Extend the profiling

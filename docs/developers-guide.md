@@ -5,7 +5,10 @@ test, lint, release, debugging, and extension workflows and acts as the source
 of truth for day-to-day contributor expectations. For the system design, see
 the [design document](cuprum-design.md); for where code lives, see the
 [repository layout](repository-layout.md); and for accepted architectural
-decisions, see [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md).
+decisions, see
+[ADR-002: Additional Rust components](adr-002-additional-rust-components.md),
+[ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md), and
+[ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md).
 
 ## Stream line-splitting properties
 
@@ -41,6 +44,17 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
+
+## `rust_consume_stream` integration status
+
+`rust_consume_stream` is implemented, tested, and exported, but production
+consumes currently go through the pure-Python `_consume_stream` function until
+Phase 2 is complete.
+Integration is deferred to
+[ADR-002: Additional Rust components](adr-002-additional-rust-components.md)
+(Phase 2). The rationale is to defer consume-side dispatch until the
+ADR-002 Phase 2 stack is complete, including dispatcher wiring, the Python
+fallback path, and parity/property coverage.
 
 ## Fail-fast reducer properties
 
