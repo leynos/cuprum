@@ -14,11 +14,22 @@ idempotent stripping.  The CrossHair contracts symbolically check bounded
 versions of the same invariants; a confirmed result means the contract held for
 the explored symbolic state space, while a failure should be treated as a
 minimal counterexample for the pure helper rather than as stream-backend drift.
+
+At import time this module probes CrossHair availability before collecting the
+symbolic tests. Expected unavailability covers a missing CrossHair dependency
+(``ImportError``) and tracer incompatibility reported as a
+``TraceException``-named ``BaseException`` during import. Control-flow
+exceptions are re-raised. Expected fallback binds the CrossHair-only names to
+``None`` so the symbolic tests skip instead of failing test collection.
 """
 
 from __future__ import annotations
 
+import builtins
+import importlib
+import importlib.metadata
 import sys
+import types
 import typing as typ
 import warnings
 
@@ -33,6 +44,7 @@ if typ.TYPE_CHECKING:
 
 
 _CROSSHAIR_PROBE_EXCEPTIONS: tuple[type[BaseException], ...] = (BaseException,)
+_MODULE_NAME: str = "cuprum.unittests.test_line_splitting"
 
 
 def _crosshair_probe_failure_reason(error: BaseException) -> str:
@@ -63,7 +75,26 @@ def _crosshair_unavailable_symbols(
 
 def _warn_crosshair_unavailable(reason: str) -> None:
     """Warn that CrossHair symbolic tests are unavailable."""
-    warnings.warn(reason, RuntimeWarning, stacklevel=2)
+    python_version = ".".join(str(part) for part in sys.version_info[:3])
+    try:
+        crosshair_version = importlib.metadata.version("crosshair-tool")
+    except importlib.metadata.PackageNotFoundError:
+        crosshair_version = "not installed"
+    opcode_context = (
+        " opcode compatibility: CrossHair tracer does not support this "
+        "interpreter opcode set."
+        if "TraceException" in reason
+        else ""
+    )
+    warnings.warn(
+        (
+            f"{reason}; Python {python_version}; "
+            f"CrossHair status: unavailable; CrossHair version: "
+            f"{crosshair_version}.{opcode_context}"
+        ),
+        RuntimeWarning,
+        stacklevel=2,
+    )
 
 
 # CrossHair's C-level tracer must support every bytecode opcode the running
@@ -216,8 +247,109 @@ def test_warn_crosshair_unavailable_emits_runtime_warning() -> None:
     """Warning helper reports the CrossHair fallback reason."""
     reason = "CrossHair unavailable: TraceException: unsupported opcode"
 
-    with pytest.warns(RuntimeWarning, match="unsupported opcode"):
+    with pytest.warns(RuntimeWarning) as warning_info:
         _warn_crosshair_unavailable(reason)
+
+    message = str(warning_info[0].message)
+    assert reason in message
+    assert f"Python {sys.version_info.major}.{sys.version_info.minor}." in message
+    assert "CrossHair status: unavailable" in message
+    assert "CrossHair version:" in message
+
+
+def test_warn_crosshair_unavailable_reports_opcode_context() -> None:
+    """Tracer fallback warning names opcode compatibility context."""
+    reason = "CrossHair unavailable: TraceException: CALL_KW"
+
+    with pytest.warns(RuntimeWarning) as warning_info:
+        _warn_crosshair_unavailable(reason)
+
+    message = str(warning_info[0].message)
+    assert reason in message
+    assert "opcode compatibility" in message
+    assert "interpreter opcode set" in message
+
+
+class _CrossHairImportFailure:
+    """Import hook for exercising the module-level CrossHair probe."""
+
+    def __init__(self, failure: BaseException) -> None:
+        """Store the targeted import failure."""
+        self._failure = failure
+        self._import = builtins.__import__
+
+    def __call__(
+        self,
+        name: str,
+        globals_: dict[str, object] | None = None,
+        locals_: dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> types.ModuleType:
+        """Import fake CrossHair modules or delegate to the real importer."""
+        if name == "crosshair.core_and_libs":
+            raise self._failure
+        return self._import(name, globals_, locals_, fromlist, level)
+
+
+def _fake_crosshair_modules() -> dict[str, types.ModuleType]:
+    """Build deterministic CrossHair modules for import-probe tests."""
+    crosshair = types.ModuleType("crosshair")
+    core_and_libs = types.ModuleType("crosshair.core_and_libs")
+    options = types.ModuleType("crosshair.options")
+    statespace = types.ModuleType("crosshair.statespace")
+    test_util = types.ModuleType("crosshair.test_util")
+    setattr(options, "AnalysisKind", object())
+    setattr(options, "AnalysisOptionSet", object())
+    setattr(statespace, "MessageType", object())
+    setattr(test_util, "check_states", object())
+    return {
+        "crosshair": crosshair,
+        "crosshair.core_and_libs": core_and_libs,
+        "crosshair.options": options,
+        "crosshair.statespace": statespace,
+        "crosshair.test_util": test_util,
+    }
+
+
+def _import_module_with_crosshair_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
+) -> types.ModuleType:
+    """Import this module with a deterministic CrossHair probe failure."""
+    executing_module = sys.modules[__name__]
+    monkeypatch.setattr(builtins, "__import__", _CrossHairImportFailure(failure))
+    for module_name, module in _fake_crosshair_modules().items():
+        monkeypatch.setitem(sys.modules, module_name, module)
+    if _MODULE_NAME in sys.modules:
+        monkeypatch.delitem(sys.modules, _MODULE_NAME)
+    try:
+        return importlib.import_module(_MODULE_NAME)
+    finally:
+        monkeypatch.setitem(sys.modules, __name__, executing_module)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(ImportError("crosshair missing"), id="import_error"),
+        pytest.param(_trace_exception("unsupported opcode"), id="trace_exception"),
+    ],
+)
+def test_crosshair_import_probe_binds_fallback_symbols(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
+) -> None:
+    """Import-time probe binds fallback symbols for expected failures."""
+    with pytest.warns(RuntimeWarning):
+        module = _import_module_with_crosshair_failure(monkeypatch, failure)
+
+    expected_reason = f"CrossHair unavailable: {failure.__class__.__name__}: {failure}"
+    assert expected_reason == module._CROSSHAIR_UNAVAILABLE_REASON
+    assert module.AnalysisOptionSet is None, "AnalysisOptionSet fallback"
+    assert module.AnalysisKind is None, "AnalysisKind fallback"
+    assert module.MessageType is None, "MessageType fallback"
+    assert module.check_states is None, "check_states fallback"
 
 
 @pytest.mark.parametrize(
