@@ -1,4 +1,18 @@
-"""Behavioural tests for deterministic random stream preservation cases."""
+"""Behavioural stream-preservation coverage for public pipeline execution.
+
+The canonical ``cuprum._streams._drain`` loop is intentionally exercised here
+through ``Pipeline.run_sync`` rather than by importing it directly.  The
+behavioural scenario keeps deterministic stream-preservation coverage at the
+public API boundary, while the Hypothesis property below drives real subprocess
+I/O with randomized payloads and chunk boundaries.  That property verifies the
+concurrent final stdout and stderr capture mechanics that wrap ``_drain`` in
+normal pipeline execution, including the case where both stream-drain tasks
+echo into one shared sink.
+
+The module reuses payload, chunking, and allowlist helpers from
+``tests.helpers.parity`` so the behavioural and property tests construct
+pipelines the same way as the rest of the stream parity suite.
+"""
 
 from __future__ import annotations
 
@@ -168,23 +182,23 @@ def _payload_and_chunk_sizes(draw: st.DrawFn) -> tuple[bytes, tuple[int, ...]]:
 
 def _stdout_stderr_sink_script() -> str:
     """Return Python code that writes derived data to stdout and stderr."""
-    return """
-import base64
-import sys
-data = sys.stdin.buffer.read()
-stdout = data.hex().encode('ascii')
-stderr = base64.b64encode(data[::-1])
-split_stdout = len(stdout) // 2
-split_stderr = len(stderr) // 2
-sys.stdout.buffer.write(stdout[:split_stdout])
-sys.stdout.buffer.flush()
-sys.stderr.buffer.write(stderr[:split_stderr])
-sys.stderr.buffer.flush()
-sys.stdout.buffer.write(stdout[split_stdout:])
-sys.stdout.buffer.flush()
-sys.stderr.buffer.write(stderr[split_stderr:])
-sys.stderr.buffer.flush()
-"""
+    return (
+        "import base64\n"
+        "import sys\n"
+        "data = sys.stdin.buffer.read()\n"
+        "stdout = data.hex().encode('ascii')\n"
+        "stderr = base64.b64encode(data[::-1])\n"
+        "split_stdout = len(stdout) // 2\n"
+        "split_stderr = len(stderr) // 2\n"
+        "sys.stdout.buffer.write(stdout[:split_stdout])\n"
+        "sys.stdout.buffer.flush()\n"
+        "sys.stderr.buffer.write(stderr[:split_stderr])\n"
+        "sys.stderr.buffer.flush()\n"
+        "sys.stdout.buffer.write(stdout[split_stdout:])\n"
+        "sys.stdout.buffer.flush()\n"
+        "sys.stderr.buffer.write(stderr[split_stderr:])\n"
+        "sys.stderr.buffer.flush()\n"
+    )
 
 
 def _run_echoing_stdout_stderr_pipeline(
