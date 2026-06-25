@@ -292,17 +292,36 @@ class _CrossHairImportFailure:
         return self._import(name, globals_, locals_, fromlist, level)
 
 
+class _FakeCrossHairOptions(types.ModuleType):
+    """Fake ``crosshair.options`` module with imported attributes."""
+
+    AnalysisKind: object
+    AnalysisOptionSet: object
+
+
+class _FakeCrossHairStatespace(types.ModuleType):
+    """Fake ``crosshair.statespace`` module with imported attributes."""
+
+    MessageType: object
+
+
+class _FakeCrossHairTestUtil(types.ModuleType):
+    """Fake ``crosshair.test_util`` module with imported attributes."""
+
+    check_states: object
+
+
 def _fake_crosshair_modules() -> dict[str, types.ModuleType]:
     """Build deterministic CrossHair modules for import-probe tests."""
     crosshair = types.ModuleType("crosshair")
     core_and_libs = types.ModuleType("crosshair.core_and_libs")
-    options = types.ModuleType("crosshair.options")
-    statespace = types.ModuleType("crosshair.statespace")
-    test_util = types.ModuleType("crosshair.test_util")
-    setattr(options, "AnalysisKind", object())
-    setattr(options, "AnalysisOptionSet", object())
-    setattr(statespace, "MessageType", object())
-    setattr(test_util, "check_states", object())
+    options = _FakeCrossHairOptions("crosshair.options")
+    statespace = _FakeCrossHairStatespace("crosshair.statespace")
+    test_util = _FakeCrossHairTestUtil("crosshair.test_util")
+    options.AnalysisKind = object()
+    options.AnalysisOptionSet = object()
+    statespace.MessageType = object()
+    test_util.check_states = object()
     return {
         "crosshair": crosshair,
         "crosshair.core_and_libs": core_and_libs,
