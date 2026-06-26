@@ -295,6 +295,26 @@ class _FakeCrossHairTestUtil(types.ModuleType):
     check_states: object
 
 
+class _FakeAnalysisKind:
+    """Fake CrossHair analysis-kind namespace."""
+
+    PEP316: object = object()
+
+
+class _FakeMessageType:
+    """Fake CrossHair message-type namespace."""
+
+    CONFIRMED: object = object()
+
+
+class _FakeAnalysisOptionSet:
+    """Fake CrossHair option set preserving constructor arguments."""
+
+    def __init__(self, **options: object) -> None:
+        """Store options passed by the symbolic contract runner."""
+        self.options = options
+
+
 def _fake_crosshair_modules() -> dict[str, types.ModuleType]:
     """Build deterministic CrossHair modules for import-probe tests."""
     crosshair = types.ModuleType("crosshair")
@@ -302,9 +322,9 @@ def _fake_crosshair_modules() -> dict[str, types.ModuleType]:
     options = _FakeCrossHairOptions("crosshair.options")
     statespace = _FakeCrossHairStatespace("crosshair.statespace")
     test_util = _FakeCrossHairTestUtil("crosshair.test_util")
-    options.AnalysisKind = object()
-    options.AnalysisOptionSet = object()
-    statespace.MessageType = object()
+    options.AnalysisKind = _FakeAnalysisKind
+    options.AnalysisOptionSet = _FakeAnalysisOptionSet
+    statespace.MessageType = _FakeMessageType
     test_util.check_states = object()
     return {
         "crosshair": crosshair,
@@ -323,6 +343,27 @@ def _import_module_with_crosshair_failure(
     executing_module = sys.modules[__name__]
     monkeypatch.setattr(builtins, "__import__", _CrossHairImportFailure(failure))
     for module_name, module in _fake_crosshair_modules().items():
+        monkeypatch.setitem(sys.modules, module_name, module)
+    if _MODULE_NAME in sys.modules:
+        monkeypatch.delitem(sys.modules, _MODULE_NAME)
+    try:
+        return importlib.import_module(_MODULE_NAME)
+    finally:
+        monkeypatch.setitem(sys.modules, __name__, executing_module)
+
+
+def _import_module_with_crosshair_available(
+    monkeypatch: pytest.MonkeyPatch,
+    check_states_stub: cabc.Callable[..., None],
+) -> types.ModuleType:
+    """Import this module with deterministic working CrossHair bindings."""
+    executing_module = sys.modules[__name__]
+    fake_modules = _fake_crosshair_modules()
+    fake_test_util = typ.cast(
+        "_FakeCrossHairTestUtil", fake_modules["crosshair.test_util"]
+    )
+    fake_test_util.check_states = check_states_stub
+    for module_name, module in fake_modules.items():
         monkeypatch.setitem(sys.modules, module_name, module)
     if _MODULE_NAME in sys.modules:
         monkeypatch.delitem(sys.modules, _MODULE_NAME)
@@ -355,6 +396,39 @@ def test_crosshair_import_probe_binds_fallback_symbols(
     assert module.AnalysisKind is None, "AnalysisKind fallback"
     assert module.MessageType is None, "MessageType fallback"
     assert module.check_states is None, "check_states fallback"
+
+
+def test_crosshair_import_probe_preserves_working_bindings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Import-time probe keeps CrossHair bindings and runs contracts."""
+    calls: list[tuple[object, object, object]] = []
+
+    def check_states_stub(
+        contract: object,
+        message_type: object,
+        options: object,
+    ) -> None:
+        """Record symbolic contract runner inputs."""
+        calls.append((contract, message_type, options))
+
+    module = _import_module_with_crosshair_available(monkeypatch, check_states_stub)
+
+    assert module.AnalysisOptionSet is _FakeAnalysisOptionSet, "AnalysisOptionSet"
+    assert module.AnalysisKind is _FakeAnalysisKind, "AnalysisKind"
+    assert module.MessageType is _FakeMessageType, "MessageType"
+    assert module.check_states is check_states_stub, "check_states"
+
+    module.test_crosshair_contracts(module._split_no_text_loss_contract)
+
+    assert calls, "contract runner invokes check_states"
+    contract, message_type, options = calls[0]
+    assert contract is module._split_no_text_loss_contract, "contract argument"
+    assert message_type is _FakeMessageType.CONFIRMED, "confirmation message"
+    assert isinstance(options, _FakeAnalysisOptionSet), "option set type"
+    assert options.options["analysis_kind"] == (_FakeAnalysisKind.PEP316,), (
+        "analysis kind option"
+    )
 
 
 @pytest.mark.parametrize(
