@@ -353,9 +353,9 @@ class TracingHook:
     @staticmethod
     def _build_attributes(event: ExecEvent) -> dict[str, object]:
         """Build initial span attributes from an event."""
-        attrs = dict(_event_common_fields(event, _prefixed("cuprum.")))
-        # Span attribute conventions prefer lists over tuples for sequences.
-        attrs["cuprum.argv"] = list(event.argv)
+        attrs = dict(
+            _event_common_fields(event, _prefixed("cuprum."), argv=list),
+        )
 
         project = _project_tag(event)
         if project is not None:

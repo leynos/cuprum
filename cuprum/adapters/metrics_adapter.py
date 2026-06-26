@@ -62,11 +62,7 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
-from cuprum.adapters._support import (
-    _event_common_fields,
-    _LockedStore,
-    _project_tag,
-)
+from cuprum.adapters._support import _LockedStore, _project_tag
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -291,9 +287,9 @@ class MetricsHook:
         the ``project`` tag; high-cardinality fields (pid, argv, lines) are
         excluded by design.
         """
-        common = dict(_event_common_fields(event, lambda field: field))
+        program = event.program
         return {
-            "program": str(common.get("program") or "unknown"),
+            "program": "unknown" if program is None else str(program),
             "project": _project_tag(event) or "unknown",
         }
 

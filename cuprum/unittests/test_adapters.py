@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 import typing as typ
 from pathlib import Path
 
@@ -322,6 +323,61 @@ class TestMetricsHook:
         assert metrics.counters == {}
         assert metrics.histograms == {}
 
+    def test_unhandled_phase_does_not_project_labels(self) -> None:
+        """Unhandled phases return before touching event label fields."""
+
+        class UnstringableProgram:
+            """Program-like value that fails if metrics tries to stringify it."""
+
+            def __str__(self) -> str:
+                """Raise when unexpected label extraction stringifies the program."""
+                msg = "unhandled phases must not project metrics labels"
+                raise AssertionError(msg)
+
+        metrics = InMemoryMetrics()
+        hook = MetricsHook(metrics)
+        event = ExecEvent(
+            phase="plan",
+            program=typ.cast("Program", UnstringableProgram()),
+            argv=("echo", "hello"),
+            cwd=None,
+            env=None,
+            pid=None,
+            timestamp=0.0,
+            line=None,
+            exit_code=None,
+            duration_s=None,
+            tags={},
+        )
+
+        hook(event)
+
+        assert metrics.counters == {}
+        assert metrics.histograms == {}
+
+    def test_concurrent_metrics_reset_leaves_valid_empty_state(self) -> None:
+        """Concurrent reset calls keep the in-memory metrics store coherent."""
+        metrics = InMemoryMetrics()
+        iterations = 100
+
+        def mutate_and_reset() -> None:
+            """Exercise collector mutators and reset under lock contention."""
+            for index in range(iterations):
+                metrics.inc_counter("test", 1.0, {})
+                metrics.observe_histogram("test_hist", float(index), {})
+                metrics.reset()
+
+        threads = [threading.Thread(target=mutate_and_reset) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        metrics.reset()
+
+        assert metrics.counters == {}
+        assert metrics.histograms == {}
+
     def test_passes_program_and_project_labels(self) -> None:
         """MetricsHook passes correct labels to collector."""
 
@@ -547,6 +603,28 @@ class TestTracingHook:
         span.end()
 
         assert len(tracer.spans) == 1
+
+        tracer.reset()
+
+        assert tracer.spans == []
+
+    def test_concurrent_tracer_reset_leaves_valid_empty_state(self) -> None:
+        """Concurrent reset calls keep the in-memory tracer store coherent."""
+        tracer = InMemoryTracer()
+        iterations = 100
+
+        def start_and_reset() -> None:
+            """Exercise span creation and reset under lock contention."""
+            for index in range(iterations):
+                span = tracer.start_span(f"test-{index}")
+                span.end()
+                tracer.reset()
+
+        threads = [threading.Thread(target=start_and_reset) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
 
         tracer.reset()
 
