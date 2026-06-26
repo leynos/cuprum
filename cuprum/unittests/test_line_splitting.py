@@ -263,20 +263,17 @@ class _CrossHairImportFailure:
     def __init__(self, failure: BaseException) -> None:
         """Store the targeted import failure."""
         self._failure = failure
-        self._import = builtins.__import__
+        self._import: cabc.Callable[..., types.ModuleType] = builtins.__import__
 
     def __call__(
         self,
         name: str,
-        globals_: dict[str, object] | None = None,
-        locals_: dict[str, object] | None = None,
-        fromlist: tuple[str, ...] = (),
-        level: int = 0,
+        *import_args: object,
     ) -> types.ModuleType:
         """Import fake CrossHair modules or delegate to the real importer."""
         if name == "crosshair.core_and_libs":
             raise self._failure
-        return self._import(name, globals_, locals_, fromlist, level)
+        return self._import(name, *import_args)
 
 
 class _FakeCrossHairOptions(types.ModuleType):
