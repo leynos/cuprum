@@ -309,14 +309,14 @@ measured tee scenario. This evidence justifies the Phase 2 dispatcher
 experiment, but it does not satisfy the wall-time acceptance gate by itself;
 that gate still requires a Rust-versus-Python dispatcher benchmark showing at
 least 20% lower median wall time for the targeted heavy scenario, plus the
-regression checks listed above. The first dispatcher must remain narrower
-than the public helper: fd-backed, UTF-8/replace, capture-only streams with no
-echo sink and no line callbacks.
+regression checks listed above. The first dispatcher must remain narrower than
+the public helper: fd-backed, UTF-8/replace, capture-only streams with no echo
+sink and no line callbacks.
 
 `rust_consume_stream()` ships in the wheel and is exercised by tests, but
 production code does not route stream consumption through it yet. The symbol is
-annotated as "implemented but not yet integrated" in `cuprum/_streams_rs.py` and
-the users' guide so it is not mistaken for a wired bridge. A guard test
+annotated as "implemented but not yet integrated" in `cuprum/_streams_rs.py`
+and the users' guide so it is not mistaken for a wired bridge. A guard test
 (`cuprum/unittests/test_rust_streams.py`) fails if production code starts
 referencing the symbol without revisiting this decision. Phase 2 integration
 should remove that marker only alongside the dispatcher, fallback path, and the

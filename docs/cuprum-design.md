@@ -899,8 +899,8 @@ The following design decisions were made during implementation:
 **Allowlist narrowing semantics:**
 
 - When `narrow()` is called on the unrestricted default context with an empty
-  allowlist, the empty allowlist is used directly as the new base, so the
-  scope is explicitly restricted to no programs.
+  allowlist, the empty allowlist is used directly as the new base, so the scope
+  is explicitly restricted to no programs.
 - When `narrow()` is called on a context with a non-empty allowlist, the
   provided allowlist is intersected with the parent's. This ensures narrowing
   can only remove programs, never add them.
@@ -1748,9 +1748,9 @@ Cuprum selects the stream backend at runtime using the following precedence:
      `_pump_stream()` for that transfer.
 
 Final stdout and stderr consumption currently bypasses this Rust dispatch
-pathway. `rust_consume_stream()` remains a Phase 2 candidate behind the
-ADR-002 measurement and parity-test gates, so backend selection does not change
-capture semantics yet.
+pathway. `rust_consume_stream()` remains a Phase 2 candidate behind the ADR-002
+measurement and parity-test gates, so backend selection does not change capture
+semantics yet.
 
 This strategy ensures:
 
@@ -1803,8 +1803,8 @@ worker invocation and do not accumulate across calls.
 
 `_EnvBackendSelector` accepts an optional `clock` parameter (a zero-argument
 callable returning `float`) so tests can inject a deterministic time source.
-The selector records `clock()` before and after each `_BACKEND_LOCK` acquisition
-and adds the difference to `metrics_state.lock_wait_seconds`.
+The selector records `clock()` before and after each `_BACKEND_LOCK`
+acquisition and adds the difference to `metrics_state.lock_wait_seconds`.
 
 For screen readers: The following flowchart illustrates the backend selection
 algorithm, showing how the environment variable and availability checks

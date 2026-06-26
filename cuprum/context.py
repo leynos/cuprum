@@ -173,6 +173,7 @@ def _validate_timeout(timeout: float | None, class_name: str) -> float | None:
         raise ValueError(msg)
     return timeout_float
 
+
 def _narrow_allowlist(
     parent: frozenset[Program],
     config: frozenset[Program] | None,
@@ -188,6 +189,7 @@ def _narrow_allowlist(
         return parent & config
     return config
 
+
 def _is_narrowed_allowlist_restricted(
     config: frozenset[Program] | None,
     *,
@@ -196,12 +198,14 @@ def _is_narrowed_allowlist_restricted(
     """Return whether a narrowed context has an active allowlist restriction."""
     return parent_is_restricted or config is not None
 
+
 def _merge_before_hooks(
     parent: tuple[BeforeHook, ...],
     config: tuple[BeforeHook, ...],
 ) -> tuple[BeforeHook, ...]:
     """Append scoped before hooks after parent hooks for FIFO execution."""
     return parent + config
+
 
 def _merge_after_hooks(
     parent: tuple[AfterHook, ...],
@@ -210,12 +214,14 @@ def _merge_after_hooks(
     """Prepend scoped after hooks before parent hooks for LIFO execution."""
     return config + parent
 
+
 def _merge_observe_hooks(
     parent: tuple[ExecHook, ...],
     config: tuple[ExecHook, ...],
 ) -> tuple[ExecHook, ...]:
     """Append scoped observe hooks after parent hooks for FIFO execution."""
     return parent + config
+
 
 def _resolve_narrowed_timeout(
     parent: float | None, config: float | None
@@ -224,6 +230,8 @@ def _resolve_narrowed_timeout(
     if config is None:
         return parent
     return config
+
+
 @dc.dataclass(frozen=True, slots=True)
 class ScopeConfig:
     """Configuration object for scoped execution context updates.

@@ -379,10 +379,10 @@ When you call `SafeCmd.run()` or `run_sync()`, Cuprum automatically:
 **Empty allowlist behaviour:** When no parent context is established,
 `scoped(ScopeConfig())` is the permissive root context (all programs allowed),
 which supports adoption by defaulting to non-restrictive execution for
-first-time callers.
-Nested `scoped(ScopeConfig())` calls inherit the current parent policy, so they
-cannot widen permissions. If an explicit empty allowlist is introduced in an
-already restricted path, that scope remains restrictive and permits no programs.
+first-time callers. Nested `scoped(ScopeConfig())` calls inherit the current
+parent policy, so they cannot widen permissions. If an explicit empty allowlist
+is introduced in an already restricted path, that scope remains restrictive and
+permits no programs.
 
 ### Scoped contexts
 
