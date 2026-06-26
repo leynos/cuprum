@@ -28,14 +28,16 @@ if typ.TYPE_CHECKING:
 def _event_common_fields(
     event: ExecEvent,
     name: cabc.Callable[[str], str],
+    *,
+    argv: cabc.Callable[[tuple[str, ...]], object] = lambda value: value,
 ) -> cabc.Iterator[tuple[str, object]]:
     """Yield the canonical common projection of *event* as key/value pairs.
 
     ``program`` and ``argv`` are always yielded; ``pid``, ``cwd``,
     ``exit_code``, ``duration_s``, and ``line`` are yielded only when the
-    event carries them (not ``None``). ``program`` and ``cwd`` are rendered
-    as strings; ``argv`` is yielded as the original tuple, so adapters that
-    need another container convert locally.
+    event carries them (not ``None``). ``program`` and ``cwd`` are rendered as
+    strings; ``argv`` is yielded as the original tuple unless the adapter
+    supplies an ``argv`` conversion.
 
     Parameters
     ----------
@@ -44,6 +46,8 @@ def _event_common_fields(
     name:
         Key-naming function mapping a canonical field name (for example,
         ``"pid"``) to the adapter's key (for example, ``"cuprum.pid"``).
+    argv:
+        Conversion applied to the event argv before yielding it.
 
     Example
     -------
@@ -51,7 +55,7 @@ def _event_common_fields(
     {'cuprum_program': 'echo', 'cuprum_argv': ('echo', 'hi'), 'cuprum_pid': 42}
     """
     yield name("program"), str(event.program)
-    yield name("argv"), event.argv
+    yield name("argv"), argv(event.argv)
     if event.pid is not None:
         yield name("pid"), event.pid
     if event.cwd is not None:
