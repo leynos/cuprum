@@ -191,8 +191,8 @@ def test_crosshair_probe_accepts_expected_unavailability(
     """Probe helper classifies known CrossHair availability failures."""
     reason = _crosshair_probe_failure_reason(error)
 
-    assert error.__class__.__name__ in reason
-    assert str(error) in reason
+    assert error.__class__.__name__ in reason, "reason names failure class"
+    assert str(error) in reason, "reason includes failure message"
 
 
 def test_crosshair_probe_rejects_unexpected_failures() -> None:
@@ -202,22 +202,7 @@ def test_crosshair_probe_rejects_unexpected_failures() -> None:
     with pytest.raises(_UnexpectedProbeFailure) as exc_info:
         _crosshair_probe_failure_reason(failure)
 
-    assert exc_info.value is failure
-
-
-@pytest.mark.parametrize(
-    "error",
-    [
-        pytest.param(ImportError("crosshair missing"), id="import_error"),
-        pytest.param(_trace_exception("unsupported opcode"), id="trace_exception"),
-    ],
-)
-def test_crosshair_probe_reason_names_failure(error: BaseException) -> None:
-    """Probe diagnostic records the expected failure class and message."""
-    reason = _crosshair_probe_failure_reason(error)
-
-    assert error.__class__.__name__ in reason
-    assert str(error) in reason
+    assert exc_info.value is failure, "unexpected probe failure is re-raised"
 
 
 @pytest.mark.parametrize(
@@ -235,12 +220,12 @@ def test_crosshair_probe_fallback_disables_symbolic_checks(
         error
     )
 
-    assert error.__class__.__name__ in reason
-    assert str(error) in reason
-    assert options is None
-    assert kind is None
-    assert message_type is None
-    assert state_checker is None
+    assert error.__class__.__name__ in reason, "fallback reason names failure class"
+    assert str(error) in reason, "fallback reason includes failure message"
+    assert options is None, "AnalysisOptionSet fallback binding"
+    assert kind is None, "AnalysisKind fallback binding"
+    assert message_type is None, "MessageType fallback binding"
+    assert state_checker is None, "check_states fallback binding"
 
 
 def test_warn_crosshair_unavailable_emits_runtime_warning() -> None:
@@ -251,10 +236,12 @@ def test_warn_crosshair_unavailable_emits_runtime_warning() -> None:
         _warn_crosshair_unavailable(reason)
 
     message = str(warning_info[0].message)
-    assert reason in message
-    assert f"Python {sys.version_info.major}.{sys.version_info.minor}." in message
-    assert "CrossHair status: unavailable" in message
-    assert "CrossHair version:" in message
+    assert reason in message, "warning includes failure reason"
+    assert f"Python {sys.version_info.major}.{sys.version_info.minor}." in message, (
+        "warning includes Python version"
+    )
+    assert "CrossHair status: unavailable" in message, "warning includes status"
+    assert "CrossHair version:" in message, "warning includes version field"
 
 
 def test_warn_crosshair_unavailable_reports_opcode_context() -> None:
@@ -265,9 +252,9 @@ def test_warn_crosshair_unavailable_reports_opcode_context() -> None:
         _warn_crosshair_unavailable(reason)
 
     message = str(warning_info[0].message)
-    assert reason in message
-    assert "opcode compatibility" in message
-    assert "interpreter opcode set" in message
+    assert reason in message, "warning includes failure reason"
+    assert "opcode compatibility" in message, "warning includes opcode context"
+    assert "interpreter opcode set" in message, "warning names interpreter opcode set"
 
 
 class _CrossHairImportFailure:
@@ -364,7 +351,9 @@ def test_crosshair_import_probe_binds_fallback_symbols(
         module = _import_module_with_crosshair_failure(monkeypatch, failure)
 
     expected_reason = f"CrossHair unavailable: {failure.__class__.__name__}: {failure}"
-    assert expected_reason == module._CROSSHAIR_UNAVAILABLE_REASON
+    assert expected_reason == module._CROSSHAIR_UNAVAILABLE_REASON, (
+        "module reason binding"
+    )
     assert module.AnalysisOptionSet is None, "AnalysisOptionSet fallback"
     assert module.AnalysisKind is None, "AnalysisKind fallback"
     assert module.MessageType is None, "MessageType fallback"
@@ -386,10 +375,10 @@ def test_crosshair_unavailable_symbols_clear_all_bindings(
         _crosshair_unavailable_symbols(error)
     )
 
-    assert options is None
-    assert kind is None
-    assert message_type is None
-    assert state_checker is None
+    assert options is None, "AnalysisOptionSet fallback binding"
+    assert kind is None, "AnalysisKind fallback binding"
+    assert message_type is None, "MessageType fallback binding"
+    assert state_checker is None, "check_states fallback binding"
 
 
 def test_crosshair_contracts_skip_when_crosshair_unavailable(
