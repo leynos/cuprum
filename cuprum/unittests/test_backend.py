@@ -268,15 +268,22 @@ def test_public_probe_agrees_with_dispatch_resolver(
     assert call_count == 2, "public probe should call the dispatch resolver each time"
 
 
-def test_public_probe_honours_test_override() -> None:
+def test_public_probe_honours_test_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """The public probe reflects ``set_rust_availability_for_testing``."""
+    monkeypatch.delenv(_ENV_VAR, raising=False)
     _check_rust_available.cache_clear()
     try:
         set_rust_availability_for_testing(is_available=True)
         assert is_rust_available() is True, "override should force availability"
+        assert get_stream_backend() is StreamBackend.RUST, (
+            "dispatcher should select Rust when the override forces availability"
+        )
 
         set_rust_availability_for_testing(is_available=False)
         assert is_rust_available() is False, "override should force unavailability"
+        assert get_stream_backend() is StreamBackend.PYTHON, (
+            "dispatcher should select Python when the override forces unavailability"
+        )
     finally:
         set_rust_availability_for_testing(is_available=None)
 

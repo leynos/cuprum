@@ -17,9 +17,11 @@ decisions, see:
 Stream backend availability is resolved through one cached entry point:
 `cuprum._backend._check_rust_available()`.
 
-`_check_rust_available()` applies the testing override
-(`set_rust_availability_for_testing`) and then falls back to
-`cuprum._rust_backend.is_available()` for raw import probing.
+`_check_rust_available()` first checks the testing override
+(`set_rust_availability_for_testing`). While active, that override
+short-circuits availability resolution and bypasses
+`cuprum._rust_backend.is_available()` entirely; otherwise the resolver falls
+back to that raw import probe.
 
 User callers should use `cuprum.is_rust_available()`, which delegates to
 `_check_rust_available()`, so the public answer and dispatch resolver cannot

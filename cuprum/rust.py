@@ -22,12 +22,13 @@ def is_rust_available() -> bool:
     -----
     This is the single public entry point for the extension-availability
     question. It delegates to :func:`cuprum._backend._check_rust_available`,
-    the same cached, override-aware resolver that governs stream-backend
-    dispatch, so the answer observed through this public API always agrees
-    with the backend the dispatcher actually selects — including the
-    ``set_rust_availability_for_testing`` override. The raw, uncached import
-    probe lives in :func:`cuprum._rust_backend.is_available`; prefer this
-    wrapper unless a deliberately uncached check is required.
+    the same cached, override-aware resolver that stream-backend dispatch uses
+    when it needs to ask whether Rust is available. Backend selection can still
+    differ from this availability answer: for example, forced Python mode
+    selects ``StreamBackend.PYTHON`` even when this function returns ``True``.
+    The raw, uncached import probe lives in
+    :func:`cuprum._rust_backend.is_available`; prefer this wrapper unless a
+    deliberately uncached check is required.
     """
     return _check_rust_available()
 
