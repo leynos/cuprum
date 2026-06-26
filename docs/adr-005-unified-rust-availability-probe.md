@@ -13,7 +13,7 @@ availability probing behind the cached dispatcher resolver.
 
 _____________________________________________________________________
 
-## Context
+## Context and Problem Statement
 
 Cuprum exposes `cuprum.is_rust_available()` and also resolves backend
 selection through internal dispatch. Before this change, those call paths could
