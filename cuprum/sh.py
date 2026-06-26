@@ -479,9 +479,9 @@ class SafeCmd:
         """
         out = output or RunOutputOptions()
         ctx = context or ExecutionContext()
+        _enforce_allowlist(self)
         stdin_data = stdin.resolve(ctx) if stdin is not None else None
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
-        _enforce_allowlist(self)
         tracking = _ExecutionTracking(
             execution_hooks=_collect_hooks(current_context()),
             pending_tasks=[],
