@@ -328,15 +328,15 @@ def _resolve_pipeline_output(
         raise TypeError(msg)
     if not flags:
         return output or RunOutputOptions()
+    if output is not None:
+        msg = "Pass either 'output' or the deprecated 'capture'/'echo' flags, not both"
+        raise ValueError(msg)
     warnings.warn(
         "Pipeline.run/run_sync 'capture' and 'echo' keyword arguments are "
         "deprecated; pass output=RunOutputOptions(...) instead",
         DeprecationWarning,
         stacklevel=3,
     )
-    if output is not None:
-        msg = "Pass either 'output' or the deprecated 'capture'/'echo' flags, not both"
-        raise ValueError(msg)
     return RunOutputOptions(
         capture=flags.get("capture", True),
         echo=flags.get("echo", False),
