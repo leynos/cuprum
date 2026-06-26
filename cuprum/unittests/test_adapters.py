@@ -47,6 +47,15 @@ def _python_builder(
     return sh.make(python_program, catalogue=catalogue), catalogue
 
 
+def _run_in_threads(target: cabc.Callable[[], None], *, workers: int = 4) -> None:
+    """Run a target callable in a fixed number of threads."""
+    threads = [threading.Thread(target=target) for _ in range(workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+
 class TestStructuredLoggingHook:
     """Tests for structured_logging_hook."""
 
@@ -246,15 +255,33 @@ class TestMetricsHook:
 
         assert metrics.counters.get("cuprum_failures_total") == pytest.approx(1.0)
 
-    def test_counts_stdin_errors(self) -> None:
-        """Hook increments stdin error counter on stdin_error events."""
+    @pytest.mark.parametrize(
+        ("phase", "extra_kwargs", "metric_name", "expected_value"),
+        [
+            (
+                "stdin_error",
+                {"note": "BrokenPipeError: forced EPIPE"},
+                "cuprum_stdin_errors_total",
+                1.0,
+            ),
+            ("stdin", {"byte_count": 7}, "cuprum_stdin_bytes_total", 7.0),
+        ],
+    )
+    def test_counts_stdin_metrics(
+        self,
+        phase: str,
+        extra_kwargs: dict[str, object],
+        metric_name: str,
+        expected_value: float,
+    ) -> None:
+        """Hook increments stdin byte and error counters for stdin events."""
         metrics = InMemoryMetrics()
         hook = MetricsHook(metrics)
         program = Program(sys.executable)
 
         hook(
             ExecEvent(
-                phase="stdin_error",
+                phase=typ.cast("typ.Any", phase),
                 program=program,
                 argv=(str(program), "-c", "pass"),
                 cwd=None,
@@ -265,36 +292,11 @@ class TestMetricsHook:
                 exit_code=None,
                 duration_s=None,
                 tags={"project": "stdin-metrics"},
-                note="BrokenPipeError: forced EPIPE",
+                **typ.cast("typ.Any", extra_kwargs),
             )
         )
 
-        assert metrics.counters.get("cuprum_stdin_errors_total") == pytest.approx(1.0)
-
-    def test_counts_stdin_bytes(self) -> None:
-        """Hook increments stdin byte counter on stdin events."""
-        metrics = InMemoryMetrics()
-        hook = MetricsHook(metrics)
-        program = Program(sys.executable)
-
-        hook(
-            ExecEvent(
-                phase="stdin",
-                program=program,
-                argv=(str(program), "-c", "pass"),
-                cwd=None,
-                env=None,
-                pid=123,
-                timestamp=0.0,
-                line=None,
-                exit_code=None,
-                duration_s=None,
-                tags={"project": "stdin-metrics"},
-                byte_count=7,
-            )
-        )
-
-        assert metrics.counters.get("cuprum_stdin_bytes_total") == pytest.approx(7.0)
+        assert metrics.counters.get(metric_name) == pytest.approx(expected_value)
 
     def test_factory_function_returns_hook(self) -> None:
         """metrics_hook() factory returns a valid ExecHook."""
@@ -367,11 +369,7 @@ class TestMetricsHook:
                 metrics.observe_histogram("test_hist", float(index), {})
                 metrics.reset()
 
-        threads = [threading.Thread(target=mutate_and_reset) for _ in range(4)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
+        _run_in_threads(mutate_and_reset)
 
         metrics.reset()
 
@@ -620,11 +618,7 @@ class TestTracingHook:
                 span.end()
                 tracer.reset()
 
-        threads = [threading.Thread(target=start_and_reset) for _ in range(4)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
+        _run_in_threads(start_and_reset)
 
         tracer.reset()
 
