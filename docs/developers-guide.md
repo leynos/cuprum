@@ -927,18 +927,22 @@ without updating snapshot files and any downstream tooling.
 ## Output behaviour carrier
 
 `RunOutputOptions` (`capture`, `echo`) is the canonical carrier for `SafeCmd`
-output-stream behaviour. `SafeCmd.run` / `run_sync` accept it via the `output`
-parameter and pass it straight through to `_prepare_execution_observation`,
-which reads `output.capture` / `output.echo` for the observation tags. There is
-no parallel internal `(capture, echo)` value object: the former `_IOBehaviour`
-was redundant with `RunOutputOptions` and has been removed. `IOOptions` remains
-only as a deprecated subclass alias that emits a `DeprecationWarning`. New code
-— internal or public — should carry output behaviour as a `RunOutputOptions`,
-not as loose `capture` / `echo` flags.
+and `Pipeline` output-stream behaviour. `SafeCmd.run` / `run_sync` accept it
+via the `output` parameter and pass it straight through to
+`_prepare_execution_observation`, which reads `output.capture` / `output.echo`
+for the observation tags. `Pipeline.run` / `run_sync` use the same `output`
+parameter and resolve it before building the pipeline execution config. There
+is no parallel internal `(capture, echo)` value object: the former
+`_IOBehaviour` was redundant with `RunOutputOptions` and has been removed.
+`IOOptions` remains only as a deprecated subclass alias that emits a
+`DeprecationWarning`. New code — internal or public — should carry output
+behaviour as a `RunOutputOptions`, not as loose `capture` / `echo` flags.
 
-`Pipeline.run` and `Pipeline.run_sync` currently retain `capture` and `echo`
-keyword arguments for compatibility; migration to `output=RunOutputOptions` is
-deferred until issue #95 lands.
+`Pipeline.run` and `Pipeline.run_sync` retain `capture` and `echo` keyword
+arguments only for compatibility. Those flags emit `DeprecationWarning` and
+must not be combined with `output=RunOutputOptions(...)`; mixed usage raises
+`ValueError` before any deprecation warning is emitted so warning filters do
+not obscure the documented ambiguity error.
 
 ## Subprocess stdin injection
 

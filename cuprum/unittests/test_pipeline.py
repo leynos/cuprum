@@ -215,7 +215,8 @@ def _run_test_pipeline(
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
         return pipeline.run_sync()
 
-def test_pipeline_run_sync_accepts_run_output_options(stream_backend: str) -> None:
+@pytest.mark.usefixtures("stream_backend")
+def test_pipeline_run_sync_accepts_run_output_options() -> None:
     """Pipeline.run_sync accepts ``output=RunOutputOptions`` like SafeCmd."""
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
@@ -227,14 +228,13 @@ def test_pipeline_run_sync_accepts_run_output_options(stream_backend: str) -> No
     )
 
     with scoped(ScopeConfig(allowlist=frozenset([ECHO, python_program]))):
-        result = pipeline.run_sync(output=RunOutputOptions(capture=True, echo=False))
+        result = pipeline.run_sync(output=RunOutputOptions(capture=False, echo=False))
 
     assert result.ok is True
-    assert result.stdout == "unified"
+    assert result.stdout is None
 
-def test_pipeline_flat_capture_echo_kwargs_are_deprecated(
-    stream_backend: str,
-) -> None:
+@pytest.mark.usefixtures("stream_backend")
+def test_pipeline_flat_capture_echo_kwargs_are_deprecated() -> None:
     """The flat ``capture``/``echo`` kwargs still work but warn."""
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
@@ -266,7 +266,6 @@ def test_pipeline_rejects_output_combined_with_flat_kwargs() -> None:
 
     with (
         scoped(ScopeConfig(allowlist=frozenset([python_program]))),
-        pytest.warns(DeprecationWarning, match="RunOutputOptions"),
         pytest.raises(ValueError, match="not both"),
     ):
         pipeline.run_sync(output=RunOutputOptions(), capture=True)

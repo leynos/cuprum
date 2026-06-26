@@ -399,7 +399,9 @@ class Pipeline(Generic[Out]):
 `Pipeline.run` / `run_sync` share the `output: RunOutputOptions` calling
 convention with `SafeCmd.run` / `run_sync`. The flat `capture` / `echo` keyword
 arguments remain accepted for backwards compatibility but are deprecated and
-emit a `DeprecationWarning`.
+emit a `DeprecationWarning`. Supplying both `output=RunOutputOptions(...)` and
+legacy `capture` / `echo` flags in the same call raises `ValueError`, because
+the intended output behaviour would be ambiguous.
 
 For the public design, the exact generic parameters are kept simple: we do
 **not** attempt to encode full pipeline structure at the type level.
@@ -516,7 +518,7 @@ ls = sh.make(LS)
 grep = sh.make(GREP)
 
 pipeline = ls("-l", "/var/log") | grep("ERROR")
-result = pipeline.run_sync(echo=True)
+result = pipeline.run_sync(output=RunOutputOptions(echo=True))
 text = result.stdout
 assert text is not None
 ```
