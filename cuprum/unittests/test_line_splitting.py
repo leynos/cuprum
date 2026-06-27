@@ -107,7 +107,7 @@ def _warn_crosshair_unavailable(reason: str) -> None:
 # of crosshair-tool 0.0.104, ``CALL_KW`` is supported, so this probe succeeds on
 # the supported interpreters.
 try:
-    import crosshair.core_and_libs  # noqa: F401
+    importlib.import_module("crosshair.core_and_libs")
     from crosshair.options import AnalysisKind, AnalysisOptionSet
     from crosshair.statespace import MessageType
     from crosshair.test_util import check_states
@@ -126,7 +126,7 @@ except _CROSSHAIR_PROBE_EXCEPTIONS as _crosshair_exc:
     ) = _crosshair_unavailable_symbols(_crosshair_exc)
     _warn_crosshair_unavailable(_CROSSHAIR_UNAVAILABLE_REASON)
 else:
-    _CROSSHAIR_UNAVAILABLE_REASON = "CrossHair is not installed"
+    _CROSSHAIR_UNAVAILABLE_REASON = "CrossHair available"
 
 _LINE_ENDINGS: tuple[str, str, str] = ("\r\n", "\n", "\r")
 _PYTHON_LINE_BOUNDARIES: str = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
@@ -276,6 +276,21 @@ class _CrossHairImportFailure:
         return self._import(name, *import_args)
 
 
+class _CrossHairImportModuleFailure:
+    """Importlib hook for exercising the module-level CrossHair probe."""
+
+    def __init__(self, failure: BaseException) -> None:
+        """Store the targeted import failure."""
+        self._failure = failure
+        self._import_module = importlib.import_module
+
+    def __call__(self, name: str, package: str | None = None) -> types.ModuleType:
+        """Import fake CrossHair modules or delegate to importlib."""
+        if name == "crosshair.core_and_libs":
+            raise self._failure
+        return self._import_module(name, package)
+
+
 class _FakeCrossHairOptions(types.ModuleType):
     """Fake ``crosshair.options`` module with imported attributes."""
 
@@ -342,6 +357,9 @@ def _import_module_with_crosshair_failure(
     """Import this module with a deterministic CrossHair probe failure."""
     executing_module = sys.modules[__name__]
     monkeypatch.setattr(builtins, "__import__", _CrossHairImportFailure(failure))
+    monkeypatch.setattr(
+        importlib, "import_module", _CrossHairImportModuleFailure(failure)
+    )
     for module_name, module in _fake_crosshair_modules().items():
         monkeypatch.setitem(sys.modules, module_name, module)
     if _MODULE_NAME in sys.modules:
@@ -414,6 +432,9 @@ def test_crosshair_import_probe_preserves_working_bindings(
 
     module = _import_module_with_crosshair_available(monkeypatch, check_states_stub)
 
+    assert module._CROSSHAIR_UNAVAILABLE_REASON == "CrossHair available", (
+        "success sentinel"
+    )
     assert module.AnalysisOptionSet is _FakeAnalysisOptionSet, "AnalysisOptionSet"
     assert module.AnalysisKind is _FakeAnalysisKind, "AnalysisKind"
     assert module.MessageType is _FakeMessageType, "MessageType"
