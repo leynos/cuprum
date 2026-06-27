@@ -1254,6 +1254,20 @@ design decisions guide these adapters:
 - Protocol implementations must be thread-safe since hooks may be invoked from
   multiple threads or async tasks concurrently.
 
+**Shared projection and store scaffolding:**
+
+- The adapters use `cuprum.adapters._support` for the common `ExecEvent`
+  projection and reference-collector locking pattern.
+- `_event_common_fields` is the canonical source for optional execution fields
+  shared by logging, metrics, and tracing adapters. Each adapter supplies its
+  own key-naming function so the wire shape remains backend-specific without
+  duplicating field-selection rules.
+- `_project_tag` centralizes the low-cardinality project tag fallback for
+  metrics and any future adapter that needs the same semantics.
+- `_LockedStore` owns the reference collectors' lock and reset behaviour so new
+  in-memory adapter collectors inherit the shared concurrency contract instead
+  of re-implementing it.
+
 **Metrics adapter specifics:**
 
 - Counter metrics (`cuprum_executions_total`, `cuprum_failures_total`,
