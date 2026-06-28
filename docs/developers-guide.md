@@ -815,7 +815,9 @@ The Rust availability API uses a single source of truth:
 - `cuprum.rust.is_rust_available()` is the public entry point and returns
   `cuprum._backend._check_rust_available()`.
 - `_backend._check_rust_available()` is `functools.lru_cache(maxsize=1)` and
-  delegates to the private `_rust_backend.is_available()` probe.
+  short-circuits to `set_rust_availability_for_testing()` while an override is
+  active; otherwise it delegates to the private `_rust_backend.is_available()`
+  probe.
 - `get_stream_backend()` reads the same cached resolver, so
   `CUPRUM_STREAM_BACKEND` dispatch and calls to `cuprum.is_rust_available()`
   stay aligned.
