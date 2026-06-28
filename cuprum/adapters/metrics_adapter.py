@@ -81,7 +81,8 @@ class _UnhandledMetricsPhaseError(RuntimeError):
 
     def __init__(self, phase: str) -> None:
         """Initialise the invariant failure for *phase*."""
-        super().__init__(f"unhandled metrics phase: {phase!r}")
+        msg = f"unhandled metrics phase: {phase!r}"
+        super().__init__(msg)
 
 
 class MetricsCollector(typ.Protocol):
