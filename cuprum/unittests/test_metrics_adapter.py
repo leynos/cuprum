@@ -259,3 +259,54 @@ class TestMetricsHook:
         _, _, labels = duration_calls[0]
         assert labels["program"] == sys.executable
         assert labels["project"] == "label-test"
+
+    def test_project_label_treats_explicit_none_as_unknown(self) -> None:
+        """MetricsHook treats an explicit ``None`` project tag as missing."""
+
+        class LabelRecordingCollector:
+            """Collector that records counter labels."""
+
+            def __init__(self) -> None:
+                """Initialise the recorded label list."""
+                self.labels: list[dict[str, str]] = []
+
+            def inc_counter(
+                self,
+                name: str,
+                value: float,
+                labels: dict[str, str],
+            ) -> None:
+                """Record counter labels."""
+                del name, value
+                self.labels.append(dict(labels))
+
+            def observe_histogram(
+                self,
+                name: str,
+                value: float,
+                labels: dict[str, str],
+            ) -> None:
+                """Ignore histogram observations."""
+                del name, value, labels
+
+        collector = LabelRecordingCollector()
+        hook = MetricsHook(collector)  # type: ignore[arg-type]
+        event = ExecEvent(
+            phase="start",
+            program=Program("tool"),
+            argv=("tool",),
+            cwd=None,
+            env=None,
+            pid=None,
+            timestamp=0.0,
+            line=None,
+            exit_code=None,
+            duration_s=None,
+            tags={"project": None},
+        )
+
+        hook(event)
+
+        assert collector.labels == [{"program": "tool", "project": "unknown"}], (
+            "explicit None project tags should use the stable unknown label"
+        )

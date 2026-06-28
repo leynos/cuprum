@@ -76,6 +76,14 @@ _HANDLED_PHASES: frozenset[str] = frozenset(
 )
 
 
+class _UnhandledMetricsPhaseError(RuntimeError):
+    """Raised when the handled phase guard and matcher drift apart."""
+
+    def __init__(self, phase: str) -> None:
+        """Initialise the invariant failure for *phase*."""
+        super().__init__(f"unhandled metrics phase: {phase!r}")
+
+
 class MetricsCollector(typ.Protocol):
     """Protocol for metrics collection backends.
 
@@ -237,7 +245,7 @@ class MetricsHook:
                 # Unreachable behind the _HANDLED_PHASES guard; kept so a new
                 # phase added to the guard without a handler fails loudly in
                 # review rather than silently matching nothing.
-                pass
+                raise _UnhandledMetricsPhaseError(event.phase)
 
     def _increment(
         self,
