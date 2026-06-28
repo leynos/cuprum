@@ -51,7 +51,6 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
-
 ## Canonical adapter event projection and locked-store base
 
 The telemetry adapters share scaffolding from
