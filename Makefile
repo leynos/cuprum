@@ -5,7 +5,8 @@ TOOLS = $(MDFORMAT_ALL) $(MDLINT) uv
 VENV_TOOLS = pytest ruff
 RUST_DIR ?= rust
 CARGO ?= cargo
-BUILD_JOBS ?=
+BUILD_JOBS ?= -j1
+PYTEST_WORKERS ?= 0
 RUST_FLAGS ?= -D warnings
 RUSTDOC_FLAGS ?= -D warnings
 CARGO_FLAGS ?= --all-targets --all-features
@@ -13,9 +14,12 @@ CLIPPY_FLAGS ?= $(CARGO_FLAGS) -- $(RUST_FLAGS)
 TEST_FLAGS ?= $(CARGO_FLAGS)
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
 LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
-LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
+LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)" RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1
 UV_RUN_ENV = $(LOCAL_TOOL_ENV) $(UV_ENV)
 RUFF = $(UV_RUN_ENV) uv run ruff
+ifneq ($(strip $(PYTEST_WORKERS)),0)
+PYTEST_XDIST_FLAGS = -n $(PYTEST_WORKERS)
+endif
 PYLINT_PYTHON ?= pypy
 PYLINT_TARGETS ?= benchmarks conftest.py cuprum tests
 PYLINT_PYPY_SHIM_REF ?= 726d09f968b4d729ee4b29c71fc732e744854f3b
@@ -92,13 +96,13 @@ lint: ruff uv ## Run linters
 	$(RUFF) check
 	$(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum
 	$(PYLINT) $(PYLINT_TARGETS)
-	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps
+	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps $(BUILD_JOBS)
 	cd $(RUST_DIR) && $(CARGO) clippy $(CLIPPY_FLAGS)
 	@if ! $(LOCAL_TOOL_ENV) command -v whitaker >/dev/null 2>&1; then \
 	  echo "whitaker is required for linting. Install it before running this target." >&2; \
 	  exit 1; \
 	fi
-	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) whitaker --all -- $(CARGO_FLAGS)
+	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) whitaker --all -- $(CARGO_FLAGS) $(BUILD_JOBS)
 
 typecheck: build ## Run typechecking
 	$(UV_RUN_ENV) uv sync --group dev
@@ -113,7 +117,7 @@ nixie: ## Validate Mermaid diagrams
 	$(LOCAL_TOOL_ENV) $(NIXIE) --no-sandbox
 
 test: build uv $(VENV_TOOLS) ## Run tests
-	$(UV_RUN_ENV) uv run pytest -v -n auto
+	$(UV_RUN_ENV) uv run pytest -v $(PYTEST_XDIST_FLAGS)
 	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
 	  cd $(RUST_DIR) && RUSTFLAGS="$(RUST_FLAGS)" $(CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
 	else \
