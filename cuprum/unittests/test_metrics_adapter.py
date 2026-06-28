@@ -8,11 +8,20 @@ import typing as typ
 import pytest
 
 from cuprum import sh
-from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook, metrics_hook
+from cuprum.adapters.metrics_adapter import (
+    InMemoryMetrics,
+    MetricsHook,
+    metrics_hook,
+)
 from cuprum.context import ScopeConfig, scoped
 from cuprum.events import ExecEvent
 from cuprum.program import Program
 from cuprum.unittests._adapter_test_support import _python_builder, _run_in_threads
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    from cuprum.adapters.metrics_adapter import MetricsCollector
 
 
 class TestMetricsHook:
@@ -218,7 +227,7 @@ class TestMetricsHook:
                 self,
                 name: str,
                 value: float,
-                labels: dict[str, str],
+                labels: cabc.Mapping[str, str],
             ) -> None:
                 """Record a counter increment with its name, value, and labels."""
                 self.calls.append((name, value, dict(labels)))
@@ -227,13 +236,14 @@ class TestMetricsHook:
                 self,
                 name: str,
                 value: float,
-                labels: dict[str, str],
+                labels: cabc.Mapping[str, str],
             ) -> None:
                 """Record a histogram observation with its name, value, and labels."""
                 self.calls.append((name, value, dict(labels)))
 
-        collector = LabelRecordingCollector()
-        hook = MetricsHook(collector)  # type: ignore[arg-type]
+        recorder = LabelRecordingCollector()
+        collector: MetricsCollector = recorder
+        hook = MetricsHook(collector)
 
         builder, catalogue = _python_builder(project_name="label-test")
         cmd = builder("-c", "print('x')")
@@ -242,10 +252,10 @@ class TestMetricsHook:
             cmd.run_sync()
 
         # Verify at least one call was made with correct labels
-        assert len(collector.calls) > 0
+        assert len(recorder.calls) > 0
 
         # Check execution counter has correct labels
-        exec_calls = [c for c in collector.calls if c[0] == "cuprum_executions_total"]
+        exec_calls = [c for c in recorder.calls if c[0] == "cuprum_executions_total"]
         assert len(exec_calls) == 1
         _, _, labels = exec_calls[0]
         assert labels["program"] == sys.executable
@@ -253,7 +263,7 @@ class TestMetricsHook:
 
         # Check duration histogram has correct labels
         duration_calls = [
-            c for c in collector.calls if c[0] == "cuprum_duration_seconds"
+            c for c in recorder.calls if c[0] == "cuprum_duration_seconds"
         ]
         assert len(duration_calls) == 1
         _, _, labels = duration_calls[0]
@@ -274,7 +284,7 @@ class TestMetricsHook:
                 self,
                 name: str,
                 value: float,
-                labels: dict[str, str],
+                labels: cabc.Mapping[str, str],
             ) -> None:
                 """Record counter labels."""
                 del name, value
@@ -284,13 +294,14 @@ class TestMetricsHook:
                 self,
                 name: str,
                 value: float,
-                labels: dict[str, str],
+                labels: cabc.Mapping[str, str],
             ) -> None:
                 """Ignore histogram observations."""
                 del name, value, labels
 
-        collector = LabelRecordingCollector()
-        hook = MetricsHook(collector)  # type: ignore[arg-type]
+        recorder = LabelRecordingCollector()
+        collector: MetricsCollector = recorder
+        hook = MetricsHook(collector)
         event = ExecEvent(
             phase="start",
             program=Program("tool"),
@@ -307,6 +318,6 @@ class TestMetricsHook:
 
         hook(event)
 
-        assert collector.labels == [{"program": "tool", "project": "unknown"}], (
+        assert recorder.labels == [{"program": "tool", "project": "unknown"}], (
             "explicit None project tags should use the stable unknown label"
         )
