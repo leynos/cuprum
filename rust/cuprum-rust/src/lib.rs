@@ -33,12 +33,8 @@ use utf8::{FinalChunk, decode_utf8_replace};
 ///
 /// # Returns
 /// `true` whenever the extension is loaded and callable.
-#[expect(
-    clippy::missing_const_for_fn,
-    reason = "runtime #[pyfunction] FFI boundary: the body is const-evaluable but the export must stay a runtime function, not a const item"
-)]
 #[pyfunction]
-fn is_available() -> bool {
+const fn is_available() -> bool {
     true
 }
 
