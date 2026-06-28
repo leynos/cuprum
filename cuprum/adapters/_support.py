@@ -31,29 +31,7 @@ def _event_common_fields(
     *,
     argv: cabc.Callable[[tuple[str, ...]], object] = lambda value: value,
 ) -> cabc.Iterator[tuple[str, object]]:
-    """Yield the canonical common projection of *event* as key/value pairs.
-
-    ``program`` and ``argv`` are always yielded; ``pid``, ``cwd``,
-    ``exit_code``, ``duration_s``, and ``line`` are yielded only when the
-    event carries them (not ``None``). ``program`` and ``cwd`` are rendered as
-    strings; ``argv`` is yielded as the original tuple unless the adapter
-    supplies an ``argv`` conversion.
-
-    Parameters
-    ----------
-    event:
-        The execution event to project.
-    name:
-        Key-naming function mapping a canonical field name (for example,
-        ``"pid"``) to the adapter's key (for example, ``"cuprum.pid"``).
-    argv:
-        Conversion applied to the event argv before yielding it.
-
-    Example
-    -------
-    >>> dict(_event_common_fields(event, _prefixed("cuprum_")))  # doctest: +SKIP
-    {'cuprum_program': 'echo', 'cuprum_argv': ('echo', 'hi'), 'cuprum_pid': 42}
-    """
+    """Yield the canonical common projection of *event* as key/value pairs."""
     yield name("program"), str(event.program)
     yield name("argv"), argv(event.argv)
     if event.pid is not None:
@@ -81,7 +59,8 @@ def _prefixed(prefix: str) -> cabc.Callable[[str], str]:
 def _project_tag(event: ExecEvent) -> str | None:
     """Return the event's ``project`` tag as a string, or ``None`` if unset."""
     if "project" in event.tags:
-        return str(event.tags["project"])
+        project = event.tags["project"]
+        return None if project is None else str(project)
     return None
 
 
