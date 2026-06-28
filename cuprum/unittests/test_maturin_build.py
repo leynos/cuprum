@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.metadata as im
 import re
 import shutil
+import subprocess  # noqa: S404 - tests assert trusted maturin command handling.
+import sys
 import typing as typ
 
 import pytest
@@ -103,10 +105,56 @@ def test_manylinux_aarch64_container_usage_regex_rejects_literal_image() -> None
 
     assert _AARCH64_CONTAINER_USAGE_RE.search(yaml_line) is None
 
+def test_build_native_wheel_artifact_uses_locked_cargo_deps(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native wheel builds pass ``--locked`` through to maturin."""
+    captured_command: list[str] = []
 
-# pytest-timeout arms SIGALRM in the *parent* process; pytest-forked blocks the
-# parent in os.waitpid() while the child runs the maturin build. When SIGALRM
-# fires there, pytest.fail() is raised outside any test handler → INTERNALERROR.
+    def fake_run(
+        command: list[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        """Record the command and create the expected wheel artifact."""
+        captured_command.extend(command)
+        (tmp_path / "wheelhouse" / "cuprum-test.whl").touch()
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    wheel_path = build_native_wheel_artifact(repo_root(), tmp_path / "wheelhouse")
+
+    assert wheel_path.name == "cuprum-test.whl"
+    assert "--locked" in captured_command
+
+def test_build_native_wheel_artifact_reports_maturin_stderr(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native wheel build failures include the command and captured stderr."""
+
+    def fake_run(
+        command: list[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        """Raise a deterministic maturin command failure."""
+        raise subprocess.CalledProcessError(
+            101,
+            command,
+            output="stdout text",
+            stderr="cargo fetch failed",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        build_native_wheel_artifact(repo_root(), tmp_path / "wheelhouse")
+
+    error_text = str(exc_info.value)
+    assert "python" in error_text
+    assert "maturin build" in error_text
+    assert "cargo fetch failed" in error_text
 @pytest.mark.timeout(0)
 def test_maturin_wheel_build_snapshot(
     tmp_path: pth.Path,
