@@ -36,6 +36,14 @@ _DIST_INFO_SUFFIXES: dict[str, str] = {
 }
 
 
+class MaturinBuildError(subprocess.CalledProcessError):
+    """Maturin build failure with captured diagnostics in ``str(error)``."""
+
+    def __str__(self) -> str:
+        """Return the enriched diagnostic captured from maturin stderr."""
+        return str(self.stderr)
+
+
 def read_expected_maturin_version(root: Path) -> str:
     """Read the maturin version pinned in ``pyproject.toml``.
 
@@ -202,16 +210,32 @@ def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
         "maturin",
         "build",
         "--release",
+        "--locked",
         "--out",
         str(out_dir),
         "--manifest-path",
         str(root / "rust/cuprum-rust/Cargo.toml"),
     ]
-    subprocess.run(  # noqa: S603 - command list uses only trusted paths and pinned maturin
-        command,
-        check=True,
-        cwd=root,
-    )
+    try:
+        subprocess.run(  # noqa: S603 - trusted paths and pinned maturin
+            command,
+            check=True,
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        rendered_command = " ".join(command)
+        msg = (
+            f"maturin wheel build failed for command: {rendered_command}\n"
+            f"stderr:\n{exc.stderr}"
+        )
+        raise MaturinBuildError(
+            exc.returncode,
+            exc.cmd,
+            output=exc.stdout,
+            stderr=msg,
+        ) from exc
     wheels = sorted(out_dir.glob("*.whl"))
     if len(wheels) != 1:
         msg = f"Expected exactly one wheel in {out_dir}, found {wheels!r}"
