@@ -75,6 +75,7 @@
       'cuprum/unittests/test_observe.py',
       'cuprum/unittests/test_performance_guidance_docs.py',
       'cuprum/unittests/test_pipeline.py',
+      'cuprum/unittests/test_pipeline_output_options.py',
       'cuprum/unittests/test_pipeline_stream_backend_selection.py',
       'cuprum/unittests/test_prerequisite_docs.py',
       'cuprum/unittests/test_profile_driver.py',
