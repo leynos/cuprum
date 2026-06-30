@@ -12,12 +12,11 @@ CARGO_FLAGS ?= --all-targets --all-features
 CLIPPY_FLAGS ?= $(CARGO_FLAGS) -- $(RUST_FLAGS)
 DOC_FLAGS ?= --jobs 1
 TEST_FLAGS ?= $(CARGO_FLAGS) --jobs 1
-TEST_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1 -C link-arg=-Wl,--threads=1
-TEST_TARGET_LINKER ?= $(CURDIR)/$(RUST_DIR)/tools/cc-single-thread-linker
+TEST_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
 WHITAKER_CARGO_FLAGS ?= $(CARGO_FLAGS) --jobs 1
-WHITAKER_RUSTFLAGS ?= -C codegen-units=1 -C link-arg=-Wl,--threads=1
+WHITAKER_RUSTFLAGS ?= -C codegen-units=1
 PYTEST_CARGO_BUILD_JOBS ?= 1
-PYTEST_RUSTFLAGS ?= -C codegen-units=1 -C link-arg=-Wl,--threads=1
+PYTEST_RUSTFLAGS ?= -C codegen-units=1
 TEST_CARGO_BUILD_JOBS ?= 1
 PYTEST_WORKERS ?= 0
 PYTEST_TARGETS ?= cuprum/unittests/test_[a-h]*.py \
@@ -141,10 +140,10 @@ test: build uv $(VENV_TOOLS) ## Run tests
 	  CARGO_BUILD_JOBS="$(PYTEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$target" || exit $$?; \
 	done
 	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
-	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="$(TEST_TARGET_LINKER)" RUSTFLAGS="$(TEST_RUSTFLAGS)" $(CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
+	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(TEST_RUSTFLAGS)" $(CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
 	else \
 	  echo "cargo-nextest not found; falling back to cargo test." >&2; \
-	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="$(TEST_TARGET_LINKER)" RUSTFLAGS="$(TEST_RUSTFLAGS)" $(CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
+	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(TEST_RUSTFLAGS)" $(CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
 	fi
 
 benchmark-micro: build uv ## Run pytest-benchmark microbenchmarks
