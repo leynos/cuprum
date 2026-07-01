@@ -38,13 +38,9 @@ class TestStructuredLoggingHook:
         builder, catalogue = _python_builder(project_name="logging-test")
         cmd = builder(
             "-c",
-            "\n".join(
-                (
-                    "import sys",
-                    "print('out1')",
-                    "print('err1', file=sys.stderr)",
-                ),
-            ),
+            """import sys
+print('out1')
+print('err1', file=sys.stderr)""",
         )
 
         logger = logging.getLogger("cuprum.exec.test")
@@ -58,7 +54,7 @@ class TestStructuredLoggingHook:
         ):
             result = cmd.run_sync()
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, "logging hook command should exit cleanly"
 
         messages = [r.message for r in caplog.records]
         self._assert_phase_logged(messages, "cuprum.plan")
@@ -84,10 +80,18 @@ class TestStructuredLoggingHook:
             cmd.run_sync()
 
         start_record = next(r for r in caplog.records if "cuprum.start" in r.message)
-        assert hasattr(start_record, "cuprum_phase")
-        assert start_record.cuprum_phase == "start"
-        assert hasattr(start_record, "cuprum_program")
-        assert hasattr(start_record, "cuprum_pid")
+        assert hasattr(start_record, "cuprum_phase"), (
+            "start log record should carry the cuprum phase"
+        )
+        assert start_record.cuprum_phase == "start", (
+            "start log record should label the start phase"
+        )
+        assert hasattr(start_record, "cuprum_program"), (
+            "start log record should carry the program"
+        )
+        assert hasattr(start_record, "cuprum_pid"), (
+            "start log record should carry the process id"
+        )
 
     def test_respects_log_levels(self, caplog: pytest.LogCaptureFixture) -> None:
         """Hook respects configured log levels for each phase."""
@@ -112,10 +116,18 @@ class TestStructuredLoggingHook:
             cmd.run_sync()
 
         messages = [r.message for r in caplog.records]
-        assert not any("cuprum.plan" in m for m in messages)
-        assert any("cuprum.start" in m for m in messages)
-        assert not any("cuprum.stdout" in m for m in messages)
-        assert any("cuprum.exit" in m for m in messages)
+        assert not any("cuprum.plan" in m for m in messages), (
+            "plan logs should stay below the configured capture level"
+        )
+        assert any("cuprum.start" in m for m in messages), (
+            "start logs should be emitted at the configured level"
+        )
+        assert not any("cuprum.stdout" in m for m in messages), (
+            "stdout logs should stay below the configured capture level"
+        )
+        assert any("cuprum.exit" in m for m in messages), (
+            "exit logs should be emitted at the configured level"
+        )
 
 
 class TestJsonLoggingFormatter:
@@ -142,8 +154,16 @@ class TestJsonLoggingFormatter:
         output = formatter.format(record)
         data = json.loads(output)
 
-        assert data["level"] == "INFO"
-        assert data["logger"] == "cuprum.exec"
-        assert data["cuprum_phase"] == "start"
-        assert data["cuprum_program"] == "echo"
-        assert data["cuprum_pid"] == 12345
+        assert data["level"] == "INFO", "JSON formatter should include log level"
+        assert data["logger"] == "cuprum.exec", (
+            "JSON formatter should include logger name"
+        )
+        assert data["cuprum_phase"] == "start", (
+            "JSON formatter should include cuprum phase"
+        )
+        assert data["cuprum_program"] == "echo", (
+            "JSON formatter should include cuprum program"
+        )
+        assert data["cuprum_pid"] == 12345, (
+            "JSON formatter should include cuprum process id"
+        )

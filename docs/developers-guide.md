@@ -76,9 +76,10 @@ The telemetry adapters share scaffolding from
 Re-use policy: a new `ExecEvent` field that adapters should surface is added
 once, in `_event_common_fields`; a new adapter projects through it rather than
 re-implementing the loop. New in-memory collectors derive from `_LockedStore`.
-Phase dispatch in the hooks is exhaustive: the `match` blocks end in an explicit
-`case _: pass`, and `MetricsHook` defers label extraction until the phase is
-known to be handled.
+Phase dispatch in the hooks is exhaustive. `MetricsHook` first checks that a
+phase is handled, defers label extraction until that guard passes, and raises
+`_UnhandledMetricsPhaseError` if the handled-phase set and `metrics_adapter`
+matcher ever drift apart.
 
 `cuprum/unittests/test_adapter_projection.py` pins the contract with Hypothesis
 properties (the projection omits exactly the `None` fields; the adapters agree

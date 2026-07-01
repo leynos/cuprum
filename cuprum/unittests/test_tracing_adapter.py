@@ -10,6 +10,8 @@ from cuprum.adapters.tracing_adapter import (
     tracing_hook,
 )
 from cuprum.context import ScopeConfig, scoped
+from cuprum.events import ExecEvent
+from cuprum.program import Program
 from cuprum.unittests._adapter_test_support import _python_builder, _run_in_threads
 
 
@@ -25,10 +27,14 @@ class TestTracingHook:
     ) -> tuple[InMemoryTracer, InMemorySpan]:
         """Run a Python command with tracing and return the tracer and first span.
 
-        Args:
-            project_name: Name for the project settings.
-            command_code: Python code to execute via `-c` flag.
-            record_output: Whether to record stdout/stderr as span events.
+        Parameters
+        ----------
+        project_name
+            Name for the project settings.
+        command_code
+            Python code to execute via `-c` flag.
+        record_output
+            Whether to record stdout/stderr as span events.
 
         Returns
         -------
@@ -57,12 +63,20 @@ class TestTracingHook:
         with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
-        assert len(tracer.spans) == 1
+        assert len(tracer.spans) == 1, (
+            "test_creates_span_for_execution should create one span"
+        )
         span = tracer.spans[0]
-        assert span.name.startswith("cuprum.exec")
-        assert span.ended is True
-        assert "cuprum.program" in span.attributes
-        assert "cuprum.pid" in span.attributes
+        assert span.name.startswith("cuprum.exec"), (
+            "test_creates_span_for_execution should name execution spans"
+        )
+        assert span.ended is True, "test_creates_span_for_execution should end the span"
+        assert "cuprum.program" in span.attributes, (
+            "test_creates_span_for_execution should record the program"
+        )
+        assert "cuprum.pid" in span.attributes, (
+            "test_creates_span_for_execution should record the process id"
+        )
 
     def test_sets_exit_attributes(self) -> None:
         """Hook sets exit_code and duration_s on span."""
@@ -71,9 +85,15 @@ class TestTracingHook:
             command_code="print('done')",
         )
 
-        assert span.attributes.get("cuprum.exit_code") == 0
-        assert span.attributes.get("cuprum.duration_s") is not None
-        assert span.status_ok is True
+        assert span.attributes.get("cuprum.exit_code") == 0, (
+            "test_sets_exit_attributes should record successful exit code"
+        )
+        assert span.attributes.get("cuprum.duration_s") is not None, (
+            "test_sets_exit_attributes should record duration"
+        )
+        assert span.status_ok is True, (
+            "test_sets_exit_attributes should mark successful spans as ok"
+        )
 
     def test_sets_error_status_on_failure(self) -> None:
         """Hook sets error status on non-zero exit."""
@@ -82,21 +102,21 @@ class TestTracingHook:
             command_code="import sys; sys.exit(42)",
         )
 
-        assert span.attributes.get("cuprum.exit_code") == 42
-        assert span.status_ok is False
+        assert span.attributes.get("cuprum.exit_code") == 42, (
+            "test_sets_error_status_on_failure should record failure exit code"
+        )
+        assert span.status_ok is False, (
+            "test_sets_error_status_on_failure should mark failed spans"
+        )
 
     def test_records_output_events(self) -> None:
         """Hook records stdout/stderr as span events."""
         builder, catalogue = _python_builder(project_name="tracing-output")
         cmd = builder(
             "-c",
-            "\n".join(
-                (
-                    "import sys",
-                    "print('stdout-line')",
-                    "print('stderr-line', file=sys.stderr)",
-                ),
-            ),
+            """import sys
+print('stdout-line')
+print('stderr-line', file=sys.stderr)""",
         )
 
         tracer = InMemoryTracer()
@@ -107,15 +127,23 @@ class TestTracingHook:
 
         span = tracer.spans[0]
         event_names = [name for name, _ in span.events]
-        assert "cuprum.stdout" in event_names
-        assert "cuprum.stderr" in event_names
+        assert "cuprum.stdout" in event_names, (
+            "test_records_output_events should record stdout events"
+        )
+        assert "cuprum.stderr" in event_names, (
+            "test_records_output_events should record stderr events"
+        )
 
         stdout_event = next(
             (attrs for name, attrs in span.events if name == "cuprum.stdout"),
             None,
         )
-        assert stdout_event is not None
-        assert stdout_event.get("line") == "stdout-line"
+        assert stdout_event is not None, (
+            "test_records_output_events should include stdout event attributes"
+        )
+        assert stdout_event.get("line") == "stdout-line", (
+            "test_records_output_events should preserve stdout line text"
+        )
 
     def test_disables_output_recording(self) -> None:
         """Hook skips output events when record_output=False."""
@@ -125,7 +153,9 @@ class TestTracingHook:
             record_output=False,
         )
 
-        assert len(span.events) == 0
+        assert len(span.events) == 0, (
+            "test_disables_output_recording should skip output events"
+        )
 
     def test_includes_project_tag(self) -> None:
         """Hook includes project tag in span attributes."""
@@ -134,7 +164,9 @@ class TestTracingHook:
             command_code="print('x')",
         )
 
-        assert span.attributes.get("cuprum.project") == "my-project"
+        assert span.attributes.get("cuprum.project") == "my-project", (
+            "test_includes_project_tag should record the project tag"
+        )
 
     def test_pipeline_creates_multiple_spans(self) -> None:
         """Hook creates separate spans for each pipeline stage."""
@@ -142,13 +174,9 @@ class TestTracingHook:
         stage1 = builder("-c", "print('hello')")
         stage2 = builder(
             "-c",
-            "\n".join(
-                (
-                    "import sys",
-                    "data = sys.stdin.read()",
-                    "sys.stdout.write(data.upper())",
-                ),
-            ),
+            """import sys
+data = sys.stdin.read()
+sys.stdout.write(data.upper())""",
         )
         pipeline = stage1 | stage2
 
@@ -158,8 +186,12 @@ class TestTracingHook:
         with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             pipeline.run_sync()
 
-        assert len(tracer.spans) == 2
-        assert all(span.ended for span in tracer.spans)
+        assert len(tracer.spans) == 2, (
+            "test_pipeline_creates_multiple_spans should create one span per stage"
+        )
+        assert all(span.ended for span in tracer.spans), (
+            "test_pipeline_creates_multiple_spans should end every span"
+        )
 
     def test_factory_function_returns_hook(self) -> None:
         """tracing_hook() factory returns a valid ExecHook."""
@@ -172,7 +204,9 @@ class TestTracingHook:
         with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
-        assert len(tracer.spans) == 1
+        assert len(tracer.spans) == 1, (
+            "test_factory_function_returns_hook should create one span"
+        )
 
     def test_inmemory_tracer_reset(self) -> None:
         """InMemoryTracer.reset() clears all spans."""
@@ -180,11 +214,13 @@ class TestTracingHook:
         span = tracer.start_span("test")
         span.end()
 
-        assert len(tracer.spans) == 1
+        assert len(tracer.spans) == 1, (
+            "test_inmemory_tracer_reset should start with one span"
+        )
 
         tracer.reset()
 
-        assert tracer.spans == []
+        assert tracer.spans == [], "test_inmemory_tracer_reset should clear spans"
 
     def test_concurrent_tracer_reset_leaves_valid_empty_state(self) -> None:
         """Concurrent reset calls keep the in-memory tracer store coherent."""
@@ -202,13 +238,12 @@ class TestTracingHook:
 
         tracer.reset()
 
-        assert tracer.spans == []
+        assert tracer.spans == [], (
+            "test_concurrent_tracer_reset_leaves_valid_empty_state should end empty"
+        )
 
     def test_pid_less_events_do_not_create_spans(self) -> None:
         """Events without a pid are ignored by the tracing hook."""
-        from cuprum.events import ExecEvent
-        from cuprum.program import Program
-
         tracer = InMemoryTracer()
         hook = TracingHook(tracer)
 
@@ -261,13 +296,12 @@ class TestTracingHook:
         hook(exit_event)
 
         # No spans should have been created
-        assert tracer.spans == []
+        assert tracer.spans == [], (
+            "test_pid_less_events_do_not_create_spans should ignore pid-less events"
+        )
 
     def test_pipeline_attributes_are_set_on_spans(self) -> None:
         """Pipeline-related tags are included in span attributes."""
-        from cuprum.events import ExecEvent
-        from cuprum.program import Program
-
         tracer = InMemoryTracer()
         hook = TracingHook(tracer)
 
@@ -311,8 +345,16 @@ class TestTracingHook:
         )
         hook(exit_event)
 
-        assert len(tracer.spans) == 1
+        assert len(tracer.spans) == 1, (
+            "test_pipeline_attributes_are_set_on_spans should create one span"
+        )
         span = tracer.spans[0]
-        assert span.attributes.get("cuprum.pipeline_stage_index") == 1
-        assert span.attributes.get("cuprum.pipeline_stages") == 3
-        assert span.attributes.get("cuprum.project") == "pipeline-test"
+        assert span.attributes.get("cuprum.pipeline_stage_index") == 1, (
+            "test_pipeline_attributes_are_set_on_spans should record stage index"
+        )
+        assert span.attributes.get("cuprum.pipeline_stages") == 3, (
+            "test_pipeline_attributes_are_set_on_spans should record stage count"
+        )
+        assert span.attributes.get("cuprum.project") == "pipeline-test", (
+            "test_pipeline_attributes_are_set_on_spans should record project tag"
+        )
