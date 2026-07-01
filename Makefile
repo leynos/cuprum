@@ -17,7 +17,7 @@ TEST_FLAGS ?= $(CARGO_FLAGS)
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
 LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
 LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
-CARGO_JOB_ENV = RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=$(patsubst -j%,%,$(BUILD_JOBS))
+CARGO_JOB_ENV = RAYON_NUM_THREADS=$(patsubst -j%,%,$(BUILD_JOBS)) CARGO_BUILD_JOBS=$(patsubst -j%,%,$(BUILD_JOBS))
 UV_RUN_ENV = $(LOCAL_TOOL_ENV) $(UV_ENV)
 RUFF = $(UV_RUN_ENV) uv run ruff
 ifneq ($(strip $(PYTEST_WORKERS)),0)

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from cuprum import sh
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
+from cuprum.events import ExecEvent, ExecPhase
 from cuprum.program import Program
 
 if typ.TYPE_CHECKING:
@@ -28,6 +29,38 @@ def _python_builder(
     )
     catalogue = ProgramCatalogue(projects=(project,))
     return sh.make(python_program, catalogue=catalogue), catalogue
+
+
+def _make_exec_event(
+    *,
+    phase: ExecPhase,
+    overrides: cabc.Mapping[str, object] | None = None,
+) -> ExecEvent:
+    """Build an ExecEvent with sensible test defaults."""
+    values = {
+        "program": "cat",
+        "argv": ("cat",),
+        "pid": None,
+        "line": None,
+        "exit_code": None,
+        "duration_s": None,
+        "tags": {},
+    }
+    if overrides is not None:
+        values.update(overrides)
+    return ExecEvent(
+        phase=phase,
+        program=Program(typ.cast("str", values["program"])),
+        argv=typ.cast("tuple[str, ...]", values["argv"]),
+        cwd=None,
+        env=None,
+        pid=typ.cast("int | None", values["pid"]),
+        timestamp=0.0,
+        line=typ.cast("str | None", values["line"]),
+        exit_code=typ.cast("int | None", values["exit_code"]),
+        duration_s=typ.cast("float | None", values["duration_s"]),
+        tags=typ.cast("cabc.Mapping[str, object]", values["tags"]),
+    )
 
 
 def _spawn_worker_threads(

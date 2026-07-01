@@ -10,9 +10,11 @@ from cuprum.adapters.tracing_adapter import (
     tracing_hook,
 )
 from cuprum.context import ScopeConfig, scoped
-from cuprum.events import ExecEvent
-from cuprum.program import Program
-from cuprum.unittests._adapter_test_support import _python_builder, _run_in_threads
+from cuprum.unittests._adapter_test_support import (
+    _make_exec_event,
+    _python_builder,
+    _run_in_threads,
+)
 
 
 class TestTracingHook:
@@ -25,22 +27,7 @@ class TestTracingHook:
         command_code: str,
         record_output: bool = True,
     ) -> tuple[InMemoryTracer, InMemorySpan]:
-        """Run a Python command with tracing and return the tracer and first span.
-
-        Parameters
-        ----------
-        project_name
-            Name for the project settings.
-        command_code
-            Python code to execute via `-c` flag.
-        record_output
-            Whether to record stdout/stderr as span events.
-
-        Returns
-        -------
-            Tuple of (tracer, first_span) for assertions in the calling test.
-
-        """
+        """Run a traced Python command and return the tracer and first span."""
         builder, catalogue = _python_builder(project_name=project_name)
         cmd = builder("-c", command_code)
 
@@ -248,50 +235,32 @@ sys.stdout.write(data.upper())""",
         hook = TracingHook(tracer)
 
         # Create a mock event with pid=None
-        event = ExecEvent(
+        event = _make_exec_event(
             phase="start",
-            program=Program("echo"),
-            argv=("echo", "hello"),
-            cwd=None,
-            env=None,
-            pid=None,
-            timestamp=0.0,
-            line=None,
-            exit_code=None,
-            duration_s=None,
-            tags={},
+            overrides={"program": "echo", "argv": ("echo", "hello")},
         )
 
         # Call the hook for start, output, and exit phases
         hook(event)
 
-        output_event = ExecEvent(
+        output_event = _make_exec_event(
             phase="stdout",
-            program=Program("echo"),
-            argv=("echo", "hello"),
-            cwd=None,
-            env=None,
-            pid=None,
-            timestamp=0.0,
-            line="hello",
-            exit_code=None,
-            duration_s=None,
-            tags={},
+            overrides={
+                "program": "echo",
+                "argv": ("echo", "hello"),
+                "line": "hello",
+            },
         )
         hook(output_event)
 
-        exit_event = ExecEvent(
+        exit_event = _make_exec_event(
             phase="exit",
-            program=Program("echo"),
-            argv=("echo", "hello"),
-            cwd=None,
-            env=None,
-            pid=None,
-            timestamp=0.0,
-            line=None,
-            exit_code=0,
-            duration_s=0.1,
-            tags={},
+            overrides={
+                "program": "echo",
+                "argv": ("echo", "hello"),
+                "exit_code": 0,
+                "duration_s": 0.1,
+            },
         )
         hook(exit_event)
 
@@ -306,41 +275,31 @@ sys.stdout.write(data.upper())""",
         hook = TracingHook(tracer)
 
         # Create a mock event with pipeline tags
-        start_event = ExecEvent(
+        start_event = _make_exec_event(
             phase="start",
-            program=Program("cat"),
-            argv=("cat",),
-            cwd=None,
-            env=None,
-            pid=1234,
-            timestamp=0.0,
-            line=None,
-            exit_code=None,
-            duration_s=None,
-            tags={
-                "project": "pipeline-test",
-                "pipeline_stage_index": 1,
-                "pipeline_stages": 3,
+            overrides={
+                "pid": 1234,
+                "tags": {
+                    "project": "pipeline-test",
+                    "pipeline_stage_index": 1,
+                    "pipeline_stages": 3,
+                },
             },
         )
         hook(start_event)
 
         # End the span
-        exit_event = ExecEvent(
+        exit_event = _make_exec_event(
             phase="exit",
-            program=Program("cat"),
-            argv=("cat",),
-            cwd=None,
-            env=None,
-            pid=1234,
-            timestamp=0.0,
-            line=None,
-            exit_code=0,
-            duration_s=0.1,
-            tags={
-                "project": "pipeline-test",
-                "pipeline_stage_index": 1,
-                "pipeline_stages": 3,
+            overrides={
+                "pid": 1234,
+                "exit_code": 0,
+                "duration_s": 0.1,
+                "tags": {
+                    "project": "pipeline-test",
+                    "pipeline_stage_index": 1,
+                    "pipeline_stages": 3,
+                },
             },
         )
         hook(exit_event)
