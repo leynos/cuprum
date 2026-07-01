@@ -30,6 +30,39 @@ def _python_builder(
     return sh.make(python_program, catalogue=catalogue), catalogue
 
 
+def _spawn_worker_threads(
+    target: cabc.Callable[[], None],
+    *,
+    workers: int,
+    name_prefix: str,
+) -> list[threading.Thread]:
+    """Build named worker threads for adapter concurrency tests."""
+    return [
+        threading.Thread(
+            target=target,
+            name=f"{name_prefix}{index}",
+            daemon=True,
+        )
+        for index in range(workers)
+    ]
+
+
+def _join_workers_or_raise(
+    threads: list[threading.Thread],
+    *,
+    timeout_s: float,
+) -> None:
+    """Run worker threads and fail if any do not finish."""
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=timeout_s)
+    alive_threads = [thread for thread in threads if thread.is_alive()]
+    if alive_threads:
+        msg = f"{len(alive_threads)} worker thread(s) did not finish"
+        raise TimeoutError(msg)
+
+
 def _run_in_threads(target: cabc.Callable[[], None], *, workers: int = 4) -> None:
     """Run a target callable in a fixed number of threads."""
     errors: list[BaseException] = []
@@ -45,21 +78,11 @@ def _run_in_threads(target: cabc.Callable[[], None], *, workers: int = 4) -> Non
             with errors_lock:
                 errors.append(exc)
 
-    threads = [
-        threading.Thread(
-            target=run_target,
-            name=f"{thread_name_prefix}{index}",
-            daemon=True,
-        )
-        for index in range(workers)
-    ]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=join_timeout_s)
-    alive_threads = [thread for thread in threads if thread.is_alive()]
-    if alive_threads:
-        msg = f"{len(alive_threads)} worker thread(s) did not finish"
-        raise TimeoutError(msg)
+    threads = _spawn_worker_threads(
+        run_target,
+        workers=workers,
+        name_prefix=thread_name_prefix,
+    )
+    _join_workers_or_raise(threads, timeout_s=join_timeout_s)
     if errors:
         raise errors[0]
