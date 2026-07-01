@@ -81,6 +81,7 @@ class _UnhandledMetricsPhaseError(RuntimeError):
 
     def __init__(self, phase: str) -> None:
         """Initialise the invariant failure for *phase*."""
+        self.phase = phase
         msg = f"unhandled metrics phase: {phase!r}"
         super().__init__(msg)
 
