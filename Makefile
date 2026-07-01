@@ -31,8 +31,7 @@ PYTEST_TARGETS ?= cuprum/unittests/test_[a-h]*.py \
   cuprum/unittests/test_timeout_resolution.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
-  tests/behaviour/test_[s-z]*.py \
-  tests/features
+  tests/behaviour/test_[s-z]*.py
 TYPOS_VERSION ?= 1.48.0
 TYPOS := uv tool run typos@$(TYPOS_VERSION)
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
