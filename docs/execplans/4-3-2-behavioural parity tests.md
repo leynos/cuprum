@@ -242,8 +242,10 @@ Two independent stream implementations exist:
 
 1. **Python** (`cuprum/_streams.py`): `_pump_stream(reader, writer)` uses
    asyncio `StreamReader`/`StreamWriter` with backpressure via `drain()`.
-   `_consume_stream(stream, config)` decodes with optional line callbacks. Read
-   chunk size is `_READ_SIZE = 4096`.
+   `_consume_stream(stream, config)` dispatches to consume variants that share
+   `_drain()` for read, echo, and capture mechanics; the line-emitting variant
+   layers its own incremental decoder through an `on_chunk` hook. Read chunk
+   size is `_READ_SIZE = 4096`.
 
 2. **Rust** (`cuprum/_streams_rs.py`):
    `rust_pump_stream(reader_fd, writer_fd, buffer_size=65536)` operates on raw
