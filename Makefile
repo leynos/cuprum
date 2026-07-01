@@ -7,6 +7,8 @@ RUST_DIR ?= rust
 CARGO ?= cargo
 WHITAKER ?= whitaker
 BUILD_JOBS ?= -j1
+# Default pytest to a serial run on shared development hosts; set
+# PYTEST_WORKERS=N to opt into pytest-xdist when the machine has capacity.
 PYTEST_WORKERS ?= 0
 RUST_FLAGS ?= -D warnings
 RUSTDOC_FLAGS ?= -D warnings
@@ -17,7 +19,8 @@ TYPOS_VERSION ?= 1.48.0
 TYPOS := uv tool run typos@$(TYPOS_VERSION)
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
 LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
-LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)" RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1
+LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
+CARGO_JOB_ENV = RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=$(patsubst -j%,%,$(BUILD_JOBS))
 UV_RUN_ENV = $(LOCAL_TOOL_ENV) $(UV_ENV)
 RUFF = $(UV_RUN_ENV) uv run ruff
 ifneq ($(strip $(PYTEST_WORKERS)),0)
@@ -101,13 +104,13 @@ lint: ruff uv ## Run linters (Ruff, pylint, Clippy, Whitaker)
 	$(RUFF) check
 	$(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum
 	$(PYLINT) $(PYLINT_TARGETS)
-	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps $(BUILD_JOBS)
-	cd $(RUST_DIR) && $(CARGO) clippy $(CLIPPY_FLAGS)
+	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO_JOB_ENV) $(CARGO) doc --no-deps $(BUILD_JOBS)
+	cd $(RUST_DIR) && $(CARGO_JOB_ENV) $(CARGO) clippy $(BUILD_JOBS) $(CLIPPY_FLAGS)
 	@if ! $(LOCAL_TOOL_ENV) command -v $(WHITAKER) >/dev/null 2>&1; then \
 	  echo "whitaker is required for linting. Install it before running this target." >&2; \
 	  exit 1; \
 	fi
-	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(RUST_FLAGS)" $(WHITAKER) --all -- $(CARGO_FLAGS) $(BUILD_JOBS)
+	cd $(RUST_DIR) && $(CARGO_JOB_ENV) $(LOCAL_TOOL_ENV) RUSTFLAGS="$(RUST_FLAGS)" $(WHITAKER) --all -- $(CARGO_FLAGS) $(BUILD_JOBS)
 	+$(MAKE) spelling
 
 typecheck: build ## Run typechecking
@@ -138,10 +141,10 @@ nixie: ## Validate Mermaid diagrams
 test: build uv $(VENV_TOOLS) ## Run tests
 	$(UV_RUN_ENV) uv run pytest -v $(PYTEST_XDIST_FLAGS)
 	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
-	  cd $(RUST_DIR) && RUSTFLAGS="$(RUST_FLAGS)" $(CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
+	  cd $(RUST_DIR) && RUSTFLAGS="$(RUST_FLAGS)" $(CARGO_JOB_ENV) $(CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
 	else \
 	  echo "cargo-nextest not found; falling back to cargo test." >&2; \
-	  cd $(RUST_DIR) && RUSTFLAGS="$(RUST_FLAGS)" $(CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
+	  cd $(RUST_DIR) && RUSTFLAGS="$(RUST_FLAGS)" $(CARGO_JOB_ENV) $(CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
 	fi
 
 benchmark-micro: build uv ## Run pytest-benchmark microbenchmarks

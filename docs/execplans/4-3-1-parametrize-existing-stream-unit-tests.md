@@ -276,7 +276,7 @@ All four must pass before committing:
     make check-fmt   # ruff format --check
     make typecheck   # pyright via ty
     make lint        # ruff check
-    make test        # pytest (parallel)
+    make test        # pytest serial by default; set PYTEST_WORKERS=N for xdist
 
 ## Plan of work
 
@@ -476,6 +476,8 @@ All steps can be repeated safely:
 
 If a step fails, review the error output, fix the issue, and re-run from the
 failed step. No special rollback needed; git provides recovery.
+
+## Artefacts and notes
 
 ## Artefacts and notes
 

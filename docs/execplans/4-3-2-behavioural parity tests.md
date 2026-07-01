@@ -282,7 +282,7 @@ All four must pass before committing:
     make check-fmt   # ruff format --check
     make typecheck   # pyright via ty
     make lint        # ruff check
-    make test        # pytest -v -n auto
+    make test        # pytest serial by default; set PYTEST_WORKERS=N for xdist
 
 ## Plan of work
 
@@ -391,6 +391,8 @@ All commands run from `/home/user/project`.
 All steps can be repeated safely. Writing files is idempotent. Tests can be
 re-run at any time. Cache clearing in `_clear_backend_cache` autouse fixture
 prevents cross-test pollution.
+
+## Artefacts and notes
 
 ## Artefacts and notes
 
