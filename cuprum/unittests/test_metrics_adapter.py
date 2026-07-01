@@ -11,6 +11,7 @@ from cuprum import sh
 from cuprum.adapters.metrics_adapter import (
     InMemoryMetrics,
     MetricsHook,
+    _UnhandledMetricsPhaseError,
     metrics_hook,
 )
 from cuprum.context import ScopeConfig, scoped
@@ -26,6 +27,15 @@ if typ.TYPE_CHECKING:
 
 class TestMetricsHook:
     """Tests for MetricsHook and InMemoryMetrics."""
+
+    def test_unhandled_phase_error_exposes_phase(self) -> None:
+        """Unhandled phase errors expose the phase without parsing text."""
+        error = _UnhandledMetricsPhaseError("future_phase")
+
+        assert error.phase == "future_phase", (
+            "unhandled metrics phase errors should expose structured phase data"
+        )
+        assert str(error) == "unhandled metrics phase: 'future_phase'"
 
     def test_increments_execution_counter(self) -> None:
         """Hook increments cuprum_executions_total on start."""
@@ -252,23 +262,33 @@ class TestMetricsHook:
             cmd.run_sync()
 
         # Verify at least one call was made with correct labels
-        assert len(recorder.calls) > 0
+        assert recorder.calls, "metrics hook should record labelled metric calls"
 
         # Check execution counter has correct labels
         exec_calls = [c for c in recorder.calls if c[0] == "cuprum_executions_total"]
-        assert len(exec_calls) == 1
+        assert len(exec_calls) == 1, "execution counter should be emitted exactly once"
         _, _, labels = exec_calls[0]
-        assert labels["program"] == sys.executable
-        assert labels["project"] == "label-test"
+        assert labels["program"] == sys.executable, (
+            "execution counter should label the executed program"
+        )
+        assert labels["project"] == "label-test", (
+            "execution counter should label the project name"
+        )
 
         # Check duration histogram has correct labels
         duration_calls = [
             c for c in recorder.calls if c[0] == "cuprum_duration_seconds"
         ]
-        assert len(duration_calls) == 1
+        assert len(duration_calls) == 1, (
+            "duration histogram should be emitted exactly once"
+        )
         _, _, labels = duration_calls[0]
-        assert labels["program"] == sys.executable
-        assert labels["project"] == "label-test"
+        assert labels["program"] == sys.executable, (
+            "duration histogram should label the executed program"
+        )
+        assert labels["project"] == "label-test", (
+            "duration histogram should label the project name"
+        )
 
     def test_project_label_treats_explicit_none_as_unknown(self) -> None:
         """MetricsHook treats an explicit ``None`` project tag as missing."""
