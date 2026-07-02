@@ -28,7 +28,7 @@ import typing as typ
 from itertools import starmap
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from cuprum.catalogue import (
@@ -163,8 +163,7 @@ def test_duplicate_program_ownership_raises_structured_error(
     owned = [
         (program, project.name) for project in projects for program in project.programs
     ]
-    if not owned:
-        return  # Graph generated no programs; nothing to contest.
+    assume(owned)
     contested, owner_name = data.draw(
         st.sampled_from(owned),
         label="contested program",
