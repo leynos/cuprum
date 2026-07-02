@@ -8,6 +8,8 @@ import time
 import typing as typ
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -414,6 +416,93 @@ def test_concurrent_result_first_failure_property() -> None:
     # No failures
     ok_result = ConcurrentResult(results=(result1,), failures=())
     assert ok_result.first_failure is None
+
+
+def test_collect_all_submission_indices_are_identity() -> None:
+    """In collect-all mode submission indices match result positions."""
+    from cuprum import CommandResult, Program
+
+    results = (
+        CommandResult(Program("echo"), (), 0, 1, "out", ""),
+        CommandResult(Program("echo"), (), 1, 2, "out", ""),
+        CommandResult(Program("echo"), (), 0, 3, "out", ""),
+    )
+    concurrent_result = ConcurrentResult(results=results, failures=(1,))
+
+    assert concurrent_result.submission_indices == (0, 1, 2)
+    # With identity submission indices the two failure views coincide.
+    assert concurrent_result.failure_submission_indices == concurrent_result.failures
+
+
+def test_fail_fast_failure_maps_to_original_submission() -> None:
+    """A compacted fail-fast failure maps back to its submission position."""
+    from cuprum import CommandResult, Program
+
+    # The first command (submission index 0) was cancelled, so only the second
+    # (submission index 1), which failed, is present in ``results``.
+    failed = CommandResult(Program("echo"), (), 99, 2, None, None)
+    concurrent_result = ConcurrentResult(
+        results=(failed,),
+        failures=(0,),
+        submission_indices=(1,),
+    )
+
+    # The position-based view says "result 0"; the submission-stable view
+    # correctly identifies the originally-submitted command 1.
+    assert concurrent_result.failures == (0,)
+    assert concurrent_result.failure_submission_indices == (1,)
+
+
+@given(
+    items=st.lists(
+        st.one_of(st.none(), st.integers(min_value=0, max_value=5)),
+        max_size=10,
+    )
+)
+def test_failure_submission_mapping_is_uniform(items: list[int | None]) -> None:
+    """Property: every failure maps back to the correct original submission.
+
+    Each generated item is either ``None`` (a cancelled command) or an exit
+    code at its submission index. Across arbitrary mixes the shared collect
+    loop must record completed results in order and expose a
+    ``failure_submission_indices`` that names exactly the originally-submitted
+    commands that exited non-zero.
+
+    Parameters
+    ----------
+    items : list[int | None]
+        Generated per-submission exit codes; ``None`` marks a cancelled command.
+    """
+    from cuprum import CommandResult, Program
+    from cuprum.concurrent import _collect_results_and_failures
+
+    indexed = [
+        (
+            submission_index,
+            None
+            if code is None
+            else CommandResult(Program("x"), (), code, 1, None, None),
+        )
+        for submission_index, code in enumerate(items)
+    ]
+    results, submission_indices, failures = _collect_results_and_failures(indexed)
+
+    completed = [code for code in items if code is not None]
+    assert len(results) == len(completed)
+    assert len(submission_indices) == len(results)
+    assert all(not results[position].ok for position in failures)
+
+    concurrent_result = ConcurrentResult(
+        results=tuple(results),
+        failures=tuple(failures),
+        submission_indices=tuple(submission_indices),
+    )
+    expected = tuple(
+        submission_index
+        for submission_index, code in enumerate(items)
+        if code is not None and code != 0
+    )
+    assert concurrent_result.failure_submission_indices == expected
 
 
 def test_single_command_works() -> None:
