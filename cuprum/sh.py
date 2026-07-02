@@ -90,14 +90,27 @@ def _coerce_argv(
 
 
 def build_argv(*args: _ArgValue, **kwargs: _ArgValue) -> tuple[str, ...]:
-    """Build an argv tuple exactly as ``sh.make`` builders do.
+    """Build an argv tuple using the same rules as ``sh.make`` builders.
 
-    Positional arguments are stringified in order, then keyword arguments
-    follow as ``--flag=value`` entries with underscores in keys normalised
-    to hyphens. ``None`` is rejected with ``TypeError``.
+    Parameters
+    ----------
+    *args
+        Positional argument values. Values are stringified with ``str()`` in
+        the order supplied and appear before generated keyword flags.
+    **kwargs
+        Keyword flag values. Each key is normalised by replacing underscores
+        with hyphens, then serialized as ``--flag=value`` in insertion order.
+        ``None`` is rejected in positional and keyword positions.
 
-    This pure helper exists so argv construction can be exercised (for
-    example, by property-based tests) without a catalogue or builder.
+    Returns
+    -------
+    tuple[str, ...]
+        The constructed argv tuple, excluding the program name.
+
+    Examples
+    --------
+    >>> build_argv("status", porcelain=True, branch="main")
+    ('status', '--porcelain=True', '--branch=main')
     """
     return _coerce_argv(args, kwargs)
 
