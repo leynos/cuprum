@@ -6,6 +6,8 @@ dispatch resolver, and the public Rust availability helper.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from cuprum import _rust_backend
@@ -19,6 +21,7 @@ from cuprum._backend import (
 from cuprum.rust import is_rust_available
 
 _ENV_VAR = "CUPRUM_STREAM_BACKEND"
+_BACKEND_LOGGER = "cuprum.backend"
 
 
 # -- StreamBackend enum -------------------------------------------------------
@@ -83,6 +86,26 @@ def test_auto_falls_back_on_import_error(
     )
 
 
+def test_auto_resolution_logs_selected_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Auto mode emits a structured decision log record."""
+    monkeypatch.delenv(_ENV_VAR, raising=False)
+    monkeypatch.setattr(_rust_backend, "is_available", lambda: True)
+
+    with caplog.at_level(logging.DEBUG, logger=_BACKEND_LOGGER):
+        assert get_stream_backend() is StreamBackend.RUST
+
+    assert any(
+        record.__dict__.get("event") == "cuprum.stream_backend_resolved"
+        and record.__dict__.get("requested_backend") == StreamBackend.AUTO.value
+        and record.__dict__.get("resolved_backend") == StreamBackend.RUST.value
+        and record.__dict__.get("rust_available") is True
+        for record in caplog.records
+    ), "expected a structured backend-resolution log record"
+
+
 # -- forced rust mode ---------------------------------------------------------
 
 
@@ -107,6 +130,28 @@ def test_forced_rust_raises_when_unavailable(
 
     with pytest.raises(ImportError, match=_ENV_VAR):
         get_stream_backend()
+
+
+def test_forced_rust_unavailable_logs_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Forced Rust mode logs the unavailable-backend failure boundary."""
+    monkeypatch.setenv(_ENV_VAR, "rust")
+    monkeypatch.setattr(_rust_backend, "is_available", lambda: False)
+
+    with (
+        caplog.at_level(logging.WARNING, logger=_BACKEND_LOGGER),
+        pytest.raises(ImportError, match=_ENV_VAR),
+    ):
+        get_stream_backend()
+
+    assert any(
+        record.__dict__.get("event") == "cuprum.stream_backend_unavailable"
+        and record.__dict__.get("requested_backend") == StreamBackend.RUST.value
+        and record.__dict__.get("rust_available") is False
+        for record in caplog.records
+    ), "expected a structured unavailable-backend warning"
 
 
 # -- forced python mode -------------------------------------------------------
@@ -286,6 +331,50 @@ def test_public_probe_honours_test_override(monkeypatch: pytest.MonkeyPatch) -> 
         )
     finally:
         set_rust_availability_for_testing(is_available=None)
+
+
+def test_testing_override_update_logs_cache_clear(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test overrides emit a structured cache-clear log record."""
+    try:
+        with caplog.at_level(logging.DEBUG, logger=_BACKEND_LOGGER):
+            set_rust_availability_for_testing(is_available=True)
+    finally:
+        set_rust_availability_for_testing(is_available=None)
+
+    assert any(
+        record.__dict__.get("event") == "cuprum.rust_availability_override_updated"
+        and record.__dict__.get("override_active") is True
+        and record.__dict__.get("rust_availability_override") is True
+        for record in caplog.records
+    ), "expected a structured override/cache-clear log record"
+
+
+def test_raw_probe_logs_missing_native_module(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The raw probe logs missing native-extension imports."""
+
+    def _missing_native_module(name: str) -> object:
+        """Raise the missing-module error emitted by ``import_module``."""
+        raise ModuleNotFoundError(name=name)
+
+    monkeypatch.setattr(
+        _rust_backend.importlib,
+        "import_module",
+        _missing_native_module,
+    )
+
+    with caplog.at_level(logging.DEBUG, logger=_BACKEND_LOGGER):
+        assert _rust_backend.is_available() is False
+
+    assert any(
+        record.__dict__.get("event") == "cuprum.rust_native_import_missing"
+        and record.__dict__.get("module_name") == "cuprum._rust_backend_native"
+        for record in caplog.records
+    ), "expected a structured native-import-missing log record"
 
 
 def test_cache_clear_allows_recheck(
