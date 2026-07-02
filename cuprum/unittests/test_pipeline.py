@@ -271,9 +271,9 @@ def test_pipeline_rejects_output_combined_with_flat_kwargs() -> None:
         with pytest.raises(ValueError, match="not both"):
             pipeline.run_sync(output=RunOutputOptions(), capture=True)
 
-        unknown_output_kwargs: dict[str, typ.Any] = {"captuer": True}
+        unknown_output_kwargs: dict[str, bool] = {"captuer": True}
         with pytest.raises(TypeError, match="unexpected keyword"):
-            pipeline.run_sync(**unknown_output_kwargs)
+            pipeline.run_sync(**typ.cast("dict[str, typ.Any]", unknown_output_kwargs))
 
 
 def test_pipeline_run_streams_stdout_between_stages(stream_backend: str) -> None:
