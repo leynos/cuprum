@@ -2,13 +2,13 @@
 
 This guide is for maintainers. It captures the operational scope for build,
 test, lint, release, debugging, and extension workflows and acts as the source
-of truth for day-to-day contributor expectations. For the system design, see
-the [design document](cuprum-design.md); for where code lives, see the
-[repository layout](repository-layout.md); and for accepted architectural
-decisions, see
-[ADR-002: Additional Rust components](adr-002-additional-rust-components.md),
-[ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md), and
-[ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md).
+of truth for day-to-day contributor expectations. For the system design, see the
+[design document](cuprum-design.md); for where code lives, see the
+[repository layout](repository-layout.md). Accepted architectural decisions are:
+
+- [ADR-002: Additional Rust components](adr-002-additional-rust-components.md)
+- [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md)
+- [ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md)
 
 ## Stream line-splitting properties
 
@@ -51,16 +51,82 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
+## Context allowlist internals
+
+`CuprumContext` stores an `allowlist` plus the internal
+`_allowlist_is_restricted` marker. The marker distinguishes the permissive
+default context from a context that has deliberately narrowed to an empty
+allowlist. It defaults to `False` on the default context and becomes `True` for
+explicit narrowing, when `ScopeConfig.allowlist` is provided, or when
+`with_allowlist()` receives a non-empty replacement. Direct allowlist
+replacement also preserves restriction when the previous context already had an
+explicit policy. Replacing that allowlist with `frozenset()` therefore cannot
+widen the context back to the permissive default by accident.
+
+`check_allowed()` therefore has two empty-allowlist modes. Empty and
+unrestricted means *no policy has been established yet*, so every program is
+permitted for the adoption-friendly default. Empty and restricted means a
+policy has been established and then narrowed to no programs, so every program
+is denied. Keeping that bit separate from the set contents prevents permission
+broadening regressions where `frozenset()` could otherwise mean both "allow
+everything" and "deny everything".
+
+`narrow()` handles allowlists in three cases:
+
+- An empty unrestricted parent uses the provided allowlist directly, creating
+  the first explicit base scope.
+- An empty restricted parent stays empty, preserving the deny-all result of
+  earlier narrowing.
+- A non-empty parent intersects its allowlist with the provided allowlist, so
+  nested scopes can remove programs but cannot add new ones.
+
+`with_allowlist()` is the direct replacement path. It preserves restriction
+when the current context already has an explicit policy, even if the
+replacement allowlist is empty, and a non-empty replacement establishes an
+explicit policy by setting restriction. So direct replacement cannot turn a
+deny-all context into the permissive default.
+
+The allowlist, hook, and timeout rules are split into pure helpers so the
+invariants can be tested directly:
+
+- `_narrow_allowlist(parent, config, parent_is_restricted=...)` returns the
+  narrowed allowlist for the three parent/config cases without mutating either
+  input.
+- `_is_narrowed_allowlist_restricted(config, parent_is_restricted=...)`
+  returns whether the child context should enforce allowlist policy after
+  narrowing.
+- `_merge_before_hooks(parent, config)` appends scoped before hooks after
+  parent hooks so execution stays FIFO.
+- `_merge_after_hooks(parent, config)` prepends scoped after hooks before
+  parent hooks so teardown stays LIFO.
+- `_merge_observe_hooks(parent, config)` appends scoped observation hooks after
+  parent hooks so execution stays FIFO.
+- `_validate_timeout(timeout, class_name)` coerces non-negative timeout values
+  to `float`, preserves `None`, and rejects negative values.
+- `_resolve_narrowed_timeout(parent, config)` inherits the parent timeout when
+  the scoped config is silent and otherwise uses the scoped value.
+
+Context property tests live in `cuprum/unittests/test_context.py`. Run them
+directly with:
+
+```bash
+uv run pytest -q cuprum/unittests/test_context.py
+```
+
+The same test module marks pure-helper properties for optional CrossHair
+execution. The `crosshair` Hypothesis profile is registered in
+`cuprum/unittests/conftest.py`; using it requires the `hypothesis-crosshair`
+package from the dev dependency group.
+
 ## `rust_consume_stream` integration status
 
 `rust_consume_stream` is implemented, tested, and exported, but production
 consumes currently go through the pure-Python `_consume_stream` function until
-Phase 2 is complete.
-Integration is deferred to
+Phase 2 is complete. Integration is deferred to
 [ADR-002: Additional Rust components](adr-002-additional-rust-components.md)
-(Phase 2). The rationale is to defer consume-side dispatch until the
-ADR-002 Phase 2 stack is complete, including dispatcher wiring, the Python
-fallback path, and parity/property coverage.
+(Phase 2). The rationale is to defer consume-side dispatch until the ADR-002
+Phase 2 stack is complete, including dispatcher wiring, the Python fallback
+path, and parity/property coverage.
 
 ## Fail-fast reducer properties
 
@@ -306,7 +372,8 @@ on the same thread, logs the rejected backend and thread identifier, and raises
 
 `TeeProfileWorkerResult` includes selector metrics gathered while activating
 the backend. The metrics are thread-local, reset for each worker run, and
-reported with the rest of the worker payload.
+reported with the rest of the worker payload. They represent per-invocation
+totals for `TeeProfileWorkerResult`, not process-lifetime aggregates.
 
 | Field                       | Type    | Description                                                                          |
 | --------------------------- | ------- | ------------------------------------------------------------------------------------ |
@@ -646,8 +713,8 @@ dependency from `uv.lock` is available before running `fmt`, `check-fmt`, or
 `lint`. Continuous Integration (CI) and local runs must keep using this
 `uv run` path for Ruff linting and formatting so preview-rule changes only
 arrive through an explicit lockfile update. `interrogate` is also invoked via
-`uv run` in the `lint` recipe, but it is not included in `VENV_TOOLS` and so
-is not gated by the probe; it relies on `uv sync` having installed it into the
+`uv run` in the `lint` recipe, but it is not included in `VENV_TOOLS` and so is
+not gated by the probe; it relies on `uv sync` having installed it into the
 locked virtualenv.
 
 Because `interrogate` requires a docstring on every documentable node,
@@ -768,11 +835,11 @@ When refreshing this container, update the value in
 comment to the original mutable reference:
 `# ghcr.io/rust-cross/manylinux_2_28-cross:aarch64`.
 
-The deterministic tests assert that the live workflow value is correctly
-formed and consumed by the aarch64 build step. The property-based tests prove
-that the shared regex accepts every valid 64-character hexadecimal digest and
-rejects the unbounded space of mutable tags and truncated digests, giving
-confidence beyond any single example.
+The deterministic tests assert that the live workflow value is correctly formed
+and consumed by the aarch64 build step. The property-based tests prove that the
+shared regex accepts every valid 64-character hexadecimal digest and rejects
+the unbounded space of mutable tags and truncated digests, giving confidence
+beyond any single example.
 
 To update the pinned digest, resolve the tag digest for
 `ghcr.io/rust-cross/manylinux_2_28-cross:aarch64`, replace only the value in

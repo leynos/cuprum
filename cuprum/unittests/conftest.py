@@ -1,15 +1,29 @@
-"""Shared test helpers for the tee profiling benchmark harness."""
+"""Shared pytest configuration and helpers for Cuprum unit tests.
+
+The module imports hypothesis_crosshair_provider so Hypothesis can use the
+CrossHair backend, registers the local ``crosshair`` Hypothesis profile, and
+declares the matching pytest marker for symbolic helper-property checks.
+"""
 
 from __future__ import annotations
 
 import typing as typ
 
+import hypothesis_crosshair_provider  # noqa: F401  # Registers CrossHair backend provider on import.
+from hypothesis import settings
 from hypothesis import strategies as st
 
 from benchmarks import tee_profile_worker
 
 if typ.TYPE_CHECKING:
     import threading
+
+    import pytest
+
+settings.register_profile(
+    "crosshair",
+    settings(backend="crosshair", deadline=None, derandomize=True, max_examples=50),
+)
 
 _VOLATILE_KEYS: frozenset[str] = frozenset({
     "sha256",
@@ -79,4 +93,12 @@ def _join_and_assert_finished(
     alive = [thread.name for thread in threads if thread.is_alive()]
     assert not alive, (  # noqa: S101 - shared test helper asserts on caller's behalf.
         f"expected threads to finish{f' ({context})' if context else ''}, got {alive}"
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Register local pytest markers."""
+    config.addinivalue_line(
+        "markers",
+        "crosshair: property tests suitable for Hypothesis' CrossHair backend",
     )
