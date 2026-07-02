@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses as dc
 import typing as typ
+from unittest import mock
 
 import pytest
 
@@ -14,10 +15,13 @@ from cuprum import (
     ForbiddenProgramError,
     ScopeConfig,
     TimeoutExpired,
+    _process_lifecycle,
     scoped,
     sh,
 )
-from cuprum import ECHO, ScopeConfig, TimeoutExpired, _process_lifecycle, scoped, sh
+from cuprum._pipeline_stage_streams import _get_stage_stream_fds
+from cuprum._process_lifecycle import _terminate_process
+from cuprum._testing import (
     _READ_SIZE,
     _PipelineWaitResult,
     _prepare_pipeline_config,
@@ -25,11 +29,8 @@ from cuprum import ECHO, ScopeConfig, TimeoutExpired, _process_lifecycle, scoped
     _spawn_pipeline_processes,
     _wait_for_pipeline,
 )
-from cuprum._pipeline_stage_streams import _get_stage_stream_fds
-from cuprum._testing import (
 from cuprum.sh import Pipeline, PipelineResult
 from tests.helpers.catalogue import python_catalogue
-from unittest import mock
 
 
 class _StubPumpReader:
@@ -603,6 +604,7 @@ def test_wait_for_pipeline_fail_fast_scenarios(
             process,
             should_terminate=(idx in scenario.terminated_stages),
         )
+
 
 @pytest.mark.parametrize("capture_or_echo", [True, False])
 def test_spawn_pipeline_processes_routes_through_get_stage_stream_fds(
