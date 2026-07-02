@@ -23,7 +23,7 @@ import typing as typ
 from pathlib import Path
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from cuprum.catalogue import DEFAULT_CATALOGUE, ProjectSettings, UnknownProgramError
@@ -131,8 +131,7 @@ def test_make_builder_agrees_with_build_argv(
 @given(name=_STAGE_NAMES)
 def test_make_rejects_programs_outside_catalogue(name: str) -> None:
     """Programs absent from the catalogue are rejected at build time."""
-    if DEFAULT_CATALOGUE.is_allowed(name):
-        return  # Generated name happens to be curated; nothing to reject.
+    assume(not DEFAULT_CATALOGUE.is_allowed(name))
     with pytest.raises(UnknownProgramError):
         make(Program(name))
 

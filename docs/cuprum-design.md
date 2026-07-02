@@ -455,6 +455,13 @@ converted into argv strings according to internal rules (e.g. str() with basic
 quoting, or more elaborate conversions later). For more control, projects are
 expected to wrap `sh.make` with **builders** (see below).
 
+`sh.build_argv(*args, **kwargs)` exposes those argv-construction rules as a
+pure helper for tests and wrapper code that need to inspect normalisation
+without performing a catalogue lookup. It intentionally shares the same
+coercion path as `sh.make`, so positional ordering, keyword flag formatting,
+underscore-to-hyphen normalisation, and `None` rejection stay in lockstep with
+builders.
+
 #### 6.2.2 Command builders
 
 Command builders centralize and type arguments for a given command. Builders
@@ -563,6 +570,7 @@ classDiagram
         +_stringify_arg(value: object) str
         +_serialize_kwargs(kwargs: dict~str,object~) tuple~str,...~
         +_coerce_argv(args: tuple~object,...~, kwargs: dict~str,object~) tuple~str,...~
+        +build_argv(*args: object, **kwargs: object) tuple~str,...~
         +make(program: Program, catalogue: ProgramCatalogue) SafeCmdBuilder
     }
 
@@ -1447,6 +1455,16 @@ than a rigid class diagram, and should favour boring, explicit implementations
 over cleverness—especially in the type‑system and configuration layers.
 
 ______________________________________________________________________
+
+
+## 13. Performance-Optimized Stream Operations
+
+Cuprum's stream operations route data through Python's asyncio event loop in
+small chunks. For typical command execution, this overhead is negligible.
+However, for high-throughput pipelines processing large data volumes, the
+overhead accumulates. This section describes an optional Rust extension that
+addresses these bottlenecks whilst preserving Cuprum's existing API and
+behavioural guarantees.
 
 ## 13. Performance-Optimized Stream Operations
 
