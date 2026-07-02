@@ -80,8 +80,11 @@ def test_pipeline_output_options_echo_for_run_and_run_sync(
 
 
 @pytest.mark.usefixtures("stream_backend")
-def test_pipeline_async_flat_capture_echo_kwargs_are_deprecated() -> None:
-    """Async Pipeline.run() accepts deprecated flat kwargs and warns."""
+def test_pipeline_flat_capture_echo_kwargs_are_deprecated_for_public_entrypoints(
+    pipeline_execution_strategy: tuple[str, PipelineExecuteFn],
+) -> None:
+    """Pipeline run() and run_sync() accept deprecated flat kwargs and warn."""
+    _, execute = pipeline_execution_strategy
     pipeline, allowlist = _identity_pipeline()
     stdout_sink = io.StringIO()
 
@@ -89,12 +92,13 @@ def test_pipeline_async_flat_capture_echo_kwargs_are_deprecated() -> None:
         scoped(ScopeConfig(allowlist=allowlist)),
         pytest.warns(DeprecationWarning, match="RunOutputOptions"),
     ):
-        result = asyncio.run(
-            pipeline.run(
-                capture=True,
-                echo=True,
-                context=ExecutionContext(stdout_sink=stdout_sink),
-            ),
+        result = execute(
+            pipeline,
+            {
+                "capture": True,
+                "echo": True,
+                "context": ExecutionContext(stdout_sink=stdout_sink),
+            },
         )
 
     assert result.ok is True
