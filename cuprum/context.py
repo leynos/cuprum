@@ -541,6 +541,7 @@ def scoped(config: ScopeConfig) -> _ScopedContext:
     """
     return _ScopedContext(config)
 
+
 class _TokenRegistration:
     """Canonical base for ContextVar-backed scope-registration handles.
 
@@ -601,6 +602,8 @@ class _TokenRegistration:
     ) -> None:
         """Exit context manager; detach the registration."""
         self.detach()
+
+
 class AllowRegistration(_TokenRegistration):
     """Registration handle for dynamic allowlist extension.
 
