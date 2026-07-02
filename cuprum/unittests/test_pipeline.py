@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import dataclasses as dc
 import typing as typ
-from unittest import mock
 
 import pytest
 
@@ -15,12 +14,9 @@ from cuprum import (
     ForbiddenProgramError,
     ScopeConfig,
     TimeoutExpired,
-    _process_lifecycle,
     scoped,
     sh,
 )
-from cuprum._pipeline_stage_streams import _get_stage_stream_fds
-from cuprum._process_lifecycle import _terminate_process
 from cuprum._testing import (
     _READ_SIZE,
     _PipelineWaitResult,
@@ -606,52 +602,37 @@ def test_wait_for_pipeline_fail_fast_scenarios(
         )
 
 
-@pytest.mark.parametrize("capture_or_echo", [True, False])
-def test_spawn_pipeline_processes_routes_through_get_stage_stream_fds(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("capture", "expected_stdout", "expected_stderr"),
+    [
+        pytest.param(True, "INTERMEDIATE", "", id="capture-final-stdio"),
+        pytest.param(False, None, None, id="discard-final-stdio"),
+    ],
+)
+def test_pipeline_stdio_policy_streams_intermediate_stdout_end_to_end(
     *,
-    capture_or_echo: bool,
+    capture: bool,
+    expected_stdout: str | None,
+    expected_stderr: str | None,
 ) -> None:
-    """Spawning a pipeline delegates stdio selection to _get_stage_stream_fds.
-
-    The spawn path must call the canonical helper once per stage with the
-    stage's ``(idx, last_idx)`` indices and the config's ``capture_or_echo``
-    flag, rather than re-deriving the PIPE/DEVNULL policy inline.
-    """
+    """Pipeline execution streams intermediate stdout and applies final capture."""
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
-    # No-op stages: portable across Linux, macOS, and Windows, and they exit
-    # immediately so the spawned processes are trivial to reap.
-    stage_0 = python("-c", "")
-    stage_1 = python("-c", "")
-    config = _prepare_pipeline_config(
-        capture=capture_or_echo, echo=False, timeout=None, context=None
+
+    producer = python("-c", "import sys; sys.stdout.write('intermediate')")
+    transformer = python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read().upper())",
     )
 
-    # Record every delegation while still returning a real _StageStreamConfig
-    # so the remaining spawn path succeeds unchanged.
-    recorder = mock.MagicMock(side_effect=_get_stage_stream_fds)
-    monkeypatch.setattr(_process_lifecycle, "_get_stage_stream_fds", recorder)
-
-    async def exercise() -> None:
-        """Spawn the two-stage pipeline, then reap the started processes."""
-        (
-            processes,
-            stderr_tasks,
-            stdout_task,
-            _started_at,
-        ) = await _spawn_pipeline_processes((stage_0, stage_1), config)
-        for process in processes:
-            await _terminate_process(process, config.ctx.cancel_grace)
-        pending = [task for task in (*stderr_tasks, stdout_task) if task is not None]
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        asyncio.run(exercise())
+        result = (producer | transformer).run_sync(capture=capture)
 
-    assert recorder.call_args_list == [
-        mock.call(0, 1, capture_or_echo=capture_or_echo),
-        mock.call(1, 1, capture_or_echo=capture_or_echo),
-    ]
+    assert result.stdout == expected_stdout
+    assert len(result.stages) == 2
+    assert result.stages[0].stdout is None
+    assert result.stages[0].stderr == expected_stderr
+    assert result.stages[0].exit_code == 0
+    assert result.stages[1].stdout == expected_stdout
+    assert result.stages[1].stderr == expected_stderr
+    assert result.stages[1].exit_code == 0
