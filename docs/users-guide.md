@@ -96,6 +96,21 @@ Builders keep argv construction in one place, making it easier to validate
 inputs, document behaviour, and reuse the same allowlisted program across a
 codebase.
 
+### Inspecting argv construction
+
+Use `sh.build_argv` when code needs to inspect Cuprum's argument normalisation
+without creating a command builder or consulting a catalogue. The helper uses
+the same argument rules as `sh.make`: positional arguments are stringified in
+order, keyword arguments become `--flag=value` entries, underscores in keyword
+names become hyphens, and `None` raises `TypeError`.
+
+```python
+from cuprum import sh
+
+argv = sh.build_argv("status", porcelain=True, branch="main")
+print(argv)  # ('status', '--porcelain=True', '--branch=main')
+```
+
 ### Core builders for common tools
 
 Cuprum ships a small builder library for common tools in `cuprum.builders`.
