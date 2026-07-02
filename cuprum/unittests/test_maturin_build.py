@@ -135,8 +135,12 @@ def test_build_native_wheel_artifact_uses_locked_cargo_deps(
 
     wheel_path = _build_with_fake_subprocess_run(tmp_path, monkeypatch, fake_run)
 
-    assert wheel_path.name == "cuprum-test.whl"
-    assert "--locked" in captured_command
+    assert wheel_path.name == "cuprum-test.whl", (
+        "native wheel helper should return the wheel created by fake maturin"
+    )
+    assert "--locked" in captured_command, (
+        "native wheel build should pass --locked through to maturin"
+    )
 
 
 def test_build_native_wheel_artifact_reports_maturin_stderr(
@@ -161,9 +165,15 @@ def test_build_native_wheel_artifact_reports_maturin_stderr(
         _build_with_fake_subprocess_run(tmp_path, monkeypatch, fake_run)
 
     error_text = str(exc_info.value)
-    assert "python" in error_text
-    assert "maturin build" in error_text
-    assert "cargo fetch failed" in error_text
+    assert "python" in error_text, (
+        "maturin failure diagnostics should include the Python executable"
+    )
+    assert "maturin build" in error_text, (
+        "maturin failure diagnostics should include the build command"
+    )
+    assert "cargo fetch failed" in error_text, (
+        "maturin failure diagnostics should include captured stderr"
+    )
 
 
 # pytest-timeout arms SIGALRM in the *parent* process; pytest-forked blocks the
