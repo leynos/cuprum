@@ -25,6 +25,8 @@
       'cuprum/_streams_rs.py',
       'cuprum/_subprocess_context.py',
       'cuprum/_subprocess_execution.py',
+      'cuprum/_subprocess_stdin.py',
+      'cuprum/_subprocess_timeout.py',
       'cuprum/_testing.py',
       'cuprum/adapters/__init__.py',
       'cuprum/adapters/logging_adapter.py',
