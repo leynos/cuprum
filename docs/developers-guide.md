@@ -38,8 +38,8 @@ skipping only for expected availability failures: a missing dev dependency
 (`ImportError`) or an interpreter whose opcode set CrossHair cannot yet trace
 (`crosshair.tracers.TraceException`, as with the `CALL_KW` gap on early Python
 3.15 betas, issue #109). Any other probe exception is allowed to propagate so
-unexpected import failures stay visible. The probe self-resolves once CrossHair
-supports the interpreter.
+that unexpected import failures stay visible. The probe self-resolves once
+CrossHair supports the interpreter.
 
 When changing `_emit_completed_lines`, `_split_complete_lines`, or
 `_strip_line_ending`, run:
@@ -50,6 +50,54 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
+
+## Canonical stream-drain loop
+
+`cuprum._streams._drain(stream, config, *, on_chunk=None)` is the single
+read/echo/buffer loop behind both consume variants. It reads in `_READ_SIZE`
+chunks, extends the capture buffer when capturing, echoes each chunk to the
+configured sink when echoing, and hands the chunk to the optional `on_chunk`
+callback for variant-specific processing:
+
+- `_consume_stream_without_lines` calls `_drain` with no callback.
+- `_consume_stream_with_lines` supplies an `on_chunk` callback that feeds the
+  incremental decoder and emits completed lines, then flushes the decoder tail
+  after the drain returns.
+
+Re-use policy: the public entry point remains `_consume_stream`, which
+dispatches between the two variants on whether an `on_line` callback was
+supplied. Any fix to the read/echo/capture mechanics belongs in `_drain` so the
+capture path and the line-emitting path cannot silently diverge; new consume
+variants must layer behaviour through `on_chunk` rather than copying the loop.
+
+`cuprum/unittests/test_stream_property_based.py` and
+`tests/behaviour/test_stream_property_preservation_behaviour.py` hold the
+public-boundary property coverage: Hypothesis generates byte payloads split at
+arbitrary boundaries and asserts that real subprocess pipelines preserve
+payloads, keep final stdout and stderr captures independent, and echo all
+stdout and stderr text when both streams share one sink.
+`cuprum/unittests/test_stream_drain.py` keeps focused direct coverage for the
+canonical helper contract and the two `_consume_stream` variants.
+
+### Concurrency model
+
+Each `_drain()` invocation is self-contained. It owns its capture buffer
+(`bytearray`) and, in the line-emitting variant, its own
+`codecs.IncrementalDecoder`. The `on_chunk` callback closes over that decoder
+and acts only as the chunk delivery hook. Concurrent stdout and stderr drains
+therefore do not share mutable capture or decoder state.
+
+The echo sink (`config.sink`) may be shared between concurrent drains when
+stdout and stderr are both echoed. Writes to that sink interleave only at
+`await` points: once a drain starts writing a single decoded chunk, there is no
+intermediate `await` before that chunk write finishes.
+
+Cancellation is fail-fast. If an `asyncio.Task` wrapping `_drain()` is
+cancelled, `asyncio.CancelledError` propagates from `stream.read()` and any
+bytes captured by that invocation so far are discarded.
+
+Callers must not share one `asyncio.StreamReader` between two `_drain()`
+invocations. Each invocation must receive its own reader.
 
 ## Context allowlist internals
 

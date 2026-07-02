@@ -10,12 +10,28 @@ RUST_FLAGS ?= -D warnings
 RUSTDOC_FLAGS ?= -D warnings
 CARGO_FLAGS ?= --all-targets --all-features
 CLIPPY_FLAGS ?= $(CARGO_FLAGS) -- $(RUST_FLAGS)
-TEST_FLAGS ?= $(CARGO_FLAGS)
+DOC_FLAGS ?= --jobs 1
+TEST_FLAGS ?= $(CARGO_FLAGS) --jobs 1
+TEST_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
+WHITAKER_CARGO_FLAGS ?= $(CARGO_FLAGS) --jobs 1
+WHITAKER_RUSTFLAGS ?= -C codegen-units=1
+PYTEST_CARGO_BUILD_JOBS ?= 1
+PYTEST_RUSTFLAGS ?= -C codegen-units=1
+TEST_CARGO_BUILD_JOBS ?= 1
+# Keep pytest serial by default: each batch may compile or reuse Rust artefacts,
+# and parallel batches contend on the Cargo build cache with little benefit.
+PYTEST_WORKERS ?= 0
+PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
+  tests/behaviour/test_[a-h]*.py \
+  tests/behaviour/test_[i-r]*.py \
+  tests/behaviour/test_[s-z]*.py
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
 LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
 LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
 UV_RUN_ENV = $(LOCAL_TOOL_ENV) $(UV_ENV)
-RUFF = $(UV_RUN_ENV) uv run ruff
+RUFF_ENV = RAYON_NUM_THREADS=1
+RUFF = $(RUFF_ENV) $(UV_RUN_ENV) uv run ruff
+PYTEST = $(UV_RUN_ENV) uv run pytest
 PYLINT_PYTHON ?= pypy
 PYLINT_TARGETS ?= benchmarks conftest.py cuprum tests
 PYLINT_PYPY_SHIM_REF ?= 726d09f968b4d729ee4b29c71fc732e744854f3b
@@ -92,13 +108,13 @@ lint: ruff uv ## Run linters
 	$(RUFF) check
 	$(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum
 	$(PYLINT) $(PYLINT_TARGETS)
-	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps
+	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps $(DOC_FLAGS)
 	cd $(RUST_DIR) && $(CARGO) clippy $(CLIPPY_FLAGS)
 	@if ! $(LOCAL_TOOL_ENV) command -v whitaker >/dev/null 2>&1; then \
 	  echo "whitaker is required for linting. Install it before running this target." >&2; \
 	  exit 1; \
 	fi
-	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) whitaker --all -- $(CARGO_FLAGS)
+	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" whitaker --all -- $(WHITAKER_CARGO_FLAGS)
 
 typecheck: build ## Run typechecking
 	$(UV_RUN_ENV) uv sync --group dev
@@ -113,12 +129,15 @@ nixie: ## Validate Mermaid diagrams
 	$(LOCAL_TOOL_ENV) $(NIXIE) --no-sandbox
 
 test: build uv $(VENV_TOOLS) ## Run tests
-	$(UV_RUN_ENV) uv run pytest -v -n auto
+	@for target in $(PYTEST_TARGETS); do \
+	  [ -e "$$target" ] || continue; \
+	  CARGO_BUILD_JOBS="$(PYTEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$target" || exit $$?; \
+	done
 	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
-	  cd $(RUST_DIR) && RUSTFLAGS="$(RUST_FLAGS)" $(CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
+	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(TEST_RUSTFLAGS)" $(CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
 	else \
 	  echo "cargo-nextest not found; falling back to cargo test." >&2; \
-	  cd $(RUST_DIR) && RUSTFLAGS="$(RUST_FLAGS)" $(CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
+	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(TEST_RUSTFLAGS)" $(CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
 	fi
 
 benchmark-micro: build uv ## Run pytest-benchmark microbenchmarks

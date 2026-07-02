@@ -1186,7 +1186,7 @@ than risking a stale environment value or backend cache leak. Avoid wrapping one
 or let the outer selector own the full profiled run.
 
 Both backends are tested for behavioural parity across edge cases including
-empty streams, multi-byte UTF-8 at chunk boundaries, broken pipes (where the
+empty streams, multibyte UTF-8 at chunk boundaries, broken pipes (where the
 downstream stage exits before the upstream finishes), and backpressure under
 large payloads. The test suite verifies that pipeline output is identical
 regardless of which backend is active, so switching between backends does not
