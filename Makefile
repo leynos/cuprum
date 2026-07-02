@@ -18,16 +18,10 @@ WHITAKER_RUSTFLAGS ?= -C codegen-units=1
 PYTEST_CARGO_BUILD_JOBS ?= 1
 PYTEST_RUSTFLAGS ?= -C codegen-units=1
 TEST_CARGO_BUILD_JOBS ?= 1
+# Keep pytest serial by default: each batch may compile or reuse Rust artefacts,
+# and parallel batches contend on the Cargo build cache with little benefit.
 PYTEST_WORKERS ?= 0
-PYTEST_TARGETS ?= cuprum/unittests/test_[a-h]*.py \
-  cuprum/unittests/test_[i-r]*.py \
-  cuprum/unittests/test_safe_cmd_run.py \
-  cuprum/unittests/test_sh.py \
-  cuprum/unittests/test_sinks.py \
-  cuprum/unittests/test_stdin_property_based.py \
-  cuprum/unittests/test_stream*.py \
-  cuprum/unittests/test_tee_profile_worker*.py \
-  cuprum/unittests/test_timeout_resolution.py \
+PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
   tests/behaviour/test_[s-z]*.py
@@ -36,8 +30,8 @@ LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
 LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
 UV_RUN_ENV = $(LOCAL_TOOL_ENV) $(UV_ENV)
 RUFF_ENV = RAYON_NUM_THREADS=1
-RUFF = $(RUFF_ENV) .venv/bin/ruff
-PYTEST = .venv/bin/pytest
+RUFF = $(RUFF_ENV) $(UV_RUN_ENV) uv run ruff
+PYTEST = $(UV_RUN_ENV) uv run pytest
 PYLINT_PYTHON ?= pypy
 PYLINT_TARGETS ?= benchmarks conftest.py cuprum tests
 PYLINT_PYPY_SHIM_REF ?= 726d09f968b4d729ee4b29c71fc732e744854f3b
@@ -136,6 +130,7 @@ nixie: ## Validate Mermaid diagrams
 
 test: build uv $(VENV_TOOLS) ## Run tests
 	@for target in $(PYTEST_TARGETS); do \
+	  [ -e "$$target" ] || continue; \
 	  CARGO_BUILD_JOBS="$(PYTEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$target" || exit $$?; \
 	done
 	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
