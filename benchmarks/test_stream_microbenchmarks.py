@@ -18,7 +18,7 @@ from cuprum import (
     scoped,
     sh,
 )
-from tests.helpers.parity import parity_catalogue, run_parity_pipeline
+from tests.helpers.parity import parity_catalogue
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import PipelineResult
@@ -83,7 +83,8 @@ def test_benchmark_pump_latency(
     pipeline, allowlist, expected = _pump_pipeline(payload_bytes=1024)
 
     def run_once() -> PipelineResult:
-        return run_parity_pipeline(pipeline, allowlist)
+        with scoped(ScopeConfig(allowlist=allowlist)):
+            return pipeline.run_sync(output=RunOutputOptions(capture=True))
 
     result = benchmark(run_once)
     assert result.ok

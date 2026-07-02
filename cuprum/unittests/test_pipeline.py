@@ -215,6 +215,7 @@ def _run_test_pipeline(
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
         return pipeline.run_sync()
 
+
 @pytest.mark.usefixtures("stream_backend")
 def test_pipeline_run_sync_accepts_run_output_options() -> None:
     """Pipeline.run_sync accepts ``output=RunOutputOptions`` like SafeCmd."""
@@ -232,6 +233,7 @@ def test_pipeline_run_sync_accepts_run_output_options() -> None:
 
     assert result.ok is True
     assert result.stdout is None
+
 
 @pytest.mark.usefixtures("stream_backend")
 def test_pipeline_flat_capture_echo_kwargs_are_deprecated() -> None:
@@ -254,6 +256,7 @@ def test_pipeline_flat_capture_echo_kwargs_are_deprecated() -> None:
     assert result.ok is True
     assert result.stdout == "legacy"
 
+
 def test_pipeline_rejects_output_combined_with_flat_kwargs() -> None:
     """Supplying both ``output`` and the deprecated flags raises ValueError."""
     catalogue, python_program = python_catalogue()
@@ -271,6 +274,8 @@ def test_pipeline_rejects_output_combined_with_flat_kwargs() -> None:
         unknown_output_kwargs: dict[str, typ.Any] = {"captuer": True}
         with pytest.raises(TypeError, match="unexpected keyword"):
             pipeline.run_sync(**unknown_output_kwargs)
+
+
 def test_pipeline_run_streams_stdout_between_stages(stream_backend: str) -> None:
     """Pipeline.run_sync streams stdout into the next stage stdin."""
     catalogue, python_program = python_catalogue()
