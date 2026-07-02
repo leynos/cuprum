@@ -25,6 +25,7 @@ from tests.helpers.maturin import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib as pth
 
     from syrupy.assertion import SnapshotAssertion
@@ -105,6 +106,14 @@ def test_manylinux_aarch64_container_usage_regex_rejects_literal_image() -> None
 
     assert _AARCH64_CONTAINER_USAGE_RE.search(yaml_line) is None
 
+def _build_with_fake_subprocess_run(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_run: cabc.Callable[..., subprocess.CompletedProcess[str]],
+) -> pth.Path:
+    """Build the native wheel while replacing ``subprocess.run``."""
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return build_native_wheel_artifact(repo_root(), tmp_path / "wheelhouse")
 def test_build_native_wheel_artifact_uses_locked_cargo_deps(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -121,9 +130,7 @@ def test_build_native_wheel_artifact_uses_locked_cargo_deps(
         (tmp_path / "wheelhouse" / "cuprum-test.whl").touch()
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    wheel_path = build_native_wheel_artifact(repo_root(), tmp_path / "wheelhouse")
+    wheel_path = _build_with_fake_subprocess_run(tmp_path, monkeypatch, fake_run)
 
     assert wheel_path.name == "cuprum-test.whl"
     assert "--locked" in captured_command
@@ -146,10 +153,8 @@ def test_build_native_wheel_artifact_reports_maturin_stderr(
             stderr="cargo fetch failed",
         )
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
     with pytest.raises(subprocess.CalledProcessError) as exc_info:
-        build_native_wheel_artifact(repo_root(), tmp_path / "wheelhouse")
+        _build_with_fake_subprocess_run(tmp_path, monkeypatch, fake_run)
 
     error_text = str(exc_info.value)
     assert "python" in error_text
