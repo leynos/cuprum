@@ -118,6 +118,7 @@ Builder functions validate inputs internally, so callers may pass `str` or
 from pathlib import Path
 
 from cuprum.builders import (
+    Compression,
     RsyncOptions,
     TarCreateOptions,
     git_checkout,
@@ -135,7 +136,7 @@ rsync_cmd = rsync_sync(
 tar_cmd = tar_create(
     Path("/backups/data.tar.gz"),
     [Path("/srv/data")],
-    options=TarCreateOptions(gzip=True),
+    options=TarCreateOptions(compression=Compression.GZIP),
 )
 restore_cmd = tar_extract(
     Path("/backups/data.tar.gz"),
