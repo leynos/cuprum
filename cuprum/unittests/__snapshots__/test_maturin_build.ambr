@@ -30,6 +30,7 @@
       'cuprum/adapters/logging_adapter.py',
       'cuprum/adapters/metrics_adapter.py',
       'cuprum/adapters/tracing_adapter.py',
+      'cuprum/adapters/tracing_memory.py',
       'cuprum/builders/__init__.py',
       'cuprum/builders/args.py',
       'cuprum/builders/git.py',
@@ -94,6 +95,7 @@
       'cuprum/unittests/test_tee_profile_worker_selector_metrics.py',
       'cuprum/unittests/test_tee_profile_worker_selector_reentrancy.py',
       'cuprum/unittests/test_timeout_resolution.py',
+      'cuprum/unittests/test_tracing_span_lifecycle.py',
     ]),
     'generator': '1.13.3',
     'metadata': dict({

@@ -64,9 +64,10 @@ Example with OpenTelemetry::
 
 from __future__ import annotations
 
-import dataclasses as dc
 import threading
 import typing as typ
+
+from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -162,74 +163,6 @@ class Tracer(typ.Protocol):
         ...  # pylint: disable=unnecessary-ellipsis
 
 
-@dc.dataclass(slots=True)
-class InMemorySpan:
-    """Reference in-memory span for testing and examples."""
-
-    name: str
-    attributes: dict[str, object] = dc.field(default_factory=dict)
-    events: list[tuple[str, dict[str, object]]] = dc.field(default_factory=list)
-    status_ok: bool | None = None
-    ended: bool = False
-
-    def set_attribute(self, key: str, value: object) -> None:
-        """Set a span attribute."""
-        self.attributes[key] = value
-
-    def add_event(
-        self,
-        name: str,
-        attributes: cabc.Mapping[str, object] | None = None,
-    ) -> None:
-        """Add an event to the span."""
-        self.events.append((name, dict(attributes) if attributes else {}))
-
-    def set_status(self, *, ok: bool) -> None:
-        """Set the span status."""
-        self.status_ok = ok
-
-    def end(self) -> None:
-        """End the span."""
-        self.ended = True
-
-
-@dc.dataclass(slots=True)
-class InMemoryTracer:
-    """Reference in-memory tracer for testing and examples.
-
-    This tracer stores spans in memory for inspection. It is thread-safe
-    and suitable for unit testing but not for production use.
-
-    Attributes
-    ----------
-    spans:
-        List of all spans created by this tracer.
-
-    """
-
-    spans: list[InMemorySpan] = dc.field(default_factory=list)
-    _lock: threading.Lock = dc.field(default_factory=threading.Lock, repr=False)
-
-    def start_span(
-        self,
-        name: str,
-        attributes: cabc.Mapping[str, object] | None = None,
-    ) -> InMemorySpan:
-        """Start a new in-memory span."""
-        span = InMemorySpan(
-            name=name,
-            attributes=dict(attributes) if attributes else {},
-        )
-        with self._lock:
-            self.spans.append(span)
-        return span
-
-    def reset(self) -> None:
-        """Clear all collected spans."""
-        with self._lock:
-            self.spans.clear()
-
-
 class TracingHook:
     """Observe hook that creates OpenTelemetry-style traces.
 
@@ -241,11 +174,13 @@ class TracingHook:
 
     - ``cuprum.program``: The program being executed
     - ``cuprum.argv``: Full argument vector
-    - ``cuprum.pid``: Process ID
+    - ``cuprum.pid``: Process ID (when available)
+    - ``cuprum.cwd``: Working directory (when set)
     - ``cuprum.exit_code``: Exit code (set on exit)
     - ``cuprum.duration_s``: Duration in seconds (set on exit)
-    - ``cuprum.project``: Project name from tags
-    - ``cuprum.pipeline_stage_index``: Pipeline stage index (if applicable)
+    - ``cuprum.project``: Project name from tags (when present)
+    - ``cuprum.pipeline_stage_index``: Pipeline stage index (when present)
+    - ``cuprum.pipeline_stages``: Total pipeline stage count (when present)
 
     Parameters
     ----------
@@ -292,7 +227,16 @@ class TracingHook:
                 self._handle_exit(event)
 
     def _handle_start(self, event: ExecEvent) -> None:
-        """Start a new span for command execution."""
+        """Start a new span for command execution.
+
+        Spans are keyed on ``event.pid``. PIDs are unique among *running*
+        processes, so a live collision cannot occur; however, a recycled PID
+        following a missed or out-of-order ``exit`` event would otherwise
+        overwrite — and silently orphan — the previous, still-open span. Guard
+        against that by ending any still-open span for the PID before
+        installing the new one, so every span is terminated exactly once and
+        later output/exit events attach to the correct execution.
+        """
         if event.pid is None:
             return
 
@@ -301,7 +245,14 @@ class TracingHook:
         span = self._tracer.start_span(span_name, attributes)
 
         with self._lock:
+            stale = self._active_spans.get(event.pid)
             self._active_spans[event.pid] = span
+
+        if stale is not None:
+            # A span for this PID was never closed (missed/out-of-order exit).
+            # End it as unknown rather than leaking it on the recycled PID.
+            stale.set_status(ok=False)
+            stale.end()
 
     def _handle_output(self, event: ExecEvent) -> None:
         """Record output as a span event."""
