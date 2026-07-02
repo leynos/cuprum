@@ -11,6 +11,7 @@ RUSTDOC_FLAGS ?= -D warnings
 CARGO_FLAGS ?= --all-targets --all-features
 CLIPPY_FLAGS ?= $(CARGO_FLAGS) -- $(RUST_FLAGS)
 TEST_FLAGS ?= $(CARGO_FLAGS)
+WHITAKER_CARGO_FLAGS ?= $(CARGO_FLAGS) --jobs 1
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
 LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
 LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
@@ -98,7 +99,7 @@ lint: ruff uv ## Run linters
 	  echo "whitaker is required for linting. Install it before running this target." >&2; \
 	  exit 1; \
 	fi
-	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) whitaker --all -- $(CARGO_FLAGS)
+	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) whitaker --all -- $(WHITAKER_CARGO_FLAGS)
 
 typecheck: build ## Run typechecking
 	$(UV_RUN_ENV) uv sync --group dev

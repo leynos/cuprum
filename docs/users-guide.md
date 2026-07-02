@@ -1061,10 +1061,18 @@ directly, and the pure Python wheel is built with `uv_build`.
 ### Checking Rust availability
 
 It is possible to check whether the optional extension is available in the
-current environment using the public helper `cuprum.is_rust_available()`, which
-wraps the internal probe `_rust_backend.is_available()`. The module
-`cuprum._rust_backend` is private and not semver-stable, so production code
-should avoid calling `_rust_backend.is_available()` directly:
+current environment using the public helper `cuprum.is_rust_available()`. The
+helper delegates to `cuprum._backend._check_rust_available()`, the cached
+resolver used by stream-backend dispatch. The resolver is override-aware and is
+therefore reliable for tests when `set_rust_availability_for_testing()` is used.
+Because the resolver caches its result for the process lifetime, test-override
+changes or wheel swaps made inside the same interpreter session do not
+automatically refresh the answer. Clear the backend cache explicitly or start a
+fresh process before checking availability again.
+
+The module `cuprum._rust_backend` is private and not semver-stable, so
+production code should avoid calling `_rust_backend.is_available()` directly
+except when explicitly testing the raw import probe:
 
 ```python
 import cuprum as c
@@ -1075,8 +1083,9 @@ else:
     print("Rust extension is not installed")
 ```
 
-The probe returns `False` on pure Python installations and does not raise when
-native wheels are missing.
+The helper returns `False` on pure Python installations and does not raise when
+native wheels are missing. Other native-extension import failures still surface
+so broken installations are visible.
 
 ### Rust stream pump (internal)
 

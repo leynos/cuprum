@@ -1,15 +1,22 @@
-"""Unit tests for the stream backend dispatcher."""
+"""Unit tests for stream backend dispatch and Rust availability resolution.
+
+The tests pin the contract between the raw Rust import probe, the cached
+dispatch resolver, and the public Rust availability helper.
+"""
 
 from __future__ import annotations
 
 import pytest
 
 from cuprum import _rust_backend
+from cuprum import rust as rust_api
 from cuprum._backend import (
     StreamBackend,
     _check_rust_available,
     get_stream_backend,
+    set_rust_availability_for_testing,
 )
+from cuprum.rust import is_rust_available
 
 _ENV_VAR = "CUPRUM_STREAM_BACKEND"
 
@@ -219,6 +226,66 @@ def test_availability_is_cached(
     get_stream_backend()
 
     assert call_count == 1, "expected availability check to be called once"
+
+
+# -- public probe agrees with dispatch ----------------------------------------
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_public_probe_agrees_with_dispatch_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    available: bool,
+) -> None:
+    """The public ``is_rust_available`` agrees with the dispatch resolver.
+
+    The public helper must delegate to the same resolver object imported by the
+    public Rust module, not the raw Rust import probe.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to override the public module's resolver binding.
+    available : bool
+        Generated availability the resolver should report.
+    """
+    call_count = 0
+
+    def _counting_resolver() -> bool:
+        """Return deterministic availability and count public resolver calls."""
+        nonlocal call_count
+        call_count += 1
+        return available
+
+    monkeypatch.delenv(_ENV_VAR, raising=False)
+    monkeypatch.setattr(rust_api, "_check_rust_available", _counting_resolver)
+
+    for _ in range(2):
+        assert is_rust_available() is available, (
+            "public probe must return the dispatch resolver availability"
+        )
+
+    assert call_count == 2, "public probe should call the dispatch resolver each time"
+
+
+def test_public_probe_honours_test_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The public probe reflects ``set_rust_availability_for_testing``."""
+    monkeypatch.delenv(_ENV_VAR, raising=False)
+    _check_rust_available.cache_clear()
+    try:
+        set_rust_availability_for_testing(is_available=True)
+        assert is_rust_available() is True, "override should force availability"
+        assert get_stream_backend() is StreamBackend.RUST, (
+            "dispatcher should select Rust when the override forces availability"
+        )
+
+        set_rust_availability_for_testing(is_available=False)
+        assert is_rust_available() is False, "override should force unavailability"
+        assert get_stream_backend() is StreamBackend.PYTHON, (
+            "dispatcher should select Python when the override forces unavailability"
+        )
+    finally:
+        set_rust_availability_for_testing(is_available=None)
 
 
 def test_cache_clear_allows_recheck(

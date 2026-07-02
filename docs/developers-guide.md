@@ -5,10 +5,30 @@ test, lint, release, debugging, and extension workflows and acts as the source
 of truth for day-to-day contributor expectations. For the system design, see
 the [design document](cuprum-design.md); for where code lives, see the
 [repository layout](repository-layout.md); and for accepted architectural
-decisions, see
-[ADR-002: Additional Rust components](adr-002-additional-rust-components.md),
-[ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md), and
-[ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md).
+decisions, see:
+
+- [ADR-002: Additional Rust components](adr-002-additional-rust-components.md)
+- [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md)
+- [ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md)
+- [ADR-005: Unify Rust availability probe](adr-005-unified-rust-availability-probe.md)
+
+## Rust availability probing
+
+Stream backend availability is resolved through one cached entry point:
+`cuprum._backend._check_rust_available()`.
+
+`_check_rust_available()` first checks the testing override
+(`set_rust_availability_for_testing`). While active, that override
+short-circuits availability resolution and bypasses
+`cuprum._rust_backend.is_available()` entirely; otherwise the resolver falls
+back to that raw import probe.
+
+User callers should use `cuprum.is_rust_available()`, which delegates to
+`_check_rust_available()`, so the public answer and dispatch resolver cannot
+diverge within a process.
+
+Issue `#128` is resolved in this path: the public helper and backend
+dispatch now share the same cached resolver.
 
 ## Stream line-splitting properties
 
@@ -517,6 +537,27 @@ uv run pytest cuprum/unittests/test_tee_profile_worker_selector_reentrancy.py \
   cuprum/unittests/test_tee_profile_worker_concurrent_workers.py \
   cuprum/unittests/test_tee_profile_worker_env_preservation.py
 ```
+
+## Rust availability probe stack
+
+The Rust availability API uses a single source of truth:
+
+- `cuprum.rust.is_rust_available()` is the public entry point and returns
+  `cuprum._backend._check_rust_available()`.
+- `_backend._check_rust_available()` is `functools.lru_cache(maxsize=1)` and
+  short-circuits to `set_rust_availability_for_testing()` while an override is
+  active; otherwise it delegates to the private `_rust_backend.is_available()`
+  probe.
+- `get_stream_backend()` reads the same cached resolver, so
+  `CUPRUM_STREAM_BACKEND` dispatch and calls to `cuprum.is_rust_available()`
+  stay aligned.
+- Tests can force a deterministic result via
+  `set_rust_availability_for_testing(is_available=...)`, which also clears the
+  two relevant caches.
+
+Keep tests that bypass `cuprum.is_rust_available()` focused on this private
+layer, because `_rust_backend.is_available()` is an uncached import probe
+without lifetime caching.
 
 ## Folded-stack summarizer (`benchmarks/summarize_folded.py`)
 
