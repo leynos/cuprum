@@ -39,6 +39,19 @@ catalogue = ProgramCatalogue(projects=(project,))
 Downstream services can fetch metadata via `catalogue.visible_settings()` to
 propagate noise filters and documentation links alongside the allowlist.
 
+### Handling duplicate catalogue entries
+
+Catalogue construction rejects ambiguous project metadata before any command is
+built. If two project entries use the same name, `ProgramCatalogue` raises
+`DuplicateProjectError`; the exception carries the duplicated name in its
+`project_name` attribute. If two projects claim the same `Program`, catalogue
+construction raises `DuplicateProgramError`; the exception carries the contested
+`program` and the first owning project name in `owner`.
+
+Both duplicate exceptions subclass `ValueError`, so existing configuration
+loading code that catches `ValueError` continues to work while newer callers can
+inspect the structured payloads directly.
+
 ## Typed command core
 
 Cuprum provides `sh.make` to build typed `SafeCmd` instances from curated
