@@ -1,0 +1,252 @@
+# serializer version: 1
+# name: test_projection_snapshots_lock_the_wire_contract[exit]
+  dict({
+    'logging_extra': dict({
+      'cuprum_argv': tuple(
+        'echo',
+        'hello',
+      ),
+      'cuprum_cwd': '<cwd>',
+      'cuprum_duration_s': '<duration>',
+      'cuprum_exit_code': 0,
+      'cuprum_phase': 'exit',
+      'cuprum_pid': '<pid>',
+      'cuprum_program': 'echo',
+      'cuprum_tags': dict({
+        'pipeline_stage_index': 0,
+        'pipeline_stages': 2,
+        'project': 'proj',
+      }),
+    }),
+    'metrics_labels': dict({
+      'program': 'echo',
+      'project': 'proj',
+    }),
+    'tracing_attributes': dict({
+      'cuprum.argv': list([
+        'echo',
+        'hello',
+      ]),
+      'cuprum.cwd': '<cwd>',
+      'cuprum.duration_s': '<duration>',
+      'cuprum.exit_code': 0,
+      'cuprum.pid': '<pid>',
+      'cuprum.pipeline_stage_index': 0,
+      'cuprum.pipeline_stages': 2,
+      'cuprum.program': 'echo',
+      'cuprum.project': 'proj',
+    }),
+  })
+# ---
+# name: test_projection_snapshots_lock_the_wire_contract[plan]
+  dict({
+    'logging_extra': dict({
+      'cuprum_argv': tuple(
+        'echo',
+        'hello',
+      ),
+      'cuprum_cwd': '<cwd>',
+      'cuprum_phase': 'plan',
+      'cuprum_program': 'echo',
+      'cuprum_tags': dict({
+        'pipeline_stage_index': 0,
+        'pipeline_stages': 2,
+        'project': 'proj',
+      }),
+    }),
+    'metrics_labels': dict({
+      'program': 'echo',
+      'project': 'proj',
+    }),
+    'tracing_attributes': dict({
+      'cuprum.argv': list([
+        'echo',
+        'hello',
+      ]),
+      'cuprum.cwd': '<cwd>',
+      'cuprum.pipeline_stage_index': 0,
+      'cuprum.pipeline_stages': 2,
+      'cuprum.program': 'echo',
+      'cuprum.project': 'proj',
+    }),
+  })
+# ---
+# name: test_projection_snapshots_lock_the_wire_contract[start]
+  dict({
+    'logging_extra': dict({
+      'cuprum_argv': tuple(
+        'echo',
+        'hello',
+      ),
+      'cuprum_cwd': '<cwd>',
+      'cuprum_phase': 'start',
+      'cuprum_pid': '<pid>',
+      'cuprum_program': 'echo',
+      'cuprum_tags': dict({
+        'pipeline_stage_index': 0,
+        'pipeline_stages': 2,
+        'project': 'proj',
+      }),
+    }),
+    'metrics_labels': dict({
+      'program': 'echo',
+      'project': 'proj',
+    }),
+    'tracing_attributes': dict({
+      'cuprum.argv': list([
+        'echo',
+        'hello',
+      ]),
+      'cuprum.cwd': '<cwd>',
+      'cuprum.pid': '<pid>',
+      'cuprum.pipeline_stage_index': 0,
+      'cuprum.pipeline_stages': 2,
+      'cuprum.program': 'echo',
+      'cuprum.project': 'proj',
+    }),
+  })
+# ---
+# name: test_projection_snapshots_lock_the_wire_contract[stderr]
+  dict({
+    'logging_extra': dict({
+      'cuprum_argv': tuple(
+        'echo',
+        'hello',
+      ),
+      'cuprum_cwd': '<cwd>',
+      'cuprum_line': 'a line',
+      'cuprum_phase': 'stderr',
+      'cuprum_pid': '<pid>',
+      'cuprum_program': 'echo',
+      'cuprum_tags': dict({
+        'pipeline_stage_index': 0,
+        'pipeline_stages': 2,
+        'project': 'proj',
+      }),
+    }),
+    'metrics_labels': dict({
+      'program': 'echo',
+      'project': 'proj',
+    }),
+    'tracing_attributes': dict({
+      'cuprum.argv': list([
+        'echo',
+        'hello',
+      ]),
+      'cuprum.cwd': '<cwd>',
+      'cuprum.line': 'a line',
+      'cuprum.pid': '<pid>',
+      'cuprum.pipeline_stage_index': 0,
+      'cuprum.pipeline_stages': 2,
+      'cuprum.program': 'echo',
+      'cuprum.project': 'proj',
+    }),
+  })
+# ---
+# name: test_projection_snapshots_lock_the_wire_contract[stdin]
+  dict({
+    'logging_extra': dict({
+      'cuprum_argv': tuple(
+        'echo',
+        'hello',
+      ),
+      'cuprum_cwd': '<cwd>',
+      'cuprum_phase': 'stdin',
+      'cuprum_pid': '<pid>',
+      'cuprum_program': 'echo',
+      'cuprum_tags': dict({
+        'pipeline_stage_index': 0,
+        'pipeline_stages': 2,
+        'project': 'proj',
+      }),
+    }),
+    'metrics_labels': dict({
+      'program': 'echo',
+      'project': 'proj',
+    }),
+    'tracing_attributes': dict({
+      'cuprum.argv': list([
+        'echo',
+        'hello',
+      ]),
+      'cuprum.cwd': '<cwd>',
+      'cuprum.pid': '<pid>',
+      'cuprum.pipeline_stage_index': 0,
+      'cuprum.pipeline_stages': 2,
+      'cuprum.program': 'echo',
+      'cuprum.project': 'proj',
+    }),
+  })
+# ---
+# name: test_projection_snapshots_lock_the_wire_contract[stdin_error]
+  dict({
+    'logging_extra': dict({
+      'cuprum_argv': tuple(
+        'echo',
+        'hello',
+      ),
+      'cuprum_cwd': '<cwd>',
+      'cuprum_phase': 'stdin_error',
+      'cuprum_pid': '<pid>',
+      'cuprum_program': 'echo',
+      'cuprum_tags': dict({
+        'pipeline_stage_index': 0,
+        'pipeline_stages': 2,
+        'project': 'proj',
+      }),
+    }),
+    'metrics_labels': dict({
+      'program': 'echo',
+      'project': 'proj',
+    }),
+    'tracing_attributes': dict({
+      'cuprum.argv': list([
+        'echo',
+        'hello',
+      ]),
+      'cuprum.cwd': '<cwd>',
+      'cuprum.pid': '<pid>',
+      'cuprum.pipeline_stage_index': 0,
+      'cuprum.pipeline_stages': 2,
+      'cuprum.program': 'echo',
+      'cuprum.project': 'proj',
+    }),
+  })
+# ---
+# name: test_projection_snapshots_lock_the_wire_contract[stdout]
+  dict({
+    'logging_extra': dict({
+      'cuprum_argv': tuple(
+        'echo',
+        'hello',
+      ),
+      'cuprum_cwd': '<cwd>',
+      'cuprum_line': 'a line',
+      'cuprum_phase': 'stdout',
+      'cuprum_pid': '<pid>',
+      'cuprum_program': 'echo',
+      'cuprum_tags': dict({
+        'pipeline_stage_index': 0,
+        'pipeline_stages': 2,
+        'project': 'proj',
+      }),
+    }),
+    'metrics_labels': dict({
+      'program': 'echo',
+      'project': 'proj',
+    }),
+    'tracing_attributes': dict({
+      'cuprum.argv': list([
+        'echo',
+        'hello',
+      ]),
+      'cuprum.cwd': '<cwd>',
+      'cuprum.line': 'a line',
+      'cuprum.pid': '<pid>',
+      'cuprum.pipeline_stage_index': 0,
+      'cuprum.pipeline_stages': 2,
+      'cuprum.program': 'echo',
+      'cuprum.project': 'proj',
+    }),
+  })
+# ---

@@ -60,13 +60,30 @@ Example with prometheus_client::
 from __future__ import annotations
 
 import dataclasses as dc
-import threading
 import typing as typ
+
+from cuprum.adapters._support import _LockedStore, _project_tag
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.events import ExecEvent, ExecHook
+
+# Phases the metrics hook translates into collector updates; other phases
+# (for example ``plan``) deliberately record nothing.
+_HANDLED_PHASES: frozenset[str] = frozenset(
+    {"start", "stdout", "stderr", "stdin", "stdin_error", "exit"},
+)
+
+
+class _UnhandledMetricsPhaseError(RuntimeError):
+    """Raised when the handled phase guard and matcher drift apart."""
+
+    def __init__(self, phase: str) -> None:
+        """Initialise the invariant failure for *phase*."""
+        self.phase = phase
+        msg = f"unhandled metrics phase: {phase!r}"
+        super().__init__(msg)
 
 
 class MetricsCollector(typ.Protocol):
@@ -118,11 +135,12 @@ class MetricsCollector(typ.Protocol):
 
 
 @dc.dataclass
-class InMemoryMetrics:
+class InMemoryMetrics(_LockedStore):
     """Reference in-memory metrics collector for testing and examples.
 
-    This collector stores metrics in memory for inspection. It is thread-safe
-    and suitable for unit testing but not for production use.
+    Storage and locking follow the shared :class:`~cuprum.adapters._support.
+    _LockedStore` contract: every mutator holds the lock, and ``reset()``
+    clears the store under it.
 
     Attributes
     ----------
@@ -135,7 +153,6 @@ class InMemoryMetrics:
 
     counters: dict[str, float] = dc.field(default_factory=dict)
     histograms: dict[str, list[float]] = dc.field(default_factory=dict)
-    _lock: threading.Lock = dc.field(default_factory=threading.Lock, repr=False)
 
     def inc_counter(
         self,
@@ -159,11 +176,10 @@ class InMemoryMetrics:
                 self.histograms[name] = []
             self.histograms[name].append(value)
 
-    def reset(self) -> None:
-        """Clear all collected metrics."""
-        with self._lock:
-            self.counters.clear()
-            self.histograms.clear()
+    def _clear(self) -> None:
+        """Clear all collected metrics; called under the store lock."""
+        self.counters.clear()
+        self.histograms.clear()
 
 
 class MetricsHook:
@@ -208,6 +224,10 @@ class MetricsHook:
 
     def __call__(self, event: ExecEvent) -> None:
         """Process an execution event and update metrics."""
+        # Defer label extraction until the phase is known to be handled so
+        # unhandled phases (for example ``plan``) do no projection work.
+        if event.phase not in _HANDLED_PHASES:
+            return
         labels = self._extract_labels(event)
 
         match event.phase:
@@ -223,6 +243,11 @@ class MetricsHook:
                 self._record_stdin_bytes(event, labels=labels)
             case "exit":
                 self._record_exit(event, labels=labels)
+            case _:
+                # Unreachable behind the _HANDLED_PHASES guard; kept so a new
+                # phase added to the guard without a handler fails loudly in
+                # review rather than silently matching nothing.
+                raise _UnhandledMetricsPhaseError(event.phase)
 
     def _increment(
         self,
@@ -266,11 +291,16 @@ class MetricsHook:
 
     @staticmethod
     def _extract_labels(event: ExecEvent) -> dict[str, str]:
-        """Extract label values from an event."""
-        project = str(event.tags.get("project", "unknown"))
+        """Extract low-cardinality label values from an event.
+
+        Labels deliberately use only the canonical ``program`` projection plus
+        the ``project`` tag; high-cardinality fields (pid, argv, lines) are
+        excluded by design.
+        """
+        program = event.program
         return {
-            "program": str(event.program),
-            "project": project,
+            "program": "unknown" if program is None else str(program),
+            "project": _project_tag(event) or "unknown",
         }
 
 
