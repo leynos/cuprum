@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+import textwrap
 import typing as typ
 
 import pytest
@@ -57,7 +58,7 @@ class _StubPumpReader:
     """Stub stream reader yielding queued chunks then EOF."""
 
     def __init__(self, chunks: list[bytes]) -> None:
-        """Initialise the stub with queued chunks."""
+        """Initialize the stub with queued chunks."""
         self._chunks = list(chunks)
         self.read_calls = 0
 
@@ -74,7 +75,7 @@ class _NeverEndingPumpReader:
     """Stub stream reader that emits once and never reaches EOF."""
 
     def __init__(self) -> None:
-        """Initialise the reader."""
+        """Initialize the reader."""
         self.read_calls = 0
 
     async def read(self, _: int) -> bytes:
@@ -90,7 +91,7 @@ class _StubPumpWriter:
     """Stub stream writer recording writes, drains, and closure."""
 
     def __init__(self, *, fail_on_drain_call: int | None = None) -> None:
-        """Initialise the stub with an optional drain failure point."""
+        """Initialize the stub with an optional drain failure point."""
         self.drain_calls = 0
         self.closed = False
         self.wait_closed_calls = 0
@@ -299,14 +300,15 @@ def test_pipeline_drains_upstream_after_downstream_closes() -> None:
     python = sh.make(python_program, catalogue=catalogue)
     producer = python(
         "-c",
-        "\n".join(
-            (
-                "import sys",
-                "for _ in range(4096):",
-                "    sys.stdout.write('payload-line\\n')",
-                "    sys.stdout.flush()",
-            ),
-        ),
+        textwrap.dedent(
+            """
+            import sys
+
+            for _ in range(4096):
+                sys.stdout.write('payload-line\\n')
+                sys.stdout.flush()
+            """
+        ).strip(),
     )
     early_consumer = python(
         "-c",

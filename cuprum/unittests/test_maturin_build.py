@@ -15,6 +15,7 @@ from tests.helpers.docs import repo_root
 from tests.helpers.maturin import (
     _AARCH64_CONTAINER_PIN_RE,
     _AARCH64_CONTAINER_USAGE_RE,
+    MaturinBuildError,
     build_native_wheel_artifact,
     read_expected_maturin_version,
     read_manylinux_aarch64_container_ref,
@@ -157,10 +158,13 @@ def test_build_native_wheel_artifact_reports_maturin_stderr(
             stderr="cargo fetch failed",
         )
 
-    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+    with pytest.raises(MaturinBuildError) as exc_info:
         _build_with_fake_subprocess_run(tmp_path, monkeypatch, fake_run)
 
     error_text = str(exc_info.value)
+    assert exc_info.value.stderr == "cargo fetch failed", (
+        "maturin build errors should preserve raw captured stderr"
+    )
     assert "python" in error_text, (
         "maturin failure diagnostics should include the Python executable"
     )

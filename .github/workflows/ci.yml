@@ -159,12 +159,15 @@ jobs:
         uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
 
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@455d9ed03477c0026da96c2541ca26569a74acac
-        with:
-          toolchain: '1.92.0'
+        run: |
+          rustup toolchain install stable \
+            --profile minimal \
+            --component rustfmt \
+            --component clippy
+          rustup default stable
 
       - name: Cache Cargo registry and git data
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.cargo/registry
