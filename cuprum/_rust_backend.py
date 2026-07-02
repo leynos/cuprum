@@ -8,6 +8,9 @@ resolver. The dispatch-aligned result lives in
 from __future__ import annotations
 
 import importlib
+import logging
+
+_LOGGER = logging.getLogger("cuprum.backend")
 
 
 def is_available() -> bool:
@@ -36,7 +39,22 @@ def is_available() -> bool:
         if isinstance(exc, ModuleNotFoundError) and exc.name == (
             "cuprum._rust_backend_native"
         ):
+            _LOGGER.debug(
+                "native Rust extension module is not importable",
+                extra={
+                    "event": "cuprum.rust_native_import_missing",
+                    "module_name": exc.name,
+                },
+            )
             return False
+        _LOGGER.warning(
+            "native Rust extension import failed",
+            exc_info=True,
+            extra={
+                "event": "cuprum.rust_native_import_failed",
+                "module_name": getattr(exc, "name", None),
+            },
+        )
         raise
     return bool(native.is_available())
 
