@@ -149,17 +149,11 @@ def test_rsync_argv_flags_match_options_in_fixed_order(
     archive=_ABS_PATHS,
     sources=st.lists(_ABS_PATHS, min_size=1, max_size=3),
     compression=_COMPRESSIONS,
-    source=_ABS_PATHS,
-    destination=_ABS_PATHS,
-    options=_RSYNC_OPTIONS,
 )
-def test_path_conversion_is_deterministic_and_type_insensitive(
+def test_tar_path_conversion_is_deterministic_and_type_insensitive(
     archive: str,
     sources: list[str],
     compression: Compression,
-    source: str,
-    destination: str,
-    options: RsyncOptions,
 ) -> None:
     """Equal inputs give equal argv; Path and str inputs agree."""
     tar_options = TarCreateOptions(compression=compression)
@@ -174,6 +168,15 @@ def test_path_conversion_is_deterministic_and_type_insensitive(
     )
     assert from_paths == from_strings, "Path inputs must match str inputs"
 
+
+@settings(max_examples=200)
+@given(source=_ABS_PATHS, destination=_ABS_PATHS, options=_RSYNC_OPTIONS)
+def test_rsync_path_conversion_is_deterministic_and_type_insensitive(
+    source: str,
+    destination: str,
+    options: RsyncOptions,
+) -> None:
+    """Equal inputs give equal argv; Path and str inputs agree."""
     rsync_from_strings = _rsync_argv(source, destination, options)
     assert rsync_from_strings == _rsync_argv(
         Path(source),
