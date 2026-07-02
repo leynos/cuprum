@@ -264,11 +264,13 @@ def test_pipeline_rejects_output_combined_with_flat_kwargs() -> None:
         "import sys; sys.stdout.write(sys.stdin.read())",
     )
 
-    with (
-        scoped(ScopeConfig(allowlist=frozenset([python_program]))),
-        pytest.raises(ValueError, match="not both"),
-    ):
-        pipeline.run_sync(output=RunOutputOptions(), capture=True)
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        with pytest.raises(ValueError, match="not both"):
+            pipeline.run_sync(output=RunOutputOptions(), capture=True)
+
+        unknown_output_kwargs: dict[str, typ.Any] = {"captuer": True}
+        with pytest.raises(TypeError, match="unexpected keyword"):
+            pipeline.run_sync(**unknown_output_kwargs)
 def test_pipeline_run_streams_stdout_between_stages(stream_backend: str) -> None:
     """Pipeline.run_sync streams stdout into the next stage stdin."""
     catalogue, python_program = python_catalogue()
