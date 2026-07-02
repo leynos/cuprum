@@ -1425,7 +1425,10 @@ extend. The following decisions guide the core builder set:
 - Builders validate inputs internally and expose `allow_relative` parameters
   on option dataclasses where relative paths are expected to be legitimate.
 - `RsyncOptions` and `TarCreateOptions` bundle flag choices to keep builder
-  function signatures short and lint-friendly.
+  function signatures short and lint-friendly. `TarCreateOptions.compression`
+  is a single `Compression` enum (`NONE`, `GZIP`, `BZIP2`, `XZ`) rather than
+  mutually-exclusive booleans, so selecting two algorithms at once is not a
+  representable state.
 
 ______________________________________________________________________
 

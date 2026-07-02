@@ -5,9 +5,15 @@ from __future__ import annotations
 from cuprum.builders.args import GitRef, SafePath, git_ref, safe_path
 from cuprum.builders.git import git_checkout, git_rev_parse, git_status
 from cuprum.builders.rsync import RsyncOptions, rsync_sync
-from cuprum.builders.tar import TarCreateOptions, tar_create, tar_extract
+from cuprum.builders.tar import (
+    Compression,
+    TarCreateOptions,
+    tar_create,
+    tar_extract,
+)
 
 __all__ = [
+    "Compression",
     "GitRef",
     "RsyncOptions",
     "SafePath",
