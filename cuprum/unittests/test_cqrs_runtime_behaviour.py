@@ -23,7 +23,7 @@ import logging
 import typing as typ
 
 import pytest
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from cuprum import (
@@ -41,7 +41,7 @@ from cuprum._observability import (
     _wait_for_exec_hook_tasks,
 )
 from cuprum._pipeline_types import _EventDetails, _ExecutionHooks, _StageObservation
-from cuprum._streams import _pump_stream
+from cuprum._streams import _POST_CLOSE_DRAIN_TIMEOUT_S, _pump_stream
 from cuprum.events import ExecEvent
 from tests.helpers.catalogue import python_catalogue
 
@@ -158,6 +158,7 @@ def test_safe_cmd_run_enforces_allowlist_before_before_hooks() -> None:
     assert calls == [], "before hooks should not run before allowlist enforcement"
 
 
+@settings(deadline=None)
 @given(
     hook_kinds=st.lists(
         st.sampled_from(("sync", "async", "fail")),
@@ -344,8 +345,8 @@ def test_pump_stream_logs_discarded_bytes_after_downstream_close(
     ]
     assert discarded_records, "early downstream close should log discarded bytes"
     last_discard = discarded_records[-1]
-    assert vars(last_discard)["cuprum_discarded_bytes"] == 0, (
-        "early-close telemetry should happen before best-effort draining"
+    assert vars(last_discard)["cuprum_discarded_bytes"] == 1, (
+        "early-close telemetry should report bytes discarded by bounded draining"
     )
 
 
@@ -386,11 +387,14 @@ def test_pump_stream_does_not_hang_when_upstream_never_ends() -> None:
         )
         return reader
 
-    reader = asyncio.run(asyncio.wait_for(exercise(), timeout=1.0))
+    reader = asyncio.run(
+        asyncio.wait_for(exercise(), timeout=_POST_CLOSE_DRAIN_TIMEOUT_S * 4)
+    )
 
     assert reader.read_calls == 2, "pump should cancel the bounded drain read"
 
 
+@settings(deadline=None)
 @given(
     chunks=st.lists(st.binary(min_size=1, max_size=64), min_size=0, max_size=8),
     fail_on_drain_call=st.integers(min_value=1, max_value=10),

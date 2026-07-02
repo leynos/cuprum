@@ -150,11 +150,11 @@ async def _relay_chunks(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter | None,
 ) -> None:
-    """Copy chunks downstream until EOF, draining after an early close.
+    """Copy chunks downstream until EOF, bounded-draining after an early close.
 
     When the writer is absent or reports :attr:`_WriteOutcome.CLOSED`, the
-    reader is still consumed to EOF so upstream stages do not block on a
-    full pipe.
+    reader is best-effort bounded-drained so upstream stages do not block on a
+    full pipe indefinitely.
     """
     has_downstream_closed = False
     while writer is not None:
@@ -164,13 +164,13 @@ async def _relay_chunks(
         if await _write_to_stream_writer(writer, chunk) is _WriteOutcome.CLOSED:
             has_downstream_closed = True
             break
+    discarded_bytes = await _drain_stream_reader_bounded(reader)
     if has_downstream_closed:
         _LOGGER.warning(
             "stream_downstream_closed discarded_bytes=%s",
-            0,
-            extra={"cuprum_discarded_bytes": 0},
+            discarded_bytes,
+            extra={"cuprum_discarded_bytes": discarded_bytes},
         )
-    await _drain_stream_reader_bounded(reader)
 
 async def _drain_stream_reader(reader: asyncio.StreamReader) -> int:
     """Consume the reader to EOF, discarding the data and returning byte count."""
