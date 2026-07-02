@@ -35,7 +35,9 @@ class TestMetricsHook:
         assert error.phase == "future_phase", (
             "unhandled metrics phase errors should expose structured phase data"
         )
-        assert str(error) == "unhandled metrics phase: 'future_phase'"
+        assert str(error) == "unhandled metrics phase: 'future_phase'", (
+            "unhandled metrics phase errors should include the phase in text"
+        )
 
     def test_increments_execution_counter(self) -> None:
         """Hook increments cuprum_executions_total on start."""
@@ -48,21 +50,19 @@ class TestMetricsHook:
         with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
-        assert metrics.counters.get("cuprum_executions_total") == pytest.approx(1.0)
+        assert metrics.counters.get("cuprum_executions_total") == pytest.approx(1.0), (
+            "start events should increment the executions counter"
+        )
 
     def test_counts_output_lines(self) -> None:
         """Hook counts stdout and stderr lines."""
         builder, catalogue = _python_builder(project_name="metrics-lines")
         cmd = builder(
             "-c",
-            "\n".join(
-                (
-                    "import sys",
-                    "print('out1')",
-                    "print('out2')",
-                    "print('err1', file=sys.stderr)",
-                ),
-            ),
+            """import sys
+print('out1')
+print('out2')
+print('err1', file=sys.stderr)""",
         )
 
         metrics = InMemoryMetrics()
@@ -71,8 +71,12 @@ class TestMetricsHook:
         with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
-        assert metrics.counters.get("cuprum_stdout_lines_total") == pytest.approx(2.0)
-        assert metrics.counters.get("cuprum_stderr_lines_total") == pytest.approx(1.0)
+        assert metrics.counters.get("cuprum_stdout_lines_total") == pytest.approx(
+            2.0
+        ), "stdout events should increment the stdout line counter"
+        assert metrics.counters.get("cuprum_stderr_lines_total") == pytest.approx(
+            1.0
+        ), "stderr events should increment the stderr line counter"
 
     def test_records_duration_histogram(self) -> None:
         """Hook records execution duration in histogram."""
@@ -86,8 +90,8 @@ class TestMetricsHook:
             cmd.run_sync()
 
         durations = metrics.histograms.get("cuprum_duration_seconds", [])
-        assert len(durations) == 1
-        assert durations[0] >= 0.0
+        assert len(durations) == 1, "exit events should record one duration sample"
+        assert durations[0] >= 0.0, "duration samples should be non-negative"
 
     def test_counts_failures(self) -> None:
         """Hook increments failure counter on non-zero exit."""
@@ -100,7 +104,9 @@ class TestMetricsHook:
         with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
-        assert metrics.counters.get("cuprum_failures_total") == pytest.approx(1.0)
+        assert metrics.counters.get("cuprum_failures_total") == pytest.approx(1.0), (
+            "non-zero exits should increment the failures counter"
+        )
 
     @pytest.mark.parametrize(
         ("phase", "extra_kwargs", "metric_name", "expected_value"),
@@ -143,7 +149,9 @@ class TestMetricsHook:
             )
         )
 
-        assert metrics.counters.get(metric_name) == pytest.approx(expected_value)
+        assert metrics.counters.get(metric_name) == pytest.approx(expected_value), (
+            f"{phase} events should update {metric_name}"
+        )
 
     def test_factory_function_returns_hook(self) -> None:
         """metrics_hook() factory returns a valid ExecHook."""
@@ -156,7 +164,9 @@ class TestMetricsHook:
         with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
-        assert metrics.counters.get("cuprum_executions_total") == pytest.approx(1.0)
+        assert metrics.counters.get("cuprum_executions_total") == pytest.approx(1.0), (
+            "metrics_hook factory should return a hook that counts executions"
+        )
 
     def test_inmemory_metrics_reset(self) -> None:
         """InMemoryMetrics.reset() clears all metrics."""
@@ -164,13 +174,17 @@ class TestMetricsHook:
         metrics.inc_counter("test", 1.0, {})
         metrics.observe_histogram("test_hist", 0.5, {})
 
-        assert metrics.counters.get("test") == pytest.approx(1.0)
-        assert len(metrics.histograms.get("test_hist", [])) == 1
+        assert metrics.counters.get("test") == pytest.approx(1.0), (
+            "in-memory metrics should record counters before reset"
+        )
+        assert len(metrics.histograms.get("test_hist", [])) == 1, (
+            "in-memory metrics should record histograms before reset"
+        )
 
         metrics.reset()
 
-        assert metrics.counters == {}
-        assert metrics.histograms == {}
+        assert metrics.counters == {}, "reset should clear in-memory counters"
+        assert metrics.histograms == {}, "reset should clear in-memory histograms"
 
     def test_unhandled_phase_does_not_project_labels(self) -> None:
         """Unhandled phases return before touching event label fields."""
@@ -201,8 +215,8 @@ class TestMetricsHook:
 
         hook(event)
 
-        assert metrics.counters == {}
-        assert metrics.histograms == {}
+        assert metrics.counters == {}, "unhandled phases should not mutate counters"
+        assert metrics.histograms == {}, "unhandled phases should not mutate histograms"
 
     def test_concurrent_metrics_reset_leaves_valid_empty_state(self) -> None:
         """Concurrent reset calls keep the in-memory metrics store coherent."""
@@ -220,8 +234,10 @@ class TestMetricsHook:
 
         metrics.reset()
 
-        assert metrics.counters == {}
-        assert metrics.histograms == {}
+        assert metrics.counters == {}, "concurrent reset should leave counters empty"
+        assert metrics.histograms == {}, (
+            "concurrent reset should leave histograms empty"
+        )
 
     def test_passes_program_and_project_labels(self) -> None:
         """MetricsHook passes correct labels to collector."""
