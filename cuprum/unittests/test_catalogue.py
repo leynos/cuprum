@@ -13,6 +13,8 @@ from cuprum.catalogue import (
     LS,
     RSYNC,
     TAR,
+    DuplicateProgramError,
+    DuplicateProjectError,
     ProgramCatalogue,
     ProjectSettings,
     UnknownProgramError,
@@ -87,9 +89,11 @@ def test_duplicate_project_names_are_rejected() -> None:
         documentation_locations=("https://example.test/docs",),
         noise_rules=(r"^info",),
     )
-    with pytest.raises(ValueError, match="duplicate") as exc:
+    with pytest.raises(DuplicateProjectError, match="duplicate") as exc:
         ProgramCatalogue(projects=(dup, dup))
-    assert "duplicate" in str(exc.value), "Error message must mention duplicate name"
+    assert exc.value.project_name == "duplicate", (
+        "Error must carry the duplicated project name"
+    )
 
 
 def test_duplicate_programs_across_projects_are_rejected() -> None:
@@ -107,11 +111,11 @@ def test_duplicate_programs_across_projects_are_rejected() -> None:
         documentation_locations=("https://example.test/second",),
         noise_rules=(r"^second",),
     )
-    with pytest.raises(ValueError, match="shared") as exc:
+    with pytest.raises(DuplicateProgramError, match="shared") as exc:
         ProgramCatalogue(projects=(first, second))
-    assert "shared" in str(exc.value), "Error must mention the shared program name"
-    assert "first" in str(exc.value), (
-        "Error must include the original owning project name"
+    assert exc.value.program == shared, "Error must carry the contested program"
+    assert exc.value.owner == "first", (
+        "Error must carry the original owning project name"
     )
 
 
