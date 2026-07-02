@@ -1,4 +1,16 @@
-"""Stream coordination for pipeline execution."""
+"""Pipeline stream pumping, capture collection, and backend dispatch.
+
+This module handles data movement after ``cuprum._process_lifecycle`` has
+spawned each subprocess with the canonical stdio handles from
+``cuprum._pipeline_stage_streams``. It creates the tasks that capture final
+stdout and per-stage stderr, pumps stdout from one stage into the next stage's
+stdin, and chooses between the Python and Rust stream backends for that pump.
+
+The module intentionally consumes the canonical stage stream policy instead of
+recomputing it. That keeps lifecycle code responsible for process ownership,
+``_pipeline_stage_streams`` responsible for stdio shape, and this module
+responsible for moving and collecting bytes once those streams exist.
+"""
 
 from __future__ import annotations
 

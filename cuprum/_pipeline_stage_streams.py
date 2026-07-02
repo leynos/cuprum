@@ -1,4 +1,15 @@
-"""Pipeline stage stream setup and capture helpers."""
+"""Canonical stream policy and capture-task helpers for pipeline stages.
+
+This module owns the pipeline-specific PIPE-versus-DEVNULL decision used while
+spawning subprocess stages. ``cuprum._process_lifecycle`` asks
+``_get_stage_stream_fds`` for each stage's stdio handles before it calls
+``asyncio.create_subprocess_exec``, while ``cuprum._pipeline_streams`` re-exports
+the capture-task helper used after each process is started.
+
+Keep stdio policy changes here so the process lifecycle code stays focused on
+starting, observing, waiting for, and cleaning up subprocesses rather than
+duplicating stream-selection rules inline.
+"""
 
 from __future__ import annotations
 
