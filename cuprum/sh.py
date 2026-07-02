@@ -295,6 +295,54 @@ class IOOptions(RunOutputOptions):
         )
 
 
+class _DeprecatedOutputFlags(typ.TypedDict, total=False):
+    """Deprecated flat ``capture``/``echo`` flags for ``Pipeline.run``."""
+
+    capture: bool
+    echo: bool
+
+
+def _resolve_pipeline_output(
+    output: RunOutputOptions | None,
+    flags: cabc.Mapping[str, bool],
+) -> RunOutputOptions:
+    """Resolve pipeline output options, deprecating flat ``capture``/``echo``.
+
+    ``flags`` is typed loosely as a mapping because the type checker cannot
+    yet propagate ``Unpack[_DeprecatedOutputFlags]`` kwargs; the callers keep
+    the precise ``TypedDict`` surface. Mirrors the ``IOOptions`` deprecation
+    pattern: the flat flags keep working but emit a ``DeprecationWarning``,
+    and combining them with ``output`` is rejected because the caller's intent
+    would be ambiguous. Unknown keys are rejected with ``TypeError`` to
+    preserve the strict keyword surface.
+
+    Example
+    -------
+    >>> _resolve_pipeline_output(None, {})
+    RunOutputOptions(capture=True, echo=False)
+    """
+    unknown = set(flags) - {"capture", "echo"}
+    if unknown:
+        joined = ", ".join(sorted(unknown))
+        msg = f"Pipeline.run/run_sync got unexpected keyword arguments: {joined}"
+        raise TypeError(msg)
+    if not flags:
+        return output or RunOutputOptions()
+    if output is not None:
+        msg = "Pass either 'output' or the deprecated 'capture'/'echo' flags, not both"
+        raise ValueError(msg)
+    warnings.warn(
+        "Pipeline.run/run_sync 'capture' and 'echo' keyword arguments are "
+        "deprecated; pass output=RunOutputOptions(...) instead",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    return RunOutputOptions(
+        capture=flags.get("capture", True),
+        echo=flags.get("echo", False),
+    )
+
+
 def _prepare_execution_observation(
     cmd: SafeCmd,
     context: ExecutionContext,
@@ -491,16 +539,45 @@ class Pipeline:
     async def run(
         self,
         *,
-        capture: bool = True,
-        echo: bool = False,
+        output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
+        **deprecated_flags: typ.Unpack[_DeprecatedOutputFlags],
     ) -> PipelineResult:
-        """Execute the pipeline asynchronously with streaming and backpressure."""
+        """Execute the pipeline asynchronously with streaming and backpressure.
+
+        Parameters
+        ----------
+        output:
+            Optional ``RunOutputOptions`` controlling stdout/stderr handling,
+            mirroring :meth:`SafeCmd.run`. Defaults to ``RunOutputOptions()``
+            (capture on, echo off).
+        timeout:
+            Optional wall-clock timeout in seconds; ``None`` disables timeouts.
+        context:
+            Optional execution settings such as env, cwd, and cancel grace.
+        deprecated_flags:
+            Deprecated flat ``capture`` / ``echo`` flags retained for
+            backwards compatibility; pass ``output=RunOutputOptions(...)``
+            instead. Supplying either emits a ``DeprecationWarning``;
+            combining them with ``output`` raises ``ValueError``.
+
+        Returns
+        -------
+        PipelineResult
+            Structured per-stage results for the completed pipeline.
+
+        Raises
+        ------
+        ValueError
+            If both ``output`` and the deprecated ``capture``/``echo`` flags
+            are supplied.
+        """
+        out = _resolve_pipeline_output(output, deprecated_flags)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         config = _prepare_pipeline_config(
-            capture=capture,
-            echo=echo,
+            capture=out.capture,
+            echo=out.echo,
             timeout=effective_timeout,
             context=context,
         )
@@ -509,16 +586,22 @@ class Pipeline:
     def run_sync(
         self,
         *,
-        capture: bool = True,
-        echo: bool = False,
+        output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
+        **deprecated_flags: typ.Unpack[_DeprecatedOutputFlags],
     ) -> PipelineResult:
-        """Execute the pipeline synchronously via ``asyncio.run``."""
+        """Execute the pipeline synchronously via ``asyncio.run``.
+
+        Mirrors :meth:`run`; all parameters and return semantics are identical,
+        including the deprecation of the flat ``capture``/``echo`` flags.
+        """
+        # Resolve here so the DeprecationWarning points at the caller rather
+        # than at the internal ``self.run`` delegation.
+        out = _resolve_pipeline_output(output, deprecated_flags)
         return asyncio.run(
             self.run(
-                capture=capture,
-                echo=echo,
+                output=out,
                 timeout=timeout,
                 context=context,
             ),

@@ -200,8 +200,12 @@ Notes:
 
 - Only the final stage's stdout is captured; intermediate stage stdout is
   streamed and represented as `None` in `result.stages`.
-- `echo=True` echoes the final stage stdout and all stage stderr streams to
-  their configured sinks.
+- `Pipeline.run` / `run_sync` accept the same `output: RunOutputOptions`
+  parameter as `SafeCmd.run` / `run_sync`, so generic helpers can call either
+  type with one convention. The flat `capture` / `echo` keyword arguments are
+  deprecated and emit a `DeprecationWarning`.
+- `RunOutputOptions(echo=True)` echoes the final stage stdout and all stage
+  stderr streams to their configured sinks.
 - Pipelines fail fast: when a stage exits non-zero, Cuprum terminates the
   remaining stages. The failing stage is available via `result.failure` /
   `result.failure_index`.
@@ -252,26 +256,17 @@ async def greet() -> None:
 `IOOptions` is a deprecated alias for `RunOutputOptions`; keep using
 `RunOutputOptions` in new code.
 
-`Pipeline.run()` and `Pipeline.run_sync()` keep legacy `capture` / `echo`
-keyword arguments until issue #95 lands.
-
-Prior to this release, `run()` and `run_sync()` accepted `capture` and `echo`
-directly:
+Prior to this release, `Pipeline.run()` and `Pipeline.run_sync()` accepted
+`capture` and `echo` directly:
 
 ```python
 # Before
-result = await cmd.run(capture=True, echo=False)
-result = cmd.run_sync(capture=False)
-```
+result = pipeline.run_sync(capture=False, echo=True)
 
-Group them into `RunOutputOptions`:
-
-```python
 # After
 from cuprum import RunOutputOptions
 
-result = await cmd.run(output=RunOutputOptions(capture=True, echo=False))
-result = cmd.run_sync(output=RunOutputOptions(capture=False))
+result = pipeline.run_sync(output=RunOutputOptions(capture=False, echo=True))
 ```
 
 `IOOptions` remains available only as a compatibility alias and emits a
@@ -281,6 +276,10 @@ result = cmd.run_sync(output=RunOutputOptions(capture=False))
 
 `RunOutputOptions(capture=True, echo=False)` is the default. Supply it
 explicitly only when overriding either flag.
+
+The flat `capture` / `echo` keyword arguments on `Pipeline.run` / `run_sync`
+remain accepted for backwards compatibility but emit a `DeprecationWarning`;
+passing them together with `output` raises `ValueError`.
 
 If the awaiting task is cancelled while a command is running, Cuprum sends
 `SIGTERM` to the subprocess, waits for a short grace period, and then escalates
