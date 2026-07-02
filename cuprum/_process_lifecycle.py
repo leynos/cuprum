@@ -138,12 +138,19 @@ def _build_spawn_observations(
     config: _PipelineRunConfig,
 ) -> tuple[_StageObservation, ...]:
     """Build per-stage observation state for spawning a pipeline."""
-    from cuprum._pipeline_internals import _run_before_hooks, _StageObservation
+    from cuprum._pipeline_internals import (
+        _collect_hooks,
+        _enforce_allowlist,
+        _StageObservation,
+    )
 
-    hooks_by_stage = tuple(_run_before_hooks(cmd) for cmd in parts)
+    for cmd in parts:
+        _enforce_allowlist(cmd)
+    ctx = current_context()
+    hooks_by_stage = tuple(_collect_hooks(ctx) for _ in parts)
     pending_tasks: list[asyncio.Task[None]] = []
     cwd = None if config.ctx.cwd is None else Path(config.ctx.cwd)
-    scoped_overlay = current_context().env_overlay
+    scoped_overlay = ctx.env_overlay
     env_overlay = _freeze_str_mapping(
         merge_env_overlays(scoped_overlay, config.ctx.env),
     )

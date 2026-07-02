@@ -131,9 +131,13 @@ jobs:
     env:
       CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
       CODESCENE_CLI_SHA256: ${{ vars.CODESCENE_CLI_SHA256 }}
+      CARGO_HTTP_MULTIPLEXING: 'false'
+      CARGO_NET_RETRY: '5'
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -142,6 +146,28 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable \
+            --profile minimal \
+            --component rustfmt \
+            --component clippy
+          rustup default stable
+
+      - name: Cache Cargo registry and git data
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: cargo-coverage-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-coverage-${{ runner.os }}-
+
+      - name: Prepare Cargo dependencies
+        run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml
 
       - name: Install code
         run: make build

@@ -63,6 +63,8 @@
       'cuprum/unittests/test_ci_benchmark_ratchet_profile.py',
       'cuprum/unittests/test_concurrency.py',
       'cuprum/unittests/test_context.py',
+      'cuprum/unittests/test_cqrs_helpers.py',
+      'cuprum/unittests/test_cqrs_runtime_behaviour.py',
       'cuprum/unittests/test_env_context.py',
       'cuprum/unittests/test_env_context_properties.py',
       'cuprum/unittests/test_fetch_main_benchmark_baseline.py',

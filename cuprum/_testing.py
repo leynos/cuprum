@@ -15,7 +15,8 @@ import typing as typ
 from cuprum._backend import _check_rust_available, set_rust_availability_for_testing
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
-    _run_before_hooks,
+    _collect_hooks,
+    _enforce_allowlist,
     _run_pipeline,
 )
 from cuprum._pipeline_streams import (
@@ -93,7 +94,8 @@ _EXPORTS = {
     "_PipelineWaitResult": _PipelineWaitResult,
     "_prepare_pipeline_config": _prepare_pipeline_config,
     "_pump_stream_dispatch": _pump_stream_dispatch,
-    "_run_before_hooks": _run_before_hooks,
+    "_collect_hooks": _collect_hooks,
+    "_enforce_allowlist": _enforce_allowlist,
     "_run_pipeline": _run_pipeline,
     "_spawn_pipeline_processes": _spawn_pipeline_processes,
     "_terminate_process": _terminate_process,

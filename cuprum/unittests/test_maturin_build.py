@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.metadata as im
 import re
 import shutil
+import subprocess  # noqa: S404 - tests assert trusted maturin command handling.
 import sys
 import typing as typ
 
@@ -14,6 +15,7 @@ from tests.helpers.docs import repo_root
 from tests.helpers.maturin import (
     _AARCH64_CONTAINER_PIN_RE,
     _AARCH64_CONTAINER_USAGE_RE,
+    MaturinBuildError,
     build_native_wheel_artifact,
     read_expected_maturin_version,
     read_manylinux_aarch64_container_ref,
@@ -24,6 +26,7 @@ from tests.helpers.maturin import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib as pth
 
     from syrupy.assertion import SnapshotAssertion
@@ -103,6 +106,78 @@ def test_manylinux_aarch64_container_usage_regex_rejects_literal_image() -> None
     )
 
     assert _AARCH64_CONTAINER_USAGE_RE.search(yaml_line) is None
+
+
+def _build_with_fake_subprocess_run(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_run: cabc.Callable[..., subprocess.CompletedProcess[str]],
+) -> pth.Path:
+    """Build the native wheel while replacing ``subprocess.run``."""
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return build_native_wheel_artifact(repo_root(), tmp_path / "wheelhouse")
+
+
+def test_build_native_wheel_artifact_uses_locked_cargo_deps(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native wheel builds pass ``--locked`` through to maturin."""
+    captured_command: list[str] = []
+
+    def fake_run(
+        command: list[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        """Record the command and create the expected wheel artifact."""
+        captured_command.extend(command)
+        (tmp_path / "wheelhouse" / "cuprum-test.whl").touch()
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    wheel_path = _build_with_fake_subprocess_run(tmp_path, monkeypatch, fake_run)
+
+    assert wheel_path.name == "cuprum-test.whl", (
+        "native wheel helper should return the wheel created by fake maturin"
+    )
+    assert "--locked" in captured_command, (
+        "native wheel build should pass --locked through to maturin"
+    )
+
+
+def test_build_native_wheel_artifact_reports_maturin_stderr(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native wheel build failures include the command and captured stderr."""
+
+    def fake_run(
+        command: list[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        """Raise a deterministic maturin command failure."""
+        raise subprocess.CalledProcessError(
+            101,
+            command,
+            output="stdout text",
+            stderr="cargo fetch failed",
+        )
+
+    with pytest.raises(MaturinBuildError) as exc_info:
+        _build_with_fake_subprocess_run(tmp_path, monkeypatch, fake_run)
+
+    error_text = str(exc_info.value)
+    assert exc_info.value.stderr == "cargo fetch failed", (
+        "maturin build errors should preserve raw captured stderr"
+    )
+    assert "python" in error_text, (
+        "maturin failure diagnostics should include the Python executable"
+    )
+    assert "maturin build" in error_text, (
+        "maturin failure diagnostics should include the build command"
+    )
+    assert "cargo fetch failed" in error_text, (
+        "maturin failure diagnostics should include captured stderr"
+    )
 
 
 # pytest-timeout arms SIGALRM in the *parent* process; pytest-forked blocks the
