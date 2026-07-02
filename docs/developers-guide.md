@@ -106,8 +106,8 @@ skipping only for expected availability failures: a missing dev dependency
 (`ImportError`) or an interpreter whose opcode set CrossHair cannot yet trace
 (`crosshair.tracers.TraceException`, as with the `CALL_KW` gap on early Python
 3.15 betas, issue #109). Any other probe exception is allowed to propagate so
-unexpected import failures stay visible. The probe self-resolves once CrossHair
-supports the interpreter.
+that unexpected import failures stay visible. The probe self-resolves once
+CrossHair supports the interpreter.
 
 When changing `_emit_completed_lines`, `_split_complete_lines`, or
 `_strip_line_ending`, run:
