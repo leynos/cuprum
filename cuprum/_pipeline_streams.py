@@ -100,16 +100,6 @@ def _extract_stream_fd(
     return _fd_from_transport(transport)
 
 
-def _extract_reader_fd(reader: asyncio.StreamReader | None) -> int | None:
-    """Extract the raw FD from an asyncio ``StreamReader``."""
-    return _extract_stream_fd(reader)
-
-
-def _extract_writer_fd(writer: asyncio.StreamWriter | None) -> int | None:
-    """Extract the raw FD from an asyncio ``StreamWriter``."""
-    return _extract_stream_fd(writer)
-
-
 def _pause_reader_transport(
     reader: asyncio.StreamReader,
 ) -> cabc.Callable[[], None] | None:
@@ -273,8 +263,8 @@ async def _try_rust_pump(
     if _PUMP_STREAM_DISPATCH_TEST_HOOKS.force_fd_extraction_failure:
         return False
 
-    reader_fd = _extract_reader_fd(reader)
-    writer_fd = _extract_writer_fd(writer)
+    reader_fd = _extract_stream_fd(reader)
+    writer_fd = _extract_stream_fd(writer)
 
     if reader_fd is None or writer_fd is None:
         return False

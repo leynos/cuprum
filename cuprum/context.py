@@ -53,9 +53,8 @@ import typing as typ
 from contextvars import ContextVar, Token
 from types import MappingProxyType
 
-from cuprum.events import ExecHook
-
 if typ.TYPE_CHECKING:
+    from cuprum.events import ExecHook
     from cuprum.program import Program
     from cuprum.sh import CommandResult, SafeCmd
 
@@ -793,7 +792,6 @@ __all__ = [
     "BeforeHook",
     "CuprumContext",
     "EnvRegistration",
-    "ExecHook",
     "ForbiddenProgramError",
     "HookRegistration",
     "ScopeConfig",
