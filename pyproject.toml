@@ -32,6 +32,7 @@ dev = [
     # Keep in sync with .github/workflows/build-wheels.yml and
     # .github/actions/build-wheels/action.yml.
     "maturin==1.13.3",
+    "pyyaml>=6.0.3",
 ]
 
 [tool.ruff]
@@ -327,6 +328,35 @@ enable = [
 [tool.pytest.ini_options]
 # Tests automatically killed after seconds elapsed
 timeout = 30
+
+[tool.mutmut]
+# Flat layout: the package lives at the repository root.
+source_paths = ["cuprum/"]
+# The suite is split between tests/ and the in-package unit tests.
+pytest_add_cli_args_test_selection = ["tests/", "cuprum/unittests/"]
+# cuprum/unittests/ is the in-package unit-test suite and
+# cuprum/_testing.py is a test-only re-export surface for internal
+# helpers; mutants in either would be noise.
+do_not_mutate = ["cuprum/unittests/*", "cuprum/_testing.py"]
+# mutmut runs pytest from mutants/; copy the assets the suite resolves
+# relative to the repository root: the shared root conftest, the
+# benchmarks package imported by the benchmark and profiling tests, the
+# documentation exercised by the docs contract tests, the workflow and
+# action files read by the maturin pin and ratchet tests, and the Rust
+# tree the wheel-build snapshot test builds from (listed piecewise so a
+# local rust/target/ build directory is never copied; the crate
+# directory precedes the loose workspace files because mutmut creates
+# parent directories only when copying directories).
+also_copy = [
+    "conftest.py",
+    "benchmarks/",
+    "docs/",
+    ".github/",
+    "rust/cuprum-rust/",
+    "rust/Cargo.toml",
+    "rust/Cargo.lock",
+    "rust/dylint.toml",
+]
 
 [tool.uv]
 package = true

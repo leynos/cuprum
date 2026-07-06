@@ -1,0 +1,36 @@
+name: Mutation testing
+
+# Thin caller of the shared mutation-testing reusable workflow; caller
+# guide: leynos/shared-actions docs/mutation-mutmut-workflow.md.
+#
+# Only the Python package is covered. The Rust extension under rust/ is
+# deliberately not enrolled: the pinned mutation-cargo.yml reusable
+# workflow always fans a repository-root cargo-mutants target out for
+# workflow_dispatch full runs, and cuprum has no repository-root
+# Cargo.toml (the workspace manifest lives at rust/Cargo.toml), so those
+# shards would fail on every manual run. Revisit once the shared
+# workflow can target a workspace in a subdirectory.
+on:
+  schedule:
+    - cron: "20 8 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: mutation-testing-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mutation-python:
+    permissions:
+      contents: read
+      id-token: write # OIDC workflow-source resolution
+    uses: leynos/shared-actions/.github/workflows/mutation-mutmut.yml@47aea18960d24f33aedc4782ec6b73e365418313
+    with:
+      # Flat layout: the mutable source is the cuprum/ package at the
+      # repository root, so change detection watches it directly.
+      paths: "cuprum/"
+      # Flat layout has no src/ prefix to strip before module-glob
+      # translation.
+      module-prefix-strip: ""
