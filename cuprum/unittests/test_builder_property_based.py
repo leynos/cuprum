@@ -32,7 +32,6 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from cuprum.builders.rsync import (
-    _FLAG_ORDER,
     RsyncOptions,
     _rsync_argv,
     rsync_sync,
@@ -54,6 +53,13 @@ _COMPRESSION_BY_MEMBER = {
     Compression.XZ: "-J",
 }
 _ALL_COMPRESSION_FLAGS = {"-z", "-j", "-J"}
+_EXPECTED_RSYNC_FLAG_ORDER = (
+    ("archive", "--archive"),
+    ("delete", "--delete"),
+    ("dry_run", "--dry-run"),
+    ("verbose", "--verbose"),
+    ("compress", "--compress"),
+)
 
 # Path segments avoid ".", NUL, and separators so generated paths are
 # always SafePath-valid and normalisation is the identity.
@@ -136,9 +142,11 @@ def test_rsync_argv_flags_match_options_in_fixed_order(
     destination: str,
     options: RsyncOptions,
 ) -> None:
-    """Exactly the enabled flags appear, in _FLAG_ORDER, then the paths."""
+    """Exactly the enabled flags appear in expected order, then the paths."""
     argv = _rsync_argv(source, destination, options)
-    expected_flags = tuple(flag for attr, flag in _FLAG_ORDER if getattr(options, attr))
+    expected_flags = tuple(
+        flag for attr, flag in _EXPECTED_RSYNC_FLAG_ORDER if getattr(options, attr)
+    )
     assert argv == (*expected_flags, source, destination), (
         "argv must be the enabled flags in fixed order, then source and destination"
     )
@@ -178,6 +186,9 @@ def test_rsync_path_conversion_is_deterministic_and_type_insensitive(
 ) -> None:
     """Equal inputs give equal argv; Path and str inputs agree."""
     rsync_from_strings = _rsync_argv(source, destination, options)
+    assert rsync_from_strings == _rsync_argv(source, destination, options), (
+        "rsync argv construction must be deterministic"
+    )
     assert rsync_from_strings == _rsync_argv(
         Path(source),
         Path(destination),
