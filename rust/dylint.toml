@@ -1,2 +1,5 @@
 [no_std_fs_operations]
+# _rust_backend_native never opens filesystem paths itself; it wraps raw file
+# descriptors and handles received from the Python caller in std::fs::File, so
+# capability-based alternatives such as cap-std do not apply here.
 excluded_crates = ["_rust_backend_native"]

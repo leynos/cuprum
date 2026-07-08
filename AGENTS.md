@@ -168,7 +168,7 @@ working on the Rust portions of the project:
     ```sh
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
     cargo clippy --all-targets --all-features -- -D warnings
-    whitaker --all -- --all-targets --all-features
+    RUSTFLAGS="-D warnings" whitaker --all -- --all-targets --all-features
     ```
 
     linting every target with all features enabled and denying all Clippy
