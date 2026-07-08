@@ -212,17 +212,7 @@ _ALL_COMPRESSION_FLAGS = frozenset({"-z", "-j", "-J"})
 def test_tar_create_emits_at_most_one_compression_flag(
     compression: Compression,
 ) -> None:
-    """Property: no compression choice can produce two compression flags.
-
-    Modelling compression as a single enum makes the "two algorithms at once"
-    state unrepresentable, so the constructed argv may carry at most one of
-    the mutually-exclusive compression flags.
-
-    Parameters
-    ----------
-    compression : Compression
-        Generated compression member drawn from every enum value.
-    """
+    """No compression choice can produce two compression flags."""
     archive = Path("/srv/archive.tar")
     cmd = tar_create(
         archive,

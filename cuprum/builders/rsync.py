@@ -58,7 +58,30 @@ def rsync_sync(
     *,
     options: RsyncOptions | None = None,
 ) -> SafeCmd:
-    """Build an `rsync` synchronisation command."""
+    """Build an ``rsync`` synchronisation command.
+
+    Parameters
+    ----------
+    source
+        Source path to synchronise from.
+    destination
+        Destination path to synchronise to.
+    options
+        Optional rsync settings. When omitted, the command uses
+        ``RsyncOptions()``.
+
+    Returns
+    -------
+    SafeCmd
+        Safe command wrapper for the curated ``rsync`` program and generated
+        argv.
+
+    Raises
+    ------
+    ValueError
+        If ``source`` or ``destination`` is relative while relative paths are
+        not allowed.
+    """
     argv = _rsync_argv(source, destination, options or RsyncOptions())
     return sh.make(RSYNC)(*argv)
 

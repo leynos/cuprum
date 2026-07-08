@@ -42,14 +42,6 @@ class Compression(enum.Enum):
     XZ = "xz"
 
 
-_COMPRESSION_FLAGS: dict[Compression, str] = {
-    Compression.NONE: "",
-    Compression.GZIP: "-z",
-    Compression.BZIP2: "-j",
-    Compression.XZ: "-J",
-}
-
-
 @dc.dataclass(frozen=True, slots=True)
 class TarCreateOptions:
     """Optional flags for tar_create.
@@ -63,7 +55,17 @@ class TarCreateOptions:
 
 def _get_compression_flag(options: TarCreateOptions) -> str:
     """Return the compression flag for tar_create, or ``""`` for none."""
-    return _COMPRESSION_FLAGS[options.compression]
+    match options.compression:
+        case Compression.NONE:
+            return ""
+        case Compression.GZIP:
+            return "-z"
+        case Compression.BZIP2:
+            return "-j"
+        case Compression.XZ:
+            return "-J"
+        case never:
+            typ.assert_never(never)
 
 
 def _tar_create_argv(
@@ -101,7 +103,32 @@ def tar_create(
     *,
     options: TarCreateOptions | None = None,
 ) -> SafeCmd:
-    """Build a `tar` create command."""
+    """Build a ``tar`` create command.
+
+    Parameters
+    ----------
+    archive
+        Archive path passed after ``-f``.
+    sources
+        Source paths added to the archive, in order.
+    options
+        Optional create settings. When omitted, the command uses
+        ``TarCreateOptions()``.
+
+    Returns
+    -------
+    SafeCmd
+        Safe command wrapper for the curated ``tar`` program and generated
+        argv.
+
+    Raises
+    ------
+    ValueError
+        If ``sources`` is empty, or if any path is relative while relative
+        paths are not allowed.
+    TypeError
+        If ``sources`` is a bare string or ``Path`` instead of a sequence.
+    """
     argv = _tar_create_argv(archive, sources, options or TarCreateOptions())
     return sh.make(TAR)(*argv)
 
@@ -129,7 +156,28 @@ def tar_extract(
     destination: str | Path | None = None,
     allow_relative: bool = False,
 ) -> SafeCmd:
-    """Build a `tar` extract command."""
+    """Build a ``tar`` extract command.
+
+    Parameters
+    ----------
+    archive
+        Archive path passed after ``-f``.
+    destination
+        Optional extraction directory passed after ``-C``.
+    allow_relative
+        Allow ``archive`` and ``destination`` to be relative paths.
+
+    Returns
+    -------
+    SafeCmd
+        Safe command wrapper for the curated ``tar`` program and generated
+        argv.
+
+    Raises
+    ------
+    ValueError
+        If any path is relative while ``allow_relative`` is false.
+    """
     argv = _tar_extract_argv(archive, destination, allow_relative=allow_relative)
     return sh.make(TAR)(*argv)
 
