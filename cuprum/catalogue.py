@@ -32,8 +32,15 @@ class UnknownProgramError(LookupError):
 class DuplicateProjectError(ValueError):
     """Raised when a project name is registered more than once.
 
-    Carries the offending project name so callers can assert on the
-    rejection category and payload rather than parsing the message.
+    Parameters
+    ----------
+    project_name : str
+        The duplicated project name.
+
+    Attributes
+    ----------
+    project_name : str
+        The duplicated project name.
     """
 
     def __init__(self, project_name: str) -> None:
@@ -45,8 +52,19 @@ class DuplicateProjectError(ValueError):
 class DuplicateProgramError(ValueError):
     """Raised when a program is claimed by more than one project.
 
-    Carries the contested program and the name of the project that
-    already owns it.
+    Parameters
+    ----------
+    program : Program
+        The contested program.
+    owner : str
+        The name of the project that already owns the program.
+
+    Attributes
+    ----------
+    program : Program
+        The contested program.
+    owner : str
+        The existing owner's project name.
     """
 
     def __init__(self, program: Program, owner: str) -> None:
