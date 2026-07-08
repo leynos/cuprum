@@ -12,8 +12,10 @@ documented hazard, not an error) is pinned by a separate example test.
 from __future__ import annotations
 
 import collections.abc as cabc
+import contextvars
 import typing as typ
 
+import pytest
 from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, precondition, rule
@@ -152,3 +154,22 @@ def test_out_of_order_detach_restores_outer_snapshot() -> None:
         inner.detach()
         leaked = current_context().env_overlay or {}
         assert leaked.get("CUPRUM_TEST_OUTER") == "outer"
+
+
+def test_failed_cross_context_detach_can_be_retried() -> None:
+    """A failed reset must not poison a registration handle.
+
+    ``ContextVar`` tokens can only be reset inside the context that created
+    them. A cross-context detach raises ``ValueError``; the original context
+    must still be able to detach the handle afterwards.
+    """
+    with scoped(ScopeConfig()):
+        baseline = current_context()
+        handle = env(CUPRUM_TEST_RETRY="retry")
+
+        with pytest.raises(ValueError, match="different Context"):
+            contextvars.Context().run(handle.detach)
+
+        assert current_context() is not baseline
+        handle.detach()
+        assert current_context() is baseline

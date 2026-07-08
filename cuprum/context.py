@@ -585,10 +585,10 @@ class _TokenRegistration:
         """Restore the original context via the captured token."""
         if self._detached:
             return
-        self._detached = True
         if self._token is not None:
             _reset_context(self._token)
             self._token = None
+        self._detached = True
 
     def __enter__(self) -> typ.Self:
         """Enter context manager; the registration is already installed."""
