@@ -5,6 +5,7 @@ TOOLS = $(MDFORMAT_ALL) $(MDLINT) uv
 VENV_TOOLS = pytest ruff
 RUST_DIR ?= rust
 CARGO ?= cargo
+WHITAKER ?= whitaker
 BUILD_JOBS ?=
 RUST_FLAGS ?= -D warnings
 RUSTDOC_FLAGS ?= -D warnings
@@ -88,17 +89,17 @@ check-fmt: ruff ## Verify formatting
 	cd $(RUST_DIR) && $(CARGO) fmt --all -- --check
 	# mdformat-all doesn't currently do checking
 
-lint: ruff uv ## Run linters
+lint: ruff uv ## Run linters (Ruff, pylint, Clippy, Whitaker)
 	$(RUFF) check
 	$(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum
 	$(PYLINT) $(PYLINT_TARGETS)
 	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps
 	cd $(RUST_DIR) && $(CARGO) clippy $(CLIPPY_FLAGS)
-	@if ! $(LOCAL_TOOL_ENV) command -v whitaker >/dev/null 2>&1; then \
+	@if ! $(LOCAL_TOOL_ENV) command -v $(WHITAKER) >/dev/null 2>&1; then \
 	  echo "whitaker is required for linting. Install it before running this target." >&2; \
 	  exit 1; \
 	fi
-	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) whitaker --all -- $(CARGO_FLAGS)
+	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(RUST_FLAGS)" $(WHITAKER) --all -- $(CARGO_FLAGS)
 
 typecheck: build ## Run typechecking
 	$(UV_RUN_ENV) uv sync --group dev

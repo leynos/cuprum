@@ -53,10 +53,16 @@ jobs:
       - name: Install Whitaker
         run: |
           if [ "${{ steps.cache-whitaker.outputs.cache-hit }}" != "true" ]; then
-            cargo binstall --no-confirm --locked \
-              --git https://github.com/leynos/whitaker \
-              --version "${WHITAKER_INSTALLER_VERSION}" \
-              whitaker-installer
+            if cargo binstall --version >/dev/null 2>&1; then
+              cargo binstall --no-confirm --locked \
+                --git https://github.com/leynos/whitaker \
+                --version "${WHITAKER_INSTALLER_VERSION}" \
+                whitaker-installer
+            else
+              echo "cargo-binstall unavailable; building whitaker-installer from crates.io"
+              cargo install --locked whitaker-installer \
+                --version "${WHITAKER_INSTALLER_VERSION}"
+            fi
           fi
           whitaker-installer --cranelift
 
