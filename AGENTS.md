@@ -17,7 +17,8 @@
   what was changed and why.
 - **Use consistent spelling and grammar.** Comments must use en-GB-oxendict
   ("-ize" / "-yse" / "-our") spelling and grammar, with the exception of
-  references to external APIs.
+  references to external APIs. Markdown prose is enforced mechanically by the
+  pinned `typos` spelling gate in `make lint` and `make markdownlint`.
 - **Illustrate with clear examples.** Function documentation must include clear
   examples demonstrating usage and outcome. Test documentation should omit
   examples that only restate the test logic.
@@ -65,7 +66,7 @@
   - New functionality or behaviour changes are fully validated by relevant unit
     and behavioural tests.
   - Bug fixes include a failing test before the fix and a passing test
-    afterward.
+    afterwards.
   - Code passes lint checks.
   - Formatting is correct and validated.
 - **For Python files:**
@@ -81,6 +82,8 @@
     `make fmt` to apply fixes).
 - For Markdown files (`.md` only):
   - **Linting:** Passes markdown lint checks (`make markdownlint`).
+  - **Spelling:** Passes the en-GB-oxendict `typos` gate included in
+    `make markdownlint` and `make lint`.
   - **Mermaid diagrams:** Passes validation using nixie (`make nixie`).
 - **Committing:**
   - Only changes that meet all quality gates should be committed.
@@ -321,7 +324,12 @@ working on the Rust portions of the project:
 
 ## Markdown guidance
 
-- Validate Markdown files using `make markdownlint`.
+- Validate Markdown files using `make markdownlint`; this also runs the pinned
+  en-GB-oxendict `typos` spelling gate.
+- The spelling configuration `typos.toml` is generated. Put narrow
+  repository-only exceptions in `typos.local.toml`, then regenerate with
+  `uv run scripts/generate_typos_config.py`; never edit generated entries by
+  hand.
 - Run `make fmt` after documentation changes to format Markdown and fix table
   markup.
 - Validate Mermaid diagrams in Markdown by running `make nixie`.

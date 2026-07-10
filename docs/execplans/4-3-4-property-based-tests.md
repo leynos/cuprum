@@ -246,7 +246,7 @@ Run required quality gates and capture log evidence.
 
    Unit scope:
    - Hypothesis strategies for random payload bytes and random chunk boundaries.
-   - Backend-parametrised pipeline execution via `stream_backend`.
+   - Backend-parametrized pipeline execution via `stream_backend`.
    - Assertions that downstream-observed bytes match original bytes.
 
    Behavioural scope:
