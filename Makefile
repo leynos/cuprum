@@ -12,6 +12,8 @@ RUSTDOC_FLAGS ?= -D warnings
 CARGO_FLAGS ?= --all-targets --all-features
 CLIPPY_FLAGS ?= $(CARGO_FLAGS) -- $(RUST_FLAGS)
 TEST_FLAGS ?= $(CARGO_FLAGS)
+TYPOS_VERSION ?= 1.48.0
+TYPOS := uv tool run typos@$(TYPOS_VERSION)
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
 LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
 LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
@@ -29,7 +31,8 @@ PYLINT = $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) \
   --from '$(PYLINT_PYPY_SHIM)' --with 'pylint==$(PYLINT_VERSION)' pylint-pypy
 
 .PHONY: help all clean build build-release lint fmt check-fmt \
-        markdownlint nixie test typecheck benchmark-micro benchmark-e2e \
+        markdownlint spelling spelling-helper-test nixie test typecheck \
+        benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
 
 .DEFAULT_GOAL := all
@@ -50,6 +53,7 @@ clean: ## Remove build artifacts
 	  .mypy_cache .pytest_cache .coverage coverage.* \
 	  lcov.info htmlcov .venv
 	find . -type d -name '__pycache__' -print0 | xargs -0 -r rm -rf
+	rm -f .typos-oxendict-base.json .typos-oxendict-base.toml
 	cd $(RUST_DIR) && $(CARGO) clean
 
 define ensure_tool
@@ -100,6 +104,7 @@ lint: ruff uv ## Run linters (Ruff, pylint, Clippy, Whitaker)
 	  exit 1; \
 	fi
 	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(RUST_FLAGS)" $(WHITAKER) --all -- $(CARGO_FLAGS)
+	+$(MAKE) spelling
 
 typecheck: build ## Run typechecking
 	$(UV_RUN_ENV) uv sync --group dev
@@ -108,6 +113,19 @@ typecheck: build ## Run typechecking
 
 markdownlint: $(MDLINT) ## Lint Markdown files
 	$(LOCAL_TOOL_ENV) $(MDLINT) '**/*.md'
+	+$(MAKE) spelling
+
+spelling: spelling-helper-test ## Enforce en-GB-oxendict spelling in Markdown prose
+	@$(UV_RUN_ENV) uv run scripts/generate_typos_config.py
+	@git ls-files -z '*.md' | \
+		xargs -0 -r $(TYPOS) --config typos.toml --force-exclude
+
+spelling-helper-test: build ## Validate the shared spelling-policy integration
+	@PYTHONPATH=scripts $(UV_RUN_ENV) uv run --python 3.13 \
+		--with pytest-cov==7.0.0 \
+		python -m pytest scripts/tests/test_typos_rollout.py \
+		--cov=generate_typos_config --cov=typos_rollout \
+		--cov=typos_rollout_cache --cov-fail-under=90
 
 nixie: ## Validate Mermaid diagrams
 	$(call ensure_tool,nixie)

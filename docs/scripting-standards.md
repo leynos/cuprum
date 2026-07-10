@@ -195,7 +195,7 @@ allowlisted `Program` values, run via `run_sync()`/`run()`, and inspect
   pre-declared. This keeps command intent explicit and supports project-wide
   auditing.
 - Manual allowlist: use `frozenset([PROGRAM, ...])` for ad‑hoc scoping or when
-  mixing catalogued and uncatalogued programs.
+  mixing catalogued and uncataloged programs.
 - Enforcement: executing a non-allowlisted program raises an exception and
   fails fast.
 - Migration note: this is a breaking behaviour change from Plumbum, where

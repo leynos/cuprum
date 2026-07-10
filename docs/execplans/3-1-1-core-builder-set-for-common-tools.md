@@ -155,7 +155,7 @@ completion.
 
    - Read `docs/users-guide.md`, `docs/cuprum-design.md`, and
      `cuprum/catalogue.py` to align validation rules and exports.
-   - Confirm how `sh.make` serialises argv to match builder outputs.
+   - Confirm how `sh.make` serializes argv to match builder outputs.
 
 2. Create scaffolding and tests.
 

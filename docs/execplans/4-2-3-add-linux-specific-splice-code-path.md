@@ -16,7 +16,7 @@ will bypass userspace entirely, reducing memory bandwidth and improving
 throughput for large pipeline operations. Non-Linux platforms and unsupported
 file descriptor types will continue using the existing read/write loop.
 
-Users observe no API changes; the optimisation is internal to
+Users observe no API changes; the optimization is internal to
 `rust_pump_stream`. Success is measured by:
 
 1. All existing tests continue to pass
@@ -30,7 +30,7 @@ Users observe no API changes; the optimisation is internal to
 Hard invariants that must hold throughout implementation:
 
 - **API stability**: The `rust_pump_stream(reader_fd, writer_fd, buffer_size)`
-  signature must not change. Splice is an internal optimisation.
+  signature must not change. Splice is an internal optimization.
 - **Behavioural parity**: Splice path must produce identical results to
   read/write path: same bytes transferred, same error handling for broken
   pipes, same return value semantics.
@@ -42,7 +42,7 @@ Hard invariants that must hold throughout implementation:
   Broken pipe and connection reset must be handled gracefully (drain reader,
   return bytes written).
 - **Paths not to modify**: `cuprum/_streams_rs.py` (Python shim) requires no
-  changes; the optimisation is Rust-internal.
+  changes; the optimization is Rust-internal.
 
 ## Tolerances (exception triggers)
 
@@ -309,7 +309,7 @@ Update `/home/user/project/docs/cuprum-design.md` Section 13.7:
 
 Update `/home/user/project/docs/users-guide.md`:
 
-- Add brief section explaining Linux splice optimisation is automatic
+- Add brief section explaining Linux splice optimization is automatic
 - Note that pipe-to-pipe transfers benefit most
 
 ### Stage G: Update roadmap
