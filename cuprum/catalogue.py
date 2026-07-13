@@ -29,6 +29,51 @@ class UnknownProgramError(LookupError):
     """Raised when a program is not present in the catalogue allowlist."""
 
 
+class DuplicateProjectError(ValueError):
+    """Raised when a project name is registered more than once.
+
+    Parameters
+    ----------
+    project_name : str
+        The duplicated project name.
+
+    Attributes
+    ----------
+    project_name : str
+        The duplicated project name.
+    """
+
+    def __init__(self, project_name: str) -> None:
+        """Record the duplicated project name and build the message."""
+        self.project_name = project_name
+        super().__init__(f"Project '{project_name}' registered more than once")
+
+
+class DuplicateProgramError(ValueError):
+    """Raised when a program is claimed by more than one project.
+
+    Parameters
+    ----------
+    program : Program
+        The contested program.
+    owner : str
+        The name of the project that already owns the program.
+
+    Attributes
+    ----------
+    program : Program
+        The contested program.
+    owner : str
+        The existing owner's project name.
+    """
+
+    def __init__(self, program: Program, owner: str) -> None:
+        """Record the contested program and its existing owner."""
+        self.program = program
+        self.owner = owner
+        super().__init__(f"Program '{program}' already owned by '{owner}'")
+
+
 @dc.dataclass(frozen=True, slots=True)
 class ProjectSettings:
     """Metadata shared by a project's curated programs."""
@@ -101,8 +146,7 @@ class ProgramCatalogue:
         indexed: dict[str, ProjectSettings] = {}
         for project in projects:
             if project.name in indexed:
-                msg = f"Project '{project.name}' registered more than once"
-                raise ValueError(msg)
+                raise DuplicateProjectError(project.name)
             indexed[project.name] = project
         return indexed
 
@@ -115,9 +159,7 @@ class ProgramCatalogue:
         for project in projects.values():
             for program in project.programs:
                 if program in program_map:
-                    owner = program_map[program].name
-                    msg = f"Program '{program}' already owned by '{owner}'"
-                    raise ValueError(msg)
+                    raise DuplicateProgramError(program, program_map[program].name)
                 program_map[program] = project
         return program_map
 
@@ -160,6 +202,8 @@ __all__ = [
     "LS",
     "RSYNC",
     "TAR",
+    "DuplicateProgramError",
+    "DuplicateProjectError",
     "ProgramCatalogue",
     "ProgramEntry",
     "ProjectSettings",

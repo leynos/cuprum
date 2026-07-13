@@ -10,6 +10,22 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md)
 - [ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md)
 
+## Program catalogue duplicate diagnostics
+
+`ProgramCatalogue` indexes project settings in two passes: first by project
+name, then by program ownership. Keep duplicate diagnostics structured so tests
+and configuration tooling can assert on fields instead of parsing messages.
+
+- `DuplicateProjectError` is raised for repeated project names and exposes the
+  duplicated name as `project_name`.
+- `DuplicateProgramError` is raised when a program is claimed by more than one
+  project and exposes the contested `program` plus the existing owner's project
+  name as `owner`.
+
+Both exceptions intentionally subclass `ValueError` to preserve compatibility
+with callers that already treat catalogue construction failures as invalid
+configuration.
+
 ## Stream line-splitting properties
 
 Line callbacks in the Python stream backend use two pure helpers from
