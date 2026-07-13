@@ -35,7 +35,7 @@ jobs:
           npm install -g markdownlint-cli2
 
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@2b09d10192627fd6e1034e7c12625dd266b45503
+        uses: leynos/shared-actions/.github/actions/setup-rust@927edd45ae77be4251a8a18ca9eb5613a2e32cbd
         with:
           toolchain: '1.92.0'
 
@@ -130,16 +130,21 @@ jobs:
         run: make test
 
   coverage:
+    # Pull requests only. Pushes to main are handled by coverage-main.yml,
+    # which also uploads the report to CodeScene; guarding here stops
+    # coverage being generated twice on main.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     needs:
       - lint-test
       - typecheck-test
-    env:
-      CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
-      CODESCENE_CLI_SHA256: ${{ vars.CODESCENE_CLI_SHA256 }}
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          # Full history so a future CodeScene changed-line gate
+          # (cs-coverage check) can reach the pull request merge base.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -152,41 +157,26 @@ jobs:
       - name: Install code
         run: make build
 
-      - name: Run tests with coverage
-        run: |
-          uv pip install slipcover pytest-forked
-          uv run python -m slipcover \
-            --source=./cuprum \
-            --omit="*/unittests/*,*/.venv/*" \
-            --branch \
-            --out coverage.xml \
-            -m pytest --forked -v
-
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v4
+      # Python-only coverage via the shared action. cuprum's repository
+      # root has no Cargo.toml (the Rust workspace lives under rust/), so
+      # detect.py classifies it as a Python project; cobertura is
+      # mandatory for non-Rust projects. pytest runs serially
+      # (pytest-workers: '') because the suite builds and shells out to
+      # the Rust toolchain, and the ratchet fails the run if line
+      # coverage drops below the baseline that coverage-main.yml stores.
+      #
+      # The changed-line CodeScene gate (upload-codescene-coverage with
+      # mode: check) is deliberately NOT wired yet: CodeScene has not
+      # enabled the coverage gate for project 74471, and mode: check
+      # fails on projects that lack a gates configuration. Add it in a
+      # follow-up once the gate is enabled (see ddlint#287).
+      - name: Generate coverage
+        uses: leynos/shared-actions/.github/actions/generate-coverage@927edd45ae77be4251a8a18ca9eb5613a2e32cbd
         with:
-          name: coverage
-          path: coverage.xml
-
-      - name: Install CodeScene Coverage CLI
-        if: env.CS_ACCESS_TOKEN != ''
-        run: |
-          curl -fsSL https://downloads.codescene.io/enterprise/cli/install-cs-coverage-tool.sh | bash -s -- -y
-          if [ -n "${CODESCENE_CLI_SHA256:-}" ]; then
-            echo "${CODESCENE_CLI_SHA256}  install-cs-coverage-tool.sh" | sha256sum -c -
-          fi
-
-      - name: Upload coverage to CodeScene
-        if: env.CS_ACCESS_TOKEN != ''
-        run: |
-          if [ ! -f coverage.xml ]; then
-            echo "coverage.xml not found!"
-            exit 1
-          fi
-          cs-coverage upload \
-            --format "cobertura" \
-            --metric "line-coverage" \
-            coverage.xml
+          format: cobertura
+          output-path: coverage.xml
+          pytest-workers: ''
+          with-ratchet: 'true'
 
   benchmark-ratchet:
     runs-on: ubicloud-standard-4-ubuntu-2404
