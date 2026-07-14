@@ -39,10 +39,33 @@ class TestMetricsHook:
             "unhandled metrics phase errors should include the phase in text"
         )
 
-    def test_increments_execution_counter(self) -> None:
-        """Hook increments cuprum_executions_total on start."""
-        builder, catalogue = _python_builder(project_name="metrics-counter")
-        cmd = builder("-c", "print('hello')")
+    @pytest.mark.parametrize(
+        ("command_code", "metric_name", "expected_value", "failure_message"),
+        [
+            (
+                "print('hello')",
+                "cuprum_executions_total",
+                1.0,
+                "start events should increment the executions counter",
+            ),
+            (
+                "import sys; sys.exit(1)",
+                "cuprum_failures_total",
+                1.0,
+                "non-zero exits should increment the failures counter",
+            ),
+        ],
+    )
+    def test_execution_counters(
+        self,
+        command_code: str,
+        metric_name: str,
+        expected_value: float,
+        failure_message: str,
+    ) -> None:
+        """Hook increments counters for successful and failed executions."""
+        builder, catalogue = _python_builder(project_name="metrics-counters")
+        cmd = builder("-c", command_code)
 
         metrics = InMemoryMetrics()
         hook = MetricsHook(metrics)
@@ -50,8 +73,8 @@ class TestMetricsHook:
         with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
-        assert metrics.counters.get("cuprum_executions_total") == pytest.approx(1.0), (
-            "start events should increment the executions counter"
+        assert metrics.counters.get(metric_name) == pytest.approx(expected_value), (
+            failure_message
         )
 
     def test_counts_output_lines(self) -> None:
@@ -92,21 +115,6 @@ print('err1', file=sys.stderr)""",
         durations = metrics.histograms.get("cuprum_duration_seconds", [])
         assert len(durations) == 1, "exit events should record one duration sample"
         assert durations[0] >= 0.0, "duration samples should be non-negative"
-
-    def test_counts_failures(self) -> None:
-        """Hook increments failure counter on non-zero exit."""
-        builder, catalogue = _python_builder(project_name="metrics-failures")
-        cmd = builder("-c", "import sys; sys.exit(1)")
-
-        metrics = InMemoryMetrics()
-        hook = MetricsHook(metrics)
-
-        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
-            cmd.run_sync()
-
-        assert metrics.counters.get("cuprum_failures_total") == pytest.approx(1.0), (
-            "non-zero exits should increment the failures counter"
-        )
 
     @pytest.mark.parametrize(
         ("phase", "extra_kwargs", "metric_name", "expected_value"),
