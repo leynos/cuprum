@@ -661,6 +661,7 @@ def test_wait_for_pipeline_fail_fast_scenarios(
             should_terminate=(idx in scenario.terminated_stages),
         )
 
+
 @pytest.mark.parametrize(
     ("capture", "expected_stdout", "expected_stderr"),
     [
