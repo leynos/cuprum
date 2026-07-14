@@ -1481,7 +1481,6 @@ over cleverness—especially in the type‑system and configuration layers.
 
 ______________________________________________________________________
 
-
 ## 13. Performance-Optimized Stream Operations
 
 Cuprum's stream operations route data through Python's asyncio event loop in
