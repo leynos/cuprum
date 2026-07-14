@@ -390,7 +390,7 @@ rm -f /tmp/4-4-1-*.log /tmp/4-4-1-*.json
 - If dependency resolution changes `uv.lock`, rerun `make build` and repeat the
   failing step.
 
-## Artifacts and notes
+## Artefacts and notes
 
 Implementation should retain these logs for review:
 

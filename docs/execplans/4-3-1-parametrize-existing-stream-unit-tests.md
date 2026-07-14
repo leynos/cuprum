@@ -477,7 +477,7 @@ All steps can be repeated safely:
 If a step fails, review the error output, fix the issue, and re-run from the
 failed step. No special rollback needed; git provides recovery.
 
-## Artifacts and notes
+## Artefacts and notes
 
 ### Key files created
 

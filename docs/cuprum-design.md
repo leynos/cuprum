@@ -1456,25 +1456,6 @@ over cleverness—especially in the type‑system and configuration layers.
 
 ______________________________________________________________________
 
-
-## 13. Performance-Optimized Stream Operations
-
-Cuprum's stream operations route data through Python's asyncio event loop in
-small chunks. For typical command execution, this overhead is negligible.
-However, for high-throughput pipelines processing large data volumes, the
-overhead accumulates. This section describes an optional Rust extension that
-addresses these bottlenecks whilst preserving Cuprum's existing API and
-behavioural guarantees.
-
-## 13. Performance-Optimized Stream Operations
-
-Cuprum's stream operations route data through Python's asyncio event loop in
-small chunks. For typical command execution, this overhead is negligible.
-However, for high-throughput pipelines processing large data volumes, the
-overhead accumulates. This section describes an optional Rust extension that
-addresses these bottlenecks whilst preserving Cuprum's existing API and
-behavioural guarantees.
-
 ## 13. Performance-Optimized Stream Operations
 
 Cuprum's stream operations route data through Python's asyncio event loop in
