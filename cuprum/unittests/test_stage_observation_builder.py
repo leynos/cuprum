@@ -50,8 +50,20 @@ _ENV_KEYS = st.text(
 ).map("CUPRUM_TEST_{}".format)
 _ENV_OVERLAYS = st.none() | st.dictionaries(_ENV_KEYS, st.text(max_size=5), max_size=4)
 _TAG_VALUES = st.text(max_size=5) | st.integers(min_value=0, max_value=9)
+_PIPELINE_STAGE_TAG_KEYS = frozenset(
+    {"pipeline_stage_index", "pipeline_stages"},
+)
 _TAGS = st.none() | st.dictionaries(
-    st.sampled_from(["team", "ticket", "project", "capture", "echo"]),
+    st.sampled_from(
+        [
+            "team",
+            "ticket",
+            "project",
+            "capture",
+            "echo",
+            *_PIPELINE_STAGE_TAG_KEYS,
+        ],
+    ),
     _TAG_VALUES,
     max_size=3,
 )
@@ -165,18 +177,31 @@ def test_single_and_pipeline_tags_agree_on_shared_keys(
         **(ctx_tags or {}),
     }
     stage_tags = _pipeline_tags((cmd, cmd), context, capture=capture, echo=echo)
+    shared_single = {
+        key: value
+        for key, value in single.items()
+        if key not in _PIPELINE_STAGE_TAG_KEYS
+    }
 
     for idx, tags in enumerate(stage_tags):
-        pipeline_only = {"pipeline_stage_index", "pipeline_stages"}
-        shared = {key: value for key, value in tags.items() if key not in pipeline_only}
-        assert shared == single, (
+        shared = {
+            key: value
+            for key, value in tags.items()
+            if key not in _PIPELINE_STAGE_TAG_KEYS
+        }
+        assert shared == shared_single, (
             "single-command and pipeline observations must agree on shared tags"
         )
-        # Per-call tags win over the base schema, but never over the grafted
-        # stage keys, which are appended after the base by the builder.
-        if ctx_tags is None or "pipeline_stage_index" not in ctx_tags:
-            assert tags["pipeline_stage_index"] == idx
-        assert tags["pipeline_stages"] == 2
+        expected_pipeline_tags = {
+            "pipeline_stage_index": idx,
+            "pipeline_stages": 2,
+            **(ctx_tags or {}),
+        }
+        assert (
+            tags["pipeline_stage_index"]
+            == expected_pipeline_tags["pipeline_stage_index"]
+        )
+        assert tags["pipeline_stages"] == expected_pipeline_tags["pipeline_stages"]
 
 
 @given(scoped_overlay=_ENV_OVERLAYS, extra=_ENV_OVERLAYS)
