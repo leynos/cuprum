@@ -1012,7 +1012,7 @@ behaviour as a `RunOutputOptions`, not as loose `capture` / `echo` flags.
 `Pipeline.run` and `Pipeline.run_sync` retain `capture` and `echo` keyword
 arguments only for compatibility. Those flags emit `DeprecationWarning` and
 must not be combined with `output=RunOutputOptions(...)`; mixed usage raises
-`ValueError` before any deprecation warning is emitted so warning filters do
+`ValueError` before any deprecation warning is emitted, so warning filters do
 not obscure the documented ambiguity error.
 
 ## Subprocess stdin injection

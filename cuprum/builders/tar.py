@@ -46,7 +46,14 @@ class Compression(enum.Enum):
 class TarCreateOptions:
     """Optional flags for tar_create.
 
-    The allow_relative flag applies to both archive and source paths.
+    Attributes
+    ----------
+    compression : Compression
+        Compression algorithm for the archive. Defaults to
+        ``Compression.NONE``.
+    allow_relative : bool
+        Allow relative archive and source paths. This applies to both archive
+        and source paths. Defaults to ``False``.
     """
 
     compression: Compression = Compression.NONE

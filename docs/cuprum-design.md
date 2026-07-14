@@ -258,7 +258,7 @@ namespace exposes functions that construct `DynamicCmd` for the rare cases
 where arbitrary composition is required.
 
 High‑level facilities (pipelines, context‑scoped allowlists, etc.) are
-optimized for `SafeCmd`. You can adapt a `DynamicCmd` into these facilities,
+optimized for `SafeCmd`. `DynamicCmd` can be adapted into these facilities,
 but doing so is visually explicit and reviewable.
 
 ### 5.3 Execution Context

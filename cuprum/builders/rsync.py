@@ -58,14 +58,14 @@ def rsync_sync(
     *,
     options: RsyncOptions | None = None,
 ) -> SafeCmd:
-    """Build an ``rsync`` synchronisation command.
+    """Build an ``rsync`` synchronization command.
 
     Parameters
     ----------
     source
-        Source path to synchronise from.
+        Source path to synchronize from.
     destination
-        Destination path to synchronise to.
+        Destination path to synchronize to.
     options
         Optional rsync settings. When omitted, the command uses
         ``RsyncOptions()``.
