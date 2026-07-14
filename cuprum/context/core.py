@@ -21,7 +21,7 @@ if typ.TYPE_CHECKING:
     from cuprum.program import Program
     from cuprum.sh import CommandResult, SafeCmd
 
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger("cuprum.context")
 
 
 type BeforeHook = cabc.Callable[[SafeCmd], None]
