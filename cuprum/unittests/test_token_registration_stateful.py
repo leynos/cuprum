@@ -27,6 +27,7 @@ from cuprum.context import (
     EnvRegistration,
     HookRegistration,
     ScopeConfig,
+    after,
     allow,
     before,
     current_context,
@@ -43,6 +44,10 @@ def _noop_before(_cmd: object) -> None:
     """Before-hook that records nothing."""
 
 
+def _noop_after(_cmd: object, _result: object) -> None:
+    """After-hook that records nothing."""
+
+
 def _noop_observe(_event: object) -> None:
     """Observe-hook that records nothing."""
 
@@ -54,6 +59,7 @@ _FACTORIES: tuple[tuple[str, _HandleFactory], ...] = (
     ("allow", lambda: allow(ECHO)),
     ("allow-two", lambda: allow(ECHO, LS)),
     ("before", lambda: before(_noop_before)),
+    ("after", lambda: after(_noop_after)),
     ("observe", lambda: observe(_noop_observe)),
     ("env", lambda: env(CUPRUM_TEST_FLAG="1")),
     ("env-mapping", lambda: env({"CUPRUM_TEST_OTHER": "2"})),
