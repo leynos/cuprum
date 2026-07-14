@@ -968,7 +968,6 @@ uv run pytest cuprum/unittests/test_maturin_build.py \
     --snapshot-update -k test_maturin_wheel_build_snapshot
 ```
 
-
 ## Workflow pins and Dependabot
 
 Dependabot owns the upgrade of GitHub Actions and reusable workflows,
