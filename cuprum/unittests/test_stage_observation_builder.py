@@ -55,14 +55,14 @@ _PIPELINE_STAGE_TAG_KEYS = frozenset(
 )
 _TAGS = st.none() | st.dictionaries(
     st.sampled_from(
-        [
+        (
             "team",
             "ticket",
             "project",
             "capture",
             "echo",
-            *_PIPELINE_STAGE_TAG_KEYS,
-        ],
+            *sorted(_PIPELINE_STAGE_TAG_KEYS),
+        ),
     ),
     _TAG_VALUES,
     max_size=3,
