@@ -70,11 +70,11 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
         # Stack of (handle, context-before-registration) pairs.
         self._stack: list[tuple[_TokenRegistration, CuprumContext]] = []
 
-    @rule(choice=st.integers(min_value=0, max_value=len(_FACTORIES) - 1))
-    def register(self, choice: int) -> None:
+    @rule(factory_entry=st.sampled_from(_FACTORIES))
+    def register(self, factory_entry: tuple[str, _HandleFactory]) -> None:
         """Create a registration of the chosen kind, recording the prior context."""
         prior = current_context()
-        _name, factory = _FACTORIES[choice]
+        _name, factory = factory_entry
         handle = factory()
         self._stack.append((handle, prior))
         assert current_context() is not prior, (
@@ -121,6 +121,20 @@ TestTokenRegistrationMachine.settings = settings(
     stateful_step_count=20,
     deadline=None,
 )
+
+
+def test_unsupported_hook_type_is_rejected() -> None:
+    """Invalid hook types must not be silently installed as observe hooks."""
+    baseline = current_context()
+    invalid_hook_type = typ.cast(
+        "typ.Literal['before', 'after', 'observe']",
+        "invalid",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported hook type: invalid"):
+        HookRegistration(_noop_observe, invalid_hook_type)
+
+    assert current_context() is baseline
 
 
 def test_out_of_order_detach_restores_outer_snapshot() -> None:

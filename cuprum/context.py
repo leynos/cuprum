@@ -663,12 +663,16 @@ class HookRegistration(_TokenRegistration):
         self._hook = hook
         self._hook_type = hook_type
         ctx = current_context()
-        if hook_type == "before":
-            new_ctx = ctx.with_before_hook(typ.cast("BeforeHook", hook))
-        elif hook_type == "after":
-            new_ctx = ctx.with_after_hook(typ.cast("AfterHook", hook))
-        else:
-            new_ctx = ctx.with_observe_hook(typ.cast("ExecHook", hook))
+        match hook_type:
+            case "before":
+                new_ctx = ctx.with_before_hook(typ.cast("BeforeHook", hook))
+            case "after":
+                new_ctx = ctx.with_after_hook(typ.cast("AfterHook", hook))
+            case "observe":
+                new_ctx = ctx.with_observe_hook(typ.cast("ExecHook", hook))
+            case _:
+                msg = f"Unsupported hook type: {hook_type}"
+                raise ValueError(msg)
         self._install(new_ctx)
 
 
