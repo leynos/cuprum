@@ -154,6 +154,7 @@ async def _run_with_semaphore(
             return await cmd.run(output=config.output, context=config.context)
     return await cmd.run(output=config.output, context=config.context)
 
+
 def _collect_results_and_failures(
     indexed_results: cabc.Iterable[tuple[int, CommandResult | None]],
 ) -> tuple[list[CommandResult], list[int], list[int]]:
@@ -246,9 +247,10 @@ def _build_final_results(
     post: all(result is not None for result in __return__[0])
     post: __return__[0] == [result for result in results if result is not None]
     post: len(__return__[0]) == sum(1 for result in results if result is not None)
-    post: all(0 <= idx < len(__return__[0]) for idx in __return__[1])
-    post: all(not __return__[0][idx].ok for idx in __return__[1])
-    post: __return__[1] == sorted(__return__[1])
+    post: __return__[1] == [i for i, result in enumerate(results) if result is not None]
+    post: all(0 <= idx < len(__return__[0]) for idx in __return__[2])
+    post: all(not __return__[0][idx].ok for idx in __return__[2])
+    post: __return__[2] == sorted(__return__[2])
 
     """
     return _collect_results_and_failures(enumerate(results))

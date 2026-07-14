@@ -121,11 +121,22 @@ def _order_preserved(
     return final_results == expected_results
 
 
+def _submission_indices_preserved(
+    submission_indices: list[int],
+    inputs: list[CommandResult | None],
+) -> bool:
+    """Return whether compacted results retain original submission positions."""
+    expected_indices = [
+        index for index, result in enumerate(inputs) if result is not None
+    ]
+    return submission_indices == expected_indices
+
+
 def _build_final_results_invariants_hold(
     inputs: list[CommandResult | None],
 ) -> bool:
     """Return whether the reducer satisfies its compaction invariants."""
-    final_results, failures = _build_final_results(inputs)
+    final_results, submission_indices, failures = _build_final_results(inputs)
     expected_results = [result for result in inputs if result is not None]
 
     return (
@@ -136,6 +147,7 @@ def _build_final_results_invariants_hold(
         and _no_cancelled_entries(final_results)
         and _result_count_matches(final_results, inputs)
         and _order_preserved(final_results, expected_results)
+        and _submission_indices_preserved(submission_indices, inputs)
     )
 
 
