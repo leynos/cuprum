@@ -227,8 +227,8 @@ def test_observe_tags_reflect_run_output_options(
         assert event.tags["echo"] is output.echo
 
 
-def test_pipeline_observe_emits_stage_tags_and_final_stdout() -> None:
-    """Pipeline execution emits per-stage events with stage tags."""
+def test_pipeline_observe_emits_stage_tags_and_env_overlay() -> None:
+    """Pipeline observation events retain tags and env overlays per stage."""
     builder, catalogue = _python_builder(project_name="observe-pipeline")
     stage1 = builder("-c", "print('hello')")
     stage2 = builder(
@@ -243,7 +243,14 @@ def test_pipeline_observe_emits_stage_tags_and_final_stdout() -> None:
     )
     pipeline = stage1 | stage2
 
-    result, events = _run_with_observe(pipeline, allowlist=catalogue.allowlist)
+    result, events = _run_with_observe(
+        pipeline,
+        allowlist=catalogue.allowlist,
+        context=ExecutionContext(
+            env={"CUPRUM_OBSERVE_PIPELINE": "1"},
+            tags={"run_id": "pipeline-unit"},
+        ),
+    )
 
     assert typ.cast("sh.PipelineResult", result).ok is True
     assert typ.cast("sh.PipelineResult", result).stdout == "HELLO\n"
@@ -255,6 +262,11 @@ def test_pipeline_observe_emits_stage_tags_and_final_stdout() -> None:
         0,
         1,
     }
+    for event in exit_events:
+        assert event.env is not None
+        assert event.env["CUPRUM_OBSERVE_PIPELINE"] == "1"
+        assert event.tags["project"] == "observe-pipeline"
+        assert event.tags["run_id"] == "pipeline-unit"
     assert "HELLO" in [
         ev.line
         for ev in events
