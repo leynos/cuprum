@@ -192,16 +192,13 @@ def test_single_and_pipeline_tags_agree_on_shared_keys(
         assert shared == shared_single, (
             "single-command and pipeline observations must agree on shared tags"
         )
-        expected_pipeline_tags = {
-            "pipeline_stage_index": idx,
-            "pipeline_stages": 2,
-            **(ctx_tags or {}),
-        }
-        assert (
-            tags["pipeline_stage_index"]
-            == expected_pipeline_tags["pipeline_stage_index"]
-        )
-        assert tags["pipeline_stages"] == expected_pipeline_tags["pipeline_stages"]
+        assert tags["pipeline_stage_index"] == (ctx_tags or {}).get(
+            "pipeline_stage_index", idx
+        ), "pipeline_stage_index must respect caller-tag precedence"
+        assert tags["pipeline_stages"] == (ctx_tags or {}).get(
+            "pipeline_stages",
+            2,
+        ), "pipeline_stages must respect caller-tag precedence"
 
 
 @given(scoped_overlay=_ENV_OVERLAYS, extra=_ENV_OVERLAYS)
