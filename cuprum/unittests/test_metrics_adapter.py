@@ -15,7 +15,7 @@ from cuprum.adapters.metrics_adapter import (
     metrics_hook,
 )
 from cuprum.context import ScopeConfig, scoped
-from cuprum.events import ExecEvent
+from cuprum.events import ExecEvent, ExecPhase
 from cuprum.program import Program
 from cuprum.unittests._adapter_test_support import _python_builder, _run_in_threads
 
@@ -139,7 +139,7 @@ print('err1', file=sys.stderr)""",
 
         hook(
             ExecEvent(
-                phase=typ.cast("typ.Any", phase),
+                phase=typ.cast("ExecPhase", phase),
                 program=program,
                 argv=(str(program), "-c", "pass"),
                 cwd=None,
@@ -150,6 +150,7 @@ print('err1', file=sys.stderr)""",
                 exit_code=None,
                 duration_s=None,
                 tags={"project": "stdin-metrics"},
+                # Parametrized cases supply distinct ancillary event fields.
                 **typ.cast("typ.Any", extra_kwargs),
             )
         )

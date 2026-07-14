@@ -80,145 +80,158 @@ def _expected_projection(event: ExecEvent) -> dict[str, object]:
     return expected
 
 
-@settings(
-    deadline=None,
-    max_examples=50,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
-@given(event=_events())
-def test_projection_includes_exactly_the_non_none_fields(event: ExecEvent) -> None:
-    """Property: the canonical projection omits exactly the ``None`` fields.
+class TestAdapterProjection:
+    """Tests for the canonical telemetry adapter projection."""
 
-    Parameters
-    ----------
-    event : ExecEvent
-        Generated event with optional fields independently present or absent.
-    """
-    projected = dict(_event_common_fields(event, lambda field: field))
-
-    assert projected == _expected_projection(event), (
-        "projection must carry program, argv, and exactly the non-None "
-        "optional fields (cwd stringified)"
+    @settings(
+        deadline=None,
+        max_examples=50,
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
     )
+    @given(event=_events())
+    def test_projection_includes_exactly_the_non_none_fields(
+        self,
+        event: ExecEvent,
+    ) -> None:
+        """Property: the canonical projection omits exactly the ``None`` fields.
 
+        Parameters
+        ----------
+        event : ExecEvent
+            Generated event with optional fields independently present or absent.
+        """
+        projected = dict(_event_common_fields(event, lambda field: field))
 
-@settings(
-    deadline=None,
-    max_examples=50,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
-@given(event=_events())
-def test_adapters_agree_on_common_keys_modulo_prefix(event: ExecEvent) -> None:
-    """Property: the three adapters expose the same common key set.
+        assert projected == _expected_projection(event), (
+            "projection must carry program, argv, and exactly the non-None "
+            "optional fields (cwd stringified)"
+        )
 
-    The logging extras (``cuprum_`` prefix) and tracing attributes
-    (``cuprum.`` prefix) must carry the same canonical fields; the metrics
-    labels are the deliberate low-cardinality subset (``program`` plus
-    ``project``).
-
-    Parameters
-    ----------
-    event : ExecEvent
-        Generated event with optional fields independently present or absent.
-    """
-    canonical = {key for key, _ in _event_common_fields(event, lambda field: field)}
-
-    extra_keys = {
-        key.removeprefix("cuprum_")
-        for key in _build_extra(event)
-        if key not in {"cuprum_phase", "cuprum_tags"}
-    }
-    assert extra_keys == canonical, (
-        "logging extras must expose exactly the canonical common fields after "
-        "removing their backend prefix"
+    @settings(
+        deadline=None,
+        max_examples=50,
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
     )
-    assert _build_extra(event)["cuprum_argv"] == event.argv, (
-        "logging extras must preserve argv as a tuple"
-    )
+    @given(event=_events())
+    def test_adapters_agree_on_common_keys_modulo_prefix(
+        self,
+        event: ExecEvent,
+    ) -> None:
+        """Property: the three adapters expose the same common key set.
 
-    attr_keys = {
-        key.removeprefix("cuprum.")
-        for key in TracingHook._build_attributes(event)
-        if key
-        not in {
-            "cuprum.project",
-            "cuprum.pipeline_stage_index",
-            "cuprum.pipeline_stages",
+        The logging extras (``cuprum_`` prefix) and tracing attributes
+        (``cuprum.`` prefix) must carry the same canonical fields; the metrics
+        labels are the deliberate low-cardinality subset (``program`` plus
+        ``project``).
+
+        Parameters
+        ----------
+        event : ExecEvent
+            Generated event with optional fields independently present or absent.
+        """
+        canonical = {key for key, _ in _event_common_fields(event, lambda field: field)}
+
+        extra_keys = {
+            key.removeprefix("cuprum_")
+            for key in _build_extra(event)
+            if key not in {"cuprum_phase", "cuprum_tags"}
         }
-    }
-    assert attr_keys == canonical, (
-        "tracing attributes must expose exactly the canonical common fields "
-        "after removing their backend prefix"
-    )
-    assert TracingHook._build_attributes(event)["cuprum.argv"] == list(event.argv), (
-        "tracing attributes must render argv as a list"
-    )
+        assert extra_keys == canonical, (
+            "logging extras must expose exactly the canonical common fields after "
+            "removing their backend prefix"
+        )
+        assert _build_extra(event)["cuprum_argv"] == event.argv, (
+            "logging extras must preserve argv as a tuple"
+        )
 
-    labels = MetricsHook._extract_labels(event)
-    assert set(labels) == {"program", "project"}, (
-        "metrics labels must stay limited to the low-cardinality program and "
-        "project fields"
-    )
-    assert labels["program"] == str(event.program), (
-        "metrics labels must stringify the event program when it is present"
-    )
-    project = event.tags.get("project")
-    expected_project = str(project) if project is not None else ""
-    assert labels["project"] == (expected_project or "unknown"), (
-        "metrics labels must stringify a non-empty project tag and fall back "
-        "to 'unknown' when the tag is absent, None, or empty"
-    )
+        attr_keys = {
+            key.removeprefix("cuprum.")
+            for key in TracingHook._build_attributes(event)
+            if key
+            not in {
+                "cuprum.project",
+                "cuprum.pipeline_stage_index",
+                "cuprum.pipeline_stages",
+            }
+        }
+        assert attr_keys == canonical, (
+            "tracing attributes must expose exactly the canonical common fields "
+            "after removing their backend prefix"
+        )
+        assert TracingHook._build_attributes(event)["cuprum.argv"] == list(
+            event.argv
+        ), "tracing attributes must render argv as a list"
 
+        labels = MetricsHook._extract_labels(event)
+        assert set(labels) == {"program", "project"}, (
+            "metrics labels must stay limited to the low-cardinality program and "
+            "project fields"
+        )
+        assert labels["program"] == str(event.program), (
+            "metrics labels must stringify the event program when it is present"
+        )
+        project = event.tags.get("project")
+        expected_project = str(project) if project is not None else ""
+        assert labels["project"] == (expected_project or "unknown"), (
+            "metrics labels must stringify a non-empty project tag and fall back "
+            "to 'unknown' when the tag is absent, None, or empty"
+        )
 
-def _representative_event(phase: str) -> ExecEvent:
-    """Build a deterministic, fully populated event for *phase*."""
-    is_exit = phase == "exit"
-    is_output = phase in {"stdout", "stderr"}
-    return ExecEvent(
-        phase=typ.cast("typ.Any", phase),
-        program=Program("echo"),
-        argv=("echo", "hello"),
-        cwd=Path("/srv/work"),
-        env=None,
-        pid=None if phase == "plan" else 4321,
-        timestamp=0.0,
-        line="a line" if is_output else None,
-        exit_code=0 if is_exit else None,
-        duration_s=0.125 if is_exit else None,
-        tags={"project": "proj", "pipeline_stage_index": 0, "pipeline_stages": 2},
-    )
+    @staticmethod
+    def _representative_event(phase: str) -> ExecEvent:
+        """Build a deterministic, fully populated event for *phase*."""
+        is_exit = phase == "exit"
+        is_output = phase in {"stdout", "stderr"}
+        return ExecEvent(
+            phase=typ.cast("typ.Any", phase),
+            program=Program("echo"),
+            argv=("echo", "hello"),
+            cwd=Path("/srv/work"),
+            env=None,
+            pid=None if phase == "plan" else 4321,
+            timestamp=0.0,
+            line="a line" if is_output else None,
+            exit_code=0 if is_exit else None,
+            duration_s=0.125 if is_exit else None,
+            tags={
+                "project": "proj",
+                "pipeline_stage_index": 0,
+                "pipeline_stages": 2,
+            },
+        )
 
+    @staticmethod
+    def _redact(mapping: dict[str, object]) -> dict[str, object]:
+        """Replace volatile fields (pid, duration, cwd) with stable tokens."""
+        redacted: dict[str, object] = {}
+        for key, value in mapping.items():
+            field = key.removeprefix("cuprum.").removeprefix("cuprum_")
+            if field in _REDACTED_FIELDS:
+                redacted[key] = f"<{field}>"
+            else:
+                redacted[key] = value
+        return redacted
 
-def _redact(mapping: dict[str, object]) -> dict[str, object]:
-    """Replace volatile fields (pid, duration, cwd) with stable tokens."""
-    redacted: dict[str, object] = {}
-    for key, value in mapping.items():
-        field = key.removeprefix("cuprum.").removeprefix("cuprum_")
-        if field in _REDACTED_FIELDS:
-            redacted[key] = f"<{field}>"
-        else:
-            redacted[key] = value
-    return redacted
+    @pytest.mark.parametrize("phase", _PHASES)
+    def test_projection_snapshots_lock_the_wire_contract(
+        self,
+        phase: str,
+        snapshot: SnapshotAssertion,
+    ) -> None:
+        """Snapshot: the per-phase projected dictionaries are stable.
 
-
-@pytest.mark.parametrize("phase", _PHASES)
-def test_projection_snapshots_lock_the_wire_contract(
-    phase: str,
-    snapshot: SnapshotAssertion,
-) -> None:
-    """Snapshot: the per-phase projected dictionaries are stable.
-
-    Locks the multivariant output format across the three adapters for a
-    representative event in each phase. Volatile fields (pid, duration, cwd)
-    are redacted with stable tokens; the surrounding property tests assert
-    their semantics.
-    """
-    event = _representative_event(phase)
-    projections = {
-        "logging_extra": _redact(_build_extra(event)),
-        "tracing_attributes": _redact(TracingHook._build_attributes(event)),
-        "metrics_labels": _redact(dict(MetricsHook._extract_labels(event))),
-    }
-    assert projections == snapshot, (
-        "per-phase adapter projections must match the redacted wire-contract snapshot"
-    )
+        Locks the multivariant output format across the three adapters for a
+        representative event in each phase. Volatile fields (pid, duration, cwd)
+        are redacted with stable tokens; the surrounding property tests assert
+        their semantics.
+        """
+        event = self._representative_event(phase)
+        projections = {
+            "logging_extra": self._redact(_build_extra(event)),
+            "tracing_attributes": self._redact(TracingHook._build_attributes(event)),
+            "metrics_labels": self._redact(dict(MetricsHook._extract_labels(event))),
+        }
+        assert projections == snapshot, (
+            "per-phase adapter projections must match the redacted wire-contract "
+            "snapshot"
+        )

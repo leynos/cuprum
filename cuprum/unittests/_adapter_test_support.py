@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
 import sys
 import threading
 import typing as typ
@@ -38,28 +39,40 @@ def _make_exec_event(
 ) -> ExecEvent:
     """Build an ExecEvent with sensible test defaults."""
     values = {
+        "phase": phase,
         "program": "cat",
         "argv": ("cat",),
+        "cwd": None,
+        "env": None,
         "pid": None,
+        "timestamp": 0.0,
         "line": None,
         "exit_code": None,
         "duration_s": None,
         "tags": {},
+        "note": None,
+        "byte_count": None,
     }
     if overrides is not None:
+        unknown = set(overrides) - {field.name for field in dc.fields(ExecEvent)}
+        if unknown:
+            msg = f"unknown ExecEvent override fields: {sorted(unknown)!r}"
+            raise KeyError(msg)
         values.update(overrides)
     return ExecEvent(
-        phase=phase,
+        phase=typ.cast("ExecPhase", values["phase"]),
         program=Program(typ.cast("str", values["program"])),
         argv=typ.cast("tuple[str, ...]", values["argv"]),
-        cwd=None,
-        env=None,
+        cwd=typ.cast("Path | None", values["cwd"]),
+        env=typ.cast("cabc.Mapping[str, str] | None", values["env"]),
         pid=typ.cast("int | None", values["pid"]),
-        timestamp=0.0,
+        timestamp=typ.cast("float", values["timestamp"]),
         line=typ.cast("str | None", values["line"]),
         exit_code=typ.cast("int | None", values["exit_code"]),
         duration_s=typ.cast("float | None", values["duration_s"]),
         tags=typ.cast("cabc.Mapping[str, object]", values["tags"]),
+        note=typ.cast("str | None", values["note"]),
+        byte_count=typ.cast("int | None", values["byte_count"]),
     )
 
 

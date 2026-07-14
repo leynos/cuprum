@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
-import typing as typ
+from pathlib import Path
+
+import pytest
 
 from cuprum import sh
 from cuprum.adapters.tracing_adapter import (
@@ -18,9 +20,6 @@ from cuprum.unittests._adapter_test_support import (
     _python_builder,
     _run_in_threads,
 )
-
-if typ.TYPE_CHECKING:
-    import pytest
 
 
 class TestTracingHook:
@@ -274,6 +273,30 @@ sys.stdout.write(data.upper())""",
         assert tracer.spans == [], (
             "test_pid_less_events_do_not_create_spans should ignore pid-less events"
         )
+
+    def test_make_exec_event_forwards_all_overrides(self) -> None:
+        """Shared event factory preserves every supported override."""
+        event = _make_exec_event(
+            phase="start",
+            overrides={
+                "phase": "stdin",
+                "cwd": Path("/workspace"),
+                "env": {"LANG": "C"},
+                "timestamp": 1.5,
+                "note": "written",
+                "byte_count": 7,
+            },
+        )
+
+        assert event.phase == "stdin", "phase overrides should be forwarded"
+        assert event.cwd == Path("/workspace"), "cwd overrides should be forwarded"
+        assert event.env == {"LANG": "C"}, "env overrides should be forwarded"
+        assert event.timestamp == 1.5, "timestamp overrides should be forwarded"
+        assert event.note == "written", "note overrides should be forwarded"
+        assert event.byte_count == 7, "byte count overrides should be forwarded"
+
+        with pytest.raises(KeyError, match="unknown ExecEvent override fields"):
+            _make_exec_event(phase="start", overrides={"unknown": None})
 
     def test_logs_unhandled_phases(self, caplog: pytest.LogCaptureFixture) -> None:
         """Phases without span semantics use the shared debug log."""

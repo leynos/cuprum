@@ -1,5 +1,5 @@
 # serializer version: 1
-# name: test_projection_snapshots_lock_the_wire_contract[exit]
+# name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[exit]
   dict({
     'logging_extra': dict({
       'cuprum_argv': tuple(
@@ -38,7 +38,7 @@
     }),
   })
 # ---
-# name: test_projection_snapshots_lock_the_wire_contract[plan]
+# name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[plan]
   dict({
     'logging_extra': dict({
       'cuprum_argv': tuple(
@@ -71,7 +71,7 @@
     }),
   })
 # ---
-# name: test_projection_snapshots_lock_the_wire_contract[start]
+# name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[start]
   dict({
     'logging_extra': dict({
       'cuprum_argv': tuple(
@@ -106,7 +106,7 @@
     }),
   })
 # ---
-# name: test_projection_snapshots_lock_the_wire_contract[stderr]
+# name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[stderr]
   dict({
     'logging_extra': dict({
       'cuprum_argv': tuple(
@@ -143,7 +143,7 @@
     }),
   })
 # ---
-# name: test_projection_snapshots_lock_the_wire_contract[stdin]
+# name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[stdin]
   dict({
     'logging_extra': dict({
       'cuprum_argv': tuple(
@@ -178,7 +178,7 @@
     }),
   })
 # ---
-# name: test_projection_snapshots_lock_the_wire_contract[stdin_error]
+# name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[stdin_error]
   dict({
     'logging_extra': dict({
       'cuprum_argv': tuple(
@@ -213,7 +213,7 @@
     }),
   })
 # ---
-# name: test_projection_snapshots_lock_the_wire_contract[stdout]
+# name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[stdout]
   dict({
     'logging_extra': dict({
       'cuprum_argv': tuple(

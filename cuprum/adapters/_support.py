@@ -33,10 +33,8 @@ def _event_common_fields(
     argv: cabc.Callable[[tuple[str, ...]], object] = lambda value: value,
 ) -> cabc.Iterator[tuple[str, object]]:
     """Yield the canonical common projection of *event* as key/value pairs."""
-    if event.program is not None:
-        yield name("program"), str(event.program)
-    if event.argv is not None:
-        yield name("argv"), argv(event.argv)
+    yield name("program"), str(event.program)
+    yield name("argv"), argv(event.argv)
     if event.pid is not None:
         yield name("pid"), event.pid
     if event.cwd is not None:
@@ -92,7 +90,11 @@ class _LockedStore:
     suitable for unit testing but not for production use.
     """
 
-    _lock: threading.Lock = dc.field(default_factory=threading.Lock, repr=False)
+    _lock: threading.Lock = dc.field(
+        default_factory=threading.Lock,
+        repr=False,
+        compare=False,
+    )
 
     def reset(self) -> None:
         """Clear all collected state under the lock."""

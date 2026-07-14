@@ -23,8 +23,10 @@ LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
 CARGO_JOB_ENV = RAYON_NUM_THREADS=$(patsubst -j%,%,$(BUILD_JOBS)) CARGO_BUILD_JOBS=$(patsubst -j%,%,$(BUILD_JOBS))
 UV_RUN_ENV = $(LOCAL_TOOL_ENV) $(UV_ENV)
 RUFF = $(UV_RUN_ENV) uv run ruff
+ifneq ($(strip $(PYTEST_WORKERS)),)
 ifneq ($(strip $(PYTEST_WORKERS)),0)
 PYTEST_XDIST_FLAGS = -n $(PYTEST_WORKERS)
+endif
 endif
 PYLINT_PYTHON ?= pypy
 PYLINT_TARGETS ?= benchmarks conftest.py cuprum tests
