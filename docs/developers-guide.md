@@ -94,8 +94,8 @@ and pipeline paths live in exactly one place, `cuprum/_observability.py`:
 
 - `_resolve_env_overlay(extra)` layers the per-call overlay (typically
   `ExecutionContext.env`) over the scoped overlay from the active
-  `CuprumContext` and freezes the result. It stays overlay-only — `os.environ`
-  is merged separately at spawn time by `resolve_env`.
+  `CuprumContext` and returns the immutable merge result. It stays overlay-only
+  — `os.environ` is merged separately at spawn time by `resolve_env`.
 - `_base_stage_tags(cmd, capture=…, echo=…)` builds the shared tag schema
   (`project`, `capture`, `echo`). The pipeline observation builder grafts on
   only its stage-specific keys (`pipeline_stage_index`, `pipeline_stages`);
