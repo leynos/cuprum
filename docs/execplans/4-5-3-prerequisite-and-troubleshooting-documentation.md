@@ -509,7 +509,7 @@ be re-applied. The `make` targets are safe to re-run.
 If a step fails partway through, fix the issue and re-run the same step. No
 rollback is needed because this task only adds documentation and tests.
 
-## Artifacts and notes
+## Artefacts and notes
 
 Expected new files:
 

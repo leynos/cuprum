@@ -392,7 +392,7 @@ All steps can be repeated safely. Writing files is idempotent. Tests can be
 re-run at any time. Cache clearing in `_clear_backend_cache` autouse fixture
 prevents cross-test pollution.
 
-## Artifacts and notes
+## Artefacts and notes
 
 ### Files to create (4)
 

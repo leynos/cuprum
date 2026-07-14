@@ -339,7 +339,7 @@ Quality criteria:
 - If command-line size failures occur, shift payload transport to encoded input
   in subprocess code and rerun targeted tests.
 
-## Artifacts and notes
+## Artefacts and notes
 
 Expected artefacts:
 

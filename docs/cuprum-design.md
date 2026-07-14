@@ -456,10 +456,10 @@ quoting, or more elaborate conversions later). For more control, projects are
 expected to wrap `sh.make` with **builders** (see below).
 
 `sh.build_argv(*args, **kwargs)` exposes those argv-construction rules as a
-pure helper for tests and wrapper code that need to inspect normalisation
+pure helper for tests and wrapper code that need to inspect normalization
 without performing a catalogue lookup. It intentionally shares the same
 coercion path as `sh.make`, so positional ordering, keyword flag formatting,
-underscore-to-hyphen normalisation, and `None` rejection stay in lockstep with
+underscore-to-hyphen normalization, and `None` rejection stay in lockstep with
 builders.
 
 #### 6.2.2 Command builders
@@ -1455,16 +1455,6 @@ than a rigid class diagram, and should favour boring, explicit implementations
 over cleverness—especially in the type‑system and configuration layers.
 
 ______________________________________________________________________
-
-
-## 13. Performance-Optimized Stream Operations
-
-Cuprum's stream operations route data through Python's asyncio event loop in
-small chunks. For typical command execution, this overhead is negligible.
-However, for high-throughput pipelines processing large data volumes, the
-overhead accumulates. This section describes an optional Rust extension that
-addresses these bottlenecks whilst preserving Cuprum's existing API and
-behavioural guarantees.
 
 ## 13. Performance-Optimized Stream Operations
 

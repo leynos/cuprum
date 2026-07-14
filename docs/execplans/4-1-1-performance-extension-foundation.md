@@ -342,9 +342,9 @@ Acceptance is satisfied when all of the following are true:
   in `pyproject.toml`, document the failure in the Decision Log, and
   re-evaluate the backend approach before continuing.
 
-## Artifacts and Notes
+## Artefacts and Notes
 
-Expected artifacts after CI configuration:
+Expected artefacts after CI configuration:
 
 - New Rust workspace files under `rust/` (Cargo workspace and crate).
 - Updated `pyproject.toml` build-system configuration supporting `uv_build`

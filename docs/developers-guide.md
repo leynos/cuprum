@@ -10,19 +10,18 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md)
 - [ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md)
 
-
 ## Command argument construction
 
 `cuprum.sh.build_argv(*args, **kwargs)` is the public, pure argv-construction
 helper behind `sh.make` builders. It delegates to the same internal coercion
 path as builders, so tests and project-specific wrappers can verify argument
-normalisation without catalogue lookup or subprocess execution.
+normalization without catalogue lookup or subprocess execution.
 
 Keep `build_argv` and `sh.make` behaviour aligned:
 
 - positional arguments are stringified with `str()` in the order supplied;
 - keyword arguments are serialized after positionals as `--flag=value` entries;
-- underscores in keyword names are normalised to hyphens;
+- underscores in keyword names are normalized to hyphens;
 - insertion order for keyword flags is preserved;
 - `None` raises `TypeError` in positional and keyword positions.
 

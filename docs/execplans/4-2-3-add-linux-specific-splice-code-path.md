@@ -461,7 +461,7 @@ If a step fails:
 
 No special rollback needed; git provides recovery via `git checkout`.
 
-## Artifacts and notes
+## Artefacts and notes
 
 ### Key files to modify
 
