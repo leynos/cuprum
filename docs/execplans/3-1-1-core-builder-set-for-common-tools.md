@@ -236,6 +236,12 @@ underlying issue and rerun the same command. If a change must be reverted, use
 `git checkout -- <path>` for the specific files that were changed, then reapply
 the step carefully.
 
+
+## Artefacts and notes
+
+Capture key outputs (for example, failing test excerpts) in the work log when
+iterating, but keep the repository clean.
+
 ## Artefacts and notes
 
 Capture key outputs (for example, failing test excerpts) in the work log when
@@ -299,9 +305,7 @@ cuprum/builders/rsync.py
 cuprum/builders/tar.py
   @dataclass(frozen=True, slots=True)
   class TarCreateOptions:
-      gzip: bool = False
-      bzip2: bool = False
-      xz: bool = False
+      compression: Compression = Compression.NONE
       allow_relative: bool = False
 
   def tar_create(
@@ -317,6 +321,9 @@ cuprum/builders/tar.py
       allow_relative: bool = False,
   ) -> SafeCmd
 ```
+
+`Compression` selects one mutually exclusive member: `NONE`, `GZIP`, `BZIP2`,
+or `XZ`.
 
 Exports and catalogue updates:
 

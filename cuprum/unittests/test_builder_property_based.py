@@ -242,3 +242,43 @@ def test_relative_paths_require_explicit_opt_in(segments: list[str]) -> None:
     assert argv == ("-x", "-f", relative), (
         "allow_relative must accept the same path verbatim"
     )
+
+
+@settings(max_examples=100)
+@given(
+    archive=st.lists(_SEGMENTS, min_size=1, max_size=3).map("/".join),
+    sources=st.lists(_SEGMENTS, min_size=1, max_size=3).map("/".join),
+)
+def test_tar_create_rejects_relative_paths_unless_opted_in(
+    archive: str,
+    sources: str,
+) -> None:
+    """tar_create rejects relative paths unless allow_relative is set."""
+    with pytest.raises(ValueError, match="absolute path"):
+        tar_create(archive, [sources])
+
+    options = TarCreateOptions(allow_relative=True)
+    command = tar_create(archive, [sources], options=options)
+    assert command.argv == _tar_create_argv(archive, [sources], options), (
+        "tar_create must pass allow_relative through to its argv builder"
+    )
+
+
+@settings(max_examples=100)
+@given(
+    source=st.lists(_SEGMENTS, min_size=1, max_size=3).map("/".join),
+    destination=st.lists(_SEGMENTS, min_size=1, max_size=3).map("/".join),
+)
+def test_rsync_sync_rejects_relative_paths_unless_opted_in(
+    source: str,
+    destination: str,
+) -> None:
+    """rsync_sync rejects relative paths unless allow_relative is set."""
+    with pytest.raises(ValueError, match="absolute path"):
+        rsync_sync(source, destination)
+
+    options = RsyncOptions(allow_relative=True)
+    command = rsync_sync(source, destination, options=options)
+    assert command.argv == _rsync_argv(source, destination, options), (
+        "rsync_sync must pass allow_relative through to its argv builder"
+    )

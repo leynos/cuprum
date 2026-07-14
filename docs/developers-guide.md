@@ -10,6 +10,30 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md)
 - [ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md)
 
+
+## Tar and rsync builder helpers
+
+`TarCreateOptions.compression` in `cuprum/builders/tar.py` selects one member
+of the `Compression` enum: `NONE`, `GZIP`, `BZIP2`, or `XZ`. This makes the
+compression choice mutually exclusive while keeping `TarCreateOptions`
+immutable.
+
+The private `_tar_create_argv` and `_tar_extract_argv` helpers in
+`cuprum/builders/tar.py`, together with `_rsync_argv` in
+`cuprum/builders/rsync.py`, construct immutable argument vectors independently
+of `sh.make` wrapping. They exist so the command construction contract can be
+tested directly for issue #71, while the public builders remain responsible for
+attaching their curated program.
+
+`_FLAG_ORDER` in `cuprum/builders/rsync.py` defines the fixed rsync flag
+emission order: `archive`, `delete`, `dry_run`, `verbose`, then `compress`.
+This is a documented contract covered by the property tests in
+`cuprum/unittests/test_builder_property_based.py`.
+
+Both `TarCreateOptions` and `RsyncOptions` provide `allow_relative`. It defaults
+to `False`, so `safe_path` rejects relative paths unless a caller explicitly
+opts in.
+
 ## Command argument construction
 
 `cuprum.sh.build_argv(*args, **kwargs)` is the public, pure argv-construction
