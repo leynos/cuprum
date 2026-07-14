@@ -184,7 +184,6 @@ __all__ = [
     "_ExecEventEmissionError",
     "_base_stage_tags",
     "_emit_exec_event",
-    "_freeze_str_mapping",
     "_merge_tags",
     "_resolve_env_overlay",
     "_wait_for_exec_hook_tasks",

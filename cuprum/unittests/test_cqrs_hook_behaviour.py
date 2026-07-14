@@ -24,11 +24,12 @@ from cuprum._observability import (
     _wait_for_exec_hook_tasks,
 )
 from cuprum._pipeline_types import _EventDetails, _ExecutionHooks, _StageObservation
-from cuprum.events import ExecEvent
 from cuprum.unittests._cqrs_fixtures import _echo_cmd, _event
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.events import ExecEvent
 
 
 class _GeneratedHookError(Exception):

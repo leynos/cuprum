@@ -33,8 +33,10 @@ from cuprum.context import (
     current_context,
     scoped,
 )
-from cuprum.events import ExecEvent
 from cuprum.unittests._cqrs_fixtures import _echo_cmd, _event
+
+if typ.TYPE_CHECKING:
+    from cuprum.events import ExecEvent
 
 
 class _AsyncObserveHookError(Exception):
