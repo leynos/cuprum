@@ -53,6 +53,7 @@
       'cuprum/unittests/__snapshots__/test_tee_profile_worker_core.ambr',
       'cuprum/unittests/__snapshots__/test_tee_profile_worker_selector_reentrancy.ambr',
       'cuprum/unittests/_adapter_test_support.py',
+      'cuprum/unittests/_cqrs_fixtures.py',
       'cuprum/unittests/_tee_profile_worker_test_helpers.py',
       'cuprum/unittests/conftest.py',
       'cuprum/unittests/strategies.py',

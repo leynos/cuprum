@@ -41,6 +41,7 @@ from cuprum.catalogue import (
     ProjectSettings,
 )
 from cuprum.catalogue import UnknownProgramError as UnknownProgramError
+from cuprum.context import current_context as current_context
 from cuprum.context import observe as observe
 from cuprum.context import scoped as scoped
 

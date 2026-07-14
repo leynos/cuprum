@@ -34,6 +34,7 @@ from cuprum.context import (
     scoped,
 )
 from cuprum.events import ExecEvent
+from cuprum.unittests._cqrs_fixtures import _echo_cmd, _event
 
 
 class _AsyncObserveHookError(Exception):
@@ -42,11 +43,6 @@ class _AsyncObserveHookError(Exception):
 
 class _SyncObserveHookError(Exception):
     """Test exception raised by a later synchronous observe hook."""
-
-
-def _echo_cmd() -> sh.SafeCmd:
-    """Return a trivial ``SafeCmd`` for the allowlisted ``echo`` program."""
-    return sh.make(ECHO)("hello")
 
 
 # -- _enforce_allowlist / _collect_hooks --------------------------------------
@@ -103,23 +99,6 @@ def test_enforce_and_collect_are_independent() -> None:
 
 
 # -- _emit_exec_event ---------------------------------------------------------
-
-
-def _event() -> ExecEvent:
-    """Return a minimal ``plan`` event for hook dispatch."""
-    return ExecEvent(
-        phase="plan",
-        program=ECHO,
-        argv=(str(ECHO),),
-        cwd=None,
-        env=None,
-        pid=None,
-        timestamp=0.0,
-        line=None,
-        exit_code=None,
-        duration_s=None,
-        tags={},
-    )
 
 
 def test_emit_exec_event_returns_empty_for_sync_hooks() -> None:

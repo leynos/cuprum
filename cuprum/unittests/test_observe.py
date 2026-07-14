@@ -226,6 +226,7 @@ def test_observe_tags_reflect_run_output_options(
         assert event.tags["capture"] is output.capture
         assert event.tags["echo"] is output.echo
 
+
 def test_pipeline_awaits_scheduled_observe_tasks_before_return() -> None:
     """Pipeline execution awaits async observe hooks before returning."""
     builder, catalogue = _python_builder(project_name="observe-async-pipeline")

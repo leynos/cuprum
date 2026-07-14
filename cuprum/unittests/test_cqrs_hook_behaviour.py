@@ -11,7 +11,6 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from cuprum import (
-    ECHO,
     LS,
     ForbiddenProgramError,
     ScopeConfig,
@@ -26,6 +25,7 @@ from cuprum._observability import (
 )
 from cuprum._pipeline_types import _EventDetails, _ExecutionHooks, _StageObservation
 from cuprum.events import ExecEvent
+from cuprum.unittests._cqrs_fixtures import _echo_cmd, _event
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -33,28 +33,6 @@ if typ.TYPE_CHECKING:
 
 class _GeneratedHookError(Exception):
     """Test exception raised by generated hook-ordering cases."""
-
-
-def _echo_cmd() -> sh.SafeCmd:
-    """Return a trivial ``SafeCmd`` for the allowlisted ``echo`` program."""
-    return sh.make(ECHO)("hello")
-
-
-def _event() -> ExecEvent:
-    """Return a minimal ``plan`` event for hook dispatch."""
-    return ExecEvent(
-        phase="plan",
-        program=ECHO,
-        argv=(str(ECHO),),
-        cwd=None,
-        env=None,
-        pid=None,
-        timestamp=0.0,
-        line=None,
-        exit_code=None,
-        duration_s=None,
-        tags={},
-    )
 
 
 def test_safe_cmd_run_enforces_allowlist_before_before_hooks() -> None:

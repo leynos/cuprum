@@ -27,10 +27,11 @@ from cuprum import ECHO, sh
 from cuprum._observability import _base_stage_tags, _resolve_env_overlay
 from cuprum._pipeline_internals import (
     _build_pipeline_observations,
-    _run_before_hooks,
+    _collect_hooks,
+    _enforce_allowlist,
 )
 from cuprum._testing import _prepare_pipeline_config
-from cuprum.context import env, merge_env_overlays
+from cuprum.context import current_context, env, merge_env_overlays
 from cuprum.sh import (
     ExecutionContext,
     RunOutputOptions,
@@ -109,8 +110,9 @@ def _single_command_tags(
     echo: bool,
 ) -> cabc.Mapping[str, object]:
     """Build the single-command observation and return its tags."""
+    _enforce_allowlist(cmd)
     tracking = _ExecutionTracking(
-        execution_hooks=_run_before_hooks(cmd),
+        execution_hooks=_collect_hooks(current_context()),
         pending_tasks=[],
     )
     observation = _prepare_execution_observation(

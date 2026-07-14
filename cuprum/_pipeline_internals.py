@@ -49,6 +49,7 @@ def _sh_module() -> types.ModuleType:
         raise RuntimeError(msg)
     return module
 
+
 def _enforce_allowlist(cmd: SafeCmd) -> None:
     """Enforce the active allowlist for ``cmd``.
 
@@ -58,6 +59,7 @@ def _enforce_allowlist(cmd: SafeCmd) -> None:
     returns ``None`` otherwise.
     """
     current_context().check_allowed(cmd.program)
+
 
 def _collect_hooks(ctx: CuprumContext) -> _ExecutionHooks:
     """Return the before/after/observe hooks registered on ``ctx``.
@@ -70,6 +72,8 @@ def _collect_hooks(ctx: CuprumContext) -> _ExecutionHooks:
         after_hooks=ctx.after_hooks,
         observe_hooks=ctx.observe_hooks,
     )
+
+
 async def _await_pipeline_wait_result(
     spawn: _PipelineSpawnResult,
     config: _PipelineRunConfig,

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import types
 import typing as typ
 
@@ -21,7 +22,9 @@ if typ.TYPE_CHECKING:
 
     from cuprum.events import ExecEvent, ExecHook
     from cuprum.sh import SafeCmd
-import logging
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _merge_tags(*tags: cabc.Mapping[str, object] | None) -> cabc.Mapping[str, object]:
