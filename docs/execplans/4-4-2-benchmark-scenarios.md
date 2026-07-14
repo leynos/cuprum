@@ -346,7 +346,7 @@ All stages are idempotent. Running `make test` is safe to repeat. The dry-run
 command overwrites its output file. If implementation produces unexpected test
 failures, revert changes to `benchmarks/pipeline_throughput.py` and retry.
 
-## Artifacts and notes
+## Artefacts and notes
 
 Log files retained for review:
 

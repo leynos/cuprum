@@ -89,6 +89,32 @@ def _coerce_argv(
     return positional + flags
 
 
+def build_argv(*args: _ArgValue, **kwargs: _ArgValue) -> tuple[str, ...]:
+    """Build an argv tuple using the same rules as ``sh.make`` builders.
+
+    Parameters
+    ----------
+    *args
+        Positional argument values. Values are stringified with ``str()`` in
+        the order supplied and appear before generated keyword flags.
+    **kwargs
+        Keyword flag values. Each key is normalised by replacing underscores
+        with hyphens, then serialized as ``--flag=value`` in insertion order.
+        ``None`` is rejected in positional and keyword positions.
+
+    Returns
+    -------
+    tuple[str, ...]
+        The constructed argv tuple, excluding the program name.
+
+    Examples
+    --------
+    >>> build_argv("status", porcelain=True, branch="main")
+    ('status', '--porcelain=True', '--branch=main')
+    """
+    return _coerce_argv(args, kwargs)
+
+
 @dc.dataclass(frozen=True, slots=True)
 class CommandResult:
     """Structured result returned by command execution.
@@ -557,6 +583,7 @@ __all__ = [
     "StdinInput",
     "TimeoutExpired",
     "UnknownProgramError",
+    "build_argv",
     "make",
     "observe",
     "scoped",

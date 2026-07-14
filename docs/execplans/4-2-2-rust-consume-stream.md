@@ -317,7 +317,7 @@ command. If the Rust extension is unavailable in the environment, the new
 Rust-specific tests should skip via the existing `rust_streams` fixture; do not
 remove the tests. No destructive commands are required.
 
-## Artifacts and notes
+## Artefacts and notes
 
 Keep the following evidence in logs when validating:
 

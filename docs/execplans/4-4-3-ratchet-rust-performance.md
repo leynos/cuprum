@@ -90,7 +90,7 @@ This task is complete only when:
   Mitigation: build/install native extension in both baseline and candidate
   worktrees before running benchmarks; fail fast if Rust scenarios are absent.
 
-- Risk: Fetching the latest successful `main` baseline artifact and benchmarking
+- Risk: Fetching the latest successful `main` baseline artefact and benchmarking
   the candidate commit may be slow or brittle. Severity: medium. Likelihood:
   medium. Mitigation: use smoke benchmark mode for CI ratchet, keep command
   paths explicit, and archive intermediate JSON for debugging.
@@ -159,8 +159,8 @@ This task is complete only when:
 - Update: superseded during follow-up CI hardening on 2026-03-06. The live
   baseline checkout could fail before candidate benchmarks ran because the
   baseline commit might predate Rust smoke-path stabilization. The workflow now
-  compares against the latest successful `main` baseline artifact and
-  bootstraps cleanly when no prior baseline artifact exists.
+  compares against the latest successful `main` baseline artefact and
+  bootstraps cleanly when no prior baseline artefact exists.
 
 - Decision: ratchet against end-to-end throughput (`hyperfine`) Rust scenarios
   only, while still collecting microbenchmark JSON artefacts for observability.
@@ -225,7 +225,7 @@ Relevant files and current state:
 Terminology used in this plan:
 
 - Baseline: benchmark JSON fetched from the latest successful `main` run in the
-  artifact store.
+  artefact store.
 - Candidate: benchmark JSON produced from the commit under test (`github.sha`).
 - Regression ratio: `(candidate_mean - baseline_mean) / baseline_mean` for the
   same Rust scenario. Positive values mean slower candidate performance.
@@ -263,7 +263,7 @@ Stage C: implement CI benchmark ratchet job.
 Add a job in `.github/workflows/ci.yml` (or a new workflow called from it) that
 runs on `pull_request` and `push` to `main` and does the following:
 
-- fetches the baseline artifact from the latest successful `main` run;
+- fetches the baseline artefact from the latest successful `main` run;
 - builds dependencies and the Rust extension for the candidate commit under
   test;
 - runs smoke benchmark commands to emit candidate JSON outputs;
@@ -400,12 +400,12 @@ Quality criteria:
   outputs.
 - CI workspace preparation should use fresh directories per run to avoid
   cross-run contamination.
-- If baseline artifact fetch fails for a given event payload, stop and log the
-  missing artifact contract before retrying with corrected event handling.
+- If baseline artefact fetch fails for a given event payload, stop and log the
+  missing artefact contract before retrying with corrected event handling.
 - If benchmark output schema mismatches expected keys, fail fast with explicit
   error messages and preserve offending JSON as artefacts.
 
-## Artifacts and notes
+## Artefacts and notes
 
 Expected local log artefacts:
 
