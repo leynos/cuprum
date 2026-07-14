@@ -342,6 +342,18 @@ Acceptance is satisfied when all of the following are true:
   in `pyproject.toml`, document the failure in the Decision Log, and
   re-evaluate the backend approach before continuing.
 
+
+## Artefacts and Notes
+
+Expected artefacts after CI configuration:
+
+- New Rust workspace files under `rust/` (Cargo workspace and crate).
+- Updated `pyproject.toml` build-system configuration supporting `uv_build`
+  and maturin.
+- Updated CI workflows or actions to build native and pure-Python wheels.
+- Updated documentation in `docs/cuprum-design.md`, `docs/users-guide.md`, and
+  roadmap changes in `docs/roadmap.md`.
+
 ## Artefacts and notes
 
 Expected artefacts after CI configuration:
