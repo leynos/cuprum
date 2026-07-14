@@ -81,12 +81,13 @@ def _tar_create_argv(
     options: TarCreateOptions,
 ) -> tuple[str, ...]:
     """Build the immutable argv for ``tar_create`` without a catalogue."""
+    match sources:
+        case str() | Path():
+            msg = "tar_create requires a sequence of source paths, not a single path"
+            raise TypeError(msg)
     if not sources:
         msg = "tar_create requires at least one source path"
         raise ValueError(msg)
-    if isinstance(sources, (str, Path)):
-        msg = "tar_create requires a sequence of source paths, not a single path"
-        raise TypeError(msg)
 
     compression_flag = _get_compression_flag(options)
     args: list[str] = ["-c"]

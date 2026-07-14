@@ -124,6 +124,12 @@ def test_tar_create_rejects_invalid_source_collections(
         _tar_create_argv(archive, bare_path, options)
 
 
+def test_tar_create_rejects_empty_bare_string_source() -> None:
+    """An empty bare string is a type error, not an empty source sequence."""
+    with pytest.raises(TypeError, match="sequence of source paths"):
+        tar_create("/archive.tar", typ.cast("list[str]", ""))
+
+
 @settings(max_examples=200)
 @given(archive=_ABS_PATHS, destination=st.none() | _ABS_PATHS)
 def test_tar_extract_argv_shape(archive: str, destination: str | None) -> None:
