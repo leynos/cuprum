@@ -71,6 +71,7 @@ import typing as typ
 from cuprum.adapters._support import (
     _event_common_fields,
     _LockedStore,
+    _log_unhandled_phase,
     _prefixed,
     _project_tag,
 )
@@ -297,9 +298,7 @@ class TracingHook:
             case "exit":
                 self._handle_exit(event)
             case _:
-                # Phases without span semantics (for example ``stdin``)
-                # deliberately record nothing.
-                pass
+                _log_unhandled_phase("tracing", event.phase)
 
     def _handle_start(self, event: ExecEvent) -> None:
         """Start a new span for command execution."""

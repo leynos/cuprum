@@ -119,40 +119,24 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
-## Canonical adapter event projection and locked-store base
+### Canonical adapter event projection and locked-store base
 
-The telemetry adapters share scaffolding from
-`cuprum/adapters/_support.py`:
+`cuprum/adapters/_support.py` keeps the three telemetry adapters from
+repeating the same event projection and in-memory collector locking. It owns
+the canonical common `(key, value)` projection, the `project` tag helper, the
+shared unhandled-phase debug log, and `_LockedStore` with its lock-guarded
+`reset()`. Each adapter retains backend-specific key names and value shaping,
+such as tuple versus list `argv`, at its call site.
 
-- `_event_common_fields(event, name)` is the single source of truth for
-  projecting an `ExecEvent` into the common `(key, value)` pairs an adapter
-  attaches to its backend records. It always yields `program` and `argv`, and
-  yields `pid`, `cwd`, `exit_code`, `duration_s`, and `line` only when not
-  `None`. Each adapter supplies a key-naming function, so backend-specific
-  conventions (`cuprum.` span attributes versus `cuprum_` log extras) stay
-  local while the include-when-set logic cannot drift. Adapters that need a
-  backend-specific `argv` container pass the projection's `argv` converter so
-  the projected value is built once. `_prefixed(prefix)` builds the simple
-  prefixing key-namer used by prefixed adapters. `_project_tag(event)` is the
-  companion helper for the `project` tag used by the tracing attributes and
-  metrics labels.
-- `_LockedStore` is the base for the in-memory reference collectors
-  (`InMemoryMetrics`, `InMemoryTracer`). It owns the `threading.Lock` and the
-  lock-guarded `reset()`; subclasses implement `_clear()` (run while the lock
-  is held) and must acquire `self._lock` in their own mutators.
+This module was extracted to prevent three-way projection drift and keep each
+adapter within its cohesion budget. It is importable only by adapter modules:
+do not add backend rendering, logging configuration, event construction, or
+general-purpose utilities. Add an adapter-visible `ExecEvent` field once to
+`_event_common_fields`; new in-memory collectors derive from `_LockedStore`
+and implement `_clear()` while its lock is held.
 
-Re-use policy: a new `ExecEvent` field that adapters should surface is added
-once, in `_event_common_fields`; a new adapter projects through it rather than
-re-implementing the loop. New in-memory collectors derive from `_LockedStore`.
-Phase dispatch in the hooks is exhaustive. `MetricsHook` first checks that a
-phase is handled, defers label extraction until that guard passes, and raises
-`_UnhandledMetricsPhaseError` if the handled-phase set and `metrics_adapter`
-matcher ever drift apart.
-
-`cuprum/unittests/test_adapter_projection.py` pins the contract with Hypothesis
-properties (the projection omits exactly the `None` fields; the adapters agree
-on the common key set modulo prefix) and syrupy snapshots of the per-phase
-projected dictionaries with volatile fields redacted.
+`cuprum/unittests/test_adapter_projection.py` pins this contract with Hypothesis
+properties and redacted per-phase syrupy snapshots.
 
 ## Canonical `_TokenRegistration` handle base
 

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import typing as typ
+
 from cuprum import sh
 from cuprum.adapters.tracing_adapter import (
     InMemorySpan,
@@ -15,6 +18,9 @@ from cuprum.unittests._adapter_test_support import (
     _python_builder,
     _run_in_threads,
 )
+
+if typ.TYPE_CHECKING:
+    import pytest
 
 
 class TestTracingHook:
@@ -267,6 +273,18 @@ sys.stdout.write(data.upper())""",
         # No spans should have been created
         assert tracer.spans == [], (
             "test_pid_less_events_do_not_create_spans should ignore pid-less events"
+        )
+
+    def test_logs_unhandled_phases(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Phases without span semantics use the shared debug log."""
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+        caplog.set_level(logging.DEBUG, logger="cuprum.adapters")
+
+        hook(_make_exec_event(phase="stdin"))
+
+        assert "Ignoring unhandled tracing adapter phase: stdin" in caplog.messages, (
+            "test_logs_unhandled_phases should log unsupported tracing phases"
         )
 
     def test_pipeline_attributes_are_set_on_spans(self) -> None:

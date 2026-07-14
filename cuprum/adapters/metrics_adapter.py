@@ -62,28 +62,17 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
-from cuprum.adapters._support import _LockedStore, _project_tag
+from cuprum.adapters._support import (
+    _event_common_fields,
+    _LockedStore,
+    _log_unhandled_phase,
+    _project_tag,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.events import ExecEvent, ExecHook
-
-# Phases the metrics hook translates into collector updates; other phases
-# (for example ``plan``) deliberately record nothing.
-_HANDLED_PHASES: frozenset[str] = frozenset(
-    {"start", "stdout", "stderr", "stdin", "stdin_error", "exit"},
-)
-
-
-class _UnhandledMetricsPhaseError(RuntimeError):
-    """Raised when the handled phase guard and matcher drift apart."""
-
-    def __init__(self, phase: str) -> None:
-        """Initialise the invariant failure for *phase*."""
-        self.phase = phase
-        msg = f"unhandled metrics phase: {phase!r}"
-        super().__init__(msg)
 
 
 class MetricsCollector(typ.Protocol):
@@ -224,30 +213,33 @@ class MetricsHook:
 
     def __call__(self, event: ExecEvent) -> None:
         """Process an execution event and update metrics."""
-        # Defer label extraction until the phase is known to be handled so
-        # unhandled phases (for example ``plan``) do no projection work.
-        if event.phase not in _HANDLED_PHASES:
-            return
-        labels = self._extract_labels(event)
-
         match event.phase:
             case "start":
-                self._increment("cuprum_executions_total", labels=labels)
+                self._increment(
+                    "cuprum_executions_total",
+                    labels=self._extract_labels(event),
+                )
             case "stdout":
-                self._increment("cuprum_stdout_lines_total", labels=labels)
+                self._increment(
+                    "cuprum_stdout_lines_total",
+                    labels=self._extract_labels(event),
+                )
             case "stderr":
-                self._increment("cuprum_stderr_lines_total", labels=labels)
+                self._increment(
+                    "cuprum_stderr_lines_total",
+                    labels=self._extract_labels(event),
+                )
             case "stdin_error":
-                self._increment("cuprum_stdin_errors_total", labels=labels)
+                self._increment(
+                    "cuprum_stdin_errors_total",
+                    labels=self._extract_labels(event),
+                )
             case "stdin":
-                self._record_stdin_bytes(event, labels=labels)
+                self._record_stdin_bytes(event, labels=self._extract_labels(event))
             case "exit":
-                self._record_exit(event, labels=labels)
+                self._record_exit(event, labels=self._extract_labels(event))
             case _:
-                # Unreachable behind the _HANDLED_PHASES guard; kept so a new
-                # phase added to the guard without a handler fails loudly in
-                # review rather than silently matching nothing.
-                raise _UnhandledMetricsPhaseError(event.phase)
+                _log_unhandled_phase("metrics", event.phase)
 
     def _increment(
         self,
@@ -297,9 +289,9 @@ class MetricsHook:
         the ``project`` tag; high-cardinality fields (pid, argv, lines) are
         excluded by design.
         """
-        program = event.program
+        common = dict(_event_common_fields(event, lambda field: field))
         return {
-            "program": "unknown" if program is None else str(program),
+            "program": str(common.get("program") or "unknown"),
             "project": _project_tag(event) or "unknown",
         }
 

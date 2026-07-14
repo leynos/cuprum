@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 import typing as typ
 
@@ -11,7 +12,6 @@ from cuprum import sh
 from cuprum.adapters.metrics_adapter import (
     InMemoryMetrics,
     MetricsHook,
-    _UnhandledMetricsPhaseError,
     metrics_hook,
 )
 from cuprum.context import ScopeConfig, scoped
@@ -27,17 +27,6 @@ if typ.TYPE_CHECKING:
 
 class TestMetricsHook:
     """Tests for MetricsHook and InMemoryMetrics."""
-
-    def test_unhandled_phase_error_exposes_phase(self) -> None:
-        """Unhandled phase errors expose the phase without parsing text."""
-        error = _UnhandledMetricsPhaseError("future_phase")
-
-        assert error.phase == "future_phase", (
-            "unhandled metrics phase errors should expose structured phase data"
-        )
-        assert str(error) == "unhandled metrics phase: 'future_phase'", (
-            "unhandled metrics phase errors should include the phase in text"
-        )
 
     @pytest.mark.parametrize(
         ("command_code", "metric_name", "expected_value", "failure_message"),
@@ -194,8 +183,11 @@ print('err1', file=sys.stderr)""",
         assert metrics.counters == {}, "reset should clear in-memory counters"
         assert metrics.histograms == {}, "reset should clear in-memory histograms"
 
-    def test_unhandled_phase_does_not_project_labels(self) -> None:
-        """Unhandled phases return before touching event label fields."""
+    def test_unhandled_phase_does_not_project_labels(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Unhandled phases log without touching event label fields."""
 
         class UnstringableProgram:
             """Program-like value that fails if metrics tries to stringify it."""
@@ -207,6 +199,7 @@ print('err1', file=sys.stderr)""",
 
         metrics = InMemoryMetrics()
         hook = MetricsHook(metrics)
+        caplog.set_level(logging.DEBUG, logger="cuprum.adapters")
         event = ExecEvent(
             phase="plan",
             program=typ.cast("Program", UnstringableProgram()),
@@ -225,6 +218,9 @@ print('err1', file=sys.stderr)""",
 
         assert metrics.counters == {}, "unhandled phases should not mutate counters"
         assert metrics.histograms == {}, "unhandled phases should not mutate histograms"
+        assert "Ignoring unhandled metrics adapter phase: plan" in caplog.messages, (
+            "unhandled metrics phases should use the shared debug log"
+        )
 
     def test_concurrent_metrics_reset_leaves_valid_empty_state(self) -> None:
         """Concurrent reset calls keep the in-memory metrics store coherent."""

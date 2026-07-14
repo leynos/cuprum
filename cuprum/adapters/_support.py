@@ -16,6 +16,7 @@ logging adapters previously duplicated:
 from __future__ import annotations
 
 import dataclasses as dc
+import logging
 import threading
 import typing as typ
 
@@ -32,8 +33,10 @@ def _event_common_fields(
     argv: cabc.Callable[[tuple[str, ...]], object] = lambda value: value,
 ) -> cabc.Iterator[tuple[str, object]]:
     """Yield the canonical common projection of *event* as key/value pairs."""
-    yield name("program"), str(event.program)
-    yield name("argv"), argv(event.argv)
+    if event.program is not None:
+        yield name("program"), str(event.program)
+    if event.argv is not None:
+        yield name("argv"), argv(event.argv)
     if event.pid is not None:
         yield name("pid"), event.pid
     if event.cwd is not None:
@@ -62,6 +65,15 @@ def _project_tag(event: ExecEvent) -> str | None:
         project = event.tags["project"]
         return None if project is None else str(project)
     return None
+
+
+def _log_unhandled_phase(adapter: str, phase: str) -> None:
+    """Log a phase that has no semantics for an adapter."""
+    logging.getLogger("cuprum.adapters").debug(
+        "Ignoring unhandled %s adapter phase: %s",
+        adapter,
+        phase,
+    )
 
 
 @dc.dataclass(slots=True)
@@ -95,6 +107,7 @@ class _LockedStore:
 __all__ = [
     "_LockedStore",
     "_event_common_fields",
+    "_log_unhandled_phase",
     "_prefixed",
     "_project_tag",
 ]

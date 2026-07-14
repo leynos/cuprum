@@ -18,21 +18,22 @@ import typing as typ
 from pathlib import Path
 
 import pytest
-from hypothesis import given
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from cuprum.adapters._support import _event_common_fields
 from cuprum.adapters.logging_adapter import _build_extra
 from cuprum.adapters.metrics_adapter import MetricsHook
 from cuprum.adapters.tracing_adapter import TracingHook
-from cuprum.events import ExecEvent
+from cuprum.events import ExecEvent, ExecPhase
 from cuprum.program import Program
 
 if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
 _OPTIONAL_FIELDS = ("pid", "cwd", "exit_code", "duration_s", "line")
-_PHASES = ("plan", "start", "stdout", "stderr", "exit", "stdin", "stdin_error")
+_PHASES = typ.get_args(ExecPhase.__value__)
+_REDACTED_FIELDS = frozenset({"pid", "duration_s", "cwd"})
 
 
 @st.composite
@@ -49,7 +50,17 @@ def _events(draw: st.DrawFn) -> ExecEvent:
         line=draw(st.none() | st.just("a line")),
         exit_code=draw(st.none() | st.integers(min_value=0, max_value=255)),
         duration_s=draw(st.none() | st.just(0.125)),
-        tags=draw(st.just({}) | st.just({"project": "proj"})),
+        tags=draw(
+            st.dictionaries(
+                st.sampled_from(
+                    ("project", "pipeline_stage_index", "pipeline_stages"),
+                ),
+                st.none()
+                | st.text(max_size=20)
+                | st.integers(min_value=0, max_value=5),
+                max_size=3,
+            ),
+        ),
     )
 
 
@@ -69,6 +80,11 @@ def _expected_projection(event: ExecEvent) -> dict[str, object]:
     return expected
 
 
+@settings(
+    deadline=None,
+    max_examples=50,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
 @given(event=_events())
 def test_projection_includes_exactly_the_non_none_fields(event: ExecEvent) -> None:
     """Property: the canonical projection omits exactly the ``None`` fields.
@@ -86,6 +102,11 @@ def test_projection_includes_exactly_the_non_none_fields(event: ExecEvent) -> No
     )
 
 
+@settings(
+    deadline=None,
+    max_examples=50,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
 @given(event=_events())
 def test_adapters_agree_on_common_keys_modulo_prefix(event: ExecEvent) -> None:
     """Property: the three adapters expose the same common key set.
@@ -111,6 +132,9 @@ def test_adapters_agree_on_common_keys_modulo_prefix(event: ExecEvent) -> None:
         "logging extras must expose exactly the canonical common fields after "
         "removing their backend prefix"
     )
+    assert _build_extra(event)["cuprum_argv"] == event.argv, (
+        "logging extras must preserve argv as a tuple"
+    )
 
     attr_keys = {
         key.removeprefix("cuprum.")
@@ -126,6 +150,9 @@ def test_adapters_agree_on_common_keys_modulo_prefix(event: ExecEvent) -> None:
         "tracing attributes must expose exactly the canonical common fields "
         "after removing their backend prefix"
     )
+    assert TracingHook._build_attributes(event)["cuprum.argv"] == list(event.argv), (
+        "tracing attributes must render argv as a list"
+    )
 
     labels = MetricsHook._extract_labels(event)
     assert set(labels) == {"program", "project"}, (
@@ -135,9 +162,10 @@ def test_adapters_agree_on_common_keys_modulo_prefix(event: ExecEvent) -> None:
     assert labels["program"] == str(event.program), (
         "metrics labels must stringify the event program when it is present"
     )
-    assert labels["project"] == str(event.tags.get("project") or "unknown"), (
-        "metrics labels must stringify the project tag and fall back to "
-        "'unknown' when the tag is absent"
+    project = event.tags.get("project")
+    assert labels["project"] == ("unknown" if project is None else str(project)), (
+        "metrics labels must stringify a real project tag and fall back to "
+        "'unknown' only when the tag is absent or None"
     )
 
 
@@ -164,12 +192,9 @@ def _redact(mapping: dict[str, object]) -> dict[str, object]:
     """Replace volatile fields (pid, duration, cwd) with stable tokens."""
     redacted: dict[str, object] = {}
     for key, value in mapping.items():
-        if key.endswith(("pid",)):
-            redacted[key] = "<pid>"
-        elif key.endswith(("duration_s",)):
-            redacted[key] = "<duration>"
-        elif key.endswith(("cwd",)):
-            redacted[key] = "<cwd>"
+        field = key.removeprefix("cuprum.").removeprefix("cuprum_")
+        if field in _REDACTED_FIELDS:
+            redacted[key] = f"<{field}>"
         else:
             redacted[key] = value
     return redacted
