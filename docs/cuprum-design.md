@@ -1283,6 +1283,10 @@ design decisions guide these adapters:
 - `_LockedStore` owns the reference collectors' lock and reset behaviour so new
   in-memory adapter collectors inherit the shared concurrency contract instead
   of re-implementing it.
+- `_support.py` begins after an `ExecEvent` is emitted. Construction of the
+  event's shared environment overlay and stage tags belongs to
+  `cuprum._observability`, keeping execution-path inputs separate from
+  backend-specific projection.
 
 **Metrics adapter specifics:**
 

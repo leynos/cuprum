@@ -891,7 +891,6 @@ Each tier must pass before the next runs. When investigating a lint failure,
 fix the Ruff findings first, then the `interrogate` gaps, then rerun
 `make lint` to reach the Pylint tier.
 
-
 ### Test and lint parallelism
 
 `make test` runs pytest serially by default (`PYTEST_WORKERS=0`) to avoid

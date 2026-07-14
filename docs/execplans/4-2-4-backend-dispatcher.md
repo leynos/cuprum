@@ -507,8 +507,6 @@ failed step. No special rollback needed; git provides recovery.
 
 ## Artefacts and notes
 
-## Artefacts and notes
-
 ### Key files created
 
 1. `cuprum/_backend.py` — Dispatcher module

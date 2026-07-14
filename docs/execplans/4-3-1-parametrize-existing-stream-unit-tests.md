@@ -479,8 +479,6 @@ failed step. No special rollback needed; git provides recovery.
 
 ## Artefacts and notes
 
-## Artefacts and notes
-
 ### Key files created
 
 1. `tests/features/stream_backend_pipeline.feature` — BDD feature file
