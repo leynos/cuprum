@@ -10,7 +10,6 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md)
 - [ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md)
 
-
 ## Tar and rsync builder helpers
 
 `TarCreateOptions.compression` in `cuprum/builders/tar.py` selects one member
