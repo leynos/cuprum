@@ -299,9 +299,7 @@ cuprum/builders/rsync.py
 cuprum/builders/tar.py
   @dataclass(frozen=True, slots=True)
   class TarCreateOptions:
-      gzip: bool = False
-      bzip2: bool = False
-      xz: bool = False
+      compression: Compression = Compression.NONE
       allow_relative: bool = False
 
   def tar_create(
@@ -317,6 +315,9 @@ cuprum/builders/tar.py
       allow_relative: bool = False,
   ) -> SafeCmd
 ```
+
+`Compression` selects one mutually exclusive member: `NONE`, `GZIP`, `BZIP2`,
+or `XZ`.
 
 Exports and catalogue updates:
 

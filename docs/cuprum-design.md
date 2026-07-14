@@ -258,7 +258,7 @@ namespace exposes functions that construct `DynamicCmd` for the rare cases
 where arbitrary composition is required.
 
 High‑level facilities (pipelines, context‑scoped allowlists, etc.) are
-optimized for `SafeCmd`. You can adapt a `DynamicCmd` into these facilities,
+optimized for `SafeCmd`. `DynamicCmd` can be adapted into these facilities,
 but doing so is visually explicit and reviewable.
 
 ### 5.3 Execution Context
@@ -1441,7 +1441,10 @@ extend. The following decisions guide the core builder set:
 - Builders validate inputs internally and expose `allow_relative` parameters
   on option dataclasses where relative paths are expected to be legitimate.
 - `RsyncOptions` and `TarCreateOptions` bundle flag choices to keep builder
-  function signatures short and lint-friendly.
+  function signatures short and lint-friendly. `TarCreateOptions.compression`
+  is a single `Compression` enum (`NONE`, `GZIP`, `BZIP2`, `XZ`) rather than
+  mutually-exclusive booleans, so selecting two algorithms at once is not a
+  representable state.
 
 ______________________________________________________________________
 

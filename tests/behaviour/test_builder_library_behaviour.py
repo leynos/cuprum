@@ -8,6 +8,7 @@ import typing as typ
 from pytest_bdd import given, parsers, scenario, then, when
 
 from cuprum.builders import (
+    Compression,
     RsyncOptions,
     TarCreateOptions,
     git_checkout,
@@ -129,7 +130,7 @@ def when_build_tar_command(tar_inputs: _TarInputs) -> _CommandResult:
     cmd = tar_create(
         tar_inputs.archive,
         tar_inputs.sources,
-        options=TarCreateOptions(gzip=True),
+        options=TarCreateOptions(compression=Compression.GZIP),
     )
     return _CommandResult(argv_with_program=cmd.argv_with_program)
 
