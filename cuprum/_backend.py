@@ -145,6 +145,78 @@ def set_rust_availability_for_testing(
     )
 
 
+def _log_stream_backend_resolution(
+    requested: StreamBackend,
+    resolved: StreamBackend,
+    *,
+    rust_available: bool | None,
+) -> None:
+    """Log the outcome of stream backend resolution."""
+    _LOGGER.debug(
+        "resolved stream backend",
+        extra={
+            "event": "cuprum.stream_backend_resolved",
+            "requested_backend": requested.value,
+            "resolved_backend": resolved.value,
+            "rust_available": rust_available,
+        },
+    )
+
+
+def _resolve_python_backend(requested: StreamBackend) -> StreamBackend:
+    """Resolve the StreamBackend.PYTHON case."""
+    _log_stream_backend_resolution(requested, StreamBackend.PYTHON, rust_available=None)
+    return StreamBackend.PYTHON
+
+
+def _resolve_rust_forced_backend(requested: StreamBackend) -> StreamBackend:
+    """Resolve the StreamBackend.RUST case, raising if unavailable."""
+    is_rust_available = _check_rust_available()
+    if is_rust_available:
+        _log_stream_backend_resolution(
+            requested, StreamBackend.RUST, rust_available=is_rust_available
+        )
+        return StreamBackend.RUST
+    _LOGGER.warning(
+        "Rust stream backend requested but unavailable",
+        extra={
+            "event": "cuprum.stream_backend_unavailable",
+            "requested_backend": requested.value,
+            "rust_available": is_rust_available,
+        },
+    )
+    msg = (
+        f"Rust stream backend requested via {_ENV_VAR}=rust "
+        "but the Rust extension is not available"
+    )
+    raise ImportError(msg)
+
+
+def _resolve_auto_backend(requested: StreamBackend) -> StreamBackend:
+    """Resolve the StreamBackend.AUTO case, falling back to Python."""
+    try:
+        is_rust_available = _check_rust_available()
+        if is_rust_available:
+            _log_stream_backend_resolution(
+                requested, StreamBackend.RUST, rust_available=is_rust_available
+            )
+            return StreamBackend.RUST
+    except ImportError:
+        _LOGGER.debug(
+            "Rust availability probe failed in auto mode; falling back to Python",
+            exc_info=True,
+            extra={
+                "event": "cuprum.stream_backend_auto_probe_failed",
+                "requested_backend": requested.value,
+            },
+        )
+        is_rust_available = None
+    _log_stream_backend_resolution(
+        requested, StreamBackend.PYTHON, rust_available=is_rust_available
+    )
+    return StreamBackend.PYTHON
+
+
 @functools.lru_cache(maxsize=1)
 def get_stream_backend() -> StreamBackend:
     """Resolve the active stream backend.
@@ -185,77 +257,11 @@ def get_stream_backend() -> StreamBackend:
 
     match requested:
         case StreamBackend.PYTHON:
-            _LOGGER.debug(
-                "resolved stream backend",
-                extra={
-                    "event": "cuprum.stream_backend_resolved",
-                    "requested_backend": requested.value,
-                    "resolved_backend": StreamBackend.PYTHON.value,
-                    "rust_available": None,
-                },
-            )
-            return StreamBackend.PYTHON
+            return _resolve_python_backend(requested)
         case StreamBackend.RUST:
-            is_rust_available = _check_rust_available()
-            if is_rust_available:
-                _LOGGER.debug(
-                    "resolved stream backend",
-                    extra={
-                        "event": "cuprum.stream_backend_resolved",
-                        "requested_backend": requested.value,
-                        "resolved_backend": StreamBackend.RUST.value,
-                        "rust_available": is_rust_available,
-                    },
-                )
-                return StreamBackend.RUST
-            _LOGGER.warning(
-                "Rust stream backend requested but unavailable",
-                extra={
-                    "event": "cuprum.stream_backend_unavailable",
-                    "requested_backend": requested.value,
-                    "rust_available": is_rust_available,
-                },
-            )
-            msg = (
-                f"Rust stream backend requested via {_ENV_VAR}=rust "
-                "but the Rust extension is not available"
-            )
-            raise ImportError(msg)
+            return _resolve_rust_forced_backend(requested)
         case StreamBackend.AUTO:
-            try:
-                is_rust_available = _check_rust_available()
-                if is_rust_available:
-                    _LOGGER.debug(
-                        "resolved stream backend",
-                        extra={
-                            "event": "cuprum.stream_backend_resolved",
-                            "requested_backend": requested.value,
-                            "resolved_backend": StreamBackend.RUST.value,
-                            "rust_available": is_rust_available,
-                        },
-                    )
-                    return StreamBackend.RUST
-            except ImportError:
-                _LOGGER.debug(
-                    "Rust availability probe failed in auto mode; "
-                    "falling back to Python",
-                    exc_info=True,
-                    extra={
-                        "event": "cuprum.stream_backend_auto_probe_failed",
-                        "requested_backend": requested.value,
-                    },
-                )
-                is_rust_available = None
-            _LOGGER.debug(
-                "resolved stream backend",
-                extra={
-                    "event": "cuprum.stream_backend_resolved",
-                    "requested_backend": requested.value,
-                    "resolved_backend": StreamBackend.PYTHON.value,
-                    "rust_available": is_rust_available,
-                },
-            )
-            return StreamBackend.PYTHON
+            return _resolve_auto_backend(requested)
 
 
 __all__ = ["StreamBackend", "get_stream_backend"]
