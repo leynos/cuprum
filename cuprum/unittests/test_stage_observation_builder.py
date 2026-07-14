@@ -51,7 +51,7 @@ _ENV_KEYS = st.text(
 _ENV_OVERLAYS = st.none() | st.dictionaries(_ENV_KEYS, st.text(max_size=5), max_size=4)
 _TAG_VALUES = st.text(max_size=5) | st.integers(min_value=0, max_value=9)
 _TAGS = st.none() | st.dictionaries(
-    st.sampled_from(["team", "ticket", "project", "capture"]),
+    st.sampled_from(["team", "ticket", "project", "capture", "echo"]),
     _TAG_VALUES,
     max_size=3,
 )
@@ -160,6 +160,10 @@ def test_single_and_pipeline_tags_agree_on_shared_keys(
     single = dict(
         _single_command_tags(cmd, context, capture=capture, echo=echo),
     )
+    assert single == {
+        **_base_stage_tags(cmd, capture=capture, echo=echo),
+        **(ctx_tags or {}),
+    }
     stage_tags = _pipeline_tags((cmd, cmd), context, capture=capture, echo=echo)
 
     for idx, tags in enumerate(stage_tags):

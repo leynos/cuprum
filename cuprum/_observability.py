@@ -23,15 +23,6 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import SafeCmd
 
 
-def _freeze_str_mapping(
-    mapping: cabc.Mapping[str, str] | None,
-) -> cabc.Mapping[str, str] | None:
-    """Return a read-only copy of ``mapping``, or ``None`` when absent."""
-    if mapping is None:
-        return None
-    return types.MappingProxyType(dict(mapping))
-
-
 def _merge_tags(*tags: cabc.Mapping[str, object] | None) -> cabc.Mapping[str, object]:
     """Merge tag mappings left-to-right into a single read-only mapping."""
     merged: dict[str, object] = {}
@@ -46,9 +37,7 @@ def _resolve_env_overlay(
     extra: cabc.Mapping[str, str] | None,
 ) -> cabc.Mapping[str, str] | None:
     """Resolve the frozen observation env overlay for the active context."""
-    return _freeze_str_mapping(
-        merge_env_overlays(current_context().env_overlay, extra),
-    )
+    return merge_env_overlays(current_context().env_overlay, extra)
 
 
 def _base_stage_tags(
@@ -108,7 +97,6 @@ async def _wait_for_exec_hook_tasks(pending_tasks: list[asyncio.Task[None]]) -> 
 __all__ = [
     "_base_stage_tags",
     "_emit_exec_event",
-    "_freeze_str_mapping",
     "_merge_tags",
     "_resolve_env_overlay",
     "_wait_for_exec_hook_tasks",
