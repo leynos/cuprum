@@ -328,7 +328,7 @@ Quality criteria (what done means):
   keep logs in `/tmp/4-3-3-*.log` for diagnosis.
 - If a documentation lint fails, run `make fmt` and rerun markdown checks.
 
-## Artifacts and notes
+## Artefacts and notes
 
 Expected files to create or modify:
 

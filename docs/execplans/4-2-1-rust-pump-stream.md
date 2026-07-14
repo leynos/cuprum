@@ -276,7 +276,7 @@ Done means:
 - If Rust FD handling proves unsafe, revert the Rust changes and revisit the
   Decision Log before proceeding.
 
-## Artifacts and notes
+## Artefacts and notes
 
 Expected changes include:
 

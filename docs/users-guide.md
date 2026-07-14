@@ -1417,7 +1417,7 @@ The continuous integration (CI) workflows run the following checks:
   Python 3.12, 3.13, and 3.14. The Python 3.15a row is experimental and allowed
   to fail.
 - Formatting and lint checks run on Python 3.13.
-- Coverage upload (artifact + optional CodeScene upload) runs on Python 3.13.
+- Coverage upload (artefact + optional CodeScene upload) runs on Python 3.13.
 - Benchmark ratchet runs on pull requests and pushes to `main`:
   - It benchmarks the current checkout in smoke mode with a release build of
     the Rust extension.
