@@ -163,9 +163,10 @@ def test_adapters_agree_on_common_keys_modulo_prefix(event: ExecEvent) -> None:
         "metrics labels must stringify the event program when it is present"
     )
     project = event.tags.get("project")
-    assert labels["project"] == ("unknown" if project is None else str(project)), (
-        "metrics labels must stringify a real project tag and fall back to "
-        "'unknown' only when the tag is absent or None"
+    expected_project = str(project) if project is not None else ""
+    assert labels["project"] == (expected_project or "unknown"), (
+        "metrics labels must stringify a non-empty project tag and fall back "
+        "to 'unknown' when the tag is absent, None, or empty"
     )
 
 

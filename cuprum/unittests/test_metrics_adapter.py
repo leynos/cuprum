@@ -29,27 +29,32 @@ class TestMetricsHook:
     """Tests for MetricsHook and InMemoryMetrics."""
 
     @pytest.mark.parametrize(
-        ("command_code", "metric_name", "expected_value", "failure_message"),
+        (
+            "command_code",
+            "expected_executions",
+            "expected_failures",
+            "failure_message",
+        ),
         [
             (
                 "print('hello')",
-                "cuprum_executions_total",
                 1.0,
-                "start events should increment the executions counter",
+                0.0,
+                "successful executions should increment only the executions counter",
             ),
             (
                 "import sys; sys.exit(1)",
-                "cuprum_failures_total",
                 1.0,
-                "non-zero exits should increment the failures counter",
+                1.0,
+                "failed executions should increment executions and failures counters",
             ),
         ],
     )
     def test_execution_counters(
         self,
         command_code: str,
-        metric_name: str,
-        expected_value: float,
+        expected_executions: float,
+        expected_failures: float,
         failure_message: str,
     ) -> None:
         """Hook increments counters for successful and failed executions."""
@@ -62,9 +67,12 @@ class TestMetricsHook:
         with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
             cmd.run_sync()
 
-        assert metrics.counters.get(metric_name) == pytest.approx(expected_value), (
-            failure_message
-        )
+        assert metrics.counters.get("cuprum_executions_total") == pytest.approx(
+            expected_executions
+        ), failure_message
+        assert metrics.counters.get("cuprum_failures_total", 0.0) == pytest.approx(
+            expected_failures
+        ), failure_message
 
     def test_counts_output_lines(self) -> None:
         """Hook counts stdout and stderr lines."""
