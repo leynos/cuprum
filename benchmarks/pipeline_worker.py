@@ -191,7 +191,9 @@ def run_pipeline_worker(config: PipelineWorkerConfig) -> int:
     )
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
         for i in range(config.iterations):
-            result = pipeline.run_sync(capture=False, echo=False)
+            result = pipeline.run_sync(
+                output=sh.RunOutputOptions(capture=False, echo=False),
+            )
             if not result.ok:
                 failure = result.failure
                 exit_code = failure.exit_code if failure is not None else 1

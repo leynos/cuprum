@@ -24,8 +24,7 @@ if typ.TYPE_CHECKING:
 class _ConcurrentRunConfig:
     """Internal configuration for concurrent command execution."""
 
-    capture: bool
-    echo: bool
+    output: RunOutputOptions
     context: ExecutionContext | None
 
 
@@ -120,11 +119,10 @@ async def _run_with_semaphore(
     config: _ConcurrentRunConfig,
 ) -> CommandResult:
     """Execute a single command, optionally throttled by semaphore."""
-    output = RunOutputOptions(capture=config.capture, echo=config.echo)
     if semaphore is not None:
         async with semaphore:
-            return await cmd.run(output=output, context=config.context)
-    return await cmd.run(output=output, context=config.context)
+            return await cmd.run(output=config.output, context=config.context)
+    return await cmd.run(output=config.output, context=config.context)
 
 
 async def _run_collect_all(
@@ -280,7 +278,8 @@ async def run_concurrent(
     )
     # ExecutionContext is passed through for runtime parameters (env, cwd, etc.)
     run_config = _ConcurrentRunConfig(
-        capture=cfg.capture, echo=cfg.echo, context=cfg.context
+        output=RunOutputOptions(capture=cfg.capture, echo=cfg.echo),
+        context=cfg.context,
     )
 
     if cfg.fail_fast:
