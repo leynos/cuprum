@@ -1777,8 +1777,8 @@ the translation between asyncio streams and file descriptors.
 
 The availability probe is implemented in the dedicated module
 `cuprum._rust_backend_native` and re-exported by the Python shim
-`cuprum._rust_backend`. The shim provides a safe fallback that always returns
-`False` when the native module cannot be imported.
+`cuprum._rust_backend`. The shim returns `False` when the native module is
+missing and re-raises other import failures after logging a warning.
 
 ### 13.4 Fallback Strategy
 
