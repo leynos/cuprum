@@ -11,7 +11,6 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md)
 - [ADR-005: Unify Rust availability probe](adr-005-unified-rust-availability-probe.md)
 
-
 ## Rust availability probing
 
 Stream backend availability is resolved through one cached entry point:
