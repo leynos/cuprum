@@ -396,10 +396,6 @@ prevents cross-test pollution.
 
 ## Artefacts and notes
 
-## Artefacts and notes
-
-## Artefacts and notes
-
 ### Files to create (4)
 
 1. `tests/features/stream_parity.feature` -- BDD feature file
