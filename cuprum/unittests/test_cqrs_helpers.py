@@ -169,7 +169,7 @@ def test_stage_observation_preserves_scheduled_tasks_when_later_hook_fails(
         )
 
         with (
-            caplog.at_level(logging.WARNING, logger="cuprum.observe"),
+            caplog.at_level(logging.WARNING, logger="cuprum._observability"),
             pytest.raises(_SyncObserveHookError),
         ):
             observation.emit("start", _EventDetails(pid=123))

@@ -23,6 +23,7 @@ from cuprum._observability import (
     _ExecEventEmissionError,
     _wait_for_exec_hook_tasks,
 )
+from cuprum._pipeline_internals import _finalize_pipeline_execution
 from cuprum._pipeline_types import _EventDetails, _ExecutionHooks, _StageObservation
 from cuprum.unittests._cqrs_fixtures import _echo_cmd, _event
 
@@ -34,6 +35,10 @@ if typ.TYPE_CHECKING:
 
 class _GeneratedHookError(Exception):
     """Test exception raised by generated hook-ordering cases."""
+
+
+class _AfterHookError(Exception):
+    """Test exception raised by a pipeline after hook."""
 
 
 def test_safe_cmd_run_enforces_allowlist_before_before_hooks() -> None:
@@ -89,6 +94,60 @@ def test_emit_exec_event_preserves_scheduled_prefix_for_generated_hook_orders(
             "failing hook emission should carry tasks scheduled before failure"
         )
         await asyncio.gather(*exc_info.value.scheduled_tasks)
+
+    asyncio.run(run())
+
+
+def test_pipeline_finalization_drains_tasks_after_hook_failure() -> None:
+    """Finalization awaits observe tasks when a pipeline after hook raises."""
+
+    async def run() -> None:
+        """Run a failing after hook beside a scheduled observe task."""
+        completed: list[bool] = []
+        pending_tasks: list[asyncio.Task[None]] = []
+
+        async def observe_task() -> None:
+            """Record that finalization awaited the scheduled task."""
+            await asyncio.sleep(0)
+            completed.append(True)
+
+        def failing_after_hook(_cmd: sh.SafeCmd, _result: sh.CommandResult) -> None:
+            """Raise while finalizing the pipeline stage."""
+            raise _AfterHookError
+
+        cmd = _echo_cmd()
+        observation = _StageObservation(
+            cmd=cmd,
+            hooks=_ExecutionHooks(
+                before_hooks=(),
+                after_hooks=(failing_after_hook,),
+                observe_hooks=(),
+            ),
+            tags={},
+            cwd=None,
+            env_overlay=None,
+            pending_tasks=pending_tasks,
+        )
+        pending_tasks.append(asyncio.create_task(observe_task()))
+        stage_result = sh.CommandResult(
+            program=cmd.program,
+            argv=cmd.argv,
+            exit_code=0,
+            pid=123,
+            stdout=None,
+            stderr=None,
+        )
+
+        with pytest.raises(_AfterHookError):
+            await _finalize_pipeline_execution(
+                (cmd,),
+                (observation,),
+                [stage_result],
+                pending_tasks,
+            )
+
+        assert completed == [True], "finalization should await scheduled observe tasks"
+        assert pending_tasks == [], "finalization should clear completed observe tasks"
 
     asyncio.run(run())
 

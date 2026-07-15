@@ -291,10 +291,16 @@ def test_pipeline_observe_emits_stage_tags_and_env_overlay() -> None:
         1,
     }
     for event in exit_events:
-        assert event.env is not None
-        assert event.env["CUPRUM_OBSERVE_PIPELINE"] == "1"
-        assert event.tags["project"] == "observe-pipeline"
-        assert event.tags["run_id"] == "pipeline-unit"
+        assert event.env is not None, "exit event should retain the environment"
+        assert event.env["CUPRUM_OBSERVE_PIPELINE"] == "1", (
+            "exit event should retain the pipeline environment value"
+        )
+        assert event.tags["project"] == "observe-pipeline", (
+            "exit event should retain the project tag"
+        )
+        assert event.tags["run_id"] == "pipeline-unit", (
+            "exit event should retain the run ID tag"
+        )
     assert "HELLO" in [
         ev.line
         for ev in events

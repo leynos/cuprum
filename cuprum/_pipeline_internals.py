@@ -255,8 +255,10 @@ async def _finalize_pipeline_execution(
 ) -> None:
     """Run after hooks for every stage and drain pending observe tasks."""
     hooks_by_stage = tuple(obs.hooks for obs in observations)
-    _run_pipeline_after_hooks(parts, hooks_by_stage, stage_results)
-    await _wait_for_exec_hook_tasks(pending_tasks)
+    try:
+        _run_pipeline_after_hooks(parts, hooks_by_stage, stage_results)
+    finally:
+        await _wait_for_exec_hook_tasks(pending_tasks)
 
 
 async def _run_pipeline(

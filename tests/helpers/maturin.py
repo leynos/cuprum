@@ -37,7 +37,17 @@ _DIST_INFO_SUFFIXES: dict[str, str] = {
 
 
 class MaturinBuildError(subprocess.CalledProcessError):
-    """Maturin build failure with raw output and rendered diagnostics."""
+    """Maturin build failure with raw output and rendered diagnostics.
+
+    Attributes
+    ----------
+    build_command : tuple[str, ...]
+        Command used to invoke the maturin wheel build.
+    returncode : int
+        Process exit status, inherited from ``CalledProcessError``.
+    stderr : str | bytes | None
+        Raw captured standard error, inherited from ``CalledProcessError``.
+    """
 
     def __init__(self, error: subprocess.CalledProcessError) -> None:
         """Store raw process diagnostics separately from ``str(error)``."""
@@ -51,15 +61,13 @@ class MaturinBuildError(subprocess.CalledProcessError):
             self.build_command = tuple(str(part) for part in error.cmd)
         else:
             self.build_command = (str(error.cmd),)
-        self.exit_code = error.returncode
-        self.captured_stderr = error.stderr
 
     def __str__(self) -> str:
         """Return an enriched diagnostic while preserving raw stderr."""
         rendered_command = " ".join(self.build_command)
         return (
             f"maturin wheel build failed for command: {rendered_command}\n"
-            f"stderr:\n{self.captured_stderr}"
+            f"stderr:\n{self.stderr}"
         )
 
 
