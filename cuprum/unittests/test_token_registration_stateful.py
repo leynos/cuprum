@@ -87,6 +87,23 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
             "registering a handle must install a derived context"
         )
 
+    @rule(factory_entry=st.sampled_from(_FACTORIES))
+    def context_manager_restores_context(
+        self, factory_entry: tuple[str, _HandleFactory]
+    ) -> None:
+        """Context-manager exit restores the context and detaches idempotently."""
+        prior = current_context()
+        _name, factory = factory_entry
+
+        with factory() as handle:
+            assert current_context() is not prior, (
+                "registering a handle must install a derived context"
+            )
+
+        assert current_context() is prior
+        handle.detach()
+        assert current_context() is prior
+
     @precondition(lambda self: self._stack)
     @rule()
     def detach_innermost(self) -> None:
@@ -151,20 +168,25 @@ def test_out_of_order_detach_restores_outer_snapshot() -> None:
     inner overlay — the documented hazard that motivates preferring ``with``
     blocks. The experiment runs inside a ``scoped`` guard so the leaked
     state cannot pollute other tests: the late ``inner.detach()`` restores
-    inner's own snapshot (which still carries the outer overlay), and only
-    the scope exit returns to the baseline.
+    inner's own snapshot, which still carries the outer overlay, before the
+    surrounding registrations are cleaned up in LIFO order.
     """
     with scoped(ScopeConfig()):
         baseline = current_context()
+        allow_registration = allow(ECHO)
+        hook_registration = before(_noop_before)
+        pre_env = current_context()
         outer = env(CUPRUM_TEST_OUTER="outer")
         inner = env(CUPRUM_TEST_INNER="inner")
 
         outer.detach()
 
         restored = current_context()
-        assert restored is baseline, (
+        assert restored is pre_env, (
             "outer detach must restore the pre-outer snapshot, discarding inner"
         )
+        assert restored.is_allowed(ECHO)
+        assert _noop_before in restored.before_hooks
         overlay = restored.env_overlay or {}
         assert "CUPRUM_TEST_INNER" not in overlay
 
@@ -172,8 +194,15 @@ def test_out_of_order_detach_restores_outer_snapshot() -> None:
         # restores its own snapshot — the context with the outer overlay
         # attached. This is exactly the documented non-LIFO hazard.
         inner.detach()
-        leaked = current_context().env_overlay or {}
+        leaked_context = current_context()
+        assert leaked_context.is_allowed(ECHO)
+        assert _noop_before in leaked_context.before_hooks
+        leaked = leaked_context.env_overlay or {}
         assert leaked.get("CUPRUM_TEST_OUTER") == "outer"
+
+        hook_registration.detach()
+        allow_registration.detach()
+        assert current_context() is baseline
 
 
 def test_failed_cross_context_detach_can_be_retried() -> None:
