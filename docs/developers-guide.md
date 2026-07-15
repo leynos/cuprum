@@ -197,7 +197,7 @@ exceptions, and cancellation.  Tests cover this contract at three levels:
 
 - direct helper tests in `cuprum/unittests/test_cqrs_helpers.py`
 - runtime behaviour and stream-drain properties in
-  `cuprum/unittests/test_cqrs_runtime_behaviour.py`
+  `cuprum/unittests/test_stream_pump_runtime_behaviour.py`
 - observe-task assertions in `cuprum/unittests/test_observe.py`
 
 ## Canonical stream-drain loop
