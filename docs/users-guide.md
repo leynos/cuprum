@@ -267,7 +267,6 @@ and echo semantics and returns a structured `CommandResult`:
 - `exit_code`, `pid`, and `ok` on the `CommandResult` make it easy to branch on
   success.
 
-
 ### Output options
 
 `RunOutputOptions` is the public contract for command output handling on
@@ -318,8 +317,8 @@ result = pipeline.run_sync(output=RunOutputOptions(capture=False, echo=True))
 ```
 
 If existing code constructs `IOOptions`, replace it with `RunOutputOptions`.
-`IOOptions` remains a deprecated alias for the same `capture` and `echo`
-values and emits a `DeprecationWarning` on construction. Migrate by replacing
+`IOOptions` remains a deprecated alias for the same `capture` and `echo` values
+and emits a `DeprecationWarning` on construction. Migrate by replacing
 `IOOptions(capture=..., echo=...)` usage with
 `RunOutputOptions(capture=..., echo=...)` passed as `output=...`.
 

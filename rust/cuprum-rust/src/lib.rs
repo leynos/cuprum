@@ -25,6 +25,8 @@ mod io_utils;
 mod lib_tests;
 #[cfg(target_os = "linux")]
 mod splice;
+#[cfg(all(test, unix))]
+mod test_support;
 mod utf8;
 
 use errors::PumpError;

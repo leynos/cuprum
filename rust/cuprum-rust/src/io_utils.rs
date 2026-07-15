@@ -222,62 +222,22 @@ fn map_short_write_error(err: io::Error, total_written: u64) -> Result<WriteOutc
     Err(pump_error)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     //! Direct tests for descriptor-backed I/O helper contracts.
 
-    use std::fmt::Debug;
-    use std::io::{self, Write};
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::io;
+    use std::os::fd::{AsRawFd, OwnedFd};
 
     use super::{
         PumpError, WriteOutcome, handle_write, handle_write_result, map_short_write_error,
         read_raw_fd, read_raw_fd_with, read_stream,
     };
-
-    fn pipe_pair() -> (OwnedFd, OwnedFd) {
-        let mut fds = [0_i32; 2];
-        // SAFETY: `fds` is a valid two-element array for `pipe(2)` to fill.
-        let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
-        assert_eq!(rc, 0, "pipe(2) failed: {}", io::Error::last_os_error());
-
-        // SAFETY: on success `pipe(2)` returned two freshly opened FDs that
-        // this process exclusively owns.
-        unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) }
-    }
-
-    fn write_all_to(fd: &OwnedFd, payload: &[u8]) {
-        // SAFETY: duplicating an owned descriptor for a scoped File wrapper.
-        let duplicated_fd = unsafe { libc::dup(fd.as_raw_fd()) };
-        assert_ne!(
-            duplicated_fd,
-            -1,
-            "dup(2) failed: {}",
-            io::Error::last_os_error(),
-        );
-        // SAFETY: `duplicated_fd` was checked for `dup(2)` failure above and
-        // is now owned by this scoped `File`.
-        let mut file = unsafe { std::fs::File::from_raw_fd(duplicated_fd) };
-        unwrap_ok(file.write_all(payload));
-    }
-
-    fn unwrap_ok<T, E: Debug>(result: Result<T, E>) -> T {
-        match result {
-            Ok(value) => value,
-            Err(err) => panic!("expected Ok(..), got Err({err:?})"),
-        }
-    }
-
-    fn unwrap_err<T: Debug, E>(result: Result<T, E>) -> E {
-        match result {
-            Ok(value) => panic!("expected Err(..), got Ok({value:?})"),
-            Err(err) => err,
-        }
-    }
+    use crate::test_support::{make_pipe, unwrap_err, unwrap_ok, write_all_to};
 
     #[test]
     fn read_stream_reads_pipe_bytes() {
-        let (mut read_end, write_end) = pipe_pair();
+        let (mut read_end, write_end) = make_pipe();
         write_all_to(&write_end, b"chunk");
         drop(write_end);
         let mut buffer = [0_u8; 8];
@@ -290,7 +250,7 @@ mod tests {
 
     #[test]
     fn read_stream_reports_unreadable_descriptor() {
-        let (_read_end, mut write_end) = pipe_pair();
+        let (_read_end, mut write_end) = make_pipe();
         let mut buffer = [0_u8; 8];
 
         let err = unwrap_err(read_stream(&mut write_end, &mut buffer));
@@ -300,7 +260,7 @@ mod tests {
 
     #[test]
     fn read_raw_fd_reports_eof() {
-        let (read_end, write_end) = pipe_pair();
+        let (read_end, write_end) = make_pipe();
         drop(write_end);
         let mut buffer = [0_u8; 8];
 
@@ -327,7 +287,7 @@ mod tests {
 
     #[test]
     fn handle_write_returns_complete_outcome() {
-        let (read_end, mut write_end) = pipe_pair();
+        let (read_end, mut write_end) = make_pipe();
 
         let outcome = unwrap_ok(handle_write(&mut write_end, b"chunk"));
 
@@ -337,7 +297,7 @@ mod tests {
 
     #[test]
     fn handle_write_reports_unwritable_descriptor() {
-        let (mut read_end, _write_end) = pipe_pair();
+        let (mut read_end, _write_end) = make_pipe();
 
         let err = unwrap_err(handle_write(&mut read_end, b"chunk"));
 
@@ -358,7 +318,7 @@ mod tests {
 
     #[test]
     fn handle_write_result_updates_total_on_success() {
-        let (read_end, mut write_end) = pipe_pair();
+        let (read_end, mut write_end) = make_pipe();
 
         let (result, total_written) = run_handle_write_result(&mut write_end, 7);
 
@@ -369,7 +329,7 @@ mod tests {
 
     #[test]
     fn handle_write_result_preserves_total_on_fatal_error() {
-        let (mut read_end, _write_end) = pipe_pair();
+        let (mut read_end, _write_end) = make_pipe();
 
         let (result, total_written) = run_handle_write_result(&mut read_end, 7);
 
