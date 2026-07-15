@@ -3,10 +3,11 @@
 All scope-registration handles (`AllowRegistration`, `HookRegistration`,
 `EnvRegistration`) share one token-restoration implementation (#113). The
 Hypothesis ``RuleBasedStateMachine`` below drives randomized sequences of
-nested registrations and LIFO detaches across the handle types and asserts
-the ``ContextVar`` is always restored to the exact prior context — token
-discipline holds under nesting and double-detach. Out-of-order detach (a
-documented hazard, not an error) is pinned by a separate example test.
+nested registrations, context-manager exits, and LIFO detaches across the
+handle types and asserts the ``ContextVar`` is always restored to the exact
+prior context — token discipline holds under nesting, context-manager exit,
+and double-detach. Out-of-order detach (a documented hazard, not an error)
+is pinned by a separate example test.
 """
 
 from __future__ import annotations

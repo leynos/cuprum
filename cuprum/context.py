@@ -560,9 +560,9 @@ class _TokenRegistration:
     outside ``scoped(ScopeConfig())`` blocks. This means :meth:`detach`
     restores the exact context that existed when the registration was
     created, regardless of subsequent context modifications. If multiple
-    registrations are created and detached in non-LIFO (last in, first out)
-    order, earlier tokens restore states that discard changes layered by
-    later registrations; prefer ``with`` blocks, which detach in LIFO order.
+    registrations are created and detached out of LIFO order, earlier tokens
+    restore states that discard changes layered by later registrations;
+    prefer ``with`` blocks, which detach in LIFO order.
 
     Detach in the same logical :class:`~contextvars.Context` (thread or
     task) in which the registration was created. Resetting a
