@@ -147,79 +147,80 @@ TestTokenRegistrationMachine.settings = settings(
 )
 
 
-def test_unsupported_hook_type_is_rejected() -> None:
-    """Invalid hook types must not be silently installed as observe hooks."""
-    baseline = current_context()
-    invalid_hook_type = typ.cast(
-        "typ.Literal['before', 'after', 'observe']",
-        "invalid",
-    )
+class TestTokenRegistrationExamples:
+    """Pinned example scenarios for token-restoration edge cases."""
 
-    with pytest.raises(ValueError, match="Unsupported hook type: invalid"):
-        HookRegistration(_noop_observe, invalid_hook_type)
-
-    assert current_context() is baseline
-
-
-def test_out_of_order_detach_restores_outer_snapshot() -> None:
-    """Example: non-LIFO detach restores the outer snapshot, as documented.
-
-    Detaching an outer registration while an inner one is still attached
-    resets the ``ContextVar`` to the outer handle's snapshot, discarding the
-    inner overlay — the documented hazard that motivates preferring ``with``
-    blocks. The experiment runs inside a ``scoped`` guard so the leaked
-    state cannot pollute other tests: the late ``inner.detach()`` restores
-    inner's own snapshot, which still carries the outer overlay, before the
-    surrounding registrations are cleaned up in LIFO order.
-    """
-    with scoped(ScopeConfig()):
+    def test_unsupported_hook_type_is_rejected(self) -> None:
+        """Invalid hook types must not be silently installed as observe hooks."""
         baseline = current_context()
-        allow_registration = allow(ECHO)
-        hook_registration = before(_noop_before)
-        pre_env = current_context()
-        outer = env(CUPRUM_TEST_OUTER="outer")
-        inner = env(CUPRUM_TEST_INNER="inner")
-
-        outer.detach()
-
-        restored = current_context()
-        assert restored is pre_env, (
-            "outer detach must restore the pre-outer snapshot, discarding inner"
+        invalid_hook_type = typ.cast(
+            "typ.Literal['before', 'after', 'observe']",
+            "invalid",
         )
-        assert restored.is_allowed(ECHO)
-        assert _noop_before in restored.before_hooks
-        overlay = restored.env_overlay or {}
-        assert "CUPRUM_TEST_INNER" not in overlay
 
-        # The inner detach stays safe (idempotent token discipline) but
-        # restores its own snapshot — the context with the outer overlay
-        # attached. This is exactly the documented non-LIFO hazard.
-        inner.detach()
-        leaked_context = current_context()
-        assert leaked_context.is_allowed(ECHO)
-        assert _noop_before in leaked_context.before_hooks
-        leaked = leaked_context.env_overlay or {}
-        assert leaked.get("CUPRUM_TEST_OUTER") == "outer"
+        with pytest.raises(ValueError, match="Unsupported hook type: invalid"):
+            HookRegistration(_noop_observe, invalid_hook_type)
 
-        hook_registration.detach()
-        allow_registration.detach()
         assert current_context() is baseline
 
+    def test_out_of_order_detach_restores_outer_snapshot(self) -> None:
+        """Example: non-LIFO detach restores the outer snapshot, as documented.
 
-def test_failed_cross_context_detach_can_be_retried() -> None:
-    """A failed reset must not poison a registration handle.
+        Detaching an outer registration while an inner one is still attached
+        resets the ``ContextVar`` to the outer handle's snapshot, discarding the
+        inner overlay — the documented hazard that motivates preferring ``with``
+        blocks. The experiment runs inside a ``scoped`` guard so the leaked
+        state cannot pollute other tests: the late ``inner.detach()`` restores
+        inner's own snapshot, which still carries the outer overlay, before the
+        surrounding registrations are cleaned up in LIFO order.
+        """
+        with scoped(ScopeConfig()):
+            baseline = current_context()
+            allow_registration = allow(ECHO)
+            hook_registration = before(_noop_before)
+            pre_env = current_context()
+            outer = env(CUPRUM_TEST_OUTER="outer")
+            inner = env(CUPRUM_TEST_INNER="inner")
 
-    ``ContextVar`` tokens can only be reset inside the context that created
-    them. A cross-context detach raises ``ValueError``; the original context
-    must still be able to detach the handle afterwards.
-    """
-    with scoped(ScopeConfig()):
-        baseline = current_context()
-        handle = env(CUPRUM_TEST_RETRY="retry")
+            outer.detach()
 
-        with pytest.raises(ValueError, match="different Context"):
-            contextvars.Context().run(handle.detach)
+            restored = current_context()
+            assert restored is pre_env, (
+                "outer detach must restore the pre-outer snapshot, discarding inner"
+            )
+            assert restored.is_allowed(ECHO)
+            assert _noop_before in restored.before_hooks
+            overlay = restored.env_overlay or {}
+            assert "CUPRUM_TEST_INNER" not in overlay
 
-        assert current_context() is not baseline
-        handle.detach()
-        assert current_context() is baseline
+            # The inner detach stays safe (idempotent token discipline) but
+            # restores its own snapshot — the context with the outer overlay
+            # attached. This is exactly the documented non-LIFO hazard.
+            inner.detach()
+            leaked_context = current_context()
+            assert leaked_context.is_allowed(ECHO)
+            assert _noop_before in leaked_context.before_hooks
+            leaked = leaked_context.env_overlay or {}
+            assert leaked.get("CUPRUM_TEST_OUTER") == "outer"
+
+            hook_registration.detach()
+            allow_registration.detach()
+            assert current_context() is baseline
+
+    def test_failed_cross_context_detach_can_be_retried(self) -> None:
+        """A failed reset must not poison a registration handle.
+
+        ``ContextVar`` tokens can only be reset inside the context that created
+        them. A cross-context detach raises ``ValueError``; the original context
+        must still be able to detach the handle afterwards.
+        """
+        with scoped(ScopeConfig()):
+            baseline = current_context()
+            handle = env(CUPRUM_TEST_RETRY="retry")
+
+            with pytest.raises(ValueError, match="different Context"):
+                contextvars.Context().run(handle.detach)
+
+            assert current_context() is not baseline
+            handle.detach()
+            assert current_context() is baseline
