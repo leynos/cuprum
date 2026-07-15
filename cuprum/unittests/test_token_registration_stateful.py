@@ -101,9 +101,14 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
                 "registering a handle must install a derived context"
             )
 
-        assert current_context() is prior
+        assert current_context() is prior, (
+            "context-manager exit must restore the original context"
+        )
         handle.detach()
-        assert current_context() is prior
+        assert current_context() is prior, (
+            "detaching after context-manager exit must leave the original "
+            "context unchanged"
+        )
 
     @precondition(lambda self: self._stack)
     @rule()
@@ -124,13 +129,17 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
         after_first = current_context()
         handle.detach()
         assert current_context() is after_first, "second detach must be a no-op"
-        assert after_first is prior
+        assert after_first is prior, (
+            "first detach must restore the captured prior context"
+        )
 
     @invariant()
     def stack_depth_matches_context_nesting(self) -> None:
         """With an empty stack the baseline context is active again."""
         if not self._stack:
-            assert current_context() is self._baseline
+            assert current_context() is self._baseline, (
+                "an empty stack must leave the baseline context active"
+            )
 
     def teardown(self) -> None:
         """Detach any remaining handles in LIFO order."""
@@ -161,7 +170,9 @@ class TestTokenRegistrationExamples:
         with pytest.raises(ValueError, match="Unsupported hook type: invalid"):
             HookRegistration(_noop_observe, invalid_hook_type)
 
-        assert current_context() is baseline
+        assert current_context() is baseline, (
+            "rejecting an unsupported hook type must not change the active context"
+        )
 
     def test_out_of_order_detach_restores_outer_snapshot(self) -> None:
         """Example: non-LIFO detach restores the outer snapshot, as documented.
@@ -188,24 +199,38 @@ class TestTokenRegistrationExamples:
             assert restored is pre_env, (
                 "outer detach must restore the pre-outer snapshot, discarding inner"
             )
-            assert restored.is_allowed(ECHO)
-            assert _noop_before in restored.before_hooks
+            assert restored.is_allowed(ECHO), (
+                "outer detach must preserve ECHO access in the restored context"
+            )
+            assert _noop_before in restored.before_hooks, (
+                "outer detach must preserve the before hook in the restored context"
+            )
             overlay = restored.env_overlay or {}
-            assert "CUPRUM_TEST_INNER" not in overlay
+            assert "CUPRUM_TEST_INNER" not in overlay, (
+                "outer detach must drop the inner env overlay"
+            )
 
             # The inner detach stays safe (idempotent token discipline) but
             # restores its own snapshot — the context with the outer overlay
             # attached. This is exactly the documented non-LIFO hazard.
             inner.detach()
             leaked_context = current_context()
-            assert leaked_context.is_allowed(ECHO)
-            assert _noop_before in leaked_context.before_hooks
+            assert leaked_context.is_allowed(ECHO), (
+                "inner detach must still preserve ECHO access"
+            )
+            assert _noop_before in leaked_context.before_hooks, (
+                "inner detach must still preserve the before hook"
+            )
             leaked = leaked_context.env_overlay or {}
-            assert leaked.get("CUPRUM_TEST_OUTER") == "outer"
+            assert leaked.get("CUPRUM_TEST_OUTER") == "outer", (
+                "inner detach must restore the outer env overlay"
+            )
 
             hook_registration.detach()
             allow_registration.detach()
-            assert current_context() is baseline
+            assert current_context() is baseline, (
+                "cleanup must restore the scoped baseline context"
+            )
 
     def test_failed_cross_context_detach_can_be_retried(self) -> None:
         """A failed reset must not poison a registration handle.
@@ -221,6 +246,12 @@ class TestTokenRegistrationExamples:
             with pytest.raises(ValueError, match="different Context"):
                 contextvars.Context().run(handle.detach)
 
-            assert current_context() is not baseline
+            assert current_context() is not baseline, (
+                "failed cross-context detach must leave the handle active in "
+                "the original context"
+            )
             handle.detach()
-            assert current_context() is baseline
+            assert current_context() is baseline, (
+                "retrying detach in the original context must restore the "
+                "baseline context"
+            )
