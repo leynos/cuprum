@@ -13,7 +13,7 @@ import asyncio
 import io
 import typing as typ
 
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 from cuprum._streams import _consume_stream, _drain, _StreamConfig
@@ -168,12 +168,14 @@ def test_consume_stream_variants_capture_identically(
     derandomize=True,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
+@example(case=(b"first\nsecond\n", (b"first\nsec", b"ond\n")))
 @given(case=_payload_and_chunks())
 def test_line_emission_is_chunk_boundary_insensitive(
     case: tuple[bytes, tuple[bytes, ...]],
 ) -> None:
     """Property: line emission is independent of stream chunk boundaries."""
     payload, chunks = case
+    expected_lines = payload.decode("utf-8", errors="replace").splitlines()
     whole_lines: list[str] = []
     split_lines: list[str] = []
 
@@ -192,6 +194,14 @@ def test_line_emission_is_chunk_boundary_insensitive(
         ),
     )
 
+    assert whole_lines == expected_lines, (
+        "whole-payload line emission must match decoded payload lines for "
+        f"payload={payload!r}, chunks={chunks!r}, expected={expected_lines!r}"
+    )
+    assert split_lines == expected_lines, (
+        "split-payload line emission must match decoded payload lines for "
+        f"payload={payload!r}, chunks={chunks!r}, expected={expected_lines!r}"
+    )
     assert split_lines == whole_lines, (
         "line emission must not depend on chunk boundaries for "
         f"payload={payload!r}, chunks={chunks!r}"
