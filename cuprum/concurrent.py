@@ -190,6 +190,8 @@ def _collect_results_and_failures(
         if not result.ok:
             failures.append(position)
     return results, submission_indices, failures
+
+
 async def _run_collect_all(
     commands: cabc.Sequence[SafeCmd],
     semaphore: asyncio.Semaphore | None,
