@@ -38,7 +38,7 @@ def _make_exec_event(
     overrides: cabc.Mapping[str, object] | None = None,
 ) -> ExecEvent:
     """Build an ExecEvent with sensible test defaults."""
-    values = {
+    values: dict[str, object] = {
         "phase": phase,
         "program": "cat",
         "argv": ("cat",),
@@ -74,6 +74,37 @@ def _make_exec_event(
         note=typ.cast("str | None", values["note"]),
         byte_count=typ.cast("int | None", values["byte_count"]),
     )
+
+
+class _LabelRecordingCollector:
+    """Record labelled metrics calls for adapter assertions."""
+
+    def __init__(self, *, record_histograms: bool = True) -> None:
+        """Initialise the recorder with optional histogram capture."""
+        self.calls: list[tuple[str, float, dict[str, str]]] = []
+        self.labels: list[dict[str, str]] = []
+        self._record_histograms = record_histograms
+
+    def inc_counter(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Record a counter increment and its labels."""
+        recorded_labels = dict(labels)
+        self.calls.append((name, value, recorded_labels))
+        self.labels.append(recorded_labels)
+
+    def observe_histogram(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Optionally record a histogram observation and its labels."""
+        if self._record_histograms:
+            self.calls.append((name, value, dict(labels)))
 
 
 def _spawn_worker_threads(

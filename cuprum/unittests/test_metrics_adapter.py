@@ -17,12 +17,11 @@ from cuprum.adapters.metrics_adapter import (
 from cuprum.context import ScopeConfig, scoped
 from cuprum.events import ExecEvent, ExecPhase
 from cuprum.program import Program
-from cuprum.unittests._adapter_test_support import _python_builder, _run_in_threads
-
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
-    from cuprum.adapters.metrics_adapter import MetricsCollector
+from cuprum.unittests._adapter_test_support import (
+    _LabelRecordingCollector,
+    _python_builder,
+    _run_in_threads,
+)
 
 
 class TestMetricsHook:
@@ -254,35 +253,8 @@ print('err1', file=sys.stderr)""",
 
     def test_passes_program_and_project_labels(self) -> None:
         """MetricsHook passes correct labels to collector."""
-
-        class LabelRecordingCollector:
-            """Collector that records metric name, value, and labels."""
-
-            def __init__(self) -> None:
-                """Initialise an empty list to record metric calls."""
-                self.calls: list[tuple[str, float, dict[str, str]]] = []
-
-            def inc_counter(
-                self,
-                name: str,
-                value: float,
-                labels: cabc.Mapping[str, str],
-            ) -> None:
-                """Record a counter increment with its name, value, and labels."""
-                self.calls.append((name, value, dict(labels)))
-
-            def observe_histogram(
-                self,
-                name: str,
-                value: float,
-                labels: cabc.Mapping[str, str],
-            ) -> None:
-                """Record a histogram observation with its name, value, and labels."""
-                self.calls.append((name, value, dict(labels)))
-
-        recorder = LabelRecordingCollector()
-        collector: MetricsCollector = recorder
-        hook = MetricsHook(collector)
+        recorder = _LabelRecordingCollector()
+        hook = MetricsHook(recorder)
 
         builder, catalogue = _python_builder(project_name="label-test")
         cmd = builder("-c", "print('x')")
@@ -321,36 +293,8 @@ print('err1', file=sys.stderr)""",
 
     def test_project_label_treats_explicit_none_as_unknown(self) -> None:
         """MetricsHook treats an explicit ``None`` project tag as missing."""
-
-        class LabelRecordingCollector:
-            """Collector that records counter labels."""
-
-            def __init__(self) -> None:
-                """Initialise the recorded label list."""
-                self.labels: list[dict[str, str]] = []
-
-            def inc_counter(
-                self,
-                name: str,
-                value: float,
-                labels: cabc.Mapping[str, str],
-            ) -> None:
-                """Record counter labels."""
-                del name, value
-                self.labels.append(dict(labels))
-
-            def observe_histogram(
-                self,
-                name: str,
-                value: float,
-                labels: cabc.Mapping[str, str],
-            ) -> None:
-                """Ignore histogram observations."""
-                del name, value, labels
-
-        recorder = LabelRecordingCollector()
-        collector: MetricsCollector = recorder
-        hook = MetricsHook(collector)
+        recorder = _LabelRecordingCollector(record_histograms=False)
+        hook = MetricsHook(recorder)
         event = ExecEvent(
             phase="start",
             program=Program("tool"),

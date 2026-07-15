@@ -26,6 +26,9 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent
 
 
+_LOGGER = logging.getLogger("cuprum.adapters")
+
+
 def _event_common_fields(
     event: ExecEvent,
     name: cabc.Callable[[str], str],
@@ -59,15 +62,13 @@ def _prefixed(prefix: str) -> cabc.Callable[[str], str]:
 
 def _project_tag(event: ExecEvent) -> str | None:
     """Return the event's ``project`` tag as a string, or ``None`` if unset."""
-    if "project" in event.tags:
-        project = event.tags["project"]
-        return None if project is None else str(project)
-    return None
+    project = event.tags.get("project")
+    return None if project is None else str(project)
 
 
 def _log_unhandled_phase(adapter: str, phase: str) -> None:
     """Log a phase that has no semantics for an adapter."""
-    logging.getLogger("cuprum.adapters").debug(
+    _LOGGER.debug(
         "Ignoring unhandled %s adapter phase: %s",
         adapter,
         phase,
