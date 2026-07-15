@@ -205,8 +205,9 @@ class InMemorySpan:
 class InMemoryTracer(_LockedStore):
     """Reference in-memory tracer for testing and examples.
 
-    Storage and locking follow the shared :class:`~cuprum.adapters._support.
-    _LockedStore` contract: every mutator holds the lock, and ``reset()``
+    Storage and locking follow the shared
+    :class:`~cuprum.adapters._support._LockedStore` contract: every mutator
+    holds the lock, and ``reset()``
     clears the store under it.
 
     Attributes

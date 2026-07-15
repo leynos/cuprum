@@ -119,21 +119,24 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
-### Canonical adapter event projection and locked-store base
+## Canonical adapter event projection and locked-store base
 
 `cuprum/adapters/_support.py` keeps the three telemetry adapters from
 repeating the same event projection and in-memory collector locking. It owns
-the canonical common `(key, value)` projection, the `project` tag helper, the
-shared unhandled-phase debug log, and `_LockedStore` with its lock-guarded
-`reset()`. Each adapter retains backend-specific key names and value shaping,
-such as tuple versus list `argv`, at its call site.
+the canonical logging/tracing `(key, value)` projection helper for optional
+execution fields, the `project` tag helper, the shared unhandled-phase debug
+log, and `_LockedStore` with its lock-guarded `reset()`. Each adapter retains
+backend-specific key names and value shaping, such as tuple versus list
+`argv`, at its call site.
 
 This module was extracted to prevent three-way projection drift and keep each
 adapter within its cohesion budget. It is importable only by adapter modules:
 do not add backend rendering, logging configuration, event construction, or
-general-purpose utilities. Add an adapter-visible `ExecEvent` field once to
-`_event_common_fields`; new in-memory collectors derive from `_LockedStore`
-and implement `_clear()` while its lock is held.
+general-purpose utilities. Production imports stay adapter-only; contract tests
+such as `cuprum/unittests/test_adapter_projection.py` may import
+`_event_common_fields` to pin the projection contract. Add an adapter-visible
+`ExecEvent` field once to `_event_common_fields`; new in-memory collectors
+derive from `_LockedStore` and implement `_clear()` while its lock is held.
 
 `cuprum/unittests/test_adapter_projection.py` pins this contract with Hypothesis
 properties and redacted per-phase syrupy snapshots.

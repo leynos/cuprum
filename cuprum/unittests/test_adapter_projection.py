@@ -183,7 +183,7 @@ class TestAdapterProjection:
         is_exit = phase == "exit"
         is_output = phase in {"stdout", "stderr"}
         return ExecEvent(
-            phase=typ.cast("typ.Any", phase),
+            phase=typ.cast("ExecPhase", phase),
             program=Program("echo"),
             argv=("echo", "hello"),
             cwd=Path("/srv/work"),

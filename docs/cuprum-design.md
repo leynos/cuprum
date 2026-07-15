@@ -1274,12 +1274,13 @@ design decisions guide these adapters:
 
 - The adapters use `cuprum.adapters._support` for the common `ExecEvent`
   projection and reference-collector locking pattern.
-- `_event_common_fields` is the canonical source for optional execution fields
-  shared by logging, metrics, and tracing adapters. Each adapter supplies its
-  own key-naming function so the wire shape remains backend-specific without
-  duplicating field-selection rules.
-- `_project_tag` centralizes the low-cardinality project tag fallback for
-  metrics and any future adapter that needs the same semantics.
+- `_event_common_fields` is the canonical logging/tracing projection helper for
+  optional execution fields. Each adapter supplies its own key-naming
+  function so the wire shape remains backend-specific without duplicating
+  field-selection rules.
+- `_project_tag` centralizes the low-cardinality project tag lookup for
+  metrics and any future adapter that needs the same semantics. It returns
+  `str | None`; `MetricsHook` maps the empty or missing case to `"unknown"`.
 - `_LockedStore` owns the reference collectors' lock and reset behaviour so new
   in-memory adapter collectors inherit the shared concurrency contract instead
   of re-implementing it.
@@ -1295,7 +1296,8 @@ design decisions guide these adapters:
   the corresponding event phases.
 - Histogram metrics (`cuprum_duration_seconds`) are observed on `exit` events.
 - All metrics include `program` and `project` labels for multi‑dimensional
-  analysis.
+  analysis. The `project` label uses `_project_tag` and falls back to
+  `"unknown"` when the event carries no usable project tag.
 
 **Tracing adapter specifics:**
 
