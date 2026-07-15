@@ -17,17 +17,21 @@ import typing as typ
 from cuprum._pipeline_internals import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _terminate_process
 from cuprum._streams import _consume_stream, _StreamConfig
-from cuprum._subprocess_context import _cwd_arg, _resolve_timeout, _sh_module
-from cuprum._subprocess_context import _sh_module
+from cuprum._subprocess_context import _cwd_arg, _sh_module
+from cuprum._subprocess_stdin import _spawn_stdin_writer
+from cuprum._subprocess_timeout import (
+    _emit_exit_event,
+    _ExitEventDetails,
+    _handle_stream_timeout,
+    _handle_subprocess_timeout,
+    _SubprocessTimeoutContext,
+    _SubprocessTimeoutError,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
-
-_LOGGER = logging.getLogger("cuprum.stdin")
-from cuprum._subprocess_stdin import _spawn_stdin_writer
-from cuprum._subprocess_timeout import (
 
 
 async def _wait_for_exit_code(
@@ -70,6 +74,8 @@ class _SubprocessExecution:
     timeout: float | None
     observation: _StageObservation
     stdin_data: bytes | None
+
+
 async def _spawn_subprocess(
     execution: _SubprocessExecution,
 ) -> asyncio.subprocess.Process:
@@ -90,6 +96,8 @@ async def _spawn_subprocess(
         env=_merge_env(execution.ctx.env),
         cwd=_cwd_arg(execution.ctx.cwd),
     )
+
+
 def _create_stream_callback(
     observation: _StageObservation,
     event_type: typ.Literal["stdout", "stderr"],
@@ -150,6 +158,8 @@ def _build_stream_config(execution: _SubprocessExecution) -> _StreamConfig:
         encoding=execution.ctx.encoding,
         errors=execution.ctx.errors,
     )
+
+
 async def _run_subprocess_with_streams(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
@@ -183,6 +193,8 @@ async def _run_subprocess_with_streams(
         await stdin_task
     stdout_text, stderr_text = await asyncio.gather(*consumers)
     return exit_code, exited_at, stdout_text, stderr_text
+
+
 async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     """Execute a subprocess and return the command result."""
     process = await _spawn_subprocess(execution)
