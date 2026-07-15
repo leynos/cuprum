@@ -660,3 +660,55 @@ def test_wait_for_pipeline_fail_fast_scenarios(
             process,
             should_terminate=(idx in scenario.terminated_stages),
         )
+
+
+@pytest.mark.parametrize(
+    ("capture", "expected_stdout", "expected_stderr"),
+    [
+        pytest.param(True, "INTERMEDIATE", "", id="capture-final-stdio"),
+        pytest.param(False, None, None, id="discard-final-stdio"),
+    ],
+)
+def test_pipeline_stdio_policy_streams_intermediate_stdout_end_to_end(
+    *,
+    capture: bool,
+    expected_stdout: str | None,
+    expected_stderr: str | None,
+) -> None:
+    """Pipeline execution streams intermediate stdout and applies final capture."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+
+    producer = python("-c", "import sys; sys.stdout.write('intermediate')")
+    transformer = python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read().upper())",
+    )
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        result = (producer | transformer).run_sync(
+            output=RunOutputOptions(capture=capture),
+        )
+
+    assert result.stdout == expected_stdout, (
+        f"capture={capture}: result.stdout mismatch"
+    )
+    assert len(result.stages) == 2, f"capture={capture}: result.stages length mismatch"
+    assert result.stages[0].stdout is None, (
+        f"capture={capture}: stage 0 stdout mismatch"
+    )
+    assert result.stages[0].stderr == expected_stderr, (
+        f"capture={capture}: stage 0 stderr mismatch"
+    )
+    assert result.stages[0].exit_code == 0, (
+        f"capture={capture}: stage 0 exit_code mismatch"
+    )
+    assert result.stages[1].stdout == expected_stdout, (
+        f"capture={capture}: stage 1 stdout mismatch"
+    )
+    assert result.stages[1].stderr == expected_stderr, (
+        f"capture={capture}: stage 1 stderr mismatch"
+    )
+    assert result.stages[1].exit_code == 0, (
+        f"capture={capture}: stage 1 exit_code mismatch"
+    )

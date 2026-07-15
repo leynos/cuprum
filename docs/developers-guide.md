@@ -20,7 +20,7 @@ immutable.
 The private `_tar_create_argv` and `_tar_extract_argv` helpers in
 `cuprum/builders/tar.py`, together with `_rsync_argv` in
 `cuprum/builders/rsync.py`, construct immutable argument vectors independently
-of `sh.make` wrapping. They exist so the command construction contract can be
+of `sh.make` wrapping. They exist, so the command construction contract can be
 tested directly for issue #71, while the public builders remain responsible for
 attaching their curated program.
 
@@ -968,7 +968,6 @@ uv run pytest cuprum/unittests/test_maturin_build.py \
     --snapshot-update -k test_maturin_wheel_build_snapshot
 ```
 
-
 ## Workflow pins and Dependabot
 
 Dependabot owns the upgrade of GitHub Actions and reusable workflows,
@@ -1058,6 +1057,34 @@ cyclomatic complexity while preserving exact error messages.
 The default scenario matrix order is fixed and documented. Callers, snapshot
 tests, and CI artefact directories all depend on it. It must not be reordered
 without updating snapshot files and any downstream tooling.
+
+## Pipeline stdio policy and cwd conversion
+
+Two canonical helpers own the subprocess spawn flags used by the subprocess
+spawn paths:
+
+- `_get_stage_stream_fds(idx, last_idx, capture_or_echo=...)` in
+  `cuprum/_pipeline_stage_streams.py` is the single source of truth for the
+  PIPE-versus-DEVNULL stdio selection when spawning pipeline stages. The first
+  stage reads stdin from `DEVNULL`, later stages from a `PIPE`; intermediate
+  stages always pipe stdout, while the final stage pipes stdout only when
+  output is captured or echoed; stderr is piped exactly when output is captured
+  or echoed. `_spawn_pipeline_processes` routes through this helper — do not
+  re-derive the flags inline at pipeline-stage spawn sites, and do not use it
+  for single-command spawning.
+- `_cwd_arg(cwd)` in `cuprum/_subprocess_context.py` renders an optional
+  working directory (`str | Path | None`) into the `cwd` argument for
+  `asyncio.create_subprocess_exec`. Every spawn site must use it, so the
+  conversion cannot drift between single-command and pipeline paths.
+
+Re-use policy: any new spawn site must call `_cwd_arg`, and pipeline-stage
+spawn sites must call `_get_stage_stream_fds` rather than copying the policy.
+Changes to stdio selection (for example, adding stdin handling to pipelines)
+belong in `_get_stage_stream_fds` so pipeline-stage behaviour and the
+exhaustive tests in `cuprum/unittests/test_stage_stream_fds.py` stay
+authoritative. That test module covers the full finite input domain (stage
+position × capture/echo) and asserts agreement with the single-command policy
+on the overlapping cases.
 
 ## Output behaviour carrier
 
