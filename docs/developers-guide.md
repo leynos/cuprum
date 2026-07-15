@@ -1063,10 +1063,9 @@ Skipped automatically when `maturin` is not on `PATH`. When it is present,
 asserts that the installed version matches the pinned development dependency.
 
 **Wheel build snapshot** (`test_maturin_wheel_build_snapshot`) Requires the
-Rust toolchain (`cargo` and `rustc`) and is skipped on Python ≥ 3.15 until
-maturin adds support for that interpreter. Builds a native wheel into a
-temporary directory, extracts normalized metadata and layout information, and
-compares the result against a
+Rust toolchain (`cargo` and `rustc`). Builds a native wheel into a temporary
+directory, extracts normalized metadata and layout information, and compares
+the result against a
 [syrupy](https://github.com/syrupy-project/syrupy) snapshot stored at
 `cuprum/unittests/__snapshots__/test_maturin_build.ambr`.
 

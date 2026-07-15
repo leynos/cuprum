@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib.metadata as im
 import re
 import shutil
-import sys
 import typing as typ
 
 import pytest
@@ -118,8 +117,6 @@ def test_maturin_wheel_build_snapshot(
     expected = read_expected_maturin_version(root)
     if not toolchain_available():
         pytest.skip("Rust toolchain unavailable.")
-    if sys.version_info >= (3, 15):
-        pytest.skip(f"maturin {expected} does not support this Python version.")
 
     wheel_path = build_native_wheel_artifact(root, tmp_path / "wheelhouse")
     snapshot_payload = wheel_build_snapshot(wheel_path)
