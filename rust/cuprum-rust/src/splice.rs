@@ -241,49 +241,4 @@ mod tests {
         let leftover = read_all_from(&read_end);
         assert!(leftover.is_empty(), "drain must consume the pipe to EOF");
     }
-
-    fn make_pipe() -> (OwnedFd, OwnedFd) {
-        let mut fds = [0_i32; 2];
-        // SAFETY: `fds` is a valid two-element array for `pipe(2)` to fill.
-        let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
-        assert_eq!(rc, 0, "pipe(2) failed: {}", io::Error::last_os_error());
-        // SAFETY: on success `pipe(2)` returned two freshly opened FDs that
-        // this process exclusively owns.
-        unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) }
-    }
-
-    /// Duplicate `fd` and wrap the duplicate in a scoped [`File`].
-    ///
-    /// The duplicate is owned by the returned [`File`]; the original `fd`
-    /// remains open and unaffected.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `dup(2)` fails.
-
-    fn dup_as_file(fd: &OwnedFd) -> File {
-        // SAFETY: duplicating an owned descriptor for a scoped File wrapper.
-        let duplicated_fd = unsafe { libc::dup(fd.as_raw_fd()) };
-        assert_ne!(
-            duplicated_fd,
-            -1,
-            "dup(2) failed: {}",
-            io::Error::last_os_error(),
-        );
-        // SAFETY: `duplicated_fd` was checked for `dup(2)` failure above and
-        // is now owned by this scoped `File`.
-        unsafe { File::from_raw_fd(duplicated_fd) }
-    }
-
-    fn write_all_to(fd: &OwnedFd, payload: &[u8]) {
-        unwrap_ok(dup_as_file(fd).write_all(payload));
-    }
-
-    fn read_all_from(fd: &OwnedFd) -> Vec<u8> {
-        let mut collected = Vec::new();
-        unwrap_ok(dup_as_file(fd).read_to_end(&mut collected));
-        collected
-    }
-
-    #[test]
 }
