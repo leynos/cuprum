@@ -63,7 +63,6 @@ import dataclasses as dc
 import typing as typ
 
 from cuprum.adapters._support import (
-    _event_common_fields,
     _LockedStore,
     _log_unhandled_phase,
     _project_tag,
@@ -285,13 +284,11 @@ class MetricsHook:
     def _extract_labels(event: ExecEvent) -> dict[str, str]:
         """Extract low-cardinality label values from an event.
 
-        Labels deliberately use only the canonical ``program`` projection plus
-        the ``project`` tag; high-cardinality fields (pid, argv, lines) are
-        excluded by design.
+        Labels deliberately use only the program and project tag;
+        high-cardinality fields (pid, argv, lines) are excluded by design.
         """
-        common = dict(_event_common_fields(event, lambda field: field))
         return {
-            "program": str(common.get("program") or "unknown"),
+            "program": str(event.program) or "unknown",
             "project": _project_tag(event) or "unknown",
         }
 
