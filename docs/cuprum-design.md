@@ -1563,11 +1563,12 @@ and performs any platform-specific file descriptor conversion (for example,
 translating Windows file descriptors into OS handles). This keeps the native
 module name stable while allowing Python-only adaptations.
 
-The foundation release also introduces a minimal availability probe. The native
-module is published as `cuprum._rust_backend_native`, while the Python wrapper
-`cuprum._rust_backend` exposes `is_available()` and returns `False` when the
-native module is missing. Later phases use this probe to gate stream dispatch
-decisions.
+The availability probe is separate from the stream shim. The Python module
+`cuprum._rust_backend` exposes the raw `is_available()` probe, which imports
+`cuprum._rust_backend_native`, returns `False` when that native module is
+missing, and re-raises other import failures after logging a warning. The
+cached resolver in `cuprum._backend._check_rust_available()` wraps that probe
+for `cuprum.rust.is_rust_available()` and `get_stream_backend()`.
 
 For screen readers: The following flowchart shows how Cuprum selects between
 the Python and Rust stream pathways based on environment configuration and
@@ -1580,7 +1581,7 @@ flowchart TD
     end
 
     subgraph Dispatcher
-        B{_get_stream_backend}
+        B["get_stream_backend()"]
         C[Check CUPRUM_STREAM_BACKEND env]
         D[Check extension availability]
     end
@@ -1775,10 +1776,12 @@ The extension accepts raw file descriptors rather than asyncio stream objects.
 This enables operation outside the Python runtime whilst the dispatcher handles
 the translation between asyncio streams and file descriptors.
 
-The availability probe is implemented in the dedicated module
-`cuprum._rust_backend_native` and re-exported by the Python shim
-`cuprum._rust_backend`. The shim returns `False` when the native module is
-missing and re-raises other import failures after logging a warning.
+The raw availability probe lives in `cuprum._rust_backend`. Its
+`is_available()` function imports `cuprum._rust_backend_native`, returns
+`False` when that native module is missing, and re-raises other import
+failures after logging a warning. The cached resolver in
+`cuprum._backend._check_rust_available()` wraps this probe and feeds both
+`cuprum.rust.is_rust_available()` and `get_stream_backend()`.
 
 ### 13.4 Fallback Strategy
 
@@ -1787,18 +1790,25 @@ Cuprum selects the stream backend at runtime using the following precedence:
 1. **Environment variable (`CUPRUM_STREAM_BACKEND`):**
    - `rust` – force Rust pathway; raise `ImportError` if unavailable;
    - `python` – force pure Python pathway;
-   - `auto` (default) – use Rust if available, fall back to Python.
+   - `auto` (default) – use Rust if `_check_rust_available()` succeeds, fall
+     back to Python otherwise.
 
-2. **Extension availability check:**
-   - Attempt to import `cuprum._streams_rs`;
-   - Call `is_available()` to verify functionality;
-   - Cache the result for subsequent operations.
+2. **Cached availability resolver:**
+   - `get_stream_backend()` delegates to
+     `cuprum._backend._check_rust_available()`;
+   - `_check_rust_available()` is `functools.lru_cache(maxsize=1)` and honours
+     `set_rust_availability_for_testing()`;
+   - `_check_rust_available()` delegates to `cuprum._rust_backend.is_available()`,
+     which returns `False` when the native module is missing and re-raises
+     other import failures after logging a warning.
 
 3. **Pipeline pump feasibility check (dispatch-time):**
    - For inter-stage pumping, Rust requires extractable raw file descriptors
      for both reader and writer transports;
    - if extraction fails for either side, dispatch falls back to Python
-     `_pump_stream()` for that transfer.
+     `_pump_stream()` for that transfer;
+   - the Rust pump implementation itself lives in `cuprum._streams_rs` and is
+     only entered after `get_stream_backend()` resolves `StreamBackend.RUST`.
 
 Final stdout and stderr consumption currently bypasses this Rust dispatch
 pathway. `rust_consume_stream()` remains a Phase 2 candidate behind the ADR-002
@@ -1866,31 +1876,40 @@ determine which pathway is used.
 ```mermaid
 flowchart TD
     A["Start stream_operation
-(Pipeline_run / SafeCmd_run)"] --> B["Call _get_stream_backend"]
+(Pipeline_run / SafeCmd_run)"] --> B["Call get_stream_backend()"]
     B --> C["Read CUPRUM_STREAM_BACKEND
 (env var or default auto)"]
 
-    C -->|"value == rust"| D["Try import cuprum._streams_rs
-and call is_available"]
-    C -->|"value == python"| E["Select python_backend"]
-    C -->|"value == auto"| F["Try import cuprum._streams_rs
-and call is_available"]
+    C -->|"python"| D["Resolve StreamBackend.PYTHON"]
+    C -->|"rust"| E["Call _check_rust_available()"]
+    C -->|"auto"| E
 
-    D -->|"import or is_available fails"| G["Raise ImportError
+    E -->|"true"| F["Resolve StreamBackend.RUST"]
+    E -->|"false and rust"| G["Raise ImportError
 (rust forced but unavailable)"]
-    D -->|"success"| H["Select rust_backend"]
+    E -->|"false and auto"| D
 
-    F -->|"success"| H
-    F -->|"import or is_available fails"| E
-
-    E --> I["Use cuprum._streams
+    D --> H["Use cuprum._streams
 (_pump_stream / _consume_stream)"]
-    H --> J["Use cuprum._streams_rs
+    F --> I["Use cuprum._streams_rs
 (rust_pump_stream for pipeline pump)"]
 
-    I --> K["Return result to caller"]
-    J --> K
-    G --> L["Error propagated to caller"]
+    H --> J["Return result to caller"]
+    I --> J
+    G --> K["Error propagated to caller"]
+
+    subgraph Availability Probe
+        L["cuprum._backend._check_rust_available()"]
+        M["cuprum._rust_backend.is_available()"]
+        N["Import cuprum._rust_backend_native"]
+        O["Return False if native module is missing"]
+        P["Log warning and re-raise other ImportError"]
+    end
+
+    E -.-> L
+    L --> M --> N
+    N --> O
+    N --> P
 ```
 
 ### 13.5 Performance Characteristics
@@ -1968,8 +1987,8 @@ async def _pump_stream_dispatch(
     reader: asyncio.StreamReader | None,
     writer: asyncio.StreamWriter | None,
 ) -> None:
-    backend = _get_stream_backend()
-    if backend == "rust" and _can_use_rust_pump(reader, writer):
+    backend = get_stream_backend()
+    if backend is StreamBackend.RUST and await _try_rust_pump(reader, writer):
         loop = asyncio.get_running_loop()
         reader_fd = _extract_fd(reader)
         writer_fd = _extract_fd(writer)
