@@ -342,7 +342,7 @@ Acceptance is satisfied when all of the following are true:
   in `pyproject.toml`, document the failure in the Decision Log, and
   re-evaluate the backend approach before continuing.
 
-## Artefacts and Notes
+## Artefacts and notes
 
 Expected artefacts after CI configuration:
 
