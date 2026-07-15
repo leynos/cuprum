@@ -1422,7 +1422,7 @@ prerequisites described above and running `maturin develop`.
 controls which stream implementation is used:
 
 - `auto` (default): uses the Rust pathway when available, otherwise falls
-  back silently to the Python pathway.
+  back to the Python pathway and emits a fallback log.
 - `python`: forces the pure Python pathway regardless of whether the Rust
   extension is installed.
 - `rust`: forces the Rust pathway and raises `ImportError` if the extension

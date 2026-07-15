@@ -23,7 +23,7 @@ import os
 from cuprum import _rust_backend
 
 _ENV_VAR = "CUPRUM_STREAM_BACKEND"
-_LOGGER = logging.getLogger("cuprum.backend")
+_LOGGER = logging.getLogger(__name__)
 _RUST_AVAILABILITY_FOR_TESTING: bool | None = None
 
 
@@ -96,18 +96,7 @@ def _check_rust_available() -> bool:
             },
         )
         return _RUST_AVAILABILITY_FOR_TESTING
-    try:
-        is_available = _rust_backend.is_available()
-    except ImportError:
-        _LOGGER.debug(
-            "Rust availability probe raised ImportError",
-            exc_info=True,
-            extra={
-                "event": "cuprum.rust_availability_import_error",
-                "source": "raw_probe",
-            },
-        )
-        raise
+    is_available = _rust_backend.is_available()
     _LOGGER.debug(
         "resolved Rust availability from raw probe",
         extra={
@@ -204,7 +193,6 @@ def _resolve_auto_backend(requested: StreamBackend) -> StreamBackend:
     except ImportError:
         _LOGGER.debug(
             "Rust availability probe failed in auto mode; falling back to Python",
-            exc_info=True,
             extra={
                 "event": "cuprum.stream_backend_auto_probe_failed",
                 "requested_backend": requested.value,

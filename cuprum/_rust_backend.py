@@ -10,7 +10,7 @@ from __future__ import annotations
 import importlib
 import logging
 
-_LOGGER = logging.getLogger("cuprum.backend")
+_LOGGER = logging.getLogger(__name__)
 
 
 def is_available() -> bool:

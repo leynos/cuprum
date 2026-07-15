@@ -21,7 +21,8 @@ from cuprum._backend import (
 from cuprum.rust import is_rust_available
 
 _ENV_VAR = "CUPRUM_STREAM_BACKEND"
-_BACKEND_LOGGER = "cuprum.backend"
+_BACKEND_LOGGER = "cuprum._backend"
+_RUST_BACKEND_LOGGER = "cuprum._rust_backend"
 
 
 # -- StreamBackend enum -------------------------------------------------------
@@ -367,7 +368,7 @@ def test_raw_probe_logs_missing_native_module(
         _missing_native_module,
     )
 
-    with caplog.at_level(logging.DEBUG, logger=_BACKEND_LOGGER):
+    with caplog.at_level(logging.DEBUG, logger=_RUST_BACKEND_LOGGER):
         assert _rust_backend.is_available() is False
 
     assert any(

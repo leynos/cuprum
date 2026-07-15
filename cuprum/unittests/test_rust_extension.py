@@ -42,7 +42,7 @@ def test_is_available_warns_and_reraises_unexpected_import_error(
     monkeypatch.setattr(importlib, "import_module", _raise_import_error)
 
     with (
-        caplog.at_level(logging.WARNING, logger="cuprum.backend"),
+        caplog.at_level(logging.WARNING, logger="cuprum._rust_backend"),
         pytest.raises(ImportError, match="broken native module"),
     ):
         _rust_backend.is_available()
