@@ -690,11 +690,25 @@ def test_pipeline_stdio_policy_streams_intermediate_stdout_end_to_end(
             output=RunOutputOptions(capture=capture),
         )
 
-    assert result.stdout == expected_stdout
-    assert len(result.stages) == 2
-    assert result.stages[0].stdout is None
-    assert result.stages[0].stderr == expected_stderr
-    assert result.stages[0].exit_code == 0
-    assert result.stages[1].stdout == expected_stdout
-    assert result.stages[1].stderr == expected_stderr
-    assert result.stages[1].exit_code == 0
+    assert result.stdout == expected_stdout, (
+        f"capture={capture}: result.stdout mismatch"
+    )
+    assert len(result.stages) == 2, f"capture={capture}: result.stages length mismatch"
+    assert result.stages[0].stdout is None, (
+        f"capture={capture}: stage 0 stdout mismatch"
+    )
+    assert result.stages[0].stderr == expected_stderr, (
+        f"capture={capture}: stage 0 stderr mismatch"
+    )
+    assert result.stages[0].exit_code == 0, (
+        f"capture={capture}: stage 0 exit_code mismatch"
+    )
+    assert result.stages[1].stdout == expected_stdout, (
+        f"capture={capture}: stage 1 stdout mismatch"
+    )
+    assert result.stages[1].stderr == expected_stderr, (
+        f"capture={capture}: stage 1 stderr mismatch"
+    )
+    assert result.stages[1].exit_code == 0, (
+        f"capture={capture}: stage 1 exit_code mismatch"
+    )

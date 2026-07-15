@@ -64,13 +64,22 @@ def test_stage_stream_fds_full_domain(
     """Property: the canonical policy holds across the full input domain."""
     fds = _get_stage_stream_fds(idx, last_idx, capture_or_echo=capture_or_echo)
 
-    assert fds.stdin == _expected_stdin(idx)
+    assert fds.stdin == _expected_stdin(idx), (
+        f"stdin mismatch for idx={idx}, last_idx={last_idx}, "
+        f"capture_or_echo={capture_or_echo}"
+    )
     assert fds.stdout == _expected_stdout(
         idx,
         last_idx,
         capture_or_echo=capture_or_echo,
+    ), (
+        f"stdout mismatch for idx={idx}, last_idx={last_idx}, "
+        f"capture_or_echo={capture_or_echo}"
     )
-    assert fds.stderr == _expected_stderr(capture_or_echo=capture_or_echo)
+    assert fds.stderr == _expected_stderr(capture_or_echo=capture_or_echo), (
+        f"stderr mismatch for idx={idx}, last_idx={last_idx}, "
+        f"capture_or_echo={capture_or_echo}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -92,8 +101,14 @@ def test_final_stage_agrees_with_single_process_policy(
 
     fds = _get_stage_stream_fds(0, 0, capture_or_echo=capture_or_echo)
 
-    assert fds.stdout == single_process_flag
-    assert fds.stderr == single_process_flag
+    assert fds.stdout == single_process_flag, (
+        f"final-stage stdout mismatch for capture={capture}, echo={echo}, "
+        f"single_process_flag={single_process_flag!r}"
+    )
+    assert fds.stderr == single_process_flag, (
+        f"final-stage stderr mismatch for capture={capture}, echo={echo}, "
+        f"single_process_flag={single_process_flag!r}"
+    )
 
 
 def test_intermediate_stage_always_pipes_stdout() -> None:
@@ -101,7 +116,9 @@ def test_intermediate_stage_always_pipes_stdout() -> None:
     for capture_or_echo in (False, True):
         # Three-stage pipeline: stage 1 is intermediate between 0 and 2.
         fds = _get_stage_stream_fds(1, 2, capture_or_echo=capture_or_echo)
-        assert fds.stdout == _PIPE
+        assert fds.stdout == _PIPE, (
+            f"intermediate-stage stdout mismatch for capture_or_echo={capture_or_echo}"
+        )
 
 
 @pytest.mark.parametrize(
@@ -116,4 +133,6 @@ def test_intermediate_stage_always_pipes_stdout() -> None:
 )
 def test_cwd_arg_conversion(cwd: str | Path | None, expected: str | None) -> None:
     """Example: ``_cwd_arg`` renders optional working directories uniformly."""
-    assert _cwd_arg(cwd) == expected
+    assert _cwd_arg(cwd) == expected, (
+        f"cwd conversion mismatch for cwd={cwd!r}, expected={expected!r}"
+    )
