@@ -104,6 +104,8 @@ def _extract_stream_fd(
     if transport is None:
         transport = getattr(stream, "_transport", None)
     return _fd_from_transport(transport)
+
+
 def _pause_reader_transport(
     reader: asyncio.StreamReader,
 ) -> cabc.Callable[[], None] | None:
