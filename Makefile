@@ -15,7 +15,7 @@ DOC_FLAGS ?= --jobs 1
 TEST_FLAGS ?= $(CARGO_FLAGS) --jobs 1
 TEST_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
 WHITAKER_CARGO_FLAGS ?= $(CARGO_FLAGS) --jobs 1
-WHITAKER_RUSTFLAGS ?= -C codegen-units=1
+WHITAKER_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
 PYTEST_CARGO_BUILD_JOBS ?= 1
 PYTEST_RUSTFLAGS ?= -C codegen-units=1
 TEST_CARGO_BUILD_JOBS ?= 1
@@ -110,16 +110,10 @@ check-fmt: ruff ## Verify formatting
 	# mdformat-all doesn't currently do checking
 
 lint: ruff uv ## Run linters (Ruff, pylint, Clippy, Whitaker)
-	$(RUFF) check
-	$(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum
-	$(PYLINT) $(PYLINT_TARGETS)
-	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps $(DOC_FLAGS)
-	cd $(RUST_DIR) && $(CARGO) clippy $(CLIPPY_FLAGS)
-	@if ! $(LOCAL_TOOL_ENV) command -v $(WHITAKER) >/dev/null 2>&1; then \
-	  echo "whitaker is required for linting. Install it before running this target." >&2; \
-	  exit 1; \
-	fi
-	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(RUST_FLAGS)" $(WHITAKER) --all -- $(CARGO_FLAGS)
+	$(RUFF) check && $(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum && $(PYLINT) $(PYLINT_TARGETS)
+	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps $(DOC_FLAGS) && $(CARGO) clippy $(CLIPPY_FLAGS)
+	@if ! $(LOCAL_TOOL_ENV) command -v $(WHITAKER) >/dev/null 2>&1; then echo "whitaker is required for linting. Install it before running this target." >&2; exit 1; fi
+	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- $(WHITAKER_CARGO_FLAGS)
 	+$(MAKE) spelling
 
 typecheck: build ## Run typechecking
@@ -148,9 +142,9 @@ nixie: ## Validate Mermaid diagrams
 	$(LOCAL_TOOL_ENV) $(NIXIE) --no-sandbox
 
 test: build uv $(VENV_TOOLS) ## Run tests
-	@for target in $(PYTEST_TARGETS); do \
-	  [ -e "$$target" ] || continue; \
-	  CARGO_BUILD_JOBS="$(PYTEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$target" || exit $$?; \
+	@for pattern in $(foreach target,$(PYTEST_TARGETS),'$(target)'); do \
+	  eval "set -- $$pattern"; [ -e "$$1" ] || continue; \
+	  CARGO_BUILD_JOBS="$(PYTEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$@" || exit $$?; \
 	done
 	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
 	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(TEST_RUSTFLAGS)" $(CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \

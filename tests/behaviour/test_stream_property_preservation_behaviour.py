@@ -26,7 +26,7 @@ from hypothesis import given as hypothesis_given
 from hypothesis import strategies as st
 from pytest_bdd import given, parsers, scenario, then, when
 
-from cuprum import ExecutionContext, ScopeConfig, scoped, sh
+from cuprum import ExecutionContext, RunOutputOptions, ScopeConfig, scoped, sh
 from tests.helpers.parity import (
     PropertyPipelineCase,
     build_property_pipeline_case,
@@ -219,7 +219,7 @@ def _run_echoing_stdout_stderr_pipeline(
 
     context = ExecutionContext(stdout_sink=sink, stderr_sink=sink)
     with scoped(ScopeConfig(allowlist=frozenset([python_prog]))):
-        return pipeline.run_sync(echo=True, context=context)
+        return pipeline.run_sync(output=RunOutputOptions(echo=True), context=context)
 
 
 @settings(

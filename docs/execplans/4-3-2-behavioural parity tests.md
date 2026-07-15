@@ -41,7 +41,9 @@ Hard invariants that must hold throughout implementation:
 
 - **No changes to production source code.** The files `cuprum/_streams.py`,
   `cuprum/_streams_rs.py`, `cuprum/_backend.py`, and
-  `cuprum/_pipeline_streams.py` must not be modified. If a test reveals a
+  `cuprum/_pipeline_streams.py` must not be modified for this task. The plan
+  assumes the existing Python baseline already exposes `_consume_stream()`,
+  `_drain()`, and `_READ_SIZE` in `cuprum/_streams.py`. If a test reveals a
   behavioural divergence between backends, that divergence must be documented
   and escalated, not fixed within this task's scope.
 - **Pipeline-level testing.** Parity tests must operate at the pipeline level
@@ -88,7 +90,7 @@ Hard invariants that must hold throughout implementation:
   - Severity: medium
   - Likelihood: medium
   - Mitigation: Use payloads significantly larger than `_READ_SIZE` containing
-    many multibyte characters so splits are statistically guaranteed. A
+    many multibyte characters, so splits are statistically guaranteed. A
     secondary mitigation is dedicated unit tests for each UTF-8 byte width.
 
 - **Risk**: Broken pipe tests may produce non-deterministic behaviour because
@@ -420,6 +422,8 @@ prevents cross-test pollution.
 
 - `stream_backend` fixture from `conftest.py:50-88`
 - `_clear_backend_cache` autouse fixture from `conftest.py:91-99`
+- `cuprum/_streams.py` baseline consume helpers (`_consume_stream()`,
+  `_drain()`, `_READ_SIZE = 4096`)
 - `python_catalogue()` from `tests/helpers/catalogue.py:17-26`
 - `cat_program()` from `tests/helpers/catalogue.py:35-37`
 - `combine_programs_into_catalogue()` from `tests/helpers/catalogue.py:40-68`
