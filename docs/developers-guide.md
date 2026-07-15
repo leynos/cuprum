@@ -1060,8 +1060,8 @@ without updating snapshot files and any downstream tooling.
 
 ## Pipeline stdio policy and cwd conversion
 
-Two canonical helpers own the subprocess spawn flags shared by the
-single-command and pipeline paths:
+Two canonical helpers own the subprocess spawn flags used by the subprocess
+spawn paths:
 
 - `_get_stage_stream_fds(idx, last_idx, capture_or_echo=...)` in
   `cuprum/_pipeline_stage_streams.py` is the single source of truth for the
@@ -1070,19 +1070,21 @@ single-command and pipeline paths:
   stages always pipe stdout, while the final stage pipes stdout only when
   output is captured or echoed; stderr is piped exactly when output is captured
   or echoed. `_spawn_pipeline_processes` routes through this helper — do not
-  re-derive the flags inline at spawn sites.
+  re-derive the flags inline at pipeline-stage spawn sites, and do not use it
+  for single-command spawning.
 - `_cwd_arg(cwd)` in `cuprum/_subprocess_context.py` renders an optional
   working directory (`str | Path | None`) into the `cwd` argument for
-  `asyncio.create_subprocess_exec`. Both `_spawn_subprocess` (single command)
-  and `_spawn_pipeline_processes` (pipeline) use it so the conversion cannot
-  drift between the two paths.
+  `asyncio.create_subprocess_exec`. Every spawn site must use it so the
+  conversion cannot drift between single-command and pipeline paths.
 
-Re-use policy: any new spawn site must call these helpers rather than copying
-the policy. Changes to stdio selection (for example, adding stdin handling to
-pipelines) belong in `_get_stage_stream_fds` so both paths and the exhaustive
-tests in `cuprum/unittests/test_stage_stream_fds.py` stay authoritative. That
-test module covers the full finite input domain (stage position × capture/echo)
-and asserts agreement with the single-command policy on the overlapping cases.
+Re-use policy: any new spawn site must call `_cwd_arg`, and pipeline-stage
+spawn sites must call `_get_stage_stream_fds` rather than copying the policy.
+Changes to stdio selection (for example, adding stdin handling to pipelines)
+belong in `_get_stage_stream_fds` so pipeline-stage behaviour and the
+exhaustive tests in `cuprum/unittests/test_stage_stream_fds.py` stay
+authoritative. That test module covers the full finite input domain (stage
+position × capture/echo) and asserts agreement with the single-command policy
+on the overlapping cases.
 
 ## Output behaviour carrier
 

@@ -686,7 +686,9 @@ def test_pipeline_stdio_policy_streams_intermediate_stdout_end_to_end(
     )
 
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        result = (producer | transformer).run_sync(capture=capture)
+        result = (producer | transformer).run_sync(
+            output=RunOutputOptions(capture=capture),
+        )
 
     assert result.stdout == expected_stdout
     assert len(result.stages) == 2
