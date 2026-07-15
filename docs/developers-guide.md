@@ -20,7 +20,7 @@ immutable.
 The private `_tar_create_argv` and `_tar_extract_argv` helpers in
 `cuprum/builders/tar.py`, together with `_rsync_argv` in
 `cuprum/builders/rsync.py`, construct immutable argument vectors independently
-of `sh.make` wrapping. They exist so the command construction contract can be
+of `sh.make` wrapping. They exist, so the command construction contract can be
 tested directly for issue #71, while the public builders remain responsible for
 attaching their curated program.
 
@@ -1074,7 +1074,7 @@ spawn paths:
   for single-command spawning.
 - `_cwd_arg(cwd)` in `cuprum/_subprocess_context.py` renders an optional
   working directory (`str | Path | None`) into the `cwd` argument for
-  `asyncio.create_subprocess_exec`. Every spawn site must use it so the
+  `asyncio.create_subprocess_exec`. Every spawn site must use it, so the
   conversion cannot drift between single-command and pipeline paths.
 
 Re-use policy: any new spawn site must call `_cwd_arg`, and pipeline-stage
