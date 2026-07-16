@@ -141,7 +141,6 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
-
 ## `cuprum/context/` package layout
 
 `cuprum/context.py` exceeded the 400-line ceiling and mixed four concerns with
