@@ -57,11 +57,7 @@ async def _drain(
     ``None`` when capture is disabled.
     """
     buffer = bytearray() if config.capture_output else None
-    echo_decoder = (
-        _incremental_decoder(config)
-        if config.echo_output and getattr(config.sink, "buffer", None) is None
-        else None
-    )
+    echo_decoder = _echo_decoder(config)
     while True:
         chunk = await stream.read(_READ_SIZE)
         if not chunk:
@@ -77,13 +73,7 @@ async def _drain(
         if on_chunk is not None:
             on_chunk(chunk)
 
-    if echo_decoder is not None:
-        _write_chunk(
-            config,
-            b"",
-            decoder=echo_decoder,
-            final=True,
-        )
+    _flush_echo_decoder(config, echo_decoder)
 
     if buffer is None:
         return None
@@ -231,6 +221,22 @@ def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:
     """Create an incremental decoder configured for a stream invocation."""
     decoder_factory = codecs.getincrementaldecoder(config.encoding)
     return decoder_factory(errors=config.errors)
+
+
+def _echo_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder | None:
+    """Create the decoder needed by a text-only echo sink, if any."""
+    if not config.echo_output or getattr(config.sink, "buffer", None) is not None:
+        return None
+    return _incremental_decoder(config)
+
+
+def _flush_echo_decoder(
+    config: _StreamConfig,
+    decoder: codecs.IncrementalDecoder | None,
+) -> None:
+    """Flush a text-only echo decoder at end of stream."""
+    if decoder is not None:
+        _write_chunk(config, b"", decoder=decoder, final=True)
 
 
 def _emit_completed_lines(
