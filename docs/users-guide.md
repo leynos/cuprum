@@ -248,7 +248,8 @@ and echo semantics and returns a structured `CommandResult`:
   `output=RunOutputOptions(capture=False)` to stream only; the result will carry
   `None` for output fields.
 - `output=RunOutputOptions(echo=True)` tees stdout/stderr to the parent process
-  while still capturing them when `capture=True`.
+  while still capturing them when `capture=True`; configured text sinks preserve
+  multibyte characters split across subprocess reads.
 - Pass an `ExecutionContext` via the `context` parameter to override execution
   details:
   - `env` overlays key/value pairs on top of the current environment without
@@ -1234,7 +1235,7 @@ than risking a stale environment value or backend cache leak. Avoid wrapping one
 or let the outer selector own the full profiled run.
 
 Both backends are tested for behavioural parity across edge cases including
-empty streams, multi-byte UTF-8 at chunk boundaries, broken pipes (where the
+empty streams, multibyte UTF-8 at chunk boundaries, broken pipes (where the
 downstream stage exits before the upstream finishes), and backpressure under
 large payloads. The test suite verifies that pipeline output is identical
 regardless of which backend is active, so switching between backends does not

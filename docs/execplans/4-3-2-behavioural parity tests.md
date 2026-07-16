@@ -41,7 +41,9 @@ Hard invariants that must hold throughout implementation:
 
 - **No changes to production source code.** The files `cuprum/_streams.py`,
   `cuprum/_streams_rs.py`, `cuprum/_backend.py`, and
-  `cuprum/_pipeline_streams.py` must not be modified. If a test reveals a
+  `cuprum/_pipeline_streams.py` must not be modified for this task. The plan
+  assumes the existing Python baseline already exposes `_consume_stream()`,
+  `_drain()`, and `_READ_SIZE` in `cuprum/_streams.py`. If a test reveals a
   behavioural divergence between backends, that divergence must be documented
   and escalated, not fixed within this task's scope.
 - **Pipeline-level testing.** Parity tests must operate at the pipeline level
@@ -88,7 +90,7 @@ Hard invariants that must hold throughout implementation:
   - Severity: medium
   - Likelihood: medium
   - Mitigation: Use payloads significantly larger than `_READ_SIZE` containing
-    many multi-byte characters so splits are statistically guaranteed. A
+    many multibyte characters, so splits are statistically guaranteed. A
     secondary mitigation is dedicated unit tests for each UTF-8 byte width.
 
 - **Risk**: Broken pipe tests may produce non-deterministic behaviour because
@@ -182,7 +184,7 @@ Hard invariants that must hold throughout implementation:
 
 Implementation completed successfully:
 
-- Created 4 BDD scenarios verifying parity for empty streams, multi-byte
+- Created 4 BDD scenarios verifying parity for empty streams, multibyte
   UTF-8, broken pipes, and backpressure (8 test runs: 4 Python + 4 Rust, with
   Rust skipped when extension unavailable)
 - Created 8 unit tests with finer granularity (16 test runs: 8 Python +
@@ -242,8 +244,10 @@ Two independent stream implementations exist:
 
 1. **Python** (`cuprum/_streams.py`): `_pump_stream(reader, writer)` uses
    asyncio `StreamReader`/`StreamWriter` with backpressure via `drain()`.
-   `_consume_stream(stream, config)` decodes with optional line callbacks. Read
-   chunk size is `_READ_SIZE = 4096`.
+   `_consume_stream(stream, config)` dispatches to consume variants that share
+   `_drain()` for read, echo, and capture mechanics; the line-emitting variant
+   layers its own incremental decoder through an `on_chunk` hook. Read chunk
+   size is `_READ_SIZE = 4096`.
 
 2. **Rust** (`cuprum/_streams_rs.py`):
    `rust_pump_stream(reader_fd, writer_fd, buffer_size=65536)` operates on raw
@@ -305,7 +309,7 @@ Create `tests/helpers/parity.py` with shared infrastructure:
 
 - `parity_catalogue()` -- builds catalogue with Python + cat + echo
 - `run_parity_pipeline(pipeline, allowlist)` -- runs within scoped config
-- `utf8_stress_payload(n_chars=32768)` -- deterministic multi-byte UTF-8
+- `utf8_stress_payload(n_chars=32768)` -- deterministic multibyte UTF-8
   string using fixed seed `random.Random(20260217)`, cycling through 1, 2, 3,
   and 4-byte characters, encoded size exceeding 80 KB
 
@@ -379,7 +383,7 @@ All commands run from `/home/user/project`.
 
 - Empty stream pipeline produces `stdout == ""` and `ok is True` under both
   backends.
-- UTF-8 pipeline with multi-byte characters produces byte-identical stdout
+- UTF-8 pipeline with multibyte characters produces byte-identical stdout
   under both backends.
 - Broken pipe pipeline completes without deadlock under both backends.
 - Backpressure pipeline with 1 MB payload produces byte-identical stdout
@@ -418,6 +422,8 @@ prevents cross-test pollution.
 
 - `stream_backend` fixture from `conftest.py:50-88`
 - `_clear_backend_cache` autouse fixture from `conftest.py:91-99`
+- `cuprum/_streams.py` baseline consume helpers (`_consume_stream()`,
+  `_drain()`, `_READ_SIZE = 4096`)
 - `python_catalogue()` from `tests/helpers/catalogue.py:17-26`
 - `cat_program()` from `tests/helpers/catalogue.py:35-37`
 - `combine_programs_into_catalogue()` from `tests/helpers/catalogue.py:40-68`
@@ -440,7 +446,7 @@ prevents cross-test pollution.
         """Execute a pipeline within a scoped allowlist."""
 
     def utf8_stress_payload(n_chars: int = 32768) -> str:
-        """Generate a deterministic multi-byte UTF-8 stress payload."""
+        """Generate a deterministic multibyte UTF-8 stress payload."""
 
 ### Dependencies
 

@@ -1504,10 +1504,24 @@ The current implementation reads and writes data in 4 KB chunks (defined by
 - `_pump_stream()` – transfers data between pipeline stages with backpressure;
 - `_consume_stream()` – dispatcher that routes to one of the two functions
   below based on whether line callbacks are registered;
+- `_drain()` – canonical read/echo/capture loop shared by both consume
+  variants;
 - `_consume_stream_without_lines()` – reads subprocess output without line
   parsing, optionally teeing to sinks;
 - `_consume_stream_with_lines()` – handles line-by-line callbacks with
-  incremental UTF-8 decoding.
+  incremental decoding configured by `config.encoding` and `config.errors`.
+
+`_drain()` owns the shared mechanics for reading stream chunks, forwarding
+echoed text to a configured sink, and accumulating captured bytes. The
+line-emitting consume variant layers one incremental decoder per invocation on
+top of this loop by passing an `on_chunk` delivery hook; the hook itself does
+not own shared state. Fixes to read, echo, and capture behaviour belong in
+`_drain()`, so the capture-only and line-emitting paths cannot diverge. The
+line-emitting variant configures its incremental decoder from
+`config.encoding` and `config.errors`, and `_drain()` applies the same error
+policy when decoding captured bytes. New consume variants should reuse
+`_drain()` unless they deliberately replace the whole stream-consumption
+contract.
 
 For a 1 GB data stream, this results in:
 

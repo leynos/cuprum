@@ -17,10 +17,25 @@ functions affected are:
 - `_pump_stream()` – transfers data between pipeline stages with backpressure;
 - `_consume_stream()` – dispatcher that routes to one of the two functions
   below based on whether line callbacks are registered;
+- `_drain()` – canonical read/echo/capture loop shared by both consume
+  variants;
 - `_consume_stream_without_lines()` – reads subprocess output without line
   parsing, optionally teeing to sinks;
 - `_consume_stream_with_lines()` – handles line-by-line callbacks with
-  incremental UTF-8 decoding.
+  incremental decoding configured by `config.encoding` and `config.errors`.
+
+The consume variants reuse `_drain()` for the shared stream-consumption
+mechanics. The line-emitting variant supplies an `on_chunk` delivery hook
+around its per-invocation incremental decoder configured by `config.encoding`
+and `config.errors`, while `_drain()` remains the sole place for read, echo,
+and capture fixes and applies the configured error policy when decoding
+captured bytes.
+
+For text-only echo sinks, `_drain()` owns a separate incremental decoder
+configured by `config.encoding` and `config.errors`. It flushes the decoder at
+end of stream so characters split across read chunks and incomplete final
+sequences follow the configured error policy; sinks with `.buffer` continue to
+receive raw bytes.
 
 For typical command execution (e.g. `git status`, `ls -l`), this overhead is
 negligible. However, for high-throughput pipelines processing large data

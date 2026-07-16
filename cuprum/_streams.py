@@ -37,15 +37,27 @@ async def _consume_stream(
     return await _consume_stream_with_lines(stream, config, on_line=on_line)
 
 
-async def _consume_stream_without_lines(
-    stream: asyncio.StreamReader | None,
+async def _drain(
+    stream: asyncio.StreamReader,
     config: _StreamConfig,
+    *,
+    on_chunk: cabc.Callable[[bytes], None] | None = None,
 ) -> str | None:
-    """Read from a subprocess stream without emitting line callbacks."""
-    if stream is None:
-        return "" if config.capture_output else None
+    """Run the canonical read/echo/buffer loop over *stream*.
 
+    This is the single source of truth for the consume mechanics shared by
+    :func:`_consume_stream_without_lines` and
+    :func:`_consume_stream_with_lines`: read in ``_READ_SIZE`` chunks, extend
+    the capture buffer when capturing, echo each chunk to the configured sink
+    when echoing, then hand the chunk to ``on_chunk`` for variant-specific
+    processing (for example incremental line decoding). Fixes to the loop must
+    be made here so the capture path and the line-emitting path cannot drift.
+
+    Returns the captured text decoded with the configured encoding/errors, or
+    ``None`` when capture is disabled.
+    """
     buffer = bytearray() if config.capture_output else None
+    echo_decoder = _echo_decoder(config)
     while True:
         chunk = await stream.read(_READ_SIZE)
         if not chunk:
@@ -54,15 +66,28 @@ async def _consume_stream_without_lines(
             buffer.extend(chunk)
         if config.echo_output:
             _write_chunk(
-                config.sink,
+                config,
                 chunk,
-                encoding=config.encoding,
-                errors=config.errors,
+                decoder=echo_decoder,
             )
+        if on_chunk is not None:
+            on_chunk(chunk)
+
+    _flush_echo_decoder(config, echo_decoder)
 
     if buffer is None:
         return None
     return buffer.decode(config.encoding, errors=config.errors)
+
+
+async def _consume_stream_without_lines(
+    stream: asyncio.StreamReader | None,
+    config: _StreamConfig,
+) -> str | None:
+    """Read from a subprocess stream without emitting line callbacks."""
+    if stream is None:
+        return "" if config.capture_output else None
+    return await _drain(stream, config)
 
 
 async def _consume_stream_with_lines(
@@ -75,28 +100,18 @@ async def _consume_stream_with_lines(
     if stream is None:
         return "" if config.capture_output else None
 
-    buffer = bytearray() if config.capture_output else None
-    decoder_factory = codecs.getincrementaldecoder(config.encoding)
-    decoder = decoder_factory(errors=config.errors)
+    decoder = _incremental_decoder(config)
     pending_text = ""
 
-    while True:
-        chunk = await stream.read(_READ_SIZE)
-        if not chunk:
-            break
-        if buffer is not None:
-            buffer.extend(chunk)
-        if config.echo_output:
-            _write_chunk(
-                config.sink,
-                chunk,
-                encoding=config.encoding,
-                errors=config.errors,
-            )
+    def feed_decoder(chunk: bytes) -> None:
+        """Feed a chunk to the incremental decoder and emit complete lines."""
+        nonlocal pending_text
         pending_text = _emit_completed_lines(
             pending_text + decoder.decode(chunk),
             on_line=on_line,
         )
+
+    captured = await _drain(stream, config, on_chunk=feed_decoder)
 
     pending_text = _emit_completed_lines(
         pending_text + decoder.decode(b"", final=True),
@@ -105,9 +120,7 @@ async def _consume_stream_with_lines(
     if pending_text:
         on_line(_strip_line_ending(pending_text))
 
-    if buffer is None:
-        return None
-    return buffer.decode(config.encoding, errors=config.errors)
+    return captured
 
 
 async def _pump_stream(
@@ -178,25 +191,52 @@ async def _close_stream_writer(writer: asyncio.StreamWriter | None) -> None:
 
 
 def _write_chunk(
-    sink: typ.IO[str],
+    config: _StreamConfig,
     chunk: bytes,
     *,
-    encoding: str,
-    errors: str,
+    decoder: codecs.IncrementalDecoder | None = None,
+    final: bool = False,
 ) -> None:
-    """Write a bytes chunk to a text sink synchronously, avoiding extra encoding.
+    """Write a bytes chunk to a sink synchronously, avoiding extra encoding.
 
     For stdio echo this blocking write is acceptable; future slow-sink handling
     can layer on a background writer if needed.
     """
-    buffer = getattr(sink, "buffer", None)
+    buffer = getattr(config.sink, "buffer", None)
     if buffer is not None:
         buffer.write(chunk)
         buffer.flush()
         return
-    text = chunk.decode(encoding, errors=errors)
-    sink.write(text)
-    sink.flush()
+    text = (
+        chunk.decode(config.encoding, errors=config.errors)
+        if decoder is None
+        else decoder.decode(chunk, final=final)
+    )
+    if text:
+        config.sink.write(text)
+    config.sink.flush()
+
+
+def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:
+    """Create an incremental decoder configured for a stream invocation."""
+    decoder_factory = codecs.getincrementaldecoder(config.encoding)
+    return decoder_factory(errors=config.errors)
+
+
+def _echo_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder | None:
+    """Create the decoder needed by a text-only echo sink, if any."""
+    if not config.echo_output or getattr(config.sink, "buffer", None) is not None:
+        return None
+    return _incremental_decoder(config)
+
+
+def _flush_echo_decoder(
+    config: _StreamConfig,
+    decoder: codecs.IncrementalDecoder | None,
+) -> None:
+    """Flush a text-only echo decoder at end of stream."""
+    if decoder is not None:
+        _write_chunk(config, b"", decoder=decoder, final=True)
 
 
 def _emit_completed_lines(
