@@ -119,6 +119,35 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
+### Canonical adapter event projection and locked-store base
+
+`cuprum/adapters/_support.py` keeps the three telemetry adapters from
+repeating the same event projection and in-memory collector locking. It owns
+the canonical logging/tracing `(key, value)` projection helper for optional
+execution fields, the `project` tag helper, the shared unhandled-phase debug
+log, and `_LockedStore` with its lock-guarded `reset()`. Each adapter retains
+backend-specific key names and value shaping, such as tuple versus list
+`argv`, at its call site.
+
+This module was extracted to prevent three-way projection drift and keep each
+adapter within its cohesion budget. It is importable only by adapter modules:
+do not add backend rendering, logging configuration, event construction, or
+general-purpose utilities. Production imports stay adapter-only; contract tests
+such as `cuprum/unittests/test_adapter_projection.py` may import
+`_event_common_fields` to pin the projection contract. Add an adapter-visible
+`ExecEvent` field once to `_event_common_fields`; new in-memory collectors
+derive from `_LockedStore` and implement `_clear()` while its lock is held.
+
+`cuprum/unittests/test_adapter_projection.py` pins this contract with Hypothesis
+properties and redacted per-phase syrupy snapshots.
+
+### Build and test worker controls
+
+`make test` runs pytest serially by default. Set `PYTEST_WORKERS` to a positive
+worker count to enable xdist explicitly. Set `BUILD_JOBS=-jN` to pass the same
+count to Rust test commands and, through `CARGO_JOB_ENV`, to both
+`RAYON_NUM_THREADS` and `CARGO_BUILD_JOBS`.
+
 ## Canonical `_TokenRegistration` handle base
 
 All `ContextVar`-backed scope-registration handles — `AllowRegistration`,
@@ -1034,10 +1063,9 @@ Skipped automatically when `maturin` is not on `PATH`. When it is present,
 asserts that the installed version matches the pinned development dependency.
 
 **Wheel build snapshot** (`test_maturin_wheel_build_snapshot`) Requires the
-Rust toolchain (`cargo` and `rustc`) and is skipped on Python ≥ 3.15 until
-maturin adds support for that interpreter. Builds a native wheel into a
-temporary directory, extracts normalized metadata and layout information, and
-compares the result against a
+Rust toolchain (`cargo` and `rustc`). Builds a native wheel into a temporary
+directory, extracts normalized metadata and layout information, and compares
+the result against a
 [syrupy](https://github.com/syrupy-project/syrupy) snapshot stored at
 `cuprum/unittests/__snapshots__/test_maturin_build.ambr`.
 

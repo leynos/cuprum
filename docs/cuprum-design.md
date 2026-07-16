@@ -1270,6 +1270,25 @@ design decisions guide these adapters:
 - Protocol implementations must be thread-safe since hooks may be invoked from
   multiple threads or async tasks concurrently.
 
+**Shared projection and store scaffolding:**
+
+- The adapters use `cuprum.adapters._support` for the common `ExecEvent`
+  projection and reference-collector locking pattern.
+- `_event_common_fields` is the canonical logging/tracing projection helper for
+  optional execution fields. Each adapter supplies its own key-naming
+  function so the wire shape remains backend-specific without duplicating
+  field-selection rules.
+- `_project_tag` centralizes the low-cardinality project tag lookup for
+  metrics and any future adapter that needs the same semantics. It returns
+  `str | None`; `MetricsHook` maps the empty or missing case to `"unknown"`.
+- `_LockedStore` owns the reference collectors' lock and reset behaviour so new
+  in-memory adapter collectors inherit the shared concurrency contract instead
+  of re-implementing it.
+- `_support.py` begins after an `ExecEvent` is emitted. Construction of the
+  event's shared environment overlay and stage tags belongs to
+  `cuprum._observability`, keeping execution-path inputs separate from
+  backend-specific projection.
+
 **Metrics adapter specifics:**
 
 - Counter metrics (`cuprum_executions_total`, `cuprum_failures_total`,
@@ -1277,7 +1296,8 @@ design decisions guide these adapters:
   the corresponding event phases.
 - Histogram metrics (`cuprum_duration_seconds`) are observed on `exit` events.
 - All metrics include `program` and `project` labels for multi‑dimensional
-  analysis.
+  analysis. The `project` label uses `_project_tag` and falls back to
+  `"unknown"` when the event carries no usable project tag.
 
 **Tracing adapter specifics:**
 

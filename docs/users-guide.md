@@ -753,7 +753,7 @@ with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         sh.make(ECHO)("hello").run_sync()
 ```
 
-The hook attaches `cuprum_*` prefixed extra fields to log records:
+The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 
 - `cuprum_phase`: Event phase (plan, start, stdout, stderr, exit)
 - `cuprum_program`: Program being executed
@@ -761,7 +761,7 @@ The hook attaches `cuprum_*` prefixed extra fields to log records:
 - `cuprum_pid`: Process ID (when available)
 - `cuprum_exit_code`: Exit code (for exit events)
 - `cuprum_duration_s`: Duration in seconds (for exit events)
-- `cuprum_tags`: Event tags as a dict
+- `cuprum_tags`: Event tags as a dictionary
 
 For JSON output suitable for log aggregation systems, use the
 `JsonLoggingFormatter`:
@@ -805,7 +805,8 @@ The hook collects:
 - `cuprum_stdout_lines_total`: Counter of stdout lines emitted
 - `cuprum_stderr_lines_total`: Counter of stderr lines emitted
 
-All metrics include `program` and `project` labels.
+All metrics include `program` and `project` labels. Missing, empty, or
+explicit `None` project tags fall back to `unknown`.
 
 To integrate with a real metrics library like `prometheus_client`, implement the
 `MetricsCollector` protocol:

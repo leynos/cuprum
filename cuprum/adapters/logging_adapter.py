@@ -31,6 +31,8 @@ import json
 import logging
 import typing as typ
 
+from cuprum.adapters._support import _event_common_fields, _prefixed
+
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook
 
@@ -95,7 +97,9 @@ def structured_logging_hook(
     - ``cuprum_pid``: Process ID (when available)
     - ``cuprum_exit_code``: Exit code (for exit events)
     - ``cuprum_duration_s``: Duration in seconds (for exit events)
-    - ``cuprum_tags``: Event tags as a dict
+
+    The adapter projects selected execution fields into log extras; it does
+    not emit the full tags mapping.
 
     """
     log = logger or logging.getLogger(_DEFAULT_LOGGER_NAME)
@@ -124,22 +128,9 @@ def structured_logging_hook(
 
 def _build_extra(event: ExecEvent) -> dict[str, object]:
     """Build structured extra data for a log record."""
-    extra: dict[str, object] = {
-        "cuprum_phase": event.phase,
-        "cuprum_program": str(event.program),
-        "cuprum_argv": event.argv,
-        "cuprum_tags": dict(event.tags),
-    }
-    if event.pid is not None:
-        extra["cuprum_pid"] = event.pid
-    if event.cwd is not None:
-        extra["cuprum_cwd"] = str(event.cwd)
-    if event.exit_code is not None:
-        extra["cuprum_exit_code"] = event.exit_code
-    if event.duration_s is not None:
-        extra["cuprum_duration_s"] = event.duration_s
-    if event.line is not None:
-        extra["cuprum_line"] = event.line
+    extra: dict[str, object] = {"cuprum_phase": event.phase}
+    extra.update(_event_common_fields(event, _prefixed("cuprum_")))
+    extra["cuprum_tags"] = dict(event.tags)
     return extra
 
 
