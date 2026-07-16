@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,6 @@ from cuprum.context import ScopeConfig, scoped
 from cuprum.unittests._adapter_test_support import (
     _make_exec_event,
     _python_builder,
-    _run_in_threads,
 )
 
 
@@ -214,24 +214,49 @@ sys.stdout.write(data.upper())""",
 
         assert tracer.spans == [], "test_inmemory_tracer_reset should clear spans"
 
-    def test_concurrent_tracer_reset_leaves_valid_empty_state(self) -> None:
-        """Concurrent reset calls keep the in-memory tracer store coherent."""
+    def test_concurrent_tracer_reset_leaves_valid_empty_state(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Reset excludes concurrent span creation until clearing completes."""
         tracer = InMemoryTracer()
-        iterations = 100
+        reset_started = threading.Event()
+        release_reset = threading.Event()
+        span_started = threading.Event()
+        span_finished = threading.Event()
+        original_clear = InMemoryTracer._clear
 
-        def start_and_reset() -> None:
-            """Exercise span creation and reset under lock contention."""
-            for index in range(iterations):
-                span = tracer.start_span(f"test-{index}")
-                span.end()
-                tracer.reset()
+        def block_clear(store: InMemoryTracer) -> None:
+            """Pause reset after it acquires the tracer lock."""
+            reset_started.set()
+            assert release_reset.wait(timeout=1.0), "test should release reset"
+            original_clear(store)
 
-        _run_in_threads(start_and_reset)
+        def create_span() -> None:
+            """Attempt to create a span while reset is paused."""
+            span_started.set()
+            tracer.start_span("after").end()
+            span_finished.set()
 
-        tracer.reset()
+        monkeypatch.setattr(InMemoryTracer, "_clear", block_clear)
+        reset_thread = threading.Thread(target=tracer.reset, daemon=True)
+        span_thread = threading.Thread(target=create_span, daemon=True)
+        reset_thread.start()
+        assert reset_started.wait(timeout=1.0), "reset should reach its clear step"
+        span_thread.start()
+        assert span_started.wait(timeout=1.0), "span creation should attempt to run"
+        assert not span_finished.wait(timeout=0.1), (
+            "span creation must wait until reset releases the shared lock"
+        )
 
-        assert tracer.spans == [], (
-            "test_concurrent_tracer_reset_leaves_valid_empty_state should end empty"
+        release_reset.set()
+        reset_thread.join(timeout=5.0)
+        span_thread.join(timeout=5.0)
+
+        assert not reset_thread.is_alive(), "reset worker should finish"
+        assert not span_thread.is_alive(), "span worker should finish"
+        assert [span.name for span in tracer.spans] == ["after"], (
+            "post-reset span creation should survive the atomic clear"
         )
 
     def test_pid_less_events_do_not_create_spans(self) -> None:
@@ -295,7 +320,7 @@ sys.stdout.write(data.upper())""",
         assert event.note == "written", "note overrides should be forwarded"
         assert event.byte_count == 7, "byte count overrides should be forwarded"
 
-        with pytest.raises(KeyError, match="unknown ExecEvent override fields"):
+        with pytest.raises(ValueError, match="unknown ExecEvent override fields"):
             _make_exec_event(phase="start", overrides={"unknown": None})
 
     def test_logs_unhandled_phases(self, caplog: pytest.LogCaptureFixture) -> None:

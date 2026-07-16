@@ -805,7 +805,8 @@ The hook collects:
 - `cuprum_stdout_lines_total`: Counter of stdout lines emitted
 - `cuprum_stderr_lines_total`: Counter of stderr lines emitted
 
-All metrics include `program` and `project` labels.
+All metrics include `program` and `project` labels. Missing, empty, or
+explicit `None` project tags fall back to `unknown`.
 
 To integrate with a real metrics library like `prometheus_client`, implement the
 `MetricsCollector` protocol:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 import typing as typ
 
 import pytest
@@ -19,8 +20,8 @@ from cuprum.events import ExecEvent, ExecPhase
 from cuprum.program import Program
 from cuprum.unittests._adapter_test_support import (
     _LabelRecordingCollector,
+    _make_exec_event,
     _python_builder,
-    _run_in_threads,
 )
 
 
@@ -137,20 +138,16 @@ print('err1', file=sys.stderr)""",
         program = Program(sys.executable)
 
         hook(
-            ExecEvent(
+            _make_exec_event(
                 phase=typ.cast("ExecPhase", phase),
-                program=program,
-                argv=(str(program), "-c", "pass"),
-                cwd=None,
-                env=None,
-                pid=123,
-                timestamp=0.0,
-                line=None,
-                exit_code=None,
-                duration_s=None,
-                tags={"project": "stdin-metrics"},
-                # Parametrized cases supply distinct ancillary event fields.
-                **typ.cast("typ.Any", extra_kwargs),
+                overrides={
+                    "program": str(program),
+                    "argv": (str(program), "-c", "pass"),
+                    "pid": 123,
+                    "tags": {"project": "stdin-metrics"},
+                    # Parametrized cases supply distinct ancillary event fields.
+                    **extra_kwargs,
+                },
             )
         )
 
@@ -230,25 +227,53 @@ print('err1', file=sys.stderr)""",
             "unhandled metrics phases should use the shared debug log"
         )
 
-    def test_concurrent_metrics_reset_leaves_valid_empty_state(self) -> None:
-        """Concurrent reset calls keep the in-memory metrics store coherent."""
+    def test_concurrent_metrics_reset_leaves_valid_empty_state(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Reset excludes concurrent metrics mutations until clearing completes."""
         metrics = InMemoryMetrics()
-        iterations = 100
+        reset_started = threading.Event()
+        release_reset = threading.Event()
+        mutation_started = threading.Event()
+        mutation_finished = threading.Event()
+        original_clear = InMemoryMetrics._clear
 
-        def mutate_and_reset() -> None:
-            """Exercise collector mutators and reset under lock contention."""
-            for index in range(iterations):
-                metrics.inc_counter("test", 1.0, {})
-                metrics.observe_histogram("test_hist", float(index), {})
-                metrics.reset()
+        def block_clear(store: InMemoryMetrics) -> None:
+            """Pause reset after it acquires the collector lock."""
+            reset_started.set()
+            assert release_reset.wait(timeout=1.0), "test should release reset"
+            original_clear(store)
 
-        _run_in_threads(mutate_and_reset)
+        def mutate() -> None:
+            """Attempt to write state while reset is paused."""
+            mutation_started.set()
+            metrics.inc_counter("after", 1.0, {})
+            metrics.observe_histogram("after", 1.0, {})
+            mutation_finished.set()
 
-        metrics.reset()
+        monkeypatch.setattr(InMemoryMetrics, "_clear", block_clear)
+        reset_thread = threading.Thread(target=metrics.reset, daemon=True)
+        mutation_thread = threading.Thread(target=mutate, daemon=True)
+        reset_thread.start()
+        assert reset_started.wait(timeout=1.0), "reset should reach its clear step"
+        mutation_thread.start()
+        assert mutation_started.wait(timeout=1.0), "mutation should attempt to run"
+        assert not mutation_finished.wait(timeout=0.1), (
+            "metrics mutations must wait until reset releases the shared lock"
+        )
 
-        assert metrics.counters == {}, "concurrent reset should leave counters empty"
-        assert metrics.histograms == {}, (
-            "concurrent reset should leave histograms empty"
+        release_reset.set()
+        reset_thread.join(timeout=5.0)
+        mutation_thread.join(timeout=5.0)
+
+        assert not reset_thread.is_alive(), "reset worker should finish"
+        assert not mutation_thread.is_alive(), "mutation worker should finish"
+        assert metrics.counters == {"after": 1.0}, (
+            "post-reset counter mutation should survive the atomic clear"
+        )
+        assert metrics.histograms == {"after": [1.0]}, (
+            "post-reset histogram mutation should survive the atomic clear"
         )
 
     def test_passes_program_and_project_labels(self) -> None:
@@ -295,18 +320,9 @@ print('err1', file=sys.stderr)""",
         """MetricsHook treats an explicit ``None`` project tag as missing."""
         recorder = _LabelRecordingCollector(record_histograms=False)
         hook = MetricsHook(recorder)
-        event = ExecEvent(
+        event = _make_exec_event(
             phase="start",
-            program=Program("tool"),
-            argv=("tool",),
-            cwd=None,
-            env=None,
-            pid=None,
-            timestamp=0.0,
-            line=None,
-            exit_code=None,
-            duration_s=None,
-            tags={"project": None},
+            overrides={"program": "tool", "tags": {"project": None}},
         )
 
         hook(event)

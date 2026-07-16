@@ -282,7 +282,7 @@ All four must pass before committing:
     make check-fmt   # ruff format --check
     make typecheck   # pyright via ty
     make lint        # ruff check
-    make test        # pytest serial by default; set PYTEST_WORKERS=N for xdist
+    make test        # pytest -v -n auto
 
 ## Plan of work
 

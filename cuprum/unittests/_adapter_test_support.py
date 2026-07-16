@@ -57,7 +57,7 @@ def _make_exec_event(
         unknown = set(overrides) - {field.name for field in dc.fields(ExecEvent)}
         if unknown:
             msg = f"unknown ExecEvent override fields: {sorted(unknown)!r}"
-            raise KeyError(msg)
+            raise ValueError(msg)
         values.update(overrides)
     return ExecEvent(
         phase=typ.cast("ExecPhase", values["phase"]),

@@ -894,16 +894,6 @@ Each tier must pass before the next runs. When investigating a lint failure,
 fix the Ruff findings first, then the `interrogate` gaps, then rerun
 `make lint` to reach the Pylint tier.
 
-### Test and lint parallelism
-
-`make test` runs pytest serially by default (`PYTEST_WORKERS=0`) to avoid
-contention on shared development hosts. Set `PYTEST_WORKERS=N` to opt into
-pytest-xdist with `N` workers; an empty, whitespace-only, or `0` value keeps
-xdist disabled.
-
-`make lint` runs Cargo and Rayon work with `BUILD_JOBS=-j1` by default. Set
-`BUILD_JOBS=-jN` when the host has capacity for `N` concurrent Rust build jobs.
-
 ### Spelling policy
 
 The lint and Markdown gates run pinned `typos` 1.48.0 with British English and
