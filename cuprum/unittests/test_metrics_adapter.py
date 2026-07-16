@@ -10,6 +10,7 @@ import typing as typ
 import pytest
 
 from cuprum import sh
+from cuprum.adapters import metrics_adapter
 from cuprum.adapters.metrics_adapter import (
     InMemoryMetrics,
     MetricsHook,
@@ -229,6 +230,28 @@ print('err1', file=sys.stderr)""",
         assert "Ignoring unhandled metrics adapter phase: plan" in caplog.messages, (
             "unhandled metrics phases should use the shared debug log"
         )
+
+    def test_handled_phase_without_collector_update_raises(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Handled phases without a collector branch fail loudly."""
+        monkeypatch.setattr(
+            metrics_adapter,
+            "_HANDLED_PHASES",
+            metrics_adapter._HANDLED_PHASES | {"plan"},
+        )
+        metrics = InMemoryMetrics()
+        hook = MetricsHook(metrics)
+
+        with pytest.raises(AssertionError) as exc_info:
+            hook(_make_exec_event(phase="plan"))
+
+        assert str(exc_info.value) == (
+            "handled metrics phase has no collector update: plan"
+        ), "missing collector branches should identify the handled phase"
+        assert metrics.counters == {}, "failed dispatch should not mutate counters"
+        assert metrics.histograms == {}, "failed dispatch should not mutate histograms"
 
     def test_concurrent_metrics_reset_leaves_valid_empty_state(
         self,

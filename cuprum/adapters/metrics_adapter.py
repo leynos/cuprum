@@ -74,6 +74,16 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook
 
 
+_HANDLED_PHASES = frozenset({
+    "start",
+    "stdout",
+    "stderr",
+    "stdin_error",
+    "stdin",
+    "exit",
+})
+
+
 class MetricsCollector(typ.Protocol):
     """Protocol for metrics collection backends.
 
@@ -240,6 +250,11 @@ class MetricsHook:
             case "exit":
                 self._record_exit(event, labels=self._extract_labels(event))
             case _:
+                if event.phase in _HANDLED_PHASES:
+                    msg = (
+                        f"handled metrics phase has no collector update: {event.phase}"
+                    )
+                    raise AssertionError(msg)
                 _log_unhandled_phase("metrics", event.phase)
 
     def _increment(
