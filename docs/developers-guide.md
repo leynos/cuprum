@@ -241,9 +241,9 @@ deliberately carries no token of its own.
 
 `cuprum/unittests/test_token_registration_stateful.py` verifies the token
 discipline with a Hypothesis `RuleBasedStateMachine` driving randomized
-register/detach sequences across all token-backed handle types (nesting, context-manager
-exit, LIFO detach, double-detach), plus an example test pinning the
-documented non-LIFO hazard.
+register/detach sequences across all token-backed handle types (nesting,
+context-manager exit, LIFO detach, double-detach), plus an example test pinning
+the documented non-LIFO hazard.
 
 ## Canonical stage-observation inputs
 
