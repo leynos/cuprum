@@ -570,6 +570,8 @@ def test_forbidden_program_error_raised_for_disallowed(
         ctx.check_allowed(LS)
 
     assert "ls" in str(exc_info.value).lower()
+    assert exc_info.value.program is LS
+    assert exc_info.value.restricted_state is True
     records = [
         record
         for record in caplog.records
@@ -687,10 +689,23 @@ def test_validate_timeout_coerces_non_negative_integers(timeout: int) -> None:
 
 @pytest.mark.crosshair
 @_PROPERTY_SETTINGS
-@given(timeout=st.floats(max_value=-0.000001, allow_nan=False))
+@given(
+    timeout=st.floats(
+        max_value=-0.000001,
+        allow_infinity=False,
+        allow_nan=False,
+    )
+)
 def test_validate_timeout_rejects_negative_floats(timeout: float) -> None:
     """Property: negative float timeouts are rejected."""
     with pytest.raises(ValueError, match="timeout must be non-negative"):
+        _validate_timeout(timeout, "Test")
+
+
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), float("-inf")])
+def test_validate_timeout_rejects_non_finite_values(timeout: float) -> None:
+    """Non-finite timeout values are rejected before negative validation."""
+    with pytest.raises(ValueError, match="timeout must be finite"):
         _validate_timeout(timeout, "Test")
 
 

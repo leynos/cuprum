@@ -74,8 +74,8 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
         """Record the baseline context and an empty handle stack."""
         super().__init__()
         self._baseline: CuprumContext = current_context()
-        # Stack of (handle, context-before-registration) pairs.
-        self._stack: list[tuple[_TokenRegistration, CuprumContext]] = []
+        # Stack of (handle, prior context, installed context) tuples.
+        self._stack: list[tuple[_TokenRegistration, CuprumContext, CuprumContext]] = []
 
     @rule(factory_entry=st.sampled_from(_FACTORIES))
     def register(self, factory_entry: tuple[str, _HandleFactory]) -> None:
@@ -83,8 +83,9 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
         prior = current_context()
         _name, factory = factory_entry
         handle = factory()
-        self._stack.append((handle, prior))
-        assert current_context() is not prior, (
+        installed = current_context()
+        self._stack.append((handle, prior, installed))
+        assert installed is not prior, (
             "registering a handle must install a derived context"
         )
 
@@ -114,7 +115,7 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
     @rule()
     def detach_innermost(self) -> None:
         """Detach the most recent registration; the prior context returns."""
-        handle, prior = self._stack.pop()
+        handle, prior, _installed = self._stack.pop()
         handle.detach()
         assert current_context() is prior, (
             "detach must restore the exact context captured at registration"
@@ -124,7 +125,7 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
     @rule()
     def double_detach_is_idempotent(self) -> None:
         """Detaching the innermost handle twice changes nothing further."""
-        handle, prior = self._stack.pop()
+        handle, prior, _installed = self._stack.pop()
         handle.detach()
         after_first = current_context()
         handle.detach()
@@ -143,6 +144,7 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
         inner_factory_entry: tuple[str, _HandleFactory],
     ) -> None:
         """Out-of-order detaches restore each handle's captured snapshot."""
+        caller_context = current_context()
         with scoped(ScopeConfig()):
             outer_prior = current_context()
             _outer_name, outer_factory = outer_factory_entry
@@ -161,6 +163,10 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
                 "inner non-LIFO detach must restore its captured prior context"
             )
 
+        assert current_context() is caller_context, (
+            "scope exit must restore the caller context"
+        )
+
     @invariant()
     def stack_depth_matches_context_nesting(self) -> None:
         """With an empty stack the baseline context is active again."""
@@ -168,11 +174,16 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
             assert current_context() is self._baseline, (
                 "an empty stack must leave the baseline context active"
             )
+        else:
+            _handle, _prior, installed = self._stack[-1]
+            assert current_context() is installed, (
+                "a non-empty stack must leave its top context active"
+            )
 
     def teardown(self) -> None:
         """Detach any remaining handles in LIFO order."""
         while self._stack:
-            handle, _prior = self._stack.pop()
+            handle, _prior, _installed = self._stack.pop()
             handle.detach()
         assert current_context() is self._baseline, (
             "teardown must restore the exact baseline context"

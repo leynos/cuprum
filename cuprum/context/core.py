@@ -12,6 +12,7 @@ from __future__ import annotations
 import collections.abc as cabc
 import dataclasses as dc
 import logging
+import math
 import typing as typ
 
 from cuprum.context.env_overlay import _coerce_env_overlay, merge_env_overlays
@@ -28,8 +29,19 @@ type BeforeHook = cabc.Callable[[SafeCmd], None]
 type AfterHook = cabc.Callable[[SafeCmd, CommandResult], None]
 
 
-class ForbiddenProgramError(PermissionError):
+class ContextError(Exception):
+    """Base class for execution-context domain errors."""
+
+
+class ForbiddenProgramError(ContextError, PermissionError):
     """Raised when attempting to run a program not in the current allowlist."""
+
+    def __init__(self, program: Program, *, restricted_state: bool) -> None:
+        """Describe the denied program and allowlist restriction state."""
+        self.program = program
+        self.restricted_state = restricted_state
+        msg = f"Program '{program}' is not allowed in the current context"
+        super().__init__(msg)
 
 
 def _validate_timeout(timeout: float | None, class_name: str) -> float | None:
@@ -50,12 +62,15 @@ def _validate_timeout(timeout: float | None, class_name: str) -> float | None:
     Raises
     ------
     ValueError
-        When timeout is negative.
+        When timeout is not finite or is negative.
 
     """
     if timeout is None:
         return None
     timeout_float = float(timeout)
+    if not math.isfinite(timeout_float):
+        msg = f"{class_name} timeout must be finite, got {timeout_float}"
+        raise ValueError(msg)
     if timeout_float < 0:
         msg = f"{class_name} timeout must be non-negative, got {timeout_float}"
         raise ValueError(msg)
@@ -232,7 +247,6 @@ class CuprumContext:
         if not self.allowlist and not self._allowlist_is_restricted:
             return  # Empty allowlist permits all programs
         if not self.is_allowed(program):
-            msg = f"Program '{program}' is not allowed in the current context"
             _logger.warning(
                 "Program %s denied by context allowlist restricted_state=%s",
                 program,
@@ -242,7 +256,10 @@ class CuprumContext:
                     "restricted_state": self._allowlist_is_restricted,
                 },
             )
-            raise ForbiddenProgramError(msg)
+            raise ForbiddenProgramError(
+                program,
+                restricted_state=self._allowlist_is_restricted,
+            )
 
     def narrow(self, config: ScopeConfig) -> CuprumContext:
         """Create a derived context with narrowed allowlist and extended hooks.

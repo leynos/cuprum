@@ -50,12 +50,24 @@ from cuprum.context.core import (
     CuprumContext,
     ForbiddenProgramError,
     ScopeConfig,
-    _merge_after_hooks,
-    _merge_before_hooks,
-    _merge_observe_hooks,
-    _narrow_allowlist,
-    _resolve_narrowed_timeout,
-    _validate_timeout,
+)
+from cuprum.context.core import (
+    _merge_after_hooks as _merge_after_hooks,
+)
+from cuprum.context.core import (
+    _merge_before_hooks as _merge_before_hooks,
+)
+from cuprum.context.core import (
+    _merge_observe_hooks as _merge_observe_hooks,
+)
+from cuprum.context.core import (
+    _narrow_allowlist as _narrow_allowlist,
+)
+from cuprum.context.core import (
+    _resolve_narrowed_timeout as _resolve_narrowed_timeout,
+)
+from cuprum.context.core import (
+    _validate_timeout as _validate_timeout,
 )
 from cuprum.context.env_overlay import merge_env_overlays, resolve_env
 from cuprum.context.registration import (
@@ -82,12 +94,6 @@ __all__ = [
     "ForbiddenProgramError",
     "HookRegistration",
     "ScopeConfig",
-    "_merge_after_hooks",
-    "_merge_before_hooks",
-    "_merge_observe_hooks",
-    "_narrow_allowlist",
-    "_resolve_narrowed_timeout",
-    "_validate_timeout",
     "after",
     "allow",
     "before",
