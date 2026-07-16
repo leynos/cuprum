@@ -109,6 +109,31 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
+## Canonical `_TokenRegistration` handle base
+
+All `ContextVar`-backed scope-registration handles — `AllowRegistration`,
+`HookRegistration`, and `EnvRegistration` in `cuprum/context.py` — derive from
+one canonical `_TokenRegistration` base. The base owns the `_token`/`_detached`
+pair, the idempotent `detach()`, the context-manager protocol, and the
+`_install(new_ctx)` step that sets the derived context and captures the
+restoration token. Subclasses implement only the context-derivation step in
+`__init__`. The consolidated "Token-based Restoration" docstring lives on the
+base.
+
+Re-use policy: any new scope-registration handle must derive from
+`_TokenRegistration` and confine itself to deriving the new context; the
+restoration protocol is subtle (`ContextVar` token discipline), so a divergent
+copy is a latent correctness hazard. Note that `LoggingHookRegistration`
+(`cuprum/logging_hooks.py`) is a *pair* handle: it composes two
+`HookRegistration` instances and detaches them in reverse order; it
+deliberately carries no token of its own.
+
+`cuprum/unittests/test_token_registration_stateful.py` verifies the token
+discipline with a Hypothesis `RuleBasedStateMachine` driving randomized
+register/detach sequences across all token-backed handle types (nesting, context-manager
+exit, LIFO detach, double-detach), plus an example test pinning the
+documented non-LIFO hazard.
+
 ## Canonical stage-observation inputs
 
 The observation tag schema is a wire contract for observability, so the
