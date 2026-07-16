@@ -45,7 +45,7 @@ def _reader(chunks: cabc.Sequence[bytes]) -> asyncio.StreamReader:
 
 
 def _config(
-    sink: io.StringIO,
+    sink: typ.IO[str],
     *,
     capture: bool = True,
     echo: bool = False,
@@ -93,6 +93,30 @@ def _payload_and_chunks(draw: st.DrawFn) -> tuple[bytes, tuple[bytes, ...]]:
 def _decode_chunks(chunks: cabc.Sequence[bytes]) -> str:
     """Decode chunks as one stream for comparison with text-sink echoing."""
     return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+def _expected_emitted_lines(payload: bytes) -> list[str]:
+    """Model stream line emission while preserving non-CR/LF boundaries."""
+    lines = payload.decode("utf-8", errors="replace").splitlines(keepends=True)
+    if not lines:
+        return []
+
+    remainder = ""
+    if not lines[-1].endswith(("\n", "\r")):
+        remainder = lines.pop()
+
+    def strip_ending(line: str) -> str:
+        """Strip the CR/LF endings recognised by stream line callbacks."""
+        if line.endswith("\r\n"):
+            return line[:-2]
+        if line.endswith(("\n", "\r")):
+            return line[:-1]
+        return line
+
+    emitted = [strip_ending(line) for line in lines]
+    if remainder:
+        emitted.append(strip_ending(remainder))
+    return emitted
 
 
 def test_drain_empty_capture_returns_empty_text() -> None:
@@ -149,6 +173,46 @@ def test_drain_echoes_split_multibyte_text_sink() -> None:
     )
 
 
+def test_drain_strictly_echoes_split_multibyte_text_sink() -> None:
+    """Echo-only drains preserve valid UTF-8 split across text-sink reads."""
+    chunks = (b"before \xe2", b"\x98", b"\x83 after")
+    sink = io.StringIO()
+    config = _StreamConfig(
+        capture_output=False,
+        echo_output=True,
+        sink=sink,
+        encoding="utf-8",
+        errors="strict",
+    )
+
+    captured = asyncio.run(_drain(_reader(chunks), config))
+
+    assert captured is None, f"echo-only drains must return None for chunks={chunks!r}"
+    assert sink.getvalue() == "before \u2603 after", (
+        "strict text-sink echo must reconstruct split multibyte characters for "
+        f"chunks={chunks!r}, received={sink.getvalue()!r}"
+    )
+
+
+def test_drain_echoes_original_bytes_to_buffered_sink() -> None:
+    """Buffered echo sinks receive original chunks without text decoding."""
+    chunks = (b"before \xe2", b"\x98", b"\x83 after")
+    raw_sink = io.BytesIO()
+    sink = io.TextIOWrapper(raw_sink, encoding="utf-8")
+
+    captured = asyncio.run(
+        _drain(_reader(chunks), _config(sink, capture=False, echo=True)),
+    )
+
+    assert captured is None, (
+        f"buffered echo-only drains must return None for chunks={chunks!r}"
+    )
+    assert raw_sink.getvalue() == b"".join(chunks), (
+        "buffered echo must preserve original bytes for "
+        f"chunks={chunks!r}, received={raw_sink.getvalue()!r}"
+    )
+
+
 @settings(
     max_examples=_PROPERTY_MAX_EXAMPLES,
     deadline=None,
@@ -192,7 +256,7 @@ def test_line_emission_is_chunk_boundary_insensitive(
 ) -> None:
     """Property: line emission is independent of stream chunk boundaries."""
     payload, chunks = case
-    expected_lines = payload.decode("utf-8", errors="replace").splitlines()
+    expected_lines = _expected_emitted_lines(payload)
     whole_lines: list[str] = []
     split_lines: list[str] = []
 
