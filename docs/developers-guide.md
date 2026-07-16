@@ -870,15 +870,15 @@ test helpers behind `#[cfg(any(test, kani))]` when both proptest and Kani need
 the same simulation path. Register new custom cfg names in the workspace lint
 configuration so `unexpected_cfgs` warnings remain meaningful.
 
-Run the normal Rust gate from the `rust/` directory:
+Run the normal project test gate from the repository root:
 
 ```bash
 make test
 ```
 
-`make test` runs the crate tests through `cargo nextest`, including proptest
-cases compiled under `#[cfg(test)]`. Run the complete Rust lint and formatting
-gates before committing Rust changes:
+`make test` runs the Python pytest batches before the crate tests through
+`cargo nextest`, including proptest cases compiled under `#[cfg(test)]`. Run
+the complete Rust lint and formatting gates before committing Rust changes:
 
 ```bash
 make check-fmt
