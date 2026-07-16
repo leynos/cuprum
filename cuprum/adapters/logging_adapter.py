@@ -97,7 +97,9 @@ def structured_logging_hook(
     - ``cuprum_pid``: Process ID (when available)
     - ``cuprum_exit_code``: Exit code (for exit events)
     - ``cuprum_duration_s``: Duration in seconds (for exit events)
-    - ``cuprum_tags``: Event tags as a dict
+
+    The adapter projects selected execution fields into log extras; it does
+    not emit the full tags mapping.
 
     """
     log = logger or logging.getLogger(_DEFAULT_LOGGER_NAME)
@@ -128,7 +130,6 @@ def _build_extra(event: ExecEvent) -> dict[str, object]:
     """Build structured extra data for a log record."""
     extra: dict[str, object] = {"cuprum_phase": event.phase}
     extra.update(_event_common_fields(event, _prefixed("cuprum_")))
-    extra["cuprum_tags"] = dict(event.tags)
     return extra
 
 

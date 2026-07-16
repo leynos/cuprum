@@ -165,6 +165,7 @@ class InMemoryMetrics(_LockedStore):
                 self.histograms[name] = []
             self.histograms[name].append(value)
 
+    @typ.override
     def _clear(self) -> None:
         """Clear all collected metrics; called under the store lock."""
         self.counters.clear()

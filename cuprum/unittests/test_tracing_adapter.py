@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import typing as typ
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,9 @@ from cuprum.unittests._adapter_test_support import (
     _make_exec_event,
     _python_builder,
 )
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 
 class TestTracingHook:
@@ -224,6 +228,8 @@ sys.stdout.write(data.upper())""",
         release_reset = threading.Event()
         span_started = threading.Event()
         span_finished = threading.Event()
+        errors: list[BaseException] = []
+        errors_lock = threading.Lock()
         original_clear = InMemoryTracer._clear
 
         def block_clear(store: InMemoryTracer) -> None:
@@ -238,9 +244,21 @@ sys.stdout.write(data.upper())""",
             tracer.start_span("after").end()
             span_finished.set()
 
+        def record_failure(target: cabc.Callable[[], None]) -> None:
+            """Run a worker and retain any failure for the main thread."""
+            try:
+                target()
+            except BaseException as exc:  # noqa: BLE001 - worker failures must surface.
+                with errors_lock:
+                    errors.append(exc)
+
         monkeypatch.setattr(InMemoryTracer, "_clear", block_clear)
-        reset_thread = threading.Thread(target=tracer.reset, daemon=True)
-        span_thread = threading.Thread(target=create_span, daemon=True)
+        reset_thread = threading.Thread(
+            target=lambda: record_failure(tracer.reset), daemon=True
+        )
+        span_thread = threading.Thread(
+            target=lambda: record_failure(create_span), daemon=True
+        )
         reset_thread.start()
         assert reset_started.wait(timeout=1.0), "reset should reach its clear step"
         span_thread.start()
@@ -255,6 +273,8 @@ sys.stdout.write(data.upper())""",
 
         assert not reset_thread.is_alive(), "reset worker should finish"
         assert not span_thread.is_alive(), "span worker should finish"
+        if errors:
+            raise errors[0]
         assert [span.name for span in tracer.spans] == ["after"], (
             "post-reset span creation should survive the atomic clear"
         )

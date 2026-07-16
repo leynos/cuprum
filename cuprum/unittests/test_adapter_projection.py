@@ -143,6 +143,9 @@ class TestAdapterProjection:
         assert _build_extra(event)["cuprum_argv"] == event.argv, (
             "logging extras must preserve argv as a tuple"
         )
+        assert "cuprum_tags" not in _build_extra(event), (
+            "logging extras must not expose caller-controlled event tags"
+        )
 
         attr_keys = {
             key.removeprefix("cuprum.")

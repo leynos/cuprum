@@ -24,6 +24,9 @@ from cuprum.unittests._adapter_test_support import (
     _python_builder,
 )
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 
 class TestMetricsHook:
     """Tests for MetricsHook and InMemoryMetrics."""
@@ -151,8 +154,8 @@ print('err1', file=sys.stderr)""",
             )
         )
 
-        assert metrics.counters.get(metric_name) == pytest.approx(expected_value), (
-            f"{phase} events should update {metric_name}"
+        assert metrics.counters == {metric_name: expected_value}, (
+            f"{phase} events should update only {metric_name}"
         )
 
     def test_factory_function_returns_hook(self) -> None:
@@ -237,6 +240,8 @@ print('err1', file=sys.stderr)""",
         release_reset = threading.Event()
         mutation_started = threading.Event()
         mutation_finished = threading.Event()
+        errors: list[BaseException] = []
+        errors_lock = threading.Lock()
         original_clear = InMemoryMetrics._clear
 
         def block_clear(store: InMemoryMetrics) -> None:
@@ -252,9 +257,21 @@ print('err1', file=sys.stderr)""",
             metrics.observe_histogram("after", 1.0, {})
             mutation_finished.set()
 
+        def record_failure(target: cabc.Callable[[], None]) -> None:
+            """Run a worker and retain any failure for the main thread."""
+            try:
+                target()
+            except BaseException as exc:  # noqa: BLE001 - worker failures must surface.
+                with errors_lock:
+                    errors.append(exc)
+
         monkeypatch.setattr(InMemoryMetrics, "_clear", block_clear)
-        reset_thread = threading.Thread(target=metrics.reset, daemon=True)
-        mutation_thread = threading.Thread(target=mutate, daemon=True)
+        reset_thread = threading.Thread(
+            target=lambda: record_failure(metrics.reset), daemon=True
+        )
+        mutation_thread = threading.Thread(
+            target=lambda: record_failure(mutate), daemon=True
+        )
         reset_thread.start()
         assert reset_started.wait(timeout=1.0), "reset should reach its clear step"
         mutation_thread.start()
@@ -269,6 +286,8 @@ print('err1', file=sys.stderr)""",
 
         assert not reset_thread.is_alive(), "reset worker should finish"
         assert not mutation_thread.is_alive(), "mutation worker should finish"
+        if errors:
+            raise errors[0]
         assert metrics.counters == {"after": 1.0}, (
             "post-reset counter mutation should survive the atomic clear"
         )

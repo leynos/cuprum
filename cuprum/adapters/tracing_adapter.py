@@ -214,7 +214,6 @@ class InMemoryTracer(_LockedStore):
     ----------
     spans:
         List of all spans created by this tracer.
-
     """
 
     spans: list[InMemorySpan] = dc.field(default_factory=list)
@@ -233,6 +232,7 @@ class InMemoryTracer(_LockedStore):
             self.spans.append(span)
         return span
 
+    @typ.override
     def _clear(self) -> None:
         """Clear all collected spans; called under the store lock."""
         self.spans.clear()
