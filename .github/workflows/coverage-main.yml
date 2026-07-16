@@ -43,10 +43,10 @@ jobs:
       # detects a Python project and cobertura is mandatory. The ratchet
       # writes the authoritative baseline that pull-request runs compare
       # against.
-      # Artifact naming remains inside the pinned shared action; this
-      # workflow always supplies the non-empty coverage.xml output path.
+      # The pinned action writes a run-specific baseline cache entry and treats
+      # changes within one percentage point as measurement noise.
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@927edd45ae77be4251a8a18ca9eb5613a2e32cbd
+        uses: leynos/shared-actions/.github/actions/generate-coverage@4977418856133491c6aa7407d40668744df21818
         with:
           format: cobertura
           output-path: coverage.xml
