@@ -91,8 +91,8 @@ def _payload_and_chunks(draw: st.DrawFn) -> tuple[bytes, tuple[bytes, ...]]:
 
 
 def _decode_chunks(chunks: cabc.Sequence[bytes]) -> str:
-    """Decode chunks the same way a text echo sink receives them."""
-    return "".join(chunk.decode("utf-8", errors="replace") for chunk in chunks)
+    """Decode chunks as one stream for comparison with text-sink echoing."""
+    return b"".join(chunks).decode("utf-8", errors="replace")
 
 
 def test_drain_empty_capture_returns_empty_text() -> None:
@@ -129,6 +129,23 @@ def test_drain_can_disable_capture_while_echoing() -> None:
     assert captured is None, "capture-disabled drains must return None"
     assert sink.getvalue() == "only echo", (
         f"echo-only drain must write all decoded chunks for chunks={chunks!r}"
+    )
+
+
+def test_drain_echoes_split_multibyte_text_sink() -> None:
+    """Text-sink echoing preserves split characters and flushes decoder tails."""
+    chunks = (b"prefix \xe2", b"\x98\x83 suffix \xf0\x9f")
+    expected = _decode_chunks(chunks)
+    sink = io.StringIO()
+
+    captured = asyncio.run(_drain(_reader(chunks), _config(sink, echo=True)))
+
+    assert captured == expected, (
+        f"capture must decode the whole payload for chunks={chunks!r}"
+    )
+    assert sink.getvalue() == expected, (
+        "text-sink echo must preserve split multibyte characters and flush "
+        f"incomplete decoder tails for chunks={chunks!r}, expected={expected!r}"
     )
 
 

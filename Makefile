@@ -26,6 +26,7 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
   tests/behaviour/test_[s-z]*.py
+shell_quote = '$(subst ','"'"',$(1))'
 TYPOS_VERSION ?= 1.48.0
 TYPOS := uv tool run typos@$(TYPOS_VERSION)
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
@@ -142,7 +143,7 @@ nixie: ## Validate Mermaid diagrams
 	$(LOCAL_TOOL_ENV) $(NIXIE) --no-sandbox
 
 test: build uv $(VENV_TOOLS) ## Run tests
-	@for pattern in $(foreach target,$(PYTEST_TARGETS),'$(target)'); do \
+	@for pattern in $(foreach target,$(PYTEST_TARGETS),$(call shell_quote,$(target))); do \
 	  set -- $$pattern; [ -e "$$1" ] || continue; \
 	  CARGO_BUILD_JOBS="$(PYTEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$@" || exit $$?; \
 	done

@@ -138,6 +138,11 @@ supplied. Any fix to the read/echo/capture mechanics belongs in `_drain` so the
 capture path and the line-emitting path cannot silently diverge; new consume
 variants must layer behaviour through `on_chunk` rather than copying the loop.
 
+When echoing, `_drain` writes raw bytes to sinks with a `.buffer`. For text-only
+sinks, it owns an incremental decoder configured with `config.encoding` and
+`config.errors`, then flushes that decoder at end of stream. This preserves
+multibyte characters that span read chunks.
+
 `cuprum/unittests/test_stream_property_based.py` and
 `tests/behaviour/test_stream_property_preservation_behaviour.py` hold the
 public-boundary property coverage: Hypothesis generates byte payloads split at
@@ -150,9 +155,9 @@ canonical helper contract and the two `_consume_stream` variants.
 ### Concurrency model
 
 Each `_drain()` invocation is self-contained. It owns its capture buffer
-(`bytearray`) and, in the line-emitting variant, its own
-`codecs.IncrementalDecoder`. The `on_chunk` callback closes over that decoder
-and acts only as the chunk delivery hook. Concurrent stdout and stderr drains
+(`bytearray`), the line-emitting variant's `codecs.IncrementalDecoder`, and any
+text-only echo decoder. The `on_chunk` callback closes over the line decoder and
+acts only as the chunk delivery hook. Concurrent stdout and stderr drains
 therefore do not share mutable capture or decoder state.
 
 The echo sink (`config.sink`) may be shared between concurrent drains when

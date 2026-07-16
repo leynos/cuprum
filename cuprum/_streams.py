@@ -57,6 +57,11 @@ async def _drain(
     ``None`` when capture is disabled.
     """
     buffer = bytearray() if config.capture_output else None
+    echo_decoder = (
+        _incremental_decoder(config)
+        if config.echo_output and getattr(config.sink, "buffer", None) is None
+        else None
+    )
     while True:
         chunk = await stream.read(_READ_SIZE)
         if not chunk:
@@ -65,13 +70,20 @@ async def _drain(
             buffer.extend(chunk)
         if config.echo_output:
             _write_chunk(
-                config.sink,
+                config,
                 chunk,
-                encoding=config.encoding,
-                errors=config.errors,
+                decoder=echo_decoder,
             )
         if on_chunk is not None:
             on_chunk(chunk)
+
+    if echo_decoder is not None:
+        _write_chunk(
+            config,
+            b"",
+            decoder=echo_decoder,
+            final=True,
+        )
 
     if buffer is None:
         return None
@@ -98,8 +110,7 @@ async def _consume_stream_with_lines(
     if stream is None:
         return "" if config.capture_output else None
 
-    decoder_factory = codecs.getincrementaldecoder(config.encoding)
-    decoder = decoder_factory(errors=config.errors)
+    decoder = _incremental_decoder(config)
     pending_text = ""
 
     def feed_decoder(chunk: bytes) -> None:
@@ -190,25 +201,36 @@ async def _close_stream_writer(writer: asyncio.StreamWriter | None) -> None:
 
 
 def _write_chunk(
-    sink: typ.IO[str],
+    config: _StreamConfig,
     chunk: bytes,
     *,
-    encoding: str,
-    errors: str,
+    decoder: codecs.IncrementalDecoder | None = None,
+    final: bool = False,
 ) -> None:
-    """Write a bytes chunk to a text sink synchronously, avoiding extra encoding.
+    """Write a bytes chunk to a sink synchronously, avoiding extra encoding.
 
     For stdio echo this blocking write is acceptable; future slow-sink handling
     can layer on a background writer if needed.
     """
-    buffer = getattr(sink, "buffer", None)
+    buffer = getattr(config.sink, "buffer", None)
     if buffer is not None:
         buffer.write(chunk)
         buffer.flush()
         return
-    text = chunk.decode(encoding, errors=errors)
-    sink.write(text)
-    sink.flush()
+    text = (
+        chunk.decode(config.encoding, errors=config.errors)
+        if decoder is None
+        else decoder.decode(chunk, final=final)
+    )
+    if text:
+        config.sink.write(text)
+    config.sink.flush()
+
+
+def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:
+    """Create an incremental decoder configured for a stream invocation."""
+    decoder_factory = codecs.getincrementaldecoder(config.encoding)
+    return decoder_factory(errors=config.errors)
 
 
 def _emit_completed_lines(

@@ -31,6 +31,12 @@ and `config.errors`, while `_drain()` remains the sole place for read, echo,
 and capture fixes and applies the configured error policy when decoding
 captured bytes.
 
+For text-only echo sinks, `_drain()` owns a separate incremental decoder
+configured by `config.encoding` and `config.errors`. It flushes the decoder at
+end of stream so characters split across read chunks and incomplete final
+sequences follow the configured error policy; sinks with `.buffer` continue to
+receive raw bytes.
+
 For typical command execution (e.g. `git status`, `ls -l`), this overhead is
 negligible. However, for high-throughput pipelines processing large data
 volumes, the overhead accumulates significantly:

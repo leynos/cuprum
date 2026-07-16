@@ -248,7 +248,8 @@ and echo semantics and returns a structured `CommandResult`:
   `output=RunOutputOptions(capture=False)` to stream only; the result will carry
   `None` for output fields.
 - `output=RunOutputOptions(echo=True)` tees stdout/stderr to the parent process
-  while still capturing them when `capture=True`.
+  while still capturing them when `capture=True`; configured text sinks preserve
+  multibyte characters split across subprocess reads.
 - Pass an `ExecutionContext` via the `context` parameter to override execution
   details:
   - `env` overlays key/value pairs on top of the current environment without
