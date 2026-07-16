@@ -156,10 +156,15 @@ fn is_splice_unsupported(err: &PumpError) -> bool {
 
 #[cfg(test)]
 mod tests {
+    //! Behavioural tests for splice transfer, fallback, and reader draining.
+
+    use std::fs::File;
+    use std::os::fd::{AsRawFd, OwnedFd};
+
+    use super::{drain_reader, try_splice_pump};
     use crate::test_support::{make_pipe, read_all_from, unwrap_ok, write_all_to};
 
     #[test]
-
     fn splice_transfers_all_bytes_between_pipes() {
         let (source_read, source_write) = make_pipe();
         let (sink_read, sink_write) = make_pipe();
@@ -182,7 +187,6 @@ mod tests {
     }
 
     #[test]
-
     fn unsupported_descriptors_signal_fallback() {
         let dir = std::env::temp_dir();
         let reader_path = dir.join("cuprum-splice-test-reader");
@@ -204,7 +208,6 @@ mod tests {
     }
 
     #[test]
-
     fn broken_pipe_drains_reader_and_reports_transferred_bytes() {
         let (source_read, source_write) = make_pipe();
         let (sink_read, sink_write) = make_pipe();
@@ -230,7 +233,6 @@ mod tests {
     }
 
     #[test]
-
     fn drain_reader_consumes_to_eof() {
         let (read_end, write_end) = make_pipe();
         write_all_to(&write_end, b"residual data");

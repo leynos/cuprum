@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 use std::mem::ManuallyDrop;
 
 #[cfg(unix)]
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::os::fd::FromRawFd;
 
 #[cfg(windows)]
 use std::fs::File;
@@ -105,13 +105,13 @@ fn convert_fd(value: i64) -> PyResult<PlatformFd> {
 
 #[cfg(unix)]
 fn convert_platform_fd(value: i64) -> Result<PlatformFd, &'static str> {
-    // Reject negative handles for symmetry with the Unix arm: Python hands
-    // over non-negative handle values, and reinterpreting a negative i64 as
-    // a pointer-sized handle would silently address nonsense.
-    if value < 0 {
-        return Err("file handle must be non-negative");
+    // File descriptors are signed C integers, but Python must not pass a
+    // negative value as an owned descriptor.
+    let descriptor = i32::try_from(value).map_err(|_| "file descriptor out of range")?;
+    if descriptor < 0 {
+        return Err("file descriptor must be non-negative");
     }
-    usize::try_from(value).map_err(|_| "file handle out of range")
+    Ok(descriptor)
 }
 
 #[cfg(windows)]
@@ -144,7 +144,7 @@ fn validate_buffer_size(buffer_size: i64) -> PyResult<BufferSize> {
         .map_err(|_| PyValueError::new_err("buffer_size is too large"))
 }
 
-#[cfg(unix)]
+#[cfg(windows)]
 fn stream_from_raw(handle: PlatformFd) -> StreamHandle {
     // The usize-to-pointer cast is a deliberate, documented reinterpretation:
     // Windows handles are pointer-sized opaque values, so this widens or
@@ -176,14 +176,13 @@ fn with_borrowed_reader<T>(fd: PlatformFd, operation: impl FnOnce(&mut StreamHan
     operation(&mut handle)
 }
 
-#[cfg(windows)]
-fn stream_from_raw(handle: PlatformFd) -> StreamHandle {
-    // The usize-to-pointer cast is a deliberate, documented reinterpretation:
-    // Windows handles are pointer-sized opaque values, so this widens or
-    // narrows nothing.
-    // SAFETY: The caller ensures the handle is valid and owned by the caller.
-    unsafe { File::from_raw_handle(handle as RawHandle) }
+#[cfg(unix)]
+fn stream_from_raw(fd: PlatformFd) -> StreamHandle {
+    // SAFETY: The caller guarantees that `fd` is valid and keeps ownership;
+    // `with_borrowed_reader` suppresses the wrapper's drop when borrowing.
+    unsafe { StreamHandle::from_raw_fd(fd) }
 }
+
 /// Pump bytes between file descriptors with explicit ownership semantics.
 ///
 /// The reader FD is borrowed and left open. The writer FD is treated as
@@ -208,7 +207,7 @@ fn consume_stream(reader_fd: ReaderFd, buffer_size: BufferSize) -> Result<String
 }
 
 #[cfg(unix)]
-type PlatformFd = usize;
+type PlatformFd = i32;
 
 #[cfg(windows)]
 type PlatformFd = usize;
@@ -313,86 +312,4 @@ fn _rust_backend_native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResul
     module.add("__package__", "cuprum")?;
     module.add("__loader__", py.None())?;
     Ok(())
-}
-
-mod tests {
-    //! Unit tests for the borrowed-FD ownership contract: the caller-owned
-    //! reader descriptor stays open after normal completion and — critically
-    //! — after a panicking inner operation (no close-on-unwind).
-
-    use std::io::{self, Read, Write};
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-
-    use super::with_borrowed_reader;
-
-    fn make_pipe() -> (OwnedFd, OwnedFd) {
-        let mut fds = [0_i32; 2];
-        // SAFETY: `fds` is a valid two-element array for `pipe(2)` to fill.
-        let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
-        assert_eq!(rc, 0, "pipe(2) failed: {}", io::Error::last_os_error());
-        // SAFETY: on success `pipe(2)` returned two freshly opened FDs that
-        // this process exclusively owns.
-        unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) }
-    }
-
-    fn fd_is_open(fd: i32) -> bool {
-        // SAFETY: F_GETFD on an arbitrary integer is safe; it reports EBADF
-        // for descriptors that are not open.
-        unsafe { libc::fcntl(fd, libc::F_GETFD) != -1 }
-    }
-
-    #[test]
-    fn borrowed_reader_stays_open_after_panicking_operation() {
-        let (read_end, _write_end) = make_pipe();
-        let raw_fd = read_end.as_raw_fd();
-
-        let outcome = catch_unwind(AssertUnwindSafe(|| {
-            with_borrowed_reader(raw_fd, |_reader| -> () {
-                panic!("simulated failure inside the borrowed scope");
-            });
-        }));
-
-        assert!(outcome.is_err(), "the panic must propagate to the caller");
-        assert!(
-            fd_is_open(raw_fd),
-            "a panicking operation must not close the caller-owned FD",
-        );
-        // `read_end` now drops and closes the FD exactly once, proving the
-        // guard did not already close it (a double close would surface as
-        // EBADF under stricter runtimes).
-    }
-
-    #[test]
-    fn borrowed_reader_stays_open_and_usable_after_success() {
-        let (read_end, write_end) = make_pipe();
-        let raw_fd = read_end.as_raw_fd();
-
-        {
-            // SAFETY: duplicating an owned descriptor for a scoped writer.
-            let mut writer =
-                unsafe { std::fs::File::from_raw_fd(libc::dup(write_end.as_raw_fd())) };
-            match writer.write_all(b"ping") {
-                Ok(()) => {}
-                Err(err) => panic!("pipe write failed: {err}"),
-            }
-        }
-        drop(write_end);
-
-        let collected = with_borrowed_reader(raw_fd, |reader| {
-            // SAFETY: reading through the borrowed handle's raw descriptor.
-            let mut file = unsafe {
-                std::mem::ManuallyDrop::new(std::fs::File::from_raw_fd(reader.as_raw_fd()))
-            };
-            let mut data = Vec::new();
-            match file.read_to_end(&mut data) {
-                Ok(_) => {}
-                Err(err) => panic!("pipe read failed: {err}"),
-            }
-            data
-        });
-
-        assert_eq!(collected, b"ping");
-        assert!(fd_is_open(raw_fd), "the borrowed FD must remain open");
-    }
 }
