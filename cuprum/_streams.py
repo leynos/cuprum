@@ -146,6 +146,7 @@ async def _pump_stream(
         _LOGGER.debug("stream_writer_close_start")
         await _close_stream_writer(writer)
 
+
 async def _relay_chunks(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter | None,
@@ -172,12 +173,14 @@ async def _relay_chunks(
             extra={"cuprum_discarded_bytes": discarded_bytes},
         )
 
+
 async def _drain_stream_reader(reader: asyncio.StreamReader) -> int:
     """Consume the reader to EOF, discarding the data and returning byte count."""
     discarded_bytes = 0
     while chunk := await reader.read(_READ_SIZE):
         discarded_bytes += len(chunk)
     return discarded_bytes
+
 
 async def _drain_stream_reader_bounded(reader: asyncio.StreamReader) -> int:
     """Best-effort drain after downstream closure without waiting forever."""
@@ -193,6 +196,8 @@ async def _drain_stream_reader_bounded(reader: asyncio.StreamReader) -> int:
             extra={"cuprum_timeout_s": _POST_CLOSE_DRAIN_TIMEOUT_S},
         )
         return 0
+
+
 async def _write_to_stream_writer(
     writer: asyncio.StreamWriter,
     chunk: bytes,
@@ -248,6 +253,7 @@ async def _close_stream_writer(writer: asyncio.StreamWriter | None) -> None:
     ) as exc:
         _log_suppressed_stream_close_error("wait_closed", exc)
 
+
 def _log_suppressed_stream_close_error(operation: str, exc: BaseException) -> None:
     """Log a cleanup error that cannot safely be raised during pipe teardown."""
     _LOGGER.debug(
@@ -260,6 +266,8 @@ def _log_suppressed_stream_close_error(operation: str, exc: BaseException) -> No
             "cuprum_error_type": type(exc).__name__,
         },
     )
+
+
 def _write_chunk(
     config: _StreamConfig,
     chunk: bytes,
@@ -361,6 +369,7 @@ def _strip_line_ending(line: str) -> str:
     if line.endswith("\n") or line.endswith("\r"):
         return line[:-1]
     return line
+
 
 class _WriteOutcome(enum.Enum):
     """Whether a downstream writer is still accepting data after a write.
