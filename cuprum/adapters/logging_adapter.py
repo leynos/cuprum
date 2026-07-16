@@ -130,6 +130,7 @@ def _build_extra(event: ExecEvent) -> dict[str, object]:
     """Build structured extra data for a log record."""
     extra: dict[str, object] = {"cuprum_phase": event.phase}
     extra.update(_event_common_fields(event, _prefixed("cuprum_")))
+    extra["cuprum_tags"] = dict(event.tags)
     return extra
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import sys
 import threading
 import typing as typ
@@ -10,10 +9,10 @@ import typing as typ
 import pytest
 
 from cuprum import sh
-from cuprum.adapters import metrics_adapter
 from cuprum.adapters.metrics_adapter import (
     InMemoryMetrics,
     MetricsHook,
+    _UnhandledMetricsPhaseError,
     metrics_hook,
 )
 from cuprum.context import ScopeConfig, scoped
@@ -192,11 +191,8 @@ print('err1', file=sys.stderr)""",
         assert metrics.counters == {}, "reset should clear in-memory counters"
         assert metrics.histograms == {}, "reset should clear in-memory histograms"
 
-    def test_unhandled_phase_does_not_project_labels(
-        self,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """Unhandled phases log without touching event label fields."""
+    def test_plan_phase_does_not_project_labels(self) -> None:
+        """The plan phase is a no-op without touching event label fields."""
 
         class UnstringableProgram:
             """Program-like value that fails if metrics tries to stringify it."""
@@ -208,7 +204,6 @@ print('err1', file=sys.stderr)""",
 
         metrics = InMemoryMetrics()
         hook = MetricsHook(metrics)
-        caplog.set_level(logging.DEBUG, logger="cuprum.adapters")
         event = ExecEvent(
             phase="plan",
             program=typ.cast("Program", UnstringableProgram()),
@@ -225,33 +220,25 @@ print('err1', file=sys.stderr)""",
 
         hook(event)
 
-        assert metrics.counters == {}, "unhandled phases should not mutate counters"
-        assert metrics.histograms == {}, "unhandled phases should not mutate histograms"
-        assert "Ignoring unhandled metrics adapter phase: plan" in caplog.messages, (
-            "unhandled metrics phases should use the shared debug log"
-        )
+        assert metrics.counters == {}, "plan events should not mutate counters"
+        assert metrics.histograms == {}, "plan events should not mutate histograms"
 
-    def test_handled_phase_without_collector_update_raises(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Handled phases without a collector branch fail loudly."""
-        monkeypatch.setattr(
-            metrics_adapter,
-            "_HANDLED_PHASES",
-            metrics_adapter._HANDLED_PHASES | {"plan"},
-        )
+    def test_unknown_phase_raises_structured_error(self) -> None:
+        """Unknown phases expose their value through a structured error."""
         metrics = InMemoryMetrics()
         hook = MetricsHook(metrics)
 
-        with pytest.raises(AssertionError) as exc_info:
-            hook(_make_exec_event(phase="plan"))
+        with pytest.raises(_UnhandledMetricsPhaseError) as exc_info:
+            hook(_make_exec_event(phase=typ.cast("ExecPhase", "future_phase")))
 
-        assert str(exc_info.value) == (
-            "handled metrics phase has no collector update: plan"
-        ), "missing collector branches should identify the handled phase"
-        assert metrics.counters == {}, "failed dispatch should not mutate counters"
-        assert metrics.histograms == {}, "failed dispatch should not mutate histograms"
+        assert exc_info.value.phase == "future_phase", (
+            "unknown metrics phases should remain inspectable"
+        )
+        assert "future_phase" in str(exc_info.value), (
+            "unknown metrics errors should include the offending phase"
+        )
+        assert metrics.counters == {}, "unknown phases should not mutate counters"
+        assert metrics.histograms == {}, "unknown phases should not mutate histograms"
 
     def test_concurrent_metrics_reset_leaves_valid_empty_state(
         self,

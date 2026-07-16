@@ -119,7 +119,7 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
-## Canonical adapter event projection and locked-store base
+### Canonical adapter event projection and locked-store base
 
 `cuprum/adapters/_support.py` keeps the three telemetry adapters from
 repeating the same event projection and in-memory collector locking. It owns
@@ -140,6 +140,14 @@ derive from `_LockedStore` and implement `_clear()` while its lock is held.
 
 `cuprum/unittests/test_adapter_projection.py` pins this contract with Hypothesis
 properties and redacted per-phase syrupy snapshots.
+
+
+### Build and test worker controls
+
+`make test` runs pytest serially by default. Set `PYTEST_WORKERS` to a positive
+worker count to enable xdist explicitly. Set `BUILD_JOBS=-jN` to pass the same
+count to Rust test commands and, through `CARGO_JOB_ENV`, to both
+`RAYON_NUM_THREADS` and `CARGO_BUILD_JOBS`.
 
 ## Canonical `_TokenRegistration` handle base
 

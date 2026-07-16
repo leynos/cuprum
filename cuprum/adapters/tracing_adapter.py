@@ -289,7 +289,7 @@ class TracingHook:
     def __call__(self, event: ExecEvent) -> None:
         """Process an execution event and update tracing."""
         match event.phase:
-            case "plan":
+            case "plan" | "stdin" | "stdin_error":
                 pass
             case "start":
                 self._handle_start(event)

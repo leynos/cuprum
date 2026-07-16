@@ -761,8 +761,7 @@ The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 - `cuprum_pid`: Process ID (when available)
 - `cuprum_exit_code`: Exit code (for exit events)
 - `cuprum_duration_s`: Duration in seconds (for exit events)
-
-The structured logging adapter does not emit the full event tag mapping.
+- `cuprum_tags`: Event tags as a dictionary
 
 For JSON output suitable for log aggregation systems, use the
 `JsonLoggingFormatter`:

@@ -7,6 +7,10 @@ RUST_DIR ?= rust
 CARGO ?= cargo
 WHITAKER ?= whitaker
 BUILD_JOBS ?=
+BUILD_JOB_COUNT = $(patsubst -j%,%,$(BUILD_JOBS))
+CARGO_JOB_ENV = $(if $(BUILD_JOB_COUNT),RAYON_NUM_THREADS=$(BUILD_JOB_COUNT) CARGO_BUILD_JOBS=$(BUILD_JOB_COUNT))
+PYTEST_WORKERS ?= 0
+PYTEST_XDIST_FLAGS = $(if $(filter-out 0,$(strip $(PYTEST_WORKERS))),-n $(PYTEST_WORKERS))
 RUST_FLAGS ?= -D warnings
 RUSTDOC_FLAGS ?= -D warnings
 CARGO_FLAGS ?= --all-targets --all-features
@@ -132,12 +136,12 @@ nixie: ## Validate Mermaid diagrams
 	$(LOCAL_TOOL_ENV) $(NIXIE) --no-sandbox
 
 test: build uv $(VENV_TOOLS) ## Run tests
-	$(UV_RUN_ENV) uv run pytest -v -n auto
+	$(UV_RUN_ENV) uv run pytest -v $(PYTEST_XDIST_FLAGS)
 	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
-	  cd $(RUST_DIR) && RUSTFLAGS="$(RUST_FLAGS)" $(CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
+	  cd $(RUST_DIR) && $(CARGO_JOB_ENV) RUSTFLAGS="$(RUST_FLAGS)" $(CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
 	else \
 	  echo "cargo-nextest not found; falling back to cargo test." >&2; \
-	  cd $(RUST_DIR) && RUSTFLAGS="$(RUST_FLAGS)" $(CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
+	  cd $(RUST_DIR) && $(CARGO_JOB_ENV) RUSTFLAGS="$(RUST_FLAGS)" $(CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
 	fi
 
 benchmark-micro: build uv ## Run pytest-benchmark microbenchmarks

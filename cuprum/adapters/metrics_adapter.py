@@ -64,7 +64,6 @@ import typing as typ
 
 from cuprum.adapters._support import (
     _LockedStore,
-    _log_unhandled_phase,
     _project_tag,
 )
 
@@ -74,14 +73,14 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook
 
 
-_HANDLED_PHASES = frozenset({
-    "start",
-    "stdout",
-    "stderr",
-    "stdin_error",
-    "stdin",
-    "exit",
-})
+class _UnhandledMetricsPhaseError(ValueError):
+    """Raised when metrics receive a phase outside the known event contract."""
+
+    def __init__(self, phase: object) -> None:
+        """Capture the unsupported phase and initialise its diagnostic."""
+        self.phase = phase
+        msg = f"Unhandled metrics phase: {phase}"
+        super().__init__(msg)
 
 
 class MetricsCollector(typ.Protocol):
@@ -225,6 +224,8 @@ class MetricsHook:
     def __call__(self, event: ExecEvent) -> None:
         """Process an execution event and update metrics."""
         match event.phase:
+            case "plan":
+                pass
             case "start":
                 self._increment(
                     "cuprum_executions_total",
@@ -250,12 +251,7 @@ class MetricsHook:
             case "exit":
                 self._record_exit(event, labels=self._extract_labels(event))
             case _:
-                if event.phase in _HANDLED_PHASES:
-                    msg = (
-                        f"handled metrics phase has no collector update: {event.phase}"
-                    )
-                    raise AssertionError(msg)
-                _log_unhandled_phase("metrics", event.phase)
+                raise _UnhandledMetricsPhaseError(event.phase)
 
     def _increment(
         self,

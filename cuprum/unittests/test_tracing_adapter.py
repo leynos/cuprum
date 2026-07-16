@@ -25,6 +25,8 @@ from cuprum.unittests._adapter_test_support import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.events import ExecPhase
+
 
 class TestTracingHook:
     """Tests for TracingHook and InMemoryTracer."""
@@ -349,11 +351,11 @@ sys.stdout.write(data.upper())""",
         hook = TracingHook(tracer)
         caplog.set_level(logging.DEBUG, logger="cuprum.adapters")
 
-        hook(_make_exec_event(phase="stdin"))
+        hook(_make_exec_event(phase=typ.cast("ExecPhase", "future_phase")))
 
-        assert "Ignoring unhandled tracing adapter phase: stdin" in caplog.messages, (
-            "test_logs_unhandled_phases should log unsupported tracing phases"
-        )
+        assert (
+            "Ignoring unhandled tracing adapter phase: future_phase" in caplog.messages
+        ), "test_logs_unhandled_phases should log unsupported tracing phases"
 
     def test_pipeline_attributes_are_set_on_spans(self) -> None:
         """Pipeline-related tags are included in span attributes."""

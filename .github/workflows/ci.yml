@@ -164,6 +164,8 @@ jobs:
       # (pytest-workers: '') because the suite builds and shells out to
       # the Rust toolchain, and the ratchet fails the run if line
       # coverage drops below the baseline that coverage-main.yml stores.
+      # Artifact naming is implemented by the pinned shared action; this
+      # workflow always supplies the non-empty coverage.xml output path.
       #
       - name: Generate coverage
         uses: leynos/shared-actions/.github/actions/generate-coverage@927edd45ae77be4251a8a18ca9eb5613a2e32cbd
