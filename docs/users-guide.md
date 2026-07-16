@@ -267,6 +267,22 @@ and echo semantics and returns a structured `CommandResult`:
 - `exit_code`, `pid`, and `ok` on the `CommandResult` make it easy to branch on
   success.
 
+### Output options
+
+`RunOutputOptions` is the public contract for command output handling on
+`SafeCmd.run()` and `SafeCmd.run_sync()`. Pass it with the `output` parameter
+when a call needs output behaviour that differs from the default.
+
+- `capture=True` stores stdout and stderr on the returned `CommandResult`.
+  Set it to `False` when the caller does not need captured output; `stdout` and
+  `stderr` will then be `None`.
+- `echo=False` keeps output out of the parent process streams. Set it to `True`
+  to tee stdout and stderr while the command runs. When `capture=True`, echoed
+  output is still captured.
+
+`RunOutputOptions(capture=True, echo=False)` is the default; you only need to
+supply it explicitly when overriding either flag.
+
 ```python
 from cuprum import ECHO, ExecutionContext, RunOutputOptions, sh
 
@@ -295,11 +311,14 @@ result = pipeline.run_sync(capture=False, echo=True)
 # After
 from cuprum import RunOutputOptions
 
+result = await cmd.run(output=RunOutputOptions(capture=True, echo=False))
+result = cmd.run_sync(output=RunOutputOptions(capture=False))
 result = pipeline.run_sync(output=RunOutputOptions(capture=False, echo=True))
 ```
 
-`IOOptions` remains available only as a compatibility alias and emits a
-`DeprecationWarning` on construction; migrate by replacing any
+If existing code constructs `IOOptions`, replace it with `RunOutputOptions`.
+`IOOptions` remains a deprecated alias for the same `capture` and `echo` values
+and emits a `DeprecationWarning` on construction. Migrate by replacing
 `IOOptions(capture=..., echo=...)` usage with
 `RunOutputOptions(capture=..., echo=...)` passed as `output=...`.
 

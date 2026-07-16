@@ -10,6 +10,16 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md)
 - [ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md)
 
+## Rust dependency management
+
+When editing `Cargo.toml`, dependencies must use explicit semver-compatible
+caret requirements only (for example `"1.2.3"`). Do not use wildcards such as
+`*` or open-ended ranges such as `>=` or `~`.
+
+When updating Rust dependencies, keep the requested version aligned to the
+patch baseline already present in `Cargo.lock`. This keeps lockfile updates
+focused, small, and easy to review.
+
 ## Tar and rsync builder helpers
 
 `TarCreateOptions.compression` in `cuprum/builders/tar.py` selects one member
@@ -29,9 +39,9 @@ emission order: `archive`, `delete`, `dry_run`, `verbose`, then `compress`.
 This is a documented contract covered by the property tests in
 `cuprum/unittests/test_builder_property_based.py`.
 
-Both `TarCreateOptions` and `RsyncOptions` provide `allow_relative`. It defaults
-to `False`, so `safe_path` rejects relative paths unless a caller explicitly
-opts in.
+Both `TarCreateOptions` and `RsyncOptions` provide `allow_relative`. It
+defaults to `False`, so `safe_path` rejects relative paths unless a caller
+explicitly opts in.
 
 ## Command argument construction
 
@@ -720,6 +730,51 @@ and tool-discovery recipes only. This supports non-interactive Continuous
 Integration/Continuous Delivery (CI/CD) hook environments without globally
 shadowing system tools for unrelated Makefile workflows.
 
+## Rust error taxonomy (`PumpError`)
+
+The `cuprum-rust` crate reports stream pump and consume failures through one
+semantic error enum, `PumpError` (`rust/cuprum-rust/src/errors.rs`), derived
+with `thiserror`:
+
+- `LengthOverflow` — an integer length conversion overflowed its target
+  type ("impossible" on supported platforms, kept observable rather than
+  silently truncating).
+- `BufferRangeExceeded` — a computed range exceeded the backing buffer.
+- `Io(io::Error)` — an operating-system I/O failure (transparent wrapper).
+
+Conversion to a Python exception happens in exactly one place
+(`From<PumpError> for PyErr`): `Io` maps through `pyo3`'s standard `io::Error`
+translation, and the overflow variants surface as `OSError`. The non-fatal
+write classification (broken pipe / connection reset) lives on the enum as
+`PumpError::is_nonfatal_write`, replacing the free function the splice and
+read/write paths previously shared. New failure conditions get a variant here
+rather than a stringly-typed `io::Error::other(...)`.
+
+## Rust splice-loop and drain contract
+
+The Linux zero-copy path in `rust/cuprum-rust/src/splice.rs` follows one
+canonical loop. `try_splice_pump` performs the first `splice_once` solely to
+detect support: `EINVAL` on that first call signals unsupported descriptor
+types and the read/write fallback. Every outcome thereafter — including the
+first call's, which is fed into the loop — is handled by the same arms: `Ok(0)`
+ends the transfer, `Ok(n)` accumulates, a non-fatal write error (broken pipe /
+connection reset) drains the reader and reports the bytes transferred so far,
+and anything else propagates.
+
+`drain_reader` routes through the canonical raw-fd read helper
+(`io_utils::read_raw_fd`), so it shares the Unix read policy with the
+read/write fallback: interrupted reads (`EINTR`) retry instead of silently
+ending the drain, end of file terminates it, and other errors propagate.
+Behavioural tests in the module cover full pipe-to-pipe transfer, the fallback
+signal for regular files, broken-pipe draining, and the drain's EOF
+termination. These outcomes and `PumpError` values are intentionally returned
+to the Python boundary, where command observation owns telemetry, so this
+internal Rust path does not add a second logging or metrics surface.
+
+Unix Rust tests share pipe creation, duplicated-file wrapping, result helpers,
+and descriptor-state checks through `test_support`. Re-use that module for
+descriptor-backed test setup; keep production code independent of test helpers.
+
 ## Rust property testing and verification
 
 Rust-level tests for `cuprum-rust` live with the crate under
@@ -995,15 +1050,15 @@ uv run pytest cuprum/unittests/test_maturin_build.py \
 
 ## Workflow pins and Dependabot
 
-Dependabot owns the upgrade of GitHub Actions and reusable workflows,
-including calls into `leynos/shared-actions`. Contract tests that assert a
-caller's exact commit SHA create a lockstep dependency: every time Dependabot
-opens a bump PR, the test fails until a human edits the pinned constant to
-match. That defeats the purpose of automated dependency updates and turns a
-routine bump into a manual chore.
+Dependabot owns the upgrade of GitHub Actions and reusable workflows, including
+calls into `leynos/shared-actions`. Contract tests that assert a caller's exact
+commit SHA create a lockstep dependency: every time Dependabot opens a bump PR,
+the test fails until a human edits the pinned constant to match. That defeats
+the purpose of automated dependency updates and turns a routine bump into a
+manual chore.
 
-Contract tests may still verify the *shape* of a reusable-workflow caller.
-They must not verify the specific SHA value.
+Contract tests may still verify the *shape* of a reusable-workflow caller. They
+must not verify the specific SHA value.
 
 - Do assert the workflow references the correct reusable workflow path.
 - Do assert the ref is pinned to a full 40-character commit SHA, not a
@@ -1113,17 +1168,27 @@ on the overlapping cases.
 
 ## Output behaviour carrier
 
-`RunOutputOptions` (`capture`, `echo`) is the canonical carrier for `SafeCmd`
-and `Pipeline` output-stream behaviour. `SafeCmd.run` / `run_sync` accept it
-via the `output` parameter and pass it straight through to
-`_prepare_execution_observation`, which reads `output.capture` / `output.echo`
-for the observation tags. `Pipeline.run` / `run_sync` use the same `output`
-parameter and resolve it before building the pipeline execution config. There
-is no parallel internal `(capture, echo)` value object: the former
-`_IOBehaviour` was redundant with `RunOutputOptions` and has been removed.
-`IOOptions` remains only as a deprecated subclass alias that emits a
-`DeprecationWarning`. New code — internal or public — should carry output
-behaviour as a `RunOutputOptions`, not as loose `capture` / `echo` flags.
+`RunOutputOptions` (`capture`, `echo`) is the canonical carrier for command
+output behaviour. Public command execution should accept or construct this
+object rather than threading separate `capture` and `echo` keyword arguments
+through new APIs. Keep that pairing intact so stdout/stderr handling stays
+explicit, testable, and compatible with the `IOOptions` deprecation path.
+
+`SafeCmd.run` / `run_sync` accept `RunOutputOptions` via the `output` parameter
+and pass it straight through to `_prepare_execution_observation`, which reads
+`output.capture` / `output.echo` for the observation tags. `Pipeline.run` /
+`run_sync` use the same `output` parameter and resolve it before building the
+pipeline execution config. There is no parallel internal `(capture, echo)`
+value object: the former `_IOBehaviour` was redundant with `RunOutputOptions`
+and has been removed. `IOOptions` remains only as a deprecated subclass alias
+that emits a `DeprecationWarning`.
+
+Internal adapters may translate legacy or aggregate configuration into
+`RunOutputOptions` at the boundary. For example, the concurrent runner converts
+its `_ConcurrentRunConfig` flags into `RunOutputOptions` once before calling
+`SafeCmd.run`. Avoid reintroducing parallel output-option structures unless a
+new boundary genuinely has different semantics; in that case, document the
+translation rule here and cover it with behavioural tests.
 
 `Pipeline.run` and `Pipeline.run_sync` retain `capture` and `echo` keyword
 arguments only for compatibility. Those flags emit `DeprecationWarning` and

@@ -3,10 +3,10 @@
 //! This crate exposes a `PyO3` module providing stream pump and consume
 //! helpers alongside an availability check for the Rust backend.
 
-use std::io;
-
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+
+use std::mem::ManuallyDrop;
 
 #[cfg(unix)]
 use std::os::fd::{FromRawFd, OwnedFd};
@@ -17,11 +17,19 @@ use std::fs::File;
 #[cfg(windows)]
 use std::os::windows::io::{FromRawHandle, RawHandle};
 
+mod errors;
+#[cfg(test)]
+mod fd_tests;
 mod io_utils;
+#[cfg(all(test, unix))]
+mod lib_tests;
 #[cfg(target_os = "linux")]
 mod splice;
+#[cfg(all(test, unix))]
+mod test_support;
 mod utf8;
 
+use errors::PumpError;
 use io_utils::{StreamHandle, handle_write_result, read_stream};
 use utf8::{FinalChunk, decode_utf8_replace};
 
@@ -92,27 +100,33 @@ fn rust_consume_stream(py: Python<'_>, reader_fd: i64, buffer_size: i64) -> PyRe
 
 #[cfg(unix)]
 fn convert_fd(value: i64) -> PyResult<PlatformFd> {
-    let fd =
-        i32::try_from(value).map_err(|_| PyValueError::new_err("file descriptor out of range"))?;
+    convert_platform_fd(value).map_err(PyValueError::new_err)
+}
+
+#[cfg(unix)]
+fn convert_platform_fd(value: i64) -> Result<PlatformFd, &'static str> {
+    let fd = i32::try_from(value).map_err(|_| "file descriptor out of range")?;
     if fd < 0 {
-        return Err(PyValueError::new_err(
-            "file descriptor must be non-negative",
-        ));
+        return Err("file descriptor must be non-negative");
     }
     Ok(fd)
 }
 
 #[cfg(windows)]
-fn convert_fd(value: i64) -> PyResult<PlatformFd> {
-    let handle_value = value as u64;
-    if usize::BITS >= 64 {
-        return Ok(handle_value as usize);
+fn convert_platform_fd(value: i64) -> Result<PlatformFd, &'static str> {
+    // Reject negative handles for symmetry with the Unix arm: Python hands
+    // over non-negative handle values, and reinterpreting a negative i64 as
+    // a pointer-sized handle would silently address nonsense.
+    if value < 0 {
+        return Err("file handle must be non-negative");
     }
-    let truncated = u32::try_from(handle_value)
-        .map_err(|_| PyValueError::new_err("file handle out of range"))?;
-    Ok(truncated as usize)
+    usize::try_from(value).map_err(|_| "file handle out of range")
 }
 
+#[cfg(windows)]
+fn convert_fd(value: i64) -> PyResult<PlatformFd> {
+    convert_platform_fd(value).map_err(PyValueError::new_err)
+}
 /// Validate that `buffer_size` is positive and fits into a usize.
 ///
 /// # Errors
@@ -134,37 +148,58 @@ fn stream_from_raw(fd: PlatformFd) -> StreamHandle {
     unsafe { OwnedFd::from_raw_fd(fd) }
 }
 
+/// Run `operation` against a `StreamHandle` borrowed from a caller-owned FD.
+///
+/// This is the canonical "borrow this FD without owning it" helper: the
+/// handle is wrapped in [`ManuallyDrop`], so it is **never** closed when the
+/// scope ends — including during unwinding from a panicking `operation`.
+/// The previous pattern (a trailing `std::mem::forget` after the inner call)
+/// was skipped on unwind, closing the caller-owned descriptor and exposing
+/// the Python side to a double close.
+///
+/// There is deliberately no writer variant: the writer FD handed to
+/// [`pump_stream`] is *consumed* — it must close (on drop, including during
+/// unwinding) to signal EOF downstream.
+///
+/// SAFETY: the caller must guarantee that `fd` is a valid open descriptor
+/// (or handle on Windows) for the duration of the call, and that ownership
+/// remains with the caller; the helper guarantees it never closes `fd`.
+fn with_borrowed_reader<T>(fd: PlatformFd, operation: impl FnOnce(&mut StreamHandle) -> T) -> T {
+    let mut handle = ManuallyDrop::new(stream_from_raw(fd));
+    // `ManuallyDrop` suppresses the close in every exit path, so no
+    // drop-guard or forget call is required even if `operation` panics.
+    operation(&mut handle)
+}
+
 #[cfg(windows)]
 fn stream_from_raw(handle: PlatformFd) -> StreamHandle {
+    // The usize-to-pointer cast is a deliberate, documented reinterpretation:
+    // Windows handles are pointer-sized opaque values, so this widens or
+    // narrows nothing.
     // SAFETY: The caller ensures the handle is valid and owned by the caller.
     unsafe { File::from_raw_handle(handle as RawHandle) }
 }
-
 /// Pump bytes between file descriptors with explicit ownership semantics.
 ///
 /// The reader FD is borrowed and left open. The writer FD is treated as
-/// consumed and closes on drop to signal EOF downstream.
+/// consumed and closes on drop to signal EOF downstream — including when
+/// the pump unwinds.
 fn pump_stream(
     reader_fd: ReaderFd,
     writer_fd: WriterFd,
     buffer_size: BufferSize,
-) -> Result<u64, io::Error> {
-    let mut reader = stream_from_raw(reader_fd.0);
+) -> Result<u64, PumpError> {
     let mut writer = stream_from_raw(writer_fd.0);
-    let result = pump_stream_files(&mut reader, &mut writer, buffer_size);
-    // The caller owns the reader FD; avoid closing it here.
-    // The writer FD is treated as consumed and closes on drop to signal EOF.
-    std::mem::forget(reader);
-    result
+    with_borrowed_reader(reader_fd.0, |reader| {
+        pump_stream_files(reader, &mut writer, buffer_size)
+    })
 }
 
 /// Consume bytes from a file descriptor and decode UTF-8 with replacement.
-fn consume_stream(reader_fd: ReaderFd, buffer_size: BufferSize) -> Result<String, io::Error> {
-    let mut reader = stream_from_raw(reader_fd.0);
-    let result = consume_stream_files(&mut reader, buffer_size);
-    // The caller owns the reader FD; avoid closing it here.
-    std::mem::forget(reader);
-    result
+fn consume_stream(reader_fd: ReaderFd, buffer_size: BufferSize) -> Result<String, PumpError> {
+    with_borrowed_reader(reader_fd.0, |reader| {
+        consume_stream_files(reader, buffer_size)
+    })
 }
 
 #[cfg(unix)]
@@ -192,7 +227,7 @@ fn pump_stream_files(
     reader: &mut StreamHandle,
     writer: &mut StreamHandle,
     buffer_size: BufferSize,
-) -> Result<u64, io::Error> {
+) -> Result<u64, PumpError> {
     // On Linux, attempt zero-copy splice first.
     #[cfg(target_os = "linux")]
     if let Some(result) = splice::try_splice_pump(reader, writer, buffer_size.value()) {
@@ -211,7 +246,7 @@ fn pump_stream_files_readwrite(
     reader: &mut StreamHandle,
     writer: &mut StreamHandle,
     buffer_size: BufferSize,
-) -> Result<u64, io::Error> {
+) -> Result<u64, PumpError> {
     let mut buffer = vec![0_u8; buffer_size.value()];
     let mut total_written = 0_u64;
     let mut writer_open = true;
@@ -227,7 +262,7 @@ fn pump_stream_files_readwrite(
 
         let chunk = buffer
             .get(..read_len)
-            .ok_or_else(|| io::Error::other("read length exceeded buffer"))?;
+            .ok_or(PumpError::BufferRangeExceeded)?;
 
         writer_open = handle_write_result(writer, chunk, &mut total_written)?;
     }
@@ -238,7 +273,7 @@ fn pump_stream_files_readwrite(
 fn consume_stream_files(
     reader: &mut StreamHandle,
     buffer_size: BufferSize,
-) -> Result<String, io::Error> {
+) -> Result<String, PumpError> {
     let mut buffer = vec![0_u8; buffer_size.value()];
     let mut pending: Vec<u8> = Vec::new();
     let mut output = String::new();
@@ -250,7 +285,7 @@ fn consume_stream_files(
         }
         let chunk = buffer
             .get(..read_len)
-            .ok_or_else(|| io::Error::other("read length exceeded buffer"))?;
+            .ok_or(PumpError::BufferRangeExceeded)?;
         pending.extend_from_slice(chunk);
         decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(false));
     }

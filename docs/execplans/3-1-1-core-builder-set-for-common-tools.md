@@ -316,8 +316,8 @@ cuprum/builders/tar.py
   ) -> SafeCmd
 ```
 
-`Compression` selects one mutually exclusive member: `NONE`, `GZIP`, `BZIP2`,
-or `XZ`.
+`Compression` selects one mutually exclusive member: `NONE`, `GZIP`, `BZIP2`, or
+`XZ`.
 
 Exports and catalogue updates:
 
