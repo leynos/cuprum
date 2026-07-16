@@ -111,13 +111,11 @@ fn convert_fd(value: i64) -> PyResult<PlatformFd> {
 
 #[cfg(unix)]
 fn convert_platform_fd(value: i64) -> Result<PlatformFd, &'static str> {
-    // Reject negative handles for symmetry with the Unix arm: Python hands
-    // over non-negative handle values, and reinterpreting a negative i64 as
-    // a pointer-sized handle would silently address nonsense.
-    if value < 0 {
-        return Err("file handle must be non-negative");
+    let fd = i32::try_from(value).map_err(|_| "file descriptor out of range")?;
+    if fd < 0 {
+        return Err("file descriptor must be non-negative");
     }
-    usize::try_from(value).map_err(|_| "file handle out of range")
+    Ok(fd)
 }
 
 #[cfg(windows)]
@@ -151,12 +149,9 @@ fn validate_buffer_size(buffer_size: i64) -> PyResult<BufferSize> {
 }
 
 #[cfg(unix)]
-fn stream_from_raw(handle: PlatformFd) -> StreamHandle {
-    // The usize-to-pointer cast is a deliberate, documented reinterpretation:
-    // Windows handles are pointer-sized opaque values, so this widens or
-    // narrows nothing.
-    // SAFETY: The caller ensures the handle is valid and owned by the caller.
-    unsafe { File::from_raw_handle(handle as RawHandle) }
+fn stream_from_raw(fd: PlatformFd) -> StreamHandle {
+    // SAFETY: The caller ensures the fd is valid and owned by the caller.
+    unsafe { OwnedFd::from_raw_fd(fd) }
 }
 
 /// Run `operation` against a `StreamHandle` borrowed from a caller-owned FD.
@@ -214,7 +209,7 @@ fn consume_stream(reader_fd: ReaderFd, buffer_size: BufferSize) -> Result<String
 }
 
 #[cfg(unix)]
-type PlatformFd = usize;
+type PlatformFd = i32;
 
 #[cfg(windows)]
 type PlatformFd = usize;
