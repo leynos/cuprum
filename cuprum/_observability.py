@@ -82,7 +82,7 @@ def _emit_exec_event(
             result = hook(event)
         except asyncio.CancelledError as exc:
             raise _ExecEventEmissionError(exc, scheduled) from exc
-        except Exception as exc:
+        except BaseException as exc:
             _LOGGER.warning(
                 "observe_hook_failed phase=%s program=%s error=%s",
                 event.phase,
@@ -133,7 +133,7 @@ async def _await_awaitable(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        _LOGGER.warning(
+        _LOGGER.exception(
             "observe_hook_task_failed phase=%s error=%s",
             phase,
             type(exc).__name__,
@@ -171,12 +171,6 @@ async def _wait_for_exec_hook_tasks(pending_tasks: list[asyncio.Task[None]]) -> 
     pending_tasks.clear()
     for result in results:
         if isinstance(result, BaseException):
-            _LOGGER.warning(
-                "observe_hook_pending_task_failed error=%s",
-                type(result).__name__,
-                exc_info=(type(result), result, result.__traceback__),
-                extra={"cuprum_error_type": type(result).__name__},
-            )
             raise result
 
 

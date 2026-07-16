@@ -43,6 +43,10 @@ class _AsyncObserveHookError(Exception):
     """Test exception raised by a scheduled async observe hook."""
 
 
+class _FatalObserveHookError(BaseException):
+    """Test base exception raised after an observe task is scheduled."""
+
+
 class _SyncObserveHookError(Exception):
     """Test exception raised by a later synchronous observe hook."""
 
@@ -181,6 +185,59 @@ def test_stage_observation_preserves_scheduled_tasks_when_later_hook_fails(
         assert any(
             "observe_hook_failed" in record.message for record in caplog.records
         ), "synchronous observe hook failures should be logged"
+        assert (
+            sum(
+                "observe_hook_task_failed" in record.message
+                for record in caplog.records
+            )
+            == 1
+        ), "an asynchronous observe hook failure should be logged once"
+        assert not any(
+            "observe_hook_pending_task_failed" in record.message
+            for record in caplog.records
+        ), "pending-task cleanup should not log the asynchronous failure again"
+
+    asyncio.run(run())
+
+
+def test_stage_observation_preserves_tasks_after_base_exception() -> None:
+    """A non-cancellation ``BaseException`` preserves earlier observe tasks."""
+
+    async def run() -> None:
+        """Emit hooks that schedule work before a base exception is raised."""
+        pending_tasks: list[asyncio.Task[None]] = []
+        completed: list[bool] = []
+
+        async def async_hook(_event: ExecEvent) -> None:
+            """Record that cleanup awaited the earlier scheduled task."""
+            await asyncio.sleep(0)
+            completed.append(True)
+
+        def failing_hook(_event: ExecEvent) -> None:
+            """Raise a non-cancellation base exception after scheduling work."""
+            raise _FatalObserveHookError
+
+        observation = _StageObservation(
+            cmd=_echo_cmd(),
+            hooks=_ExecutionHooks(
+                before_hooks=(),
+                after_hooks=(),
+                observe_hooks=(async_hook, failing_hook),
+            ),
+            tags={},
+            cwd=None,
+            env_overlay=None,
+            pending_tasks=pending_tasks,
+        )
+
+        with pytest.raises(_FatalObserveHookError):
+            observation.emit("start", _EventDetails(pid=123))
+
+        assert len(pending_tasks) == 1, (
+            "a base exception should preserve earlier scheduled observe tasks"
+        )
+        await _wait_for_exec_hook_tasks(pending_tasks)
+        assert completed == [True], "cleanup should await the preserved observe task"
 
     asyncio.run(run())
 

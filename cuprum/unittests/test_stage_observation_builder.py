@@ -93,10 +93,12 @@ def test_resolve_env_overlay_matches_merge_semantics(
         expected = merge_env_overlays(None, extra)
 
     if expected is None:
-        assert resolved is None
+        assert resolved is None, "an empty overlay merge should resolve to None"
     else:
-        assert resolved is not None
-        assert dict(resolved) == dict(expected)
+        assert resolved is not None, "a non-empty overlay merge should resolve"
+        assert dict(resolved) == dict(expected), (
+            "the resolved overlay should match documented merge semantics"
+        )
         assert isinstance(resolved, types.MappingProxyType), (
             "the resolved overlay must be immutable"
         )
@@ -177,7 +179,7 @@ def test_single_and_pipeline_tags_agree_on_shared_keys(
     assert single == {
         **_base_stage_tags(cmd, capture=capture, echo=echo),
         **(ctx_tags or {}),
-    }
+    }, "single-command tags should merge caller tags over the base schema"
     stage_tags = _pipeline_tags((cmd, cmd), context, capture=capture, echo=echo)
     shared_single = {
         key: value
@@ -221,9 +223,13 @@ def test_overlay_resolution_is_order_insensitive_for_disjoint_layers(
     right = merge_env_overlays(extra, scoped_overlay)
     overlapping = set(scoped_overlay or {}) & set(extra or {})
     if not overlapping:
-        assert (left is None) == (right is None)
+        assert (left is None) == (right is None), (
+            "disjoint overlay order should agree on whether a value is present"
+        )
         if left is not None and right is not None:
-            assert dict(left) == dict(right)
+            assert dict(left) == dict(right), (
+                "disjoint overlay order should produce the same mapping"
+            )
 
 
 def test_stage_tag_snapshots_lock_the_wire_contract(
@@ -244,7 +250,9 @@ def test_stage_tag_snapshots_lock_the_wire_contract(
         for tags in _pipeline_tags((cmd, cmd), context, capture=True, echo=False)
     ]
 
-    assert {"single": single, "pipeline": pipeline} == snapshot
+    assert {"single": single, "pipeline": pipeline} == snapshot, (
+        "representative stage tags should retain the snapshot wire contract"
+    )
 
 
 def test_base_stage_tags_schema() -> None:
@@ -255,4 +263,4 @@ def test_base_stage_tags_schema() -> None:
         "project": cmd.project.name,
         "capture": True,
         "echo": False,
-    }
+    }, "base stage tags should contain only the canonical schema"
