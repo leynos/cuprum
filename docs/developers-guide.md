@@ -141,7 +141,6 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
-
 ## Pipeline execution helper contracts
 
 Pipeline and command execution use small internal helpers whose names expose
