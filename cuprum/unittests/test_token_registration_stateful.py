@@ -133,6 +133,34 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
             "first detach must restore the captured prior context"
         )
 
+    @rule(
+        outer_factory_entry=st.sampled_from(_FACTORIES),
+        inner_factory_entry=st.sampled_from(_FACTORIES),
+    )
+    def non_lifo_detach_restores_captured_snapshots(
+        self,
+        outer_factory_entry: tuple[str, _HandleFactory],
+        inner_factory_entry: tuple[str, _HandleFactory],
+    ) -> None:
+        """Out-of-order detaches restore each handle's captured snapshot."""
+        with scoped(ScopeConfig()):
+            outer_prior = current_context()
+            _outer_name, outer_factory = outer_factory_entry
+            outer = outer_factory()
+            inner_prior = current_context()
+            _inner_name, inner_factory = inner_factory_entry
+            inner = inner_factory()
+
+            outer.detach()
+            assert current_context() is outer_prior, (
+                "outer non-LIFO detach must restore its captured prior context"
+            )
+
+            inner.detach()
+            assert current_context() is inner_prior, (
+                "inner non-LIFO detach must restore its captured prior context"
+            )
+
     @invariant()
     def stack_depth_matches_context_nesting(self) -> None:
         """With an empty stack the baseline context is active again."""
@@ -146,6 +174,9 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
         while self._stack:
             handle, _prior = self._stack.pop()
             handle.detach()
+        assert current_context() is self._baseline, (
+            "teardown must restore the exact baseline context"
+        )
 
 
 TestTokenRegistrationMachine = TokenRegistrationMachine.TestCase
