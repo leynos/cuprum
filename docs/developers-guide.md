@@ -141,7 +141,6 @@ derive from `_LockedStore` and implement `_clear()` while its lock is held.
 `cuprum/unittests/test_adapter_projection.py` pins this contract with Hypothesis
 properties and redacted per-phase syrupy snapshots.
 
-
 ### Build and test worker controls
 
 `make test` runs pytest serially by default. Set `PYTEST_WORKERS` to a positive
