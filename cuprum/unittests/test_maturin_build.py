@@ -6,7 +6,6 @@ import importlib.metadata as im
 import re
 import shutil
 import subprocess  # noqa: S404 - tests assert trusted maturin command handling.
-import sys
 import typing as typ
 
 import pytest
@@ -107,6 +106,7 @@ def test_manylinux_aarch64_container_usage_regex_rejects_literal_image() -> None
 
     assert _AARCH64_CONTAINER_USAGE_RE.search(yaml_line) is None
 
+
 def _build_with_fake_subprocess_run(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -115,6 +115,8 @@ def _build_with_fake_subprocess_run(
     """Build the native wheel while replacing ``subprocess.run``."""
     monkeypatch.setattr(subprocess, "run", fake_run)
     return build_native_wheel_artifact(repo_root(), tmp_path / "wheelhouse")
+
+
 def test_build_native_wheel_artifact_uses_locked_cargo_deps(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -139,6 +141,7 @@ def test_build_native_wheel_artifact_uses_locked_cargo_deps(
     assert "--locked" in captured_command, (
         "native wheel build should pass --locked through to maturin"
     )
+
 
 def test_build_native_wheel_artifact_reports_maturin_stderr(
     tmp_path: pth.Path,
@@ -174,6 +177,8 @@ def test_build_native_wheel_artifact_reports_maturin_stderr(
     assert "cargo fetch failed" in error_text, (
         "maturin failure diagnostics should include captured stderr"
     )
+
+
 @pytest.mark.timeout(0)
 def test_maturin_wheel_build_snapshot(
     tmp_path: pth.Path,
