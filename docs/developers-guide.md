@@ -1041,6 +1041,7 @@ The root `Makefile` exposes the following lint-related variables:
 | `PYLINT_PYPY_SHIM`     | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                      |
 | `PYLINT_VERSION`       | `4.0.5`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.         |
 | `PYLINT`               | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                       |
+| `WHITAKER_CARGO_FLAGS` | `$(CARGO_FLAGS) --jobs 1`                                                    | Keeps the Whitaker `cargo-dylint` pass single-worker in the Rust lint gate.|
 | `LOCAL_TOOL_ENV`       | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools. |
 | `UV_ENV`               | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                  |
 | `UV_RUN_ENV`           | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment for locked `uv run` commands such as `$(RUFF)`.         |
@@ -1057,6 +1058,11 @@ PYLINT_TARGETS=cuprum/sh.py make lint
 Do not change `PYLINT_PYPY_SHIM_REF` casually. Updating the pinned shim
 revision changes the lint runtime and must be reviewed like any other toolchain
 update.
+
+`WHITAKER_CARGO_FLAGS` intentionally limits Whitaker to a single Cargo job.
+The Rust lint gate already runs `cargo doc` and `cargo clippy` before the
+Whitaker pass, so keeping the final `cargo-dylint` stage single-worker avoids
+adding avoidable Cargo parallelism to an already sequential lint recipe.
 
 ### Episodic lint policy
 

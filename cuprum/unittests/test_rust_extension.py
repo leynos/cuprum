@@ -51,7 +51,7 @@ def test_is_available_warns_and_reraises_unexpected_import_error(
         record.levelno == logging.WARNING
         and record.__dict__.get("event") == "cuprum.rust_native_import_failed"
         for record in caplog.records
-    )
+    ), "expected cuprum.rust_native_import_failed warning was not emitted"
 
 
 def test_is_available_returns_true_when_module_present(
