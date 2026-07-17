@@ -1118,7 +1118,8 @@ resolver used by stream-backend dispatch. When
 `set_rust_availability_for_testing()` is active, it short-circuits that
 resolver before the raw import probe runs and clears both backend caches, so
 test overrides take effect immediately. Cached answers only drift if a
-long-lived interpreter survives an out-of-band wheel swap.
+long-lived interpreter survives a wheel swap or another out-of-band import-path
+or installation-state change.
 
 The module `cuprum._rust_backend` is private and not semver-stable, so
 production code should avoid calling `_rust_backend.is_available()` directly

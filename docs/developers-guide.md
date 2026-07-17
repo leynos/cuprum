@@ -22,7 +22,8 @@ short-circuits availability resolution before the raw import probe runs, and
 `set_rust_availability_for_testing()` clears both `_check_rust_available.cache_clear()`
 and `get_stream_backend.cache_clear()`; otherwise the resolver falls back to
 that raw import probe. Cached answers only drift if a long-lived interpreter
-survives an out-of-band wheel swap.
+survives a wheel swap or another out-of-band import-path or installation-state
+change.
 
 User callers should use `cuprum.is_rust_available()`, which delegates to
 `_check_rust_available()`, so the public answer and dispatch resolver cannot

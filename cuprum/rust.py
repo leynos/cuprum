@@ -29,8 +29,9 @@ def is_rust_available() -> bool:
     caches, so the new answer is visible immediately. Backend selection can
     still differ from this availability answer: for example, forced Python
     mode selects ``StreamBackend.PYTHON`` even when this function returns
-    ``True``. Cached answers only drift if a long-lived interpreter survives an
-    out-of-band wheel swap. The raw, uncached import probe lives in
+    ``True``. Cached answers only drift if a long-lived interpreter survives a
+    wheel swap or another out-of-band import-path or installation-state change.
+    The raw, uncached import probe lives in
     :func:`cuprum._rust_backend.is_available`; prefer this wrapper unless a
     deliberately uncached check is required.
     """
