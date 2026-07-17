@@ -15,7 +15,7 @@ jobs:
     env:
       MBAKE_VERSION: '1.4.6'
       TY_VERSION: '0.0.8'
-      WHITAKER_INSTALLER_VERSION: '0.2.5'
+      WHITAKER_INSTALLER_VERSION: '0.2.6'
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
