@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from cuprum import _rust_backend
 from cuprum import rust as rust_api
@@ -332,6 +334,59 @@ def test_public_probe_honours_test_override(monkeypatch: pytest.MonkeyPatch) -> 
         )
     finally:
         set_rust_availability_for_testing(is_available=None)
+
+
+@settings(
+    max_examples=100,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+@given(
+    raw_available=st.booleans(),
+    overrides=st.lists(
+        st.one_of(st.none(), st.booleans()),
+        min_size=1,
+        max_size=10,
+    ),
+)
+def test_public_probe_and_dispatch_stay_aligned_across_override_transitions(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    raw_available: bool,
+    overrides: list[bool | None],
+) -> None:
+    """Public availability and dispatch agree through cache-refresh transitions."""
+    raw_probe_calls = 0
+
+    def _raw_probe() -> bool:
+        """Return a deterministic raw availability value and count probes."""
+        nonlocal raw_probe_calls
+        raw_probe_calls += 1
+        return raw_available
+
+    monkeypatch.delenv(_ENV_VAR, raising=False)
+    monkeypatch.setattr(_rust_backend, "is_available", _raw_probe)
+    set_rust_availability_for_testing(is_available=None)
+
+    try:
+        for override in overrides:
+            set_rust_availability_for_testing(is_available=override)
+            expected_available = raw_available if override is None else override
+            expected_backend = (
+                StreamBackend.RUST if expected_available else StreamBackend.PYTHON
+            )
+
+            assert is_rust_available() is expected_available, (
+                "public probe must reflect the refreshed availability resolver"
+            )
+            assert get_stream_backend() is expected_backend, (
+                "dispatcher must reflect the refreshed availability resolver"
+            )
+    finally:
+        set_rust_availability_for_testing(is_available=None)
+
+    assert raw_probe_calls == overrides.count(None), (
+        "testing overrides must short-circuit the raw availability probe"
+    )
 
 
 def test_testing_override_update_logs_cache_clear(
