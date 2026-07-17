@@ -18,9 +18,11 @@ Stream backend availability is resolved through one cached entry point:
 
 `_check_rust_available()` first checks the testing override
 (`set_rust_availability_for_testing`). While active, that override
-short-circuits availability resolution and bypasses
-`cuprum._rust_backend.is_available()` entirely; otherwise the resolver falls
-back to that raw import probe.
+short-circuits availability resolution before the raw import probe runs, and
+`set_rust_availability_for_testing()` clears both `_check_rust_available.cache_clear()`
+and `get_stream_backend.cache_clear()`; otherwise the resolver falls back to
+that raw import probe. Cached answers only drift if a long-lived interpreter
+survives an out-of-band wheel swap.
 
 User callers should use `cuprum.is_rust_available()`, which delegates to
 `_check_rust_available()`, so the public answer and dispatch resolver cannot
@@ -219,31 +221,6 @@ properties and redacted per-phase syrupy snapshots.
 worker count to enable xdist explicitly. Set `BUILD_JOBS=-jN` to pass the same
 count to Rust test commands and, through `CARGO_JOB_ENV`, to both
 `RAYON_NUM_THREADS` and `CARGO_BUILD_JOBS`.
-
-## Canonical `_TokenRegistration` handle base
-
-All `ContextVar`-backed scope-registration handles — `AllowRegistration`,
-`HookRegistration`, and `EnvRegistration` in `cuprum/context.py` — derive from
-one canonical `_TokenRegistration` base. The base owns the `_token`/`_detached`
-pair, the idempotent `detach()`, the context-manager protocol, and the
-`_install(new_ctx)` step that sets the derived context and captures the
-restoration token. Subclasses implement only the context-derivation step in
-`__init__`. The consolidated "Token-based Restoration" docstring lives on the
-base.
-
-Re-use policy: any new scope-registration handle must derive from
-`_TokenRegistration` and confine itself to deriving the new context; the
-restoration protocol is subtle (`ContextVar` token discipline), so a divergent
-copy is a latent correctness hazard. Note that `LoggingHookRegistration`
-(`cuprum/logging_hooks.py`) is a *pair* handle: it composes two
-`HookRegistration` instances and detaches them in reverse order; it
-deliberately carries no token of its own.
-
-`cuprum/unittests/test_token_registration_stateful.py` verifies the token
-discipline with a Hypothesis `RuleBasedStateMachine` driving randomized
-register/detach sequences across all token-backed handle types (nesting,
-context-manager exit, LIFO detach, double-detach), plus an example test pinning
-the documented non-LIFO hazard.
 
 ## Canonical stage-observation inputs
 
@@ -1041,7 +1018,6 @@ The root `Makefile` exposes the following lint-related variables:
 | `PYLINT_PYPY_SHIM`     | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                      |
 | `PYLINT_VERSION`       | `4.0.5`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.         |
 | `PYLINT`               | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                       |
-| `WHITAKER_CARGO_FLAGS` | `$(CARGO_FLAGS) --jobs 1`                                                    | Keeps the Whitaker `cargo-dylint` pass single-worker in the Rust lint gate.|
 | `LOCAL_TOOL_ENV`       | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools. |
 | `UV_ENV`               | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                  |
 | `UV_RUN_ENV`           | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment for locked `uv run` commands such as `$(RUFF)`.         |
@@ -1058,11 +1034,6 @@ PYLINT_TARGETS=cuprum/sh.py make lint
 Do not change `PYLINT_PYPY_SHIM_REF` casually. Updating the pinned shim
 revision changes the lint runtime and must be reviewed like any other toolchain
 update.
-
-`WHITAKER_CARGO_FLAGS` intentionally limits Whitaker to a single Cargo job.
-The Rust lint gate already runs `cargo doc` and `cargo clippy` before the
-Whitaker pass, so keeping the final `cargo-dylint` stage single-worker avoids
-adding avoidable Cargo parallelism to an already sequential lint recipe.
 
 ### Episodic lint policy
 
