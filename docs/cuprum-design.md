@@ -1063,7 +1063,6 @@ Semantics (aligned with `subprocess.run` and plumbum):
   capture rules as successful runs (final stage stdout plus all stderr when
   capture is enabled).
 
-
 ### 8.1.5 Subprocess execution module boundaries
 
 The private subprocess implementation is divided by lifecycle concern while
