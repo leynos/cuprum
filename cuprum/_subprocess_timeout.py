@@ -124,16 +124,19 @@ def _handle_subprocess_timeout(
     exc: TimeoutError | _SubprocessTimeoutError,
 ) -> typ.NoReturn:
     """Handle a subprocess timeout by emitting exit event and raising TimeoutExpired."""
-    if isinstance(exc, _SubprocessTimeoutError):
-        timeout = exc.timeout
-        exited_at = exc.exited_at
-        stdout = exc.stdout
-        stderr = exc.stderr
-    else:
-        timeout = _require_timeout(ctx.execution.timeout, exc)
-        exited_at = time.perf_counter()
-        stdout = ctx.stdout_text
-        stderr = ctx.stderr_text
+    match exc:
+        case _SubprocessTimeoutError(
+            timeout=timeout,
+            exited_at=exited_at,
+            stdout=stdout,
+            stderr=stderr,
+        ):
+            pass
+        case TimeoutError():
+            timeout = _require_timeout(ctx.execution.timeout, exc)
+            exited_at = time.perf_counter()
+            stdout = ctx.stdout_text
+            stderr = ctx.stderr_text
 
     exit_code = _get_exit_code(ctx.process)
     _emit_exit_event(

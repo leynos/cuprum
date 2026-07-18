@@ -11,6 +11,7 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md)
 - [ADR-005: Unify Rust availability probe](adr-005-unified-rust-availability-probe.md)
 - [ADR-006: Split cuprum/context.py into a context package](adr-006-context-package-split.md)
+- [ADR-007: Subprocess execution module boundaries](adr-007-subprocess-execution-module-boundaries.md)
 
 ## Rust availability probing
 
@@ -1414,6 +1415,22 @@ must not be combined with `output=RunOutputOptions(...)`; mixed usage raises
 not obscure the documented ambiguity error.
 
 ## Subprocess stdin injection
+
+The subprocess execution implementation is divided by lifecycle concern:
+
+- `cuprum/_subprocess_execution.py` owns runner orchestration, subprocess
+  spawning, and stream-consumer wiring.
+- `cuprum/_subprocess_stdin.py` owns stdin writes, early-close diagnostics, and
+  the `cuprum.stdin` logger.
+- `cuprum/_subprocess_timeout.py` owns timeout translation and exit-event
+  accounting shared by completion and timeout paths.
+
+Keep these boundaries intact. New stdin pipe behaviour belongs in
+`_subprocess_stdin`; timeout or exit-event policy belongs in
+`_subprocess_timeout`; and orchestration that coordinates them belongs in
+`_subprocess_execution`. See
+[ADR-006](adr-006-subprocess-execution-module-boundaries.md) for the decision
+and its compatibility constraints.
 
 When `stdin: StdinInput` is passed to `SafeCmd.run()`, the following sequence
 executes:
