@@ -57,7 +57,7 @@ fn borrowed_reader_stays_open_after_operation(
 
 fn assert_panicking_reader_keeps_fd_open(raw_fd: i32) {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        with_borrowed_reader(raw_fd, |_reader| -> () {
+        with_borrowed_reader(raw_fd, |_reader| {
             panic!("simulated failure inside the borrowed scope");
         });
     }));
