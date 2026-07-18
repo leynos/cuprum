@@ -1257,10 +1257,12 @@ Run compile-time UI tests with:
 cd rust && cargo test compile_time_ui
 ```
 
-To update `.stderr` expectation files after a PyO3 or compiler upgrade:
+Committed `.stderr` fixtures must be regenerated with the CI and minimum
+supported Rust version (MSRV) compiler, Rust 1.85.0. To update them after a
+PyO3 or compiler upgrade:
 
 ```bash
-cd rust && TRYBUILD=overwrite cargo test compile_time_ui
+cd rust && TRYBUILD=overwrite cargo +1.85.0 test compile_time_ui
 ```
 
 Inspect the updated `.stderr` files before committing to confirm that each fail
