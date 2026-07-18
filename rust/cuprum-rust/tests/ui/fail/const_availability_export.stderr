@@ -1,7 +1,12 @@
-error[E0015]: cannot call non-const function `is_available` in constants
+error[E0015]: cannot call non-const function `_rust_backend_native::is_available` in constants
  --> tests/ui/fail/const_availability_export.rs:3:30
   |
 3 | const RUST_AVAILABLE: bool = _rust_backend_native::is_available();
   |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
+note: function `is_available` is not const
+ --> src/lib.rs
+  |
+  | pub fn is_available() -> bool {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   = note: calls in constants are limited to constant functions, tuple structs and tuple variants
