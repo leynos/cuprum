@@ -84,10 +84,10 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
         _name, factory = factory_entry
         handle = factory()
         installed = current_context()
-        self._stack.append((handle, prior, installed))
         assert installed is not prior, (
             "registering a handle must install a derived context"
         )
+        self._stack.append((handle, prior, installed))
 
     @rule(factory_entry=st.sampled_from(_FACTORIES))
     def context_manager_restores_context(
@@ -168,17 +168,13 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
         )
 
     @invariant()
-    def stack_depth_matches_context_nesting(self) -> None:
-        """With an empty stack the baseline context is active again."""
-        if not self._stack:
-            assert current_context() is self._baseline, (
-                "an empty stack must leave the baseline context active"
-            )
-        else:
-            _handle, _prior, installed = self._stack[-1]
-            assert current_context() is installed, (
-                "a non-empty stack must leave its top context active"
-            )
+    def active_context_matches_stack_top(self) -> None:
+        """Ensure the active context matches the latest attached registration."""
+        expected = self._baseline if not self._stack else self._stack[-1][2]
+        assert current_context() is expected, (
+            "the active ContextVar value must equal the latest attached "
+            "registration's context"
+        )
 
     def teardown(self) -> None:
         """Detach any remaining handles in LIFO order."""
@@ -272,6 +268,44 @@ class TestTokenRegistrationExamples:
             allow_registration.detach()
             assert current_context() is baseline, (
                 "cleanup must restore the scoped baseline context"
+            )
+
+    def test_nested_env_detach_restores_outer_overlay(self) -> None:
+        """LIFO env detach restores the outer registration's overlay."""
+        with scoped(ScopeConfig()):
+            baseline = current_context()
+            outer = env(CUPRUM_TEST_OUTER="outer")
+            try:
+                outer_context = current_context()
+                inner = env(CUPRUM_TEST_INNER="inner")
+                try:
+                    overlay = current_context().env_overlay or {}
+                    assert overlay.get("CUPRUM_TEST_OUTER") == "outer", (
+                        "nested overlays must retain the outer key"
+                    )
+                    assert overlay.get("CUPRUM_TEST_INNER") == "inner", (
+                        "nested overlays must include the inner key"
+                    )
+
+                    inner.detach()
+
+                    assert current_context() is outer_context, (
+                        "inner detach must restore the outer context"
+                    )
+                    restored_overlay = current_context().env_overlay or {}
+                    assert restored_overlay.get("CUPRUM_TEST_OUTER") == "outer", (
+                        "inner detach must retain the outer overlay"
+                    )
+                    assert "CUPRUM_TEST_INNER" not in restored_overlay, (
+                        "inner detach must discard the inner overlay"
+                    )
+                finally:
+                    inner.detach()
+            finally:
+                outer.detach()
+
+            assert current_context() is baseline, (
+                "outer detach must restore the scoped baseline context"
             )
 
     def test_failed_cross_context_detach_can_be_retried(self) -> None:
