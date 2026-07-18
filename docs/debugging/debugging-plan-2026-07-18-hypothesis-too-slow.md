@@ -1,0 +1,109 @@
+# Debugging Plan: Hypothesis generation exceeds its health-check budget
+
+**Generated**: 2026-07-18
+**Issue ID**: local validation follow-up
+**Severity**: Medium
+**Falsification sub-agent**: Wyvern (investigation fallback; no Alchemist
+agent is available)
+**Planning agent boundary**: This document was prepared by the planning agent.
+Falsification must be executed by the named sub-agent, not by the planning
+agent.
+
+## Problem Statement
+
+`make test` fails in
+`test_single_and_pipeline_tags_agree_on_shared_keys` because Hypothesis takes
+too long to generate `ctx_tags`. The property should execute within Hypothesis'
+health-check budget without suppressing that protection or changing its stated
+behaviour.
+
+## Context Summary
+
+| Aspect | Details |
+| --- | --- |
+| First observed | 2026-07-18 validation run |
+| Reproduction rate | Observed with seed `617015540253848316034710431685553955` |
+| Affected components | `test_stage_observation_builder.py`, `_TAGS` strategy |
+| Recent changes | Documentation and timeout-branch review follow-up; this test was untouched |
+
+### Error Artefacts
+
+```plaintext
+FailedHealthCheck: Data generation is extremely slow: Only produced 0 valid
+examples in 1.94 seconds. Health check: too_slow.
+```
+
+### Investigation Outcome
+
+Wyvern replayed the supplied seed five times; every replay passed in
+0.18–0.19 seconds. Sampling 100 `_TAGS` examples took 0.098 seconds and 100
+fixed-tag observation constructions took 0.001 seconds. Both hypotheses were
+falsified, so no correction or health-check suppression is justified.
+
+## Hypotheses
+
+### H1: The `_TAGS` strategy generates costly recursive values
+
+**Claim**: The recursive or broad value strategy under `_TAGS` prevents
+Hypothesis from producing a valid dictionary within the health-check budget.
+
+**Plausibility**: High — the health check identifies `ctx_tags` generation.
+
+**Prediction**: Replaying the seed while sampling `_TAGS` alone will reproduce
+the slow generation; a bounded, schema-representative strategy will not.
+
+#### H1 Falsification Plan
+
+| Step | Action | Expected Negative Result |
+| --- | --- | --- |
+| 1 | Inspect `_TAGS` and replay the named test seed. | The test completes without a slow-generation health check. |
+| 2 | Time representative samples from `_TAGS`. | Sampling is quick, which disproves strategy generation as the cause. |
+
+**Tooling**: `leta show _TAGS`, focused `pytest` invocation with the supplied
+seed.
+
+**Confidence on falsification**: High; the reproduction directly measures the
+suspected boundary.
+
+### H2: Observation construction is slow for otherwise valid tags
+
+**Claim**: `_prepare_execution_observation` or pipeline construction consumes
+the health-check budget after valid tags are produced.
+
+**Plausibility**: Medium — the property builds both observation paths per
+example.
+
+**Prediction**: Supplying a small fixed tag dictionary will still trigger the
+health check or have a comparable per-example cost.
+
+#### H2 Falsification Plan
+
+| Step | Action | Expected Negative Result |
+| --- | --- | --- |
+| 1 | Run an equivalent focused test with fixed small tags. | It runs promptly, disproving construction cost as the primary cause. |
+
+**Tooling**: Focused pytest test or temporary local instrumentation, reverted
+after measurement.
+
+**Confidence on falsification**: Medium; it isolates construction from input
+generation.
+
+## Recommended Execution Order
+
+1. **H1** — the error names the generated argument and this is the cheapest
+   decisive check.
+2. **H2** — investigate construction only if H1 is falsified.
+
+## Termination Criteria
+
+- **Root cause identified**: One hypothesis survives while the other is
+  falsified, and a narrow correction makes the focused property pass without
+  suppressing Hypothesis health checks.
+- **Escalation trigger**: Both hypotheses were falsified. Treat the original
+  failure as non-reproducible unless it recurs with new evidence.
+
+## Notes for Executing Agent
+
+Keep the property representative of tag-merge and pipeline precedence
+behaviour. Do not add `HealthCheck.too_slow` suppression or lower the property
+coverage solely to hide the failure.
