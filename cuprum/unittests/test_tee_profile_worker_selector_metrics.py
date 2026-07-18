@@ -18,7 +18,7 @@ from hypothesis import strategies as st
 from benchmarks import tee_profile_worker
 from benchmarks.tee_profile_worker import TeeProfileWorkerConfig, run_tee_profile_worker
 from cuprum.unittests import (
-    _tee_profile_worker_test_helpers as _tee_profile_worker_test_helpers,
+    _tee_profile_concurrency_support as _tee_profile_worker_test_helpers,
 )
 
 if typ.TYPE_CHECKING:

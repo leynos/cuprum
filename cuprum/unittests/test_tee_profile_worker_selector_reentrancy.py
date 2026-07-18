@@ -17,7 +17,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from benchmarks import tee_profile_worker
-from cuprum.unittests.conftest import _backends_strategy
+from cuprum.unittests._tee_profile_concurrency_support import _backends_strategy
 
 if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion

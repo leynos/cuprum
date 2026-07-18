@@ -1,9 +1,7 @@
-"""Backend-environment isolation and lock-serialisation tests.
+"""Concurrent-worker and environment-preservation tee-profile worker tests.
 
-These tests inject coordinating backend selectors so concurrent workers can be
-driven through precise interleavings, proving that ``_BACKEND_LOCK`` serialises
-backend-environment mutation and that each worker observes only its own pinned
-``CUPRUM_STREAM_BACKEND`` value.
+These tests spin up multiple tee-profile workers across the available backends
+and drive coordinating backend selectors through precise interleavings.
 """
 
 from __future__ import annotations
@@ -11,36 +9,51 @@ from __future__ import annotations
 import threading
 import typing as typ
 
+import pytest
+from hypothesis import HealthCheck, given, settings
+
 from benchmarks import tee_profile_worker
-from cuprum.unittests._tee_profile_worker_test_helpers import (
+from cuprum.unittests._tee_profile_concurrency_support import (
+    _EVENT_WAIT_TIMEOUT_SECONDS,
+    _assert_backend_pair_completes,
+    _backend_lists,
+    _backend_pairs,
     _BackendEnvironmentRace,
     _CheckpointBackendSelector,
-    _SignallingRLock,
-)
-from cuprum.unittests.conftest import (
-    _EVENT_WAIT_TIMEOUT_SECONDS,
     _join_and_assert_finished,
+    _run_selector_context,
+    _SignallingRLock,
 )
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
 
-    import pytest
 
-
-def _run_selector_context(
-    selector: tee_profile_worker.BackendSelector,
-    backend: tee_profile_worker.BackendName,
-    errors: list[BaseException],
-    result_lock: threading.Lock,
+@pytest.mark.parametrize("backends", _backend_pairs())
+def test_concurrent_workers_do_not_race(
+    tmp_path: pth.Path,
+    backends: tuple[tee_profile_worker.BackendName, tee_profile_worker.BackendName],
 ) -> None:
-    """Enter a selector context and capture thread failures."""
-    try:
-        with selector(backend):
-            pass
-    except BaseException as exc:  # noqa: BLE001 - thread failures must surface.
-        with result_lock:
-            errors.append(exc)
+    """Concurrent workers with the given backend pair complete without races."""
+    fixture = tmp_path / "fixture_concurrent.b64"
+    fixture.write_text("YWJjZGVm\n")
+    _assert_backend_pair_completes(backends, fixture)
+
+
+@settings(
+    max_examples=20,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+@given(backends=_backend_lists())
+def test_generated_concurrent_workers_complete(
+    tmp_path: pth.Path,
+    backends: tuple[tee_profile_worker.BackendName, ...],
+) -> None:
+    """Generated concurrent backend selections all complete successfully."""
+    fixture = tmp_path / "fixture_generated_concurrent.b64"
+    fixture.write_text("YWJjZGVm\n")
+    _assert_backend_pair_completes(backends, fixture)
 
 
 def test_concurrent_workers_preserve_backend_environment(

@@ -1,6 +1,6 @@
-"""Scaffolding for backend-environment isolation and lock-serialisation tests.
+"""Scaffolding for tee-profile worker concurrency tests.
 
-These helpers let the env-preservation tests drive concurrent workers through
+These helpers let the concurrent-worker and selector tests drive workers through
 precise interleavings: an instrumented re-entrant lock that signals contention,
 coordinating backend selectors that expose state transitions, and a race
 harness that owns the shared events, observations, and result capture.
@@ -10,18 +10,27 @@ from __future__ import annotations
 
 import abc
 import contextlib
+import dataclasses as dc
 import os
 import threading
 import typing as typ
 
+import pytest
+from hypothesis import strategies as st
+
 from benchmarks import tee_profile_worker
 from benchmarks.tee_profile_worker import TeeProfileWorkerConfig, run_tee_profile_worker
-from cuprum.unittests.conftest import _EVENT_WAIT_TIMEOUT_SECONDS
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
     import types
+
+    from _pytest.mark.structures import ParameterSet
+
+
+_EVENT_WAIT_TIMEOUT_SECONDS = 10
+_THREAD_JOIN_TIMEOUT_SECONDS = 15
 
 
 class _RLockLike(typ.Protocol):
@@ -103,6 +112,55 @@ class _SignallingRLock:
         self.release()
 
 
+@dc.dataclass(slots=True)
+class _WorkerSharedState:
+    """Shared mutable state for collecting results and errors from worker threads.
+
+    All access to *results* and *errors* must be performed under *result_lock*
+    to prevent data races between concurrent worker threads.
+    """
+
+    results: list[tee_profile_worker.TeeProfileWorkerResult] = dc.field(
+        default_factory=list,
+    )
+    errors: list[BaseException] = dc.field(default_factory=list)
+    result_lock: threading.Lock = dc.field(default_factory=threading.Lock)
+
+
+def _run_worker_thread(
+    backend: tee_profile_worker.BackendName,
+    fixture: pth.Path,
+    barrier: threading.Barrier,
+    shared: _WorkerSharedState,
+) -> None:
+    """Run one tee-profile worker, synchronising start via *barrier*.
+
+    Appends the result to *shared.results* or the exception to *shared.errors*
+    under *shared.result_lock* so that the calling thread can inspect them
+    safely after joining.
+    """
+    try:
+        barrier.wait(timeout=_EVENT_WAIT_TIMEOUT_SECONDS)
+        result = run_tee_profile_worker(
+            TeeProfileWorkerConfig(
+                fixture_path=fixture,
+                stages=1,
+                mode="tee",
+                sink_kind="devnull",
+                with_line_callbacks=True,
+                backend=backend,
+                repeat_count=1,
+            ),
+        )
+    except BaseException as exc:  # noqa: BLE001 - thread failures must surface.
+        with shared.result_lock:
+            shared.errors.append(exc)
+        return
+
+    with shared.result_lock:
+        shared.results.append(result)
+
+
 def _run_worker_with_selector(
     race: _BackendEnvironmentRace,
     backend: tee_profile_worker.BackendName,
@@ -126,6 +184,130 @@ def _run_worker_with_selector(
     except BaseException as exc:  # noqa: BLE001 - thread failures must surface.
         with race.result_lock:
             race.errors.append(exc)
+
+
+def _run_selector_context(
+    selector: tee_profile_worker.BackendSelector,
+    backend: tee_profile_worker.BackendName,
+    errors: list[BaseException],
+    result_lock: threading.Lock,
+) -> None:
+    """Enter a selector context and capture thread failures."""
+    try:
+        with selector(backend):
+            pass
+    except BaseException as exc:  # noqa: BLE001 - thread failures must surface.
+        with result_lock:
+            errors.append(exc)
+
+
+def _join_and_assert_finished(
+    *threads: threading.Thread,
+    context: str = "",
+) -> None:
+    """Join *threads* and assert all have stopped within the configured timeout."""
+    for thread in threads:
+        thread.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
+    alive = [thread.name for thread in threads if thread.is_alive()]
+    assert not alive, (
+        f"expected threads to finish{f' ({context})' if context else ''}, got {alive}"
+    )
+
+
+def _assert_backend_pair_completes(
+    backends: tuple[tee_profile_worker.BackendName, ...],
+    fixture: pth.Path,
+) -> None:
+    """Assert that concurrent workers for *backends* all complete without error.
+
+    Spins up one thread per backend, synchronises their starts via a
+    ``threading.Barrier``, joins each thread, and asserts that every worker
+    returned ``status == "ok"`` and ``exit_code == 0``.
+    """
+    barrier = threading.Barrier(parties=len(backends) + 1)
+    shared = _WorkerSharedState()
+
+    threads = [
+        threading.Thread(
+            target=_run_worker_thread,
+            args=(backend, fixture, barrier, shared),
+            daemon=True,
+        )
+        for backend in backends
+    ]
+
+    for thread in threads:
+        thread.start()
+
+    try:
+        barrier.wait(timeout=_EVENT_WAIT_TIMEOUT_SECONDS)
+    finally:
+        # A broken or timed-out barrier must still join the daemon workers so
+        # they cannot leak into subsequent tests or Hypothesis examples.
+        _join_and_assert_finished(
+            *threads, context=f"backend pair completion for {backends}"
+        )
+    assert not shared.errors, f"expected no worker thread errors, got {shared.errors!r}"
+    assert len(shared.results) == len(backends), (
+        f"expected one result per worker, got {shared.results}"
+    )
+    assert all(result["status"] == "ok" for result in shared.results), (
+        f"expected all worker statuses to be ok, got {shared.results}"
+    )
+    assert all(result["exit_code"] == 0 for result in shared.results), (
+        f"expected all worker exit codes to be 0, got {shared.results}"
+    )
+
+
+def _available_backend_names() -> tuple[tee_profile_worker.BackendName, ...]:
+    """Return backend names that can run in this environment."""
+    if tee_profile_worker._backend._check_rust_available():
+        return ("auto", "python", "rust")
+    return ("auto", "python")
+
+
+def _alternate_backend() -> tee_profile_worker.BackendName:
+    """Return the non-python backend available in this environment."""
+    if tee_profile_worker._backend._check_rust_available():
+        return "rust"
+    msg = "Rust backend is unavailable; no non-python backend can be selected"
+    raise RuntimeError(msg)
+
+
+def _backend_pairs() -> tuple[
+    tuple[tee_profile_worker.BackendName, tee_profile_worker.BackendName]
+    | ParameterSet,
+    ...,
+]:
+    """Return parametrised backend pairs for concurrent-worker tests."""
+    try:
+        alternate_backend = _alternate_backend()
+    except RuntimeError as exc:
+        alternate_pair = pytest.param(
+            ("python", "rust"),
+            marks=pytest.mark.skip(reason=str(exc)),
+        )
+    else:
+        alternate_pair = ("python", alternate_backend)
+    return (
+        ("python", "python"),
+        alternate_pair,
+    )
+
+
+@st.composite
+def _backend_lists(
+    draw: st.DrawFn,
+) -> tuple[tee_profile_worker.BackendName, ...]:
+    """Generate same-length backend sequences for concurrent worker tests."""
+    thread_count = draw(st.integers(min_value=2, max_value=8))
+    backend = st.sampled_from(_available_backend_names())
+    return tuple(draw(st.lists(backend, min_size=thread_count, max_size=thread_count)))
+
+
+_backends_strategy: st.SearchStrategy[tee_profile_worker.BackendName] = st.deferred(
+    lambda: st.sampled_from(_available_backend_names())
+)
 
 
 class _BaseBackendSelector(abc.ABC):
