@@ -12,7 +12,11 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from cuprum import ScopeConfig, scoped, sh
-from cuprum._streams import _POST_CLOSE_DRAIN_TIMEOUT_S, _pump_stream
+from cuprum._streams import (
+    _POST_CLOSE_DRAIN_TIMEOUT_S,
+    _drain_stream_reader_bounded,
+    _pump_stream,
+)
 from tests.helpers.catalogue import python_catalogue
 
 
@@ -45,6 +49,22 @@ class _NeverEndingPumpReader:
         self.read_calls += 1
         if self.read_calls == 1:
             return b"first"
+        await asyncio.sleep(3600)
+        return b"more"
+
+
+class _PartiallyDrainedPumpReader:
+    """Stub reader that yields discarded bytes before stalling."""
+
+    def __init__(self) -> None:
+        """Initialize the reader."""
+        self.read_calls = 0
+
+    async def read(self, _: int) -> bytes:
+        """Return one discarded chunk, then wait until cancelled."""
+        self.read_calls += 1
+        if self.read_calls == 1:
+            return b"discarded"
         await asyncio.sleep(3600)
         return b"more"
 
@@ -182,6 +202,25 @@ def test_pump_stream_does_not_hang_when_upstream_never_ends() -> None:
     )
 
     assert reader.read_calls == 2, "pump should cancel the bounded drain read"
+
+
+def test_bounded_drain_returns_partial_count_on_timeout() -> None:
+    """A timed-out bounded drain reports bytes consumed before cancellation."""
+
+    async def exercise() -> tuple[_PartiallyDrainedPumpReader, int]:
+        """Drain one chunk from a reader that never reaches EOF."""
+        reader = _PartiallyDrainedPumpReader()
+        discarded_bytes = await _drain_stream_reader_bounded(
+            typ.cast("asyncio.StreamReader", reader)
+        )
+        return reader, discarded_bytes
+
+    reader, discarded_bytes = asyncio.run(exercise())
+
+    assert discarded_bytes == len(b"discarded"), (
+        "bounded drain should preserve bytes consumed before timeout"
+    )
+    assert reader.read_calls == 2, "bounded drain should cancel the stalled read"
 
 
 @settings(deadline=None)

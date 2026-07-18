@@ -39,6 +39,7 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import CommandResult, PipelineResult, SafeCmd
 
 _MIN_PIPELINE_STAGES = 2
+_PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
 
 
 def _sh_module() -> types.ModuleType:
@@ -257,8 +258,17 @@ async def _finalize_pipeline_execution(
     hooks_by_stage = tuple(obs.hooks for obs in observations)
     try:
         _run_pipeline_after_hooks(parts, hooks_by_stage, stage_results)
-    finally:
-        await _wait_for_exec_hook_tasks(pending_tasks)
+    except BaseException as after_hook_error:
+        try:
+            await _wait_for_exec_hook_tasks(pending_tasks)
+        except (asyncio.CancelledError, Exception) as task_error:  # noqa: BLE001
+            # Finalization must retain failures from both independent paths.
+            raise BaseExceptionGroup(
+                _PIPELINE_FINALIZATION_ERROR,
+                (after_hook_error, task_error),
+            ) from None
+        raise
+    await _wait_for_exec_hook_tasks(pending_tasks)
 
 
 async def _run_pipeline(

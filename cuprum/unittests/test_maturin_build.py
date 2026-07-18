@@ -154,6 +154,12 @@ def test_build_native_wheel_artifact_reports_maturin_stderr(
         **_kwargs: object,
     ) -> subprocess.CompletedProcess[str]:
         """Raise a deterministic maturin command failure."""
+        assert _kwargs.get("capture_output") is True, (
+            "native wheel builds should capture maturin output"
+        )
+        assert _kwargs.get("text") is True, (
+            "native wheel builds should decode captured output as text"
+        )
         raise subprocess.CalledProcessError(
             101,
             command,

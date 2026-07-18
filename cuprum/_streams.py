@@ -28,6 +28,13 @@ class _StreamConfig:
     errors: str
 
 
+@dc.dataclass(slots=True)
+class _DrainProgress:
+    """Track bytes discarded by a cancellable reader drain."""
+
+    discarded_bytes: int = 0
+
+
 async def _consume_stream(
     stream: asyncio.StreamReader | None,
     config: _StreamConfig,
@@ -174,19 +181,22 @@ async def _relay_chunks(
         )
 
 
-async def _drain_stream_reader(reader: asyncio.StreamReader) -> int:
+async def _drain_stream_reader(
+    reader: asyncio.StreamReader,
+    progress: _DrainProgress,
+) -> int:
     """Consume the reader to EOF, discarding the data and returning byte count."""
-    discarded_bytes = 0
     while chunk := await reader.read(_READ_SIZE):
-        discarded_bytes += len(chunk)
-    return discarded_bytes
+        progress.discarded_bytes += len(chunk)
+    return progress.discarded_bytes
 
 
 async def _drain_stream_reader_bounded(reader: asyncio.StreamReader) -> int:
     """Best-effort drain after downstream closure without waiting forever."""
+    progress = _DrainProgress()
     try:
         return await asyncio.wait_for(
-            _drain_stream_reader(reader),
+            _drain_stream_reader(reader, progress),
             timeout=_POST_CLOSE_DRAIN_TIMEOUT_S,
         )
     except TimeoutError:
@@ -195,7 +205,7 @@ async def _drain_stream_reader_bounded(reader: asyncio.StreamReader) -> int:
             _POST_CLOSE_DRAIN_TIMEOUT_S,
             extra={"cuprum_timeout_s": _POST_CLOSE_DRAIN_TIMEOUT_S},
         )
-        return 0
+        return progress.discarded_bytes
 
 
 async def _write_to_stream_writer(

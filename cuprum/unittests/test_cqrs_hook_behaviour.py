@@ -41,6 +41,10 @@ class _AfterHookError(Exception):
     """Test exception raised by a pipeline after hook."""
 
 
+class _ObserveTaskError(Exception):
+    """Test exception raised by a scheduled observe task."""
+
+
 def test_safe_cmd_run_enforces_allowlist_before_before_hooks() -> None:
     """A forbidden ``SafeCmd.run_sync`` must not dispatch before hooks."""
     calls: list[sh.SafeCmd] = []
@@ -148,6 +152,62 @@ def test_pipeline_finalization_drains_tasks_after_hook_failure() -> None:
 
         assert completed == [True], "finalization should await scheduled observe tasks"
         assert pending_tasks == [], "finalization should clear completed observe tasks"
+
+    asyncio.run(run())
+
+
+def test_pipeline_finalization_preserves_after_hook_and_task_failures() -> None:
+    """Finalization groups simultaneous after-hook and observe-task failures."""
+
+    async def run() -> None:
+        """Raise from an after hook and a scheduled observe task."""
+        pending_tasks: list[asyncio.Task[None]] = []
+
+        async def failing_observe_task() -> None:
+            """Raise when finalization awaits the scheduled task."""
+            await asyncio.sleep(0)
+            raise _ObserveTaskError
+
+        def failing_after_hook(_cmd: sh.SafeCmd, _result: sh.CommandResult) -> None:
+            """Raise while finalizing the pipeline stage."""
+            raise _AfterHookError
+
+        cmd = _echo_cmd()
+        observation = _StageObservation(
+            cmd=cmd,
+            hooks=_ExecutionHooks(
+                before_hooks=(),
+                after_hooks=(failing_after_hook,),
+                observe_hooks=(),
+            ),
+            tags={},
+            cwd=None,
+            env_overlay=None,
+            pending_tasks=pending_tasks,
+        )
+        pending_tasks.append(asyncio.create_task(failing_observe_task()))
+        stage_result = sh.CommandResult(
+            program=cmd.program,
+            argv=cmd.argv,
+            exit_code=0,
+            pid=123,
+            stdout=None,
+            stderr=None,
+        )
+
+        with pytest.raises(ExceptionGroup) as exc_info:
+            await _finalize_pipeline_execution(
+                (cmd,),
+                (observation,),
+                [stage_result],
+                pending_tasks,
+            )
+
+        assert tuple(type(error) for error in exc_info.value.exceptions) == (
+            _AfterHookError,
+            _ObserveTaskError,
+        ), "finalization should preserve both failures in operation order"
+        assert pending_tasks == [], "finalization should clear failed observe tasks"
 
     asyncio.run(run())
 

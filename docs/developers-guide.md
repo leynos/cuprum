@@ -177,9 +177,10 @@ append, so no explicit lock is required.  Do not call `_StageObservation.emit`
 from a worker thread; marshal back to the execution loop first.
 
 Private helpers emit diagnostic logs rather than installing a global metrics or
-tracing backend.  Hook scheduling and hook failures use the `cuprum._observability`
-logger with structured `extra` fields such as `cuprum_phase`, `cuprum_program`,
-`cuprum_error_type`, and `cuprum_scheduled_task_count`.  Stream early-close
+tracing backend.  Hook scheduling and hook failures use the
+`cuprum._observability` logger with structured `extra` fields such as
+`cuprum_phase`, `cuprum_program`, `cuprum_error_type`, and
+`cuprum_scheduled_task_count`.  Stream early-close
 decisions use warning-level records on the `cuprum.streams` logger and include
 `cuprum_discarded_bytes` when upstream bytes are drained after the downstream
 writer has closed. Suppressed writer cleanup failures remain debug-level
