@@ -1112,10 +1112,18 @@ directly, and the pure Python wheel is built with `uv_build`.
 ### Checking Rust availability
 
 It is possible to check whether the optional extension is available in the
-current environment using the public helper `cuprum.is_rust_available()`, which
-wraps the internal probe `_rust_backend.is_available()`. The module
-`cuprum._rust_backend` is private and not semver-stable, so production code
-should avoid calling `_rust_backend.is_available()` directly:
+current environment using the public helper `cuprum.is_rust_available()`. The
+helper delegates to `cuprum._backend._check_rust_available()`, the cached
+resolver used by stream-backend dispatch. When
+`set_rust_availability_for_testing()` is active, it short-circuits that
+resolver before the raw import probe runs and clears both backend caches, so
+test overrides take effect immediately. Cached answers only drift if a
+long-lived interpreter survives a wheel swap or another out-of-band import-path
+or installation-state change.
+
+The module `cuprum._rust_backend` is private and not semver-stable, so
+production code should avoid calling `_rust_backend.is_available()` directly
+except when explicitly testing the raw import probe:
 
 ```python
 import cuprum as c
@@ -1126,8 +1134,9 @@ else:
     print("Rust extension is not installed")
 ```
 
-The probe returns `False` on pure Python installations and does not raise when
-native wheels are missing.
+The helper returns `False` on pure Python installations and does not raise when
+native wheels are missing. Other native-extension import failures still surface
+so broken installations are visible.
 
 ### Rust stream pump (internal)
 
@@ -1413,7 +1422,7 @@ prerequisites described above and running `maturin develop`.
 controls which stream implementation is used:
 
 - `auto` (default): uses the Rust pathway when available, otherwise falls
-  back silently to the Python pathway.
+  back to the Python pathway and emits a fallback log.
 - `python`: forces the pure Python pathway regardless of whether the Rust
   extension is installed.
 - `rust`: forces the Rust pathway and raises `ImportError` if the extension

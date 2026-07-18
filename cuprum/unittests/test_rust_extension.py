@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import types
 
 import pytest
@@ -25,6 +26,32 @@ def test_is_available_returns_false_when_module_missing(
     assert _rust_backend.is_available() is False, (
         "expected probe to report unavailable when module missing"
     )
+
+
+def test_is_available_warns_and_reraises_unexpected_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Probe preserves unexpected import failures after logging them."""
+
+    def _raise_import_error(_: str) -> types.ModuleType:
+        """Raise ImportError to simulate a broken native module."""
+        msg = "broken native module"
+        raise ImportError(msg)
+
+    monkeypatch.setattr(importlib, "import_module", _raise_import_error)
+
+    with (
+        caplog.at_level(logging.WARNING, logger="cuprum._rust_backend"),
+        pytest.raises(ImportError, match="broken native module"),
+    ):
+        _rust_backend.is_available()
+
+    assert any(
+        record.levelno == logging.WARNING
+        and record.__dict__.get("event") == "cuprum.rust_native_import_failed"
+        for record in caplog.records
+    ), "expected cuprum.rust_native_import_failed warning was not emitted"
 
 
 def test_is_available_returns_true_when_module_present(

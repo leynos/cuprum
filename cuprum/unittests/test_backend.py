@@ -1,17 +1,30 @@
-"""Unit tests for the stream backend dispatcher."""
+"""Unit tests for stream backend dispatch and Rust availability resolution.
+
+The tests pin the contract between the raw Rust import probe, the cached
+dispatch resolver, and the public Rust availability helper.
+"""
 
 from __future__ import annotations
 
+import logging
+
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from cuprum import _rust_backend
+from cuprum import rust as rust_api
 from cuprum._backend import (
     StreamBackend,
     _check_rust_available,
     get_stream_backend,
+    set_rust_availability_for_testing,
 )
+from cuprum.rust import is_rust_available
 
 _ENV_VAR = "CUPRUM_STREAM_BACKEND"
+_BACKEND_LOGGER = "cuprum._backend"
+_RUST_BACKEND_LOGGER = "cuprum._rust_backend"
 
 
 # -- StreamBackend enum -------------------------------------------------------
@@ -76,6 +89,26 @@ def test_auto_falls_back_on_import_error(
     )
 
 
+def test_auto_resolution_logs_selected_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Auto mode emits a structured decision log record."""
+    monkeypatch.delenv(_ENV_VAR, raising=False)
+    monkeypatch.setattr(_rust_backend, "is_available", lambda: True)
+
+    with caplog.at_level(logging.DEBUG, logger=_BACKEND_LOGGER):
+        assert get_stream_backend() is StreamBackend.RUST
+
+    assert any(
+        record.__dict__.get("event") == "cuprum.stream_backend_resolved"
+        and record.__dict__.get("requested_backend") == StreamBackend.AUTO.value
+        and record.__dict__.get("resolved_backend") == StreamBackend.RUST.value
+        and record.__dict__.get("rust_available") is True
+        for record in caplog.records
+    ), "expected a structured backend-resolution log record"
+
+
 # -- forced rust mode ---------------------------------------------------------
 
 
@@ -100,6 +133,28 @@ def test_forced_rust_raises_when_unavailable(
 
     with pytest.raises(ImportError, match=_ENV_VAR):
         get_stream_backend()
+
+
+def test_forced_rust_unavailable_logs_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Forced Rust mode logs the unavailable-backend failure boundary."""
+    monkeypatch.setenv(_ENV_VAR, "rust")
+    monkeypatch.setattr(_rust_backend, "is_available", lambda: False)
+
+    with (
+        caplog.at_level(logging.WARNING, logger=_BACKEND_LOGGER),
+        pytest.raises(ImportError, match=_ENV_VAR),
+    ):
+        get_stream_backend()
+
+    assert any(
+        record.__dict__.get("event") == "cuprum.stream_backend_unavailable"
+        and record.__dict__.get("requested_backend") == StreamBackend.RUST.value
+        and record.__dict__.get("rust_available") is False
+        for record in caplog.records
+    ), "expected a structured unavailable-backend warning"
 
 
 # -- forced python mode -------------------------------------------------------
@@ -219,6 +274,163 @@ def test_availability_is_cached(
     get_stream_backend()
 
     assert call_count == 1, "expected availability check to be called once"
+
+
+# -- public probe agrees with dispatch ----------------------------------------
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_public_probe_agrees_with_dispatch_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    available: bool,
+) -> None:
+    """The public ``is_rust_available`` agrees with the dispatch resolver.
+
+    The public helper must delegate to the same resolver object imported by the
+    public Rust module, not the raw Rust import probe.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to override the public module's resolver binding.
+    available : bool
+        Generated availability the resolver should report.
+    """
+    call_count = 0
+
+    def _counting_resolver() -> bool:
+        """Return deterministic availability and count public resolver calls."""
+        nonlocal call_count
+        call_count += 1
+        return available
+
+    monkeypatch.delenv(_ENV_VAR, raising=False)
+    monkeypatch.setattr(rust_api, "_check_rust_available", _counting_resolver)
+
+    for _ in range(2):
+        assert is_rust_available() is available, (
+            "public probe must return the dispatch resolver availability"
+        )
+
+    assert call_count == 2, "public probe should call the dispatch resolver each time"
+
+
+def test_public_probe_honours_test_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The public probe reflects ``set_rust_availability_for_testing``."""
+    monkeypatch.delenv(_ENV_VAR, raising=False)
+    _check_rust_available.cache_clear()
+    try:
+        set_rust_availability_for_testing(is_available=True)
+        assert is_rust_available() is True, "override should force availability"
+        assert get_stream_backend() is StreamBackend.RUST, (
+            "dispatcher should select Rust when the override forces availability"
+        )
+
+        set_rust_availability_for_testing(is_available=False)
+        assert is_rust_available() is False, "override should force unavailability"
+        assert get_stream_backend() is StreamBackend.PYTHON, (
+            "dispatcher should select Python when the override forces unavailability"
+        )
+    finally:
+        set_rust_availability_for_testing(is_available=None)
+
+
+@settings(
+    max_examples=100,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+@given(
+    raw_available=st.booleans(),
+    overrides=st.lists(
+        st.one_of(st.none(), st.booleans()),
+        min_size=1,
+        max_size=10,
+    ),
+)
+def test_public_probe_and_dispatch_stay_aligned_across_override_transitions(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    raw_available: bool,
+    overrides: list[bool | None],
+) -> None:
+    """Public availability and dispatch agree through cache-refresh transitions."""
+    raw_probe_calls = 0
+
+    def _raw_probe() -> bool:
+        """Return a deterministic raw availability value and count probes."""
+        nonlocal raw_probe_calls
+        raw_probe_calls += 1
+        return raw_available
+
+    monkeypatch.delenv(_ENV_VAR, raising=False)
+    monkeypatch.setattr(_rust_backend, "is_available", _raw_probe)
+    set_rust_availability_for_testing(is_available=None)
+
+    try:
+        for override in overrides:
+            set_rust_availability_for_testing(is_available=override)
+            expected_available = raw_available if override is None else override
+            expected_backend = (
+                StreamBackend.RUST if expected_available else StreamBackend.PYTHON
+            )
+
+            assert is_rust_available() is expected_available, (
+                "public probe must reflect the refreshed availability resolver"
+            )
+            assert get_stream_backend() is expected_backend, (
+                "dispatcher must reflect the refreshed availability resolver"
+            )
+    finally:
+        set_rust_availability_for_testing(is_available=None)
+
+    assert raw_probe_calls == overrides.count(None), (
+        "testing overrides must short-circuit the raw availability probe"
+    )
+
+
+def test_testing_override_update_logs_cache_clear(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test overrides emit a structured cache-clear log record."""
+    try:
+        with caplog.at_level(logging.DEBUG, logger=_BACKEND_LOGGER):
+            set_rust_availability_for_testing(is_available=True)
+    finally:
+        set_rust_availability_for_testing(is_available=None)
+
+    assert any(
+        record.__dict__.get("event") == "cuprum.rust_availability_override_updated"
+        and record.__dict__.get("override_active") is True
+        and record.__dict__.get("rust_availability_override") is True
+        for record in caplog.records
+    ), "expected a structured override/cache-clear log record"
+
+
+def test_raw_probe_logs_missing_native_module(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The raw probe logs missing native-extension imports."""
+
+    def _missing_native_module(name: str) -> object:
+        """Raise the missing-module error emitted by ``import_module``."""
+        raise ModuleNotFoundError(name=name)
+
+    monkeypatch.setattr(
+        _rust_backend.importlib,
+        "import_module",
+        _missing_native_module,
+    )
+
+    with caplog.at_level(logging.DEBUG, logger=_RUST_BACKEND_LOGGER):
+        assert _rust_backend.is_available() is False
+
+    assert any(
+        record.__dict__.get("event") == "cuprum.rust_native_import_missing"
+        and record.__dict__.get("module_name") == "cuprum._rust_backend_native"
+        for record in caplog.records
+    ), "expected a structured native-import-missing log record"
 
 
 def test_cache_clear_allows_recheck(

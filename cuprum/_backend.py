@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import enum
 import functools
+import logging
 import os
 
 from cuprum import _rust_backend
 
 _ENV_VAR = "CUPRUM_STREAM_BACKEND"
+_LOGGER = logging.getLogger(__name__)
 _RUST_AVAILABILITY_FOR_TESTING: bool | None = None
 
 
@@ -85,8 +87,25 @@ def _check_rust_available() -> bool:
     tests).
     """
     if _RUST_AVAILABILITY_FOR_TESTING is not None:
+        _LOGGER.debug(
+            "resolved Rust availability from testing override",
+            extra={
+                "event": "cuprum.rust_availability_resolved",
+                "rust_available": _RUST_AVAILABILITY_FOR_TESTING,
+                "source": "testing_override",
+            },
+        )
         return _RUST_AVAILABILITY_FOR_TESTING
-    return _rust_backend.is_available()
+    is_available = _rust_backend.is_available()
+    _LOGGER.debug(
+        "resolved Rust availability from raw probe",
+        extra={
+            "event": "cuprum.rust_availability_resolved",
+            "rust_available": is_available,
+            "source": "raw_probe",
+        },
+    )
+    return is_available
 
 
 def set_rust_availability_for_testing(
@@ -105,6 +124,85 @@ def set_rust_availability_for_testing(
     _RUST_AVAILABILITY_FOR_TESTING = is_available
     _check_rust_available.cache_clear()
     get_stream_backend.cache_clear()
+    _LOGGER.debug(
+        "updated Rust availability testing override and cleared resolver caches",
+        extra={
+            "event": "cuprum.rust_availability_override_updated",
+            "override_active": is_available is not None,
+            "rust_availability_override": is_available,
+        },
+    )
+
+
+def _log_stream_backend_resolution(
+    requested: StreamBackend,
+    resolved: StreamBackend,
+    *,
+    rust_available: bool | None,
+) -> None:
+    """Log the outcome of stream backend resolution."""
+    _LOGGER.debug(
+        "resolved stream backend",
+        extra={
+            "event": "cuprum.stream_backend_resolved",
+            "requested_backend": requested.value,
+            "resolved_backend": resolved.value,
+            "rust_available": rust_available,
+        },
+    )
+
+
+def _resolve_python_backend(requested: StreamBackend) -> StreamBackend:
+    """Resolve the StreamBackend.PYTHON case."""
+    _log_stream_backend_resolution(requested, StreamBackend.PYTHON, rust_available=None)
+    return StreamBackend.PYTHON
+
+
+def _resolve_rust_forced_backend(requested: StreamBackend) -> StreamBackend:
+    """Resolve the StreamBackend.RUST case, raising if unavailable."""
+    is_rust_available = _check_rust_available()
+    if is_rust_available:
+        _log_stream_backend_resolution(
+            requested, StreamBackend.RUST, rust_available=is_rust_available
+        )
+        return StreamBackend.RUST
+    _LOGGER.warning(
+        "Rust stream backend requested but unavailable",
+        extra={
+            "event": "cuprum.stream_backend_unavailable",
+            "requested_backend": requested.value,
+            "rust_available": is_rust_available,
+        },
+    )
+    msg = (
+        f"Rust stream backend requested via {_ENV_VAR}=rust "
+        "but the Rust extension is not available"
+    )
+    raise ImportError(msg)
+
+
+def _resolve_auto_backend(requested: StreamBackend) -> StreamBackend:
+    """Resolve the StreamBackend.AUTO case, falling back to Python."""
+    try:
+        is_rust_available = _check_rust_available()
+        if is_rust_available:
+            _log_stream_backend_resolution(
+                requested, StreamBackend.RUST, rust_available=is_rust_available
+            )
+            return StreamBackend.RUST
+    except ImportError:
+        _LOGGER.debug(
+            "Rust availability probe failed in auto mode; falling back to Python",
+            extra={
+                "event": "cuprum.stream_backend_auto_probe_failed",
+                "requested_backend": requested.value,
+            },
+        )
+        is_rust_available = None
+    _log_stream_backend_resolution(
+        requested, StreamBackend.PYTHON, rust_available=is_rust_available
+    )
+    return StreamBackend.PYTHON
 
 
 @functools.lru_cache(maxsize=1)
@@ -147,22 +245,11 @@ def get_stream_backend() -> StreamBackend:
 
     match requested:
         case StreamBackend.PYTHON:
-            return StreamBackend.PYTHON
+            return _resolve_python_backend(requested)
         case StreamBackend.RUST:
-            if _check_rust_available():
-                return StreamBackend.RUST
-            msg = (
-                f"Rust stream backend requested via {_ENV_VAR}=rust "
-                "but the Rust extension is not available"
-            )
-            raise ImportError(msg)
+            return _resolve_rust_forced_backend(requested)
         case StreamBackend.AUTO:
-            try:
-                if _check_rust_available():
-                    return StreamBackend.RUST
-            except ImportError:
-                pass
-            return StreamBackend.PYTHON
+            return _resolve_auto_backend(requested)
 
 
 __all__ = ["StreamBackend", "get_stream_backend"]
