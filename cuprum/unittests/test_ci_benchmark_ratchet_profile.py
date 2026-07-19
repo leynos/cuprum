@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
 import json
 import typing as typ
 
@@ -20,21 +21,25 @@ if typ.TYPE_CHECKING:
     import pathlib as pth
 
 
-def _scenario(
-    *,
-    name: str,
-    backend: str,
-    payload_bytes: int,
-    stages: int,
-    with_line_callbacks: bool = False,
-) -> dict[str, object]:
+@dc.dataclass(frozen=True)
+class _ScenarioSpec:
+    """Parameters for a CI benchmark test scenario."""
+
+    name: str
+    backend: str
+    payload_bytes: int
+    stages: int
+    with_line_callbacks: bool = False
+
+
+def _scenario(spec: _ScenarioSpec) -> dict[str, object]:
     """Create a scenario dict for CI benchmark tests."""
     return {
-        "name": name,
-        "backend": backend,
-        "payload_bytes": payload_bytes,
-        "stages": stages,
-        "with_line_callbacks": with_line_callbacks,
+        "name": spec.name,
+        "backend": spec.backend,
+        "payload_bytes": spec.payload_bytes,
+        "stages": spec.stages,
+        "with_line_callbacks": spec.with_line_callbacks,
     }
 
 
@@ -60,42 +65,54 @@ def test_select_ci_ratchet_scenarios_filters_for_ci_profile() -> None:
         ],
         "scenarios": [
             _scenario(
-                name="python-small-single-nocb",
-                backend="python",
-                payload_bytes=1024,
-                stages=2,
+                _ScenarioSpec(
+                    name="python-small-single-nocb",
+                    backend="python",
+                    payload_bytes=1024,
+                    stages=2,
+                )
             ),
             _scenario(
-                name="python-small-single-cb",
-                backend="python",
-                payload_bytes=1024,
-                stages=2,
-                with_line_callbacks=True,
+                _ScenarioSpec(
+                    name="python-small-single-cb",
+                    backend="python",
+                    payload_bytes=1024,
+                    stages=2,
+                    with_line_callbacks=True,
+                )
             ),
             _scenario(
-                name="rust-small-single-nocb",
-                backend="rust",
-                payload_bytes=1024,
-                stages=2,
+                _ScenarioSpec(
+                    name="rust-small-single-nocb",
+                    backend="rust",
+                    payload_bytes=1024,
+                    stages=2,
+                )
             ),
             _scenario(
-                name="rust-small-single-cb",
-                backend="rust",
-                payload_bytes=1024,
-                stages=2,
-                with_line_callbacks=True,
+                _ScenarioSpec(
+                    name="rust-small-single-cb",
+                    backend="rust",
+                    payload_bytes=1024,
+                    stages=2,
+                    with_line_callbacks=True,
+                )
             ),
             _scenario(
-                name="rust-large-single-nocb",
-                backend="rust",
-                payload_bytes=131072,
-                stages=2,
+                _ScenarioSpec(
+                    name="rust-large-single-nocb",
+                    backend="rust",
+                    payload_bytes=131072,
+                    stages=2,
+                )
             ),
             _scenario(
-                name="python-small-multi-nocb",
-                backend="python",
-                payload_bytes=1024,
-                stages=3,
+                _ScenarioSpec(
+                    name="python-small-multi-nocb",
+                    backend="python",
+                    payload_bytes=1024,
+                    stages=3,
+                )
             ),
         ],
     }
@@ -148,10 +165,12 @@ def test_select_ci_ratchet_scenarios_rejects_invalid_single_scenario(
             "command": ["a", "b", "c", "d", "e", "f", "g", last_command],
             "scenarios": [
                 _scenario(
-                    name=typ.cast("str", scenario_kwargs["name"]),
-                    backend=typ.cast("str", scenario_kwargs["backend"]),
-                    payload_bytes=typ.cast("int", scenario_kwargs["payload_bytes"]),
-                    stages=2,
+                    _ScenarioSpec(
+                        name=typ.cast("str", scenario_kwargs["name"]),
+                        backend=typ.cast("str", scenario_kwargs["backend"]),
+                        payload_bytes=typ.cast("int", scenario_kwargs["payload_bytes"]),
+                        stages=2,
+                    )
                 )
             ],
         })
@@ -167,16 +186,20 @@ def test_load_plan_payload_rejects_mismatched_command_count(tmp_path: pth.Path) 
             "command": ["a", "b", "c", "d", "e", "f", "g", "cmd-1"],
             "scenarios": [
                 _scenario(
-                    name="python-small-single-nocb",
-                    backend="python",
-                    payload_bytes=1024,
-                    stages=2,
+                    _ScenarioSpec(
+                        name="python-small-single-nocb",
+                        backend="python",
+                        payload_bytes=1024,
+                        stages=2,
+                    )
                 ),
                 _scenario(
-                    name="rust-small-single-nocb",
-                    backend="rust",
-                    payload_bytes=1024,
-                    stages=2,
+                    _ScenarioSpec(
+                        name="rust-small-single-nocb",
+                        backend="rust",
+                        payload_bytes=1024,
+                        stages=2,
+                    )
                 ),
             ],
         }),
@@ -195,19 +218,23 @@ def test_build_hyperfine_command_includes_selected_scenarios(
     selected = [
         (
             _scenario(
-                name="python-small-single-nocb",
-                backend="python",
-                payload_bytes=1024,
-                stages=2,
+                _ScenarioSpec(
+                    name="python-small-single-nocb",
+                    backend="python",
+                    payload_bytes=1024,
+                    stages=2,
+                )
             ),
             "python cmd",
         ),
         (
             _scenario(
-                name="rust-small-single-nocb",
-                backend="rust",
-                payload_bytes=1024,
-                stages=2,
+                _ScenarioSpec(
+                    name="rust-small-single-nocb",
+                    backend="rust",
+                    payload_bytes=1024,
+                    stages=2,
+                )
             ),
             "rust cmd",
         ),
@@ -244,19 +271,23 @@ def test_write_filtered_plan_preserves_selected_scenarios(tmp_path: pth.Path) ->
     selected = [
         (
             _scenario(
-                name="python-small-single-nocb",
-                backend="python",
-                payload_bytes=1024,
-                stages=2,
+                _ScenarioSpec(
+                    name="python-small-single-nocb",
+                    backend="python",
+                    payload_bytes=1024,
+                    stages=2,
+                )
             ),
             "python cmd",
         ),
         (
             _scenario(
-                name="rust-small-single-nocb",
-                backend="rust",
-                payload_bytes=1024,
-                stages=2,
+                _ScenarioSpec(
+                    name="rust-small-single-nocb",
+                    backend="rust",
+                    payload_bytes=1024,
+                    stages=2,
+                )
             ),
             "rust cmd",
         ),
@@ -301,10 +332,12 @@ def test_main_rejects_non_bool_rust_availability(
             "command": ["a", "b", "c", "d", "e", "f", "g", "rust cmd"],
             "scenarios": [
                 _scenario(
-                    name="rust-small-single-nocb",
-                    backend="rust",
-                    payload_bytes=1024,
-                    stages=2,
+                    _ScenarioSpec(
+                        name="rust-small-single-nocb",
+                        backend="rust",
+                        payload_bytes=1024,
+                        stages=2,
+                    )
                 )
             ],
         }),
@@ -342,10 +375,12 @@ def test_write_filtered_plan_rejects_non_boolean_rust_available(
             selected=[
                 (
                     _scenario(
-                        name="rust-small-single-nocb",
-                        backend="rust",
-                        payload_bytes=1024,
-                        stages=2,
+                        _ScenarioSpec(
+                            name="rust-small-single-nocb",
+                            backend="rust",
+                            payload_bytes=1024,
+                            stages=2,
+                        )
                     ),
                     "rust cmd",
                 ),
