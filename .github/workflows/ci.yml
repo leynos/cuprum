@@ -37,7 +37,7 @@ jobs:
       - name: Install Rust toolchain
         uses: leynos/shared-actions/.github/actions/setup-rust@074f7d8ba75a6e5d18532b72cbe38fccbda4e9c6
         with:
-          toolchain: '1.92.0'
+          toolchain: '1.85.0'
 
       - name: Cache Whitaker installation
         id: cache-whitaker
