@@ -60,7 +60,10 @@ impl PumpError {
 impl From<PumpError> for PyErr {
     fn from(err: PumpError) -> Self {
         match err {
-            PumpError::Io(io_err) => io_err.into(),
+            PumpError::Io(io_err) => match io_err.raw_os_error() {
+                Some(error_code) => PyOSError::new_err((error_code, io_err.to_string())),
+                None => io_err.into(),
+            },
             other @ (PumpError::LengthOverflow | PumpError::BufferRangeExceeded) => {
                 PyOSError::new_err(other.py_os_error_message().unwrap_or("stream pump failed"))
             }

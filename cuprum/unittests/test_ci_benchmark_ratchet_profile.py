@@ -26,6 +26,7 @@ def _scenario(
     backend: str,
     payload_bytes: int,
     stages: int,
+    with_line_callbacks: bool = False,
 ) -> dict[str, object]:
     """Create a scenario dict for CI benchmark tests."""
     return {
@@ -33,6 +34,7 @@ def _scenario(
         "backend": backend,
         "payload_bytes": payload_bytes,
         "stages": stages,
+        "with_line_callbacks": with_line_callbacks,
     }
 
 
@@ -49,8 +51,10 @@ def test_select_ci_ratchet_scenarios_filters_for_ci_profile() -> None:
             "1",
             "--runs",
             "3",
-            "python small",
-            "rust small",
+            "python small nocb",
+            "python small cb",
+            "rust small nocb",
+            "rust small cb",
             "rust too-big",
             "python too-deep",
         ],
@@ -62,10 +66,24 @@ def test_select_ci_ratchet_scenarios_filters_for_ci_profile() -> None:
                 stages=2,
             ),
             _scenario(
+                name="python-small-single-cb",
+                backend="python",
+                payload_bytes=1024,
+                stages=2,
+                with_line_callbacks=True,
+            ),
+            _scenario(
                 name="rust-small-single-nocb",
                 backend="rust",
                 payload_bytes=1024,
                 stages=2,
+            ),
+            _scenario(
+                name="rust-small-single-cb",
+                backend="rust",
+                payload_bytes=1024,
+                stages=2,
+                with_line_callbacks=True,
             ),
             _scenario(
                 name="rust-large-single-nocb",
@@ -87,6 +105,8 @@ def test_select_ci_ratchet_scenarios_filters_for_ci_profile() -> None:
     assert [scenario["name"] for scenario, _ in selected] == [
         "python-small-single-nocb",
         "rust-small-single-nocb",
+        "python-small-single-cb",
+        "rust-small-single-cb",
     ]
 
 
@@ -205,7 +225,7 @@ def test_build_hyperfine_command_includes_selected_scenarios(
         "--warmup",
         "1",
         "--runs",
-        "3",
+        "10",
         "python cmd",
         "rust cmd",
     ]

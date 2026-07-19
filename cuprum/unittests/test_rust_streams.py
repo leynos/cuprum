@@ -15,6 +15,7 @@ import contextlib
 import errno
 import os
 import pathlib
+import threading
 import typing as typ
 
 import pytest
@@ -39,14 +40,27 @@ def _pump_payload(
     *,
     buffer_size: int | None = None,
 ) -> tuple[bytes, int]:
-    """Pump payload through the Rust stream and return output and count."""
+    """Pump payload while concurrently feeding and draining its pipes."""
     with _pipe_pair() as (in_read, in_write, out_read, out_write):
-        view = memoryview(payload)
-        while view:
-            written = os.write(in_write, view)
-            assert written > 0, "expected os.write to make progress"
-            view = view[written:]
-        _safe_close(in_write)
+        output_chunks: list[bytes] = []
+
+        def writer() -> None:
+            """Feed the source pipe while the synchronous pump is running."""
+            view = memoryview(payload)
+            while view:
+                written = os.write(in_write, view)
+                assert written > 0, "expected os.write to make progress"
+                view = view[written:]
+            _safe_close(in_write)
+
+        def reader() -> None:
+            """Drain the destination pipe while the synchronous pump is running."""
+            output_chunks.append(_read_all(out_read))
+
+        write_thread = threading.Thread(target=writer)
+        read_thread = threading.Thread(target=reader)
+        write_thread.start()
+        read_thread.start()
 
         kwargs: dict[str, int] = {}
         if buffer_size is not None:
@@ -54,9 +68,10 @@ def _pump_payload(
         transferred = streams.rust_pump_stream(in_read, out_write, **kwargs)
 
         _safe_close(out_write)
-        output = _read_all(out_read)
+        write_thread.join()
+        read_thread.join()
 
-    return output, transferred
+    return output_chunks[0], transferred
 
 
 def _consume_payload(

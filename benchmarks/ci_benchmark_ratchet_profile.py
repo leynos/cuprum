@@ -21,6 +21,7 @@ if typ.TYPE_CHECKING:
 _HYPERFINE_PREFIX_ARGUMENT_COUNT = 7
 _CI_RATCHET_STAGE_COUNT = 2
 _CI_RATCHET_MAX_PAYLOAD_BYTES = 65536
+_CI_RATCHET_RUNS = 10
 
 
 def load_plan_payload(full_plan_path: pth.Path) -> cabc.Mapping[str, object]:
@@ -88,6 +89,13 @@ def select_ci_ratchet_scenarios(
     if not any(scenario.get("backend") == "rust" for scenario, _ in selected):
         msg = "selected CI benchmark profile must include Rust scenarios"
         raise ValueError(msg)
+    selected.sort(
+        key=lambda entry: (
+            _require_numeric_payload_bytes(entry[0].get("payload_bytes", 0)),
+            bool(entry[0].get("with_line_callbacks", False)),
+            entry[0].get("backend") != "python",
+        )
+    )
     return selected
 
 
@@ -104,7 +112,7 @@ def build_hyperfine_command(
         "--warmup",
         "1",
         "--runs",
-        "3",
+        str(_CI_RATCHET_RUNS),
         *[scenario_command for _, scenario_command in selected],
     ]
 

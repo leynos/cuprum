@@ -2127,9 +2127,12 @@ CI includes a benchmark ratchet job on pull requests and pushes to `main`. The
 job executes smoke-mode throughput benchmarks for the current checkout (with a
 release build of the Rust extension) and compares each scenario's within-run
 Rust-to-Python mean ratio against the latest successful `main` baseline
-artefact. On pushes to `main`, the new smoke benchmark output is uploaded as
-the next baseline artefact for future runs. When no prior `main` baseline is
-available yet, the job writes a skip report instead of failing the workflow.
+artefact. The CI profile measures ten runs per command and orders matched
+Python/Rust commands adjacently so time-dependent runner load is less likely to
+bias one backend block. On pushes to `main`, the new smoke benchmark output is
+uploaded as the next baseline artefact for future runs. When no prior `main`
+baseline is available yet, the job writes a skip report instead of failing the
+workflow.
 The baseline fetch helper follows GitHub’s signed archive redirects without
 forwarding GitHub-only authentication headers to the storage host, avoiding
 cross-origin 401 responses during artefact download. The same job also

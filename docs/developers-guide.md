@@ -543,7 +543,10 @@ pipeline execution, reducing Python interpreter startup noise in the ratchet.
 The ratchet itself compares each scenario's within-run
 `rust_mean / python_mean` ratio between the baseline and candidate runs, so
 runner-speed differences and residual startup overhead cancel out of the
-comparison. Dry-run plans record `benchmark_profile_version` and
+comparison. Its CI profile places each matched Python/Rust scenario pair next
+to each other and records ten measured runs per command, reducing temporal
+runner drift and three-sample outliers. Dry-run plans record
+`benchmark_profile_version` and
 `worker_iterations`; ratchet comparison skips older baseline artefacts whose
 profile metadata does not match the current benchmark shape.
 
@@ -953,12 +956,14 @@ with `thiserror`:
 - `Io(io::Error)` — an operating-system I/O failure (transparent wrapper).
 
 Conversion to a Python exception happens in exactly one place
-(`From<PumpError> for PyErr`): `Io` maps through `pyo3`'s standard `io::Error`
-translation, and the overflow variants surface as `OSError`. The non-fatal
-write classification (broken pipe / connection reset) lives on the enum as
-`PumpError::is_nonfatal_write`, replacing the free function the splice and
-read/write paths previously shared. New failure conditions get a variant here
-rather than a stringly-typed `io::Error::other(...)`.
+(`From<PumpError> for PyErr`): `Io` preserves a raw operating-system error code
+as Python's machine-readable `OSError.errno`, while errors without a raw code
+use `pyo3`'s standard `io::Error` translation. The overflow variants surface
+as `OSError`. The non-fatal write classification (broken pipe / connection
+reset) lives on the enum as `PumpError::is_nonfatal_write`, replacing the free
+function the splice and read/write paths previously shared. New failure
+conditions get a variant here rather than a stringly-typed
+`io::Error::other(...)`.
 
 ## Rust splice-loop and drain contract
 

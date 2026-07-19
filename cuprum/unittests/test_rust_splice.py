@@ -28,8 +28,9 @@ def _pump_payload_threaded(
     *,
     buffer_size: int | None = None,
 ) -> tuple[bytes, int]:
-    """Pump payload through the Rust stream using a writer thread to avoid deadlock."""
+    """Pump payload while concurrently feeding and draining its pipes."""
     with _pipe_pair() as (in_read, in_write, out_read, out_write):
+        output_chunks: list[bytes] = []
 
         def writer() -> None:
             """Write the payload into the pipe from a worker thread."""
@@ -39,19 +40,24 @@ def _pump_payload_threaded(
                 view = view[written:]
             _safe_close(in_write)
 
+        def reader() -> None:
+            """Drain the output pipe while the synchronous pump is running."""
+            output_chunks.append(_read_all(out_read))
+
         write_thread = threading.Thread(target=writer)
+        read_thread = threading.Thread(target=reader)
         write_thread.start()
+        read_thread.start()
 
         kwargs: dict[str, int] = {}
         if buffer_size is not None:
             kwargs["buffer_size"] = buffer_size
         transferred = streams.rust_pump_stream(in_read, out_write, **kwargs)
         _safe_close(out_write)
-
-        output = _read_all(out_read)
         write_thread.join()
+        read_thread.join()
 
-    return output, transferred
+    return output_chunks[0], transferred
 
 
 class TestSpliceOptimization:
