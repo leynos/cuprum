@@ -168,8 +168,13 @@ async def _handle_stream_timeout(
 ) -> typ.NoReturn:
     """Clean up stdin/stream tasks on timeout and raise _SubprocessTimeoutError."""
     if stdin_task is not None:
+        stdin_task.cancel()
         await asyncio.gather(stdin_task, return_exceptions=True)
-    stdout_text, stderr_text = await asyncio.gather(*consumers)
+    stdout_result, stderr_result = await asyncio.gather(
+        *consumers, return_exceptions=True
+    )
+    stdout_text = None if isinstance(stdout_result, BaseException) else stdout_result
+    stderr_text = None if isinstance(stderr_result, BaseException) else stderr_result
     raise _SubprocessTimeoutError(
         _SubprocessTimeoutDetails(
             timeout=_require_timeout(timeout, exc),

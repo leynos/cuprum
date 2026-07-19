@@ -1,4 +1,4 @@
-# Debugging Plan: Hypothesis generation exceeds its health-check budget
+# Debugging plan: Hypothesis generation exceeds its health-check budget
 
 **Generated**: 2026-07-18
 **Issue ID**: local validation follow-up
@@ -13,16 +13,18 @@ agent.
 
 `make test` fails in
 `test_single_and_pipeline_tags_agree_on_shared_keys` because Hypothesis takes
-too long to generate `ctx_tags`. The property should execute within Hypothesis'
+too long to generate `ctx_tags`. The property should execute within Hypothesis's
 health-check budget without suppressing that protection or changing its stated
 behaviour.
 
 ## Context Summary
 
+_Table 1: Context summary for the slow-generation health-check observation._
+
 | Aspect | Details |
 | --- | --- |
 | First observed | 2026-07-18 validation run |
-| Reproduction rate | Observed with seed `617015540253848316034710431685553955` |
+| Reproduction evidence | Observed with seed `617015540253848316034710431685553955` |
 | Affected components | `test_stage_observation_builder.py`, `_TAGS` strategy |
 | Recent changes | Documentation and timeout-branch review follow-up; this test was untouched |
 
@@ -54,6 +56,8 @@ the slow generation; a bounded, schema-representative strategy will not.
 
 #### H1 Falsification Plan
 
+_Table 2: Falsification steps for the `_TAGS` generation hypothesis._
+
 | Step | Action | Expected Negative Result |
 | --- | --- | --- |
 | 1 | Inspect `_TAGS` and replay the named test seed. | The test completes without a slow-generation health check. |
@@ -77,6 +81,8 @@ example.
 health check or have a comparable per-example cost.
 
 #### H2 Falsification Plan
+
+_Table 3: Falsification steps for the observation-construction hypothesis._
 
 | Step | Action | Expected Negative Result |
 | --- | --- | --- |

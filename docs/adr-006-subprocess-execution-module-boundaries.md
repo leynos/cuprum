@@ -9,7 +9,7 @@ implementation by runner orchestration, stdin handling, and timeout handling.
 
 2026-07-18.
 
-## Context and Problem Statement
+## Context and problem statement
 
 `cuprum/_subprocess_execution.py` combined subprocess spawning, stdout/stderr
 consumer coordination, supplied-stdin lifecycle management, timeout
@@ -21,7 +21,7 @@ The split must preserve the private execution contract: `SafeCmd.run()` keeps
 the same observable results, cancellation behaviour, timeout translation, and
 event emission.
 
-## Decision Drivers
+## Decision drivers
 
 - Remove the module-size suppression by creating cohesive modules.
 - Give stdin diagnostics and timeout translation clear ownership.
@@ -29,9 +29,9 @@ event emission.
 - Preserve existing private import compatibility where it remains necessary.
 - Make the specialized lifecycles independently testable.
 
-## Options Considered
+## Options considered
 
-### Option A: Retain the combined module and suppression
+### Option A: retain the combined module and suppression
 
 Keep all execution concerns in `_subprocess_execution.py` and retain the
 `too-many-lines` suppression.
@@ -39,7 +39,7 @@ Keep all execution concerns in `_subprocess_execution.py` and retain the
 This avoids import changes but keeps unrelated lifecycles coupled and leaves a
 policy exception in a core implementation module.
 
-### Option B: Split by lifecycle concern
+### Option B: split by lifecycle concern
 
 Keep runner orchestration in `_subprocess_execution.py`; move stdin writing and
 its logger to `_subprocess_stdin.py`; and move timeout translation plus shared
@@ -48,7 +48,7 @@ exit-event accounting to `_subprocess_timeout.py`.
 This makes ownership explicit while retaining the runner as the composition
 root.
 
-### Option C: Move all execution helpers into a generic utilities module
+### Option C: move all execution helpers into a generic utilities module
 
 Create a broad helpers module without distinguishing the lifecycle each helper
 belongs to.
@@ -65,7 +65,7 @@ does not improve ownership.
 
 _Table 1: Trade-offs for organizing private subprocess execution._
 
-## Decision Outcome / Proposed Direction
+## Decision outcome / proposed direction
 
 Choose Option B. `_subprocess_execution` remains the composition root for
 spawning and stream consumers. `_subprocess_stdin` owns `_emit_stdin_error`,
@@ -78,7 +78,7 @@ subprocesses or expose public command APIs. `_resolve_timeout` remains defined
 in `_subprocess_context`, and `cuprum.sh` imports it from that definition site
 rather than through a redundant execution-module re-export.
 
-## Goals and Non-Goals
+## Goals and non-goals
 
 ### Goals
 
@@ -86,13 +86,13 @@ rather than through a redundant execution-module re-export.
 - Retain existing observable execution and error behaviour.
 - Make stdin and timeout paths directly importable for focused tests.
 
-### Non-Goals
+### Non-goals
 
 - Change the public `SafeCmd` or timeout API.
 - Change process spawning, cancellation, or stream-consumer semantics.
 - Introduce a new public module surface.
 
-## Known Risks and Limitations
+## Known risks and limitations
 
 - Private import paths used outside the package may need adjustment because
   specialized helpers now live in their owning modules.
