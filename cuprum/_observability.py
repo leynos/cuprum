@@ -137,7 +137,6 @@ async def _await_awaitable(
             "observe_hook_task_failed phase=%s error=%s",
             phase,
             type(exc).__name__,
-            exc_info=(type(exc), exc, exc.__traceback__),
             extra={
                 "cuprum_phase": phase,
                 "cuprum_error_type": type(exc).__name__,

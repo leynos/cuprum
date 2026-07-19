@@ -160,6 +160,9 @@ def test_build_native_wheel_artifact_reports_maturin_stderr(
         assert _kwargs.get("text") is True, (
             "native wheel builds should decode captured output as text"
         )
+        assert _kwargs.get("check") is True, (
+            "native wheel builds should require maturin command success"
+        )
         raise subprocess.CalledProcessError(
             101,
             command,

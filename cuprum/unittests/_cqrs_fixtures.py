@@ -1,4 +1,16 @@
-"""Shared fixtures for Command-Query Separation tests."""
+"""Shared CQRS fixtures for `cuprum.unittests`.
+
+This module keeps the reusable fixtures for Command-Query Separation tests in
+one place so related cases do not repeat the same `cuprum.sh` and
+`cuprum.events.ExecEvent` setup. `_echo_cmd()` supplies the allowlisted
+`echo` command for command-building assertions, and `_event()` supplies the
+matching `ExecEvent` for hook-dispatch assertions.
+
+Examples
+--------
+- `_echo_cmd()` creates `sh.make(ECHO)("hello")` for command-path tests.
+- `_event()` creates a plan-phase `ExecEvent` with the `echo` program.
+"""
 
 from __future__ import annotations
 

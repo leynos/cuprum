@@ -37,34 +37,19 @@ class _StubPumpReader:
         return self._chunks.pop(0)
 
 
-class _NeverEndingPumpReader:
-    """Stub stream reader that emits once and never reaches EOF."""
+class _StallingPumpReader:
+    """Stub stream reader that emits one configured chunk then stalls."""
 
-    def __init__(self) -> None:
-        """Initialize the reader."""
+    def __init__(self, first_chunk: bytes) -> None:
+        """Initialize the reader with the chunk emitted before stalling."""
+        self._first_chunk = first_chunk
         self.read_calls = 0
 
     async def read(self, _: int) -> bytes:
         """Return one chunk, then wait forever unless the pump cancels the read."""
         self.read_calls += 1
         if self.read_calls == 1:
-            return b"first"
-        await asyncio.sleep(3600)
-        return b"more"
-
-
-class _PartiallyDrainedPumpReader:
-    """Stub reader that yields discarded bytes before stalling."""
-
-    def __init__(self) -> None:
-        """Initialize the reader."""
-        self.read_calls = 0
-
-    async def read(self, _: int) -> bytes:
-        """Return one discarded chunk, then wait until cancelled."""
-        self.read_calls += 1
-        if self.read_calls == 1:
-            return b"discarded"
+            return self._first_chunk
         await asyncio.sleep(3600)
         return b"more"
 
@@ -187,9 +172,9 @@ def test_pump_stream_omits_downstream_close_log_without_writer(
 def test_pump_stream_does_not_hang_when_upstream_never_ends() -> None:
     """Early downstream closure performs bounded draining only."""
 
-    async def exercise() -> _NeverEndingPumpReader:
+    async def exercise() -> _StallingPumpReader:
         """Pump from a reader that never produces EOF."""
-        reader = _NeverEndingPumpReader()
+        reader = _StallingPumpReader(b"first")
         writer = _StubPumpWriter(fail_on_drain_call=1)
         await _pump_stream(
             typ.cast("asyncio.StreamReader", reader),
@@ -207,9 +192,9 @@ def test_pump_stream_does_not_hang_when_upstream_never_ends() -> None:
 def test_bounded_drain_returns_partial_count_on_timeout() -> None:
     """A timed-out bounded drain reports bytes consumed before cancellation."""
 
-    async def exercise() -> tuple[_PartiallyDrainedPumpReader, int]:
+    async def exercise() -> tuple[_StallingPumpReader, int]:
         """Drain one chunk from a reader that never reaches EOF."""
-        reader = _PartiallyDrainedPumpReader()
+        reader = _StallingPumpReader(b"discarded")
         discarded_bytes = await _drain_stream_reader_bounded(
             typ.cast("asyncio.StreamReader", reader)
         )

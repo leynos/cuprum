@@ -21,6 +21,7 @@ import pytest
 from cuprum import ECHO, LS, sh
 from cuprum._observability import (
     _emit_exec_event,
+    _ExecEventEmissionError,
     _wait_for_exec_hook_tasks,
 )
 from cuprum._pipeline_internals import _collect_hooks, _enforce_allowlist
@@ -137,6 +138,37 @@ def test_emit_exec_event_returns_scheduled_async_tasks() -> None:
         assert len(scheduled) == 1, "one async hook should schedule one task"
         await asyncio.gather(*scheduled)
         assert ran.is_set(), "scheduled task must run the async hook"
+
+    asyncio.run(run())
+
+
+def test_emit_exec_event_wraps_cancellation_and_preserves_tasks() -> None:
+    """Cancellation carries observe tasks scheduled by earlier hooks."""
+
+    async def run() -> None:
+        """Schedule one hook before a later hook raises cancellation."""
+        completed: list[bool] = []
+
+        async def async_hook(_event: ExecEvent) -> None:
+            """Record that cleanup awaited the scheduled hook."""
+            await asyncio.sleep(0)
+            completed.append(True)
+
+        def cancelling_hook(_event: ExecEvent) -> None:
+            """Raise cancellation after the earlier hook is scheduled."""
+            raise asyncio.CancelledError
+
+        with pytest.raises(_ExecEventEmissionError) as exc_info:
+            _emit_exec_event((async_hook, cancelling_hook), _event())
+
+        assert isinstance(exc_info.value.error, asyncio.CancelledError), (
+            "event emission should preserve cancellation as the wrapped error"
+        )
+        assert len(exc_info.value.scheduled_tasks) == 1, (
+            "cancellation should carry tasks scheduled by earlier hooks"
+        )
+        await asyncio.gather(*exc_info.value.scheduled_tasks)
+        assert completed == [True], "cleanup should await the preserved observe task"
 
     asyncio.run(run())
 
