@@ -1,5 +1,8 @@
 # cuprum
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](
+https://deepwiki.com/leynos/cuprum)
+
 Typed, async command execution for Python—so you can ditch the shell scripts
 without losing your mind.
 
