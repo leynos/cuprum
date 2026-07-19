@@ -43,6 +43,48 @@ def _scenario(spec: _ScenarioSpec) -> dict[str, object]:
     }
 
 
+_CI_PROFILE_SCENARIO_SPECS: tuple[_ScenarioSpec, ...] = (
+    _ScenarioSpec(
+        name="python-small-single-nocb",
+        backend="python",
+        payload_bytes=1024,
+        stages=2,
+    ),
+    _ScenarioSpec(
+        name="python-small-single-cb",
+        backend="python",
+        payload_bytes=1024,
+        stages=2,
+        with_line_callbacks=True,
+    ),
+    _ScenarioSpec(
+        name="rust-small-single-nocb",
+        backend="rust",
+        payload_bytes=1024,
+        stages=2,
+    ),
+    _ScenarioSpec(
+        name="rust-small-single-cb",
+        backend="rust",
+        payload_bytes=1024,
+        stages=2,
+        with_line_callbacks=True,
+    ),
+    _ScenarioSpec(
+        name="rust-large-single-nocb",
+        backend="rust",
+        payload_bytes=131072,
+        stages=2,
+    ),
+    _ScenarioSpec(
+        name="python-small-multi-nocb",
+        backend="python",
+        payload_bytes=1024,
+        stages=3,
+    ),
+)
+
+
 def test_select_ci_ratchet_scenarios_filters_for_ci_profile() -> None:
     """Only two-stage scenarios up to 64 KiB should remain in the CI profile."""
     full_payload = {
@@ -63,58 +105,7 @@ def test_select_ci_ratchet_scenarios_filters_for_ci_profile() -> None:
             "rust too-big",
             "python too-deep",
         ],
-        "scenarios": [
-            _scenario(
-                _ScenarioSpec(
-                    name="python-small-single-nocb",
-                    backend="python",
-                    payload_bytes=1024,
-                    stages=2,
-                )
-            ),
-            _scenario(
-                _ScenarioSpec(
-                    name="python-small-single-cb",
-                    backend="python",
-                    payload_bytes=1024,
-                    stages=2,
-                    with_line_callbacks=True,
-                )
-            ),
-            _scenario(
-                _ScenarioSpec(
-                    name="rust-small-single-nocb",
-                    backend="rust",
-                    payload_bytes=1024,
-                    stages=2,
-                )
-            ),
-            _scenario(
-                _ScenarioSpec(
-                    name="rust-small-single-cb",
-                    backend="rust",
-                    payload_bytes=1024,
-                    stages=2,
-                    with_line_callbacks=True,
-                )
-            ),
-            _scenario(
-                _ScenarioSpec(
-                    name="rust-large-single-nocb",
-                    backend="rust",
-                    payload_bytes=131072,
-                    stages=2,
-                )
-            ),
-            _scenario(
-                _ScenarioSpec(
-                    name="python-small-multi-nocb",
-                    backend="python",
-                    payload_bytes=1024,
-                    stages=3,
-                )
-            ),
-        ],
+        "scenarios": [_scenario(spec) for spec in _CI_PROFILE_SCENARIO_SPECS],
     }
 
     selected = select_ci_ratchet_scenarios(full_payload)
