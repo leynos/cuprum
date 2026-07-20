@@ -392,7 +392,7 @@ def test_close_stream_writer_logs_suppressed_cleanup_errors(
     expected_error: str,
 ) -> None:
     """Suppressed stream cleanup errors are still visible in diagnostics."""
-    with caplog.at_level(logging.DEBUG, logger="cuprum.streams"):
+    with caplog.at_level(logging.DEBUG, logger="cuprum._streams"):
         asyncio.run(_close_stream_writer(typ.cast("typ.Any", writer)))
 
     matching_records = [

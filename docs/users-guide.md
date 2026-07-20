@@ -238,8 +238,9 @@ Notes:
 - Pipelines fail fast: when a stage exits non-zero, Cuprum terminates the
   remaining stages. The failing stage is available via `result.failure` /
   `result.failure_index`.
-- When a downstream writer closes early, Cuprum drains only already-buffered
-  bytes before stopping, so discarded input stays bounded.
+- When a downstream writer closes early, Cuprum drains the upstream reader
+  until EOF or a short timeout elapses, even on a stalled upstream, so
+  discarded input stays bounded.
 
 ## Execution runtime
 

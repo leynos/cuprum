@@ -14,7 +14,7 @@ if typ.TYPE_CHECKING:
 
 _READ_SIZE = 4096
 _POST_CLOSE_DRAIN_TIMEOUT_S = 0.25
-_LOGGER = logging.getLogger("cuprum.streams")
+_LOGGER = logging.getLogger(__name__)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -158,27 +158,22 @@ async def _relay_chunks(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter | None,
 ) -> None:
-    """Copy chunks downstream until EOF, bounded-draining after an early close.
-
-    When the writer is absent or reports :attr:`_WriteOutcome.CLOSED`, the
-    reader is best-effort bounded-drained so upstream stages do not block on a
-    full pipe indefinitely.
-    """
-    has_downstream_closed = False
-    while writer is not None:
+    """Copy chunks downstream; drain to EOF with no writer, bounded after a close."""
+    if writer is None:
+        await _drain_stream_reader(reader, _DrainProgress())
+        return
+    while True:
         chunk = await reader.read(_READ_SIZE)
         if not chunk:
             return
         if await _write_to_stream_writer(writer, chunk) is _WriteOutcome.CLOSED:
-            has_downstream_closed = True
             break
     discarded_bytes = await _drain_stream_reader_bounded(reader)
-    if has_downstream_closed:
-        _LOGGER.warning(
-            "stream_downstream_closed discarded_bytes=%s",
-            discarded_bytes,
-            extra={"cuprum_discarded_bytes": discarded_bytes},
-        )
+    _LOGGER.warning(
+        "stream_downstream_closed discarded_bytes=%s",
+        discarded_bytes,
+        extra={"cuprum_discarded_bytes": discarded_bytes},
+    )
 
 
 async def _drain_stream_reader(
@@ -212,13 +207,7 @@ async def _write_to_stream_writer(
     writer: asyncio.StreamWriter,
     chunk: bytes,
 ) -> _WriteOutcome:
-    """Write a chunk and report whether the downstream writer stays open.
-
-    The writer is owned by the caller and is intentionally *not* closed here;
-    a broken pipe is reported as :attr:`_WriteOutcome.CLOSED` so the caller can
-    stop writing while continuing to drain upstream and close the writer once
-    at the end.
-    """
+    """Write a chunk; report whether the caller-owned downstream writer stays open."""
     try:
         writer.write(chunk)
         await writer.drain()

@@ -88,7 +88,7 @@ def _emit_exec_event(
                 event.phase,
                 event.program,
                 type(exc).__name__,
-                exc_info=(type(exc), exc, exc.__traceback__),
+                exc_info=True,
                 extra={
                     "cuprum_phase": event.phase,
                     "cuprum_program": str(event.program),

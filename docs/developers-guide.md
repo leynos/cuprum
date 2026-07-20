@@ -181,7 +181,7 @@ tracing backend.  Hook scheduling and hook failures use the
 `cuprum._observability` logger with structured `extra` fields such as
 `cuprum_phase`, `cuprum_program`, `cuprum_error_type`, and
 `cuprum_scheduled_task_count`.  Stream early-close
-decisions use warning-level records on the `cuprum.streams` logger and include
+decisions use warning-level records on the `cuprum._streams` logger and include
 `cuprum_discarded_bytes` when upstream bytes are drained after the downstream
 writer has closed. Suppressed writer cleanup failures remain debug-level
 diagnostics with `cuprum_operation` and `cuprum_error_type`, because they are
@@ -193,12 +193,15 @@ to a telemetry vendor.
 Stream pumping continues to drain the upstream reader after
 `_write_to_stream_writer` reports `_WriteOutcome.CLOSED`.  `_pump_stream`
 closes the writer in a `finally` block, so writer cleanup runs after success,
-exceptions, and cancellation.  Tests cover this contract at three levels:
+exceptions, and cancellation.  Tests cover this contract at four levels:
 
 - direct helper tests in `cuprum/unittests/test_cqrs_helpers.py`
 - runtime behaviour and stream-drain properties in
   `cuprum/unittests/test_stream_pump_runtime_behaviour.py`
 - observe-task assertions in `cuprum/unittests/test_observe.py`
+- CQRS hook and task-scheduling behaviour in
+  `cuprum/unittests/test_cqrs_hook_behaviour.py`, covering allowlist
+  enforcement, before/after/observe hooks, and async observe-task scheduling
 
 ## Canonical stream-drain loop
 

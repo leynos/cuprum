@@ -52,22 +52,12 @@ def _sh_module() -> types.ModuleType:
 
 
 def _enforce_allowlist(cmd: SafeCmd) -> None:
-    """Enforce the active allowlist for ``cmd``.
-
-    This is a command: its purpose is the side effect of rejecting a program
-    that the current context does not permit. It raises
-    :class:`~cuprum.context.ForbiddenProgramError` for a forbidden program and
-    returns ``None`` otherwise.
-    """
+    """Reject ``cmd`` when the active context forbids its program."""
     current_context().check_allowed(cmd.program)
 
 
 def _collect_hooks(ctx: CuprumContext) -> _ExecutionHooks:
-    """Return the before/after/observe hooks registered on ``ctx``.
-
-    This is a pure query with no side effects; allowlist enforcement is the
-    separate responsibility of :func:`_enforce_allowlist`.
-    """
+    """Return the before/after/observe hooks registered on ``ctx``."""
     return _ExecutionHooks(
         before_hooks=ctx.before_hooks,
         after_hooks=ctx.after_hooks,

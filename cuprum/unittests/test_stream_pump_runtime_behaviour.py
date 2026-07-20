@@ -54,6 +54,24 @@ class _StallingPumpReader:
         return b"more"
 
 
+class _DelayedPumpReader:
+    """Stub stream reader that emits queued chunks with a per-read delay then EOF."""
+
+    def __init__(self, chunks: list[bytes], *, delay_s: float) -> None:
+        """Initialize with queued chunks and the delay applied before each read."""
+        self._chunks = list(chunks)
+        self._delay_s = delay_s
+        self.read_calls = 0
+
+    async def read(self, _: int) -> bytes:
+        """Return the next queued chunk after a delay, or empty bytes at EOF."""
+        self.read_calls += 1
+        await asyncio.sleep(self._delay_s)
+        if not self._chunks:
+            return b""
+        return self._chunks.pop(0)
+
+
 class _StubPumpWriter:
     """Stub stream writer recording writes, drains, and closure."""
 
@@ -129,13 +147,13 @@ def test_pump_stream_logs_discarded_bytes_after_downstream_close(
             typ.cast("asyncio.StreamWriter", writer),
         )
 
-    with caplog.at_level(logging.DEBUG, logger="cuprum.streams"):
+    with caplog.at_level(logging.DEBUG, logger="cuprum._streams"):
         asyncio.run(exercise())
 
     discarded_records = [
         record
         for record in caplog.records
-        if record.name == "cuprum.streams"
+        if record.name == "cuprum._streams"
         and "stream_downstream_closed" in record.message
     ]
     assert discarded_records, "early downstream close should log discarded bytes"
@@ -156,17 +174,39 @@ def test_pump_stream_omits_downstream_close_log_without_writer(
         await _pump_stream(typ.cast("asyncio.StreamReader", reader), None)
         return reader
 
-    with caplog.at_level(logging.DEBUG, logger="cuprum.streams"):
+    with caplog.at_level(logging.DEBUG, logger="cuprum._streams"):
         reader = asyncio.run(exercise())
 
     close_records = [
         record
         for record in caplog.records
-        if record.name == "cuprum.streams"
+        if record.name == "cuprum._streams"
         and "stream_downstream_closed" in record.message
     ]
     assert reader.read_calls == 3, "pump should drain all chunks plus EOF"
     assert not close_records, "missing writer should not log downstream closure"
+
+
+def test_pump_stream_drains_slow_reader_until_eof_without_writer() -> None:
+    """A writerless pump drains a slow reader to EOF, not just a bounded window."""
+
+    async def exercise() -> _DelayedPumpReader:
+        """Pump with no writer from a reader slower than the bounded-drain window."""
+        reader = _DelayedPumpReader(
+            [b"a" * 8, b"b" * 8, b"c" * 8],
+            delay_s=_POST_CLOSE_DRAIN_TIMEOUT_S * 0.6,
+        )
+        await _pump_stream(typ.cast("asyncio.StreamReader", reader), None)
+        return reader
+
+    reader = asyncio.run(
+        asyncio.wait_for(exercise(), timeout=_POST_CLOSE_DRAIN_TIMEOUT_S * 20)
+    )
+
+    assert reader.read_calls == 4, (
+        "writerless pump should drain every chunk plus EOF rather than stopping "
+        "at the bounded-drain timeout"
+    )
 
 
 def test_pump_stream_does_not_hang_when_upstream_never_ends() -> None:
