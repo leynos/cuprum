@@ -47,6 +47,7 @@ construction.
 from cuprum.context.core import (
     AfterHook,
     BeforeHook,
+    ContextError,
     CuprumContext,
     ForbiddenProgramError,
     ScopeConfig,
@@ -88,6 +89,7 @@ __all__ = [
     "AfterHook",
     "AllowRegistration",
     "BeforeHook",
+    "ContextError",
     "CuprumContext",
     "EnvRegistration",
     "ExecHook",

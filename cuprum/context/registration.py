@@ -8,7 +8,6 @@ from the canonical :class:`_TokenRegistration` base, which owns the
 
 from __future__ import annotations
 
-import dataclasses as dc
 import typing as typ
 
 from cuprum.context.env_overlay import _coerce_env_overlay
@@ -154,7 +153,7 @@ class AllowRegistration(_TokenRegistration):
         super().__init__()
         self._programs = frozenset(programs)
         ctx = current_context()
-        self._install(dc.replace(ctx, allowlist=ctx.allowlist | self._programs))
+        self._install(ctx.with_allowlist(ctx.allowlist | self._programs))
 
 
 def allow(*programs: Program) -> AllowRegistration:

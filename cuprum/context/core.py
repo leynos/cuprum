@@ -45,26 +45,7 @@ class ForbiddenProgramError(ContextError, PermissionError):
 
 
 def _validate_timeout(timeout: float | None, class_name: str) -> float | None:
-    """Validate and coerce timeout value.
-
-    Parameters
-    ----------
-    timeout:
-        The timeout value to validate. May be None, float, or int.
-    class_name:
-        Name of the class for error messages.
-
-    Returns
-    -------
-    float | None
-        The validated timeout as a float, or None.
-
-    Raises
-    ------
-    ValueError
-        When timeout is not finite or is negative.
-
-    """
+    """Validate a timeout is finite and non-negative, coercing it to float."""
     if timeout is None:
         return None
     timeout_float = float(timeout)
@@ -372,6 +353,7 @@ class CuprumContext:
 __all__ = [
     "AfterHook",
     "BeforeHook",
+    "ContextError",
     "CuprumContext",
     "ForbiddenProgramError",
     "ScopeConfig",

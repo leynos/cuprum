@@ -47,6 +47,21 @@ def merge_env_overlays(
     Exposed as public API so that other cuprum modules — and downstream
     code that builds custom observation tags — can merge overlay layers
     without reaching for a private symbol.
+
+    Parameters
+    ----------
+    parent : collections.abc.Mapping[str, str] | None
+        The base overlay layer. ``None`` means *inherit unchanged* — the
+        layer contributes nothing.
+    child : collections.abc.Mapping[str, str] | None
+        The overlay layered on top of ``parent``; its values win on key
+        collisions. ``None`` means *inherit unchanged*.
+
+    Returns
+    -------
+    collections.abc.Mapping[str, str] | None
+        An immutable snapshot of the merged overlay, or ``None`` when both
+        layers are ``None`` (meaning *inherit the environment unchanged*).
     """
     if parent is None and child is None:
         return None
@@ -78,6 +93,20 @@ def resolve_env(
     overlay is non-empty, so the result reflects whatever the process
     environment looks like at the moment of resolution — the exact behaviour
     the issue requires.
+
+    Parameters
+    ----------
+    *layers : collections.abc.Mapping[str, str] | None
+        Overlay layers applied left-to-right over a live copy of
+        ``os.environ``; later values win. ``None`` and empty layers are
+        skipped.
+
+    Returns
+    -------
+    dict[str, str] | None
+        The merged environment mapping, or ``None`` when every layer is
+        ``None`` or empty (meaning *inherit the parent environment
+        unchanged*).
     """
     if all(not layer for layer in layers):
         return None
