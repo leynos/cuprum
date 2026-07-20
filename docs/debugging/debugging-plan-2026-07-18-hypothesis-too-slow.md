@@ -11,11 +11,10 @@ agent.
 
 ## Problem statement
 
-`make test` fails in
-`test_single_and_pipeline_tags_agree_on_shared_keys` because Hypothesis takes
-too long to generate `ctx_tags`. The property should execute within Hypothesis's
-health-check budget without suppressing that protection or changing its stated
-behaviour.
+`make test` reported Hypothesis's `too_slow` health check in
+`test_single_and_pipeline_tags_agree_on_shared_keys` while generating
+`ctx_tags`. The property should execute within Hypothesis's health-check budget
+without suppressing that protection or changing its stated behaviour.
 
 ## Context summary
 
@@ -44,15 +43,17 @@ falsified, so no correction or health-check suppression is justified.
 
 ## Hypotheses
 
-### H1: The `_TAGS` strategy generates costly recursive values
+### H1: The `_TAGS` strategy generates values unexpectedly slowly
 
-**Claim**: The recursive or broad value strategy under `_TAGS` prevents
-Hypothesis from producing a valid dictionary within the health-check budget.
+**Claim**: Although `_TAGS` is bounded and non-recursive — a finite key set via
+`st.sampled_from`, bounded values (`st.text(max_size=5) | st.integers(0, 9)`),
+and `max_size=3` — generating it still exhausts Hypothesis's health-check budget
+before a valid dictionary is produced.
 
 **Plausibility**: High — the health check identifies `ctx_tags` generation.
 
 **Prediction**: Replaying the seed while sampling `_TAGS` alone will reproduce
-the slow generation; a bounded, schema-representative strategy will not.
+the slow generation; if sampling is quick, generation is not the cause.
 
 #### H1 falsification plan
 
@@ -63,8 +64,16 @@ _Table 2: Falsification steps for the `_TAGS` generation hypothesis._
 | 1 | Inspect `_TAGS` and replay the named test seed. | The test completes without a slow-generation health check. |
 | 2 | Time representative samples from `_TAGS`. | Sampling is quick, which disproves strategy generation as the cause. |
 
-**Tooling**: `leta show _TAGS`, focused `pytest` invocation with the supplied
-seed.
+**Tooling**: display the strategy with a repository-native command (no leta
+workspace-indexing prerequisite), then replay the focused property with its
+recorded seed:
+
+```bash
+rg -n -A15 '^_TAGS = ' cuprum/unittests/test_stage_observation_builder.py
+uv run pytest \
+  cuprum/unittests/test_stage_observation_builder.py::test_single_and_pipeline_tags_agree_on_shared_keys \
+  --hypothesis-seed=617015540253848316034710431685553955
+```
 
 **Confidence on falsification**: High; the reproduction directly measures the
 suspected boundary.
@@ -96,7 +105,7 @@ generation.
 
 ## Recommended execution order
 
-1. **H1** — the error names the generated argument and this is the cheapest
+1. **H1** — the error names the generated argument, and this is the cheapest
    decisive check.
 2. **H2** — investigate construction only if H1 is falsified.
 

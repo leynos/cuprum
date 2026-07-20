@@ -39,7 +39,7 @@ async def _wait_for_exit_code(
     ctx: ExecutionContext,
     *,
     timeout: float | None = None,
-    consumers: tuple[asyncio.Task[None] | asyncio.Task[str | None], ...] = (),
+    consumers: tuple[asyncio.Task[str | None], ...] = (),
 ) -> tuple[int, float]:
     """Wait for a subprocess, handling cancellation and capturing exit time."""
     try:
