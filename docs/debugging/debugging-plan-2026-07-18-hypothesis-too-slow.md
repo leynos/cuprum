@@ -9,7 +9,7 @@ agent is available)
 Falsification must be executed by the named sub-agent, not by the planning
 agent.
 
-## Problem Statement
+## Problem statement
 
 `make test` fails in
 `test_single_and_pipeline_tags_agree_on_shared_keys` because Hypothesis takes
@@ -17,7 +17,7 @@ too long to generate `ctx_tags`. The property should execute within Hypothesis's
 health-check budget without suppressing that protection or changing its stated
 behaviour.
 
-## Context Summary
+## Context summary
 
 _Table 1: Context summary for the slow-generation health-check observation._
 
@@ -28,14 +28,14 @@ _Table 1: Context summary for the slow-generation health-check observation._
 | Affected components | `test_stage_observation_builder.py`, `_TAGS` strategy |
 | Recent changes | Documentation and timeout-branch review follow-up; this test was untouched |
 
-### Error Artefacts
+### Error artefacts
 
 ```plaintext
 FailedHealthCheck: Data generation is extremely slow: Only produced 0 valid
 examples in 1.94 seconds. Health check: too_slow.
 ```
 
-### Investigation Outcome
+### Investigation outcome
 
 Wyvern replayed the supplied seed five times; every replay passed in
 0.18–0.19 seconds. Sampling 100 `_TAGS` examples took 0.098 seconds and 100
@@ -54,7 +54,7 @@ Hypothesis from producing a valid dictionary within the health-check budget.
 **Prediction**: Replaying the seed while sampling `_TAGS` alone will reproduce
 the slow generation; a bounded, schema-representative strategy will not.
 
-#### H1 Falsification Plan
+#### H1 falsification plan
 
 _Table 2: Falsification steps for the `_TAGS` generation hypothesis._
 
@@ -80,7 +80,7 @@ example.
 **Prediction**: Supplying a small fixed tag dictionary will still trigger the
 health check or have a comparable per-example cost.
 
-#### H2 Falsification Plan
+#### H2 falsification plan
 
 _Table 3: Falsification steps for the observation-construction hypothesis._
 
@@ -94,21 +94,30 @@ after measurement.
 **Confidence on falsification**: Medium; it isolates construction from input
 generation.
 
-## Recommended Execution Order
+## Recommended execution order
 
 1. **H1** — the error names the generated argument and this is the cheapest
    decisive check.
 2. **H2** — investigate construction only if H1 is falsified.
 
-## Termination Criteria
+## Termination criteria
 
 - **Root cause identified**: One hypothesis survives while the other is
   falsified, and a narrow correction makes the focused property pass without
   suppressing Hypothesis health checks.
+- **Joint cause confirmed**: Both hypotheses remain supported — neither the
+  `_TAGS` generation cost (H1) nor the observation-construction cost (H2) is
+  falsified, so the slow example arises from their combined budget. Next step:
+  attribute the health-check budget across the two phases (time raw `_TAGS`
+  sampling and observation construction separately for the same tags) to find
+  the dominant contributor, apply the narrow correction to that phase first,
+  then re-measure; if neither phase dominates, split the fix across both and
+  re-run the focused property until it passes without suppressing health
+  checks.
 - **Escalation trigger**: Both hypotheses were falsified. Treat the original
   failure as non-reproducible unless it recurs with new evidence.
 
-## Notes for Executing Agent
+## Notes for executing agent
 
 Keep the property representative of tag-merge and pipeline precedence
 behaviour. Do not add `HealthCheck.too_slow` suppression or lower the property
