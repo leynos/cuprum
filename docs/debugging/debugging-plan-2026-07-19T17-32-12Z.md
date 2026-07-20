@@ -21,6 +21,8 @@ the indirect cost before changing production code.
 
 ## Context Summary
 
+*Table 1. Benchmark context and affected components.*
+
 | Aspect | Details |
 | --- | --- |
 | First observed | PR #157 CI output supplied on 2026-07-19 |
@@ -63,6 +65,8 @@ will place the Rust/Python ratio within the ratchet threshold most of the time.
 
 #### H1 Falsification Plan
 
+*Table 2. H1 falsification plan — reproducing the reported outlier.*
+
 | Step | Action | Expected Negative Result |
 | --- | --- | --- |
 | 1 | Run the exact paired 1 KiB commands repeatedly with additional warm-up and at least ten samples | A stable Rust/Python ratio remains above the baseline threshold with low variance |
@@ -89,6 +93,8 @@ warm-up before measurement, removes most of the gap without changing steady
 state pipeline work.
 
 #### H2 Falsification Plan
+
+*Table 3. H2 falsification plan — isolating Rust backend initialization cost.*
 
 | Step | Action | Expected Negative Result |
 | --- | --- | --- |
@@ -117,6 +123,8 @@ profile attributes the delta to context symbols.
 
 #### H3 Falsification Plan
 
+*Table 4. H3 falsification plan — testing context-split per-iteration overhead.*
+
 | Step | Action | Expected Negative Result |
 | --- | --- | --- |
 | 1 | Compare the same benchmark commands on `origin/main` and the branch in equivalent built environments | No repeatable branch-only slowdown appears |
@@ -143,6 +151,8 @@ tests descriptor suitability on each inter-stage stream.
 the failing scenario choosing a different path from the other Rust scenarios.
 
 #### H4 Falsification Plan
+
+*Table 5. H4 falsification plan — checking for a slower Rust descriptor path.*
 
 | Step | Action | Expected Negative Result |
 | --- | --- | --- |
@@ -189,6 +199,30 @@ helpers: they fed or drained only one side concurrently, so payloads larger
 than the host's pipe capacity could block forever. The helpers now feed and
 drain concurrently around the synchronous native pump. This test-only repair
 does not alter stream behaviour or the benchmark conclusion.
+
+### Evidence recorded
+
+**Measurement protocol**: ten samples per command, with matched Python/Rust
+commands ordered adjacently and executed in both orders (Python-first and
+Rust-first).
+
+*Table 6. Recorded ratchet evidence.*
+
+| Measurement | Value |
+| --- | --- |
+| CI ratio, first (failing) attempt | 1.288 |
+| CI ratio, passing re-run (same commit) | 1.133 |
+| Local ten-run ratio, Python-first order | 1.005 |
+| Local ten-run ratio, Rust-first order | 0.971 |
+| Order-dependent shift within the Python sample block | ~30 ms |
+| Backend-resolution delta (Python vs Rust) | ~1 ms |
+| First-run pipeline timing delta | ~0.2 ms |
+| Profile attribution to `current_context()`/`resolve_env()` | <0.2 ms |
+| Native-backend selections vs Python fallbacks (20 observed iterations) | 20 native, 0 fallback |
+
+The individual per-sample raw timings and the exact toolchain/runner version
+identifiers were not retained as separate artefacts alongside this plan, so
+only the aggregate ratios and counts above are on record.
 
 ## Termination Criteria
 

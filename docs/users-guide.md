@@ -764,11 +764,22 @@ The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 
 - `cuprum_phase`: Event phase (plan, start, stdout, stderr, exit)
 - `cuprum_program`: Program being executed
-- `cuprum_argv`: Full argument vector
+- `cuprum_argv`: The command's argument vector, recorded verbatim (see the
+  security note below)
 - `cuprum_pid`: Process ID (when available)
 - `cuprum_exit_code`: Exit code (for exit events)
 - `cuprum_duration_s`: Duration in seconds (for exit events)
 - `cuprum_tags`: Event tags as a dictionary
+
+> **Security note — argument logging.** `cuprum_argv` is emitted verbatim and
+> is **not** redacted. Any secret passed on the command line — a
+> `--password=…`, an API token, a connection string — is written into the log
+> record (and into the `JsonLoggingFormatter` output) exactly as supplied. The
+> same applies to the plain-text `logging_hook()`. Prefer passing secrets via
+> the environment or files rather than as arguments; where arguments may carry
+> sensitive values, wrap `structured_logging_hook()` in your own observe hook
+> that drops or masks `cuprum_argv` before the record reaches your handlers,
+> and scope log destinations accordingly.
 
 For JSON output suitable for log aggregation systems, use the
 `JsonLoggingFormatter`:
