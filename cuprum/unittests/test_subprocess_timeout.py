@@ -5,10 +5,18 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from cuprum._subprocess_timeout import (
     _handle_stream_timeout,
     _SubprocessTimeoutError,
+)
+
+# A consumer either completes with captured text or fails with an exception.
+_CONSUMER_OUTCOME = st.one_of(
+    st.text(max_size=16).map(lambda value: ("value", value)),
+    st.just(("raise", None)),
 )
 
 
@@ -41,8 +49,103 @@ def test_stream_timeout_preserves_timeout_when_consumer_fails() -> None:
                 timeout=1.0,
             )
 
-        assert stdin_task.cancelled()
-        assert exc_info.value.stdout is None
-        assert exc_info.value.stderr == "stderr"
+        assert stdin_task.cancelled(), (
+            "timeout cleanup must cancel the pending stdin writer, "
+            f"but stdin_task.done()={stdin_task.done()} and it was not cancelled"
+        )
+        assert exc_info.value.stdout is None, (
+            "a failed stdout consumer must surface as None, "
+            f"not {exc_info.value.stdout!r}"
+        )
+        assert exc_info.value.stderr == "stderr", (
+            "a successful stderr consumer must be preserved through timeout "
+            f"cleanup, but got {exc_info.value.stderr!r}"
+        )
 
     asyncio.run(handle_timeout())
+
+
+@settings(max_examples=75, deadline=None, derandomize=True)
+@given(
+    stdout=_CONSUMER_OUTCOME,
+    stdout_delay=st.integers(min_value=0, max_value=3),
+    stderr=_CONSUMER_OUTCOME,
+    stderr_delay=st.integers(min_value=0, max_value=3),
+    stdin_delay=st.integers(min_value=0, max_value=3),
+    timeout=st.floats(min_value=0.001, max_value=3600.0, allow_nan=False),
+)
+def test_handle_stream_timeout_upholds_invariants_across_orderings(
+    stdout: tuple[str, str | None],
+    stdout_delay: int,
+    stderr: tuple[str, str | None],
+    stderr_delay: int,
+    stdin_delay: int,
+    timeout: float,
+) -> None:
+    """_handle_stream_timeout keeps its cleanup contract for any task ordering.
+
+    Across arbitrary interleavings of consumer completion, consumer failure,
+    and a stdin writer that blocks until cancelled, the handler must always:
+
+    - raise ``_SubprocessTimeoutError`` carrying the configured timeout,
+    - cancel and drain the pending stdin writer, and
+    - surface each successful consumer's text while mapping a failed consumer
+      to ``None``.
+    """
+
+    async def consumer(outcome: tuple[str, str | None], delay: int) -> str | None:
+        """Yield ``delay`` times, then either return text or fail."""
+        for _ in range(delay):
+            await asyncio.sleep(0)
+        kind, value = outcome
+        if kind == "raise":
+            msg = "consumer failed"
+            raise RuntimeError(msg)
+        return value
+
+    async def block_stdin() -> None:
+        """Yield ``stdin_delay`` times, then block until cancelled."""
+        for _ in range(stdin_delay):
+            await asyncio.sleep(0)
+        await asyncio.Event().wait()
+
+    async def run_case() -> None:
+        """Drive the handler once and assert its cleanup invariants."""
+        stdin_task = asyncio.create_task(block_stdin())
+        consumers = (
+            asyncio.create_task(consumer(stdout, stdout_delay)),
+            asyncio.create_task(consumer(stderr, stderr_delay)),
+        )
+
+        with pytest.raises(_SubprocessTimeoutError) as exc_info:
+            await _handle_stream_timeout(
+                TimeoutError(),
+                stdin_task=stdin_task,
+                consumers=consumers,
+                timeout=timeout,
+            )
+
+        exc = exc_info.value
+        assert exc.timeout == timeout, (
+            f"timeout must survive cleanup unchanged: got {exc.timeout} "
+            f"for configured {timeout}"
+        )
+        assert stdin_task.cancelled(), (
+            "the blocked stdin writer must be cancelled during cleanup, "
+            f"but stdin_task.done()={stdin_task.done()}"
+        )
+        assert all(task.done() for task in consumers), (
+            "every consumer task must be drained before the handler returns"
+        )
+        for label, captured, outcome in (
+            ("stdout", exc.stdout, stdout),
+            ("stderr", exc.stderr, stderr),
+        ):
+            kind, value = outcome
+            expected = None if kind == "raise" else value
+            assert captured == expected, (
+                f"{label} capture must reflect its consumer outcome: "
+                f"expected {expected!r}, got {captured!r}"
+            )
+
+    asyncio.run(run_case())

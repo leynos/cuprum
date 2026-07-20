@@ -79,6 +79,19 @@ async def _write_stdin(
     _LOGGER.debug("stdin_writer_finished pid=%s", process.pid)
 
 
+async def _cancel_stdin_writer(stdin_task: asyncio.Task[None] | None) -> None:
+    """Cancel and drain a stdin writer task, tolerating any raised error.
+
+    Used on the timeout and cancellation paths to reclaim a writer that may be
+    blocked draining bytes into an unread pipe, so its cleanup cannot delay the
+    surrounding failure handling.
+    """
+    if stdin_task is None:
+        return
+    stdin_task.cancel()
+    await asyncio.gather(stdin_task, return_exceptions=True)
+
+
 def _spawn_stdin_writer(
     process: asyncio.subprocess.Process,
     stdin_data: bytes | None,
@@ -97,6 +110,7 @@ def _spawn_stdin_writer(
 
 
 __all__ = [
+    "_cancel_stdin_writer",
     "_emit_stdin_error",
     "_spawn_stdin_writer",
     "_write_stdin",
