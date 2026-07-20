@@ -21,7 +21,7 @@ if typ.TYPE_CHECKING:
     import pathlib as pth
 
 
-@dc.dataclass(frozen=True)
+@dc.dataclass(frozen=True, slots=True)
 class _ScenarioSpec:
     """Parameters for a CI benchmark test scenario."""
 

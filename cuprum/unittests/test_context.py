@@ -570,8 +570,12 @@ def test_forbidden_program_error_raised_for_disallowed(
         ctx.check_allowed(LS)
 
     assert "ls" in str(exc_info.value).lower()
-    assert exc_info.value.program is LS
-    assert exc_info.value.restricted_state is True
+    assert exc_info.value.program is LS, (
+        f"expected denied program to be LS, got {exc_info.value.program!r}"
+    )
+    assert exc_info.value.restricted_state is True, (
+        "expected restricted_state to be True for a narrowed allowlist"
+    )
     records = [
         record
         for record in caplog.records
