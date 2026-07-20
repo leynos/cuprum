@@ -11,12 +11,16 @@ pytest tests/behaviour/test_rust_streams_behaviour.py -k rust_pump_stream_behavi
 from __future__ import annotations
 
 import os
-import threading
 import typing as typ
 
 from pytest_bdd import given, scenario, then, when
 
-from tests.helpers.stream_pipes import _pipe_pair, _read_all, _safe_close
+from tests.helpers.stream_pipes import (
+    _pipe_pair,
+    _read_all,
+    _safe_close,
+    pump_payload_through_pipes,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -266,33 +270,8 @@ def when_pump_large_payload(
     """
     # 1 MB payload to exercise splice with multiple chunks
     payload = bytes(range(256)) * (1024 * 1024 // 256)
-    with _pipe_pair() as (in_read, in_write, out_read, out_write):
-        output_chunks: list[bytes] = []
-
-        def writer() -> None:
-            """Feed the source pipe while the synchronous pump is running."""
-            view = memoryview(payload)
-            while view:
-                written = os.write(in_write, view)
-                view = view[written:]
-            _safe_close(in_write)
-
-        def reader() -> None:
-            """Drain the destination pipe while the synchronous pump is running."""
-            output_chunks.append(_read_all(out_read))
-
-        write_thread = threading.Thread(target=writer)
-        read_thread = threading.Thread(target=reader)
-        write_thread.start()
-        read_thread.start()
-
-        pumped_bytes = rust_pump(in_read, out_write)
-
-        _safe_close(out_write)
-        write_thread.join()
-        read_thread.join()
-
-    return payload, output_chunks[0], pumped_bytes
+    output, pumped_bytes = pump_payload_through_pipes(rust_pump, payload)
+    return payload, output, pumped_bytes
 
 
 @then("the output matches the large payload")

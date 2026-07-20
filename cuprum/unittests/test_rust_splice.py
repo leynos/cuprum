@@ -15,7 +15,12 @@ import os
 import threading
 import typing as typ
 
-from tests.helpers.stream_pipes import _pipe_pair, _read_all, _safe_close
+from tests.helpers.stream_pipes import (
+    _pipe_pair,
+    _read_all,
+    _safe_close,
+    pump_payload_through_pipes,
+)
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -29,35 +34,15 @@ def _pump_payload_threaded(
     buffer_size: int | None = None,
 ) -> tuple[bytes, int]:
     """Pump payload while concurrently feeding and draining its pipes."""
-    with _pipe_pair() as (in_read, in_write, out_read, out_write):
-        output_chunks: list[bytes] = []
+    kwargs: dict[str, int] = {}
+    if buffer_size is not None:
+        kwargs["buffer_size"] = buffer_size
 
-        def writer() -> None:
-            """Write the payload into the pipe from a worker thread."""
-            view = memoryview(payload)
-            while view:
-                written = os.write(in_write, view)
-                view = view[written:]
-            _safe_close(in_write)
+    def pump(in_read: int, out_write: int) -> int:
+        """Run the Rust stream pump across the supplied pipe ends."""
+        return streams.rust_pump_stream(in_read, out_write, **kwargs)
 
-        def reader() -> None:
-            """Drain the output pipe while the synchronous pump is running."""
-            output_chunks.append(_read_all(out_read))
-
-        write_thread = threading.Thread(target=writer)
-        read_thread = threading.Thread(target=reader)
-        write_thread.start()
-        read_thread.start()
-
-        kwargs: dict[str, int] = {}
-        if buffer_size is not None:
-            kwargs["buffer_size"] = buffer_size
-        transferred = streams.rust_pump_stream(in_read, out_write, **kwargs)
-        _safe_close(out_write)
-        write_thread.join()
-        read_thread.join()
-
-    return output_chunks[0], transferred
+    return pump_payload_through_pipes(pump, payload)
 
 
 class TestSpliceOptimization:

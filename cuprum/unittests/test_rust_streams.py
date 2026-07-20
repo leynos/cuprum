@@ -15,12 +15,16 @@ import contextlib
 import errno
 import os
 import pathlib
-import threading
 import typing as typ
 
 import pytest
 
-from tests.helpers.stream_pipes import _pipe_pair, _read_all, _safe_close
+from tests.helpers.stream_pipes import (
+    _pipe_pair,
+    _safe_close,
+    feed_source_pipe,
+    pump_payload_through_pipes,
+)
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
@@ -41,37 +45,15 @@ def _pump_payload(
     buffer_size: int | None = None,
 ) -> tuple[bytes, int]:
     """Pump payload while concurrently feeding and draining its pipes."""
-    with _pipe_pair() as (in_read, in_write, out_read, out_write):
-        output_chunks: list[bytes] = []
+    kwargs: dict[str, int] = {}
+    if buffer_size is not None:
+        kwargs["buffer_size"] = buffer_size
 
-        def writer() -> None:
-            """Feed the source pipe while the synchronous pump is running."""
-            view = memoryview(payload)
-            while view:
-                written = os.write(in_write, view)
-                assert written > 0, "expected os.write to make progress"
-                view = view[written:]
-            _safe_close(in_write)
+    def pump(in_read: int, out_write: int) -> int:
+        """Run the Rust stream pump across the supplied pipe ends."""
+        return streams.rust_pump_stream(in_read, out_write, **kwargs)
 
-        def reader() -> None:
-            """Drain the destination pipe while the synchronous pump is running."""
-            output_chunks.append(_read_all(out_read))
-
-        write_thread = threading.Thread(target=writer)
-        read_thread = threading.Thread(target=reader)
-        write_thread.start()
-        read_thread.start()
-
-        kwargs: dict[str, int] = {}
-        if buffer_size is not None:
-            kwargs["buffer_size"] = buffer_size
-        transferred = streams.rust_pump_stream(in_read, out_write, **kwargs)
-
-        _safe_close(out_write)
-        write_thread.join()
-        read_thread.join()
-
-    return output_chunks[0], transferred
+    return pump_payload_through_pipes(pump, payload)
 
 
 def _consume_payload(
@@ -262,25 +244,22 @@ def test_rust_pump_stream_ignores_broken_pipe(
     """
     payload = b"x" * (64 * 1024)
     with _pipe_pair() as (in_read, in_write, out_read, out_write):
-        _safe_close(out_read)
-        view = memoryview(payload)
-        while view:
-            written = os.write(in_write, view)
-            assert written > 0, "expected os.write to make progress"
-            view = view[written:]
-        _safe_close(in_write)
+        _safe_close(out_read)  # Break the destination before pumping.
+        # Feed the source concurrently so the write cannot deadlock when the
+        # payload exceeds the host pipe capacity.
+        with feed_source_pipe(in_write, payload, cancel_fd=in_read):
+            try:
+                transferred = rust_streams.rust_pump_stream(in_read, out_write)
+            except OSError as exc:
+                if getattr(exc, "errno", None) in {errno.EPIPE, errno.ECONNRESET}:
+                    pytest.fail(
+                        "rust_pump_stream raised OSError for broken pipe/connection "
+                        "reset"
+                    )
+                raise
 
-        try:
-            transferred = rust_streams.rust_pump_stream(in_read, out_write)
-        except OSError as exc:
-            if getattr(exc, "errno", None) in {errno.EPIPE, errno.ECONNRESET}:
-                pytest.fail(
-                    "rust_pump_stream raised OSError for broken pipe/connection reset"
-                )
-            raise
-
-        remaining = os.read(in_read, 4096)
-        assert remaining == b"", "expected input pipe to be fully drained"
+            remaining = os.read(in_read, 4096)
+            assert remaining == b"", "expected input pipe to be fully drained"
 
     assert isinstance(transferred, int), "expected transfer count to be integer"
     assert transferred <= len(payload), "expected transfer count to be bounded"
