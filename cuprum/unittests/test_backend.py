@@ -195,6 +195,7 @@ def test_invalid_env_var_raises_value_error(
     with pytest.raises(ValueError, match="turbo"):
         get_stream_backend()
 
+
 def test_unhandled_backend_member_raises_assertion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -210,6 +211,8 @@ def test_unhandled_backend_member_raises_assertion(
 
     with pytest.raises(AssertionError, match="unreachable backend"):
         get_stream_backend()
+
+
 @pytest.mark.parametrize(
     ("rust_available_str", "expected"),
     [
