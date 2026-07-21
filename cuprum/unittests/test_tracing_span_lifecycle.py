@@ -11,12 +11,33 @@ command execution.
 
 from __future__ import annotations
 
-import re
+import typing as typ
 from pathlib import Path
 
-from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
+from cuprum.adapters.tracing_adapter import InMemorySpan, InMemoryTracer, TracingHook
 from cuprum.events import ExecEvent, ExecPhase
 from cuprum.program import Program
+
+if typ.TYPE_CHECKING:
+    import pytest
+
+# Single source of truth for the span-attribute contract documented on
+# ``TracingHook``. Both the documentation check and the emitted-attribute
+# check derive from this constant, so the contract is defined in exactly one
+# place and cannot drift between prose and code.
+DOCUMENTED_SPAN_ATTRIBUTES: frozenset[str] = frozenset(
+    {
+        "cuprum.program",
+        "cuprum.argv",
+        "cuprum.pid",
+        "cuprum.cwd",
+        "cuprum.exit_code",
+        "cuprum.duration_s",
+        "cuprum.project",
+        "cuprum.pipeline_stage_index",
+        "cuprum.pipeline_stages",
+    },
+)
 
 
 def _exec_event(
@@ -96,20 +117,57 @@ def test_recycled_pid_attributes_output_to_correct_span() -> None:
     )
 
 
-def test_documented_attributes_match_build_attributes() -> None:
-    """The class docstring lists exactly the attributes the code can emit.
+def test_recycled_pid_transition_ends_stale_before_installing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stale span is failed and ended before its replacement is installed.
 
-    Keeps the documented span-attribute contract in lockstep with
-    ``_build_attributes`` plus the exit-time attributes, so the two cannot
-    drift (the omission of ``cuprum.cwd`` / ``cuprum.pipeline_stages`` that
-    motivated issue #122).
+    Probes the atomic PID→span transition in ``_handle_start``: teardown of
+    the orphaned span and installation of its replacement happen under a
+    single lock acquisition, so a concurrent reader can never observe a
+    half-updated mapping. Ending the stale span runs while the map still
+    points at it; the replacement is installed only afterwards.
     """
-    documented = set(
-        re.findall(r"``(cuprum\.[a-z_]+)``", TracingHook.__doc__ or ""),
+    tracer = InMemoryTracer()
+    hook = TracingHook(tracer)
+    hook(_exec_event("start", pid=42))
+    stale = tracer.spans[0]
+
+    observed: dict[str, object] = {}
+    real_end = InMemorySpan.end
+
+    def recording_end(span: InMemorySpan) -> None:
+        """Capture the hook's PID mapping at the moment the stale span ends."""
+        if span is stale:
+            observed["mapping_during_end"] = hook._active_spans.get(42)
+            observed["status_during_end"] = span.status_ok
+        real_end(span)
+
+    monkeypatch.setattr(InMemorySpan, "end", recording_end)
+
+    hook(_exec_event("start", pid=42))
+
+    current = tracer.spans[1]
+    assert observed["mapping_during_end"] is stale, (
+        "the stale span must still be the active mapping while it is ended"
+    )
+    assert observed["status_during_end"] is False, (
+        "the stale span must be marked failed before it is ended"
+    )
+    assert stale.ended is True, "the stale span must be ended"
+    assert hook._active_spans[42] is current, (
+        "the replacement span must be installed after the stale span is ended"
     )
 
-    # Every attribute the hook can attach: start-time (from
-    # _build_attributes over a fully-populated event) plus exit-time.
+
+def test_emitted_attributes_match_documented_contract() -> None:
+    """The attributes the hook emits equal the documented contract.
+
+    Every attribute ``_build_attributes`` produces for a fully-populated
+    start event, plus the exit-time attributes, must equal
+    ``DOCUMENTED_SPAN_ATTRIBUTES`` — guarding the omission of ``cuprum.cwd`` /
+    ``cuprum.pipeline_stages`` that motivated issue #122.
+    """
     start_event = ExecEvent(
         phase="start",
         program=Program("cat"),
@@ -128,9 +186,25 @@ def test_documented_attributes_match_build_attributes() -> None:
         },
     )
     emitted = set(TracingHook._build_attributes(start_event))
+    # exit_code and duration_s are attached later, in _handle_exit.
     emitted |= {"cuprum.exit_code", "cuprum.duration_s"}
 
-    assert documented == emitted, (
-        "TracingHook docstring attributes must match the emitted set; "
-        f"documented-only={documented - emitted}, code-only={emitted - documented}"
+    contract = set(DOCUMENTED_SPAN_ATTRIBUTES)
+    assert emitted == contract, (
+        "emitted attributes must match the documented contract; "
+        f"emitted-only={emitted - contract}, contract-only={contract - emitted}"
     )
+
+
+def test_docstring_documents_each_contract_attribute() -> None:
+    """The ``TracingHook`` docstring names every attribute in the contract.
+
+    Checks substring membership of each documented name rather than parsing
+    ``__doc__``, so whitespace or formatting edits to the docstring cannot
+    change the test outcome.
+    """
+    doc = TracingHook.__doc__ or ""
+    missing = sorted(
+        attr for attr in DOCUMENTED_SPAN_ATTRIBUTES if f"``{attr}``" not in doc
+    )
+    assert not missing, f"TracingHook docstring omits documented attributes: {missing}"

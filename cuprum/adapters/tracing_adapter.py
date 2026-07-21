@@ -244,23 +244,34 @@ class TracingHook:
         against that by ending any still-open span for the PID before
         installing the new one, so every span is terminated exactly once and
         later output/exit events attach to the correct execution.
+
+        The lookup, stale-span teardown, and installation of the replacement
+        are performed together under ``self._lock`` so the PID→span mapping
+        transitions atomically: a concurrent ``_handle_output`` or
+        ``_handle_exit`` for the same PID observes either the stale span or
+        the new one, never a half-updated entry. Only the unrelated tracer
+        setup (building attributes and starting the span) runs outside the
+        lock, to avoid serialising other PIDs' handlers behind it.
         """
         if event.pid is None:
             return
 
+        # Tracer setup is independent of the PID bookkeeping; do it before
+        # taking the lock so unrelated handlers are not blocked on it.
         attributes = self._build_attributes(event)
         span_name = f"cuprum.exec {event.program}"
         span = self._tracer.start_span(span_name, attributes)
 
         with self._lock:
             stale = self._active_spans.get(event.pid)
+            if stale is not None:
+                # A span for this PID was never closed (missed/out-of-order
+                # exit). End it as unknown rather than leaking it on the
+                # recycled PID; do so before installing the replacement so the
+                # transition is atomic under the lock.
+                stale.set_status(ok=False)
+                stale.end()
             self._active_spans[event.pid] = span
-
-        if stale is not None:
-            # A span for this PID was never closed (missed/out-of-order exit).
-            # End it as unknown rather than leaking it on the recycled PID.
-            stale.set_status(ok=False)
-            stale.end()
 
     def _handle_output(self, event: ExecEvent) -> None:
         """Record output as a span event."""
