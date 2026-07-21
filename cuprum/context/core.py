@@ -224,6 +224,11 @@ class CuprumContext:
 
         A warning log with operation and restricted_state fields is emitted
         before raising ForbiddenProgramError.
+
+        Raises
+        ------
+        ForbiddenProgramError
+            If the program is not permitted by the context allowlist.
         """
         if not self.allowlist and not self._allowlist_is_restricted:
             return  # Empty allowlist permits all programs
