@@ -17,32 +17,14 @@ import typing as typ
 
 from tests.helpers.stream_pipes import (
     _pipe_pair,
+    _pump_rust_stream_payload,
     _read_all,
     _safe_close,
-    pump_payload_through_pipes,
 )
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
     from types import ModuleType
-
-
-def _pump_payload_threaded(
-    streams: ModuleType,
-    payload: bytes,
-    *,
-    buffer_size: int | None = None,
-) -> tuple[bytes, int]:
-    """Pump payload while concurrently feeding and draining its pipes."""
-    kwargs: dict[str, int] = {}
-    if buffer_size is not None:
-        kwargs["buffer_size"] = buffer_size
-
-    def pump(in_read: int, out_write: int) -> int:
-        """Run the Rust stream pump across the supplied pipe ends."""
-        return streams.rust_pump_stream(in_read, out_write, **kwargs)
-
-    return pump_payload_through_pipes(pump, payload)
 
 
 class TestSpliceOptimization:
@@ -56,7 +38,7 @@ class TestSpliceOptimization:
         # 1 MB payload to exercise splice with multiple chunks
         payload = bytes(range(256)) * (1024 * 1024 // 256)
 
-        output, transferred = _pump_payload_threaded(rust_streams, payload)
+        output, transferred = _pump_rust_stream_payload(rust_streams, payload)
 
         assert output == payload, "expected large payload to round-trip"
         assert transferred == len(payload), "expected all bytes transferred"
@@ -91,7 +73,7 @@ class TestSpliceOptimization:
         # 256 KB payload with 4 KB buffer
         payload = bytes(range(256)) * 1024
 
-        output, transferred = _pump_payload_threaded(
+        output, transferred = _pump_rust_stream_payload(
             rust_streams,
             payload,
             buffer_size=4096,

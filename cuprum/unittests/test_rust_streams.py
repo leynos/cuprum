@@ -21,9 +21,9 @@ import pytest
 
 from tests.helpers.stream_pipes import (
     _pipe_pair,
+    _pump_rust_stream_payload,
     _safe_close,
     feed_source_pipe,
-    pump_payload_through_pipes,
 )
 
 if typ.TYPE_CHECKING:
@@ -36,24 +36,6 @@ class _ModuleReferenceScanError(Exception):
     def __init__(self, path: pathlib.Path, symbol: str) -> None:
         """Describe the module reference scan failure."""
         super().__init__(f"cannot inspect {path} for {symbol!r} production references")
-
-
-def _pump_payload(
-    streams: ModuleType,
-    payload: bytes,
-    *,
-    buffer_size: int | None = None,
-) -> tuple[bytes, int]:
-    """Pump payload while concurrently feeding and draining its pipes."""
-    kwargs: dict[str, int] = {}
-    if buffer_size is not None:
-        kwargs["buffer_size"] = buffer_size
-
-    def pump(in_read: int, out_write: int) -> int:
-        """Run the Rust stream pump across the supplied pipe ends."""
-        return streams.rust_pump_stream(in_read, out_write, **kwargs)
-
-    return pump_payload_through_pipes(pump, payload)
 
 
 def _consume_payload(
@@ -169,7 +151,9 @@ def test_rust_pump_stream_transfers_data(
     -------
     None
     """
-    output, transferred = _pump_payload(rust_streams, payload, buffer_size=buffer_size)
+    output, transferred = _pump_rust_stream_payload(
+        rust_streams, payload, buffer_size=buffer_size
+    )
 
     assert output == payload, f"expected payload to round-trip through pump ({test_id})"
     assert transferred == len(payload), (
