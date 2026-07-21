@@ -34,12 +34,26 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
 
 
+def _cancel_pending_consumers(
+    consumers: tuple[asyncio.Task[None] | asyncio.Task[str | None], ...],
+) -> None:
+    """Cancel each consumer task that has not already completed.
+
+    Finished readers keep their captured output; only tasks still blocked
+    after process termination (or on cancellation) are cancelled, so cleanup
+    cannot hang on a reader wedged on a pipe that never reached EOF.
+    """
+    for task in consumers:
+        if not task.done():
+            task.cancel()
+
+
 async def _wait_for_exit_code(
     process: asyncio.subprocess.Process,
     ctx: ExecutionContext,
     *,
     timeout: float | None = None,
-    consumers: tuple[asyncio.Task[str | None], ...] = (),
+    consumers: tuple[asyncio.Task[None] | asyncio.Task[str | None], ...] = (),
 ) -> tuple[int, float]:
     """Wait for a subprocess, handling cancellation and capturing exit time."""
     try:
@@ -50,13 +64,13 @@ async def _wait_for_exit_code(
     except TimeoutError:  # Raised by asyncio.wait_for on timeout expiry
         await _terminate_process(process, ctx.cancel_grace)
         if consumers:
+            _cancel_pending_consumers(consumers)
             await asyncio.gather(*consumers, return_exceptions=True)
         raise
     except asyncio.CancelledError:
         await _terminate_process(process, ctx.cancel_grace)
         if consumers:
-            for task in consumers:
-                task.cancel()
+            _cancel_pending_consumers(consumers)
             await asyncio.gather(*consumers, return_exceptions=True)
         raise
     exited_at = time.perf_counter()
@@ -269,6 +283,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
 __all__ = [
     "_SubprocessExecution",
     "_build_stream_config",
+    "_cancel_pending_consumers",
     "_create_stream_callback",
     "_execute_subprocess",
     "_run_subprocess_with_streams",

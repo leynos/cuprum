@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
+import typing as typ
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from cuprum._subprocess_execution import _wait_for_exit_code
 from cuprum._subprocess_timeout import (
     _handle_stream_timeout,
     _SubprocessTimeoutError,
 )
+from cuprum.sh import ExecutionContext
 
 # A consumer either completes with captured text or fails with an exception.
 _CONSUMER_OUTCOME = st.one_of(
@@ -159,5 +162,71 @@ def test_handle_stream_timeout_upholds_invariants_across_orderings(
                 f"{label} capture must reflect its consumer outcome: "
                 f"expected {expected!r}, got {captured!r}"
             )
+
+    asyncio.run(run_case())
+
+
+class _TimeoutWaitProcess:
+    """Process double whose ``wait()`` blocks until terminate()/kill()."""
+
+    def __init__(self) -> None:
+        """Start unexited, with a pid and an unset termination event."""
+        self.returncode: int | None = None
+        self.pid = 4321
+        self._exited = asyncio.Event()
+
+    async def wait(self) -> int:
+        """Block until a termination signal records an exit code."""
+        await self._exited.wait()
+        assert self.returncode is not None
+        return self.returncode
+
+    def terminate(self) -> None:
+        """Record a SIGTERM exit code and release ``wait()``."""
+        if self.returncode is None:
+            self.returncode = -15
+        self._exited.set()
+
+    def kill(self) -> None:
+        """Record a SIGKILL exit code and release ``wait()``."""
+        if self.returncode is None:
+            self.returncode = -9
+        self._exited.set()
+
+
+def test_wait_for_exit_code_cancels_pending_consumers_on_timeout() -> None:
+    """A timed-out wait cancels and drains consumers still pending after kill.
+
+    The stream path hands its stdout/stderr tasks to ``_wait_for_exit_code`` as
+    ``consumers``. When ``process.wait()`` times out and a consumer remains
+    blocked after termination, cleanup must cancel and drain it so timeout
+    handling cannot hang, while the original ``TimeoutError`` still propagates.
+    """
+
+    async def blocking_consumer() -> None:
+        """Block until timeout cleanup cancels this task."""
+        await asyncio.Event().wait()
+
+    async def run_case() -> None:
+        """Drive ``_wait_for_exit_code`` through its timeout-cleanup branch."""
+        process = _TimeoutWaitProcess()
+        consumer = asyncio.create_task(blocking_consumer())
+        ctx = ExecutionContext(cancel_grace=0.1)
+
+        with pytest.raises(TimeoutError):
+            await _wait_for_exit_code(
+                typ.cast("asyncio.subprocess.Process", process),
+                ctx,
+                timeout=0.05,
+                consumers=(consumer,),
+            )
+
+        assert consumer.cancelled(), (
+            "a consumer left pending at timeout must be cancelled during "
+            f"cleanup, but consumer.done()={consumer.done()}"
+        )
+        assert consumer.done(), (
+            "the cancelled consumer must be drained before the timeout propagates"
+        )
 
     asyncio.run(run_case())
