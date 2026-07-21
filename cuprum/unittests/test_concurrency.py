@@ -453,6 +453,20 @@ def test_fail_fast_failure_maps_to_original_submission() -> None:
     assert concurrent_result.failure_submission_indices == (1,)
 
 
+def test_mismatched_submission_indices_length_is_rejected() -> None:
+    """A supplied submission_indices must match the results length."""
+    from cuprum import CommandResult, Program
+
+    results = (
+        CommandResult(Program("echo"), (), 0, 1, "out", ""),
+        CommandResult(Program("echo"), (), 1, 2, "out", ""),
+    )
+    # Two results but only one submission index: fail fast in __post_init__
+    # rather than defer to an IndexError from failure_submission_indices.
+    with pytest.raises(ValueError, match="submission_indices length"):
+        ConcurrentResult(results=results, failures=(1,), submission_indices=(0,))
+
+
 @given(
     items=st.lists(
         st.one_of(st.none(), st.integers(min_value=0, max_value=5)),

@@ -93,7 +93,8 @@ class ConcurrentResult:
         fail-fast mode it lists the submission positions of the completed
         commands. Lets callers map any result — or failure — back to the
         command they submitted, uniformly across both execution modes. Defaults
-        to the identity sequence when not supplied.
+        to the identity sequence when not supplied; a supplied sequence whose
+        length differs from ``results`` raises :class:`ValueError`.
 
     """
 
@@ -102,13 +103,23 @@ class ConcurrentResult:
     submission_indices: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
-        """Populate ``submission_indices`` with the identity when unset."""
-        if not self.submission_indices and self.results:
-            object.__setattr__(
-                self,
-                "submission_indices",
-                tuple(range(len(self.results))),
+        """Backfill or validate ``submission_indices`` against ``results``.
+
+        Populate the identity sequence when ``submission_indices`` is omitted;
+        reject a supplied sequence whose length differs from ``results`` so
+        misuse fails fast here rather than raising ``IndexError`` later.
+        """
+        if not self.submission_indices:
+            if self.results:
+                identity = tuple(range(len(self.results)))
+                object.__setattr__(self, "submission_indices", identity)
+            return
+        if len(self.submission_indices) != len(self.results):
+            msg = (
+                f"submission_indices length ({len(self.submission_indices)}) "
+                f"must match results length ({len(self.results)})"
             )
+            raise ValueError(msg)
 
     @property
     def ok(self) -> bool:

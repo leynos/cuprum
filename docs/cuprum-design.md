@@ -1180,7 +1180,9 @@ concurrently with optional concurrency limits. The implementation uses
   non-zero, ascending. Because `results` is compacted in fail-fast mode, these
   are not original submission positions.
 - `submission_indices`: Tuple parallel to `results` giving each result's
-  original submission index (the identity sequence in collect-all mode).
+  original submission index (the identity sequence in collect-all mode). It
+  defaults to the identity sequence when omitted; a supplied sequence whose
+  length differs from `results` raises `ValueError` so misuse fails fast.
 - `ok`: Property returning `True` when `failures` is empty.
 - `first_failure`: Property returning the first failed `CommandResult`, or
   `None` if all succeeded.
@@ -1493,7 +1495,6 @@ than a rigid class diagram, and should favour boring, explicit implementations
 over cleverness—especially in the type‑system and configuration layers.
 
 ______________________________________________________________________
-
 
 ## 13. Performance-Optimized Stream Operations
 

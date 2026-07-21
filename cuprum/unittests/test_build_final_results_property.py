@@ -132,13 +132,13 @@ def _submission_indices_preserved(
     return submission_indices == expected_indices
 
 
-def _build_final_results_invariants_hold(
+def _compaction_and_failure_invariants_hold(
+    final_results: list[CommandResult],
+    failures: list[int],
     inputs: list[CommandResult | None],
+    expected_results: list[CommandResult],
 ) -> bool:
-    """Return whether the reducer satisfies its compaction invariants."""
-    final_results, submission_indices, failures = _build_final_results(inputs)
-    expected_results = [result for result in inputs if result is not None]
-
+    """Return whether the compaction and failure-index invariants hold."""
     return (
         _failure_indices_in_bounds(failures, final_results)
         and _failure_indices_point_to_failures(failures, final_results)
@@ -147,8 +147,19 @@ def _build_final_results_invariants_hold(
         and _no_cancelled_entries(final_results)
         and _result_count_matches(final_results, inputs)
         and _order_preserved(final_results, expected_results)
-        and _submission_indices_preserved(submission_indices, inputs)
     )
+
+
+def _build_final_results_invariants_hold(
+    inputs: list[CommandResult | None],
+) -> bool:
+    """Return whether the reducer satisfies its compaction invariants."""
+    final_results, submission_indices, failures = _build_final_results(inputs)
+    expected_results = [result for result in inputs if result is not None]
+
+    return _compaction_and_failure_invariants_hold(
+        final_results, failures, inputs, expected_results
+    ) and _submission_indices_preserved(submission_indices, inputs)
 
 
 def _assert_build_final_results_invariants(
