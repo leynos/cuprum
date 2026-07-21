@@ -747,7 +747,33 @@ def test_stdin_input_cancellation_cleans_up_task(
 
     asyncio.run(_orchestrate())
 
+def test_streamed_run_cancellation_cleans_up_task(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """Cancelling an in-flight streamed (capture=True) run does not hang.
 
+    Output capture routes execution through ``_run_subprocess_with_streams``,
+    so cancelling the run must cancel and drain the stdout/stderr consumer
+    tasks via ``_wait_for_exit_code``'s ``CancelledError`` branch rather than
+    deadlocking on a still-pending reader (regression for #117).
+    """
+
+    async def _orchestrate() -> None:
+        """Start a streaming command and cancel it mid-flight."""
+        command = python_builder(
+            "-c",
+            "import time; [print('tick', flush=True) or time.sleep(0.02) "
+            "for _ in range(600)]",
+        )
+        task = asyncio.create_task(
+            command.run(output=RunOutputOptions(capture=True)),
+        )
+        await asyncio.sleep(0.1)  # let the child stream some output first
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+
+    asyncio.run(_orchestrate())
 @pytest.mark.parametrize("execution_strategy", ["async", "sync"])
 def test_input_text_encoding_failure_raises(
     python_builder: cabc.Callable[..., SafeCmd],
