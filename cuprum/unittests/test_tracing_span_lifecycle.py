@@ -12,31 +12,31 @@ command execution.
 from __future__ import annotations
 
 import re
-import typing as typ
 from pathlib import Path
 
 from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
-from cuprum.events import ExecEvent
+from cuprum.events import ExecEvent, ExecPhase
 from cuprum.program import Program
 
 
 def _exec_event(
-    phase: str,
+    phase: ExecPhase,
     pid: int,
     *,
+    line: str | None = None,
     exit_code: int | None = None,
     duration_s: float | None = None,
 ) -> ExecEvent:
     """Build a minimal ``ExecEvent`` for direct hook dispatch."""
     return ExecEvent(
-        phase=typ.cast("typ.Any", phase),
+        phase=phase,
         program=Program("cat"),
         argv=("cat",),
         cwd=None,
         env=None,
         pid=pid,
         timestamp=0.0,
-        line=None,
+        line=line,
         exit_code=exit_code,
         duration_s=duration_s,
         tags={},
@@ -65,6 +65,34 @@ def test_recycled_pid_does_not_orphan_previous_span() -> None:
     )
     assert current.status_ok is True, (
         "the recycled-PID execution must retain its own clean exit status"
+    )
+
+
+def test_recycled_pid_attributes_output_to_correct_span() -> None:
+    """Output emitted before and after a PID is recycled attaches correctly.
+
+    Guards the core purpose of the issue #122 fix: when a PID is reused after
+    a missed exit, later ``stdout``/``stderr`` events must land on the current
+    span, and output recorded before the recycle must remain on the stale
+    span rather than leaking onto the wrong execution.
+    """
+    tracer = InMemoryTracer()
+    hook = TracingHook(tracer)
+
+    # First execution starts, emits output, then its exit event is missed.
+    hook(_exec_event("start", pid=1234))
+    hook(_exec_event("stdout", pid=1234, line="first-run-output"))
+    # The PID is recycled by a second execution before the first closed.
+    hook(_exec_event("start", pid=1234))
+    hook(_exec_event("stdout", pid=1234, line="second-run-output"))
+    hook(_exec_event("exit", pid=1234, exit_code=0, duration_s=0.1))
+
+    stale, current = tracer.spans
+    assert stale.events == [("cuprum.stdout", {"line": "first-run-output"})], (
+        "output from the first run must stay on the stale span"
+    )
+    assert current.events == [("cuprum.stdout", {"line": "second-run-output"})], (
+        "output from the recycled-PID run must attach to the current span"
     )
 
 
