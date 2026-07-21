@@ -3,7 +3,10 @@
 ``InMemorySpan`` and ``InMemoryTracer`` implement the ``Span`` and
 ``Tracer`` protocols from :mod:`cuprum.adapters.tracing_adapter` for
 testing and examples. They store spans in memory for inspection and are
-thread-safe, but are not intended for production telemetry.
+not intended for production telemetry. ``InMemoryTracer`` protects its
+span store with a lock (see below); the ``InMemorySpan`` objects it
+returns are plain mutable test doubles that provide no synchronization of
+their own.
 
 ``InMemoryTracer`` follows the shared
 :class:`~cuprum.adapters._support._LockedStore` contract: every mutator
@@ -23,7 +26,30 @@ if typ.TYPE_CHECKING:
 
 @dc.dataclass(slots=True)
 class InMemorySpan:
-    """Reference in-memory span for testing and examples."""
+    """Reference in-memory span for testing and examples.
+
+    A mutable test double implementing the ``Span`` protocol from
+    :mod:`cuprum.adapters.tracing_adapter`. It records everything set on it so
+    that tests can inspect the result. It performs no synchronization of its
+    own; a span is expected to be mutated by a single thread at a time.
+
+    Attributes
+    ----------
+    name : str
+        Name of the span, as supplied to
+        :meth:`InMemoryTracer.start_span`.
+    attributes : dict[str, object]
+        Span attributes keyed by name. Seeded from the attributes passed at
+        creation and extended in place by :meth:`set_attribute`.
+    events : list[tuple[str, dict[str, object]]]
+        Recorded events in insertion order, each a ``(name, attributes)``
+        pair appended by :meth:`add_event`.
+    status_ok : bool | None
+        Completion status: ``None`` until :meth:`set_status` is called, then
+        ``True`` for success or ``False`` for failure.
+    ended : bool
+        Whether :meth:`end` has been called; ``False`` until then.
+    """
 
     name: str
     attributes: dict[str, object] = dc.field(default_factory=dict)
@@ -32,7 +58,20 @@ class InMemorySpan:
     ended: bool = False
 
     def set_attribute(self, key: str, value: object) -> None:
-        """Set a span attribute."""
+        """Record a single span attribute, overwriting any existing value.
+
+        Parameters
+        ----------
+        key : str
+            Attribute name (for example, ``"cuprum.program"``).
+        value : object
+            Attribute value, stored verbatim.
+
+        Returns
+        -------
+        None
+            The span's :attr:`attributes` mapping is mutated in place.
+        """
         self.attributes[key] = value
 
     def add_event(
@@ -40,15 +79,50 @@ class InMemorySpan:
         name: str,
         attributes: cabc.Mapping[str, object] | None = None,
     ) -> None:
-        """Add an event to the span."""
+        """Append a named event to the span.
+
+        Parameters
+        ----------
+        name : str
+            Event name (for example, ``"cuprum.stdout"``).
+        attributes : collections.abc.Mapping[str, object] | None, optional
+            Optional event attributes. When provided, a shallow copy is
+            stored so later caller mutations do not affect the recorded
+            event; when ``None`` (the default), an empty attribute mapping is
+            recorded.
+
+        Returns
+        -------
+        None
+            The new event is appended to :attr:`events` in place.
+        """
         self.events.append((name, dict(attributes) if attributes else {}))
 
     def set_status(self, *, ok: bool) -> None:
-        """Set the span status."""
+        """Set the span's completion status.
+
+        Parameters
+        ----------
+        ok : bool
+            Keyword-only. ``True`` marks the span as successful and ``False``
+            marks it as failed; the value is stored on :attr:`status_ok`.
+
+        Returns
+        -------
+        None
+            :attr:`status_ok` is updated in place.
+        """
         self.status_ok = ok
 
     def end(self) -> None:
-        """End the span."""
+        """Mark the span as ended.
+
+        Returns
+        -------
+        None
+            Sets :attr:`ended` to ``True``. No further recording is expected
+            after a span has ended, though the double does not enforce this.
+        """
         self.ended = True
 
 
@@ -73,7 +147,26 @@ class InMemoryTracer(_LockedStore):
         name: str,
         attributes: cabc.Mapping[str, object] | None = None,
     ) -> InMemorySpan:
-        """Start a new in-memory span."""
+        """Create, record, and return a new in-memory span.
+
+        The span is appended to :attr:`spans` under the store lock, so
+        concurrent ``start_span`` calls record their spans safely.
+
+        Parameters
+        ----------
+        name : str
+            Name for the new span.
+        attributes : collections.abc.Mapping[str, object] | None, optional
+            Optional initial span attributes. When provided, a shallow copy
+            seeds the span's :attr:`~InMemorySpan.attributes`; when ``None``
+            (the default), the span starts with no attributes.
+
+        Returns
+        -------
+        InMemorySpan
+            The newly created span, already appended to :attr:`spans`. The
+            caller is responsible for ending it via :meth:`InMemorySpan.end`.
+        """
         span = InMemorySpan(
             name=name,
             attributes=dict(attributes) if attributes else {},
