@@ -176,6 +176,21 @@ def test_tar_create_builder_outputs_args(tmp_path: Path) -> None:
     ), "tar_create argv mismatch"
 
 
+def test_tar_create_defaults_to_no_compression(tmp_path: Path) -> None:
+    """tar_create emits no compression flag when options are omitted."""
+    archive = tmp_path / "archive.tar"
+    source = tmp_path / "source"
+
+    cmd = tar_create(archive, [source])
+
+    assert cmd.argv == (
+        "-c",
+        "-f",
+        archive.as_posix(),
+        source.as_posix(),
+    )
+
+
 @pytest.mark.parametrize(
     ("compression", "expected_flag"),
     [

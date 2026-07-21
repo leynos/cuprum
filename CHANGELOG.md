@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Tar compression options (breaking):** `tar_create` now selects compression
+  through a single `Compression` enum instead of mutually-exclusive boolean
+  flags. Replace `TarCreateOptions(gzip=True)` with
+  `TarCreateOptions(compression=Compression.GZIP)`; likewise `bzip2=True`
+  becomes `Compression.BZIP2` and `xz=True` becomes `Compression.XZ`. Omitting
+  compression now maps to `Compression.NONE` and emits no tar compression flag
+  ([#119](https://github.com/leynos/cuprum/issues/119)).
+
 ## [0.2.0] - 2026-06-21
 
 ### Changed
