@@ -45,10 +45,11 @@ falsified, so no correction or health-check suppression is justified.
 
 ### H1: The `_TAGS` strategy generates values unexpectedly slowly
 
-**Claim**: Although `_TAGS` is bounded and non-recursive — a finite key set via
-`st.sampled_from`, bounded values (`st.text(max_size=5) | st.integers(0, 9)`),
-and `max_size=3` — generating it still exhausts Hypothesis's health-check budget
-before a valid dictionary is produced.
+**Claim**: Although `_TAGS` is
+bounded and non-recursive — a finite key set via `st.sampled_from`,
+bounded values (`st.text(max_size=5) | st.integers(0, 9)`), and
+`max_size=3` — generating it still exhausts Hypothesis's health-check
+budget before a valid dictionary is produced.
 
 **Plausibility**: High — the health check identifies `ctx_tags` generation.
 
@@ -64,9 +65,9 @@ _Table 2: Falsification steps for the `_TAGS` generation hypothesis._
 | 1 | Inspect `_TAGS` and replay the named test seed. | The test completes without a slow-generation health check. |
 | 2 | Time representative samples from `_TAGS`. | Sampling is quick, which disproves strategy generation as the cause. |
 
-**Tooling**: display the strategy with a repository-native command (no leta
-workspace-indexing prerequisite), then replay the focused property with its
-recorded seed:
+**Tooling**: display the strategy with a repository-native command (no
+`leta workspace add` indexing step required), then replay the focused
+property with its recorded seed:
 
 ```bash
 rg -n -A15 '^_TAGS = ' cuprum/unittests/test_stage_observation_builder.py
@@ -105,8 +106,8 @@ generation.
 
 ## Recommended execution order
 
-1. **H1** — the error names the generated argument, and this is the cheapest
-   decisive check.
+1. **H1** — the error names the generated argument `ctx_tags`, and this
+   is the cheapest decisive check.
 2. **H2** — investigate construction only if H1 is falsified.
 
 ## Termination criteria

@@ -14,6 +14,7 @@ import typing as typ
 
 from cuprum._pipeline_internals import _EventDetails
 from cuprum._subprocess_context import _sh_module
+from cuprum._subprocess_stdin import _cancel_stdin_writer
 
 if typ.TYPE_CHECKING:
     from cuprum._pipeline_internals import _StageObservation
@@ -167,9 +168,7 @@ async def _handle_stream_timeout(
     timeout: float | None,
 ) -> typ.NoReturn:
     """Clean up stdin/stream tasks on timeout and raise _SubprocessTimeoutError."""
-    if stdin_task is not None:
-        stdin_task.cancel()
-        await asyncio.gather(stdin_task, return_exceptions=True)
+    await _cancel_stdin_writer(stdin_task)
     stdout_result, stderr_result = await asyncio.gather(
         *consumers, return_exceptions=True
     )
