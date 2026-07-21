@@ -93,6 +93,31 @@ async def _finalize_with_failing_after_hook(
     )
 
 
+async def _assert_pipeline_finalization_failure_group(
+    task_exception_class: type[BaseException],
+    expected_group_class: type[BaseExceptionGroup[BaseException]],
+) -> None:
+    """Assert finalization groups the after-hook and observe-task failures."""
+    pending_tasks: list[asyncio.Task[None]] = []
+
+    async def failing_observe_task() -> None:
+        """Yield once, then raise the scenario's observe-task exception."""
+        await asyncio.sleep(0)
+        raise task_exception_class
+
+    with pytest.raises(expected_group_class) as exc_info:
+        await _finalize_with_failing_after_hook(pending_tasks, failing_observe_task)
+
+    assert type(exc_info.value) is expected_group_class, (
+        "finalization should raise the expected concrete exception-group type"
+    )
+    assert tuple(type(error) for error in exc_info.value.exceptions) == (
+        _AfterHookError,
+        task_exception_class,
+    ), "finalization should preserve both failures in operation order"
+    assert pending_tasks == [], "finalization should clear failed observe tasks"
+
+
 def test_safe_cmd_run_enforces_allowlist_before_before_hooks() -> None:
     """A forbidden ``SafeCmd.run_sync`` must not dispatch before hooks."""
     calls: list[sh.SafeCmd] = []
@@ -174,59 +199,22 @@ def test_pipeline_finalization_drains_tasks_after_hook_failure() -> None:
 
 def test_pipeline_finalization_preserves_after_hook_and_task_failures() -> None:
     """Finalization groups simultaneous after-hook and observe-task failures."""
-
-    async def run() -> None:
-        """Raise from an after hook and a scheduled observe task."""
-        pending_tasks: list[asyncio.Task[None]] = []
-
-        async def failing_observe_task() -> None:
-            """Raise when finalization awaits the scheduled task."""
-            await asyncio.sleep(0)
-            raise _ObserveTaskError
-
-        with pytest.raises(ExceptionGroup) as exc_info:
-            await _finalize_with_failing_after_hook(
-                pending_tasks,
-                failing_observe_task,
-            )
-
-        assert tuple(type(error) for error in exc_info.value.exceptions) == (
-            _AfterHookError,
+    asyncio.run(
+        _assert_pipeline_finalization_failure_group(
             _ObserveTaskError,
-        ), "finalization should preserve both failures in operation order"
-        assert pending_tasks == [], "finalization should clear failed observe tasks"
-
-    asyncio.run(run())
+            ExceptionGroup,
+        )
+    )
 
 
 def test_pipeline_finalization_preserves_after_hook_and_base_exception_task() -> None:
     """Finalization groups an after-hook failure with a non-Exception task failure."""
-
-    async def run() -> None:
-        """Raise an Exception after hook beside a BaseException observe task."""
-        pending_tasks: list[asyncio.Task[None]] = []
-
-        async def fatal_observe_task() -> None:
-            """Raise a non-Exception BaseException when the task is awaited."""
-            await asyncio.sleep(0)
-            raise _FatalObserveTaskError
-
-        with pytest.raises(BaseExceptionGroup) as exc_info:
-            await _finalize_with_failing_after_hook(
-                pending_tasks,
-                fatal_observe_task,
-            )
-
-        assert not isinstance(exc_info.value, ExceptionGroup), (
-            "a non-Exception task failure must keep the group as a BaseExceptionGroup"
-        )
-        assert tuple(type(error) for error in exc_info.value.exceptions) == (
-            _AfterHookError,
+    asyncio.run(
+        _assert_pipeline_finalization_failure_group(
             _FatalObserveTaskError,
-        ), "finalization should preserve both failures in operation order"
-        assert pending_tasks == [], "finalization should clear failed observe tasks"
-
-    asyncio.run(run())
+            BaseExceptionGroup,
+        )
+    )
 
 
 def _first_failure_index(hook_kinds: list[str]) -> int | None:
