@@ -167,6 +167,37 @@ def test_select_ci_ratchet_scenarios_rejects_invalid_single_scenario(
         })
 
 
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        pytest.param("true", id="str"),
+        pytest.param(1, id="int"),
+        pytest.param(None, id="none"),
+        pytest.param([], id="list"),
+    ],
+)
+def test_select_ci_ratchet_scenarios_rejects_non_boolean_line_callbacks(
+    bad_value: object,
+) -> None:
+    """Non-boolean with_line_callbacks metadata should raise TypeError."""
+    scenario = _scenario(
+        _ScenarioSpec(
+            name="rust-small-single-nocb",
+            backend="rust",
+            payload_bytes=1024,
+            stages=2,
+        )
+    )
+    scenario["with_line_callbacks"] = bad_value
+    with pytest.raises(TypeError, match="scenario with_line_callbacks must be a bool"):
+        select_ci_ratchet_scenarios({
+            "dry_run": True,
+            "rust_available": True,
+            "command": ["a", "b", "c", "d", "e", "f", "g", "rust only"],
+            "scenarios": [scenario],
+        })
+
+
 def test_load_plan_payload_rejects_mismatched_command_count(tmp_path: pth.Path) -> None:
     """The helper should reject dry-run plans with misaligned command counts."""
     plan_path = tmp_path / "full-plan.json"

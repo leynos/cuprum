@@ -33,6 +33,14 @@ def _require_non_empty_string(value: object, *, name: str) -> str:
     return value
 
 
+def _require_bool(value: object, *, name: str) -> bool:
+    """Validate and return a boolean value."""
+    if not isinstance(value, bool):
+        msg = f"{name} must be a bool"
+        raise TypeError(msg)
+    return value
+
+
 def _check_float_bound(
     validated: float,
     *,

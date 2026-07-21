@@ -9,6 +9,7 @@ import subprocess  # noqa: S404 - helper intentionally invokes hyperfine
 import typing as typ
 
 from benchmarks._validation import (
+    _require_bool,
     _require_list,
     _require_mapping,
     _require_non_empty_string,
@@ -92,7 +93,10 @@ def select_ci_ratchet_scenarios(
     selected.sort(
         key=lambda entry: (
             _require_numeric_payload_bytes(entry[0].get("payload_bytes", 0)),
-            bool(entry[0].get("with_line_callbacks", False)),
+            _require_bool(
+                entry[0].get("with_line_callbacks", False),
+                name="scenario with_line_callbacks",
+            ),
             entry[0].get("backend") != "python",
         )
     )
