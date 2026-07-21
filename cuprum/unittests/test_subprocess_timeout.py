@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 
 import pytest
 from hypothesis import given, settings
@@ -17,6 +18,29 @@ from cuprum._subprocess_timeout import (
 _CONSUMER_OUTCOME = st.one_of(
     st.text(max_size=16).map(lambda value: ("value", value)),
     st.just(("raise", None)),
+)
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _StreamTimeoutCase:
+    """Generated scheduling and outcome configuration for timeout cleanup."""
+
+    stdout: tuple[str, str | None]
+    stdout_delay: int
+    stderr: tuple[str, str | None]
+    stderr_delay: int
+    stdin_delay: int
+    timeout: float
+
+
+_STREAM_TIMEOUT_CASE = st.builds(
+    _StreamTimeoutCase,
+    stdout=_CONSUMER_OUTCOME,
+    stdout_delay=st.integers(min_value=0, max_value=3),
+    stderr=_CONSUMER_OUTCOME,
+    stderr_delay=st.integers(min_value=0, max_value=3),
+    stdin_delay=st.integers(min_value=0, max_value=3),
+    timeout=st.floats(min_value=0.001, max_value=3600.0, allow_nan=False),
 )
 
 
@@ -66,21 +90,9 @@ def test_stream_timeout_preserves_timeout_when_consumer_fails() -> None:
 
 
 @settings(max_examples=75, deadline=None, derandomize=True)
-@given(
-    stdout=_CONSUMER_OUTCOME,
-    stdout_delay=st.integers(min_value=0, max_value=3),
-    stderr=_CONSUMER_OUTCOME,
-    stderr_delay=st.integers(min_value=0, max_value=3),
-    stdin_delay=st.integers(min_value=0, max_value=3),
-    timeout=st.floats(min_value=0.001, max_value=3600.0, allow_nan=False),
-)
+@given(case=_STREAM_TIMEOUT_CASE)
 def test_handle_stream_timeout_upholds_invariants_across_orderings(
-    stdout: tuple[str, str | None],
-    stdout_delay: int,
-    stderr: tuple[str, str | None],
-    stderr_delay: int,
-    stdin_delay: int,
-    timeout: float,
+    case: _StreamTimeoutCase,
 ) -> None:
     """_handle_stream_timeout keeps its cleanup contract for any task ordering.
 
@@ -104,8 +116,8 @@ def test_handle_stream_timeout_upholds_invariants_across_orderings(
         return value
 
     async def block_stdin() -> None:
-        """Yield ``stdin_delay`` times, then block until cancelled."""
-        for _ in range(stdin_delay):
+        """Yield ``case.stdin_delay`` times, then block until cancelled."""
+        for _ in range(case.stdin_delay):
             await asyncio.sleep(0)
         await asyncio.Event().wait()
 
@@ -113,8 +125,8 @@ def test_handle_stream_timeout_upholds_invariants_across_orderings(
         """Drive the handler once and assert its cleanup invariants."""
         stdin_task = asyncio.create_task(block_stdin())
         consumers = (
-            asyncio.create_task(consumer(stdout, stdout_delay)),
-            asyncio.create_task(consumer(stderr, stderr_delay)),
+            asyncio.create_task(consumer(case.stdout, case.stdout_delay)),
+            asyncio.create_task(consumer(case.stderr, case.stderr_delay)),
         )
 
         with pytest.raises(_SubprocessTimeoutError) as exc_info:
@@ -122,13 +134,13 @@ def test_handle_stream_timeout_upholds_invariants_across_orderings(
                 TimeoutError(),
                 stdin_task=stdin_task,
                 consumers=consumers,
-                timeout=timeout,
+                timeout=case.timeout,
             )
 
         exc = exc_info.value
-        assert exc.timeout == timeout, (
+        assert exc.timeout == case.timeout, (
             f"timeout must survive cleanup unchanged: got {exc.timeout} "
-            f"for configured {timeout}"
+            f"for configured {case.timeout}"
         )
         assert stdin_task.cancelled(), (
             "the blocked stdin writer must be cancelled during cleanup, "
@@ -138,8 +150,8 @@ def test_handle_stream_timeout_upholds_invariants_across_orderings(
             "every consumer task must be drained before the handler returns"
         )
         for label, captured, outcome in (
-            ("stdout", exc.stdout, stdout),
-            ("stderr", exc.stderr, stderr),
+            ("stdout", exc.stdout, case.stdout),
+            ("stderr", exc.stderr, case.stderr),
         ):
             kind, value = outcome
             expected = None if kind == "raise" else value
