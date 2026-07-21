@@ -59,11 +59,15 @@ pub(crate) fn try_splice_pump(
     Some(splice_loop(reader_fd, writer_fd, chunk_size, first))
 }
 
-/// Perform a single splice call.
+/// Perform a single splice call, retrying on `EINTR`.
+///
+/// The `EINTR` retry lives at the syscall level, matching the Unix read and
+/// write policies in [`crate::io_utils`]: a signal delivered mid-transfer
+/// re-issues the splice rather than surfacing a spurious failure that would
+/// abort an otherwise-healthy pump.
 fn splice_once(fd_in: libc::c_int, fd_out: libc::c_int, len: usize) -> Result<usize, PumpError> {
     let flags = SPLICE_F_MOVE | SPLICE_F_MORE;
-
-    loop {
+    splice_once_with(|| {
         // SAFETY: splice is a well-defined syscall; null offsets are valid for pipes.
         let result = unsafe {
             libc::splice(
@@ -77,13 +81,30 @@ fn splice_once(fd_in: libc::c_int, fd_out: libc::c_int, len: usize) -> Result<us
         };
 
         if result >= 0 {
-            // Non-negative ssize_t fits in usize on Linux.
-            return usize::try_from(result).map_err(|_| PumpError::LengthOverflow);
+            Ok(result)
+        } else {
+            Err(io::Error::last_os_error())
         }
+    })
+}
 
-        let err = io::Error::last_os_error();
-        if err.kind() != io::ErrorKind::Interrupted {
-            return Err(PumpError::from(err));
+/// Retry an interrupted splice syscall and map its result into [`PumpError`].
+///
+/// Factored out of [`splice_once`] so the `EINTR` retry policy can be
+/// exercised deterministically without provoking a real signal, mirroring
+/// [`crate::io_utils::read_raw_fd_with`]. Interrupted calls retry, a
+/// non-negative result is the byte count, and every other error propagates.
+fn splice_once_with(
+    mut splice_call: impl FnMut() -> Result<libc::ssize_t, io::Error>,
+) -> Result<usize, PumpError> {
+    loop {
+        match splice_call() {
+            // Non-negative ssize_t fits in usize on Linux.
+            Ok(transferred) => {
+                return usize::try_from(transferred).map_err(|_| PumpError::LengthOverflow);
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => return Err(PumpError::from(err)),
         }
     }
 }
@@ -161,12 +182,13 @@ mod tests {
     //! unsupported descriptor types, and broken-pipe draining.
 
     use std::fs::File;
+    use std::io;
     use std::os::fd::{AsRawFd, OwnedFd};
 
     use rstest::{fixture, rstest};
     use tempfile::NamedTempFile;
 
-    use super::{drain_reader, try_splice_pump};
+    use super::{drain_reader, splice_once_with, try_splice_pump};
     use crate::test_support::{make_pipe, read_all_from, unwrap_ok, write_all_to};
 
     /// A connected `pipe(2)` pair: `(read_end, write_end)`.
@@ -266,5 +288,24 @@ mod tests {
 
         let leftover = read_all_from(&read_end);
         assert!(leftover.is_empty(), "drain must consume the pipe to EOF");
+    }
+
+    #[rstest]
+    fn splice_once_retries_after_interruption() {
+        // A signal delivered mid-transfer surfaces as `EINTR`; the syscall
+        // wrapper must re-issue the splice rather than fail. Inject one
+        // interruption, then a successful transfer, and confirm the retry.
+        let mut attempts = 0_u8;
+
+        let transferred = unwrap_ok(splice_once_with(|| {
+            attempts = attempts.saturating_add(1);
+            if attempts == 1 {
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            Ok(7)
+        }));
+
+        assert_eq!(transferred, 7);
+        assert_eq!(attempts, 2);
     }
 }
