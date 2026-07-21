@@ -45,6 +45,10 @@ class _ObserveTaskError(Exception):
     """Test exception raised by a scheduled observe task."""
 
 
+class _FatalObserveTaskError(BaseException):
+    """Test base exception raised by a scheduled observe task."""
+
+
 async def _finalize_with_failing_after_hook(
     pending_tasks: list[asyncio.Task[None]],
     observe_task_factory: cabc.Callable[[], cabc.Awaitable[None]],
@@ -189,6 +193,36 @@ def test_pipeline_finalization_preserves_after_hook_and_task_failures() -> None:
         assert tuple(type(error) for error in exc_info.value.exceptions) == (
             _AfterHookError,
             _ObserveTaskError,
+        ), "finalization should preserve both failures in operation order"
+        assert pending_tasks == [], "finalization should clear failed observe tasks"
+
+    asyncio.run(run())
+
+
+def test_pipeline_finalization_preserves_after_hook_and_base_exception_task() -> None:
+    """Finalization groups an after-hook failure with a non-Exception task failure."""
+
+    async def run() -> None:
+        """Raise an Exception after hook beside a BaseException observe task."""
+        pending_tasks: list[asyncio.Task[None]] = []
+
+        async def fatal_observe_task() -> None:
+            """Raise a non-Exception BaseException when the task is awaited."""
+            await asyncio.sleep(0)
+            raise _FatalObserveTaskError
+
+        with pytest.raises(BaseExceptionGroup) as exc_info:
+            await _finalize_with_failing_after_hook(
+                pending_tasks,
+                fatal_observe_task,
+            )
+
+        assert not isinstance(exc_info.value, ExceptionGroup), (
+            "a non-Exception task failure must keep the group as a BaseExceptionGroup"
+        )
+        assert tuple(type(error) for error in exc_info.value.exceptions) == (
+            _AfterHookError,
+            _FatalObserveTaskError,
         ), "finalization should preserve both failures in operation order"
         assert pending_tasks == [], "finalization should clear failed observe tasks"
 

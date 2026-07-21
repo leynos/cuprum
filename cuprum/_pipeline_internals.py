@@ -1,4 +1,19 @@
-"""Internal pipeline execution coordination and fail-fast semantics."""
+"""Internal pipeline execution coordination and fail-fast semantics.
+
+This module is the private machinery behind ``cuprum.sh``'s
+``Pipeline.run``/``run_sync``. It ties together allowlist enforcement
+and hook collection, stage process spawning, inter-stage pipe wiring,
+completion waiting with optional timeouts, and per-stage
+``CommandResult`` assembly. It exists chiefly to centralise
+finalization: when a stage fails or an after-hook raises, pending
+observe-hook tasks must still be drained and every independent
+failure preserved, grouping after-hook and task failures into a
+``BaseExceptionGroup``. It collaborates with ``cuprum._pipeline_spawn``,
+``cuprum._pipeline_streams``, ``cuprum._pipeline_types``,
+``cuprum._pipeline_wait``, ``cuprum._observability``, and
+``cuprum.context``, and is invoked by ``cuprum.sh`` and
+``cuprum._subprocess_execution``/``_process_lifecycle``.
+"""
 
 from __future__ import annotations
 
@@ -251,8 +266,9 @@ async def _finalize_pipeline_execution(
     except BaseException as after_hook_error:
         try:
             await _wait_for_exec_hook_tasks(pending_tasks)
-        except (asyncio.CancelledError, Exception) as task_error:  # noqa: BLE001
-            # Finalization must retain failures from both independent paths.
+        except BaseException as task_error:  # noqa: BLE001
+            # Finalization must retain failures from both independent paths,
+            # including non-Exception BaseExceptions surfaced by observe tasks.
             raise BaseExceptionGroup(
                 _PIPELINE_FINALIZATION_ERROR,
                 (after_hook_error, task_error),

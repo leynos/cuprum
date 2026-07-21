@@ -1,4 +1,14 @@
-"""Internal stream handling utilities for subprocess I/O operations."""
+"""Internal stream-handling utilities for subprocess I/O.
+
+The pure-Python home for consuming a subprocess's stdout/stderr and pumping one
+pipeline stage's stdout into the next stage's stdin. ``_consume_stream`` and the
+shared ``_drain`` loop decode bytes, optionally tee each chunk to a sink, capture
+the text, and emit decoded lines; ``_pump_stream``/``_relay_chunks`` copy chunks
+between stages with ``writer.drain()`` backpressure, draining to EOF without a
+writer and best-effort under a bounded timeout after an early close so upstream
+stages never block. Used by the pipeline and single-command execution layers, it
+mirrors the optional Rust backend ``cuprum._streams_rs``. Callers own any writer.
+"""
 
 from __future__ import annotations
 
