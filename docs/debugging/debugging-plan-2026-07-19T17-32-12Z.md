@@ -202,11 +202,23 @@ does not alter stream behaviour or the benchmark conclusion.
 
 ### Evidence recorded
 
-**Measurement protocol**: ten samples per command, with matched Python/Rust
-commands ordered adjacently and executed in both orders (Python-first and
-Rust-first).
+The figures below come from two distinct sources that must not be conflated:
 
-*Table 6. Recorded ratchet evidence.*
+- **Investigation-reported figures** (Table 6) were produced by the
+  falsification runs summarized above. Their raw per-sample timings were *not*
+  retained, and the exact CI run they were read from cannot now be pinned
+  down: the failing attempt passed on re-run (so that run's final status is
+  success, not failure), and this branch was later rebased, rewriting the
+  investigated commit SHAs. They are recorded here as reported by the
+  investigation, not re-derived.
+- **Retained CI evidence** (Tables 7–8) is a real, still-downloadable
+  `benchmark-ratchet` artefact from a *sibling* failure on the same pull
+  request. It is not the run that produced the 0.395 headline regression, but
+  it exercises the identical pre-remediation configuration and independently
+  corroborates the diagnosis.
+
+*Table 6. Investigation-reported figures (raw per-sample timings not
+retained).*
 
 | Measurement | Value |
 | --- | --- |
@@ -218,11 +230,106 @@ Rust-first).
 | Backend-resolution delta (Python vs Rust) | ~1 ms |
 | First-run pipeline timing delta | ~0.2 ms |
 | Profile attribution to `current_context()`/`resolve_env()` | <0.2 ms |
-| Native-backend selections vs Python fallbacks (20 observed iterations) | 20 native, 0 fallback |
+| Native-backend selections vs Python fallbacks (20 iterations) | 20 / 0 |
 
-The individual per-sample raw timings and the exact toolchain/runner version
-identifiers were not retained as separate artefacts alongside this plan, so
-only the aggregate ratios and counts above are on record.
+#### Retained CI artefact (corroborating sibling failure)
+
+The `benchmark-ratchet` artefact from the PR #157 CI failure on commit
+`d73f8be` (workflow run `29641966622`, 2026-07-18, retained until
+2026-10-16) holds the plan, the ratchet report, and the hyperfine
+`--export-json` output with per-run timings. It used the immediate
+predecessor profile `pipeline-worker-release-ratio-v2`, three hyperfine runs
+per command, and the non-adjacent ordering (all four Python commands, then all
+four Rust commands) that the remediation replaces.
+
+- Run: <https://github.com/leynos/cuprum/actions/runs/29641966622>
+- Ratchet verdict: failed, `worst_regression_ratio = 0.520` on
+  `rust-small-single-cb` (`candidate_ratio 1.141` vs `baseline_ratio 0.751`);
+  four Rust scenarios compared.
+
+**Exact commands.** hyperfine wrapped eight worker commands:
+
+```text
+hyperfine --export-json <throughput.json> --warmup 1 --runs 3 <command...>
+```
+
+Each `<command>` forced the backend through an environment prefix and ran the
+worker, for example:
+
+```text
+CUPRUM_STREAM_BACKEND=rust .venv/bin/python3 benchmarks/pipeline_worker.py \
+  --payload-bytes 1024 --stages 2 --iterations 20
+CUPRUM_STREAM_BACKEND=rust .venv/bin/python3 benchmarks/pipeline_worker.py \
+  --payload-bytes 1024 --stages 2 --iterations 20 --line-callbacks
+```
+
+The full set covers `{python, rust} × {1024, 65536} bytes × {no-cb, cb}` at
+`--stages 2` and `--iterations 20`. The plan
+(`pipeline_throughput.py --smoke --dry-run`) and filter
+(`ci_benchmark_ratchet_profile.py`) that emit these commands are unchanged in
+the repository; the current CI ratchet raises `--runs` to 10 and orders each
+Python/Rust pair adjacently.
+
+*Table 7. Per-run hyperfine samples from the retained artefact (seconds; three
+runs per command).*
+
+| Backend | Payload | Callbacks | Run 1 | Run 2 | Run 3 | Mean | Std dev |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| python | 1 KiB | no | 0.4015 | 0.4101 | 0.3795 | 0.3971 | 0.0158 |
+| python | 1 KiB | yes | 0.3657 | 0.3689 | 0.3653 | 0.3666 | 0.0020 |
+| python | 64 KiB | no | 0.3742 | 0.3705 | 0.3686 | 0.3711 | 0.0028 |
+| python | 64 KiB | yes | 0.3867 | 0.3699 | 0.3811 | 0.3792 | 0.0086 |
+| rust | 1 KiB | no | 0.3626 | 0.4009 | 0.4136 | 0.3924 | 0.0266 |
+| rust | 1 KiB | yes | 0.4185 | 0.4401 | 0.3969 | 0.4185 | 0.0216 |
+| rust | 64 KiB | no | 0.3780 | 0.3737 | 0.3671 | 0.3729 | 0.0055 |
+| rust | 64 KiB | yes | 0.3676 | 0.3738 | 0.3714 | 0.3709 | 0.0032 |
+
+The two Rust 1 KiB commands carry by far the highest variance (std dev 26.6 ms
+and 21.6 ms) while every Python command stays under 16 ms, matching the plan's
+account of a high-variance small-payload Rust outlier driven by host load
+rather than a stream-code regression.
+
+**Command sequence.** The retained plan lists all four Python commands first
+and all four Rust commands second, so the Python and Rust blocks are measured
+minutes apart — the ordering artefact the remediation targets. The current
+`select_ci_ratchet_scenarios` instead sorts by
+`(payload_bytes, with_line_callbacks, python-before-rust)`, interleaving each
+Python/Rust pair. The local Python-first/Rust-first A/B reordering behind
+Table 6 was manual and its exact invocation order was not retained.
+
+*Table 8. Toolchain and execution environment.*
+
+| Aspect | Value | Source |
+| --- | --- | --- |
+| Ratchet runner | `ubicloud-standard-4-ubuntu-2404` (Ubuntu 24.04, 4 vCPU) | `.github/workflows/ci.yml` |
+| Python | 3.13 (`actions/setup-python`) | `.github/workflows/ci.yml` |
+| Rust (lint/typecheck jobs) | pinned `1.92.0` | `.github/workflows/ci.yml` |
+| Rust (ratchet build) | runner default via `maturin develop --release` | `.github/workflows/ci.yml` |
+| hyperfine | Ubuntu apt package, version not pinned | `.github/workflows/ci.yml` |
+| Retained-artefact commit | `d73f8be` (GitHub runner, paths under `/home/runner/work`) | run `29641966622` |
+| Current branch tip | `0cc33db` (CI success) | run `29785825476` |
+
+**Native-backend vs fallback.** Backend selection is forced per command by the
+`CUPRUM_STREAM_BACKEND` environment variable (`rust` or `python`) shown above,
+so each measured process runs exactly one backend. The plan's "20 native
+selections, 0 fallbacks" describes the 20 worker iterations of the Rust
+command; the per-iteration observation method was not retained alongside the
+plan and is not reproducible from the artefact, which records only aggregate
+hyperfine timings.
+
+#### Limitations
+
+- The individual per-sample timings behind Table 6 — both the local ten-run
+  ratios and the CI attempt ratios — were not retained; only the aggregates
+  are on record.
+- The exact CI run that produced the 0.395 headline regression cannot be
+  linked: it passed on re-run (final status success) and its commit SHA was
+  rewritten by the later rebase. Tables 7–8 link a retained sibling failure
+  that corroborates, but does not reproduce, those figures.
+- The precise hyperfine version and the ratchet job's Rust build version are
+  not captured in the artefact.
+- The native-versus-fallback count's per-iteration provenance was not
+  retained.
 
 ## Termination Criteria
 
