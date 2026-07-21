@@ -1,4 +1,4 @@
-# Debugging Plan: Pipeline benchmark ratchet regression
+# Debugging plan: pipeline benchmark ratchet regression
 
 **Generated**: 2026-07-19T17:32:12Z
 **Issue ID**: PR #157 / issue #116
@@ -8,7 +8,7 @@
 Falsification must be executed by the named sub-agent, not by the planning
 agent.
 
-## Problem Statement
+## Problem statement
 
 The CI pipeline benchmark ratchet reports a 39.5% relative regression against
 its 30% threshold. Seven of eight candidate scenarios cluster near 324–353 ms,
@@ -19,7 +19,7 @@ backend dispatcher, Python stream pump, or Rust stream pump. The investigation
 must determine whether the outlying ratio is reproducible and, if so, locate
 the indirect cost before changing production code.
 
-## Context Summary
+## Context summary
 
 *Table 1. Benchmark context and affected components.*
 
@@ -30,7 +30,7 @@ the indirect cost before changing production code.
 | Affected components | Pipeline benchmark worker, Rust/Python backend ratio, CI ratchet |
 | Recent changes | Context module split; main also contains stream-drain and Rust-availability refactors |
 
-### Error Artefacts
+### Error artefacts
 
 ```plaintext
 Rust 1 KiB, two-stage, no callbacks: 417.9 ms ± 34.4 ms
@@ -39,7 +39,7 @@ benchmark ratchet failed: worst_regression_ratio=0.395037,
 max_regression=0.300000
 ```
 
-### Information Gaps
+### Information gaps
 
 The baseline artefact and per-scenario ratio report were not included in the
 supplied log. Memtrace is not exposed in this session, so temporal and blast
@@ -50,7 +50,7 @@ recreated exactly on the local host.
 
 ## Hypotheses
 
-### H1: The reported regression is a noisy outlier
+### H1: the reported regression is a noisy outlier
 
 **Claim**: The Rust 1 KiB no-callback result is not reproducibly slower; three
 samples are insufficient to distinguish runner interference from a real
@@ -63,7 +63,7 @@ stream backend code.
 **Prediction**: Repeated paired runs with more samples and alternating order
 will place the Rust/Python ratio within the ratchet threshold most of the time.
 
-#### H1 Falsification Plan
+#### H1 falsification plan
 
 *Table 2. H1 falsification plan — reproducing the reported outlier.*
 
@@ -92,7 +92,7 @@ the matrix and processes are restarted for every hyperfine sample.
 warm-up before measurement, removes most of the gap without changing steady
 state pipeline work.
 
-#### H2 Falsification Plan
+#### H2 falsification plan
 
 *Table 3. H2 falsification plan — isolating Rust backend initialization cost.*
 
@@ -108,7 +108,7 @@ do not edit production code during falsification.
 
 ---
 
-### H3: The context package split adds indirect per-iteration overhead
+### H3: the context package split adds indirect per-iteration overhead
 
 **Claim**: Import plumbing or context access introduced by the package split
 adds measurable work to each pipeline iteration, with greater impact on the
@@ -121,7 +121,7 @@ and both backends traverse the same command/context path.
 branch shows the branch slower only when the context split is present, and a
 profile attributes the delta to context symbols.
 
-#### H3 Falsification Plan
+#### H3 falsification plan
 
 *Table 4. H3 falsification plan — testing context-split per-iteration overhead.*
 
@@ -138,7 +138,7 @@ and run order.
 
 ---
 
-### H4: The Rust pump falls back or takes a slower descriptor path
+### H4: the Rust pump falls back or takes a slower descriptor path
 
 **Claim**: The forced Rust backend is selected, but descriptor extraction,
 buffer draining, or splice support causes repeated fallback or a slower path
@@ -150,7 +150,7 @@ tests descriptor suitability on each inter-stage stream.
 **Prediction**: Existing pathway observability or a non-invasive trace shows
 the failing scenario choosing a different path from the other Rust scenarios.
 
-#### H4 Falsification Plan
+#### H4 falsification plan
 
 *Table 5. H4 falsification plan — checking for a slower Rust descriptor path.*
 
@@ -166,7 +166,7 @@ needed.
 
 ---
 
-## Recommended Execution Order
+## Recommended execution order
 
 1. **H1** — cheapest and most decisive given the reported variance.
 2. **H2** — isolates fixed startup cost without production edits.
@@ -174,7 +174,7 @@ needed.
    intended path.
 4. **H3** — paired-branch profiling is more expensive and least plausible.
 
-## Investigation Outcome
+## Investigation outcome
 
 H1 survived falsification; H2, H3, and H4 were falsified. The same commit
 failed its first CI attempt with a 1.288 Rust/Python ratio and passed unchanged
@@ -331,7 +331,7 @@ hyperfine timings.
 - The native-versus-fallback count's per-iteration provenance was not
   retained.
 
-## Termination Criteria
+## Termination criteria
 
 - **Root cause identified**: One hypothesis survives repeated falsification
   while the others are eliminated, with a measurable mechanism matching the
@@ -341,7 +341,7 @@ reproduced locally and no CI baseline artefact is available; report the
   evidence and recommend a measurement-only mitigation rather than changing
   runtime code.
 
-## Notes for Executing Agent
+## Notes for executing agent
 
 Keep the worktree unchanged during falsification. Prefer repeated paired
 measurements and report raw samples, ratios, command order, toolchain, and

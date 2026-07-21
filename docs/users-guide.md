@@ -777,9 +777,9 @@ The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 > record (and into the `JsonLoggingFormatter` output) exactly as supplied. The
 > same applies to the plain-text `logging_hook()`. Prefer passing secrets via
 > the environment or files rather than as arguments; where arguments may carry
-> sensitive values, wrap `structured_logging_hook()` in your own observe hook
-> that drops or masks `cuprum_argv` before the record reaches your handlers,
-> and scope log destinations accordingly.
+> sensitive values, wrap `structured_logging_hook()` in a custom observe hook
+> that drops or masks `cuprum_argv` before the record reaches configured
+> handlers, and scope log destinations accordingly.
 
 For JSON output suitable for log aggregation systems, use the
 `JsonLoggingFormatter`:
