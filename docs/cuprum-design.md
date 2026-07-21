@@ -791,6 +791,7 @@ class ExecEvent:
     exit_code: int | None
     duration_s: float | None
     tags: Mapping[str, object]
+    exec_id: ExecId | None  # stable per-execution correlation token
 
 
 ExecHook = Callable[[ExecEvent], None | Awaitable[None]]
@@ -976,6 +977,15 @@ implemented with the following decisions:
 - **Event phases:** Cuprum emits `plan`, `start`, `stdout`, `stderr`, and `exit`
   phases for both single commands and pipeline stages. Pipeline stage events
   are tagged with a stage index and stage count.
+- **Correlation:** every event for one execution carries the same
+  `ExecEvent.exec_id`, a stable token minted once per execution (per pipeline
+  stage for pipelines). Consumers that track per-execution state — such as the
+  tracing adapter's span map — must key on `exec_id` rather than `pid`, because
+  the operating system can recycle a `pid` across executions. `pid` remains
+  available for observability but is not a reliable correlation key. Legacy or
+  manually constructed events may omit `exec_id` (`None`); such events cannot
+  be correlated, and consumers should ignore ambiguous output/exit events
+  rather than guess.
 - **Line emission:** `stdout`/`stderr` phases are emitted per decoded line. Line
   terminators are removed, and the final partial line (when output does not end
   with a newline) is still emitted.

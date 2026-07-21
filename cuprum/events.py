@@ -10,6 +10,7 @@ from __future__ import annotations
 import collections.abc as cabc
 import dataclasses as dc
 import typing as typ
+import uuid
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -25,6 +26,18 @@ type ExecPhase = typ.Literal[
     "stdin",
     "stdin_error",
 ]
+
+# A stable, per-execution correlation token. It is minted once when an
+# execution begins and propagated unchanged through every lifecycle event
+# (``start``, ``stdout``, ``stderr``, ``exit``) for that execution, so
+# consumers can correlate the events of a single execution even when the
+# operating system recycles a process identifier across executions.
+ExecId = typ.NewType("ExecId", uuid.UUID)
+
+
+def new_exec_id() -> ExecId:
+    """Return a fresh, process-unique execution correlation token."""
+    return ExecId(uuid.uuid4())
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -63,6 +76,13 @@ class ExecEvent:
         such as ``stdin_error``.
     byte_count:
         Number of bytes written for byte-counted phases such as ``stdin``.
+    exec_id:
+        Stable per-execution correlation token, minted once per execution and
+        shared by every lifecycle event for that execution. It is the reliable
+        way to correlate an execution's events, because a process identifier
+        (``pid``) can be recycled by the operating system across executions.
+        ``None`` for legacy or manually constructed events that predate the
+        token; such events cannot be safely correlated by consumers.
 
     """
 
@@ -79,9 +99,10 @@ class ExecEvent:
     tags: cabc.Mapping[str, object]
     note: str | None = None
     byte_count: int | None = None
+    exec_id: ExecId | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]
 
 
-__all__ = ["ExecEvent", "ExecHook", "ExecPhase"]
+__all__ = ["ExecEvent", "ExecHook", "ExecId", "ExecPhase", "new_exec_id"]

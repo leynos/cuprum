@@ -14,7 +14,7 @@ import time
 import typing as typ
 
 from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
-from cuprum.events import ExecEvent
+from cuprum.events import ExecEvent, new_exec_id
 
 if typ.TYPE_CHECKING:
     import asyncio
@@ -23,7 +23,7 @@ if typ.TYPE_CHECKING:
 
     from cuprum._pipeline_wait import _PipelineWaitResult
     from cuprum.context import AfterHook, BeforeHook
-    from cuprum.events import ExecHook
+    from cuprum.events import ExecHook, ExecId
     from cuprum.sh import SafeCmd
 
 
@@ -58,6 +58,10 @@ class _StageObservation:
     cwd: Path | None
     env_overlay: cabc.Mapping[str, str] | None
     pending_tasks: list[asyncio.Task[None]]
+    # Minted once per stage observation so every lifecycle event this object
+    # emits shares one correlation token, distinguishing this execution from
+    # any other that happens to reuse the same PID.
+    exec_id: ExecId = dc.field(default_factory=new_exec_id)
 
     def emit(
         self,
@@ -89,6 +93,7 @@ class _StageObservation:
             tags=self.tags,
             note=details.note,
             byte_count=details.byte_count,
+            exec_id=self.exec_id,
         )
         try:
             scheduled_tasks = _emit_exec_event(self.hooks.observe_hooks, event)
