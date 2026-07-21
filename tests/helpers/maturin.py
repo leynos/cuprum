@@ -7,11 +7,10 @@ import re
 import shutil
 import subprocess  # noqa: S404 - tests invoke pinned maturin build commands.
 import sys
+import sysconfig
 import typing as typ
 import zipfile
-
-if typ.TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
 
 _MATURIN_PIN_RE = re.compile(r"maturin==(\d+\.\d+\.\d+)")
 _WORKFLOW_PIN_RE = re.compile(r'MATURIN_VERSION:\s*"(\d+\.\d+\.\d+)"')
@@ -180,6 +179,47 @@ def toolchain_available() -> bool:
         shutil.which("cargo") is not None
         and shutil.which("rustc") is not None
         and _maturin_module_available()
+    )
+
+
+def _script_named_maturin_exists(directory: Path) -> bool:
+    """Return whether ``directory`` contains a file stem named ``maturin``."""
+    return any(
+        entry.is_file() and entry.stem == "maturin" for entry in directory.rglob("*")
+    )
+
+
+def maturin_script_locatable() -> bool:
+    """Return whether maturin's own lookup can find its compiled script.
+
+    Mirrors ``maturin.__main__.get_maturin_path``: the ``maturin`` PyPI
+    package resolves its bundled binary by walking each ``sysconfig``
+    scheme's ``scripts`` directory for a file named ``maturin``, keyed off
+    ``sys.prefix``/``sys.exec_prefix`` of the *running* interpreter — not
+    ``sys.path`` or ``PATH``. This diverges from :func:`toolchain_available`,
+    whose ``importlib.util.find_spec`` check only confirms the ``maturin``
+    module is importable.
+
+    The two checks disagree in layered/ephemeral interpreters such as a
+    ``uv run --with ...`` overlay: the overlay's ``sys.path`` includes the
+    project's own virtual environment (so the module imports fine and
+    :func:`toolchain_available` reports ``True``), but ``sys.prefix`` points
+    at a temporary environment that never received maturin's script, so
+    ``python -m maturin`` fails with ``Unable to find `maturin` script``
+    even though a real build would succeed in the project's own virtualenv.
+    Checking this separately lets callers skip precisely where the build is
+    genuinely unreachable, without masking a regression in normal CI or
+    local-development environments, where ``sys.prefix`` matches the
+    virtualenv that installed maturin's script.
+    """
+    script_dirs = (
+        Path(sysconfig.get_path("scripts", scheme))
+        for scheme in sysconfig.get_scheme_names()
+    )
+    return any(
+        _script_named_maturin_exists(directory)
+        for directory in script_dirs
+        if directory.exists()
     )
 
 
