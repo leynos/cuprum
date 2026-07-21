@@ -7,9 +7,13 @@ helpers used by the registration handles.
 
 from __future__ import annotations
 
-from contextvars import ContextVar, Token
+import typing as typ
+from contextvars import ContextVar
 
 from cuprum.context.core import CuprumContext
+
+if typ.TYPE_CHECKING:
+    from contextvars import Token
 
 # Global ContextVar for the current execution context.
 # Default is the singleton _DEFAULT_CONTEXT which is immutable (frozen dataclass).

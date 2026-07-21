@@ -34,7 +34,16 @@ class ContextError(Exception):
 
 
 class ForbiddenProgramError(ContextError, PermissionError):
-    """Raised when attempting to run a program not in the current allowlist."""
+    """Raised when attempting to run a program not in the current allowlist.
+
+    Attributes
+    ----------
+    program : Program
+        The program that was denied by the context allowlist.
+    restricted_state : bool
+        Whether the context allowlist was in a restricted state when the
+        program was denied.
+    """
 
     def __init__(self, program: Program, *, restricted_state: bool) -> None:
         """Describe the denied program and allowlist restriction state."""

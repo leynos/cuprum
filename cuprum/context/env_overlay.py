@@ -19,14 +19,7 @@ if typ.TYPE_CHECKING:
 def _coerce_env_overlay(
     overlay: cabc.Mapping[str, str] | None,
 ) -> cabc.Mapping[str, str] | None:
-    """Return an immutable snapshot of an env overlay, or ``None``.
-
-    Overlays are stored as :class:`types.MappingProxyType` views of a frozen
-    ``dict`` so that ``CuprumContext`` stays effectively immutable. The overlay
-    itself is intentionally *not* materialised against :func:`os.environ`; the
-    live process environment is read at subprocess spawn time, after which the
-    overlay is layered on top.
-    """
+    """Return an immutable env-overlay snapshot, or ``None``."""
     if overlay is None:
         return None
     return MappingProxyType(dict(overlay))
