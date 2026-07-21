@@ -163,13 +163,33 @@ mod tests {
     use std::fs::File;
     use std::os::fd::{AsRawFd, OwnedFd};
 
+    use rstest::{fixture, rstest};
+    use tempfile::NamedTempFile;
+
     use super::{drain_reader, try_splice_pump};
     use crate::test_support::{make_pipe, read_all_from, unwrap_ok, write_all_to};
 
-    #[test]
-    fn splice_transfers_all_bytes_between_pipes() {
-        let (source_read, source_write) = make_pipe();
-        let (sink_read, sink_write) = make_pipe();
+    /// A connected `pipe(2)` pair: `(read_end, write_end)`.
+    type PipePair = (OwnedFd, OwnedFd);
+
+    /// A `pipe(2)` pair as an [`rstest`] fixture wrapping
+    /// [`crate::test_support::make_pipe`].
+    ///
+    /// Exposing the shared pipe setup as a fixture keeps its construction in
+    /// one place; tests needing several independent pipes request it once per
+    /// `#[from(pipe)]` parameter.
+    #[fixture]
+    fn pipe() -> PipePair {
+        make_pipe()
+    }
+
+    #[rstest]
+    fn splice_transfers_all_bytes_between_pipes(
+        #[from(pipe)] source: PipePair,
+        #[from(pipe)] sink: PipePair,
+    ) {
+        let (source_read, source_write) = source;
+        let (sink_read, sink_write) = sink;
         let payload = b"unified splice loop payload";
 
         write_all_to(&source_write, payload);
@@ -188,14 +208,16 @@ mod tests {
         assert_eq!(read_all_from(&sink_read), payload);
     }
 
-    #[test]
+    #[rstest]
     fn unsupported_descriptors_signal_fallback() {
-        let dir = std::env::temp_dir();
-        let reader_path = dir.join("cuprum-splice-test-reader");
-        let writer_path = dir.join("cuprum-splice-test-writer");
-        unwrap_ok(std::fs::write(&reader_path, b"file payload"));
-        let reader = OwnedFd::from(unwrap_ok(File::open(&reader_path)));
-        let writer = OwnedFd::from(unwrap_ok(File::create(&writer_path)));
+        // Unique temp files avoid name collisions between concurrent test
+        // runs; each `NamedTempFile` removes itself on drop, so a mid-test
+        // panic leaves nothing behind.
+        let reader_file = unwrap_ok(NamedTempFile::new());
+        let writer_file = unwrap_ok(NamedTempFile::new());
+        unwrap_ok(std::fs::write(reader_file.path(), b"file payload"));
+        let reader = OwnedFd::from(unwrap_ok(File::open(reader_file.path())));
+        let writer = OwnedFd::from(unwrap_ok(File::create(writer_file.path())));
 
         // Two regular files cannot splice; the first call must signal the
         // read/write fallback rather than erroring.
@@ -204,15 +226,15 @@ mod tests {
             outcome.is_none(),
             "expected fallback signal, got {outcome:?}"
         );
-
-        unwrap_ok(std::fs::remove_file(&reader_path));
-        unwrap_ok(std::fs::remove_file(&writer_path));
     }
 
-    #[test]
-    fn broken_pipe_drains_reader_and_reports_transferred_bytes() {
-        let (source_read, source_write) = make_pipe();
-        let (sink_read, sink_write) = make_pipe();
+    #[rstest]
+    fn broken_pipe_drains_reader_and_reports_transferred_bytes(
+        #[from(pipe)] source: PipePair,
+        #[from(pipe)] sink: PipePair,
+    ) {
+        let (source_read, source_write) = source;
+        let (sink_read, sink_write) = sink;
         let payload = b"bytes that can no longer be delivered";
 
         write_all_to(&source_write, payload);
@@ -234,9 +256,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn drain_reader_consumes_to_eof() {
-        let (read_end, write_end) = make_pipe();
+    #[rstest]
+    fn drain_reader_consumes_to_eof(pipe: PipePair) {
+        let (read_end, write_end) = pipe;
         write_all_to(&write_end, b"residual data");
         drop(write_end);
 
