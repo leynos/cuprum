@@ -115,7 +115,7 @@ def test_handle_stream_timeout_upholds_invariants_across_orderings(
         kind, value = outcome
         if kind == "raise":
             msg = "consumer failed"
-            raise RuntimeError(msg)
+            raise ValueError(msg)
         return value
 
     async def block_stdin() -> None:
@@ -178,7 +178,10 @@ class _TimeoutWaitProcess:
     async def wait(self) -> int:
         """Block until a termination signal records an exit code."""
         await self._exited.wait()
-        assert self.returncode is not None
+        assert self.returncode is not None, (
+            "process double invariant: terminate()/kill() must record "
+            "returncode before _exited is set"
+        )
         return self.returncode
 
     def terminate(self) -> None:
@@ -227,6 +230,49 @@ def test_wait_for_exit_code_cancels_pending_consumers_on_timeout() -> None:
         )
         assert consumer.done(), (
             "the cancelled consumer must be drained before the timeout propagates"
+        )
+
+    asyncio.run(run_case())
+
+
+def test_wait_for_exit_code_cancels_pending_consumers_on_cancellation() -> None:
+    """Cancelling the waiter cancels and drains consumers still pending.
+
+    This covers the distinct ``asyncio.CancelledError`` cleanup path (not the
+    timeout path): when the task running ``_wait_for_exit_code`` is cancelled
+    while a consumer is still blocked, cleanup must cancel and drain that
+    consumer and let the ``CancelledError`` propagate.
+    """
+
+    async def blocking_consumer() -> None:
+        """Block until cancellation cleanup cancels this task."""
+        await asyncio.Event().wait()
+
+    async def run_case() -> None:
+        """Cancel ``_wait_for_exit_code`` mid-wait and assert its cleanup."""
+        process = _TimeoutWaitProcess()
+        consumer = asyncio.create_task(blocking_consumer())
+        ctx = ExecutionContext(cancel_grace=0.1)
+
+        task = asyncio.create_task(
+            _wait_for_exit_code(
+                typ.cast("asyncio.subprocess.Process", process),
+                ctx,
+                consumers=(consumer,),
+            )
+        )
+        await asyncio.sleep(0.01)  # let the waiter park on process.wait()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert consumer.cancelled(), (
+            "a consumer left pending at cancellation must be cancelled during "
+            f"cleanup, but consumer.done()={consumer.done()}"
+        )
+        assert consumer.done(), (
+            "the cancelled consumer must be drained before cancellation propagates"
         )
 
     asyncio.run(run_case())
