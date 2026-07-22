@@ -133,7 +133,7 @@ def _run_worker_thread(
     barrier: threading.Barrier,
     shared: _WorkerSharedState,
 ) -> None:
-    """Run one tee-profile worker, synchronising start via *barrier*.
+    """Run one tee-profile worker, synchronizing start via *barrier*.
 
     Appends the result to *shared.results* or the exception to *shared.errors*
     under *shared.result_lock* so that the calling thread can inspect them
@@ -208,7 +208,7 @@ def _join_and_assert_finished(
     for thread in threads:
         thread.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
     alive = [thread.name for thread in threads if thread.is_alive()]
-    assert not alive, (  # noqa: S101 - test scaffolding assertion
+    assert not alive, (
         f"expected threads to finish{f' ({context})' if context else ''}, got {alive}"
     )
 
@@ -219,7 +219,7 @@ def _assert_backend_pair_completes(
 ) -> None:
     """Assert that concurrent workers for *backends* all complete without error.
 
-    Spins up one thread per backend, synchronises their starts via a
+    Spins up one thread per backend, synchronizes their starts via a
     ``threading.Barrier``, joins each thread, and asserts that every worker
     returned ``status == "ok"`` and ``exit_code == 0``.
     """
@@ -246,16 +246,14 @@ def _assert_backend_pair_completes(
         _join_and_assert_finished(
             *threads, context=f"backend pair completion for {backends}"
         )
-    assert not shared.errors, (  # noqa: S101 - test scaffolding assertion
-        f"expected no worker thread errors, got {shared.errors!r}"
-    )
-    assert len(shared.results) == len(backends), (  # noqa: S101 - test scaffolding assertion
+    assert not shared.errors, f"expected no worker thread errors, got {shared.errors!r}"
+    assert len(shared.results) == len(backends), (
         f"expected one result per worker, got {shared.results}"
     )
-    assert all(result["status"] == "ok" for result in shared.results), (  # noqa: S101 - test scaffolding assertion
+    assert all(result["status"] == "ok" for result in shared.results), (
         f"expected all worker statuses to be ok, got {shared.results}"
     )
-    assert all(result["exit_code"] == 0 for result in shared.results), (  # noqa: S101 - test scaffolding assertion
+    assert all(result["exit_code"] == 0 for result in shared.results), (
         f"expected all worker exit codes to be 0, got {shared.results}"
     )
 
@@ -289,7 +287,7 @@ def _backend_pairs() -> tuple[
     | ParameterSet,
     ...,
 ]:
-    """Return parametrised backend pairs for concurrent-worker tests."""
+    """Return parameterized backend pairs for concurrent-worker tests."""
     try:
         alternate_backend = _alternate_backend()
     except RuntimeError as exc:
@@ -382,7 +380,7 @@ class _CoordinatedBackendSelector(_BaseBackendSelector):
         with self._delegate(backend):
             if backend == "python":
                 self._events["first_inside"].set()
-                assert self._events["second_selector_attempting"].wait(  # noqa: S101 - test scaffolding assertion
+                assert self._events["second_selector_attempting"].wait(
                     timeout=_EVENT_WAIT_TIMEOUT_SECONDS,
                 ), "expected second_selector_attempting event to signal selector start"
                 with self._observation_lock:
@@ -407,18 +405,18 @@ class _CheckpointBackendSelector(_BaseBackendSelector):
         with self._delegate(backend):
             if backend == "python":
                 self._events["first_mutated_environment"].set()
-                assert self._events["second_waiting_for_lock"].wait(  # noqa: S101 - test scaffolding assertion
+                assert self._events["second_waiting_for_lock"].wait(
                     timeout=_EVENT_WAIT_TIMEOUT_SECONDS,
                 ), "expected second thread to contend for the backend lock"
                 with self._observation_lock:
                     self._observations.append(os.environ.get("CUPRUM_STREAM_BACKEND"))
-                assert not self._events["second_entered_context"].is_set(), (  # noqa: S101 - test scaffolding assertion
+                assert not self._events["second_entered_context"].is_set(), (
                     "expected the second thread to block while the first holds the lock"
                 )
                 did_release = self._events["release_first_context"].wait(
                     timeout=_EVENT_WAIT_TIMEOUT_SECONDS,
                 )
-                assert did_release, (  # noqa: S101 - test scaffolding assertion
+                assert did_release, (
                     "expected release_first_context to be signalled before second "
                     "observes env"
                 )

@@ -104,6 +104,7 @@ extend-ignore = [
 # Test scaffolding modules (shared helpers imported by test_*.py) get the same
 # allowances as the tests they support; they use bare ``assert`` for fixtures.
 "cuprum/unittests/*_test_helpers.py" = ["S101", "PLR0913", "PLR0917", "PLR2004", "PLR6301"]
+"cuprum/unittests/_tee_profile_concurrency_support.py" = ["S101", "PLR0913", "PLR0917", "PLR2004", "PLR6301"]
 "tests/steps/*.py" = ["S101", "PLR0913", "PLR0917", "PLR2004", "PLR6301"]
 
 [tool.ruff.lint.flake8-import-conventions]
