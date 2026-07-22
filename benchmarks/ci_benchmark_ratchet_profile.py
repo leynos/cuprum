@@ -23,6 +23,7 @@ _HYPERFINE_PREFIX_ARGUMENT_COUNT = 7
 _CI_RATCHET_STAGE_COUNT = 2
 _CI_RATCHET_MAX_PAYLOAD_BYTES = 65536
 _CI_RATCHET_RUNS = 10
+_SUPPORTED_BACKENDS = ("python", "rust")
 
 
 def load_plan_payload(full_plan_path: pth.Path) -> cabc.Mapping[str, object]:
@@ -44,6 +45,14 @@ def _require_numeric_payload_bytes(value: object) -> int | float:
         msg = "scenario payload_bytes must be numeric"
         raise TypeError(msg)
     return value
+
+
+def _require_backend(value: object) -> str:
+    """Return *value* as a supported backend name, or raise ``ValueError``."""
+    if value not in _SUPPORTED_BACKENDS:
+        msg = f"scenario backend must be one of {_SUPPORTED_BACKENDS}, got {value!r}"
+        raise ValueError(msg)
+    return typ.cast("str", value)
 
 
 def _select_scenario(
@@ -97,7 +106,7 @@ def select_ci_ratchet_scenarios(
                 entry[0].get("with_line_callbacks", False),
                 name="scenario with_line_callbacks",
             ),
-            entry[0].get("backend") != "python",
+            _require_backend(entry[0].get("backend")) != "python",
         )
     )
     return selected

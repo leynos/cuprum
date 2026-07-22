@@ -110,11 +110,13 @@ def test_select_ci_ratchet_scenarios_filters_for_ci_profile() -> None:
 
     selected = select_ci_ratchet_scenarios(full_payload)
 
-    assert [scenario["name"] for scenario, _ in selected] == [
-        "python-small-single-nocb",
-        "rust-small-single-nocb",
-        "python-small-single-cb",
-        "rust-small-single-cb",
+    # Validate name/command pairs (not names alone) so the test fails if the
+    # scenario metadata and its hyperfine command were mismatched.
+    assert [(scenario["name"], command) for scenario, command in selected] == [
+        ("python-small-single-nocb", "python small nocb"),
+        ("rust-small-single-nocb", "rust small nocb"),
+        ("python-small-single-cb", "python small cb"),
+        ("rust-small-single-cb", "rust small cb"),
     ]
 
 
@@ -195,6 +197,40 @@ def test_select_ci_ratchet_scenarios_rejects_non_boolean_line_callbacks(
             "rust_available": True,
             "command": ["a", "b", "c", "d", "e", "f", "g", "rust only"],
             "scenarios": [scenario],
+        })
+
+
+@pytest.mark.parametrize(
+    "bad_backend",
+    [
+        pytest.param("wasm", id="wasm"),
+        pytest.param("node", id="node"),
+    ],
+)
+def test_select_ci_ratchet_scenarios_rejects_unknown_backend(bad_backend: str) -> None:
+    """Scenarios with an unsupported backend should raise ValueError."""
+    bad_scenario = _scenario(
+        _ScenarioSpec(
+            name="bad-small-single-nocb",
+            backend=bad_backend,
+            payload_bytes=1024,
+            stages=2,
+        )
+    )
+    rust_scenario = _scenario(
+        _ScenarioSpec(
+            name="rust-small-single-nocb",
+            backend="rust",
+            payload_bytes=1024,
+            stages=2,
+        )
+    )
+    with pytest.raises(ValueError, match="scenario backend must be one of"):
+        select_ci_ratchet_scenarios({
+            "dry_run": True,
+            "rust_available": True,
+            "command": ["a", "b", "c", "d", "e", "f", "g", "bad", "rust only"],
+            "scenarios": [bad_scenario, rust_scenario],
         })
 
 
