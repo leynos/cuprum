@@ -253,6 +253,29 @@ def _build_pipeline_stage_results(
     return stage_results
 
 
+async def _drain_tasks_during_cleanup(
+    pending_tasks: list[asyncio.Task[None]],
+    active_error: BaseException,
+) -> None:
+    """Drain observe-hook tasks during cleanup without masking ``active_error``.
+
+    Callers invoke this while handling ``active_error`` and then re-raise it.
+    Draining that succeeds returns normally so the caller's bare ``raise``
+    re-raises ``active_error`` unchanged. When a scheduled observe task fails,
+    the drain failure is aggregated with ``active_error`` into a
+    :class:`BaseExceptionGroup` so a task failure never replaces the error that
+    triggered cleanup. Non-Exception ``BaseException`` task failures are
+    retained the same way.
+    """
+    try:
+        await _wait_for_exec_hook_tasks(pending_tasks)
+    except BaseException as task_error:  # noqa: BLE001
+        raise BaseExceptionGroup(
+            _PIPELINE_FINALIZATION_ERROR,
+            (active_error, task_error),
+        ) from None
+
+
 async def _finalize_pipeline_execution(
     parts: tuple[SafeCmd, ...],
     observations: tuple[_StageObservation, ...],
@@ -264,15 +287,7 @@ async def _finalize_pipeline_execution(
     try:
         _run_pipeline_after_hooks(parts, hooks_by_stage, stage_results)
     except BaseException as after_hook_error:
-        try:
-            await _wait_for_exec_hook_tasks(pending_tasks)
-        except BaseException as task_error:  # noqa: BLE001
-            # Finalization must retain failures from both independent paths,
-            # including non-Exception BaseExceptions surfaced by observe tasks.
-            raise BaseExceptionGroup(
-                _PIPELINE_FINALIZATION_ERROR,
-                (after_hook_error, task_error),
-            ) from None
+        await _drain_tasks_during_cleanup(pending_tasks, after_hook_error)
         raise
     await _wait_for_exec_hook_tasks(pending_tasks)
 
@@ -306,8 +321,8 @@ async def _run_pipeline(
             stdout_task=stdout_task,
             started_at=started_at,
         )
-    except BaseException:
-        await _wait_for_exec_hook_tasks(pending_tasks)
+    except BaseException as spawn_error:
+        await _drain_tasks_during_cleanup(pending_tasks, spawn_error)
         raise
     try:
         inputs = await _collect_pipeline_inputs(
@@ -315,12 +330,12 @@ async def _run_pipeline(
             spawn,
             config,
         )
-    except _sh_module().TimeoutExpired:
-        await _wait_for_exec_hook_tasks(pending_tasks)
+    except _sh_module().TimeoutExpired as timeout_error:
+        await _drain_tasks_during_cleanup(pending_tasks, timeout_error)
         raise
-    except BaseException:
+    except BaseException as run_error:
         await _cancel_stream_tasks(spawn.stderr_tasks, spawn.stdout_task)
-        await _wait_for_exec_hook_tasks(pending_tasks)
+        await _drain_tasks_during_cleanup(pending_tasks, run_error)
         raise
     stage_results = _build_pipeline_stage_results(
         parts,

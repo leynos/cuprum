@@ -23,7 +23,10 @@ from cuprum._observability import (
     _ExecEventEmissionError,
     _wait_for_exec_hook_tasks,
 )
-from cuprum._pipeline_internals import _finalize_pipeline_execution
+from cuprum._pipeline_internals import (
+    _drain_tasks_during_cleanup,
+    _finalize_pipeline_execution,
+)
 from cuprum._pipeline_types import _EventDetails, _ExecutionHooks, _StageObservation
 from cuprum.unittests._cqrs_fixtures import _echo_cmd, _event
 
@@ -215,6 +218,37 @@ def test_pipeline_finalization_preserves_after_hook_and_base_exception_task() ->
             BaseExceptionGroup,
         )
     )
+
+
+def test_pipeline_cleanup_drain_failure_preserves_active_error() -> None:
+    """Cleanup aggregates an observe-task failure with the active timeout error."""
+
+    async def run() -> None:
+        """Fail an observe task while a TimeoutExpired cleanup is active."""
+        pending_tasks: list[asyncio.Task[None]] = []
+
+        async def failing_observe_task() -> None:
+            """Yield once, then fail while cleanup drains observe tasks."""
+            await asyncio.sleep(0)
+            raise _ObserveTaskError
+
+        pending_tasks.append(asyncio.create_task(failing_observe_task()))
+        timeout_error = sh.TimeoutExpired(cmd=("echo",), timeout=0.2)
+
+        with pytest.raises(BaseExceptionGroup) as exc_info:
+            await _drain_tasks_during_cleanup(pending_tasks, timeout_error)
+
+        assert exc_info.value.exceptions[0] is timeout_error, (
+            "cleanup should preserve the active error, not replace it with the drain "
+            "failure"
+        )
+        assert tuple(type(error) for error in exc_info.value.exceptions) == (
+            sh.TimeoutExpired,
+            _ObserveTaskError,
+        ), "cleanup should aggregate the active error with the observe-task failure"
+        assert pending_tasks == [], "cleanup should clear drained observe tasks"
+
+    asyncio.run(run())
 
 
 def _first_failure_index(hook_kinds: list[str]) -> int | None:
