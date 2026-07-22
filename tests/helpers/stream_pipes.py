@@ -63,6 +63,22 @@ def _feed_pipe(write_fd: int, payload: bytes, errors: list[BaseException]) -> No
         errors.append(exc)
 
 
+_JOIN_TIMEOUT_SECONDS = 10.0
+
+
+def _join_or_raise(thread: threading.Thread, label: str) -> None:
+    """Join ``thread`` within a bounded timeout, raising if it stays alive.
+
+    A worker thread that never terminates would otherwise hang the join
+    indefinitely; bounding it converts a deadlock into a clear failure that
+    names the offending ``label`` worker.
+    """
+    thread.join(_JOIN_TIMEOUT_SECONDS)
+    if thread.is_alive():
+        msg = f"{label} thread did not terminate within {_JOIN_TIMEOUT_SECONDS}s"
+        raise RuntimeError(msg)
+
+
 @contextlib.contextmanager
 def feed_source_pipe(
     write_fd: int,
@@ -113,7 +129,7 @@ def feed_source_pipe(
         _safe_close(cancel_fd)
         raise
     finally:
-        thread.join()
+        _join_or_raise(thread, "feed_source_pipe writer")
     if errors:
         raise errors[0]
 
@@ -182,8 +198,8 @@ def pump_payload_through_pipes(
             # joining, so the joins cannot deadlock when the pump fails.
             _safe_close(out_write)
             _safe_close(in_read)
-            write_thread.join()
-            read_thread.join()
+            _join_or_raise(write_thread, "pump writer")
+            _join_or_raise(read_thread, "pump reader")
 
     if errors:
         raise errors[0]
