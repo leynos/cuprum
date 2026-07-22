@@ -264,11 +264,10 @@ CUPRUM_STREAM_BACKEND=rust .venv/bin/python3 benchmarks/pipeline_worker.py \
 ```
 
 The full set covers `{python, rust} × {1024, 65536} bytes × {no-cb, cb}` at
-`--stages 2` and `--iterations 20`. The plan
-(`pipeline_throughput.py --smoke --dry-run`) and filter
-(`ci_benchmark_ratchet_profile.py`) that emit these commands are unchanged in
-the repository; the current CI ratchet raises `--runs` to 10 and orders each
-Python/Rust pair adjacently.
+`--stages 2` and `--iterations 20`. These commands come from the retained v2
+plan and filter (`pipeline_throughput.py --smoke --dry-run` and
+`ci_benchmark_ratchet_profile.py` as they stood for that run); the current CI
+ratchet raises `--runs` to 10 and interleaves each Python/Rust pair adjacently.
 
 *Table 7. Per-run hyperfine samples from the retained artefact (seconds; three
 runs per command).*

@@ -10,6 +10,7 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md)
 - [ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md)
 - [ADR-005: Unify Rust availability probe](adr-005-unified-rust-availability-probe.md)
+- [ADR-006: Split cuprum/context.py into a context package](adr-006-context-package-split.md)
 
 ## Rust availability probing
 
@@ -151,8 +152,9 @@ surface is re-exported unchanged from `cuprum/context/__init__.py`:
   (`merge_env_overlays`, `resolve_env`, `_coerce_env_overlay`); no `ContextVar`
   dependency.
 - `cuprum/context/core.py` — the domain dataclasses (`CuprumContext`,
-  `ScopeConfig`), `ForbiddenProgramError`, timeout validation, and the hook
-  type aliases.
+  `ScopeConfig`), the `ContextError` package-level root of the domain exception
+  hierarchy and its `ForbiddenProgramError` subclass, timeout validation, and
+  the hook type aliases.
 - `cuprum/context/state.py` — the `ContextVar` plumbing (`current_context`,
   `get_context`, and the internal set/reset helpers).
 - `cuprum/context/registration.py` — `scoped`, the `_TokenRegistration`
