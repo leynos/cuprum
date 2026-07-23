@@ -257,19 +257,13 @@ async def _drain_tasks_during_cleanup(
     pending_tasks: list[asyncio.Task[None]],
     active_error: BaseException,
 ) -> None:
-    """Drain observe-hook tasks during cleanup without masking ``active_error``.
-
-    Callers invoke this while handling ``active_error`` and then re-raise it.
-    Draining that succeeds returns normally so the caller's bare ``raise``
-    re-raises ``active_error`` unchanged. When a scheduled observe task fails,
-    the drain failure is aggregated with ``active_error`` into a
-    :class:`BaseExceptionGroup` so a task failure never replaces the error that
-    triggered cleanup. Non-Exception ``BaseException`` task failures are
-    retained the same way.
-    """
+    """Drain observe tasks in cleanup, aggregating a failure with ``active_error``."""
     try:
         await _wait_for_exec_hook_tasks(pending_tasks)
     except BaseException as task_error:  # noqa: BLE001
+        # A blind catch is intentional: every task failure, including
+        # non-Exception BaseExceptions, must be aggregated with active_error so
+        # cleanup never masks the error that triggered it.
         raise BaseExceptionGroup(
             _PIPELINE_FINALIZATION_ERROR,
             (active_error, task_error),
