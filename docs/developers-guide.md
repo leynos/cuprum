@@ -309,7 +309,6 @@ worker count to enable xdist explicitly. Set `BUILD_JOBS=-jN` to pass the same
 count to Rust test commands and, through `CARGO_JOB_ENV`, to both
 `RAYON_NUM_THREADS` and `CARGO_BUILD_JOBS`.
 
-
 ## Canonical `_TokenRegistration` handle base
 
 All `ContextVar`-backed scope-registration handles — `AllowRegistration`,
