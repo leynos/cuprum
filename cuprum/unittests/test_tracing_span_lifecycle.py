@@ -8,6 +8,12 @@ the attributes the hook can actually emit. They live in their own module
 (rather than in ``test_adapters.py``) because they exercise the hook's
 internal lifecycle directly instead of the adapter behaviour observed
 through command execution.
+
+Events are built with the shared :func:`_make_exec_event` factory; each
+call passes its ``pid``, ``exec_id``, and phase-specific fields through
+``overrides``. Pass distinct ``exec_id`` tokens for distinct executions
+(even when they share a ``pid``), reuse one token across an execution's
+phases, and pass ``exec_id=None`` to model a legacy event.
 """
 
 from __future__ import annotations
@@ -16,8 +22,9 @@ import typing as typ
 from pathlib import Path
 
 from cuprum.adapters.tracing_adapter import InMemorySpan, InMemoryTracer, TracingHook
-from cuprum.events import ExecEvent, ExecId, ExecPhase, new_exec_id
+from cuprum.events import ExecEvent, new_exec_id
 from cuprum.program import Program
+from cuprum.unittests._adapter_test_support import _make_exec_event
 
 if typ.TYPE_CHECKING:
     import pytest
@@ -40,39 +47,6 @@ DOCUMENTED_SPAN_ATTRIBUTES: frozenset[str] = frozenset(
     },
 )
 
-
-def _exec_event(
-    phase: ExecPhase,
-    pid: int,
-    *,
-    exec_id: ExecId | None = None,
-    line: str | None = None,
-    exit_code: int | None = None,
-    duration_s: float | None = None,
-) -> ExecEvent:
-    """Build a minimal ``ExecEvent`` for direct hook dispatch.
-
-    ``exec_id`` is the per-execution correlation token: pass distinct tokens
-    for distinct executions (even when they share a ``pid``) and reuse one
-    token across an execution's phases. ``None`` models a legacy event that
-    predates the token.
-    """
-    return ExecEvent(
-        phase=phase,
-        program=Program("cat"),
-        argv=("cat",),
-        cwd=None,
-        env=None,
-        pid=pid,
-        timestamp=0.0,
-        line=line,
-        exit_code=exit_code,
-        duration_s=duration_s,
-        tags={},
-        exec_id=exec_id,
-    )
-
-
 # A single recycled PID shared by two distinct executions A and B.
 _SHARED_PID = 1234
 
@@ -88,14 +62,32 @@ def test_recycled_pid_output_attaches_by_exec_id_not_pid() -> None:
     exec_a = new_exec_id()
     exec_b = new_exec_id()
 
-    hook(_exec_event("start", pid=_SHARED_PID, exec_id=exec_a))
+    hook(
+        _make_exec_event(
+            phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_a}
+        )
+    )
     span_a = tracer.spans[0]
-    hook(_exec_event("start", pid=_SHARED_PID, exec_id=exec_b))
+    hook(
+        _make_exec_event(
+            phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_b}
+        )
+    )
     span_b = tracer.spans[1]
 
     # Out-of-order output: A's delayed line arrives after B started.
-    hook(_exec_event("stdout", pid=_SHARED_PID, exec_id=exec_a, line="from-A"))
-    hook(_exec_event("stdout", pid=_SHARED_PID, exec_id=exec_b, line="from-B"))
+    hook(
+        _make_exec_event(
+            phase="stdout",
+            overrides={"pid": _SHARED_PID, "exec_id": exec_a, "line": "from-A"},
+        )
+    )
+    hook(
+        _make_exec_event(
+            phase="stdout",
+            overrides={"pid": _SHARED_PID, "exec_id": exec_b, "line": "from-B"},
+        )
+    )
 
     assert span_a.events == [("cuprum.stdout", {"line": "from-A"})], (
         "A's delayed output must attach to A's span"
@@ -115,16 +107,30 @@ def test_recycled_pid_exit_closes_correct_execution() -> None:
     exec_a = new_exec_id()
     exec_b = new_exec_id()
 
-    hook(_exec_event("start", pid=_SHARED_PID, exec_id=exec_a))
+    hook(
+        _make_exec_event(
+            phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_a}
+        )
+    )
     span_a = tracer.spans[0]
-    hook(_exec_event("start", pid=_SHARED_PID, exec_id=exec_b))
+    hook(
+        _make_exec_event(
+            phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_b}
+        )
+    )
     span_b = tracer.spans[1]
 
     # A's delayed, failing exit arrives after B recycled the PID.
     hook(
-        _exec_event(
-            "exit", pid=_SHARED_PID, exec_id=exec_a, exit_code=3, duration_s=0.2
-        ),
+        _make_exec_event(
+            phase="exit",
+            overrides={
+                "pid": _SHARED_PID,
+                "exec_id": exec_a,
+                "exit_code": 3,
+                "duration_s": 0.2,
+            },
+        )
     )
 
     assert span_a.ended is True, "A's delayed exit must close A"
@@ -134,9 +140,15 @@ def test_recycled_pid_exit_closes_correct_execution() -> None:
 
     # B exits cleanly and closes its own span.
     hook(
-        _exec_event(
-            "exit", pid=_SHARED_PID, exec_id=exec_b, exit_code=0, duration_s=0.1
-        ),
+        _make_exec_event(
+            phase="exit",
+            overrides={
+                "pid": _SHARED_PID,
+                "exec_id": exec_b,
+                "exit_code": 0,
+                "duration_s": 0.1,
+            },
+        )
     )
     assert span_b.ended is True, "B's exit must close B"
     assert span_b.status_ok is True, "B must retain its own clean status"
@@ -153,15 +165,35 @@ def test_recycled_pid_normal_flow_for_second_execution() -> None:
     exec_a = new_exec_id()
     exec_b = new_exec_id()
 
-    hook(_exec_event("start", pid=_SHARED_PID, exec_id=exec_a))  # A left open
-    hook(_exec_event("start", pid=_SHARED_PID, exec_id=exec_b))
+    # A left open.
+    hook(
+        _make_exec_event(
+            phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_a}
+        )
+    )
+    hook(
+        _make_exec_event(
+            phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_b}
+        )
+    )
     span_b = tracer.spans[1]
 
-    hook(_exec_event("stdout", pid=_SHARED_PID, exec_id=exec_b, line="hello-from-B"))
     hook(
-        _exec_event(
-            "exit", pid=_SHARED_PID, exec_id=exec_b, exit_code=0, duration_s=0.1
-        ),
+        _make_exec_event(
+            phase="stdout",
+            overrides={"pid": _SHARED_PID, "exec_id": exec_b, "line": "hello-from-B"},
+        )
+    )
+    hook(
+        _make_exec_event(
+            phase="exit",
+            overrides={
+                "pid": _SHARED_PID,
+                "exec_id": exec_b,
+                "exit_code": 0,
+                "duration_s": 0.1,
+            },
+        )
     )
 
     assert span_b.events == [("cuprum.stdout", {"line": "hello-from-B"})], (
@@ -183,14 +215,33 @@ def test_legacy_events_without_exec_id_are_ignored() -> None:
     exec_b = new_exec_id()
 
     # A live, correlated execution B on the PID.
-    hook(_exec_event("start", pid=_SHARED_PID, exec_id=exec_b))
+    hook(
+        _make_exec_event(
+            phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_b}
+        )
+    )
     span_b = tracer.spans[0]
 
     # Legacy events on the same PID (no exec_id) must all be dropped.
-    hook(_exec_event("start", pid=_SHARED_PID, exec_id=None))
-    hook(_exec_event("stdout", pid=_SHARED_PID, exec_id=None, line="legacy"))
     hook(
-        _exec_event("exit", pid=_SHARED_PID, exec_id=None, exit_code=0, duration_s=0.1),
+        _make_exec_event(phase="start", overrides={"pid": _SHARED_PID, "exec_id": None})
+    )
+    hook(
+        _make_exec_event(
+            phase="stdout",
+            overrides={"pid": _SHARED_PID, "exec_id": None, "line": "legacy"},
+        )
+    )
+    hook(
+        _make_exec_event(
+            phase="exit",
+            overrides={
+                "pid": _SHARED_PID,
+                "exec_id": None,
+                "exit_code": 0,
+                "duration_s": 0.1,
+            },
+        )
     )
 
     assert len(tracer.spans) == 1, "a legacy start must not create a span"
@@ -214,7 +265,7 @@ def test_duplicate_exec_id_start_ends_prior_span(
     tracer = InMemoryTracer()
     hook = TracingHook(tracer)
     exec_id = new_exec_id()
-    hook(_exec_event("start", pid=42, exec_id=exec_id))
+    hook(_make_exec_event(phase="start", overrides={"pid": 42, "exec_id": exec_id}))
     stale = tracer.spans[0]
 
     observed: dict[str, object] = {}
@@ -229,7 +280,7 @@ def test_duplicate_exec_id_start_ends_prior_span(
 
     monkeypatch.setattr(InMemorySpan, "end", recording_end)
 
-    hook(_exec_event("start", pid=42, exec_id=exec_id))
+    hook(_make_exec_event(phase="start", overrides={"pid": 42, "exec_id": exec_id}))
 
     current = tracer.spans[1]
     assert observed["mapping_during_end"] is stale, (

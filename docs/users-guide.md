@@ -894,6 +894,16 @@ The hook creates spans with these attributes:
 Output lines (stdout/stderr) are recorded as span events when `record_io=True`
 (the default).
 
+**Correlation note:** the hook correlates an execution's `start`, `stdout`,
+`stderr`, and `exit` events by `ExecEvent.exec_id`, a stable token minted
+once per execution (per pipeline stage for pipelines) — not by `pid`, since
+the operating system can recycle a `pid` across executions. `pid` is still
+recorded as the `cuprum.pid` attribute for observability. Events emitted by
+Cuprum always carry an `exec_id`, so ordinary usage is unaffected. Only
+hand-built or legacy events that omit `exec_id` are affected: the hook
+cannot correlate them, so it ignores them — a `start` without an `exec_id`
+creates no span, and `stdout`/`stderr`/`exit` without one are dropped.
+
 To integrate with OpenTelemetry, implement the `Tracer` and `Span` protocols:
 
 ```python
