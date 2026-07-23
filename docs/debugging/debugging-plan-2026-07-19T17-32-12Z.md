@@ -249,14 +249,14 @@ four Rust commands) that the remediation replaces.
 
 **Exact commands.** hyperfine wrapped eight worker commands:
 
-```text
+```plaintext
 hyperfine --export-json <throughput.json> --warmup 1 --runs 3 <command...>
 ```
 
 Each `<command>` forced the backend through an environment prefix and ran the
 worker, for example:
 
-```text
+```plaintext
 CUPRUM_STREAM_BACKEND=rust .venv/bin/python3 benchmarks/pipeline_worker.py \
   --payload-bytes 1024 --stages 2 --iterations 20
 CUPRUM_STREAM_BACKEND=rust .venv/bin/python3 benchmarks/pipeline_worker.py \

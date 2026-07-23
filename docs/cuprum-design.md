@@ -2131,8 +2131,9 @@ artefact. The CI profile measures ten runs per command and orders matched
 Python/Rust commands adjacently so time-dependent runner load is less likely to
 bias one backend block. On pushes to `main`, the new smoke benchmark output is
 uploaded as the next baseline artefact for future runs. When no prior `main`
-baseline is available yet, the job writes a skip report instead of failing the
-workflow.
+baseline is available yet, or when the existing baseline uses an incompatible
+(older) benchmark profile whose sampling protocol is not comparable, the job
+writes a skip report instead of failing the workflow.
 The baseline fetch helper follows GitHub’s signed archive redirects without
 forwarding GitHub-only authentication headers to the storage host, avoiding
 cross-origin 401 responses during artefact download. The same job also
