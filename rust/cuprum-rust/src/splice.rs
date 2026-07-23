@@ -185,10 +185,12 @@ mod tests {
     use std::io;
     use std::os::fd::{AsRawFd, OwnedFd};
 
+    use proptest::prelude::*;
     use rstest::{fixture, rstest};
     use tempfile::NamedTempFile;
 
     use super::{drain_reader, splice_once_with, try_splice_pump};
+    use crate::errors::PumpError;
     use crate::test_support::{make_pipe, read_all_from, unwrap_ok, write_all_to};
 
     /// A connected `pipe(2)` pair: `(read_end, write_end)`.
@@ -307,5 +309,45 @@ mod tests {
 
         assert_eq!(transferred, 7);
         assert_eq!(attempts, 2);
+    }
+
+    proptest! {
+        /// Across any number of leading `EINTR`s and either terminal outcome,
+        /// `splice_once_with` issues exactly one syscall per attempt and
+        /// returns the first non-interrupted result. This exercises the retry
+        /// state space the deterministic case above only samples at one point.
+        #[test]
+        fn splice_once_with_retries_through_interruptions(
+            interruptions in 0_u32..64,
+            terminal_ok in any::<bool>(),
+        ) {
+            let mut remaining = interruptions;
+            let mut calls = 0_u32;
+
+            let result = splice_once_with(|| {
+                calls = calls.saturating_add(1);
+                if remaining > 0 {
+                    remaining = remaining.saturating_sub(1);
+                    return Err(io::Error::from(io::ErrorKind::Interrupted));
+                }
+                if terminal_ok {
+                    Ok(7)
+                } else {
+                    Err(io::Error::from(io::ErrorKind::BrokenPipe))
+                }
+            });
+
+            prop_assert_eq!(calls, interruptions.saturating_add(1));
+            match result {
+                Ok(transferred) => {
+                    prop_assert!(terminal_ok);
+                    prop_assert_eq!(transferred, 7);
+                }
+                Err(err) => {
+                    prop_assert!(!terminal_ok);
+                    prop_assert!(matches!(err, PumpError::Io(_)));
+                }
+            }
+        }
     }
 }
