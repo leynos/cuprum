@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import asyncio
 import collections.abc as cabc
 import io
@@ -10,6 +9,7 @@ import os
 import sys
 import time
 import typing as typ
+from pathlib import Path
 
 import pytest
 
