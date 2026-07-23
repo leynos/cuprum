@@ -1029,7 +1029,10 @@ with scoped(allowlist=frozenset([ECHO])):
 
 By default, `run_concurrent` uses collect-all mode: all commands run to
 completion regardless of failures. The `ConcurrentResult.failures` tuple
-contains indices of commands that exited non-zero:
+contains indices of commands that exited non-zero. In fail-fast mode,
+`results` may omit cancelled commands, so `failures` indices are positions
+within the compacted `results`, whereas `failure_submission_indices`
+recovers the original submission positions:
 
 ```python
 from cuprum import run_concurrent_sync, scoped
@@ -1098,6 +1101,14 @@ The `ConcurrentResult` dataclass provides:
 - `ok`: `True` when all commands succeeded.
 - `first_failure`: The first failed `CommandResult`, or `None` if all
   succeeded.
+- `submission_indices`: Tuple parallel to `results` giving each result's
+  original submission index. In collect-all mode this is the identity
+  sequence; in fail-fast mode it records the submission position of each
+  completed command.
+- `failure_submission_indices`: Tuple mapping each failure back to its
+  original submission position. Unlike `failures` (positions within the
+  possibly-compacted `results`), these are stable across collect-all and
+  fail-fast modes.
 
 ## Performance extensions (optional Rust)
 

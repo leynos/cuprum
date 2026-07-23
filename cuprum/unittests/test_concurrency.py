@@ -614,3 +614,73 @@ def test_fail_fast_first_failure_indexes_correctly_when_earlier_cancelled() -> N
     assert result.first_failure is not None
     assert result.first_failure is result.results[result.failures[0]]
     assert result.first_failure.exit_code == 99
+
+
+def test_fail_fast_submission_indices_map_to_original_positions() -> None:
+    """End-to-end fail-fast run exposes submission-stable failure indices.
+
+    When fail-fast cancels an earlier, slower command, ``results`` is compacted,
+    so ``failures`` (positions within ``results``) diverges from the original
+    submission positions. ``submission_indices`` and
+    ``failure_submission_indices`` must still name the originally-submitted
+    command that failed.
+    """
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+
+    # cmd0 sleeps (submission index 0, will be cancelled); cmd1 fails fast.
+    cmd0 = python("-c", "import time; time.sleep(2); print('slow')")
+    cmd1 = python("-c", "import sys; sys.exit(7)")
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        start = time.perf_counter()
+        result = run_concurrent_sync(
+            cmd0, cmd1, config=ConcurrentConfig(fail_fast=True)
+        )
+        elapsed = time.perf_counter() - start
+
+    # Fail-fast must cancel the 2s sleeper long before it could finish.
+    assert elapsed < 1.0, f"Expected < 1.0s with fail-fast, got {elapsed:.3f}s"
+    assert result.ok is False
+
+    # Invariants that hold regardless of scheduling. __post_init__ always
+    # backfills the mapping, so it is never None here.
+    indices = result.submission_indices
+    assert indices is not None
+    assert len(indices) == len(result.results)
+    assert result.failure_submission_indices == tuple(
+        indices[position] for position in result.failures
+    )
+
+    # The sleeper cannot have completed within the elapsed bound, so results is
+    # compacted to the single failed command (originally submitted at index 1).
+    assert len(result.results) == 1
+    assert result.failures == (0,)
+    assert result.submission_indices == (1,)
+    # The position-based view says "result 0"; the submission-stable view names
+    # the originally-submitted command 1 — the regression this guards.
+    assert result.failure_submission_indices == (1,)
+    assert result.first_failure is not None
+    assert result.first_failure.exit_code == 7
+
+
+def test_collect_all_submission_indices_are_identity_end_to_end() -> None:
+    """A completed collect-all run exposes identity submission indices.
+
+    Without cancellation, ``results`` is not compacted, so every submission
+    index equals its result position and the two failure views coincide.
+    """
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+
+    cmd0 = python("-c", "print('ok')")
+    cmd1 = python("-c", "import sys; sys.exit(3)")
+    cmd2 = python("-c", "print('ok')")
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        result = run_concurrent_sync(cmd0, cmd1, cmd2)
+
+    assert len(result.results) == 3
+    assert result.submission_indices == (0, 1, 2)
+    assert result.failures == (1,)
+    assert result.failure_submission_indices == (1,)

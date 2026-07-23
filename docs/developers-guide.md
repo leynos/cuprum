@@ -342,6 +342,8 @@ carries explicit postcondition-style contracts in its docstring:
 - Every index in `failures` points at an entry with `ok == False`.
 - `failures` contains *all* such indices — no non-ok entry is omitted.
 - The relative order of non-`None` inputs is preserved in `final_results`.
+- `submission_indices[i]` is the original position of `final_results[i]` in
+  `inputs`, so the submission order is recoverable after compaction.
 
 These invariants are verified at two levels:
 
@@ -368,6 +370,23 @@ These invariants are verified at two levels:
 
 When changing `_build_final_results`, run both verification paths before
 committing.
+
+## ConcurrentResult submission mapping
+
+`ConcurrentResult` (in `cuprum/concurrent.py`) exposes the compacted
+results alongside a submission-stable mapping so callers can relate any
+result — or failure — back to the command they submitted:
+
+- `submission_indices` is a tuple parallel to `results`; each entry is
+  the original submission index of the corresponding result. It
+  defaults to the identity sequence when omitted (the constructor
+  treats `None` as "omitted"), and a supplied sequence whose length
+  differs from `results` raises `ValueError`.
+- `failure_submission_indices` maps each entry of `failures` through
+  `submission_indices`, yielding the original submission positions of
+  the failed commands. Unlike `failures` (positions within the
+  possibly-compacted `results`), it is stable across collect-all and
+  fail-fast modes.
 
 ## Environment overlay resolution
 
