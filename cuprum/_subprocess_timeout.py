@@ -21,6 +21,16 @@ if typ.TYPE_CHECKING:
     from cuprum._subprocess_execution import _SubprocessExecution
 
 
+class _SubprocessInvariantError(RuntimeError):
+    """Raised when an internal subprocess-execution invariant is violated.
+
+    Subclasses :class:`RuntimeError` so it is still caught by broad runtime
+    handlers, while giving these impossible-state guards a distinct,
+    package-scoped type that callers can tell apart from unrelated runtime
+    failures.
+    """
+
+
 def _require_timeout(timeout: float | None, exc: BaseException) -> float:
     """Return ``timeout`` or fail loudly when none was configured.
 
@@ -30,7 +40,7 @@ def _require_timeout(timeout: float | None, exc: BaseException) -> float:
     """
     if timeout is None:
         msg = "TimeoutError without a configured timeout"
-        raise RuntimeError(msg) from exc
+        raise _SubprocessInvariantError(msg) from exc
     return timeout
 
 
@@ -186,6 +196,7 @@ async def _handle_stream_timeout(
 
 __all__ = [
     "_ExitEventDetails",
+    "_SubprocessInvariantError",
     "_SubprocessTimeoutContext",
     "_SubprocessTimeoutDetails",
     "_SubprocessTimeoutError",
