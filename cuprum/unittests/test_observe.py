@@ -227,6 +227,34 @@ def test_observe_tags_reflect_run_output_options(
         assert event.tags["echo"] is output.echo
 
 
+def test_pipeline_awaits_scheduled_observe_tasks_before_return() -> None:
+    """Pipeline execution awaits async observe hooks before returning."""
+    builder, catalogue = _python_builder(project_name="observe-async-pipeline")
+    stage1 = builder("-c", "print('hello')")
+    stage2 = builder(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read().upper())",
+    )
+    completed_exit_stages: list[int] = []
+
+    async def hook(event: ExecEvent) -> None:
+        """Record exit events after an async scheduling boundary."""
+        if event.phase != "exit":
+            return
+        await asyncio.sleep(0)
+        completed_exit_stages.append(
+            typ.cast("int", event.tags["pipeline_stage_index"])
+        )
+
+    with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
+        result = (stage1 | stage2).run_sync()
+
+    assert result.ok is True, "pipeline should complete successfully"
+    assert sorted(completed_exit_stages) == [0, 1], (
+        "pipeline should await scheduled async exit observe tasks before returning"
+    )
+
+
 def test_pipeline_observe_emits_stage_tags_and_env_overlay() -> None:
     """Pipeline observation events retain tags and env overlays per stage."""
     builder, catalogue = _python_builder(project_name="observe-pipeline")
@@ -263,10 +291,16 @@ def test_pipeline_observe_emits_stage_tags_and_env_overlay() -> None:
         1,
     }
     for event in exit_events:
-        assert event.env is not None
-        assert event.env["CUPRUM_OBSERVE_PIPELINE"] == "1"
-        assert event.tags["project"] == "observe-pipeline"
-        assert event.tags["run_id"] == "pipeline-unit"
+        assert event.env is not None, "exit event should retain the environment"
+        assert event.env["CUPRUM_OBSERVE_PIPELINE"] == "1", (
+            "exit event should retain the pipeline environment value"
+        )
+        assert event.tags["project"] == "observe-pipeline", (
+            "exit event should retain the project tag"
+        )
+        assert event.tags["run_id"] == "pipeline-unit", (
+            "exit event should retain the run ID tag"
+        )
     assert "HELLO" in [
         ev.line
         for ev in events

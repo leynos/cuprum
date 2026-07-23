@@ -1,4 +1,19 @@
-"""Internal pipeline execution coordination and fail-fast semantics."""
+"""Internal pipeline execution coordination and fail-fast semantics.
+
+This module is the private machinery behind ``cuprum.sh``'s
+``Pipeline.run``/``run_sync``. It ties together allowlist enforcement
+and hook collection, stage process spawning, inter-stage pipe wiring,
+completion waiting with optional timeouts, and per-stage
+``CommandResult`` assembly. It exists chiefly to centralise
+finalization: when a stage fails or an after-hook raises, pending
+observe-hook tasks must still be drained and every independent
+failure preserved, grouping after-hook and task failures into a
+``BaseExceptionGroup``. It collaborates with ``cuprum._pipeline_spawn``,
+``cuprum._pipeline_streams``, ``cuprum._pipeline_types``,
+``cuprum._pipeline_wait``, ``cuprum._observability``, and
+``cuprum.context``, and is invoked by ``cuprum.sh`` and
+``cuprum._subprocess_execution``/``_process_lifecycle``.
+"""
 
 from __future__ import annotations
 
@@ -35,9 +50,11 @@ from cuprum.context import current_context
 if typ.TYPE_CHECKING:
     import types
 
+    from cuprum.context import CuprumContext
     from cuprum.sh import CommandResult, PipelineResult, SafeCmd
 
 _MIN_PIPELINE_STAGES = 2
+_PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
 
 
 def _sh_module() -> types.ModuleType:
@@ -49,10 +66,13 @@ def _sh_module() -> types.ModuleType:
     return module
 
 
-def _run_before_hooks(cmd: SafeCmd) -> _ExecutionHooks:
-    """Collect hooks for a command after enforcing the current allowlist."""
-    ctx = current_context()
-    ctx.check_allowed(cmd.program)
+def _enforce_allowlist(cmd: SafeCmd) -> None:
+    """Reject ``cmd`` when the active context forbids its program."""
+    current_context().check_allowed(cmd.program)
+
+
+def _collect_hooks(ctx: CuprumContext) -> _ExecutionHooks:
+    """Return the before/after/observe hooks registered on ``ctx``."""
     return _ExecutionHooks(
         before_hooks=ctx.before_hooks,
         after_hooks=ctx.after_hooks,
@@ -158,7 +178,10 @@ def _build_pipeline_observations(
     pending_tasks: list[asyncio.Task[None]],
 ) -> tuple[_StageObservation, ...]:
     """Build per-stage observation state for every command in the pipeline."""
-    hooks_by_stage = tuple(_run_before_hooks(cmd) for cmd in parts)
+    for cmd in parts:
+        _enforce_allowlist(cmd)
+    ctx = current_context()
+    hooks_by_stage = tuple(_collect_hooks(ctx) for _ in parts)
     cwd = None if config.ctx.cwd is None else Path(config.ctx.cwd)
     env_overlay = _resolve_env_overlay(config.ctx.env)
     return tuple(
@@ -230,6 +253,23 @@ def _build_pipeline_stage_results(
     return stage_results
 
 
+async def _drain_tasks_during_cleanup(
+    pending_tasks: list[asyncio.Task[None]],
+    active_error: BaseException,
+) -> None:
+    """Drain observe tasks in cleanup, aggregating a failure with ``active_error``."""
+    try:
+        await _wait_for_exec_hook_tasks(pending_tasks)
+    except BaseException as task_error:  # noqa: BLE001
+        # A blind catch is intentional: every task failure, including
+        # non-Exception BaseExceptions, must be aggregated with active_error so
+        # cleanup never masks the error that triggered it.
+        raise BaseExceptionGroup(
+            _PIPELINE_FINALIZATION_ERROR,
+            (active_error, task_error),
+        ) from None
+
+
 async def _finalize_pipeline_execution(
     parts: tuple[SafeCmd, ...],
     observations: tuple[_StageObservation, ...],
@@ -238,7 +278,11 @@ async def _finalize_pipeline_execution(
 ) -> None:
     """Run after hooks for every stage and drain pending observe tasks."""
     hooks_by_stage = tuple(obs.hooks for obs in observations)
-    _run_pipeline_after_hooks(parts, hooks_by_stage, stage_results)
+    try:
+        _run_pipeline_after_hooks(parts, hooks_by_stage, stage_results)
+    except BaseException as after_hook_error:
+        await _drain_tasks_during_cleanup(pending_tasks, after_hook_error)
+        raise
     await _wait_for_exec_hook_tasks(pending_tasks)
 
 
@@ -271,8 +315,8 @@ async def _run_pipeline(
             stdout_task=stdout_task,
             started_at=started_at,
         )
-    except BaseException:
-        await _wait_for_exec_hook_tasks(pending_tasks)
+    except BaseException as spawn_error:
+        await _drain_tasks_during_cleanup(pending_tasks, spawn_error)
         raise
     try:
         inputs = await _collect_pipeline_inputs(
@@ -280,12 +324,12 @@ async def _run_pipeline(
             spawn,
             config,
         )
-    except _sh_module().TimeoutExpired:
-        await _wait_for_exec_hook_tasks(pending_tasks)
+    except _sh_module().TimeoutExpired as timeout_error:
+        await _drain_tasks_during_cleanup(pending_tasks, timeout_error)
         raise
-    except BaseException:
+    except BaseException as run_error:
         await _cancel_stream_tasks(spawn.stderr_tasks, spawn.stdout_task)
-        await _wait_for_exec_hook_tasks(pending_tasks)
+        await _drain_tasks_during_cleanup(pending_tasks, run_error)
         raise
     stage_results = _build_pipeline_stage_results(
         parts,

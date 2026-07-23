@@ -238,6 +238,9 @@ Notes:
 - Pipelines fail fast: when a stage exits non-zero, Cuprum terminates the
   remaining stages. The failing stage is available via `result.failure` /
   `result.failure_index`.
+- When a downstream writer closes early, Cuprum drains the upstream reader
+  until EOF or a short timeout elapses, even on a stalled upstream, so
+  discarded input stays bounded.
 
 ## Execution runtime
 
@@ -640,6 +643,9 @@ hooks receive `ExecEvent` values describing:
 
 Hooks can be used for structured logging, metrics, or tracing without coupling
 Cuprum to a specific telemetry library.
+
+Awaitable hook results are scheduled as `asyncio.Task` instances and awaited
+before the run completes.
 
 ```python
 from cuprum import ECHO, ExecEvent, ScopeConfig, scoped, sh

@@ -36,6 +36,41 @@ _DIST_INFO_SUFFIXES: dict[str, str] = {
 }
 
 
+class MaturinBuildError(subprocess.CalledProcessError):
+    """Maturin build failure with raw output and rendered diagnostics.
+
+    Attributes
+    ----------
+    build_command : tuple[str, ...]
+        Command used to invoke the maturin wheel build.
+    returncode : int
+        Process exit status, inherited from ``CalledProcessError``.
+    stderr : str | bytes | None
+        Raw captured standard error, inherited from ``CalledProcessError``.
+    """
+
+    def __init__(self, error: subprocess.CalledProcessError) -> None:
+        """Store raw process diagnostics separately from ``str(error)``."""
+        super().__init__(
+            error.returncode,
+            error.cmd,
+            output=error.stdout,
+            stderr=error.stderr,
+        )
+        if isinstance(error.cmd, list | tuple):
+            self.build_command = tuple(str(part) for part in error.cmd)
+        else:
+            self.build_command = (str(error.cmd),)
+
+    def __str__(self) -> str:
+        """Return an enriched diagnostic while preserving raw stderr."""
+        rendered_command = " ".join(self.build_command)
+        return (
+            f"maturin wheel build failed for command: {rendered_command}\n"
+            f"stderr:\n{self.stderr}"
+        )
+
+
 def read_expected_maturin_version(root: Path) -> str:
     """Read the maturin version pinned in ``pyproject.toml``.
 
@@ -192,7 +227,7 @@ def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
         If the build does not produce exactly one wheel.
     OSError
         If the output directory cannot be created or inspected.
-    subprocess.CalledProcessError
+    MaturinBuildError
         If the maturin build command exits non-zero.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -202,16 +237,22 @@ def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
         "maturin",
         "build",
         "--release",
+        "--locked",
         "--out",
         str(out_dir),
         "--manifest-path",
         str(root / "rust/cuprum-rust/Cargo.toml"),
     ]
-    subprocess.run(  # noqa: S603 - command list uses only trusted paths and pinned maturin
-        command,
-        check=True,
-        cwd=root,
-    )
+    try:
+        subprocess.run(  # noqa: S603 - trusted paths and pinned maturin
+            command,
+            check=True,
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise MaturinBuildError(exc) from exc
     wheels = sorted(out_dir.glob("*.whl"))
     if len(wheels) != 1:
         msg = f"Expected exactly one wheel in {out_dir}, found {wheels!r}"

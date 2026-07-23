@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from cuprum import ECHO, TimeoutExpired, sh
+from cuprum import ECHO, ForbiddenProgramError, ScopeConfig, TimeoutExpired, scoped, sh
 from cuprum.sh import (
     CommandResult,
     ExecutionContext,
@@ -505,7 +505,6 @@ def test_run_raises_forbidden_when_program_not_in_allowlist(
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """run() raises ForbiddenProgramError when program is not in context allowlist."""
-    from cuprum.context import ForbiddenProgramError, ScopeConfig, scoped
     from cuprum.program import Program
 
     _, execute = execution_strategy
@@ -730,6 +729,26 @@ def test_input_text_encoding_failure_raises(
     ctx = ExecutionContext(encoding="ascii", errors="strict")
     execute = _execute_async if execution_strategy == "async" else _execute_sync
     with pytest.raises(UnicodeEncodeError):
+        execute(
+            command,
+            {"stdin": StdinInput(text="\u00e9 non-ASCII"), "context": ctx},
+        )
+
+
+@pytest.mark.parametrize("execution_strategy", ["async", "sync"])
+def test_forbidden_command_rejects_before_stdin_encoding(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: str,
+) -> None:
+    """Forbidden commands fail before stdin encoding is attempted."""
+    command = python_builder("-c", "import sys; sys.stdin.read()")
+    ctx = ExecutionContext(encoding="ascii", errors="strict")
+    execute = _execute_async if execution_strategy == "async" else _execute_sync
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([ECHO]))),
+        pytest.raises(ForbiddenProgramError),
+    ):
         execute(
             command,
             {"stdin": StdinInput(text="\u00e9 non-ASCII"), "context": ctx},

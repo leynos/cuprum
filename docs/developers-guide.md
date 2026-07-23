@@ -141,6 +141,68 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
 
+## Pipeline execution helper contracts
+
+Pipeline and command execution use small internal helpers whose names expose
+their command-query separation contract:
+
+- `_enforce_allowlist(cmd)` is a command.  It reads the active context and
+  raises `ForbiddenProgramError` when `cmd.program` is not allowed.  It must
+  run before any before-hook dispatch.
+- `_collect_hooks(ctx)` is a query.  It copies the hooks already present on
+  `ctx` and does not enforce access, dispatch hooks, or mutate the context.
+- `_emit_exec_event(hooks, event)` is a dispatcher query over hook return
+  values.  It invokes synchronous observe hooks inline, schedules awaitable
+  hook results as `asyncio.Task` instances, and returns those tasks to the
+  caller.  If a later hook raises, `_ExecEventEmissionError` carries the tasks
+  scheduled before the failure so cleanup can still await them.
+- `_write_to_stream_writer(writer, chunk)` is a write command with a semantic
+  result.  It returns `_WriteOutcome.OPEN` after a successful write/drain and
+  `_WriteOutcome.CLOSED` when the downstream pipe closes early.  The caller
+  keeps writer ownership and closes it exactly once.
+
+`SafeCmd.run()` enforces the allowlist, then collects hooks from the current
+context, emits the `plan` event, runs before-hooks, and delegates subprocess
+execution to `_execute_with_hooks`.  Pipeline execution follows the same
+ordering per stage: `_build_pipeline_observations` enforces every stage before
+collecting hooks, then `_emit_plan_events_and_run_before_hooks` emits and
+dispatches.
+
+Observe hooks can return awaitables.  Single-command execution and pipeline
+execution both keep a `pending_tasks` list and pass it into every
+`_StageObservation`.  For pipelines, all stage observations share that list on
+the same asyncio event loop.  Appending a task is synchronous Python bytecode
+and the event loop does not pre-empt an `emit()` call halfway through the list
+append, so no explicit lock is required.  Do not call `_StageObservation.emit`
+from a worker thread; marshal back to the execution loop first.
+
+Private helpers emit diagnostic logs rather than installing a global metrics or
+tracing backend.  Hook scheduling and hook failures use the
+`cuprum._observability` logger with structured `extra` fields such as
+`cuprum_phase`, `cuprum_program`, `cuprum_error_type`, and
+`cuprum_scheduled_task_count`.  Stream early-close
+decisions use warning-level records on the `cuprum._streams` logger and include
+`cuprum_discarded_bytes` when upstream bytes are drained after the downstream
+writer has closed. Suppressed writer cleanup failures remain debug-level
+diagnostics with `cuprum_operation` and `cuprum_error_type`, because they are
+expected during already-closed pipe teardown.  User-facing metrics and spans
+remain the responsibility of observe-hook adapters such as `MetricsHook` and
+`TracingHook`, which consume `ExecEvent` values without coupling core execution
+to a telemetry vendor.
+
+Stream pumping continues to drain the upstream reader after
+`_write_to_stream_writer` reports `_WriteOutcome.CLOSED`.  `_pump_stream`
+closes the writer in a `finally` block, so writer cleanup runs after success,
+exceptions, and cancellation.  Tests cover this contract at four levels:
+
+- direct helper tests in `cuprum/unittests/test_cqrs_helpers.py`
+- runtime behaviour and stream-drain properties in
+  `cuprum/unittests/test_stream_pump_runtime_behaviour.py`
+- observe-task assertions in `cuprum/unittests/test_observe.py`
+- CQRS hook and task-scheduling behaviour in
+  `cuprum/unittests/test_cqrs_hook_behaviour.py`, covering allowlist
+  enforcement, before/after/observe hooks, and async observe-task scheduling
+
 ## Canonical stream-drain loop
 
 `cuprum._streams._drain(stream, config, *, on_chunk=None)` is the single
@@ -1198,10 +1260,12 @@ Run compile-time UI tests with:
 cd rust && cargo test compile_time_ui
 ```
 
-To update `.stderr` expectation files after a PyO3 or compiler upgrade:
+Committed `.stderr` fixtures must be regenerated with the CI and minimum
+supported Rust version (MSRV) compiler, Rust 1.85.0. To update them after a
+PyO3 or compiler upgrade:
 
 ```bash
-cd rust && TRYBUILD=overwrite cargo test compile_time_ui
+cd rust && TRYBUILD=overwrite cargo +1.85.0 test compile_time_ui
 ```
 
 Inspect the updated `.stderr` files before committing to confirm that each fail

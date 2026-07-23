@@ -1,17 +1,30 @@
-"""Internal stream handling utilities for subprocess I/O operations."""
+"""Internal stream-handling utilities for subprocess I/O.
+
+The pure-Python home for consuming a subprocess's stdout/stderr and pumping one
+pipeline stage's stdout into the next stage's stdin. ``_consume_stream`` and the
+shared ``_drain`` loop decode bytes, optionally tee each chunk to a sink, capture
+the text, and emit decoded lines; ``_pump_stream``/``_relay_chunks`` copy chunks
+between stages with ``writer.drain()`` backpressure, draining to EOF without a
+writer and best-effort under a bounded timeout after an early close so upstream
+stages never block. Used by the pipeline and single-command execution layers, it
+mirrors the optional Rust backend ``cuprum._streams_rs``. Callers own any writer.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import codecs
-import contextlib
 import dataclasses as dc
+import enum
+import logging
 import typing as typ
 
 if typ.TYPE_CHECKING:
-    import asyncio
     import collections.abc as cabc
 
 _READ_SIZE = 4096
+_POST_CLOSE_DRAIN_TIMEOUT_S = 0.25
+_LOGGER = logging.getLogger(__name__)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -23,6 +36,13 @@ class _StreamConfig:
     sink: typ.IO[str]
     encoding: str
     errors: str
+
+
+@dc.dataclass(slots=True)
+class _DrainProgress:
+    """Track bytes discarded by a cancellable reader drain."""
+
+    discarded_bytes: int = 0
 
 
 async def _consume_stream(
@@ -137,57 +157,124 @@ async def _pump_stream(
         await _close_stream_writer(writer)
         return
 
-    active_writer = writer
+    try:
+        await _relay_chunks(reader, writer)
+    finally:
+        _LOGGER.debug("stream_writer_close_start")
+        await _close_stream_writer(writer)
+
+
+async def _relay_chunks(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter | None,
+) -> None:
+    """Copy chunks downstream; drain to EOF with no writer, bounded after a close."""
+    if writer is None:
+        await _drain_stream_reader(reader, _DrainProgress())
+        return
     while True:
         chunk = await reader.read(_READ_SIZE)
         if not chunk:
+            return
+        if await _write_to_stream_writer(writer, chunk) is _WriteOutcome.CLOSED:
             break
-        active_writer = await _write_to_stream_writer(active_writer, chunk)
+    discarded_bytes = await _drain_stream_reader_bounded(reader)
+    _LOGGER.warning(
+        "stream_downstream_closed discarded_bytes=%s",
+        discarded_bytes,
+        extra={"cuprum_discarded_bytes": discarded_bytes},
+    )
 
-    await _close_stream_writer(active_writer)
+
+async def _drain_stream_reader(
+    reader: asyncio.StreamReader,
+    progress: _DrainProgress,
+) -> int:
+    """Consume the reader to EOF, discarding the data and returning byte count."""
+    while chunk := await reader.read(_READ_SIZE):
+        progress.discarded_bytes += len(chunk)
+    return progress.discarded_bytes
+
+
+async def _drain_stream_reader_bounded(reader: asyncio.StreamReader) -> int:
+    """Best-effort drain after downstream closure without waiting forever."""
+    progress = _DrainProgress()
+    try:
+        return await asyncio.wait_for(
+            _drain_stream_reader(reader, progress),
+            timeout=_POST_CLOSE_DRAIN_TIMEOUT_S,
+        )
+    except TimeoutError:
+        _LOGGER.debug(
+            "stream_reader_drain_timeout timeout_s=%s",
+            _POST_CLOSE_DRAIN_TIMEOUT_S,
+            extra={"cuprum_timeout_s": _POST_CLOSE_DRAIN_TIMEOUT_S},
+        )
+        return progress.discarded_bytes
 
 
 async def _write_to_stream_writer(
-    writer: asyncio.StreamWriter | None,
+    writer: asyncio.StreamWriter,
     chunk: bytes,
-) -> asyncio.StreamWriter | None:
-    """Write a chunk to a writer, returning None when downstream closes."""
-    if writer is None:
-        return None
+) -> _WriteOutcome:
+    """Write a chunk; report whether the caller-owned downstream writer stays open."""
     try:
         writer.write(chunk)
         await writer.drain()
     except (BrokenPipeError, ConnectionResetError):
-        await _close_stream_writer(writer)
-        return None
-    return writer
+        _LOGGER.warning(
+            "stream_write_closed bytes=%s",
+            len(chunk),
+            extra={"cuprum_attempted_bytes": len(chunk)},
+        )
+        return _WriteOutcome.CLOSED
+    return _WriteOutcome.OPEN
 
 
 async def _close_stream_writer(writer: asyncio.StreamWriter | None) -> None:
     """Close a writer, swallowing errors from already-closed pipes."""
     if writer is None:
         return
-    with contextlib.suppress(
+    try:
+        writer.write_eof()
+    except (
         AttributeError,
         NotImplementedError,
         BrokenPipeError,
         ConnectionResetError,
-    ):
-        writer.write_eof()
+    ) as exc:
+        _log_suppressed_stream_close_error("write_eof", exc)
     try:
         writer.close()
-    except (BrokenPipeError, ConnectionResetError):
+    except (BrokenPipeError, ConnectionResetError) as exc:
+        _log_suppressed_stream_close_error("close", exc)
         return
     wait_closed = getattr(writer, "wait_closed", None)
     if wait_closed is None:
         return
-    with contextlib.suppress(
+    try:
+        await wait_closed()
+    except (
         AttributeError,
         NotImplementedError,
         BrokenPipeError,
         ConnectionResetError,
-    ):
-        await wait_closed()
+    ) as exc:
+        _log_suppressed_stream_close_error("wait_closed", exc)
+
+
+def _log_suppressed_stream_close_error(operation: str, exc: BaseException) -> None:
+    """Log a cleanup error that cannot safely be raised during pipe teardown."""
+    _LOGGER.debug(
+        "stream_writer_close_suppressed operation=%s error=%s",
+        operation,
+        type(exc).__name__,
+        exc_info=(type(exc), exc, exc.__traceback__),
+        extra={
+            "cuprum_operation": operation,
+            "cuprum_error_type": type(exc).__name__,
+        },
+    )
 
 
 def _write_chunk(
@@ -291,3 +378,22 @@ def _strip_line_ending(line: str) -> str:
     if line.endswith("\n") or line.endswith("\r"):
         return line[:-1]
     return line
+
+
+class _WriteOutcome(enum.Enum):
+    """Whether a downstream writer is still accepting data after a write.
+
+    Used by :func:`_write_to_stream_writer` to report broken-pipe state as a
+    value rather than overloading a ``StreamWriter | None`` return, so the
+    caller retains ownership of the writer and decides when to close it.
+
+    Members
+    -------
+    OPEN
+        The write succeeded and the downstream writer remains open.
+    CLOSED
+        The downstream closed early (broken pipe); stop writing to it.
+    """
+
+    OPEN = "open"
+    CLOSED = "closed"
