@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from cuprum import _subprocess_stdin, sh
+from cuprum import sh
 from cuprum._pipeline_internals import _EventDetails
 from cuprum._subprocess_stdin import _write_stdin
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
@@ -309,10 +309,14 @@ def test_pipeline_observe_emits_stage_tags_and_env_overlay() -> None:
     ]
 
 
-def test_observe_emits_stdin_error_event_when_process_closes_stdin_early(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Emit ``stdin_error`` event when the subprocess closes stdin early."""
+def test_observe_emits_stdin_error_event_when_process_closes_stdin_early() -> None:
+    """Emit a real ``stdin_error`` event when the subprocess closes stdin early.
+
+    The child closes its stdin immediately, so writing a payload larger than
+    the OS pipe buffer drives the real writer's ``drain()`` into a broken-pipe
+    (EPIPE) failure. The runner must surface that as an observable
+    ``stdin_error`` event rather than propagating or swallowing it silently.
+    """
     builder, catalogue = _python_builder(project_name="observe-stdin-error")
     cmd = builder(
         "-c",
@@ -325,23 +329,12 @@ def test_observe_emits_stdin_error_event_when_process_closes_stdin_early(
         """Record an emitted execution event."""
         events.append(ev)
 
-    async def fake_write_stdin(
-        process: asyncio.subprocess.Process,
-        stdin_data: bytes,
-        observation: _StageObservation,
-    ) -> None:
-        """Emit a deterministic stdin error without relying on pipe pressure."""
-        await asyncio.sleep(0)
-        assert stdin_data == b"x", "stdin writer should receive the configured payload"
-        observation.emit(
-            "stdin_error",
-            _EventDetails(pid=process.pid, note="BrokenPipeError: forced EPIPE"),
-        )
-
-    monkeypatch.setattr(_subprocess_stdin, "_write_stdin", fake_write_stdin)
+    # 1 MiB exceeds the ~64 KiB pipe buffer, so the write cannot be absorbed
+    # before the child closes the read end, forcing a genuine EPIPE on drain.
+    payload = b"x" * (1024 * 1024)
     with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
         result = cmd.run_sync(
-            stdin=StdinInput(data=b"x"),
+            stdin=StdinInput(data=payload),
             output=RunOutputOptions(capture=True),
         )
 

@@ -1,21 +1,25 @@
 """Integration tests for the SafeCmd stdin writer lifecycle.
 
-Covers stdin-fed executions where the writer task must be cleaned up on
-timeout escalation, on a blocked ``drain()`` in direct mode, and on
-cancellation, across both the ``run()`` and ``run_sync()`` strategies.
+Timeout escalation and blocked-``drain()`` scenarios cover both the ``run()``
+and ``run_sync()`` strategies; cancellation cleanup is exercised only through
+``run()`` (async), since cancelling a synchronous call is not meaningful.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 import typing as typ
 
 import pytest
 
 from cuprum import TimeoutExpired
-from cuprum.sh import CommandResult, RunOutputOptions, StdinInput
+from cuprum.sh import (
+    CommandResult,
+    ExecutionContext,
+    RunOutputOptions,
+    StdinInput,
+)
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
@@ -24,12 +28,21 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import SafeCmd
 
 
-def _execute_async(cmd: SafeCmd, kwargs: dict[str, typ.Any]) -> CommandResult:
+class _RunKwargs(typ.TypedDict, total=False):
+    """Keyword arguments accepted by ``SafeCmd.run``/``SafeCmd.run_sync``."""
+
+    output: RunOutputOptions | None
+    timeout: float | None
+    context: ExecutionContext | None
+    stdin: StdinInput | None
+
+
+def _execute_async(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
     """Execute a SafeCmd using the async run() method."""
     return asyncio.run(cmd.run(**kwargs))
 
 
-def _execute_sync(cmd: SafeCmd, kwargs: dict[str, typ.Any]) -> CommandResult:
+def _execute_sync(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
     """Execute a SafeCmd using the sync run_sync() method."""
     return cmd.run_sync(**kwargs)
 
@@ -43,7 +56,7 @@ def python_builder() -> cabc.Callable[..., SafeCmd]:
 @pytest.mark.parametrize("execution_strategy", ["async", "sync"])
 def test_stdin_input_with_timeout_escalation(
     python_builder: cabc.Callable[..., SafeCmd],
-    execution_strategy: str,
+    execution_strategy: typ.Literal["async", "sync"],
 ) -> None:
     """Stdin writer task is cleaned up when the command times out."""
     command = python_builder(
@@ -65,7 +78,7 @@ def test_stdin_input_with_timeout_escalation(
 @pytest.mark.parametrize("execution_strategy", ["async", "sync"])
 def test_direct_timeout_with_blocked_stdin_writer_does_not_hang(
     python_builder: cabc.Callable[..., SafeCmd],
-    execution_strategy: str,
+    execution_strategy: typ.Literal["async", "sync"],
 ) -> None:
     """Direct-mode timeout cancels a stdin writer wedged on an unread pipe.
 
@@ -97,23 +110,31 @@ def test_direct_timeout_with_blocked_stdin_writer_does_not_hang(
 def test_stdin_input_cancellation_cleans_up_task(
     python_builder: cabc.Callable[..., SafeCmd],
 ) -> None:
-    """Cancelling a command with stdin data does not hang."""
+    """Cancelling a run with a blocked stdin writer propagates cancellation.
+
+    The child never reads its stdin and the payload exceeds the OS pipe
+    buffer, so the writer wedges in ``drain()``. Cancelling the run must cancel
+    that blocked writer and let ``CancelledError`` propagate (rather than being
+    swallowed), without hanging (regression for #117).
+    """
 
     async def _orchestrate() -> None:
-        """Start a stdin-fed command and cancel it without hanging."""
-        command = python_builder(
-            "-c",
-            "import sys, time; sys.stdin.read(); time.sleep(30)",
-        )
+        """Start a blocked-writer command and cancel it after writer cleanup."""
+        command = python_builder("-c", "import time; time.sleep(30)")
+        payload = b"x" * (1024 * 1024)  # 1 MiB wedges the writer's drain()
         task = asyncio.create_task(
             command.run(
                 output=RunOutputOptions(capture=False),
-                stdin=StdinInput(text="payload"),
+                stdin=StdinInput(data=payload),
             )
         )
         await asyncio.sleep(0.05)
         task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+        assert task.cancelled(), (
+            "cancellation must propagate out of run(); the task must not "
+            "swallow CancelledError"
+        )
 
     asyncio.run(_orchestrate())

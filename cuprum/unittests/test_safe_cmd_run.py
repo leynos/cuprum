@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import asyncio
 import collections.abc as cabc
-import contextlib
 import io
 import os
 import sys
 import time
 import typing as typ
-from pathlib import Path
 
 import pytest
 
@@ -695,8 +694,12 @@ def test_streamed_run_cancellation_cleans_up_task(
         )
         await asyncio.sleep(0.1)  # let the child stream some output first
         task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+        assert task.cancelled(), (
+            "cancellation must propagate out of the streamed run; the task "
+            "must not swallow CancelledError"
+        )
 
     asyncio.run(_orchestrate())
 

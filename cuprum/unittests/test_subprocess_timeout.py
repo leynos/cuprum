@@ -58,7 +58,7 @@ def test_stream_timeout_preserves_timeout_when_consumer_fails() -> None:
         """Yield once, then raise the stream-consumer failure."""
         await asyncio.sleep(0)
         msg = "consumer failed"
-        raise RuntimeError(msg)
+        raise ValueError(msg)
 
     async def handle_timeout() -> None:
         """Run the timeout handler and assert its cleanup outcome."""
@@ -206,7 +206,7 @@ def test_wait_for_exit_code_cancels_pending_consumers_on_timeout() -> None:
     handling cannot hang, while the original ``TimeoutError`` still propagates.
     """
 
-    async def blocking_consumer() -> None:
+    async def blocking_consumer() -> str | None:
         """Block until timeout cleanup cancels this task."""
         await asyncio.Event().wait()
 
@@ -244,7 +244,7 @@ def test_wait_for_exit_code_cancels_pending_consumers_on_cancellation() -> None:
     consumer and let the ``CancelledError`` propagate.
     """
 
-    async def blocking_consumer() -> None:
+    async def blocking_consumer() -> str | None:
         """Block until cancellation cleanup cancels this task."""
         await asyncio.Event().wait()
 

@@ -35,7 +35,7 @@ if typ.TYPE_CHECKING:
 
 
 def _cancel_pending_consumers(
-    consumers: tuple[asyncio.Task[None] | asyncio.Task[str | None], ...],
+    consumers: tuple[asyncio.Task[str | None], ...],
 ) -> None:
     """Cancel each consumer task that has not already completed.
 
@@ -53,7 +53,7 @@ async def _wait_for_exit_code(
     ctx: ExecutionContext,
     *,
     timeout: float | None = None,
-    consumers: tuple[asyncio.Task[None] | asyncio.Task[str | None], ...] = (),
+    consumers: tuple[asyncio.Task[str | None], ...] = (),
 ) -> tuple[int, float]:
     """Wait for a subprocess, handling cancellation and capturing exit time."""
     try:
@@ -61,13 +61,11 @@ async def _wait_for_exit_code(
             exit_code = await process.wait()
         else:
             exit_code = await asyncio.wait_for(process.wait(), timeout)
-    except TimeoutError:  # Raised by asyncio.wait_for on timeout expiry
-        await _terminate_process(process, ctx.cancel_grace)
-        if consumers:
-            _cancel_pending_consumers(consumers)
-            await asyncio.gather(*consumers, return_exceptions=True)
-        raise
-    except asyncio.CancelledError:
+    except (TimeoutError, asyncio.CancelledError):
+        # asyncio.wait_for raises TimeoutError on expiry; the surrounding task
+        # may also be cancelled. Both need the same teardown: terminate the
+        # process, then cancel and drain any still-pending consumers before
+        # re-raising the original exception.
         await _terminate_process(process, ctx.cancel_grace)
         if consumers:
             _cancel_pending_consumers(consumers)
