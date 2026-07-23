@@ -92,27 +92,27 @@ class ConcurrentResult:
         In collect-all mode this is the identity ``(0, 1, …, n-1)``; in
         fail-fast mode it lists the submission positions of the completed
         commands. Lets callers map any result — or failure — back to the
-        command they submitted, uniformly across both execution modes. Defaults
-        to the identity sequence when not supplied; a supplied sequence whose
-        length differs from ``results`` raises :class:`ValueError`.
+        command they submitted, uniformly across both execution modes. Pass
+        ``None`` (the default) to backfill the identity sequence (even for
+        empty ``results``); any supplied sequence — including an empty tuple —
+        whose length differs from ``results`` raises :class:`ValueError`.
 
     """
 
     results: tuple[CommandResult, ...]
     failures: tuple[int, ...] = ()
-    submission_indices: tuple[int, ...] = ()
+    submission_indices: tuple[int, ...] | None = None
 
     def __post_init__(self) -> None:
         """Backfill or validate ``submission_indices`` against ``results``.
 
-        Populate the identity sequence when ``submission_indices`` is omitted;
-        reject a supplied sequence whose length differs from ``results`` so
-        misuse fails fast here rather than raising ``IndexError`` later.
+        Treat ``None`` as "omitted" and backfill the identity sequence (even
+        for empty ``results``); validate any supplied sequence, so a length
+        mismatch fails fast here rather than as a later ``IndexError``.
         """
-        if not self.submission_indices:
-            if self.results:
-                identity = tuple(range(len(self.results)))
-                object.__setattr__(self, "submission_indices", identity)
+        if self.submission_indices is None:
+            identity = tuple(range(len(self.results)))
+            object.__setattr__(self, "submission_indices", identity)
             return
         if len(self.submission_indices) != len(self.results):
             msg = (
@@ -141,7 +141,8 @@ class ConcurrentResult:
         these are stable across both collect-all and fail-fast modes: each
         value is the position at which the failing command was submitted.
         """
-        return tuple(self.submission_indices[index] for index in self.failures)
+        # ``__post_init__`` backfills the mapping, so it is never None here.
+        return tuple((self.submission_indices or ())[index] for index in self.failures)
 
 
 class _FirstFailureError(Exception):

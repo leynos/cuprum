@@ -467,6 +467,19 @@ def test_mismatched_submission_indices_length_is_rejected() -> None:
         ConcurrentResult(results=results, failures=(1,), submission_indices=(0,))
 
 
+def test_explicit_empty_submission_indices_with_results_is_rejected() -> None:
+    """An explicit empty submission_indices differs from omitting it."""
+    from cuprum import CommandResult, Program
+
+    results = (CommandResult(Program("echo"), (), 0, 1, "out", ""),)
+    # Omitting submission_indices (None) backfills the identity sequence...
+    assert ConcurrentResult(results=results, failures=()).submission_indices == (0,)
+    # ...but an explicit empty tuple is a supplied length-0 sequence, so it is
+    # rejected against the single result rather than silently backfilled.
+    with pytest.raises(ValueError, match="submission_indices length"):
+        ConcurrentResult(results=results, failures=(), submission_indices=())
+
+
 @given(
     items=st.lists(
         st.one_of(st.none(), st.integers(min_value=0, max_value=5)),
