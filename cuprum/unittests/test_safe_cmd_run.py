@@ -24,6 +24,7 @@ from cuprum.sh import (
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
+    from cuprum.events import ExecEvent
     from cuprum.sh import SafeCmd
 
 type ExecuteFn = cabc.Callable[[SafeCmd, dict[str, typ.Any]], CommandResult]
@@ -683,23 +684,36 @@ def test_streamed_run_cancellation_cleans_up_task(
     """
 
     async def _orchestrate() -> None:
-        """Start a streaming command and cancel it mid-flight."""
+        """Start a streaming command and cancel it once output is observed."""
         command = python_builder(
             "-c",
             "import time; [print('tick', flush=True) or time.sleep(0.02) "
             "for _ in range(600)]",
         )
-        task = asyncio.create_task(
-            command.run(output=RunOutputOptions(capture=True)),
-        )
-        await asyncio.sleep(0.1)  # let the child stream some output first
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
-        assert task.cancelled(), (
-            "cancellation must propagate out of the streamed run; the task "
-            "must not swallow CancelledError"
-        )
+        streaming = asyncio.Event()
+
+        def on_event(ev: ExecEvent) -> None:
+            """Signal once a stdout consumer has delivered a line."""
+            if ev.phase == "stdout":
+                streaming.set()
+
+        with (
+            scoped(ScopeConfig(allowlist=frozenset([command.program]))),
+            sh.observe(on_event),
+        ):
+            task = asyncio.create_task(
+                command.run(output=RunOutputOptions(capture=True)),
+            )
+            # Cancel only after a stream consumer has actually delivered a
+            # line: a deterministic readiness signal rather than a fixed sleep.
+            await asyncio.wait_for(streaming.wait(), timeout=2.0)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+            assert task.cancelled(), (
+                "cancellation must propagate out of the streamed run; the task "
+                "must not swallow CancelledError"
+            )
 
     asyncio.run(_orchestrate())
 

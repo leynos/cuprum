@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import logging
+import os
 import sys
 import typing as typ
 from pathlib import Path
@@ -309,6 +311,25 @@ def test_pipeline_observe_emits_stage_tags_and_env_overlay() -> None:
     ]
 
 
+def _drain_blocking_payload_size() -> int:
+    """Return a stdin payload size that reliably blocks the writer's drain().
+
+    The early-close ``stdin_error`` only surfaces when ``drain()`` actually
+    blocks, which requires a payload larger than the OS pipe buffer plus the
+    asyncio transport write high-water mark. Probe the real pipe capacity so
+    the assertion does not rely on an assumed ~64 KiB buffer.
+    """
+    read_fd, write_fd = os.pipe()
+    try:
+        pipe_capacity = fcntl.fcntl(write_fd, fcntl.F_GETPIPE_SZ)
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+    # Exceed the probed pipe capacity and the default 64 KiB transport
+    # high-water mark with a full extra MiB of headroom.
+    return pipe_capacity + (1 << 20)
+
+
 def test_observe_emits_stdin_error_event_when_process_closes_stdin_early() -> None:
     """Emit a real ``stdin_error`` event when the subprocess closes stdin early.
 
@@ -329,9 +350,10 @@ def test_observe_emits_stdin_error_event_when_process_closes_stdin_early() -> No
         """Record an emitted execution event."""
         events.append(ev)
 
-    # 1 MiB exceeds the ~64 KiB pipe buffer, so the write cannot be absorbed
-    # before the child closes the read end, forcing a genuine EPIPE on drain.
-    payload = b"x" * (1024 * 1024)
+    # Size the payload from the real pipe capacity so the writer is guaranteed
+    # to block in drain() until the child closes the read end, forcing a
+    # deterministic EPIPE rather than assuming a ~64 KiB buffer.
+    payload = b"x" * _drain_blocking_payload_size()
     with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
         result = cmd.run_sync(
             stdin=StdinInput(data=payload),

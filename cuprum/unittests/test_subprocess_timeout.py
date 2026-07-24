@@ -170,13 +170,15 @@ class _TimeoutWaitProcess:
     """Process double whose ``wait()`` blocks until terminate()/kill()."""
 
     def __init__(self) -> None:
-        """Start unexited, with a pid and an unset termination event."""
+        """Start unexited, with a pid and unset started/termination events."""
         self.returncode: int | None = None
         self.pid = 4321
         self._exited = asyncio.Event()
+        self.wait_started = asyncio.Event()
 
     async def wait(self) -> int:
         """Block until a termination signal records an exit code."""
+        self.wait_started.set()
         await self._exited.wait()
         assert self.returncode is not None, (
             "process double invariant: terminate()/kill() must record "
@@ -261,7 +263,10 @@ def test_wait_for_exit_code_cancels_pending_consumers_on_cancellation() -> None:
                 consumers=(consumer,),
             )
         )
-        await asyncio.sleep(0.01)  # let the waiter park on process.wait()
+        # Wait until the task has actually entered process.wait() before
+        # cancelling, so the cleanup branch is exercised deterministically
+        # rather than racing a fixed sleep.
+        await asyncio.wait_for(process.wait_started.wait(), timeout=2.0)
         task.cancel()
 
         with pytest.raises(asyncio.CancelledError):
