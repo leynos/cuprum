@@ -1429,7 +1429,7 @@ Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; timeout or exit-event policy belongs in
 `_subprocess_timeout`; and orchestration that coordinates them belongs in
 `_subprocess_execution`. See
-[ADR-006](adr-006-subprocess-execution-module-boundaries.md) for the decision
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the decision
 and its compatibility constraints.
 
 When `stdin: StdinInput` is passed to `SafeCmd.run()`, the following sequence

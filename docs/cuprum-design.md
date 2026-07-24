@@ -1066,7 +1066,7 @@ public command APIs or creates subprocesses. This separation keeps the timeout
 and stdin lifecycles independently testable without altering observable
 execution, cancellation, timeout, or event semantics. The accepted rationale
 and alternatives are recorded in
-[ADR-006](adr-006-subprocess-execution-module-boundaries.md).
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md).
 
 Figure 3: Sequence of start/exit logging hook execution
 
