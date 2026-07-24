@@ -8,6 +8,8 @@ import time
 import typing as typ
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -416,6 +418,120 @@ def test_concurrent_result_first_failure_property() -> None:
     assert ok_result.first_failure is None
 
 
+def test_collect_all_submission_indices_are_identity() -> None:
+    """In collect-all mode submission indices match result positions."""
+    from cuprum import CommandResult, Program
+
+    results = (
+        CommandResult(Program("echo"), (), 0, 1, "out", ""),
+        CommandResult(Program("echo"), (), 1, 2, "out", ""),
+        CommandResult(Program("echo"), (), 0, 3, "out", ""),
+    )
+    concurrent_result = ConcurrentResult(results=results, failures=(1,))
+
+    assert concurrent_result.submission_indices == (0, 1, 2)
+    # With identity submission indices the two failure views coincide.
+    assert concurrent_result.failure_submission_indices == concurrent_result.failures
+
+
+def test_fail_fast_failure_maps_to_original_submission() -> None:
+    """A compacted fail-fast failure maps back to its submission position."""
+    from cuprum import CommandResult, Program
+
+    # The first command (submission index 0) was cancelled, so only the second
+    # (submission index 1), which failed, is present in ``results``.
+    failed = CommandResult(Program("echo"), (), 99, 2, None, None)
+    concurrent_result = ConcurrentResult(
+        results=(failed,),
+        failures=(0,),
+        submission_indices=(1,),
+    )
+
+    # The position-based view says "result 0"; the submission-stable view
+    # correctly identifies the originally-submitted command 1.
+    assert concurrent_result.failures == (0,)
+    assert concurrent_result.failure_submission_indices == (1,)
+
+
+def test_mismatched_submission_indices_length_is_rejected() -> None:
+    """A supplied submission_indices must match the results length."""
+    from cuprum import CommandResult, Program
+
+    results = (
+        CommandResult(Program("echo"), (), 0, 1, "out", ""),
+        CommandResult(Program("echo"), (), 1, 2, "out", ""),
+    )
+    # Two results but only one submission index: fail fast in __post_init__
+    # rather than defer to an IndexError from failure_submission_indices.
+    with pytest.raises(ValueError, match="submission_indices length"):
+        ConcurrentResult(results=results, failures=(1,), submission_indices=(0,))
+
+
+def test_explicit_empty_submission_indices_with_results_is_rejected() -> None:
+    """An explicit empty submission_indices differs from omitting it."""
+    from cuprum import CommandResult, Program
+
+    results = (CommandResult(Program("echo"), (), 0, 1, "out", ""),)
+    # Omitting submission_indices (None) backfills the identity sequence...
+    assert ConcurrentResult(results=results, failures=()).submission_indices == (0,)
+    # ...but an explicit empty tuple is a supplied length-0 sequence, so it is
+    # rejected against the single result rather than silently backfilled.
+    with pytest.raises(ValueError, match="submission_indices length"):
+        ConcurrentResult(results=results, failures=(), submission_indices=())
+
+
+@given(
+    items=st.lists(
+        st.one_of(st.none(), st.integers(min_value=0, max_value=5)),
+        max_size=10,
+    )
+)
+def test_failure_submission_mapping_is_uniform(items: list[int | None]) -> None:
+    """Property: every failure maps back to the correct original submission.
+
+    Each generated item is either ``None`` (a cancelled command) or an exit
+    code at its submission index. Across arbitrary mixes the shared collect
+    loop must record completed results in order and expose a
+    ``failure_submission_indices`` that names exactly the originally-submitted
+    commands that exited non-zero.
+
+    Parameters
+    ----------
+    items : list[int | None]
+        Generated per-submission exit codes; ``None`` marks a cancelled command.
+    """
+    from cuprum import CommandResult, Program
+    from cuprum.concurrent import _collect_results_and_failures
+
+    indexed = [
+        (
+            submission_index,
+            None
+            if code is None
+            else CommandResult(Program("x"), (), code, 1, None, None),
+        )
+        for submission_index, code in enumerate(items)
+    ]
+    results, submission_indices, failures = _collect_results_and_failures(indexed)
+
+    completed = [code for code in items if code is not None]
+    assert len(results) == len(completed)
+    assert len(submission_indices) == len(results)
+    assert all(not results[position].ok for position in failures)
+
+    concurrent_result = ConcurrentResult(
+        results=tuple(results),
+        failures=tuple(failures),
+        submission_indices=tuple(submission_indices),
+    )
+    expected = tuple(
+        submission_index
+        for submission_index, code in enumerate(items)
+        if code is not None and code != 0
+    )
+    assert concurrent_result.failure_submission_indices == expected
+
+
 def test_single_command_works() -> None:
     """run_concurrent works with a single command."""
     echo = sh.make(ECHO)
@@ -498,3 +614,73 @@ def test_fail_fast_first_failure_indexes_correctly_when_earlier_cancelled() -> N
     assert result.first_failure is not None
     assert result.first_failure is result.results[result.failures[0]]
     assert result.first_failure.exit_code == 99
+
+
+def test_fail_fast_submission_indices_map_to_original_positions() -> None:
+    """End-to-end fail-fast run exposes submission-stable failure indices.
+
+    When fail-fast cancels an earlier, slower command, ``results`` is compacted,
+    so ``failures`` (positions within ``results``) diverges from the original
+    submission positions. ``submission_indices`` and
+    ``failure_submission_indices`` must still name the originally-submitted
+    command that failed.
+    """
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+
+    # cmd0 sleeps (submission index 0, will be cancelled); cmd1 fails fast.
+    cmd0 = python("-c", "import time; time.sleep(2); print('slow')")
+    cmd1 = python("-c", "import sys; sys.exit(7)")
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        start = time.perf_counter()
+        result = run_concurrent_sync(
+            cmd0, cmd1, config=ConcurrentConfig(fail_fast=True)
+        )
+        elapsed = time.perf_counter() - start
+
+    # Fail-fast must cancel the 2s sleeper long before it could finish.
+    assert elapsed < 1.0, f"Expected < 1.0s with fail-fast, got {elapsed:.3f}s"
+    assert result.ok is False
+
+    # Invariants that hold regardless of scheduling. __post_init__ always
+    # backfills the mapping, so it is never None here.
+    indices = result.submission_indices
+    assert indices is not None
+    assert len(indices) == len(result.results)
+    assert result.failure_submission_indices == tuple(
+        indices[position] for position in result.failures
+    )
+
+    # The sleeper cannot have completed within the elapsed bound, so results is
+    # compacted to the single failed command (originally submitted at index 1).
+    assert len(result.results) == 1
+    assert result.failures == (0,)
+    assert result.submission_indices == (1,)
+    # The position-based view says "result 0"; the submission-stable view names
+    # the originally-submitted command 1 — the regression this guards.
+    assert result.failure_submission_indices == (1,)
+    assert result.first_failure is not None
+    assert result.first_failure.exit_code == 7
+
+
+def test_collect_all_submission_indices_are_identity_end_to_end() -> None:
+    """A completed collect-all run exposes identity submission indices.
+
+    Without cancellation, ``results`` is not compacted, so every submission
+    index equals its result position and the two failure views coincide.
+    """
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+
+    cmd0 = python("-c", "print('ok')")
+    cmd1 = python("-c", "import sys; sys.exit(3)")
+    cmd2 = python("-c", "print('ok')")
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        result = run_concurrent_sync(cmd0, cmd1, cmd2)
+
+    assert len(result.results) == 3
+    assert result.submission_indices == (0, 1, 2)
+    assert result.failures == (1,)
+    assert result.failure_submission_indices == (1,)

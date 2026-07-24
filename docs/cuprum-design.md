@@ -1174,11 +1174,20 @@ concurrently with optional concurrency limits. The implementation uses
 
 **ConcurrentResult structure:**
 
-- `results`: Tuple of `CommandResult` in submission order.
-- `failures`: Tuple of indices where commands exited non-zero.
+- `results`: Tuple of `CommandResult` in submission order. In fail-fast mode it
+  is compacted to the completed (non-cancelled) commands.
+- `failures`: Tuple of positions within `results` where commands exited
+  non-zero, ascending. Because `results` is compacted in fail-fast mode, these
+  are not original submission positions.
+- `submission_indices`: Tuple parallel to `results` giving each result's
+  original submission index (the identity sequence in collect-all mode). It
+  defaults to the identity sequence when omitted; a supplied sequence whose
+  length differs from `results` raises `ValueError` so misuse fails fast.
 - `ok`: Property returning `True` when `failures` is empty.
 - `first_failure`: Property returning the first failed `CommandResult`, or
   `None` if all succeeded.
+- `failure_submission_indices`: Property mapping each failure back to its
+  original submission position, uniformly across both execution modes.
 
 Figure 4: Concurrent execution flow with allowlist validation and semaphore
 gating
