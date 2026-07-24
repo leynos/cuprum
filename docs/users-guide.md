@@ -644,6 +644,13 @@ hooks receive `ExecEvent` values describing:
 Hooks can be used for structured logging, metrics, or tracing without coupling
 Cuprum to a specific telemetry library.
 
+Each event carries a stable `exec_id` correlation token: every lifecycle event
+for one execution — a single command, or one stage of a pipeline — shares the
+same token. Hooks that track per-execution state should correlate by `exec_id`
+rather than `pid`, which the operating system can recycle across executions.
+Events with `exec_id=None` cannot be correlated, so correlation-consuming hooks
+(such as the tracing adapter) drop them.
+
 Awaitable hook results are scheduled as `asyncio.Task` instances and awaited
 before the run completes.
 

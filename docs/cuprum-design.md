@@ -984,8 +984,9 @@ implemented with the following decisions:
   the operating system can recycle a `pid` across executions. `pid` remains
   available for observability but is not a reliable correlation key. Legacy or
   manually constructed events may omit `exec_id` (`None`); such events cannot
-  be correlated, and consumers should ignore ambiguous output/exit events
-  rather than guess.
+  be correlated. Consumers should ignore an uncorrelatable `start` and create
+  no span for it, and likewise ignore ambiguous `stdout`, `stderr`, and `exit`
+  events rather than guess.
 - **Line emission:** `stdout`/`stderr` phases are emitted per decoded line. Line
   terminators are removed, and the final partial line (when output does not end
   with a newline) is still emitted.

@@ -328,7 +328,7 @@ internal `threading.Lock`:
 - **start** builds the span outside the lock, then, under the lock, ends any
   span already registered for that `exec_id` (a duplicated or reused token) as
   failed before installing the replacement, so the token-to-span transition is
-  atomic and every span is ended exactly once.
+  atomic and each replaced span is ended exactly once.
 - **stdout/stderr** look up the span for the event's `exec_id` under the lock,
   then record the line as a span event outside the lock.
 - **exit** removes (pops) the span for the event's `exec_id` under the lock,
