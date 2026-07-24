@@ -385,7 +385,7 @@ result — or failure — back to the command they submitted:
 - `failure_submission_indices` maps each entry of `failures` through
   `submission_indices`, yielding the original submission positions of
   the failed commands. Unlike `failures` (positions within the
-  possibly-compacted `results`), it is stable across collect-all and
+  possibly compacted `results`), it is stable across collect-all and
   fail-fast modes.
 
 ## Environment overlay resolution

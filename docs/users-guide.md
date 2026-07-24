@@ -1042,6 +1042,7 @@ with scoped(allowlist=...):
 
 if not result.ok:
     print(f"Failed command indices: {result.failures}")
+    print(f"Original submission positions: {result.failure_submission_indices}")
     print(f"First failure: {result.first_failure}")
 ```
 
@@ -1107,7 +1108,7 @@ The `ConcurrentResult` dataclass provides:
   completed command.
 - `failure_submission_indices`: Tuple mapping each failure back to its
   original submission position. Unlike `failures` (positions within the
-  possibly-compacted `results`), these are stable across collect-all and
+  possibly compacted `results`), these are stable across collect-all and
   fail-fast modes.
 
 ## Performance extensions (optional Rust)
