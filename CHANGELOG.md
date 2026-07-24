@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Breaking changes
+
+- **`ExecHook` import path (breaking):** Import `ExecHook` from top-level
+  `cuprum` or its definition site, `cuprum.events`. The former
+  `cuprum.context.ExecHook` re-export has been removed; only the import path
+  changes, not the hook signature or registration behaviour.
+
 ## [0.2.0] - 2026-06-21
 
 ### Changed

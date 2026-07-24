@@ -648,7 +648,7 @@ Awaitable hook results are scheduled as `asyncio.Task` instances and awaited
 before the run completes.
 
 ```python
-from cuprum import ECHO, ExecEvent, ScopeConfig, scoped, sh
+from cuprum import ECHO, ExecEvent, ExecHook, ScopeConfig, scoped, sh
 from cuprum.sh import ExecutionContext
 
 
@@ -659,7 +659,9 @@ def capture(ev: ExecEvent) -> None:
     events.append(ev)
 
 
-with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), sh.observe(capture):
+hook: ExecHook = capture
+
+with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), sh.observe(hook):
     ctx = ExecutionContext(tags={"run_id": "demo"})
     sh.make(ECHO)("-n", "hello events").run_sync(context=ctx)
 
@@ -668,6 +670,12 @@ exit_events = [ev for ev in events if ev.phase == "exit"]
 assert "hello events" in stdout_lines
 assert exit_events[0].tags["run_id"] == "demo"
 ```
+
+`ExecHook` is defined in `cuprum.events` and re-exported from `cuprum`.
+Import it with `from cuprum import ExecHook` or
+`from cuprum.events import ExecHook`. The former
+`from cuprum.context import ExecHook` path is no longer supported; update that
+import without changing the hook implementation.
 
 `ExecutionContext.tags` is merged into each event's `tags` mapping. Cuprum also
 adds default tags such as the project name and pipeline stage metadata.

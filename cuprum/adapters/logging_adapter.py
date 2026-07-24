@@ -92,7 +92,7 @@ def structured_logging_hook(
     The hook attaches structured ``extra`` data to log records including:
 
     - ``cuprum_phase``: Event phase (plan, start, stdout, stderr, exit)
-    - ``cuprum_program``: Programme being executed
+    - ``cuprum_program``: Program being executed
     - ``cuprum_argv``: Full argument vector
     - ``cuprum_pid``: Process ID (when available)
     - ``cuprum_exit_code``: Exit code (for exit events)
@@ -161,7 +161,7 @@ def _format_message(event: ExecEvent) -> str:
 class JsonLoggingFormatter(logging.Formatter):
     """A JSON formatter for structured log output.
 
-    This formatter serialises log records as JSON objects, suitable for
+    This formatter serializes log records as JSON objects, suitable for
     log aggregation systems. It includes all ``cuprum_*`` extra fields.
 
     Example::

@@ -23,7 +23,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._pipeline_config import _PipelineRunConfig
-    from cuprum._pipeline_internals import _StageObservation
+from cuprum._pipeline_types import _EventDetails, _StageObservation
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -94,8 +94,6 @@ def _create_stage_capture_tasks(
 
         def stderr_on_line(line: str) -> None:
             """Emit a stderr observe event for each captured line."""
-            from cuprum._pipeline_internals import _EventDetails
-
             observation.emit(
                 "stderr",
                 _EventDetails(pid=process.pid, line=line),
@@ -117,8 +115,6 @@ def _create_stage_capture_tasks(
 
         def stdout_on_line(line: str) -> None:
             """Emit a stdout observe event for each captured line."""
-            from cuprum._pipeline_internals import _EventDetails
-
             observation.emit(
                 "stdout",
                 _EventDetails(pid=process.pid, line=line),
