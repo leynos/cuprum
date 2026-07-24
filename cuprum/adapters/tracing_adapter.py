@@ -64,22 +64,21 @@ Example with OpenTelemetry::
 
 from __future__ import annotations
 
-import dataclasses as dc
 import threading
 import typing as typ
 
 from cuprum.adapters._support import (
     _event_common_fields,
-    _LockedStore,
     _log_unhandled_phase,
     _prefixed,
     _project_tag,
 )
+from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.events import ExecEvent, ExecHook
+    from cuprum.events import ExecEvent, ExecHook, ExecId
 
 
 class Span(typ.Protocol):
@@ -170,74 +169,6 @@ class Tracer(typ.Protocol):
         ...  # pylint: disable=unnecessary-ellipsis
 
 
-@dc.dataclass(slots=True)
-class InMemorySpan:
-    """Reference in-memory span for testing and examples."""
-
-    name: str
-    attributes: dict[str, object] = dc.field(default_factory=dict)
-    events: list[tuple[str, dict[str, object]]] = dc.field(default_factory=list)
-    status_ok: bool | None = None
-    ended: bool = False
-
-    def set_attribute(self, key: str, value: object) -> None:
-        """Set a span attribute."""
-        self.attributes[key] = value
-
-    def add_event(
-        self,
-        name: str,
-        attributes: cabc.Mapping[str, object] | None = None,
-    ) -> None:
-        """Add an event to the span."""
-        self.events.append((name, dict(attributes) if attributes else {}))
-
-    def set_status(self, *, ok: bool) -> None:
-        """Set the span status."""
-        self.status_ok = ok
-
-    def end(self) -> None:
-        """End the span."""
-        self.ended = True
-
-
-@dc.dataclass(slots=True)
-class InMemoryTracer(_LockedStore):
-    """Reference in-memory tracer for testing and examples.
-
-    Storage and locking follow the shared
-    :class:`~cuprum.adapters._support._LockedStore` contract: every mutator
-    holds the lock, and ``reset()``
-    clears the store under it.
-
-    Attributes
-    ----------
-    spans:
-        List of all spans created by this tracer.
-    """
-
-    spans: list[InMemorySpan] = dc.field(default_factory=list)
-
-    def start_span(
-        self,
-        name: str,
-        attributes: cabc.Mapping[str, object] | None = None,
-    ) -> InMemorySpan:
-        """Start a new in-memory span."""
-        span = InMemorySpan(
-            name=name,
-            attributes=dict(attributes) if attributes else {},
-        )
-        with self._lock:
-            self.spans.append(span)
-        return span
-
-    @typ.override
-    def _clear(self) -> None:
-        """Clear all collected spans; called under the store lock."""
-        self.spans.clear()
-
-
 class TracingHook:
     """Observe hook that creates OpenTelemetry-style traces.
 
@@ -249,11 +180,30 @@ class TracingHook:
 
     - ``cuprum.program``: The program being executed
     - ``cuprum.argv``: Full argument vector
-    - ``cuprum.pid``: Process ID
+    - ``cuprum.pid``: Process ID (when available)
+    - ``cuprum.cwd``: Working directory (when set)
     - ``cuprum.exit_code``: Exit code (set on exit)
     - ``cuprum.duration_s``: Duration in seconds (set on exit)
-    - ``cuprum.project``: Project name from tags
-    - ``cuprum.pipeline_stage_index``: Pipeline stage index (if applicable)
+    - ``cuprum.project``: Project name from tags (when present)
+    - ``cuprum.pipeline_stage_index``: Pipeline stage index (when present)
+    - ``cuprum.pipeline_stages``: Total pipeline stage count (when present)
+
+    Correlation
+    -----------
+    Active spans are keyed by :attr:`~cuprum.events.ExecEvent.exec_id`, the
+    stable per-execution token Cuprum mints once per execution and repeats on
+    every lifecycle event. This is what lets ``stdout``/``stderr``/``exit``
+    events find their span even when the operating system recycles a process
+    identifier: two executions that share a PID have distinct ``exec_id``
+    values, so their events never cross. The PID is still recorded as the
+    ``cuprum.pid`` span attribute for observability, but it is not used to
+    correlate events.
+
+    Legacy or manually constructed events that carry no ``exec_id`` (``None``)
+    cannot be correlated safely, so the hook deliberately ignores them rather
+    than risk attaching output or exit to an unrelated execution's span. A
+    ``start`` without an ``exec_id`` creates no span; a ``stdout``/``stderr``/
+    ``exit`` without one is dropped.
 
     Parameters
     ----------
@@ -283,7 +233,7 @@ class TracingHook:
         """Initialize the tracing hook with a tracer."""
         self._tracer = tracer
         self._record_output = record_output
-        self._active_spans: dict[int, Span] = {}
+        self._active_spans: dict[ExecId, Span] = {}
         self._lock = threading.Lock()
 
     def __call__(self, event: ExecEvent) -> None:
@@ -302,24 +252,65 @@ class TracingHook:
                 _log_unhandled_phase("tracing", event.phase)
 
     def _handle_start(self, event: ExecEvent) -> None:
-        """Start a new span for command execution."""
-        if event.pid is None:
+        """Start a new span for command execution.
+
+        Spans are keyed on ``event.exec_id`` (see the class ``Correlation``
+        notes). Distinct executions always have distinct tokens, so keying by
+        ``exec_id`` — rather than the recyclable PID — is what keeps a later
+        execution's events off an earlier execution's span.
+
+        Events without an ``exec_id`` cannot be correlated and are ignored, so
+        no untracked span is created for them.
+
+        A pre-existing span for the *same* ``exec_id`` should not occur for a
+        well-formed event stream (tokens are unique per execution). If one is
+        seen — a duplicated or reused token — it is detached from the map and
+        ended as failed. The lookup and the installation of the replacement run
+        together under ``self._lock`` so the exec_id→span mapping transitions
+        atomically: a concurrent ``_handle_output`` or ``_handle_exit`` for the
+        same token observes either the old span or the replacement, never a
+        missing or half-updated entry. The detached stale span is then marked
+        failed and ended *outside* the lock — exactly once, since it is already
+        unreachable via the map — so an arbitrary ``Span`` whose
+        ``set_status``/``end`` blocks on I/O cannot serialise other executions'
+        handlers. The unrelated tracer setup (building attributes and starting
+        the span) likewise runs outside the lock.
+        """
+        exec_id = event.exec_id
+        if exec_id is None:
             return
 
+        # Tracer setup is independent of the span bookkeeping; do it before
+        # taking the lock so unrelated handlers are not blocked on it.
         attributes = self._build_attributes(event)
         span_name = f"cuprum.exec {event.program}"
         span = self._tracer.start_span(span_name, attributes)
 
         with self._lock:
-            self._active_spans[event.pid] = span
+            # Swap atomically: capture any span already mapped to this exec_id
+            # and install the replacement in a single critical section, so a
+            # concurrent handler for the same token sees either the old span or
+            # the replacement, never a missing/partial entry.
+            stale = self._active_spans.get(exec_id)
+            self._active_spans[exec_id] = span
+
+        if stale is not None:
+            # Duplicated/reused exec_id: the prior span is now detached from the
+            # map, so exactly one handler ends it. Mark and end it outside the
+            # lock — a production Span may block on I/O in set_status()/end(),
+            # and holding the lifecycle lock across that would serialise every
+            # other execution's handler.
+            stale.set_status(ok=False)
+            stale.end()
 
     def _handle_output(self, event: ExecEvent) -> None:
-        """Record output as a span event."""
-        if event.pid is None:
+        """Record output as a span event, correlated by ``exec_id``."""
+        exec_id = event.exec_id
+        if exec_id is None:
             return
 
         with self._lock:
-            span = self._active_spans.get(event.pid)
+            span = self._active_spans.get(exec_id)
 
         if span is None:
             return
@@ -331,12 +322,13 @@ class TracingHook:
         span.add_event(event_name, event_attrs)
 
     def _handle_exit(self, event: ExecEvent) -> None:
-        """End the span for command execution."""
-        if event.pid is None:
+        """End the span for command execution, correlated by ``exec_id``."""
+        exec_id = event.exec_id
+        if exec_id is None:
             return
 
         with self._lock:
-            span = self._active_spans.pop(event.pid, None)
+            span = self._active_spans.pop(exec_id, None)
 
         if span is None:
             return

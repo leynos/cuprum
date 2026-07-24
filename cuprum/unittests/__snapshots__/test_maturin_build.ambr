@@ -31,6 +31,7 @@
       'cuprum/adapters/logging_adapter.py',
       'cuprum/adapters/metrics_adapter.py',
       'cuprum/adapters/tracing_adapter.py',
+      'cuprum/adapters/tracing_memory.py',
       'cuprum/builders/__init__.py',
       'cuprum/builders/args.py',
       'cuprum/builders/git.py',
@@ -119,6 +120,9 @@
       'cuprum/unittests/test_timeout_resolution.py',
       'cuprum/unittests/test_token_registration_stateful.py',
       'cuprum/unittests/test_tracing_adapter.py',
+      'cuprum/unittests/test_tracing_span_concurrency.py',
+      'cuprum/unittests/test_tracing_span_lifecycle.py',
+      'cuprum/unittests/test_tracing_span_stateful.py',
     ]),
     'generator': '1.13.3',
     'metadata': dict({

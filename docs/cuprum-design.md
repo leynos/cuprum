@@ -791,6 +791,7 @@ class ExecEvent:
     exit_code: int | None
     duration_s: float | None
     tags: Mapping[str, object]
+    exec_id: ExecId | None  # stable per-execution correlation token
 
 
 ExecHook = Callable[[ExecEvent], None | Awaitable[None]]
@@ -976,6 +977,16 @@ implemented with the following decisions:
 - **Event phases:** Cuprum emits `plan`, `start`, `stdout`, `stderr`, and `exit`
   phases for both single commands and pipeline stages. Pipeline stage events
   are tagged with a stage index and stage count.
+- **Correlation:** every event for one execution carries the same
+  `ExecEvent.exec_id`, a stable token minted once per execution (per pipeline
+  stage for pipelines). Consumers that track per-execution state — such as the
+  tracing adapter's span map — must key on `exec_id` rather than `pid`, because
+  the operating system can recycle a `pid` across executions. `pid` remains
+  available for observability but is not a reliable correlation key. Legacy or
+  manually constructed events may omit `exec_id` (`None`); such events cannot
+  be correlated. Consumers should ignore an uncorrelatable `start` and create
+  no span for it, and likewise ignore ambiguous `stdout`, `stderr`, and `exit`
+  events rather than guess.
 - **Line emission:** `stdout`/`stderr` phases are emitted per decoded line. Line
   terminators are removed, and the final partial line (when output does not end
   with a newline) is still emitted.
@@ -1311,7 +1322,15 @@ design decisions guide these adapters:
 **Tracing adapter specifics:**
 
 - Spans are started on `start` events and ended on `exit` events.
-- Active spans are tracked by PID in a dictionary to correlate start/exit.
+- Active spans are tracked in a dictionary keyed by the per-execution
+  `ExecEvent.exec_id` correlation token, not by PID, so a recycled PID and
+  delayed output/exit events cannot cross between executions. `pid` is kept
+  only as the `cuprum.pid` span attribute for observability. This follows the
+  canonical correlation policy in the structured execution events section
+  (8.1.3).
+- Events without an `exec_id` (legacy or manually constructed) are ambiguous
+  and are ignored: no span is created for such a `start`, and their
+  `stdout`/`stderr`/`exit` events are dropped rather than guessed from PID.
 - Output lines can optionally be recorded as span events (controlled by
   `record_output` parameter).
 - Span status is set based on exit code (OK for 0, ERROR otherwise).
