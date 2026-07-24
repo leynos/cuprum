@@ -54,6 +54,7 @@ pub(crate) fn try_splice_pump(
     // the loop below treats it as fatal like any other error.
     let first = splice_once(reader_fd, writer_fd, chunk_size);
     if matches!(&first, Err(e) if is_splice_unsupported(e)) {
+        tracing::debug!("splice unsupported for these descriptors; using read/write fallback");
         return None;
     }
     Some(splice_loop(reader_fd, writer_fd, chunk_size, first))
@@ -103,7 +104,9 @@ fn splice_once_with(
             Ok(transferred) => {
                 return usize::try_from(transferred).map_err(|_| PumpError::LengthOverflow);
             }
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                tracing::trace!("splice interrupted by a signal (EINTR); retrying");
+            }
             Err(err) => return Err(PumpError::from(err)),
         }
     }
@@ -121,9 +124,30 @@ fn splice_loop(
     fd_in: libc::c_int,
     fd_out: libc::c_int,
     chunk_size: usize,
-    mut outcome: Result<usize, PumpError>,
+    first: Result<usize, PumpError>,
+) -> Result<u64, PumpError> {
+    accumulate_splices(
+        first,
+        || splice_once(fd_in, fd_out, chunk_size),
+        || drain_reader(fd_in, chunk_size),
+    )
+}
+
+/// Accumulate transferred bytes across splice outcomes until EOF or error.
+///
+/// This holds the loop's control flow with its side effects injected: `next`
+/// yields each subsequent outcome (`splice_once` in production) and `drain`
+/// empties the reader after a broken pipe (`drain_reader` in production).
+/// Injecting them lets the accumulation and `Ok(0)` / `Ok(n)` / non-fatal /
+/// fatal transitions be property-tested without real descriptors, while
+/// production wiring keeps the single canonical loop.
+fn accumulate_splices(
+    first: Result<usize, PumpError>,
+    mut next: impl FnMut() -> Result<usize, PumpError>,
+    mut drain: impl FnMut() -> Result<(), PumpError>,
 ) -> Result<u64, PumpError> {
     let mut total = 0_u64;
+    let mut outcome = first;
 
     loop {
         match outcome {
@@ -134,12 +158,13 @@ fn splice_loop(
             }
             Err(e) if e.is_nonfatal_write() => {
                 // Broken pipe: drain reader and return bytes written so far.
-                drain_reader(fd_in, chunk_size)?;
+                tracing::debug!(bytes_transferred = total, "broken pipe; draining reader");
+                drain()?;
                 break;
             }
             Err(e) => return Err(e),
         }
-        outcome = splice_once(fd_in, fd_out, chunk_size);
+        outcome = next();
     }
 
     Ok(total)
@@ -176,178 +201,4 @@ fn is_splice_unsupported(err: &PumpError) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    //! Behavioural tests for the unified splice loop and the EINTR-correct
-    //! drain: full transfer between pipes, fallback signalling for
-    //! unsupported descriptor types, and broken-pipe draining.
-
-    use std::fs::File;
-    use std::io;
-    use std::os::fd::{AsRawFd, OwnedFd};
-
-    use proptest::prelude::*;
-    use rstest::{fixture, rstest};
-    use tempfile::NamedTempFile;
-
-    use super::{drain_reader, splice_once_with, try_splice_pump};
-    use crate::errors::PumpError;
-    use crate::test_support::{make_pipe, read_all_from, unwrap_ok, write_all_to};
-
-    /// A connected `pipe(2)` pair: `(read_end, write_end)`.
-    type PipePair = (OwnedFd, OwnedFd);
-
-    /// A `pipe(2)` pair as an [`rstest`] fixture wrapping
-    /// [`crate::test_support::make_pipe`].
-    ///
-    /// Exposing the shared pipe setup as a fixture keeps its construction in
-    /// one place; tests needing several independent pipes request it once per
-    /// `#[from(pipe)]` parameter.
-    #[fixture]
-    fn pipe() -> PipePair {
-        make_pipe()
-    }
-
-    #[rstest]
-    fn splice_transfers_all_bytes_between_pipes(
-        #[from(pipe)] source: PipePair,
-        #[from(pipe)] sink: PipePair,
-    ) {
-        let (source_read, source_write) = source;
-        let (sink_read, sink_write) = sink;
-        let payload = b"unified splice loop payload";
-
-        write_all_to(&source_write, payload);
-        drop(source_write); // EOF for the splice loop.
-
-        let outcome = try_splice_pump(&source_read, &sink_write, 4096);
-        drop(sink_write); // EOF for the verification read.
-
-        let expected_len = unwrap_ok(u64::try_from(payload.len()));
-        match outcome {
-            Some(Ok(transferred)) => {
-                assert_eq!(transferred, expected_len);
-            }
-            other => panic!("expected Some(Ok(_)) from pipe splice, got {other:?}"),
-        }
-        assert_eq!(read_all_from(&sink_read), payload);
-    }
-
-    #[rstest]
-    fn unsupported_descriptors_signal_fallback() {
-        // Unique temp files avoid name collisions between concurrent test
-        // runs; each `NamedTempFile` removes itself on drop, so a mid-test
-        // panic leaves nothing behind.
-        let reader_file = unwrap_ok(NamedTempFile::new());
-        let writer_file = unwrap_ok(NamedTempFile::new());
-        unwrap_ok(std::fs::write(reader_file.path(), b"file payload"));
-        let reader = OwnedFd::from(unwrap_ok(File::open(reader_file.path())));
-        let writer = OwnedFd::from(unwrap_ok(File::create(writer_file.path())));
-
-        // Two regular files cannot splice; the first call must signal the
-        // read/write fallback rather than erroring.
-        let outcome = try_splice_pump(&reader, &writer, 4096);
-        assert!(
-            outcome.is_none(),
-            "expected fallback signal, got {outcome:?}"
-        );
-    }
-
-    #[rstest]
-    fn broken_pipe_drains_reader_and_reports_transferred_bytes(
-        #[from(pipe)] source: PipePair,
-        #[from(pipe)] sink: PipePair,
-    ) {
-        let (source_read, source_write) = source;
-        let (sink_read, sink_write) = sink;
-        let payload = b"bytes that can no longer be delivered";
-
-        write_all_to(&source_write, payload);
-        drop(source_write);
-        drop(sink_read); // Break the downstream pipe before pumping.
-
-        let outcome = try_splice_pump(&source_read, &sink_write, 4096);
-        match outcome {
-            Some(Ok(0)) => {}
-            other => panic!("expected Some(Ok(0)) after broken pipe, got {other:?}"),
-        }
-
-        // The drain must have consumed the source to EOF so upstream writers
-        // cannot block on a full pipe buffer.
-        let leftover = read_all_from(&source_read);
-        assert!(
-            leftover.is_empty(),
-            "reader must be drained, got {leftover:?}"
-        );
-    }
-
-    #[rstest]
-    fn drain_reader_consumes_to_eof(pipe: PipePair) {
-        let (read_end, write_end) = pipe;
-        write_all_to(&write_end, b"residual data");
-        drop(write_end);
-
-        unwrap_ok(drain_reader(read_end.as_raw_fd(), 8));
-
-        let leftover = read_all_from(&read_end);
-        assert!(leftover.is_empty(), "drain must consume the pipe to EOF");
-    }
-
-    #[rstest]
-    fn splice_once_retries_after_interruption() {
-        // A signal delivered mid-transfer surfaces as `EINTR`; the syscall
-        // wrapper must re-issue the splice rather than fail. Inject one
-        // interruption, then a successful transfer, and confirm the retry.
-        let mut attempts = 0_u8;
-
-        let transferred = unwrap_ok(splice_once_with(|| {
-            attempts = attempts.saturating_add(1);
-            if attempts == 1 {
-                return Err(io::Error::from(io::ErrorKind::Interrupted));
-            }
-            Ok(7)
-        }));
-
-        assert_eq!(transferred, 7);
-        assert_eq!(attempts, 2);
-    }
-
-    proptest! {
-        /// Across any number of leading `EINTR`s and either terminal outcome,
-        /// `splice_once_with` issues exactly one syscall per attempt and
-        /// returns the first non-interrupted result. This exercises the retry
-        /// state space the deterministic case above only samples at one point.
-        #[test]
-        fn splice_once_with_retries_through_interruptions(
-            interruptions in 0_u32..64,
-            terminal_ok in any::<bool>(),
-        ) {
-            let mut remaining = interruptions;
-            let mut calls = 0_u32;
-
-            let result = splice_once_with(|| {
-                calls = calls.saturating_add(1);
-                if remaining > 0 {
-                    remaining = remaining.saturating_sub(1);
-                    return Err(io::Error::from(io::ErrorKind::Interrupted));
-                }
-                if terminal_ok {
-                    Ok(7)
-                } else {
-                    Err(io::Error::from(io::ErrorKind::BrokenPipe))
-                }
-            });
-
-            prop_assert_eq!(calls, interruptions.saturating_add(1));
-            match result {
-                Ok(transferred) => {
-                    prop_assert!(terminal_ok);
-                    prop_assert_eq!(transferred, 7);
-                }
-                Err(err) => {
-                    prop_assert!(!terminal_ok);
-                    prop_assert!(matches!(err, PumpError::Io(_)));
-                }
-            }
-        }
-    }
-}
+mod tests;

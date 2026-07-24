@@ -867,8 +867,12 @@ signal delivered mid-transfer does not spuriously fail an otherwise-healthy
 pump. The retry loop is factored into `splice_once_with`, which a regression
 test drives with an injected `EINTR`, mirroring the `read_raw_fd` coverage, and
 a proptest exercises the retry across any number of interruptions and either
-terminal outcome. Bounded model-checking of the loop accumulation and the drain
-policy is tracked separately in issues `#87` and `#88`.
+terminal outcome. The accumulation loop is factored the same way into
+`accumulate_splices`, whose `next` (splice) and `drain` side effects are
+injected so a proptest can assert the `Ok(0)` / `Ok(n)` / broken-pipe-drain /
+fatal transitions over generated outcome sequences. Exhaustive bounded
+model-checking of these paths with Kani remains tracked in issues `#87` and
+`#88`.
 
 `drain_reader` routes through the canonical raw-fd read helper
 (`io_utils::read_raw_fd`), so it shares the Unix read policy with the
@@ -878,17 +882,18 @@ Behavioural tests in the module cover full pipe-to-pipe transfer, the fallback
 signal for regular files, broken-pipe draining, the drain's EOF termination,
 and the syscall-level `EINTR` retry.
 
-These outcomes and `PumpError` values are intentionally returned to the Python
-boundary, where command observation owns telemetry, so this internal Rust path
-adds no second logging or metrics surface. That silence is deliberate at the
-three boundaries where instrumentation might be expected — support detection
-(the `EINVAL` fallback), the `splice_once` `EINTR` retry, and the broken-pipe
-reader drain: emitting per-syscall telemetry inside the crate would duplicate
-the Python boundary's observation and add high-frequency noise, since an
-`EINTR` retry can fire repeatedly under signal pressure. The crate therefore
-carries no `tracing` or `metrics` dependency, and any operator-facing signal
-for these paths belongs at the Python command-observation boundary rather than
-here.
+The path emits bounded `tracing` diagnostics at the three boundaries operators
+need visibility into: support detection logs a `debug` event when the
+descriptors cannot splice and the read/write fallback takes over; the
+`splice_once` `EINTR` retry logs a `trace` event per re-issue (the lowest
+level, filtered out by default, so signal-heavy workloads stay quiet unless
+trace is enabled); and the broken-pipe drain logs a `debug` event carrying the
+`bytes_transferred` so far. Messages are static and low-cardinality. Following
+the library convention, the crate emits instrumentation but installs no
+subscriber — the embedding application (the Python command boundary) owns
+subscriber configuration and higher-level command observation, and `PumpError`
+values with transfer counts are still returned across that boundary as the
+primary signal.
 
 Unix Rust tests share pipe creation, duplicated-file wrapping, result helpers,
 and descriptor-state checks through `test_support`. Re-use that module for
