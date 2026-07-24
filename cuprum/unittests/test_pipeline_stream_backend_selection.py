@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import typing as typ
+from unittest import mock
 
 import pytest
 
@@ -225,10 +226,18 @@ class TestPumpStreamDispatch:
         ):
             del read_write_fd, write_read_fd
             reader = typ.cast("asyncio.StreamReader", object())
+            writer = mock.MagicMock(spec=asyncio.StreamWriter)
+            writer.wait_closed = mock.AsyncMock()
             monkeypatch.setattr(
                 _pipeline_streams,
                 "_extract_stream_fd",
-                lambda stream: read_fd if stream is reader else write_fd,
+                lambda stream: (
+                    read_fd
+                    if stream is reader
+                    else write_fd
+                    if stream is writer
+                    else None
+                ),
             )
 
             calls = {"rust_pump": 0, "python_pump": 0}
@@ -250,13 +259,14 @@ class TestPumpStreamDispatch:
             )
             configure_pump_stream_dispatch_for_testing(python_pump=fake_python_pump)
 
-            asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, None))
+            asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
             original_reader_blocking = _pipeline_streams.os.get_blocking(read_fd)
             original_writer_blocking = _pipeline_streams.os.get_blocking(write_fd)
+            asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, None))
 
         assert calls["rust_pump"] == 1, "expected Rust pump path to execute once"
-        assert calls["python_pump"] == 0, (
-            "did not expect Python fallback when Rust pump succeeds"
+        assert calls["python_pump"] == 1, (
+            "expected Python fallback when no writer is available"
         )
         assert not original_reader_blocking, (
             "expected original reader FD to remain non-blocking"

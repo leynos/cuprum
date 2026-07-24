@@ -23,8 +23,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._pipeline_config import _PipelineRunConfig
-    from cuprum._pipeline_internals import _StageObservation
-from cuprum._pipeline_types import _EventDetails
+from cuprum._pipeline_types import _EventDetails, _StageObservation
 
 
 @dc.dataclass(frozen=True, slots=True)
