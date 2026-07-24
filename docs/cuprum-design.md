@@ -1048,6 +1048,26 @@ Semantics (aligned with `subprocess.run` and plumbum):
   capture rules as successful runs (final stage stdout plus all stderr when
   capture is enabled).
 
+### 8.1.5 Subprocess execution module boundaries
+
+The private subprocess implementation is divided by lifecycle concern while
+preserving the `SafeCmd.run()` execution contract:
+
+- `cuprum/_subprocess_execution.py` owns runner orchestration, spawning, and
+  stdout/stderr consumer wiring.
+- `cuprum/_subprocess_stdin.py` owns writing supplied stdin, closing the pipe,
+  and early-close diagnostics through the `cuprum.stdin` logger.
+- `cuprum/_subprocess_timeout.py` owns timeout data and translation to the
+  public `TimeoutExpired` error, plus exit-event helpers shared with normal
+  completion.
+
+The runner composes the specialized modules; neither specialized module owns
+public command APIs or creates subprocesses. This separation keeps the timeout
+and stdin lifecycles independently testable without altering observable
+execution, cancellation, timeout, or event semantics. The accepted rationale
+and alternatives are recorded in
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md).
+
 Figure 3: Sequence of start/exit logging hook execution
 
 ```mermaid

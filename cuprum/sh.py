@@ -30,9 +30,9 @@ from cuprum._pipeline_internals import (
     _StageObservation,
 )
 from cuprum._pipeline_streams import _prepare_pipeline_config
+from cuprum._subprocess_context import _resolve_timeout
 from cuprum._subprocess_execution import (
     _execute_subprocess,
-    _resolve_timeout,
     _SubprocessExecution,
 )
 from cuprum.catalogue import (
