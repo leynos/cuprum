@@ -796,6 +796,10 @@ class ExecEvent:
 ExecHook = Callable[[ExecEvent], None | Awaitable[None]]
 ```
 
+`ExecEvent` and `ExecHook` are defined in `cuprum.events` and re-exported from
+top-level `cuprum`. The context package consumes `ExecHook` for annotations and
+registration but does not own or re-export the type.
+
 The concrete shape is an implementation detail, but the design assumes:
 
 - Events can be consumed synchronously or asynchronously.
