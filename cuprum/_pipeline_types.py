@@ -15,7 +15,6 @@ import time
 import typing as typ
 
 from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
-from cuprum.context import current_context
 from cuprum.events import ExecEvent
 
 if typ.TYPE_CHECKING:
@@ -36,17 +35,6 @@ class _ExecutionHooks:
     before_hooks: tuple[BeforeHook, ...]
     after_hooks: tuple[AfterHook, ...]
     observe_hooks: tuple[ExecHook, ...]
-
-
-def _run_before_hooks(cmd: SafeCmd) -> _ExecutionHooks:
-    """Collect hooks for a command after enforcing the current allowlist."""
-    ctx = current_context()
-    ctx.check_allowed(cmd.program)
-    return _ExecutionHooks(
-        before_hooks=ctx.before_hooks,
-        after_hooks=ctx.after_hooks,
-        observe_hooks=ctx.observe_hooks,
-    )
 
 
 @dc.dataclass(frozen=True, slots=True)

@@ -8,7 +8,7 @@ completion waiting with optional timeouts, and per-stage
 finalization: when a stage fails or an after-hook raises, pending
 observe-hook tasks must still be drained and every independent
 failure preserved, grouping after-hook and task failures into a
-``BaseExceptionGroup``. It collaborates with ``cuprum._pipeline_spawn``,
+``BaseExceptionGroup``. It collaborates with ``cuprum._process_lifecycle``,
 ``cuprum._pipeline_streams``, ``cuprum._pipeline_types``,
 ``cuprum._pipeline_wait``, ``cuprum._observability``, and
 ``cuprum.context``, and is invoked by ``cuprum.sh`` and
@@ -42,76 +42,17 @@ from cuprum._pipeline_types import (
     _PipelineSpawnResult,
     _PipelineStageResultInputs,
     _StageObservation,
-    _run_before_hooks,
 )
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
-
-if typ.TYPE_CHECKING:
-    import types
-
-    from cuprum.context import CuprumContext
-    from cuprum.sh import CommandResult, PipelineResult, SafeCmd
-
-_MIN_PIPELINE_STAGES = 2
-_PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
-
-
 from cuprum._process_lifecycle import _spawn_pipeline_processes
+from cuprum.context import current_context
 
-"""Internal pipeline execution coordination and fail-fast semantics.
-This module is the private machinery behind ``cuprum.sh``'s
-``Pipeline.run``/``run_sync``. It ties together allowlist enforcement
-completion waiting with optional timeouts, and per-stage
-``CommandResult`` assembly. It exists chiefly to centralise
-finalization: when a stage fails or an after-hook raises, pending
-observe-hook tasks must still be drained and every independent
-failure preserved, grouping after-hook and task failures into a
-``cuprum._pipeline_wait``, ``cuprum._observability``, and
-``cuprum.context``, and is invoked by ``cuprum.sh`` and
-``cuprum._subprocess_execution``/``_process_lifecycle``.
-"""
 if typ.TYPE_CHECKING:
     import types
-    from cuprum.context import CuprumContext
-    from cuprum.sh import CommandResult, PipelineResult, SafeCmd
-_MIN_PIPELINE_STAGES = 2
-_PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
 
+    from cuprum.context import CuprumContext
+    from cuprum.sh import CommandResult, PipelineResult, SafeCmd
 
-"""Internal pipeline execution coordination and fail-fast semantics.
-This module is the private machinery behind ``cuprum.sh``'s
-``Pipeline.run``/``run_sync``. It ties together allowlist enforcement
-completion waiting with optional timeouts, and per-stage
-``CommandResult`` assembly. It exists chiefly to centralise
-finalization: when a stage fails or an after-hook raises, pending
-observe-hook tasks must still be drained and every independent
-failure preserved, grouping after-hook and task failures into a
-``cuprum._pipeline_wait``, ``cuprum._observability``, and
-``cuprum.context``, and is invoked by ``cuprum.sh`` and
-``cuprum._subprocess_execution``/``_process_lifecycle``.
-"""
-if typ.TYPE_CHECKING:
-    import types
-    from cuprum.context import CuprumContext
-    from cuprum.sh import CommandResult, PipelineResult, SafeCmd
-_MIN_PIPELINE_STAGES = 2
-_PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
-"""Internal pipeline execution coordination and fail-fast semantics.
-This module is the private machinery behind ``cuprum.sh``'s
-``Pipeline.run``/``run_sync``. It ties together allowlist enforcement
-completion waiting with optional timeouts, and per-stage
-``CommandResult`` assembly. It exists chiefly to centralise
-finalization: when a stage fails or an after-hook raises, pending
-observe-hook tasks must still be drained and every independent
-failure preserved, grouping after-hook and task failures into a
-``cuprum._pipeline_wait``, ``cuprum._observability``, and
-``cuprum.context``, and is invoked by ``cuprum.sh`` and
-``cuprum._subprocess_execution``/``_process_lifecycle``.
-"""
-if typ.TYPE_CHECKING:
-    import types
-    from cuprum.context import CuprumContext
-    from cuprum.sh import CommandResult, PipelineResult, SafeCmd
 _MIN_PIPELINE_STAGES = 2
 _PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
 
