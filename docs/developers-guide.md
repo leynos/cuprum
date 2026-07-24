@@ -817,8 +817,10 @@ one boundary of behaviour:
     `CUPRUM_STREAM_BACKEND` preservation under concurrent, interleaved access.
   - `cuprum/unittests/_tee_profile_concurrency_support.py` — the instrumented
     lock, coordinating backend selectors, and race harness, plus the timeout
-    constants, backend-availability helpers, Hypothesis backend strategies, and
-    the thread join/assert helper used by those tests.
+    constants and the thread join/assert helper used by those tests.
+  - `cuprum/unittests/_tee_profile_backend_support.py` — backend-availability
+    detection and the Hypothesis backend strategies/parametrization shared by
+    the concurrency and reentrancy modules.
 - `cuprum/unittests/test_tee_profile_worker_selector_metrics.py` covers the
   selector observability metrics (`lock_wait_seconds`,
   `reentrant_rejection_count`): their accumulation, thread-locality, reset per

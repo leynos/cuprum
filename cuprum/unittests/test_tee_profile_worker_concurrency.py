@@ -13,11 +13,13 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from benchmarks import tee_profile_worker
+from cuprum.unittests._tee_profile_backend_support import (
+    _backend_lists,
+    _backend_pairs,
+)
 from cuprum.unittests._tee_profile_concurrency_support import (
     _EVENT_WAIT_TIMEOUT_SECONDS,
     _assert_backend_pair_completes,
-    _backend_lists,
-    _backend_pairs,
     _BackendEnvironmentRace,
     _CheckpointBackendSelector,
     _join_and_assert_finished,
