@@ -764,11 +764,22 @@ The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 
 - `cuprum_phase`: Event phase (plan, start, stdout, stderr, exit)
 - `cuprum_program`: Program being executed
-- `cuprum_argv`: Full argument vector
+- `cuprum_argv`: The command's argument vector, recorded verbatim (see the
+  security note below)
 - `cuprum_pid`: Process ID (when available)
 - `cuprum_exit_code`: Exit code (for exit events)
 - `cuprum_duration_s`: Duration in seconds (for exit events)
 - `cuprum_tags`: Event tags as a dictionary
+
+> **Security note — argument logging.** `cuprum_argv` is emitted verbatim and
+> is **not** redacted. Any secret passed on the command line — a
+> `--password=…`, an API token, a connection string — is written into the log
+> record (and into the `JsonLoggingFormatter` output) exactly as supplied. The
+> same applies to the plain-text `logging_hook()`. Prefer passing secrets via
+> the environment or files rather than as arguments; where arguments may carry
+> sensitive values, wrap `structured_logging_hook()` in a custom observe hook
+> that drops or masks `cuprum_argv` before the record reaches configured
+> handlers, and scope log destinations accordingly.
 
 For JSON output suitable for log aggregation systems, use the
 `JsonLoggingFormatter`:
@@ -1475,8 +1486,11 @@ The continuous integration (CI) workflows run the following checks:
   - It compares each scenario's within-run `rust_mean / python_mean` ratio
     against the latest successful `main` baseline artefact when one exists, so
     runner-speed differences between CI jobs cancel out.
-  - It skips comparison when the saved baseline uses an older benchmark profile
-    shape because single-run and batched-worker timings are not comparable.
+  - It places matched Python/Rust commands next to each other and measures each
+    command ten times to reduce temporal runner drift and outlier sensitivity.
+  - It skips comparison and writes a skip report when the saved baseline uses an
+    older benchmark profile shape, because different sampling protocols and
+    worker timings are not comparable.
   - Its baseline fetch helper follows GitHub’s signed archive redirects
     without forwarding GitHub-only authentication headers to the storage host.
   - It generates a Python-versus-Rust comparison report from the candidate

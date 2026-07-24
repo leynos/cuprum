@@ -15,43 +15,16 @@ import os
 import threading
 import typing as typ
 
-from tests.helpers.stream_pipes import _pipe_pair, _read_all, _safe_close
+from tests.helpers.stream_pipes import (
+    _pipe_pair,
+    _pump_rust_stream_payload,
+    _read_all,
+    _safe_close,
+)
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
     from types import ModuleType
-
-
-def _pump_payload_threaded(
-    streams: ModuleType,
-    payload: bytes,
-    *,
-    buffer_size: int | None = None,
-) -> tuple[bytes, int]:
-    """Pump payload through the Rust stream using a writer thread to avoid deadlock."""
-    with _pipe_pair() as (in_read, in_write, out_read, out_write):
-
-        def writer() -> None:
-            """Write the payload into the pipe from a worker thread."""
-            view = memoryview(payload)
-            while view:
-                written = os.write(in_write, view)
-                view = view[written:]
-            _safe_close(in_write)
-
-        write_thread = threading.Thread(target=writer)
-        write_thread.start()
-
-        kwargs: dict[str, int] = {}
-        if buffer_size is not None:
-            kwargs["buffer_size"] = buffer_size
-        transferred = streams.rust_pump_stream(in_read, out_write, **kwargs)
-        _safe_close(out_write)
-
-        output = _read_all(out_read)
-        write_thread.join()
-
-    return output, transferred
 
 
 class TestSpliceOptimization:
@@ -65,7 +38,7 @@ class TestSpliceOptimization:
         # 1 MB payload to exercise splice with multiple chunks
         payload = bytes(range(256)) * (1024 * 1024 // 256)
 
-        output, transferred = _pump_payload_threaded(rust_streams, payload)
+        output, transferred = _pump_rust_stream_payload(rust_streams, payload)
 
         assert output == payload, "expected large payload to round-trip"
         assert transferred == len(payload), "expected all bytes transferred"
@@ -100,7 +73,7 @@ class TestSpliceOptimization:
         # 256 KB payload with 4 KB buffer
         payload = bytes(range(256)) * 1024
 
-        output, transferred = _pump_payload_threaded(
+        output, transferred = _pump_rust_stream_payload(
             rust_streams,
             payload,
             buffer_size=4096,

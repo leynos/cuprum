@@ -10,6 +10,7 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md)
 - [ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md)
 - [ADR-005: Unify Rust availability probe](adr-005-unified-rust-availability-probe.md)
+- [ADR-006: Split cuprum/context.py into a context package](adr-006-context-package-split.md)
 
 ## Rust availability probing
 
@@ -140,6 +141,29 @@ uv run pytest -q cuprum/unittests/test_line_splitting.py
 
 Run `make test` before committing so the stream behaviour and the pure helper
 contracts stay aligned.
+
+## `cuprum/context/` package layout
+
+`cuprum/context.py` exceeded the 400-line ceiling and mixed four concerns with
+different audiences and change cadences, so it is now a package whose public
+surface is re-exported unchanged from `cuprum/context/__init__.py`:
+
+- `cuprum/context/env_overlay.py` — pure overlay merging
+  (`merge_env_overlays`, `resolve_env`, `_coerce_env_overlay`); no `ContextVar`
+  dependency.
+- `cuprum/context/core.py` — the domain dataclasses (`CuprumContext`,
+  `ScopeConfig`), the `ContextError` package-level root of the domain exception
+  hierarchy and its `ForbiddenProgramError` subclass, timeout validation, and
+  the hook type aliases.
+- `cuprum/context/state.py` — the `ContextVar` plumbing (`current_context`,
+  `get_context`, and the internal set/reset helpers).
+- `cuprum/context/registration.py` — `scoped`, the `_TokenRegistration`
+  base, the registration handles, and the `allow`/`before`/`after`/`env`/
+  `observe` factories.
+
+Importers are unaffected: `from cuprum.context import …` continues to work for
+the whole public `__all__`. Keep each module under 400 lines; new context
+features go in the module matching their concern.
 
 ## Pipeline execution helper contracts
 
@@ -284,6 +308,31 @@ properties and redacted per-phase syrupy snapshots.
 worker count to enable xdist explicitly. Set `BUILD_JOBS=-jN` to pass the same
 count to Rust test commands and, through `CARGO_JOB_ENV`, to both
 `RAYON_NUM_THREADS` and `CARGO_BUILD_JOBS`.
+
+## Canonical `_TokenRegistration` handle base
+
+All `ContextVar`-backed scope-registration handles — `AllowRegistration`,
+`HookRegistration`, and `EnvRegistration` in `cuprum/context/registration.py` —
+derive from one canonical `_TokenRegistration` base. The base owns the `_token`/
+`_detached` pair, the idempotent `detach()`, the context-manager protocol, and
+the `_install(new_ctx)` step that sets the derived context and captures the
+restoration token. Subclasses implement only the context-derivation step in
+`__init__`. The consolidated "Token-based Restoration" docstring lives on the
+base.
+
+Re-use policy: any new scope-registration handle must derive from
+`_TokenRegistration` and confine itself to deriving the new context; the
+restoration protocol is subtle (`ContextVar` token discipline), so a divergent
+copy is a latent correctness hazard. Note that `LoggingHookRegistration`
+(`cuprum/logging_hooks.py`) is a *pair* handle: it composes two
+`HookRegistration` instances and detaches them in reverse order; it
+deliberately carries no token of its own.
+
+`cuprum/unittests/test_token_registration_stateful.py` verifies the token
+discipline with a Hypothesis `RuleBasedStateMachine` driving randomized
+register/detach sequences across all token-backed handle types (nesting, context-manager
+exit, LIFO detach, double-detach), plus an example test pinning the
+documented non-LIFO hazard.
 
 ## Canonical stage-observation inputs
 
@@ -435,8 +484,8 @@ committing.
 
 The user-facing `env(...)` context manager and the related `ScopeConfig` field
 carry an *overlay-only* mapping that is layered on top of the live `os.environ`
-at subprocess spawn time. The implementation sits in `cuprum/context.py` and is
-built on three cooperating helpers:
+at subprocess spawn time. The implementation sits in
+`cuprum/context/env_overlay.py` and is built on three cooperating helpers:
 
 - `merge_env_overlays(parent, child)` (public) returns an immutable
   `MappingProxyType` whose entries are `parent` updated by `child`. Either
@@ -495,7 +544,10 @@ pipeline execution, reducing Python interpreter startup noise in the ratchet.
 The ratchet itself compares each scenario's within-run
 `rust_mean / python_mean` ratio between the baseline and candidate runs, so
 runner-speed differences and residual startup overhead cancel out of the
-comparison. Dry-run plans record `benchmark_profile_version` and
+comparison. Its CI profile places each matched Python/Rust scenario pair next
+to each other and records ten measured runs per command, reducing temporal
+runner drift and three-sample outliers. Dry-run plans record
+`benchmark_profile_version` and
 `worker_iterations`; ratchet comparison skips older baseline artefacts whose
 profile metadata does not match the current benchmark shape.
 
@@ -905,12 +957,14 @@ with `thiserror`:
 - `Io(io::Error)` — an operating-system I/O failure (transparent wrapper).
 
 Conversion to a Python exception happens in exactly one place
-(`From<PumpError> for PyErr`): `Io` maps through `pyo3`'s standard `io::Error`
-translation, and the overflow variants surface as `OSError`. The non-fatal
-write classification (broken pipe / connection reset) lives on the enum as
-`PumpError::is_nonfatal_write`, replacing the free function the splice and
-read/write paths previously shared. New failure conditions get a variant here
-rather than a stringly-typed `io::Error::other(...)`.
+(`From<PumpError> for PyErr`): `Io` preserves a raw operating-system error code
+as Python's machine-readable `OSError.errno`, while errors without a raw code
+use `pyo3`'s standard `io::Error` translation. The overflow variants surface
+as `OSError`. The non-fatal write classification (broken pipe / connection
+reset) lives on the enum as `PumpError::is_nonfatal_write`, replacing the free
+function the splice and read/write paths previously shared. New failure
+conditions get a variant here rather than a stringly-typed
+`io::Error::other(...)`.
 
 ## Rust splice-loop and drain contract
 

@@ -152,6 +152,23 @@ def test_load_plan_rejects_old_profile_version(tmp_path: pth.Path) -> None:
         load_plan(path)
 
 
+def test_load_plan_rejects_immediate_predecessor_profile_version(
+    tmp_path: pth.Path,
+) -> None:
+    """The immediate predecessor profile version is incompatible.
+
+    Baselines collected under ``pipeline-worker-release-ratio-v2`` used the
+    noisier v2 command order, so the current v3 ratchet must reject them even
+    though the version string differs by a single revision.
+    """
+    payload = _plan_payload()
+    payload["benchmark_profile_version"] = "pipeline-worker-release-ratio-v2"
+    path = _write_json(tmp_path=tmp_path, filename="plan.json", payload=payload)
+
+    with pytest.raises(IncompatibleBenchmarkProfileError, match="incompatible"):
+        load_plan(path)
+
+
 def test_load_plan_rejects_single_run_worker_iteration_metadata(
     tmp_path: pth.Path,
 ) -> None:

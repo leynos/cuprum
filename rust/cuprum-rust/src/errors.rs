@@ -60,6 +60,10 @@ impl PumpError {
 impl From<PumpError> for PyErr {
     fn from(err: PumpError) -> Self {
         match err {
+            // Delegate to PyO3's conversion so I/O failures keep their
+            // specific Python exception subclasses (e.g. ``BrokenPipeError``,
+            // ``FileNotFoundError``) instead of collapsing to a base
+            // ``OSError``.
             PumpError::Io(io_err) => io_err.into(),
             other @ (PumpError::LengthOverflow | PumpError::BufferRangeExceeded) => {
                 PyOSError::new_err(other.py_os_error_message().unwrap_or("stream pump failed"))
