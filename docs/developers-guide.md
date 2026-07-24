@@ -825,21 +825,23 @@ one boundary of behaviour:
   hot-path execution, result accounting, and snapshotted worker output.
 - `cuprum/unittests/test_tee_profile_worker_cli.py` covers CLI invocation, the
   JSON payload shape, and `TeeProfileWorkerConfig` validation errors.
-- The `_EnvBackendSelector` concurrency coverage is itself split across three
-  modules sharing common scaffolding, keeping each file's responsibility count
-  within the cohesion budget:
+- The `_EnvBackendSelector` concurrency coverage is itself split across two
+  modules sharing a common support module, keeping each file's responsibility
+  count within the cohesion budget:
   - `cuprum/unittests/test_tee_profile_worker_selector_reentrancy.py` — the
     `_BACKEND_LOCK` `RLock` reentrancy guarantee, plus same-thread re-entrant
     selector rejection, recovery, and the structured warning log (snapshot).
-  - `cuprum/unittests/test_tee_profile_worker_concurrent_workers.py` —
-    concurrent `run_tee_profile_worker` race-freedom across backend pairs.
-  - `cuprum/unittests/test_tee_profile_worker_env_preservation.py` —
+  - `cuprum/unittests/test_tee_profile_worker_concurrency.py` — concurrent
+    `run_tee_profile_worker` race-freedom across backend pairs and
     `CUPRUM_STREAM_BACKEND` preservation under concurrent, interleaved access.
-  - `cuprum/unittests/_tee_profile_worker_test_helpers.py` — the instrumented
-    lock, coordinating backend selectors, and race harness used by the
-    env-preservation tests; timeout constants, backend-availability helpers,
-    Hypothesis backend strategies, and the thread join/assert helper live in
-    `cuprum/unittests/conftest.py`.
+  - `cuprum/unittests/_tee_profile_concurrency_support.py` — the coordinating
+    backend selectors and race harness, plus the timeout constants, worker
+    plumbing, and the thread join/assert helper used by those tests.
+  - `cuprum/unittests/_tee_profile_signalling_lock.py` — the instrumented
+    `_SignallingRLock` wrapper that flags first-observed lock contention.
+  - `cuprum/unittests/_tee_profile_backend_support.py` — backend-availability
+    detection and the Hypothesis backend strategies/parametrization shared by
+    the concurrency and reentrancy modules.
 - `cuprum/unittests/test_tee_profile_worker_selector_metrics.py` covers the
   selector observability metrics (`lock_wait_seconds`,
   `reentrant_rejection_count`): their accumulation, thread-locality, reset per
@@ -848,13 +850,13 @@ one boundary of behaviour:
 Keeping the concerns in separate files makes the coverage boundary explicit: a
 change to command construction touches the core module, a change to the CLI
 contract touches the CLI module, a change to backend locking or the selector
-state machine touches one of the three concurrency modules (with shared
-scaffolding in the helpers module and `conftest.py`), and a change to selector
-metrics touches the metrics module.
+state machine touches one of the two concurrency modules (with shared
+scaffolding in the support module), and a change to selector metrics touches
+the metrics module.
 
 ### `_EnvBackendSelector` concurrency invariants
 
-The three concurrency modules verify the `_EnvBackendSelector` state machine
+The two concurrency modules verify the `_EnvBackendSelector` state machine
 that serializes process-local backend selection. The selector is backed by a
 process-wide reentrant lock (`_BACKEND_LOCK`) and a thread-local reentrancy
 guard; the tests assert the following invariants:
@@ -910,12 +912,11 @@ schedule using `threading.Event` checkpoints:
   the serialized observation sequence `["python", None]`.
 
 When changing `_EnvBackendSelector`, `_BACKEND_LOCK`, or the reentrancy guard,
-run the three concurrency modules together:
+run the two concurrency modules together:
 
 ```bash
 uv run pytest cuprum/unittests/test_tee_profile_worker_selector_reentrancy.py \
-  cuprum/unittests/test_tee_profile_worker_concurrent_workers.py \
-  cuprum/unittests/test_tee_profile_worker_env_preservation.py
+  cuprum/unittests/test_tee_profile_worker_concurrency.py
 ```
 
 ## Rust availability probe stack
@@ -1333,9 +1334,9 @@ Run compile-time UI tests with:
 cd rust && cargo test compile_time_ui
 ```
 
-Committed `.stderr` fixtures must be regenerated with the CI and minimum
-supported Rust version (MSRV) compiler, Rust 1.85.0. To update them after a
-PyO3 or compiler upgrade:
+Committed `.stderr` fixtures must be regenerated with Rust 1.85.0, the
+minimum-supported Rust compiler version used by CI. Update them after a PyO3 or
+compiler upgrade:
 
 ```bash
 cd rust && TRYBUILD=overwrite cargo +1.85.0 test compile_time_ui

@@ -17,9 +17,7 @@ from hypothesis import strategies as st
 
 from benchmarks import tee_profile_worker
 from benchmarks.tee_profile_worker import TeeProfileWorkerConfig, run_tee_profile_worker
-from cuprum.unittests import (
-    _tee_profile_worker_test_helpers as _tee_profile_worker_test_helpers,
-)
+from cuprum.unittests import _tee_profile_concurrency_support
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -151,7 +149,7 @@ def test_worker_resets_prepopulated_selector_metrics(
     """run_tee_profile_worker resets stale metrics carried by the selector."""
 
     class _PassthroughBackendSelector(
-        _tee_profile_worker_test_helpers._BaseBackendSelector,
+        _tee_profile_concurrency_support._BaseBackendSelector,
     ):
         """Delegate directly while exposing the helper selector metrics state."""
 

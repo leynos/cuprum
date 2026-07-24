@@ -11,13 +11,8 @@ import typing as typ
 
 import hypothesis_crosshair_provider  # noqa: F401  # Registers CrossHair backend provider on import.
 from hypothesis import settings
-from hypothesis import strategies as st
-
-from benchmarks import tee_profile_worker
 
 if typ.TYPE_CHECKING:
-    import threading
-
     import pytest
 
 settings.register_profile(
@@ -47,53 +42,6 @@ def redact(obj: object, keys: frozenset[str] = _VOLATILE_KEYS) -> object:
     if isinstance(obj, list):
         return [redact(item, keys) for item in obj]
     return obj
-
-
-_EVENT_WAIT_TIMEOUT_SECONDS = 10
-_THREAD_JOIN_TIMEOUT_SECONDS = 15
-
-
-def _available_backend_names() -> tuple[tee_profile_worker.BackendName, ...]:
-    """Return backend names that can run in this environment."""
-    if tee_profile_worker._backend._check_rust_available():
-        return ("auto", "python", "rust")
-    return ("auto", "python")
-
-
-def _alternate_backend() -> tee_profile_worker.BackendName:
-    """Return the non-python backend available in this environment."""
-    if tee_profile_worker._backend._check_rust_available():
-        return "rust"
-    msg = "Rust backend is unavailable; no non-python backend can be selected"
-    raise RuntimeError(msg)
-
-
-@st.composite
-def _backend_lists(
-    draw: st.DrawFn,
-) -> tuple[tee_profile_worker.BackendName, ...]:
-    """Generate same-length backend sequences for concurrent worker tests."""
-    thread_count = draw(st.integers(min_value=2, max_value=8))
-    backend = st.sampled_from(_available_backend_names())
-    return tuple(draw(st.lists(backend, min_size=thread_count, max_size=thread_count)))
-
-
-_backends_strategy: st.SearchStrategy[tee_profile_worker.BackendName] = st.deferred(
-    lambda: st.sampled_from(_available_backend_names())
-)
-
-
-def _join_and_assert_finished(
-    *threads: threading.Thread,
-    context: str = "",
-) -> None:
-    """Join *threads* and assert all have stopped within the configured timeout."""
-    for thread in threads:
-        thread.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
-    alive = [thread.name for thread in threads if thread.is_alive()]
-    assert not alive, (  # noqa: S101 - shared test helper asserts on caller's behalf.
-        f"expected threads to finish{f' ({context})' if context else ''}, got {alive}"
-    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
