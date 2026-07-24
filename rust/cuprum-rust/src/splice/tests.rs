@@ -241,7 +241,14 @@ proptest! {
             }
             Terminal::Fatal => {
                 prop_assert_eq!(drained, 0);
-                prop_assert!(result.is_err());
+                match result {
+                    Err(PumpError::Io(io_err)) => {
+                        prop_assert_eq!(io_err.kind(), io::ErrorKind::PermissionDenied);
+                    }
+                    other => {
+                        prop_assert!(false, "expected propagated PermissionDenied, got {other:?}");
+                    }
+                }
             }
         }
     }
