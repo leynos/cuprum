@@ -33,7 +33,7 @@ open each document.
   accepted decision for combining Ruff with Pylint under PyPy.
 - [ADR-004: Interrogate docstring-coverage gate][adr-004] - accepted decision
   to enforce 100% docstring coverage as a third lint tier.
-- [ADR-006: Subprocess execution module boundaries][adr-006] - accepted
+- [ADR-007: Subprocess execution module boundaries][adr-007] - accepted
   decision to split private subprocess execution by lifecycle concern.
 
 ## Planning and validation references
@@ -49,6 +49,6 @@ open each document.
   hotspot verdicts from the tee profiling harness, gating ADR-002 Phase 2.
 
 [adr-004]: adr-004-interrogate-docstring-gate.md
-[adr-006]: adr-006-subprocess-execution-module-boundaries.md
+[adr-007]: adr-007-subprocess-execution-module-boundaries.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md

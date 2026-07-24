@@ -1,4 +1,4 @@
-# Architectural decision record (ADR) 006: Subprocess execution module boundaries
+# Architectural decision record (ADR) 007: Subprocess execution module boundaries
 
 ## Status
 
