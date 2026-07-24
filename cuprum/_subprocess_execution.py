@@ -200,7 +200,16 @@ async def _run_subprocess_with_streams(
         await _cancel_stdin_writer(stdin_task)
         raise
     if stdin_task is not None:
-        await stdin_task
+        try:
+            await stdin_task
+        except BaseException:
+            # An unexpected stdin-writer failure (or a cancellation landing on
+            # this await) must still reconcile the stdout/stderr consumers,
+            # mirroring the timeout and cancellation paths above, so those tasks
+            # are cancelled and drained before the error propagates.
+            _cancel_pending_consumers(consumers)
+            await asyncio.gather(*consumers, return_exceptions=True)
+            raise
     stdout_text, stderr_text = await asyncio.gather(*consumers)
     return exit_code, exited_at, stdout_text, stderr_text
 

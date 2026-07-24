@@ -14,6 +14,7 @@ import typing as typ
 import pytest
 
 from cuprum import TimeoutExpired
+from cuprum._subprocess_stdin import _write_stdin as _real_write_stdin
 from cuprum.sh import (
     CommandResult,
     ExecutionContext,
@@ -25,6 +26,7 @@ from tests.helpers.catalogue import python_builder as build_python_builder
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._pipeline_internals import _StageObservation
     from cuprum.sh import SafeCmd
 
 
@@ -109,6 +111,7 @@ def test_direct_timeout_with_blocked_stdin_writer_does_not_hang(
 
 def test_stdin_input_cancellation_cleans_up_task(
     python_builder: cabc.Callable[..., SafeCmd],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cancelling a run with a blocked stdin writer propagates cancellation.
 
@@ -119,16 +122,40 @@ def test_stdin_input_cancellation_cleans_up_task(
     """
 
     async def _orchestrate() -> None:
-        """Start a blocked-writer command and cancel it after writer cleanup."""
+        """Start a blocked-writer command and cancel it once it is wedged."""
         command = python_builder("-c", "import time; time.sleep(30)")
         payload = b"x" * (1024 * 1024)  # 1 MiB wedges the writer's drain()
+        writer_wedged = asyncio.Event()
+
+        async def _tracked_write_stdin(
+            process: asyncio.subprocess.Process,
+            stdin_data: bytes,
+            observation: _StageObservation,
+        ) -> None:
+            """Signal the writer is running, then write stdin as usual.
+
+            The event is set synchronously before delegating; the real writer
+            then buffers the oversized payload and suspends on ``drain()``
+            before control returns to the awaiting orchestrator, so the writer
+            is genuinely wedged when it is cancelled.
+            """
+            writer_wedged.set()
+            await _real_write_stdin(process, stdin_data, observation)
+
+        monkeypatch.setattr(
+            "cuprum._subprocess_stdin._write_stdin", _tracked_write_stdin
+        )
+
         task = asyncio.create_task(
             command.run(
                 output=RunOutputOptions(capture=False),
                 stdin=StdinInput(data=payload),
             )
         )
-        await asyncio.sleep(0.05)
+        # Cancel only once the writer has begun (and, given the oversized
+        # payload, wedged in drain): a deterministic readiness signal rather
+        # than a fixed sleep.
+        await asyncio.wait_for(writer_wedged.wait(), timeout=2.0)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
