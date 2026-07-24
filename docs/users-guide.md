@@ -886,13 +886,15 @@ The hook creates spans with these attributes:
 - `cuprum.program`: The program being executed
 - `cuprum.argv`: Full argument vector
 - `cuprum.pid`: Process ID
+- `cuprum.cwd`: Working directory (when set)
 - `cuprum.exit_code`: Exit code (set on span end)
 - `cuprum.duration_s`: Duration in seconds (set on span end)
 - `cuprum.project`: Project name from tags
 - `cuprum.pipeline_stage_index`: Pipeline stage index (if applicable)
+- `cuprum.pipeline_stages`: Total pipeline stages (when applicable)
 
-Output lines (stdout/stderr) are recorded as span events when `record_io=True`
-(the default).
+Output lines (stdout/stderr) are recorded as span events when
+`record_output=True` (the default).
 
 **Correlation note:** the hook correlates an execution's `start`, `stdout`,
 `stderr`, and `exit` events by `ExecEvent.exec_id`, a stable token minted

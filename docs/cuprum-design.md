@@ -1312,7 +1312,15 @@ design decisions guide these adapters:
 **Tracing adapter specifics:**
 
 - Spans are started on `start` events and ended on `exit` events.
-- Active spans are tracked by PID in a dictionary to correlate start/exit.
+- Active spans are tracked in a dictionary keyed by the per-execution
+  `ExecEvent.exec_id` correlation token, not by PID, so a recycled PID and
+  delayed output/exit events cannot cross between executions. `pid` is kept
+  only as the `cuprum.pid` span attribute for observability. This follows the
+  canonical correlation policy in the structured execution events section
+  (8.1.3).
+- Events without an `exec_id` (legacy or manually constructed) are ambiguous
+  and are ignored: no span is created for such a `start`, and their
+  `stdout`/`stderr`/`exit` events are dropped rather than guessed from PID.
 - Output lines can optionally be recorded as span events (controlled by
   `record_output` parameter).
 - Span status is set based on exit code (OK for 0, ERROR otherwise).

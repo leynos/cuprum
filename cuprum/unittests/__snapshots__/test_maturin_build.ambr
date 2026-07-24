@@ -120,6 +120,7 @@
       'cuprum/unittests/test_token_registration_stateful.py',
       'cuprum/unittests/test_tracing_adapter.py',
       'cuprum/unittests/test_tracing_span_lifecycle.py',
+      'cuprum/unittests/test_tracing_span_stateful.py',
     ]),
     'generator': '1.13.3',
     'metadata': dict({

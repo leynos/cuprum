@@ -343,3 +343,32 @@ def test_docstring_documents_each_contract_attribute() -> None:
         attr for attr in DOCUMENTED_SPAN_ATTRIBUTES if f"``{attr}``" not in doc
     )
     assert not missing, f"TracingHook docstring omits documented attributes: {missing}"
+
+
+def _users_guide_text() -> str:
+    """Return the users' guide markdown for documentation-contract checks."""
+    repo_root = Path(__file__).resolve().parents[2]
+    return (repo_root / "docs" / "users-guide.md").read_text(encoding="utf-8")
+
+
+def test_users_guide_lists_every_tracing_attribute() -> None:
+    """The users' guide tracing section names every attribute in the contract.
+
+    Uses inline-code substring membership rather than parsing the list, so the
+    guide's markdown formatting is not itself part of the assertion. Locks in
+    ``cuprum.cwd`` and ``cuprum.pipeline_stages`` alongside the rest.
+    """
+    guide = _users_guide_text()
+    missing = sorted(
+        attr for attr in DOCUMENTED_SPAN_ATTRIBUTES if f"`{attr}`" not in guide
+    )
+    assert not missing, f"users' guide omits tracing attributes: {missing}"
+
+
+def test_users_guide_names_record_output_option() -> None:
+    """The users' guide documents ``record_output``, not the obsolete name."""
+    guide = _users_guide_text()
+    assert "record_output" in guide, "users' guide must name the record_output option"
+    assert "record_io" not in guide, (
+        "users' guide must not use the obsolete record_io option name"
+    )
