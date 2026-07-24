@@ -1315,9 +1315,9 @@ Run compile-time UI tests with:
 cd rust && cargo test compile_time_ui
 ```
 
-Committed `.stderr` fixtures must be regenerated with the CI and minimum
-supported Rust version (MSRV) compiler, Rust 1.85.0. To update them after a
-PyO3 or compiler upgrade:
+Committed `.stderr` fixtures must be regenerated with Rust 1.85.0, the
+minimum-supported Rust compiler version used by CI. Update them after a PyO3 or
+compiler upgrade:
 
 ```bash
 cd rust && TRYBUILD=overwrite cargo +1.85.0 test compile_time_ui
