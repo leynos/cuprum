@@ -718,6 +718,80 @@ def test_streamed_run_cancellation_cleans_up_task(
     asyncio.run(_orchestrate())
 
 
+def test_streamed_run_reconciles_consumers_on_stdin_writer_failure(
+    python_builder: cabc.Callable[..., SafeCmd],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing stdin writer must not orphan the stream consumer tasks.
+
+    On the streamed (capture) path, an unexpected exception raised from
+    ``await stdin_task`` must still cancel and drain the stdout/stderr consumer
+    tasks before it propagates, rather than leaving them pending (regression
+    for #117).
+    """
+
+    class _InjectedStdinError(Exception):
+        """Sentinel error injected by the fake stdin writer."""
+
+    recorded: list[asyncio.Task[str | None]] = []
+
+    async def _raise_stdin(
+        process: asyncio.subprocess.Process,
+        stdin_data: bytes,
+        observation: object,
+    ) -> None:
+        """Close stdin, then fail the writer with an injected error."""
+        _ = (stdin_data, observation)
+        await asyncio.sleep(0)  # yield like the real writer's drain() await
+        if process.stdin is not None:
+            process.stdin.close()
+        raise _InjectedStdinError
+
+    def _spawn_blocking_consumers(
+        process: object,
+        execution: object,
+        stream_config: object,
+        *,
+        pid: int | None,
+    ) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
+        """Return two never-completing consumer tasks and record them."""
+        _ = (process, execution, stream_config, pid)
+
+        async def _block() -> str | None:
+            """Block until cancelled during stdin-failure cleanup."""
+            await asyncio.Event().wait()
+
+        tasks = (asyncio.create_task(_block()), asyncio.create_task(_block()))
+        recorded.extend(tasks)
+        return tasks
+
+    monkeypatch.setattr("cuprum._subprocess_stdin._write_stdin", _raise_stdin)
+    monkeypatch.setattr(
+        "cuprum._subprocess_execution._spawn_stream_consumers",
+        _spawn_blocking_consumers,
+    )
+
+    command = python_builder("-c", "pass")
+
+    async def _drive() -> None:
+        """Run the streamed command and inspect consumers within the loop."""
+        with pytest.raises(_InjectedStdinError):
+            await command.run(
+                output=RunOutputOptions(capture=True),
+                stdin=StdinInput(data=b"payload"),
+            )
+        # Assert inside the still-running loop, before asyncio.run tears it
+        # down: loop teardown would itself cancel any orphaned tasks and mask
+        # the bug, so only the reconcile path can have finished these here.
+        assert len(recorded) == 2, "streamed path must spawn two stream consumers"
+        assert all(task.cancelled() for task in recorded), (
+            "stdout/stderr consumers must be cancelled and drained when the "
+            "stdin writer fails, not left orphaned as pending tasks"
+        )
+
+    asyncio.run(_drive())
+
+
 @pytest.mark.parametrize("execution_strategy", ["async", "sync"])
 def test_input_text_encoding_failure_raises(
     python_builder: cabc.Callable[..., SafeCmd],
