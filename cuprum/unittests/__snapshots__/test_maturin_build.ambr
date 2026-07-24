@@ -60,6 +60,7 @@
       'cuprum/unittests/_cqrs_fixtures.py',
       'cuprum/unittests/_tee_profile_backend_support.py',
       'cuprum/unittests/_tee_profile_concurrency_support.py',
+      'cuprum/unittests/_tee_profile_signalling_lock.py',
       'cuprum/unittests/conftest.py',
       'cuprum/unittests/strategies.py',
       'cuprum/unittests/test_adapter_projection.py',

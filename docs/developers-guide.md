@@ -815,9 +815,11 @@ one boundary of behaviour:
   - `cuprum/unittests/test_tee_profile_worker_concurrency.py` — concurrent
     `run_tee_profile_worker` race-freedom across backend pairs and
     `CUPRUM_STREAM_BACKEND` preservation under concurrent, interleaved access.
-  - `cuprum/unittests/_tee_profile_concurrency_support.py` — the instrumented
-    lock, coordinating backend selectors, and race harness, plus the timeout
-    constants and the thread join/assert helper used by those tests.
+  - `cuprum/unittests/_tee_profile_concurrency_support.py` — the coordinating
+    backend selectors and race harness, plus the timeout constants, worker
+    plumbing, and the thread join/assert helper used by those tests.
+  - `cuprum/unittests/_tee_profile_signalling_lock.py` — the instrumented
+    `_SignallingRLock` wrapper that flags first-observed lock contention.
   - `cuprum/unittests/_tee_profile_backend_support.py` — backend-availability
     detection and the Hypothesis backend strategies/parametrization shared by
     the concurrency and reentrancy modules.

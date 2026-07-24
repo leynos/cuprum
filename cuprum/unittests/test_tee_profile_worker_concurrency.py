@@ -24,8 +24,8 @@ from cuprum.unittests._tee_profile_concurrency_support import (
     _CheckpointBackendSelector,
     _join_and_assert_finished,
     _run_selector_context,
-    _SignallingRLock,
 )
+from cuprum.unittests._tee_profile_signalling_lock import _SignallingRLock
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
