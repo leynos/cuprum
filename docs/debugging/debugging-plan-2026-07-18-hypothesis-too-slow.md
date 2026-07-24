@@ -53,8 +53,9 @@ budget before a valid dictionary is produced.
 
 **Plausibility**: High — the health check identifies `ctx_tags` generation.
 
-**Prediction**: Replaying the seed while sampling `_TAGS` alone will reproduce
-the slow generation; if sampling is quick, generation is not the cause.
+**Prediction**: Replaying the named seed will reproduce the slow-generation
+health check; if the replay completes without it, `_TAGS` generation is not
+the cause.
 
 #### H1 falsification plan
 
@@ -63,7 +64,6 @@ _Table 2: Falsification steps for the `_TAGS` generation hypothesis._
 | Step | Action | Expected Negative Result |
 | --- | --- | --- |
 | 1 | Inspect `_TAGS` and replay the named test seed. | The test completes without a slow-generation health check. |
-| 2 | Time representative samples from `_TAGS`. | Sampling is quick, which disproves strategy generation as the cause. |
 
 **Tooling**: display the strategy with a repository-native command (no
 `leta workspace add` indexing step required), then replay the focused
