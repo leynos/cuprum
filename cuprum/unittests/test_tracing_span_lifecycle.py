@@ -9,22 +9,24 @@ the attributes the hook can actually emit. They live in their own module
 internal lifecycle directly instead of the adapter behaviour observed
 through command execution.
 
-Events are built with the shared :func:`_make_exec_event` factory; each
-call passes its ``pid``, ``exec_id``, and phase-specific fields through
-``overrides``. Pass distinct ``exec_id`` tokens for distinct executions
-(even when they share a ``pid``), reuse one token across an execution's
-phases, and pass ``exec_id=None`` to model a legacy event.
+Events are built with the module-local :func:`_exec_event` helper; each call
+passes its ``phase`` and ``pid`` positionally and bundles the optional
+execution-specific values (``exec_id``, ``line``, ``exit_code``,
+``duration_s``) in a :class:`_ExecEventDetails`. Pass distinct ``exec_id``
+tokens for distinct executions (even when they share a ``pid``), reuse one
+token across an execution's phases, and pass ``exec_id=None`` to model a
+legacy event.
 """
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 from pathlib import Path
 
 from cuprum.adapters.tracing_adapter import InMemorySpan, InMemoryTracer, TracingHook
-from cuprum.events import ExecEvent, new_exec_id
+from cuprum.events import ExecEvent, ExecId, ExecPhase, new_exec_id
 from cuprum.program import Program
-from cuprum.unittests._adapter_test_support import _make_exec_event
 
 if typ.TYPE_CHECKING:
     import pytest
@@ -51,6 +53,41 @@ DOCUMENTED_SPAN_ATTRIBUTES: frozenset[str] = frozenset(
 _SHARED_PID = 1234
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _ExecEventDetails:
+    """Optional execution-specific values for a synthetic ExecEvent."""
+
+    exec_id: ExecId | None = None
+    line: str | None = None
+    exit_code: int | None = None
+    duration_s: float | None = None
+
+
+def _exec_event(phase: ExecPhase, pid: int, details: _ExecEventDetails) -> ExecEvent:
+    """Build a minimal ``ExecEvent`` for direct hook dispatch.
+
+    ``details`` bundles the optional execution-specific values so the helper
+    keeps a small, fixed argument surface. ``details.exec_id`` is the
+    per-execution correlation token: pass distinct tokens for distinct
+    executions (even when they share a ``pid``), reuse one token across an
+    execution's phases, and use ``None`` to model a legacy event.
+    """
+    return ExecEvent(
+        phase=phase,
+        program=Program("cat"),
+        argv=("cat",),
+        cwd=None,
+        env=None,
+        pid=pid,
+        timestamp=0.0,
+        line=details.line,
+        exit_code=details.exit_code,
+        duration_s=details.duration_s,
+        tags={},
+        exec_id=details.exec_id,
+    )
+
+
 def test_recycled_pid_output_attaches_by_exec_id_not_pid() -> None:
     """Delayed output for A never lands on B, despite the shared PID.
 
@@ -62,30 +99,24 @@ def test_recycled_pid_output_attaches_by_exec_id_not_pid() -> None:
     exec_a = new_exec_id()
     exec_b = new_exec_id()
 
-    hook(
-        _make_exec_event(
-            phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_a}
-        )
-    )
+    hook(_exec_event("start", _SHARED_PID, _ExecEventDetails(exec_id=exec_a)))
     span_a = tracer.spans[0]
-    hook(
-        _make_exec_event(
-            phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_b}
-        )
-    )
+    hook(_exec_event("start", _SHARED_PID, _ExecEventDetails(exec_id=exec_b)))
     span_b = tracer.spans[1]
 
     # Out-of-order output: A's delayed line arrives after B started.
     hook(
-        _make_exec_event(
-            phase="stdout",
-            overrides={"pid": _SHARED_PID, "exec_id": exec_a, "line": "from-A"},
+        _exec_event(
+            "stdout",
+            _SHARED_PID,
+            _ExecEventDetails(exec_id=exec_a, line="from-A"),
         )
     )
     hook(
-        _make_exec_event(
-            phase="stdout",
-            overrides={"pid": _SHARED_PID, "exec_id": exec_b, "line": "from-B"},
+        _exec_event(
+            "stdout",
+            _SHARED_PID,
+            _ExecEventDetails(exec_id=exec_b, line="from-B"),
         )
     )
 
@@ -107,29 +138,17 @@ def test_recycled_pid_exit_closes_correct_execution() -> None:
     exec_a = new_exec_id()
     exec_b = new_exec_id()
 
-    hook(
-        _make_exec_event(
-            phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_a}
-        )
-    )
+    hook(_exec_event("start", _SHARED_PID, _ExecEventDetails(exec_id=exec_a)))
     span_a = tracer.spans[0]
-    hook(
-        _make_exec_event(
-            phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_b}
-        )
-    )
+    hook(_exec_event("start", _SHARED_PID, _ExecEventDetails(exec_id=exec_b)))
     span_b = tracer.spans[1]
 
     # A's delayed, failing exit arrives after B recycled the PID.
     hook(
-        _make_exec_event(
-            phase="exit",
-            overrides={
-                "pid": _SHARED_PID,
-                "exec_id": exec_a,
-                "exit_code": 3,
-                "duration_s": 0.2,
-            },
+        _exec_event(
+            "exit",
+            _SHARED_PID,
+            _ExecEventDetails(exec_id=exec_a, exit_code=3, duration_s=0.2),
         )
     )
 
@@ -140,14 +159,10 @@ def test_recycled_pid_exit_closes_correct_execution() -> None:
 
     # B exits cleanly and closes its own span.
     hook(
-        _make_exec_event(
-            phase="exit",
-            overrides={
-                "pid": _SHARED_PID,
-                "exec_id": exec_b,
-                "exit_code": 0,
-                "duration_s": 0.1,
-            },
+        _exec_event(
+            "exit",
+            _SHARED_PID,
+            _ExecEventDetails(exec_id=exec_b, exit_code=0, duration_s=0.1),
         )
     )
     assert span_b.ended is True, "B's exit must close B"
@@ -166,33 +181,22 @@ def test_recycled_pid_normal_flow_for_second_execution() -> None:
     exec_b = new_exec_id()
 
     # A left open.
-    hook(
-        _make_exec_event(
-            phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_a}
-        )
-    )
-    hook(
-        _make_exec_event(
-            phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_b}
-        )
-    )
+    hook(_exec_event("start", _SHARED_PID, _ExecEventDetails(exec_id=exec_a)))
+    hook(_exec_event("start", _SHARED_PID, _ExecEventDetails(exec_id=exec_b)))
     span_b = tracer.spans[1]
 
     hook(
-        _make_exec_event(
-            phase="stdout",
-            overrides={"pid": _SHARED_PID, "exec_id": exec_b, "line": "hello-from-B"},
+        _exec_event(
+            "stdout",
+            _SHARED_PID,
+            _ExecEventDetails(exec_id=exec_b, line="hello-from-B"),
         )
     )
     hook(
-        _make_exec_event(
-            phase="exit",
-            overrides={
-                "pid": _SHARED_PID,
-                "exec_id": exec_b,
-                "exit_code": 0,
-                "duration_s": 0.1,
-            },
+        _exec_event(
+            "exit",
+            _SHARED_PID,
+            _ExecEventDetails(exec_id=exec_b, exit_code=0, duration_s=0.1),
         )
     )
 
@@ -215,32 +219,23 @@ def test_legacy_events_without_exec_id_are_ignored() -> None:
     exec_b = new_exec_id()
 
     # A live, correlated execution B on the PID.
-    hook(
-        _make_exec_event(
-            phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_b}
-        )
-    )
+    hook(_exec_event("start", _SHARED_PID, _ExecEventDetails(exec_id=exec_b)))
     span_b = tracer.spans[0]
 
     # Legacy events on the same PID (no exec_id) must all be dropped.
+    hook(_exec_event("start", _SHARED_PID, _ExecEventDetails(exec_id=None)))
     hook(
-        _make_exec_event(phase="start", overrides={"pid": _SHARED_PID, "exec_id": None})
-    )
-    hook(
-        _make_exec_event(
-            phase="stdout",
-            overrides={"pid": _SHARED_PID, "exec_id": None, "line": "legacy"},
+        _exec_event(
+            "stdout",
+            _SHARED_PID,
+            _ExecEventDetails(exec_id=None, line="legacy"),
         )
     )
     hook(
-        _make_exec_event(
-            phase="exit",
-            overrides={
-                "pid": _SHARED_PID,
-                "exec_id": None,
-                "exit_code": 0,
-                "duration_s": 0.1,
-            },
+        _exec_event(
+            "exit",
+            _SHARED_PID,
+            _ExecEventDetails(exec_id=None, exit_code=0, duration_s=0.1),
         )
     )
 
@@ -265,7 +260,7 @@ def test_duplicate_exec_id_start_ends_prior_span(
     tracer = InMemoryTracer()
     hook = TracingHook(tracer)
     exec_id = new_exec_id()
-    hook(_make_exec_event(phase="start", overrides={"pid": 42, "exec_id": exec_id}))
+    hook(_exec_event("start", 42, _ExecEventDetails(exec_id=exec_id)))
     stale = tracer.spans[0]
 
     observed: dict[str, object] = {}
@@ -280,7 +275,7 @@ def test_duplicate_exec_id_start_ends_prior_span(
 
     monkeypatch.setattr(InMemorySpan, "end", recording_end)
 
-    hook(_make_exec_event(phase="start", overrides={"pid": 42, "exec_id": exec_id}))
+    hook(_exec_event("start", 42, _ExecEventDetails(exec_id=exec_id)))
 
     current = tracer.spans[1]
     assert observed["mapping_during_end"] is stale, (
