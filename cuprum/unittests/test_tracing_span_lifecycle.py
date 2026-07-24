@@ -265,14 +265,13 @@ class TestTracingSpanLifecycle:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A repeated exec_id ends the prior span before installing the new one.
+        """A repeated exec_id ends the prior span after installing the new one.
 
         Distinct executions carry distinct tokens, so this only guards a malformed
-        stream that repeats a token. The prior span is failed and ended before the
-        replacement is installed, all under one lock acquisition, so the
-        exec_id→span mapping never exposes a half-updated entry: the mapping still
-        points at the prior span while it is ended, and at the replacement only
-        afterwards.
+        stream that repeats a token. The replacement is installed under the lock,
+        then the detached prior span is failed and ended outside the lock, so the
+        exec_id→span mapping already points at the replacement by the time the
+        prior span is ended and never exposes a missing entry.
         """
         tracer = InMemoryTracer()
         hook = TracingHook(tracer)
@@ -295,15 +294,16 @@ class TestTracingSpanLifecycle:
         hook(_make_exec_event(phase="start", overrides={"pid": 42, "exec_id": exec_id}))
 
         current = tracer.spans[1]
-        assert observed["mapping_during_end"] is stale, (
-            "the prior span must still be mapped while it is ended"
+        assert observed["mapping_during_end"] is current, (
+            "the replacement must be installed before the detached prior span "
+            "is ended outside the lock"
         )
         assert observed["status_during_end"] is False, (
             "the prior span must be marked failed before it is ended"
         )
         assert stale.ended is True, "the prior span must be ended"
         assert hook._active_spans[exec_id] is current, (
-            "the replacement span must be installed after the prior span is ended"
+            "the replacement span must remain installed after the prior span ends"
         )
 
     def test_emitted_attributes_match_documented_contract(self) -> None:

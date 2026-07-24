@@ -325,10 +325,13 @@ synchronization of its own.
 `ExecEvent.exec_id` (the per-execution correlation token), guarded by an
 internal `threading.Lock`:
 
-- **start** builds the span outside the lock, then, under the lock, ends any
-  span already registered for that `exec_id` (a duplicated or reused token) as
-  failed before installing the replacement, so the token-to-span transition is
-  atomic and each replaced span is ended exactly once.
+- **start** builds the span outside the lock, then, under the lock, swaps the
+  mapping atomically — capturing any span already registered for that `exec_id`
+  (a duplicated or reused token) and installing the replacement in one critical
+  section. The detached stale span is then marked failed and ended *outside*
+  the lock, so an arbitrary `Span` that blocks on I/O in `set_status()`/`end()`
+  cannot stall other executions' handlers; each replaced span is still ended
+  exactly once because it is already unreachable via the map.
 - **stdout/stderr** look up the span for the event's `exec_id` under the lock,
   then record the line as a span event outside the lock.
 - **exit** removes (pops) the span for the event's `exec_id` under the lock,

@@ -264,15 +264,17 @@ class TracingHook:
 
         A pre-existing span for the *same* ``exec_id`` should not occur for a
         well-formed event stream (tokens are unique per execution). If one is
-        seen — a duplicated or reused token — end it as failed before
-        installing the replacement, preserving the "each span is ended exactly
-        once" invariant. The lookup, that teardown, and installing the
-        replacement run together under ``self._lock`` so the exec_id→span
-        mapping transitions atomically: a concurrent ``_handle_output`` or
-        ``_handle_exit`` for the same token observes either the old span or
-        the new one, never a half-updated entry. Only the unrelated tracer
-        setup (building attributes and starting the span) runs outside the
-        lock, to avoid serialising other executions' handlers behind it.
+        seen — a duplicated or reused token — it is detached from the map and
+        ended as failed. The lookup and the installation of the replacement run
+        together under ``self._lock`` so the exec_id→span mapping transitions
+        atomically: a concurrent ``_handle_output`` or ``_handle_exit`` for the
+        same token observes either the old span or the replacement, never a
+        missing or half-updated entry. The detached stale span is then marked
+        failed and ended *outside* the lock — exactly once, since it is already
+        unreachable via the map — so an arbitrary ``Span`` whose
+        ``set_status``/``end`` blocks on I/O cannot serialise other executions'
+        handlers. The unrelated tracer setup (building attributes and starting
+        the span) likewise runs outside the lock.
         """
         exec_id = event.exec_id
         if exec_id is None:
@@ -285,14 +287,21 @@ class TracingHook:
         span = self._tracer.start_span(span_name, attributes)
 
         with self._lock:
+            # Swap atomically: capture any span already mapped to this exec_id
+            # and install the replacement in a single critical section, so a
+            # concurrent handler for the same token sees either the old span or
+            # the replacement, never a missing/partial entry.
             stale = self._active_spans.get(exec_id)
-            if stale is not None:
-                # Same correlation token seen twice (duplicated/reused token).
-                # End the prior span as failed before installing the
-                # replacement so the transition is atomic under the lock.
-                stale.set_status(ok=False)
-                stale.end()
             self._active_spans[exec_id] = span
+
+        if stale is not None:
+            # Duplicated/reused exec_id: the prior span is now detached from the
+            # map, so exactly one handler ends it. Mark and end it outside the
+            # lock — a production Span may block on I/O in set_status()/end(),
+            # and holding the lifecycle lock across that would serialise every
+            # other execution's handler.
+            stale.set_status(ok=False)
+            stale.end()
 
     def _handle_output(self, event: ExecEvent) -> None:
         """Record output as a span event, correlated by ``exec_id``."""

@@ -119,6 +119,7 @@
       'cuprum/unittests/test_timeout_resolution.py',
       'cuprum/unittests/test_token_registration_stateful.py',
       'cuprum/unittests/test_tracing_adapter.py',
+      'cuprum/unittests/test_tracing_span_concurrency.py',
       'cuprum/unittests/test_tracing_span_lifecycle.py',
       'cuprum/unittests/test_tracing_span_stateful.py',
     ]),
