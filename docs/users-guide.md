@@ -1488,9 +1488,9 @@ The continuous integration (CI) workflows run the following checks:
     runner-speed differences between CI jobs cancel out.
   - It places matched Python/Rust commands next to each other and measures each
     command ten times to reduce temporal runner drift and outlier sensitivity.
-  - It skips comparison when the saved baseline uses an older benchmark profile
-    shape because different sampling protocols and worker timings are not
-    comparable.
+  - It skips comparison and writes a skip report when the saved baseline uses an
+    older benchmark profile shape, because different sampling protocols and
+    worker timings are not comparable.
   - Its baseline fetch helper follows GitHub’s signed archive redirects
     without forwarding GitHub-only authentication headers to the storage host.
   - It generates a Python-versus-Rust comparison report from the candidate
