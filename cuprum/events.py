@@ -36,7 +36,15 @@ ExecId = typ.NewType("ExecId", uuid.UUID)
 
 
 def new_exec_id() -> ExecId:
-    """Return a fresh, process-unique execution correlation token."""
+    """Return a fresh, process-unique execution correlation token.
+
+    Returns
+    -------
+    ExecId
+        A new :data:`ExecId` wrapping a random UUID (:func:`uuid.uuid4`),
+        distinct on every call, used to correlate all lifecycle events of a
+        single execution.
+    """
     return ExecId(uuid.uuid4())
 
 

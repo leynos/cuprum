@@ -89,50 +89,55 @@ def _block_span_end(
     return entered, release
 
 
-def test_duplicate_token_cleanup_does_not_hold_lifecycle_lock(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A blocked stale-span teardown must not stall unrelated executions.
+class TestTracingSpanConcurrency:
+    """Concurrency regression tests for ``TracingHook`` span lifecycle."""
 
-    While the duplicate-token cleanup is parked inside a blocking ``end`` (run
-    outside the lifecycle lock), an unrelated execution's start/output/exit
-    handlers must still acquire the hook's lock and run to completion.
-    """
-    tracer = InMemoryTracer()
-    hook = TracingHook(tracer)
-    exec_dup = new_exec_id()
-    exec_other = new_exec_id()
+    def test_duplicate_token_cleanup_does_not_hold_lifecycle_lock(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A blocked stale-span teardown must not stall unrelated executions.
 
-    # Open exec_dup once so the next start for it triggers duplicate-token
-    # cleanup, which ends this (now stale) span.
-    _start(hook, exec_dup)
-    stale = tracer.spans[0]
-    entered, release = _block_span_end(monkeypatch, stale)
+        While the duplicate-token cleanup is parked inside a blocking ``end``
+        (run outside the lifecycle lock), an unrelated execution's
+        start/output/exit handlers must still acquire the hook's lock and run
+        to completion.
+        """
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+        exec_dup = new_exec_id()
+        exec_other = new_exec_id()
 
-    # The reused exec_dup start parks in the (blocked) stale-span end.
-    dup_thread = _spawn(lambda: _start(hook, exec_dup))
-    assert entered.wait(timeout=_TIMEOUT_S), (
-        "the duplicate-token cleanup must reach the blocked stale-span end"
-    )
+        # Open exec_dup once so the next start for it triggers duplicate-token
+        # cleanup, which ends this (now stale) span.
+        _start(hook, exec_dup)
+        stale = tracer.spans[0]
+        entered, release = _block_span_end(monkeypatch, stale)
 
-    # The lifecycle lock must be free while cleanup is parked in end(): an
-    # unrelated execution completes its whole start/output/exit sequence.
-    other_thread = _spawn(lambda: _run_full_lifecycle(hook, exec_other))
-    other_thread.join(timeout=_TIMEOUT_S)
-    assert not other_thread.is_alive(), (
-        "an unrelated execution must complete while duplicate-token cleanup is "
-        "blocked; the lifecycle lock must not be held during Span.end()"
-    )
+        # The reused exec_dup start parks in the (blocked) stale-span end.
+        dup_thread = _spawn(lambda: _start(hook, exec_dup))
+        assert entered.wait(timeout=_TIMEOUT_S), (
+            "the duplicate-token cleanup must reach the blocked stale-span end"
+        )
 
-    release.set()
-    dup_thread.join(timeout=_TIMEOUT_S)
-    assert not dup_thread.is_alive(), "duplicate cleanup must finish once released"
+        # The lifecycle lock must be free while cleanup is parked in end(): an
+        # unrelated execution completes its whole start/output/exit sequence.
+        other_thread = _spawn(lambda: _run_full_lifecycle(hook, exec_other))
+        other_thread.join(timeout=_TIMEOUT_S)
+        assert not other_thread.is_alive(), (
+            "an unrelated execution must complete while duplicate-token cleanup "
+            "is blocked; the lifecycle lock must not be held during Span.end()"
+        )
 
-    assert stale.ended is True, "the stale span must be ended after release"
-    assert stale.status_ok is False, "the stale span must be marked failed"
-    assert any(
-        span.events == [("cuprum.stdout", {"line": "hi"})]
-        and span.ended
-        and span.status_ok
-        for span in tracer.spans
-    ), "the unrelated execution's output and clean exit must be recorded"
+        release.set()
+        dup_thread.join(timeout=_TIMEOUT_S)
+        assert not dup_thread.is_alive(), "duplicate cleanup must finish once released"
+
+        assert stale.ended is True, "the stale span must be ended after release"
+        assert stale.status_ok is False, "the stale span must be marked failed"
+        assert any(
+            span.events == [("cuprum.stdout", {"line": "hi"})]
+            and span.ended
+            and span.status_ok
+            for span in tracer.spans
+        ), "the unrelated execution's output and clean exit must be recorded"
