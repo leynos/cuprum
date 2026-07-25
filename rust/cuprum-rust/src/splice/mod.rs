@@ -154,7 +154,7 @@ fn accumulate_splices(
             Ok(0) => break, // EOF
             Ok(n) => {
                 let chunk = u64::try_from(n).map_err(|_| PumpError::LengthOverflow)?;
-                total = total.saturating_add(chunk);
+                total = total.checked_add(chunk).ok_or(PumpError::LengthOverflow)?;
             }
             Err(e) if e.is_nonfatal_write() => {
                 // Broken pipe: drain reader and return bytes written so far.

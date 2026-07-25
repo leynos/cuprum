@@ -166,7 +166,14 @@ proptest! {
             }
             Err(err) => {
                 prop_assert!(!terminal_ok);
-                prop_assert!(matches!(err, PumpError::Io(_)));
+                match err {
+                    PumpError::Io(io_err) => {
+                        prop_assert_eq!(io_err.kind(), io::ErrorKind::BrokenPipe);
+                    }
+                    other => {
+                        prop_assert!(false, "expected BrokenPipe PumpError::Io, got {other:?}");
+                    }
+                }
             }
         }
     }
