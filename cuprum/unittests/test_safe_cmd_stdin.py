@@ -1,19 +1,24 @@
-"""Integration tests for the SafeCmd stdin writer lifecycle.
+"""Integration tests for SafeCmd stdin handling.
 
-Timeout escalation and blocked-``drain()`` scenarios cover both the ``run()``
-and ``run_sync()`` strategies; cancellation cleanup is exercised only through
-``run()`` (async), since cancelling a synchronous call is not meaningful.
+Covers stdin injection (text and bytes feeding, configured encoding,
+capture-disabled and early-close behaviour, and forbidden-command/encoding
+ordering) alongside the stdin writer lifecycle regressions (timeout escalation,
+blocked-``drain()`` cleanup, and cancellation). Feeding and timeout scenarios
+cover both the ``run()`` and ``run_sync()`` strategies; cancellation cleanup is
+exercised only through ``run()`` (async), since cancelling a synchronous call is
+not meaningful.
 """
 
 from __future__ import annotations
 
 import asyncio
+import collections.abc as cabc
 import time
 import typing as typ
 
 import pytest
 
-from cuprum import TimeoutExpired
+from cuprum import ECHO, ForbiddenProgramError, ScopeConfig, TimeoutExpired, scoped
 from cuprum._subprocess_stdin import _write_stdin as _real_write_stdin
 from cuprum.sh import (
     CommandResult,
@@ -24,8 +29,6 @@ from cuprum.sh import (
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
     from cuprum._pipeline_internals import _StageObservation
     from cuprum.sh import SafeCmd
 
@@ -39,6 +42,9 @@ class _RunKwargs(typ.TypedDict, total=False):
     stdin: StdinInput | None
 
 
+type ExecuteFn = cabc.Callable[[SafeCmd, _RunKwargs], CommandResult]
+
+
 def _execute_async(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
     """Execute a SafeCmd using the async run() method."""
     return asyncio.run(cmd.run(**kwargs))
@@ -49,10 +55,182 @@ def _execute_sync(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
     return cmd.run_sync(**kwargs)
 
 
+@pytest.fixture(params=["async", "sync"], ids=["run()", "run_sync()"])
+def execution_strategy(request: pytest.FixtureRequest) -> tuple[str, ExecuteFn]:
+    """Provide parametrised execution strategies for run() and run_sync()."""
+    if request.param == "async":
+        return ("async", _execute_async)
+    return ("sync", _execute_sync)
+
+
 @pytest.fixture
 def python_builder() -> cabc.Callable[..., SafeCmd]:
     """Provide a SafeCmd builder for the current Python interpreter."""
     return build_python_builder()
+
+
+def test_input_text_feeds_stdin(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Both run() and run_sync() feed text directly to stdin."""
+    _, execute = execution_strategy
+    command = python_builder("-c", "import sys; print(sys.stdin.read(), end='')")
+
+    result = execute(command, {"stdin": StdinInput(text="hello stdin\n")})
+
+    assert result.exit_code == 0
+    assert result.stdout == "hello stdin\n"
+    assert result.stderr == ""
+
+
+def test_input_bytes_feeds_raw_stdin(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Both run() and run_sync() feed bytes directly to stdin."""
+    _, execute = execution_strategy
+    command = python_builder(
+        "-c",
+        "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
+    )
+
+    result = execute(command, {"stdin": StdinInput(data=b"\x00raw\xff\n")})
+
+    assert result.exit_code == 0
+    assert result.stdout == "\x00raw\ufffd\n"
+    assert result.stderr == ""
+
+
+def test_input_text_uses_configured_encoding(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Text stdin is encoded using the execution context settings."""
+    _, execute = execution_strategy
+    command = python_builder(
+        "-c",
+        "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
+    )
+
+    result = execute(
+        command,
+        {
+            "stdin": StdinInput(text="\u2013"),
+            "context": ExecutionContext(encoding="cp1252", errors="strict"),
+        },
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == "\u2013"
+    assert result.stderr == ""
+
+
+def test_input_text_and_input_bytes_conflict(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Supplying both stdin forms raises a validation error."""
+    _ = python_builder, execution_strategy
+    with pytest.raises(
+        ValueError,
+        match=r"text and data cannot both be provided",
+    ):
+        StdinInput(text="hello", data=b"hello")
+
+
+def test_input_text_works_when_capture_is_disabled(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Stdin injection still works when stdout/stderr are not captured."""
+    _, execute = execution_strategy
+    command = python_builder(
+        "-c",
+        "import sys; sys.exit(0 if sys.stdin.read() == 'uncaptured' else 9)",
+    )
+
+    result = execute(
+        command,
+        {
+            "output": RunOutputOptions(capture=False),
+            "stdin": StdinInput(text="uncaptured"),
+        },
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout is None
+    assert result.stderr is None
+
+
+def test_nonzero_exit_code_is_captured_with_input_text(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Non-zero exits still include captured streams when stdin is supplied."""
+    _, execute = execution_strategy
+    command = python_builder(
+        "-c",
+        ("import sys; data = sys.stdin.read(); print(data, end=''); sys.exit(7)"),
+    )
+
+    result = execute(command, {"stdin": StdinInput(text="failure input")})
+
+    assert result.exit_code == 7
+    assert result.ok is False
+    assert result.stdout == "failure input"
+    assert result.stderr == ""
+
+
+def test_process_closing_stdin_early_is_handled(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """A process that ignores stdin does not fail the command run."""
+    _, execute = execution_strategy
+    command = python_builder("-c", "print('done')")
+
+    result = execute(command, {"stdin": StdinInput(text="ignored stdin")})
+
+    assert result.exit_code == 0
+    assert result.stdout == "done\n"
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize("execution_strategy", ["async", "sync"])
+def test_input_text_encoding_failure_raises(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: str,
+) -> None:
+    """UnicodeEncodeError propagates when text cannot be encoded."""
+    command = python_builder("-c", "import sys; sys.stdin.read()")
+    ctx = ExecutionContext(encoding="ascii", errors="strict")
+    execute = _execute_async if execution_strategy == "async" else _execute_sync
+    with pytest.raises(UnicodeEncodeError):
+        execute(
+            command,
+            {"stdin": StdinInput(text="\u00e9 non-ASCII"), "context": ctx},
+        )
+
+
+@pytest.mark.parametrize("execution_strategy", ["async", "sync"])
+def test_forbidden_command_rejects_before_stdin_encoding(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: str,
+) -> None:
+    """Forbidden commands fail before stdin encoding is attempted."""
+    command = python_builder("-c", "import sys; sys.stdin.read()")
+    ctx = ExecutionContext(encoding="ascii", errors="strict")
+    execute = _execute_async if execution_strategy == "async" else _execute_sync
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([ECHO]))),
+        pytest.raises(ForbiddenProgramError),
+    ):
+        execute(
+            command,
+            {"stdin": StdinInput(text="\u00e9 non-ASCII"), "context": ctx},
+        )
 
 
 @pytest.mark.parametrize("execution_strategy", ["async", "sync"])
