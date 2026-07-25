@@ -69,36 +69,41 @@ def python_builder() -> cabc.Callable[..., SafeCmd]:
     return build_python_builder()
 
 
-def test_input_text_feeds_stdin(
+@pytest.mark.parametrize(
+    ("script", "stdin", "expected_stdout"),
+    [
+        pytest.param(
+            "import sys; print(sys.stdin.read(), end='')",
+            StdinInput(text="hello stdin\n"),
+            "hello stdin\n",
+            id="text",
+        ),
+        pytest.param(
+            "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
+            StdinInput(data=b"\x00raw\xff\n"),
+            "\x00raw\ufffd\n",
+            id="raw-bytes",
+        ),
+    ],
+)
+def test_input_feeds_stdin(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
+    script: str,
+    stdin: StdinInput,
+    expected_stdout: str,
 ) -> None:
-    """Both run() and run_sync() feed text directly to stdin."""
-    _, execute = execution_strategy
-    command = python_builder("-c", "import sys; print(sys.stdin.read(), end='')")
+    """Text and raw-byte stdin reach the child process.
 
-    result = execute(command, {"stdin": StdinInput(text="hello stdin\n")})
+    Exercised under both the ``run()`` and ``run_sync()`` execution strategies.
+    """
+    _, execute = execution_strategy
+    command = python_builder("-c", script)
+
+    result = execute(command, {"stdin": stdin})
 
     assert result.exit_code == 0
-    assert result.stdout == "hello stdin\n"
-    assert result.stderr == ""
-
-
-def test_input_bytes_feeds_raw_stdin(
-    python_builder: cabc.Callable[..., SafeCmd],
-    execution_strategy: tuple[str, ExecuteFn],
-) -> None:
-    """Both run() and run_sync() feed bytes directly to stdin."""
-    _, execute = execution_strategy
-    command = python_builder(
-        "-c",
-        "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
-    )
-
-    result = execute(command, {"stdin": StdinInput(data=b"\x00raw\xff\n")})
-
-    assert result.exit_code == 0
-    assert result.stdout == "\x00raw\ufffd\n"
+    assert result.stdout == expected_stdout
     assert result.stderr == ""
 
 
