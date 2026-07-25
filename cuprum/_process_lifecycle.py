@@ -6,17 +6,17 @@ import asyncio
 import time
 import typing as typ
 
+from cuprum._pipeline_stage_streams import _get_stage_stream_fds
 from cuprum._pipeline_streams import _collect_pipe_results
+from cuprum._pipeline_types import _EventDetails, _StageObservation
+from cuprum._subprocess_context import _cwd_arg
 from cuprum.context import current_context, resolve_env
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum._pipeline_internals import _StageObservation
     from cuprum._pipeline_streams import _PipelineRunConfig
     from cuprum.sh import SafeCmd
-from cuprum._pipeline_stage_streams import _get_stage_stream_fds
-from cuprum._subprocess_context import _cwd_arg
 
 
 async def _terminate_process(
@@ -166,7 +166,6 @@ async def _spawn_pipeline_processes(
     list[float],
 ]:
     """Start subprocesses for each stage and wire up capture tasks."""
-    from cuprum._pipeline_internals import _EventDetails
     from cuprum._pipeline_streams import _create_stage_capture_tasks
 
     if observations is None:

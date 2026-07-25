@@ -250,6 +250,11 @@ def get_stream_backend() -> StreamBackend:
             return _resolve_rust_forced_backend(requested)
         case StreamBackend.AUTO:
             return _resolve_auto_backend(requested)
+        case _:
+            # A new StreamBackend member must be handled explicitly above;
+            # falling off the end would silently return None.
+            msg = f"unreachable backend {requested!r}"
+            raise AssertionError(msg)
 
 
 __all__ = ["StreamBackend", "get_stream_backend"]

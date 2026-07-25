@@ -8,7 +8,7 @@ completion waiting with optional timeouts, and per-stage
 finalization: when a stage fails or an after-hook raises, pending
 observe-hook tasks must still be drained and every independent
 failure preserved, grouping after-hook and task failures into a
-``BaseExceptionGroup``. It collaborates with ``cuprum._pipeline_spawn``,
+``BaseExceptionGroup``. It collaborates with ``cuprum._process_lifecycle``,
 ``cuprum._pipeline_streams``, ``cuprum._pipeline_types``,
 ``cuprum._pipeline_wait``, ``cuprum._observability``, and
 ``cuprum.context``, and is invoked by ``cuprum.sh`` and
@@ -29,7 +29,6 @@ from cuprum._observability import (
     _resolve_env_overlay,
     _wait_for_exec_hook_tasks,
 )
-from cuprum._pipeline_spawn import _spawn_pipeline_processes
 from cuprum._pipeline_streams import (
     _cancel_stream_tasks,
     _create_pipe_tasks,
@@ -45,6 +44,7 @@ from cuprum._pipeline_types import (
     _StageObservation,
 )
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
+from cuprum._process_lifecycle import _spawn_pipeline_processes
 from cuprum.context import current_context
 
 if typ.TYPE_CHECKING:

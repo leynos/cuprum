@@ -83,7 +83,6 @@ from cuprum.context.registration import (
     scoped,
 )
 from cuprum.context.state import current_context, get_context
-from cuprum.events import ExecHook
 
 __all__ = [
     "AfterHook",
@@ -92,7 +91,6 @@ __all__ = [
     "ContextError",
     "CuprumContext",
     "EnvRegistration",
-    "ExecHook",
     "ForbiddenProgramError",
     "HookRegistration",
     "ScopeConfig",

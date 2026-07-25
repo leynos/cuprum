@@ -21,7 +21,7 @@ from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum._pipeline_internals import _StageObservation
+    from cuprum._pipeline_types import _StageObservation
     from cuprum.events import ExecEvent
 
 

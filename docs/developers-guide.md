@@ -145,8 +145,8 @@ contracts stay aligned.
 ## `cuprum/context/` package layout
 
 `cuprum/context.py` exceeded the 400-line ceiling and mixed four concerns with
-different audiences and change cadences, so it is now a package whose public
-surface is re-exported unchanged from `cuprum/context/__init__.py`:
+different audiences and change cadences, so it is now a package whose context
+surface is re-exported from `cuprum/context/__init__.py`:
 
 - `cuprum/context/env_overlay.py` — pure overlay merging
   (`merge_env_overlays`, `resolve_env`, `_coerce_env_overlay`); no `ContextVar`
@@ -154,21 +154,27 @@ surface is re-exported unchanged from `cuprum/context/__init__.py`:
 - `cuprum/context/core.py` — the domain dataclasses (`CuprumContext`,
   `ScopeConfig`), the `ContextError` package-level root of the domain exception
   hierarchy and its `ForbiddenProgramError` subclass, timeout validation, and
-  the hook type aliases.
+  the before/after hook type aliases.
 - `cuprum/context/state.py` — the `ContextVar` plumbing (`current_context`,
   `get_context`, and the internal set/reset helpers).
 - `cuprum/context/registration.py` — `scoped`, the `_TokenRegistration`
   base, the registration handles, and the `allow`/`before`/`after`/`env`/
   `observe` factories.
 
-Importers are unaffected: `from cuprum.context import …` continues to work for
-the whole public `__all__`. Keep each module under 400 lines; new context
-features go in the module matching their concern.
+Most context importers are unaffected. `ExecHook` is the exception: its
+definition site is `cuprum.events`, it remains available from top-level
+`cuprum`, and it is not re-exported by `cuprum.context`. Keep each module under
+400 lines; new context features go in the module matching their concern.
 
 ## Pipeline execution helper contracts
 
 Pipeline and command execution use small internal helpers whose names expose
 their command-query separation contract:
+
+The separate `_enforce_allowlist` and `_collect_hooks` operations supersede the
+former combined `_run_before_hooks` helper. Keep authorization as an explicit
+command and hook collection as a side-effect-free query; do not recreate the
+combined boundary in `_pipeline_types`.
 
 - `_enforce_allowlist(cmd)` is a command.  It reads the active context and
   raises `ForbiddenProgramError` when `cmd.program` is not allowed.  It must

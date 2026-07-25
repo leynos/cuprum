@@ -3,8 +3,9 @@
 These small dataclasses model the hooks, per-stage observation state, and
 captured results threaded through pipeline coordination. They live apart from
 ``cuprum._pipeline_internals`` so the coordination logic stays within the
-project file-size ceiling; that module re-exports them for backwards
-compatibility.
+project file-size ceiling and so spawn-side modules can import them at the
+top level without import cycles; ``cuprum._pipeline_internals`` re-exports
+them for backwards compatibility.
 """
 
 from __future__ import annotations

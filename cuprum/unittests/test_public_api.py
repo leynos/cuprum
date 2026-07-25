@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import cuprum as c
+from cuprum import context
+from cuprum.events import ExecHook
 
 
 def test_public_exports_are_available() -> None:
@@ -25,6 +27,13 @@ def test_public_exports_are_available() -> None:
     assert c.Pipeline is not None, "Pipeline must be exported"
     assert c.PipelineResult is not None, "PipelineResult must be exported"
     assert callable(c.is_rust_available), "is_rust_available must be exported"
+
+
+def test_exec_hook_uses_events_as_its_definition_site() -> None:
+    """ExecHook remains top-level but is no longer re-exported by context."""
+    assert c.ExecHook is ExecHook, "top-level ExecHook must come from events"
+    assert not hasattr(context, "ExecHook"), "context must not re-export ExecHook"
+    assert "ExecHook" not in context.__all__, "context.__all__ must omit ExecHook"
 
 
 def test_public_catalogue_behaviour_via_reexports() -> None:

@@ -13,7 +13,6 @@
       'cuprum/_observability.py',
       'cuprum/_pipeline_config.py',
       'cuprum/_pipeline_internals.py',
-      'cuprum/_pipeline_spawn.py',
       'cuprum/_pipeline_stage_streams.py',
       'cuprum/_pipeline_streams.py',
       'cuprum/_pipeline_types.py',
