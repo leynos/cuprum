@@ -1111,6 +1111,22 @@ Using `TaskGroup` (where available) or an equivalent pattern, Cuprum treats the
 pipeline as a **single structured task**: entering the context starts all
 subprocesses, leaving it ensures they are either completed or terminated.
 
+#### 8.2.1 Pipeline helper ownership
+
+The former combined `_run_before_hooks` helper has been superseded by separate
+authorization and query operations. `_enforce_allowlist` performs authorization
+and may raise before hook dispatch. `_collect_hooks` reads and copies registered
+hooks without performing authorization, dispatching hooks, or mutating the
+context. Pipeline execution preserves this ordering for every stage before
+emitting its `plan` event and dispatching before-hooks.
+
+`cuprum._pipeline_types` owns the shared pipeline dataclasses and types. Keeping
+these passive definitions separate preserves the dependency-safe import
+boundary and the project file-size constraints; the module does not perform
+execution logic. `cuprum._pipeline_internals` re-exports the shared types only
+for compatibility. Do not reintroduce the combined `_run_before_hooks`
+responsibility in `_pipeline_types`.
+
 Error propagation policy (to be finalized, but roughly):
 
 - Pipelines fail fast: once any stage exits non-zero, Cuprum terminates the
