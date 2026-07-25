@@ -17,6 +17,7 @@ from cuprum.adapters.tracing_adapter import (
     tracing_hook,
 )
 from cuprum.context import ScopeConfig, scoped
+from cuprum.events import new_exec_id
 from cuprum.unittests._adapter_test_support import (
     _make_exec_event,
     _python_builder,
@@ -281,48 +282,39 @@ sys.stdout.write(data.upper())""",
             "post-reset span creation should survive the atomic clear"
         )
 
-    def test_pid_less_events_do_not_create_spans(self) -> None:
-        """Events without a pid are ignored by the tracing hook."""
+    def test_events_without_exec_id_are_ignored(self) -> None:
+        """Legacy events lacking an exec_id are ignored (uncorrelatable).
+
+        Without a correlation token the hook cannot know which execution an
+        event belongs to, so it declines to trace it rather than risk
+        attaching output/exit to an unrelated PID's span.
+        """
         tracer = InMemoryTracer()
         hook = TracingHook(tracer)
 
-        # Create a mock event with pid=None
-        event = _make_exec_event(
-            phase="start",
-            overrides={"program": "echo", "argv": ("echo", "hello")},
+        base = {"program": "echo", "argv": ("echo", "hello"), "pid": 4321}
+        # A full lifecycle, but every event predates the correlation token.
+        hook(_make_exec_event(phase="start", overrides={**base, "exec_id": None}))
+        hook(
+            _make_exec_event(
+                phase="stdout",
+                overrides={**base, "exec_id": None, "line": "hello"},
+            ),
+        )
+        hook(
+            _make_exec_event(
+                phase="exit",
+                overrides={**base, "exec_id": None, "exit_code": 0, "duration_s": 0.1},
+            ),
         )
 
-        # Call the hook for start, output, and exit phases
-        hook(event)
-
-        output_event = _make_exec_event(
-            phase="stdout",
-            overrides={
-                "program": "echo",
-                "argv": ("echo", "hello"),
-                "line": "hello",
-            },
-        )
-        hook(output_event)
-
-        exit_event = _make_exec_event(
-            phase="exit",
-            overrides={
-                "program": "echo",
-                "argv": ("echo", "hello"),
-                "exit_code": 0,
-                "duration_s": 0.1,
-            },
-        )
-        hook(exit_event)
-
-        # No spans should have been created
         assert tracer.spans == [], (
-            "test_pid_less_events_do_not_create_spans should ignore pid-less events"
+            "events without an exec_id must not create or affect any span"
         )
 
     def test_make_exec_event_forwards_all_overrides(self) -> None:
         """Shared event factory preserves every supported override."""
+        exec_id = new_exec_id()
         event = _make_exec_event(
             phase="start",
             overrides={
@@ -332,6 +324,7 @@ sys.stdout.write(data.upper())""",
                 "timestamp": 1.5,
                 "note": "written",
                 "byte_count": 7,
+                "exec_id": exec_id,
             },
         )
 
@@ -341,6 +334,7 @@ sys.stdout.write(data.upper())""",
         assert event.timestamp == 1.5, "timestamp overrides should be forwarded"
         assert event.note == "written", "note overrides should be forwarded"
         assert event.byte_count == 7, "byte count overrides should be forwarded"
+        assert event.exec_id == exec_id, "exec_id overrides should be forwarded"
 
         with pytest.raises(ValueError, match="unknown ExecEvent override fields"):
             _make_exec_event(phase="start", overrides={"unknown": None})
@@ -362,17 +356,16 @@ sys.stdout.write(data.upper())""",
         tracer = InMemoryTracer()
         hook = TracingHook(tracer)
 
-        # Create a mock event with pipeline tags
+        # One execution: start and exit share a correlation token.
+        exec_id = new_exec_id()
+        tags = {
+            "project": "pipeline-test",
+            "pipeline_stage_index": 1,
+            "pipeline_stages": 3,
+        }
         start_event = _make_exec_event(
             phase="start",
-            overrides={
-                "pid": 1234,
-                "tags": {
-                    "project": "pipeline-test",
-                    "pipeline_stage_index": 1,
-                    "pipeline_stages": 3,
-                },
-            },
+            overrides={"pid": 1234, "exec_id": exec_id, "tags": tags},
         )
         hook(start_event)
 
@@ -381,13 +374,10 @@ sys.stdout.write(data.upper())""",
             phase="exit",
             overrides={
                 "pid": 1234,
+                "exec_id": exec_id,
                 "exit_code": 0,
                 "duration_s": 0.1,
-                "tags": {
-                    "project": "pipeline-test",
-                    "pipeline_stage_index": 1,
-                    "pipeline_stages": 3,
-                },
+                "tags": tags,
             },
         )
         hook(exit_event)

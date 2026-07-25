@@ -644,6 +644,13 @@ hooks receive `ExecEvent` values describing:
 Hooks can be used for structured logging, metrics, or tracing without coupling
 Cuprum to a specific telemetry library.
 
+Each event carries a stable `exec_id` correlation token: every lifecycle event
+for one execution — a single command, or one stage of a pipeline — shares the
+same token. Hooks that track per-execution state should correlate by `exec_id`
+rather than `pid`, which the operating system can recycle across executions.
+Events with `exec_id=None` cannot be correlated, so correlation-consuming hooks
+(such as the tracing adapter) drop them.
+
 Awaitable hook results are scheduled as `asyncio.Task` instances and awaited
 before the run completes.
 
@@ -886,13 +893,25 @@ The hook creates spans with these attributes:
 - `cuprum.program`: The program being executed
 - `cuprum.argv`: Full argument vector
 - `cuprum.pid`: Process ID
+- `cuprum.cwd`: Working directory (when set)
 - `cuprum.exit_code`: Exit code (set on span end)
 - `cuprum.duration_s`: Duration in seconds (set on span end)
 - `cuprum.project`: Project name from tags
 - `cuprum.pipeline_stage_index`: Pipeline stage index (if applicable)
+- `cuprum.pipeline_stages`: Total pipeline stages (when applicable)
 
-Output lines (stdout/stderr) are recorded as span events when `record_io=True`
-(the default).
+Output lines (stdout/stderr) are recorded as span events when
+`record_output=True` (the default).
+
+**Correlation note:** the hook correlates an execution's `start`, `stdout`,
+`stderr`, and `exit` events by `ExecEvent.exec_id`, a stable token minted
+once per execution (per pipeline stage for pipelines) — not by `pid`, since
+the operating system can recycle a `pid` across executions. `pid` is still
+recorded as the `cuprum.pid` attribute for observability. Events emitted by
+Cuprum always carry an `exec_id`, so ordinary usage is unaffected. Only
+hand-built or legacy events that omit `exec_id` are affected: the hook
+cannot correlate them, so it ignores them — a `start` without an `exec_id`
+creates no span, and `stdout`/`stderr`/`exit` without one are dropped.
 
 To integrate with OpenTelemetry, implement the `Tracer` and `Span` protocols:
 
@@ -1501,7 +1520,7 @@ The continuous integration (CI) workflows run the following checks:
   - It places matched Python/Rust commands next to each other and measures each
     command ten times to reduce temporal runner drift and outlier sensitivity.
   - It skips comparison and writes a skip report when the saved baseline uses an
-    older benchmark profile shape, because different sampling protocols and
+    older benchmark profile shape because different sampling protocols and
     worker timings are not comparable.
   - Its baseline fetch helper follows GitHub’s signed archive redirects
     without forwarding GitHub-only authentication headers to the storage host.

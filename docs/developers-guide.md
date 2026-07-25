@@ -309,6 +309,45 @@ worker count to enable xdist explicitly. Set `BUILD_JOBS=-jN` to pass the same
 count to Rust test commands and, through `CARGO_JOB_ENV`, to both
 `RAYON_NUM_THREADS` and `CARGO_BUILD_JOBS`.
 
+## Tracing adapter span lifecycle
+
+`cuprum/adapters/tracing_adapter.py` provides `TracingHook`, an observe hook
+that turns the `ExecEvent` stream into OpenTelemetry-style spans. It depends
+only on the `Tracer` and `Span` protocols, so any backend that implements them
+can be plugged in. `cuprum/adapters/tracing_memory.py` supplies `InMemoryTracer`
+and `InMemorySpan`, the reference doubles used by tests and examples:
+`InMemoryTracer` collects spans in memory and protects its span store through
+the shared `_LockedStore` lock (its mutators, and `reset()`, run under that
+lock), while `InMemorySpan` is a plain mutable record that provides no
+synchronization of its own.
+
+**State model.** `TracingHook` keeps `_active_spans`, a dictionary keyed by
+`ExecEvent.exec_id` (the per-execution correlation token), guarded by an
+internal `threading.Lock`:
+
+- **start** builds the span outside the lock, then, under the lock, swaps the
+  mapping atomically — capturing any span already registered for that `exec_id`
+  (a duplicated or reused token) and installing the replacement in one critical
+  section. The detached stale span is then marked failed and ended *outside*
+  the lock, so an arbitrary `Span` that blocks on I/O in `set_status()`/`end()`
+  cannot stall other executions' handlers; each replaced span is still ended
+  exactly once because it is already unreachable via the map.
+- **stdout/stderr** look up the span for the event's `exec_id` under the lock,
+  then record the line as a span event outside the lock.
+- **exit** removes (pops) the span for the event's `exec_id` under the lock,
+  then sets the exit attributes and status and ends the span outside the lock.
+
+Keying on `exec_id` rather than PID is what stops a recycled PID, or delayed
+output/exit from an earlier execution, from attaching to a later execution's
+span. `pid` is retained only as the `cuprum.pid` span attribute for
+observability.
+
+**Legacy or manual events.** An event whose `exec_id` is `None` (a legacy or
+hand-constructed event) cannot be correlated, so it is ignored rather than
+guessed from PID: a `start` without an `exec_id` creates no span, and
+`stdout`/`stderr`/`exit` without one are dropped. Every event Cuprum itself
+emits carries an `exec_id`, so this only affects hand-built event streams.
+
 ## Canonical `_TokenRegistration` handle base
 
 All `ContextVar`-backed scope-registration handles — `AllowRegistration`,

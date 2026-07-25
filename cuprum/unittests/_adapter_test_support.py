@@ -10,11 +10,13 @@ from pathlib import Path
 
 from cuprum import sh
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
-from cuprum.events import ExecEvent, ExecPhase
+from cuprum.events import ExecEvent, ExecPhase, new_exec_id
 from cuprum.program import Program
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.events import ExecId
 
 
 def _python_builder(
@@ -37,7 +39,13 @@ def _make_exec_event(
     phase: ExecPhase,
     overrides: cabc.Mapping[str, object] | None = None,
 ) -> ExecEvent:
-    """Build an ExecEvent with sensible test defaults."""
+    """Build an ExecEvent with sensible test defaults.
+
+    Each event carries a fresh ``exec_id`` by default, mirroring real
+    executions. Tests that span several lifecycle phases of one execution must
+    thread a shared ``exec_id`` override; pass ``{"exec_id": None}`` to build a
+    legacy, uncorrelated event.
+    """
     values: dict[str, object] = {
         "phase": phase,
         "program": "cat",
@@ -52,6 +60,7 @@ def _make_exec_event(
         "tags": {},
         "note": None,
         "byte_count": None,
+        "exec_id": new_exec_id(),
     }
     if overrides is not None:
         unknown = set(overrides) - {field.name for field in dc.fields(ExecEvent)}
@@ -73,6 +82,7 @@ def _make_exec_event(
         tags=typ.cast("cabc.Mapping[str, object]", values["tags"]),
         note=typ.cast("str | None", values["note"]),
         byte_count=typ.cast("int | None", values["byte_count"]),
+        exec_id=typ.cast("ExecId | None", values["exec_id"]),
     )
 
 
