@@ -260,3 +260,21 @@ proptest! {
         }
     }
 }
+
+#[cfg(target_pointer_width = "64")]
+#[rstest]
+fn accumulate_splices_reports_length_overflow() {
+    // Two `usize::MAX` chunks sum past `u64::MAX` on 64-bit targets, so the
+    // second accumulation exercises the `checked_add` overflow branch and must
+    // surface `LengthOverflow` rather than silently capping the total.
+    let outcomes: [Result<usize, PumpError>; 2] = [Ok(usize::MAX), Ok(usize::MAX)];
+    let mut remaining = outcomes.into_iter();
+    let first = remaining.next().unwrap_or(Ok(0));
+
+    let result = accumulate_splices(first, || remaining.next().unwrap_or(Ok(0)), || Ok(()));
+
+    assert!(
+        matches!(result, Err(PumpError::LengthOverflow)),
+        "expected LengthOverflow, got {result:?}"
+    );
+}
