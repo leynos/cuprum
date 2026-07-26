@@ -7,16 +7,16 @@ exit-event helpers shared by the timeout and normal completion paths.
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses as dc
 import time
 import typing as typ
 
 from cuprum._pipeline_internals import _EventDetails
 from cuprum._subprocess_context import _sh_module
-from cuprum._subprocess_stdin import _cancel_stdin_writer
 
 if typ.TYPE_CHECKING:
+    import asyncio
+
     from cuprum._pipeline_internals import _StageObservation
     from cuprum._subprocess_execution import _SubprocessExecution
 
@@ -170,20 +170,19 @@ def _handle_subprocess_timeout(
     )
 
 
-async def _handle_stream_timeout(
+def _handle_stream_timeout(
     exc: TimeoutError,
     *,
-    stdin_task: asyncio.Task[None] | None,
-    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+    stdout_text: str | None,
+    stderr_text: str | None,
     timeout: float | None,
 ) -> typ.NoReturn:
-    """Clean up stdin/stream tasks on timeout and raise _SubprocessTimeoutError."""
-    await _cancel_stdin_writer(stdin_task)
-    stdout_result, stderr_result = await asyncio.gather(
-        *consumers, return_exceptions=True
-    )
-    stdout_text = None if isinstance(stdout_result, BaseException) else stdout_result
-    stderr_text = None if isinstance(stderr_result, BaseException) else stderr_result
+    """Raise ``_SubprocessTimeoutError`` carrying pre-drained stream output.
+
+    The caller drains the stream consumers exactly once and passes the decoded
+    stdout/stderr here, so a timeout preserves whatever output was captured
+    before it fired.
+    """
     raise _SubprocessTimeoutError(
         _SubprocessTimeoutDetails(
             timeout=_require_timeout(timeout, exc),

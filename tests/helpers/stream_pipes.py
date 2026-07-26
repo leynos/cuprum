@@ -29,6 +29,35 @@ def _read_all(fd: int, *, chunk_size: int = 4096) -> bytes:
     return b"".join(chunks)
 
 
+def drain_blocking_payload_size() -> int:
+    """Return a stdin payload size that reliably blocks the writer's ``drain()``.
+
+    A blocked-``drain()`` regression only surfaces when the writer's ``drain()``
+    actually blocks, which requires a payload larger than the OS pipe buffer
+    plus the asyncio transport write high-water mark. Probe the real pipe
+    capacity so callers do not rely on an assumed ~64 KiB buffer.
+
+    ``fcntl`` is imported lazily so importing this module — and collecting the
+    tests that use it — still succeeds on platforms without ``fcntl``; the
+    helper itself is only ever executed on POSIX hosts.
+
+    Returns
+    -------
+    int
+        A payload size exceeding the probed pipe capacity, with a full extra
+        mebibyte of headroom above the default transport high-water mark.
+    """
+    import fcntl
+
+    read_fd, write_fd = os.pipe()
+    try:
+        pipe_capacity = fcntl.fcntl(write_fd, fcntl.F_GETPIPE_SZ)
+    finally:
+        _safe_close(read_fd)
+        _safe_close(write_fd)
+    return pipe_capacity + (1 << 20)
+
+
 @contextlib.contextmanager
 def _pipe_pair() -> cabc.Iterator[tuple[int, int, int, int]]:
     """Manage pipe creation and cleanup for stream tests."""

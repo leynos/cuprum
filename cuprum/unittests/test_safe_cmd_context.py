@@ -20,6 +20,7 @@ from tests.helpers.catalogue import python_builder as build_python_builder
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.events import ExecEvent
     from cuprum.sh import CommandResult, SafeCmd
     from tests.helpers.execution import ExecuteFn, _RunKwargs
 
@@ -206,11 +207,21 @@ def test_run_does_not_invoke_after_hooks_on_cancellation(
     command = python_builder("-c", "import time; time.sleep(10)")
 
     async def orchestrate() -> None:
-        """Start the command under a scope, then cancel it."""
-        with scoped(
-            ScopeConfig(
-                allowlist=frozenset([command.program]), after_hooks=(after_hook,)
-            )
+        """Start the command under a scope, then cancel it once it starts."""
+        started = asyncio.Event()
+
+        def on_event(ev: ExecEvent) -> None:
+            """Signal once the subprocess has actually started."""
+            if ev.phase == "start":
+                started.set()
+
+        with (
+            scoped(
+                ScopeConfig(
+                    allowlist=frozenset([command.program]), after_hooks=(after_hook,)
+                )
+            ),
+            sh.observe(on_event),
         ):
             task = asyncio.create_task(
                 command.run(
@@ -218,7 +229,9 @@ def test_run_does_not_invoke_after_hooks_on_cancellation(
                     context=ExecutionContext(cancel_grace=0.1),
                 ),
             )
-            await asyncio.sleep(0.1)  # Let the process start
+            # Cancel only after the subprocess has actually started: a
+            # deterministic readiness signal rather than a fixed sleep.
+            await asyncio.wait_for(started.wait(), timeout=2.0)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task

@@ -34,7 +34,7 @@ examples in 1.94 seconds. Health check: too_slow.
 ### Investigation outcome
 
 Wyvern replayed the supplied seed five times; every replay passed in 0.18–0.19
-seconds. Sampling 100 `_TAGS` examples took 0.098 seconds and 100 fixed-tag
+seconds. Sampling 100 `_TAGS` examples took 0.098 seconds, and 100 fixed-tag
 observation constructions took 0.001 seconds. Both hypotheses were falsified,
 so no correction or health-check suppression is justified.
 

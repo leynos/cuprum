@@ -53,9 +53,14 @@ async def _wait_for_exit_code(
     ctx: ExecutionContext,
     *,
     timeout: float | None = None,
-    consumers: tuple[asyncio.Task[str | None], ...] = (),
 ) -> tuple[int, float]:
-    """Wait for a subprocess, handling cancellation and capturing exit time."""
+    """Wait for a subprocess exit code, terminating it on timeout or cancel.
+
+    Waiting for the exit code is this helper's sole responsibility. Any stream
+    consumers belong to the caller, which drains them exactly once when the wait
+    fails (see :func:`_run_subprocess_with_streams`); terminating the process
+    here lets those consumers reach EOF during that drain.
+    """
     try:
         if timeout is None:
             exit_code = await process.wait()
@@ -63,16 +68,30 @@ async def _wait_for_exit_code(
             exit_code = await asyncio.wait_for(process.wait(), timeout)
     except (TimeoutError, asyncio.CancelledError):
         # asyncio.wait_for raises TimeoutError on expiry; the surrounding task
-        # may also be cancelled. Both need the same teardown: terminate the
-        # process, then cancel and drain any still-pending consumers before
-        # re-raising the original exception.
+        # may also be cancelled. Both tear the process down before re-raising
+        # the original exception.
         await _terminate_process(process, ctx.cancel_grace)
-        if consumers:
-            _cancel_pending_consumers(consumers)
-            await asyncio.gather(*consumers, return_exceptions=True)
         raise
     exited_at = time.perf_counter()
     return exit_code, exited_at
+
+
+async def _drain_stream_consumers(
+    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+) -> tuple[str | None, str | None]:
+    """Cancel pending consumers, drain them once, and decode their output.
+
+    A consumer that failed or was cancelled maps to ``None`` so a broken reader
+    cannot mask the surrounding failure. Draining here exactly once keeps the
+    timeout and cancellation paths from reconciling the same tasks twice.
+    """
+    _cancel_pending_consumers(consumers)
+    stdout_result, stderr_result = await asyncio.gather(
+        *consumers, return_exceptions=True
+    )
+    stdout_text = None if isinstance(stdout_result, BaseException) else stdout_result
+    stderr_text = None if isinstance(stderr_result, BaseException) else stderr_result
+    return stdout_text, stderr_text
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -190,14 +209,22 @@ async def _run_subprocess_with_streams(
             process,
             execution.ctx,
             timeout=timeout,
-            consumers=consumers,
         )
     except TimeoutError as exc:
-        await _handle_stream_timeout(
-            exc, stdin_task=stdin_task, consumers=consumers, timeout=timeout
+        # The process has been terminated; cancel the stdin writer and drain the
+        # stream consumers exactly once here, then hand the decoded output to the
+        # timeout handler so it survives on the resulting TimeoutExpired.
+        await _cancel_stdin_writer(stdin_task)
+        stdout_text, stderr_text = await _drain_stream_consumers(consumers)
+        _handle_stream_timeout(
+            exc,
+            stdout_text=stdout_text,
+            stderr_text=stderr_text,
+            timeout=timeout,
         )
     except asyncio.CancelledError:
         await _cancel_stdin_writer(stdin_task)
+        await _drain_stream_consumers(consumers)
         raise
     if stdin_task is not None:
         try:
@@ -292,6 +319,7 @@ __all__ = [
     "_build_stream_config",
     "_cancel_pending_consumers",
     "_create_stream_callback",
+    "_drain_stream_consumers",
     "_execute_subprocess",
     "_run_subprocess_with_streams",
     "_spawn_stream_consumers",
