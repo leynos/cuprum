@@ -429,6 +429,6 @@ def test_write_stdin_observes_error_events(
     assert observation.events == expected_events, (
         "stdin writer should emit the expected stdin/stdin_error event sequence"
     )
-    assert any(expected_note in record.message for record in caplog.records), (
-        "stdin failure should be logged with the same diagnostic note"
+    assert expected_note in caplog.text, (
+        "stdin failure should be logged with the exception recorded in its traceback"
     )

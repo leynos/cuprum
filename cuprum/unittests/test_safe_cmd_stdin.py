@@ -12,7 +12,7 @@ not meaningful.
 from __future__ import annotations
 
 import asyncio
-import collections.abc as cabc
+import dataclasses as dc
 import time
 import typing as typ
 
@@ -20,29 +20,15 @@ import pytest
 
 from cuprum import ECHO, ForbiddenProgramError, ScopeConfig, TimeoutExpired, scoped
 from cuprum._subprocess_stdin import _write_stdin as _real_write_stdin
-from cuprum.sh import (
-    CommandResult,
-    ExecutionContext,
-    RunOutputOptions,
-    StdinInput,
-)
+from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum._pipeline_internals import _StageObservation
-    from cuprum.sh import SafeCmd
-
-
-class _RunKwargs(typ.TypedDict, total=False):
-    """Keyword arguments accepted by ``SafeCmd.run``/``SafeCmd.run_sync``."""
-
-    output: RunOutputOptions | None
-    timeout: float | None
-    context: ExecutionContext | None
-    stdin: StdinInput | None
-
-
-type ExecuteFn = cabc.Callable[[SafeCmd, _RunKwargs], CommandResult]
+    from cuprum.sh import CommandResult, SafeCmd
+    from tests.helpers.execution import ExecuteFn, _RunKwargs
 
 
 def _execute_async(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
@@ -69,19 +55,32 @@ def python_builder() -> cabc.Callable[..., SafeCmd]:
     return build_python_builder()
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _StdinFeedCase:
+    """A stdin-feeding scenario: child script, stdin payload, expected stdout."""
+
+    script: str
+    stdin: StdinInput
+    expected_stdout: str
+
+
 @pytest.mark.parametrize(
-    ("script", "stdin", "expected_stdout"),
+    "case",
     [
         pytest.param(
-            "import sys; print(sys.stdin.read(), end='')",
-            StdinInput(text="hello stdin\n"),
-            "hello stdin\n",
+            _StdinFeedCase(
+                script="import sys; print(sys.stdin.read(), end='')",
+                stdin=StdinInput(text="hello stdin\n"),
+                expected_stdout="hello stdin\n",
+            ),
             id="text",
         ),
         pytest.param(
-            "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
-            StdinInput(data=b"\x00raw\xff\n"),
-            "\x00raw\ufffd\n",
+            _StdinFeedCase(
+                script="import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
+                stdin=StdinInput(data=b"\x00raw\xff\n"),
+                expected_stdout="\x00raw\ufffd\n",
+            ),
             id="raw-bytes",
         ),
     ],
@@ -89,22 +88,22 @@ def python_builder() -> cabc.Callable[..., SafeCmd]:
 def test_input_feeds_stdin(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
-    script: str,
-    stdin: StdinInput,
-    expected_stdout: str,
+    case: _StdinFeedCase,
 ) -> None:
     """Text and raw-byte stdin reach the child process.
 
     Exercised under both the ``run()`` and ``run_sync()`` execution strategies.
     """
     _, execute = execution_strategy
-    command = python_builder("-c", script)
+    command = python_builder("-c", case.script)
 
-    result = execute(command, {"stdin": stdin})
+    result = execute(command, {"stdin": case.stdin})
 
-    assert result.exit_code == 0
-    assert result.stdout == expected_stdout
-    assert result.stderr == ""
+    assert result.exit_code == 0, "stdin-fed command should exit cleanly"
+    assert result.stdout == case.expected_stdout, (
+        "the stdin payload should reach the child and be echoed back unchanged"
+    )
+    assert result.stderr == "", "stdin feeding should not emit stderr"
 
 
 def test_input_text_uses_configured_encoding(
@@ -126,17 +125,15 @@ def test_input_text_uses_configured_encoding(
         },
     )
 
-    assert result.exit_code == 0
-    assert result.stdout == "\u2013"
-    assert result.stderr == ""
+    assert result.exit_code == 0, "encoded stdin should be consumed and exit cleanly"
+    assert result.stdout == "\u2013", (
+        "stdin text should be encoded with the configured cp1252 codec"
+    )
+    assert result.stderr == "", "encoded stdin feeding should not emit stderr"
 
 
-def test_input_text_and_input_bytes_conflict(
-    python_builder: cabc.Callable[..., SafeCmd],
-    execution_strategy: tuple[str, ExecuteFn],
-) -> None:
+def test_input_text_and_input_bytes_conflict() -> None:
     """Supplying both stdin forms raises a validation error."""
-    _ = python_builder, execution_strategy
     with pytest.raises(
         ValueError,
         match=r"text and data cannot both be provided",
@@ -163,9 +160,11 @@ def test_input_text_works_when_capture_is_disabled(
         },
     )
 
-    assert result.exit_code == 0
-    assert result.stdout is None
-    assert result.stderr is None
+    assert result.exit_code == 0, (
+        "stdin should still be fed when output capture is disabled"
+    )
+    assert result.stdout is None, "stdout must not be retained when capture is disabled"
+    assert result.stderr is None, "stderr must not be retained when capture is disabled"
 
 
 def test_nonzero_exit_code_is_captured_with_input_text(
@@ -181,10 +180,12 @@ def test_nonzero_exit_code_is_captured_with_input_text(
 
     result = execute(command, {"stdin": StdinInput(text="failure input")})
 
-    assert result.exit_code == 7
-    assert result.ok is False
-    assert result.stdout == "failure input"
-    assert result.stderr == ""
+    assert result.exit_code == 7, "the child's non-zero exit code should be reported"
+    assert result.ok is False, "a non-zero exit must mark the result as not ok"
+    assert result.stdout == "failure input", (
+        "captured stdout should include the fed stdin echoed back"
+    )
+    assert result.stderr == "", "no stderr is expected for this command"
 
 
 def test_process_closing_stdin_early_is_handled(
@@ -197,20 +198,19 @@ def test_process_closing_stdin_early_is_handled(
 
     result = execute(command, {"stdin": StdinInput(text="ignored stdin")})
 
-    assert result.exit_code == 0
-    assert result.stdout == "done\n"
-    assert result.stderr == ""
+    assert result.exit_code == 0, "a child that ignores stdin should still exit cleanly"
+    assert result.stdout == "done\n", "the child's own output should be captured"
+    assert result.stderr == "", "early stdin closure should not surface as stderr"
 
 
-@pytest.mark.parametrize("execution_strategy", ["async", "sync"])
 def test_input_text_encoding_failure_raises(
     python_builder: cabc.Callable[..., SafeCmd],
-    execution_strategy: str,
+    execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """UnicodeEncodeError propagates when text cannot be encoded."""
+    _, execute = execution_strategy
     command = python_builder("-c", "import sys; sys.stdin.read()")
     ctx = ExecutionContext(encoding="ascii", errors="strict")
-    execute = _execute_async if execution_strategy == "async" else _execute_sync
     with pytest.raises(UnicodeEncodeError):
         execute(
             command,
@@ -218,15 +218,14 @@ def test_input_text_encoding_failure_raises(
         )
 
 
-@pytest.mark.parametrize("execution_strategy", ["async", "sync"])
 def test_forbidden_command_rejects_before_stdin_encoding(
     python_builder: cabc.Callable[..., SafeCmd],
-    execution_strategy: str,
+    execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """Forbidden commands fail before stdin encoding is attempted."""
+    _, execute = execution_strategy
     command = python_builder("-c", "import sys; sys.stdin.read()")
     ctx = ExecutionContext(encoding="ascii", errors="strict")
-    execute = _execute_async if execution_strategy == "async" else _execute_sync
 
     with (
         scoped(ScopeConfig(allowlist=frozenset([ECHO]))),
@@ -238,17 +237,16 @@ def test_forbidden_command_rejects_before_stdin_encoding(
         )
 
 
-@pytest.mark.parametrize("execution_strategy", ["async", "sync"])
 def test_stdin_input_with_timeout_escalation(
     python_builder: cabc.Callable[..., SafeCmd],
-    execution_strategy: typ.Literal["async", "sync"],
+    execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """Stdin writer task is cleaned up when the command times out."""
+    _, execute = execution_strategy
     command = python_builder(
         "-c",
         "import sys, time; sys.stdin.read(); time.sleep(10)",
     )
-    execute = _execute_async if execution_strategy == "async" else _execute_sync
     with pytest.raises(TimeoutExpired):
         execute(
             command,
@@ -260,10 +258,9 @@ def test_stdin_input_with_timeout_escalation(
         )
 
 
-@pytest.mark.parametrize("execution_strategy", ["async", "sync"])
 def test_direct_timeout_with_blocked_stdin_writer_does_not_hang(
     python_builder: cabc.Callable[..., SafeCmd],
-    execution_strategy: typ.Literal["async", "sync"],
+    execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """Direct-mode timeout cancels a stdin writer wedged on an unread pipe.
 
@@ -272,8 +269,8 @@ def test_direct_timeout_with_blocked_stdin_writer_does_not_hang(
     that writer rather than wait on it, raising ``TimeoutExpired`` promptly
     instead of blocking on the stalled drain (regression for #117).
     """
+    _, execute = execution_strategy
     command = python_builder("-c", "import time; time.sleep(3600)")
-    execute = _execute_async if execution_strategy == "async" else _execute_sync
     payload = b"x" * (1024 * 1024)  # 1 MiB dwarfs the ~64 KiB pipe buffer
     started = time.perf_counter()
     with pytest.raises(TimeoutExpired):

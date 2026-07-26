@@ -9,27 +9,27 @@ hooks.
 from __future__ import annotations
 
 import asyncio
-import collections.abc as cabc
 import typing as typ
 
 import pytest
 
 from cuprum import ECHO, ForbiddenProgramError, ScopeConfig, scoped, sh
-from cuprum.sh import CommandResult, ExecutionContext, RunOutputOptions
+from cuprum.sh import ExecutionContext, RunOutputOptions
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
-    from cuprum.sh import SafeCmd
+    import collections.abc as cabc
 
-type ExecuteFn = cabc.Callable[[SafeCmd, dict[str, typ.Any]], CommandResult]
+    from cuprum.sh import CommandResult, SafeCmd
+    from tests.helpers.execution import ExecuteFn, _RunKwargs
 
 
-def _execute_async(cmd: SafeCmd, kwargs: dict[str, typ.Any]) -> CommandResult:
+def _execute_async(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
     """Execute a SafeCmd using the async run() method."""
     return asyncio.run(cmd.run(**kwargs))
 
 
-def _execute_sync(cmd: SafeCmd, kwargs: dict[str, typ.Any]) -> CommandResult:
+def _execute_sync(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
     """Execute a SafeCmd using the sync run_sync() method."""
     return cmd.run_sync(**kwargs)
 
@@ -75,8 +75,8 @@ def test_run_succeeds_when_program_in_allowlist(
     command = sh.make(ECHO)("-n", "allowed")
     with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         result = execute(command, {})
-    assert result.exit_code == 0
-    assert result.stdout == "allowed"
+    assert result.exit_code == 0, "an allowlisted program should run and exit cleanly"
+    assert result.stdout == "allowed", "the allowlisted command's output should capture"
 
 
 def test_run_succeeds_with_empty_allowlist() -> None:
@@ -84,8 +84,8 @@ def test_run_succeeds_with_empty_allowlist() -> None:
     # Default context has empty allowlist which permits all programs
     command = sh.make(ECHO)("-n", "hello")
     result = asyncio.run(command.run())
-    assert result.exit_code == 0
-    assert result.stdout == "hello"
+    assert result.exit_code == 0, "an empty allowlist should permit all programs"
+    assert result.stdout == "hello", "the permitted command's output should be captured"
 
 
 def test_run_invokes_before_hooks_in_fifo_order(
@@ -111,7 +111,7 @@ def test_run_invokes_before_hooks_in_fifo_order(
     with scoped(ScopeConfig(allowlist=frozenset([ECHO]), before_hooks=(hook1, hook2))):
         execute(command, {})
 
-    assert call_order == [1, 2]
+    assert call_order == [1, 2], "before hooks should run in FIFO registration order"
 
 
 def test_run_invokes_after_hooks_in_lifo_order(
@@ -142,7 +142,9 @@ def test_run_invokes_after_hooks_in_lifo_order(
             execute(command, {})
 
     # Inner hook (2) runs first, then outer hook (1) - true LIFO semantics
-    assert call_order == [2, 1]
+    assert call_order == [2, 1], (
+        "after hooks should run in LIFO order (inner scope before outer)"
+    )
 
 
 def test_run_passes_command_and_result_to_hooks(
@@ -173,11 +175,17 @@ def test_run_passes_command_and_result_to_hooks(
     ):
         result = execute(command, {})
 
-    assert len(before_received) == 1
-    assert before_received[0] is command
-    assert len(after_received) == 1
-    assert after_received[0][0] is command
-    assert after_received[0][1] is result
+    assert len(before_received) == 1, "the before hook should be invoked exactly once"
+    assert before_received[0] is command, (
+        "the before hook should receive the executed command"
+    )
+    assert len(after_received) == 1, "the after hook should be invoked exactly once"
+    assert after_received[0][0] is command, (
+        "the after hook should receive the executed command"
+    )
+    assert after_received[0][1] is result, (
+        "the after hook should receive the command result"
+    )
 
 
 def test_run_does_not_invoke_after_hooks_on_cancellation(
@@ -216,4 +224,6 @@ def test_run_does_not_invoke_after_hooks_on_cancellation(
                 await task
 
     asyncio.run(orchestrate())
-    assert after_called is False
+    assert after_called is False, (
+        "after hooks must not run when the command is cancelled"
+    )

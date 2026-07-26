@@ -23,12 +23,12 @@ def _emit_stdin_error(
     operation: str,
 ) -> None:
     """Emit an observable diagnostic for stdin pipe write failures."""
-    _LOGGER.warning(
-        "stdin_%s_failed pid=%s error=%s: %s",
+    _LOGGER.error(
+        "stdin_%s_failed pid=%s error=%s",
         operation,
         process.pid,
         type(exc).__name__,
-        exc,
+        exc_info=exc,
         extra={
             "cuprum_pid": process.pid,
             "cuprum_stdin_operation": operation,
