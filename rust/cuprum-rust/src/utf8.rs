@@ -341,8 +341,14 @@ mod kani_proofs {
         if let Err(err) = core::str::from_utf8(&bytes) {
             let valid_up_to = err.valid_up_to();
             if let Some(error_len) = err.error_len() {
-                // The addition must not overflow, and the resulting drain end
-                // must stay within the buffer that `handle_utf8_error` drains.
+                // Cover proves the malformed-sequence branch is reachable, so
+                // the assertion below is not vacuously satisfied.
+                kani::cover!(
+                    error_len >= 1,
+                    "reaches a malformed sequence with a bounded error length"
+                );
+                // The addition must not overflow, and the drain end must stay
+                // within the buffer that `handle_utf8_error` drains.
                 let drain_end = valid_up_to
                     .checked_add(error_len)
                     .expect("valid_up_to + error_len must not overflow");
@@ -351,7 +357,12 @@ mod kani_proofs {
                     "the drain bound never exceeds the pending buffer",
                 );
             } else {
-                // Incomplete tail: the retained prefix bound is in range too.
+                // Cover proves the incomplete-tail branch (error_len == None)
+                // is reachable; the retained prefix bound is then in range too.
+                kani::cover!(
+                    valid_up_to < bytes.len(),
+                    "reaches an incomplete trailing sequence (error_len == None)"
+                );
                 kani::assert(
                     valid_up_to <= bytes.len(),
                     "the incomplete-sequence prefix bound stays in range",
@@ -379,7 +390,8 @@ mod kani_proofs {
         // The prefix is valid UTF-8 by construction, so the checked decode
         // cannot fail; the unchecked path must produce the identical string.
         let prefix = &bytes[..valid_up_to];
-        let checked = core::str::from_utf8(prefix).unwrap();
+        let checked =
+            core::str::from_utf8(prefix).expect("the valid_up_to prefix decodes as UTF-8");
         kani::assert(
             output == checked,
             "unchecked prefix decode must equal the checked decode",
