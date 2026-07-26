@@ -10,13 +10,22 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from cuprum._subprocess_execution import _drain_stream_consumers, _wait_for_exit_code
+from cuprum._subprocess_execution import (
+    _drain_stream_consumers,
+    _wait_for_exit_code,
+    _wait_for_exit_code_within_timeout,
+)
 from cuprum._subprocess_timeout import (
     _handle_stream_timeout,
     _SubprocessInvariantError,
     _SubprocessTimeoutError,
 )
 from cuprum.sh import ExecutionContext
+
+if typ.TYPE_CHECKING:
+    # Referenced only through the string-based ``typ.cast`` below, so it carries
+    # no runtime dependency and stays type-checking-only.
+    from cuprum._subprocess_execution import _SubprocessExecution
 
 # A consumer either completes with captured text or fails with an exception.
 _CONSUMER_OUTCOME = st.one_of(
@@ -274,6 +283,87 @@ def test_wait_for_exit_code_terminates_process_on_cancellation() -> None:
 
         assert process.returncode == -15, (
             "the process must be terminated during cancellation cleanup, "
+            f"but returncode={process.returncode}"
+        )
+
+    asyncio.run(run_case())
+
+
+class _ExitedProcess:
+    """Process double whose ``wait()`` returns immediately (already exited)."""
+
+    def __init__(self, returncode: int = 0) -> None:
+        """Start already exited, with a recorded exit code and a pid."""
+        self.returncode = returncode
+        self.pid = 5678
+
+    async def wait(self) -> int:
+        """Return the recorded exit code without ever suspending."""
+        return self.returncode
+
+    def terminate(self) -> None:
+        """No-op: the process has already exited."""
+
+    def kill(self) -> None:
+        """No-op: the process has already exited."""
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _DeadlineExecution:
+    """Execution stand-in exposing only the fields the waiter reads."""
+
+    ctx: ExecutionContext
+    timeout: float | None
+
+
+@pytest.mark.parametrize("timeout", [0, 0.0, -1.0])
+def test_non_positive_timeout_expires_immediately(timeout: float) -> None:
+    """A non-positive deadline times out even when the process already exited.
+
+    ``asyncio.timeout`` schedules its cancellation only for the next event-loop
+    iteration, so a process whose ``wait()`` returns without suspending would
+    otherwise race past a zero or negative deadline and report success. The
+    waiter must instead expire deterministically, preserving the previous
+    ``asyncio.wait_for`` behaviour (regression for ``run(timeout=0)``).
+    """
+
+    async def run_case() -> None:
+        """Drive the waiter with an already-exited process and expect a timeout."""
+        process = _ExitedProcess()
+        execution = _DeadlineExecution(ctx=ExecutionContext(), timeout=timeout)
+
+        with pytest.raises(TimeoutError):
+            await _wait_for_exit_code_within_timeout(
+                typ.cast("asyncio.subprocess.Process", process),
+                typ.cast("_SubprocessExecution", execution),
+            )
+
+    asyncio.run(run_case())
+
+
+def test_non_positive_timeout_terminates_running_process() -> None:
+    """A non-positive deadline terminates a still-running process before raising.
+
+    Stream consumers belong to the caller, which drains them exactly once via
+    ``_drain_stream_consumers``; the fast path's own teardown duty is to
+    terminate the process so those consumers can reach EOF during that drain.
+    """
+
+    async def run_case() -> None:
+        """Expire immediately against a running process and assert termination."""
+        process = _TimeoutWaitProcess()
+        execution = _DeadlineExecution(
+            ctx=ExecutionContext(cancel_grace=0.1), timeout=0
+        )
+
+        with pytest.raises(TimeoutError):
+            await _wait_for_exit_code_within_timeout(
+                typ.cast("asyncio.subprocess.Process", process),
+                typ.cast("_SubprocessExecution", execution),
+            )
+
+        assert process.returncode == -15, (
+            "the process must be terminated when a non-positive deadline expires, "
             f"but returncode={process.returncode}"
         )
 

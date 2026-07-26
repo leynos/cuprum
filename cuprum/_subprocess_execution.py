@@ -98,6 +98,32 @@ async def _drain_stream_consumers(
     return stdout_text, stderr_text
 
 
+async def _wait_for_exit_code_within_timeout(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+) -> tuple[int, float]:
+    """Await the exit code under ``execution.timeout``, or unbounded when ``None``.
+
+    A non-positive timeout denotes an already-elapsed deadline. ``asyncio.timeout``
+    would only schedule its cancellation for the next event-loop iteration, so a
+    fast, already-exited process whose ``wait()`` never suspends would race past
+    it and return successfully. To keep ``run(timeout=0)`` deterministic — and to
+    preserve the behaviour of the ``asyncio.wait_for`` implementation this
+    replaced — a non-positive deadline expires immediately: the process is
+    terminated and :class:`TimeoutError` is raised without awaiting ``wait()``.
+
+    Stream consumers belong to the caller, which drains them exactly once via
+    :func:`_drain_stream_consumers`; terminating the process here lets those
+    consumers reach EOF during that drain.
+    """
+    timeout = execution.timeout
+    if timeout is not None and timeout <= 0:
+        await _terminate_process(process, execution.ctx.cancel_grace)
+        raise TimeoutError
+    async with asyncio.timeout(timeout):
+        return await _wait_for_exit_code(process, execution.ctx)
+
+
 @dc.dataclass(frozen=True, slots=True)
 class _SubprocessExecution:
     """Execution context bundle for subprocess spawning."""
@@ -208,11 +234,10 @@ async def _run_subprocess_with_streams(
         process, execution.stdin_data, execution.observation
     )
     try:
-        async with asyncio.timeout(execution.timeout):
-            exit_code, exited_at = await _wait_for_exit_code(
-                process,
-                execution.ctx,
-            )
+        exit_code, exited_at = await _wait_for_exit_code_within_timeout(
+            process,
+            execution,
+        )
     except TimeoutError as exc:
         # The process has been terminated; cancel the stdin writer and drain the
         # stream consumers exactly once here, then hand the decoded output to the
@@ -258,11 +283,10 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
                 process, execution.stdin_data, execution.observation
             )
             try:
-                async with asyncio.timeout(execution.timeout):
-                    exit_code, exited_at = await _wait_for_exit_code(
-                        process,
-                        execution.ctx,
-                    )
+                exit_code, exited_at = await _wait_for_exit_code_within_timeout(
+                    process,
+                    execution,
+                )
             except (TimeoutError, asyncio.CancelledError):
                 # Manage the stdin writer separately from _wait_for_exit_code's
                 # consumers: cancel and drain it before the timeout is
@@ -326,4 +350,5 @@ __all__ = [
     "_spawn_stream_consumers",
     "_spawn_subprocess",
     "_wait_for_exit_code",
+    "_wait_for_exit_code_within_timeout",
 ]
