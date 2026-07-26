@@ -23,7 +23,7 @@ from cuprum._subprocess_timeout import (
 from cuprum.sh import ExecutionContext
 
 if typ.TYPE_CHECKING:
-    # Referenced only through the string-based ``typ.cast`` below, so it carries
+    # Only referenced through the string-based ``typ.cast`` below, so it carries
     # no runtime dependency and stays type-checking-only.
     from cuprum._subprocess_execution import _SubprocessExecution
 
