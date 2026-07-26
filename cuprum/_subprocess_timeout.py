@@ -230,7 +230,10 @@ def _handle_stream_timeout(
 
     The caller drains the stream consumers exactly once and passes the decoded
     stdout/stderr here, so a timeout preserves whatever output was captured
-    before it fired.
+    before it fired. ``timeout`` is carried metadata, not a deadline this
+    function awaits on; it records the timeout the caller configured so it can
+    populate the raised error. The function is synchronous, so ``ASYNC109`` does
+    not apply to that parameter name.
     """
     raise _SubprocessTimeoutError(
         _SubprocessTimeoutDetails(

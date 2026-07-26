@@ -225,12 +225,15 @@ def test_wait_for_exit_code_terminates_process_on_timeout() -> None:
         process = _TimeoutWaitProcess()
         ctx = ExecutionContext(cancel_grace=0.1)
 
+        # The deadline now belongs to the caller: asyncio.timeout expiry cancels
+        # the wait, driving the same cleanup branch and re-raising as
+        # TimeoutError at the context-manager boundary.
         with pytest.raises(TimeoutError):
-            await _wait_for_exit_code(
-                typ.cast("asyncio.subprocess.Process", process),
-                ctx,
-                timeout=0.05,
-            )
+            async with asyncio.timeout(0.05):
+                await _wait_for_exit_code(
+                    typ.cast("asyncio.subprocess.Process", process),
+                    ctx,
+                )
 
         assert process.returncode == -15, (
             "the process must be terminated during timeout cleanup, "
