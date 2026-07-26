@@ -2367,6 +2367,23 @@ Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_timeout`; and orchestration that coordinates them belongs in
 `_subprocess_execution`.
 
+The subprocess wait path uses caller-owned deadlines: `asyncio.timeout()` was
+adopted in place of `asyncio.wait_for()`, so the deadline is applied by the
+caller rather than threaded through a `timeout` parameter. The wait logic is
+split accordingly: `_wait_for_exit_code` awaits the process and terminates it
+on cancellation, and no longer takes a timeout argument, while
+`_wait_for_exit_code_within_timeout` applies `execution.timeout` around it. A
+non-positive timeout is special-cased to expire immediately and
+deterministically, because `asyncio.timeout()` alone would let a fast,
+already-exited process race past a zero or negative deadline; this preserves
+the behaviour of the previous `asyncio.wait_for()` implementation and is
+guarded by regression tests in `cuprum/unittests/test_subprocess_timeout.py`.
+
+Both wait helpers terminate the process but never drain: stream consumers
+belong to the caller, which drains them exactly once via
+`_drain_stream_consumers` (see the stdin-injection sequence below). Terminating
+the process first is what lets that single drain reach EOF.
+
 ## Subprocess stdin injection
 
 When `stdin: StdinInput` is passed to `SafeCmd.run()`, the following sequence

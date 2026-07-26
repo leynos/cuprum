@@ -375,6 +375,11 @@ exception: `exc.output` / `exc.stderr` hold the partial stdout/stderr (or
 `None` when `capture=False`), so callers can inspect what the command
 produced before it was killed.
 
+**Non-positive timeout behaviour:** a `timeout` of `0` or a negative value is
+treated as already elapsed, so the command expires immediately, terminating
+any already-running process without waiting on it and raising
+`TimeoutExpired`.
+
 Timeout resolution order:
 
 - Explicit `timeout` argument on `run()` / `run_sync` when not `None`.
