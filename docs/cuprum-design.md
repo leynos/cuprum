@@ -1718,7 +1718,8 @@ def rust_pump_stream(
     Raises
     ------
     ValueError
-        When ``buffer_size`` is less than 1 or exceeds the 1 GiB maximum.
+        When ``buffer_size`` is not a positive integer or exceeds the 1 GiB
+        maximum.
     OSError
         When an I/O error occurs during transfer. Expected broken-pipe
         conditions are swallowed while the reader continues draining.
