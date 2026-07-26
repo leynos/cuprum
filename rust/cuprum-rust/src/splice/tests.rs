@@ -2,8 +2,7 @@
 //! drain: full transfer between pipes, fallback signalling for
 //! unsupported descriptor types, and broken-pipe draining.
 
-use std::fs::File;
-use std::io;
+use std::io::{self, Write};
 use std::os::fd::{AsRawFd, OwnedFd};
 
 use proptest::prelude::*;
@@ -58,11 +57,13 @@ fn unsupported_descriptors_signal_fallback() {
     // Unique temp files avoid name collisions between concurrent test
     // runs; each `NamedTempFile` removes itself on drop, so a mid-test
     // panic leaves nothing behind.
-    let reader_file = unwrap_ok(NamedTempFile::new());
+    let mut reader_file = unwrap_ok(NamedTempFile::new());
     let writer_file = unwrap_ok(NamedTempFile::new());
-    unwrap_ok(std::fs::write(reader_file.path(), b"file payload"));
-    let reader = OwnedFd::from(unwrap_ok(File::open(reader_file.path())));
-    let writer = OwnedFd::from(unwrap_ok(File::create(writer_file.path())));
+    unwrap_ok(reader_file.as_file_mut().write_all(b"file payload"));
+    // `reopen()` hands back an independent descriptor to the same inode,
+    // verified against replacement, rather than a racy path lookup.
+    let reader = OwnedFd::from(unwrap_ok(reader_file.reopen()));
+    let writer = OwnedFd::from(unwrap_ok(writer_file.reopen()));
 
     // Two regular files cannot splice; the first call must signal the
     // read/write fallback rather than erroring.
