@@ -73,7 +73,7 @@ def test_stream_timeout_preserves_timeout_when_consumer_fails() -> None:
                 TimeoutError(),
                 stdin_task=stdin_task,
                 consumers=consumers,
-                timeout=1.0,
+                configured_timeout=1.0,
             )
 
         assert stdin_task.cancelled(), (
@@ -137,7 +137,7 @@ def test_handle_stream_timeout_upholds_invariants_across_orderings(
                 TimeoutError(),
                 stdin_task=stdin_task,
                 consumers=consumers,
-                timeout=case.timeout,
+                configured_timeout=case.timeout,
             )
 
         exc = exc_info.value
@@ -202,10 +202,11 @@ class _TimeoutWaitProcess:
 def test_wait_for_exit_code_cancels_pending_consumers_on_timeout() -> None:
     """A timed-out wait cancels and drains consumers still pending after kill.
 
-    The stream path hands its stdout/stderr tasks to ``_wait_for_exit_code`` as
-    ``consumers``. When ``process.wait()`` times out and a consumer remains
-    blocked after termination, cleanup must cancel and drain it so timeout
-    handling cannot hang, while the original ``TimeoutError`` still propagates.
+    The stream path wraps ``_wait_for_exit_code`` in ``asyncio.timeout`` and
+    hands it the stdout/stderr tasks as ``consumers``. When the deadline expires
+    while a consumer remains blocked after termination, cleanup must cancel and
+    drain it so timeout handling cannot hang, while ``asyncio.timeout`` still
+    surfaces the expiry as ``TimeoutError``.
     """
 
     async def blocking_consumer() -> str | None:
@@ -219,12 +220,12 @@ def test_wait_for_exit_code_cancels_pending_consumers_on_timeout() -> None:
         ctx = ExecutionContext(cancel_grace=0.1)
 
         with pytest.raises(TimeoutError):
-            await _wait_for_exit_code(
-                typ.cast("asyncio.subprocess.Process", process),
-                ctx,
-                timeout=0.05,
-                consumers=(consumer,),
-            )
+            async with asyncio.timeout(0.05):
+                await _wait_for_exit_code(
+                    typ.cast("asyncio.subprocess.Process", process),
+                    ctx,
+                    consumers=(consumer,),
+                )
 
         assert consumer.cancelled(), (
             "a consumer left pending at timeout must be cancelled during "

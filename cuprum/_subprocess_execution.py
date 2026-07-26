@@ -52,20 +52,21 @@ async def _wait_for_exit_code(
     process: asyncio.subprocess.Process,
     ctx: ExecutionContext,
     *,
-    timeout: float | None = None,
     consumers: tuple[asyncio.Task[str | None], ...] = (),
 ) -> tuple[int, float]:
-    """Wait for a subprocess, handling cancellation and capturing exit time."""
+    """Wait for a subprocess, handling cancellation and capturing exit time.
+
+    The deadline is owned by the caller via ``asyncio.timeout``; an expired
+    deadline surfaces here as a ``CancelledError`` and is handled identically to
+    an external cancellation.
+    """
     try:
-        if timeout is None:
-            exit_code = await process.wait()
-        else:
-            exit_code = await asyncio.wait_for(process.wait(), timeout)
-    except (TimeoutError, asyncio.CancelledError):
-        # asyncio.wait_for raises TimeoutError on expiry; the surrounding task
-        # may also be cancelled. Both need the same teardown: terminate the
-        # process, then cancel and drain any still-pending consumers before
-        # re-raising the original exception.
+        exit_code = await process.wait()
+    except asyncio.CancelledError:
+        # Cancellation — whether external or injected by the caller's
+        # ``asyncio.timeout`` on deadline expiry — needs the same teardown:
+        # terminate the process, then cancel and drain any still-pending
+        # consumers before re-raising.
         await _terminate_process(process, ctx.cancel_grace)
         if consumers:
             _cancel_pending_consumers(consumers)
@@ -177,7 +178,6 @@ async def _run_subprocess_with_streams(
     execution: _SubprocessExecution,
     *,
     pid: int | None,
-    timeout: float | None,
 ) -> tuple[int, float, str | None, str | None]:
     """Run subprocess with stream capture and timeout handling."""
     stream_config = _build_stream_config(execution)
@@ -186,15 +186,18 @@ async def _run_subprocess_with_streams(
         process, execution.stdin_data, execution.observation
     )
     try:
-        exit_code, exited_at = await _wait_for_exit_code(
-            process,
-            execution.ctx,
-            timeout=timeout,
-            consumers=consumers,
-        )
+        async with asyncio.timeout(execution.timeout):
+            exit_code, exited_at = await _wait_for_exit_code(
+                process,
+                execution.ctx,
+                consumers=consumers,
+            )
     except TimeoutError as exc:
         await _handle_stream_timeout(
-            exc, stdin_task=stdin_task, consumers=consumers, timeout=timeout
+            exc,
+            stdin_task=stdin_task,
+            consumers=consumers,
+            configured_timeout=execution.timeout,
         )
     except asyncio.CancelledError:
         await _cancel_stdin_writer(stdin_task)
@@ -229,11 +232,11 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
                 process, execution.stdin_data, execution.observation
             )
             try:
-                exit_code, exited_at = await _wait_for_exit_code(
-                    process,
-                    execution.ctx,
-                    timeout=execution.timeout,
-                )
+                async with asyncio.timeout(execution.timeout):
+                    exit_code, exited_at = await _wait_for_exit_code(
+                        process,
+                        execution.ctx,
+                    )
             except (TimeoutError, asyncio.CancelledError):
                 # Manage the stdin writer separately from _wait_for_exit_code's
                 # consumers: cancel and drain it before the timeout is
@@ -253,7 +256,6 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
                 process,
                 execution,
                 pid=pid,
-                timeout=execution.timeout,
             )
     except (TimeoutError, _SubprocessTimeoutError) as exc:
         _handle_subprocess_timeout(
