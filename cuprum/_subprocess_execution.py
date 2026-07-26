@@ -234,8 +234,7 @@ async def _run_subprocess_with_streams(
             # this await) must still reconcile the stdout/stderr consumers,
             # mirroring the timeout and cancellation paths above, so those tasks
             # are cancelled and drained before the error propagates.
-            _cancel_pending_consumers(consumers)
-            await asyncio.gather(*consumers, return_exceptions=True)
+            await _drain_stream_consumers(consumers)
             raise
     stdout_text, stderr_text = await asyncio.gather(*consumers)
     return exit_code, exited_at, stdout_text, stderr_text

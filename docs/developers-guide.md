@@ -1669,11 +1669,26 @@ executes:
    successful writes and `cuprum_stdin_errors_total` for failure events.
 5. In the streaming path (`_run_subprocess_with_streams`), the stdin writer
    task runs concurrently with the stdout/stderr consumer tasks.  On
-   `TimeoutError`, `_handle_stream_timeout` cancels/gathers the stdin task
-   before raising `_SubprocessTimeoutError`.  On `asyncio.CancelledError`, the
-   task is explicitly cancelled and gathered before re-raising.
+   `TimeoutError` or `asyncio.CancelledError`, `_run_subprocess_with_streams`
+   itself cancels and gathers the stdin writer via `_cancel_stdin_writer`,
+   then drains the stdout/stderr consumers exactly once via
+   `_drain_stream_consumers`.  `_wait_for_exit_code` has already terminated
+   the process, so the drain reaches EOF.  Only after that draining does it
+   call `_handle_stream_timeout`, which merely raises
+   `_SubprocessTimeoutError` carrying the pre-drained stdout/stderr; on the
+   cancellation path `CancelledError` is re-raised directly.
 6. In the non-streaming path (`_execute_subprocess`), the same writer task is
    created and awaited after `_wait_for_exit_code` completes.
+
+The `tests/helpers/stream_pipes.py` module provides
+`drain_blocking_payload_size()`, a shared helper returning a stdin payload
+size that reliably wedges the writer's `drain()`.  It probes the real OS
+pipe capacity (via `fcntl(F_GETPIPE_SZ)` on Linux) and adds a mebibyte of
+headroom, falling back to a conservative default on platforms that cannot
+probe it so callers need no platform guard.  It exists solely to make
+blocked-`drain()` regression tests deterministic and is shared by
+`test_safe_cmd_stdin.py` and `test_observe_stdin_early_close.py`; new
+blocked-writer tests should reuse it rather than hardcoding a payload size.
 
 `_execute_with_hooks(cmd, execution, tracking)` is the single site that runs
 `_execute_subprocess`, iterates after-hooks, and co-ordinates cancellation-safe

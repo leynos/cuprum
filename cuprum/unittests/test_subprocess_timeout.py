@@ -84,14 +84,24 @@ def test_drain_stream_consumers_cancels_pending_and_decodes() -> None:
     asyncio.run(run_case())
 
 
+# Number of event-loop turns the harness lets consumers settle before draining.
+# ``_consumer`` needs ``delay + 1`` turns to reach its outcome, and each consumer
+# is scheduled exactly once per turn, so a consumer whose ``delay`` is at least
+# ``_SETTLE_TURNS`` is still pending when the drain runs (and must be cancelled
+# and decoded to ``None``); one with a smaller delay has completed and keeps its
+# outcome.
+_SETTLE_TURNS = 2
+
+
 @settings(max_examples=75, deadline=None, derandomize=True)
 @given(case=_DRAIN_CASE)
 def test_drain_stream_consumers_decodes_across_orderings(case: _DrainCase) -> None:
-    """_drain_stream_consumers drains once and decodes each consumer outcome.
+    """_drain_stream_consumers drains once, decoding completed and pending readers.
 
-    Across arbitrary interleavings of consumer completion and failure, the
-    helper must drain every consumer and surface each successful consumer's
-    text while mapping a failed consumer to ``None``.
+    Consumers settle for a fixed number of event-loop turns before the drain, so
+    those whose delay fits the window complete (their text preserved, a failure
+    mapping to ``None``) while those whose delay exceeds it are still pending at
+    drain time and must be cancelled and decoded to ``None``.
     """
 
     async def run_case() -> None:
@@ -100,22 +110,34 @@ def test_drain_stream_consumers_decodes_across_orderings(case: _DrainCase) -> No
             asyncio.create_task(_consumer(case.stdout, case.stdout_delay)),
             asyncio.create_task(_consumer(case.stderr, case.stderr_delay)),
         )
-        # Let every consumer reach its outcome before draining, so the decode
-        # path (text preserved, failure -> None) is exercised rather than the
-        # cancellation of a reader that never got to run.
-        await asyncio.gather(*consumers, return_exceptions=True)
+        # Let consumers settle for a bounded number of turns rather than awaiting
+        # every one to completion, so readers slower than the window remain
+        # pending when the drain runs and exercise its cancellation path.
+        for _ in range(_SETTLE_TURNS):
+            await asyncio.sleep(0)
 
         stdout_text, stderr_text = await _drain_stream_consumers(consumers)
 
         assert all(task.done() for task in consumers), (
             "every consumer task must be drained before the helper returns"
         )
-        for label, captured, outcome in (
-            ("stdout", stdout_text, case.stdout),
-            ("stderr", stderr_text, case.stderr),
+        for label, task, captured, outcome, delay in (
+            ("stdout", consumers[0], stdout_text, case.stdout, case.stdout_delay),
+            ("stderr", consumers[1], stderr_text, case.stderr, case.stderr_delay),
         ):
             kind, value = outcome
-            expected = None if kind == "raise" else value
+            if delay >= _SETTLE_TURNS:
+                assert task.cancelled(), (
+                    f"{label} consumer with delay {delay} must still be pending at "
+                    f"drain and be cancelled, but cancelled()={task.cancelled()}"
+                )
+                expected = None
+            else:
+                assert not task.cancelled(), (
+                    f"{label} consumer with delay {delay} must complete within the "
+                    "settling window rather than being cancelled"
+                )
+                expected = None if kind == "raise" else value
             assert captured == expected, (
                 f"{label} capture must reflect its consumer outcome: "
                 f"expected {expected!r}, got {captured!r}"
