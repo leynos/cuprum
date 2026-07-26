@@ -67,6 +67,25 @@ Both `TarCreateOptions` and `RsyncOptions` provide `allow_relative`. It
 defaults to `False`, so `safe_path` rejects relative paths unless a caller
 explicitly opts in.
 
+### Rejection classifiers for `safe_path` and `git_ref`
+
+`cuprum/builders/args.py` exposes `classify_path_string` and `classify_git_ref`
+alongside the `PathRejection` and `GitRefRejection` enums. These are the single
+source of truth for *why* an input is rejected: each enum member's value is the
+exact `ValueError` message, and `safe_path` / `git_ref` raise directly from the
+classifier, so the categories cannot drift from the validators. The intended
+reuse policy is:
+
+- **In-tree callers and tests** may depend on the classifiers to assert on the
+  rejection *category* (rather than a brittle message substring) — this is what
+  the property tests in `cuprum/unittests/test_args_validators_property.py` do.
+- The enum member *names* are the stable contract; enum *values* (messages) may
+  be reworded, so match on the member, not the string.
+- New validation rules must be added to the classifier (and a matching enum
+  member) rather than inline in the validators, keeping the reason taxonomy
+  authoritative. Preserve the declared member order — the classifier returns the
+  first matching category.
+
 ## Command argument construction
 
 `cuprum.sh.build_argv(*args, **kwargs)` is the public, pure argv-construction

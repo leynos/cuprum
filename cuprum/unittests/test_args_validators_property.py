@@ -21,6 +21,8 @@ The invariants checked here are:
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
@@ -40,6 +42,10 @@ _FUZZ_ALPHABET = "ab/.\\-_ \t\x00:@{}é☃"
 _FUZZ_TEXT = st.text(alphabet=_FUZZ_ALPHABET, max_size=12)
 # Ref-safe characters accepted by the git-ref pattern.
 _REF_SEGMENT = st.text(alphabet="abcXYZ0123_-", min_size=1, max_size=5)
+# A platform-native absolute anchor. ``safe_path`` treats a leading "/" as
+# absolute on POSIX but not on Windows (where it is drive-relative), so anchor
+# with a drive letter there to keep the round-trip property valid on both.
+_ABSOLUTE_ANCHOR = "C:/" if sys.platform == "win32" else "/"
 
 
 @given(raw=_FUZZ_TEXT, allow_relative=st.booleans())
@@ -84,11 +90,13 @@ def test_parent_segments_are_rejected(prefix: str, suffix: str) -> None:
 @given(segments=st.lists(_REF_SEGMENT, min_size=1, max_size=4))
 def test_absolute_paths_without_traversal_round_trip(segments: list[str]) -> None:
     """Absolute, NUL-free, traversal-free paths validate and normalise stably."""
-    raw = "/" + "/".join(segments)
+    # Use a platform-native absolute anchor: on Windows a leading "/" without a
+    # drive is root-relative (not absolute), so anchor with a drive there.
+    raw = _ABSOLUTE_ANCHOR + "/".join(segments)
     assert classify_path_string(raw, allow_relative=False) is None
     normalised = safe_path(raw)
-    assert normalised.startswith("/")
-    # ``safe_path`` is idempotent on its own normalised output.
+    # A valid, traversal-free absolute path stays valid and normalises stably.
+    assert classify_path_string(normalised, allow_relative=False) is None
     assert safe_path(normalised) == normalised
 
 

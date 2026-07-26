@@ -11,13 +11,13 @@ properties can pin its contract exhaustively:
   ``ImportError``.
 - ``AUTO`` selects ``RUST`` iff the extension is available.
 
-They also fuzz ``_read_backend_env`` to prove invalid environment values are
-rejected and that only the empty/``auto`` inputs resolve to ``AUTO``.
+They also fuzz ``_parse_backend_value`` (the pure parsing core behind
+``_read_backend_env``) to prove invalid values are rejected and that only the
+empty/``auto`` inputs resolve to ``AUTO`` — injecting the raw value directly
+rather than mutating ``os.environ``.
 """
 
 from __future__ import annotations
-
-import os
 
 import pytest
 from hypothesis import given
@@ -25,7 +25,7 @@ from hypothesis import strategies as st
 
 from cuprum._backend import (
     StreamBackend,
-    _read_backend_env,
+    _parse_backend_value,
     _resolve_backend,
 )
 
@@ -99,23 +99,21 @@ _ENV_VALUE = st.one_of(
 
 
 @given(raw=_ENV_VALUE)
-def test_read_backend_env_rejects_invalid_values(raw: str) -> None:
-    """Env parsing yields a valid member or raises; only empty/auto give AUTO."""
+def test_parse_backend_value_maps_exactly_or_rejects(raw: str) -> None:
+    """Parsing maps to the exact member (empty/auto -> AUTO), else raises.
+
+    The raw value is injected directly rather than written to ``os.environ``,
+    so the property never mutates global process state (avoiding the shared
+    environment-guard requirement in AGENTS.md and any cross-thread races).
+    """
     normalised = raw.strip().lower()
     valid = {member.value for member in StreamBackend}
-    prior = os.environ.get(_ENV_VAR)
-    os.environ[_ENV_VAR] = raw
-    try:
-        if normalised == "" or normalised in valid:
-            result = _read_backend_env()
-            assert result in set(StreamBackend)
-            if result is StreamBackend.AUTO:
-                assert normalised in {"", "auto"}
-        else:
-            with pytest.raises(ValueError, match=_ENV_VAR):
-                _read_backend_env()
-    finally:
-        if prior is None:
-            os.environ.pop(_ENV_VAR, None)
-        else:
-            os.environ[_ENV_VAR] = prior
+    if normalised == "":
+        # Empty/whitespace resolves to AUTO.
+        assert _parse_backend_value(raw) is StreamBackend.AUTO
+    elif normalised in valid:
+        # A recognized value maps to exactly that member, never a different one.
+        assert _parse_backend_value(raw).value == normalised
+    else:
+        with pytest.raises(ValueError, match=_ENV_VAR):
+            _parse_backend_value(raw)

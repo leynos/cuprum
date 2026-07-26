@@ -45,6 +45,41 @@ class StreamBackend(enum.StrEnum):
     PYTHON = "python"
 
 
+def _parse_backend_value(raw: str) -> StreamBackend:
+    """Parse a raw ``CUPRUM_STREAM_BACKEND`` value into a backend.
+
+    This is the pure parsing core behind :func:`_read_backend_env`: it takes the
+    raw string directly rather than reading the environment, so it can be
+    property tested by injecting values without mutating ``os.environ``.
+
+    Parameters
+    ----------
+    raw:
+        The raw value (e.g. from the environment). Leading/trailing whitespace
+        is stripped and the value is lower-cased before matching.
+
+    Returns
+    -------
+    StreamBackend
+        The parsed backend, or ``StreamBackend.AUTO`` when ``raw`` is empty or
+        whitespace-only.
+
+    Raises
+    ------
+    ValueError
+        If ``raw`` is a non-empty, unrecognized value.
+    """
+    normalised = raw.strip().lower()
+    if not normalised:
+        return StreamBackend.AUTO
+    try:
+        return StreamBackend(normalised)
+    except ValueError:
+        valid = ", ".join(sorted(v.value for v in StreamBackend))
+        msg = f"invalid {_ENV_VAR} value {normalised!r}; expected one of: {valid}"
+        raise ValueError(msg) from None
+
+
 def _read_backend_env() -> StreamBackend:
     """Read and validate the stream backend from the environment.
 
@@ -59,15 +94,7 @@ def _read_backend_env() -> StreamBackend:
     ValueError
         If the environment variable contains an unrecognized value.
     """
-    raw = os.environ.get(_ENV_VAR, "").strip().lower()
-    if not raw:
-        return StreamBackend.AUTO
-    try:
-        return StreamBackend(raw)
-    except ValueError:
-        valid = ", ".join(sorted(v.value for v in StreamBackend))
-        msg = f"invalid {_ENV_VAR} value {raw!r}; expected one of: {valid}"
-        raise ValueError(msg) from None
+    return _parse_backend_value(os.environ.get(_ENV_VAR, ""))
 
 
 @functools.lru_cache(maxsize=1)
