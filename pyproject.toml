@@ -52,6 +52,7 @@ select = [
     "I",        # Sort imports properly
     "UP",       # Warn if certain things can changed due to newer Python versions
     "C4",       # Catch incorrect use of comprehensions, dict, list, etc
+    "ASYNC",    # flake8-async: async-correctness lints (e.g. ASYNC109, ASYNC240)
     "FA",       # Enforce from __future__ import annotations
     "ISC",      # Good use of string concatenation
     "ICN",      # Use common import conventions
@@ -104,7 +105,18 @@ extend-ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"**/test_*.py" = ["S101", "PLR0913", "PLR0917", "PLR2004", "PLR6301"]
+# ASYNC109/ASYNC240 are ignored for tests: the async scaffolding polls a PID
+# file with asyncio-only helpers, so a ``timeout`` parameter and blocking
+# ``pathlib`` calls are acceptable here (trio/anyio async paths are not in use).
+"**/test_*.py" = [
+    "S101",
+    "PLR0913",
+    "PLR0917",
+    "PLR2004",
+    "PLR6301",
+    "ASYNC109",
+    "ASYNC240",
+]
 # Test scaffolding modules (shared helpers imported by test_*.py) get the same
 # allowances as the tests they support; they use bare ``assert`` for fixtures.
 "cuprum/unittests/*_test_helpers.py" = ["S101", "PLR0913", "PLR0917", "PLR2004", "PLR6301"]
