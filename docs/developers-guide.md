@@ -1506,23 +1506,20 @@ must not be combined with `output=RunOutputOptions(...)`; mixed usage raises
 `ValueError` before any deprecation warning is emitted, so warning filters do
 not obscure the documented ambiguity error.
 
-## Subprocess stdin injection
+## Subprocess execution module boundaries
 
-The subprocess execution implementation is divided by lifecycle concern:
-
-- `cuprum/_subprocess_execution.py` owns runner orchestration, subprocess
-  spawning, and stream-consumer wiring.
-- `cuprum/_subprocess_stdin.py` owns stdin writes, early-close diagnostics, and
-  the `cuprum.stdin` logger.
-- `cuprum/_subprocess_timeout.py` owns timeout translation and exit-event
-  accounting shared by completion and timeout paths.
+The subprocess execution implementation is split by lifecycle concern across
+`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stdin.py`, and
+`cuprum/_subprocess_timeout.py`. See [Cuprum design](cuprum-design.md) §8.1.5
+and [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the
+accepted rationale and compatibility constraints.
 
 Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; timeout or exit-event policy belongs in
 `_subprocess_timeout`; and orchestration that coordinates them belongs in
-`_subprocess_execution`. See
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the decision
-and its compatibility constraints.
+`_subprocess_execution`.
+
+## Subprocess stdin injection
 
 When `stdin: StdinInput` is passed to `SafeCmd.run()`, the following sequence
 executes:
