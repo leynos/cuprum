@@ -18,14 +18,14 @@ conversion is the failing step.
 
 from __future__ import annotations
 
+import contextlib
 import os
+import sys
 import typing as typ
 
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-
-from tests.helpers.stream_pipes import _safe_close
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
@@ -35,14 +35,35 @@ _MAX_BUFFER_SIZE = 1 << 30
 _DEFAULT_BUFFER_SIZE = 65536
 _I32_MAX = (1 << 31) - 1
 _I64_MAX = (1 << 63) - 1
-# A descriptor value that is guaranteed to be closed/invalid but non-negative,
-# used only where validation fails before the descriptor is dereferenced.
-_UNUSED_FD = 0
+# A descriptor value that is deterministically invalid, used only where
+# validation fails before the descriptor is dereferenced. -1 never names an
+# open descriptor, so a validation-order regression fails loudly instead of
+# blocking on a real fd such as stdin (0).
+_UNUSED_FD = -1
+
+# The descriptor properties assert the Unix i32 file-descriptor conversion
+# contract. On Windows the wrapper routes fds through msvcrt.get_osfhandle and
+# the native path accepts pointer-sized handles, so those assertions do not
+# hold; skip them there rather than encode platform-specific error semantics.
+_unix_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="asserts the Unix i32 file-descriptor conversion contract",
+)
 
 _SUPPRESS_FIXTURE = settings(
     suppress_health_check=[HealthCheck.function_scoped_fixture],
     max_examples=50,
 )
+
+
+def _safe_close(fd: int) -> None:
+    """Close ``fd``, ignoring an already-closed or invalid descriptor.
+
+    Defined locally so the packaged test module stays importable from an
+    installed wheel, which ships ``cuprum/unittests`` but not ``tests``.
+    """
+    with contextlib.suppress(OSError):
+        os.close(fd)
 
 
 @_SUPPRESS_FIXTURE
@@ -78,6 +99,7 @@ def test_pump_rejects_nonpositive_buffer(
         rust_streams.rust_pump_stream(_UNUSED_FD, _UNUSED_FD, buffer_size=bad_size)
 
 
+@_unix_only
 @_SUPPRESS_FIXTURE
 @given(
     bad_fd=st.one_of(
@@ -94,6 +116,7 @@ def test_consume_rejects_invalid_descriptor(
         rust_streams.rust_consume_stream(bad_fd)
 
 
+@_unix_only
 @_SUPPRESS_FIXTURE
 @given(
     bad_fd=st.one_of(
@@ -145,5 +168,9 @@ def test_default_buffer_matches_explicit(
         rust_streams, payload, buffer_size=_DEFAULT_BUFFER_SIZE
     )
     default = _consume_via_pipe(rust_streams, payload)
-    assert explicit == default
-    assert default == payload.decode("utf-8", errors="replace")
+    assert explicit == default, (
+        "omitting buffer_size must equal the explicit 65536 default"
+    )
+    assert default == payload.decode("utf-8", errors="replace"), (
+        "decoded output must match Python's UTF-8 replace decoding"
+    )
