@@ -102,6 +102,7 @@
       'cuprum/unittests/test_rust_extension.py',
       'cuprum/unittests/test_rust_splice.py',
       'cuprum/unittests/test_rust_streams.py',
+      'cuprum/unittests/test_rust_streams_boundary_property.py',
       'cuprum/unittests/test_safe_cmd_context.py',
       'cuprum/unittests/test_safe_cmd_run.py',
       'cuprum/unittests/test_safe_cmd_stdin.py',

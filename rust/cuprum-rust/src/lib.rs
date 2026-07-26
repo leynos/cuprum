@@ -17,6 +17,8 @@ use std::fs::File;
 #[cfg(windows)]
 use std::os::windows::io::{FromRawHandle, RawHandle};
 
+#[cfg(test)]
+mod buffer_size_tests;
 mod errors;
 #[cfg(test)]
 mod fd_tests;
@@ -135,19 +137,42 @@ fn convert_platform_fd(value: i64) -> Result<PlatformFd, &'static str> {
 fn convert_fd(value: i64) -> PyResult<PlatformFd> {
     convert_platform_fd(value).map_err(PyValueError::new_err)
 }
-/// Validate that `buffer_size` is positive and fits into a usize.
+/// Maximum accepted stream buffer size, in bytes (1 GiB).
+///
+/// This guards against absurd allocations from a bad `buffer_size` while
+/// comfortably exceeding any realistic transfer buffer — the default is
+/// 64 KiB and even multi-megabyte buffers stay far below this cap.
+const MAX_BUFFER_SIZE: usize = 1 << 30;
+
+/// Validate and convert a raw `buffer_size` into a bounded `usize`.
+///
+/// This is the pure decision core behind [`validate_buffer_size`]: it takes no
+/// Python state and returns a stable, message-carrying error so it can be
+/// property tested directly.
 ///
 /// # Errors
-/// Returns `PyValueError` if `buffer_size` is non-positive or out of range.
-fn validate_buffer_size(buffer_size: i64) -> PyResult<BufferSize> {
+/// Returns a stable error message when `buffer_size` is non-positive, overflows
+/// `usize` on the target platform, or exceeds [`MAX_BUFFER_SIZE`].
+fn checked_buffer_size(buffer_size: i64) -> Result<usize, &'static str> {
     if buffer_size <= 0 {
-        return Err(PyValueError::new_err(
-            "buffer_size must be greater than zero",
-        ));
+        return Err("buffer_size must be greater than zero");
     }
-    usize::try_from(buffer_size)
+    let size = usize::try_from(buffer_size).map_err(|_| "buffer_size is too large")?;
+    if size > MAX_BUFFER_SIZE {
+        return Err("buffer_size exceeds the maximum permitted size");
+    }
+    Ok(size)
+}
+
+/// Validate that `buffer_size` is positive, in range, and within the cap.
+///
+/// # Errors
+/// Returns `PyValueError` if `buffer_size` is non-positive, out of range, or
+/// exceeds [`MAX_BUFFER_SIZE`].
+fn validate_buffer_size(buffer_size: i64) -> PyResult<BufferSize> {
+    checked_buffer_size(buffer_size)
         .map(BufferSize)
-        .map_err(|_| PyValueError::new_err("buffer_size is too large"))
+        .map_err(PyValueError::new_err)
 }
 
 #[cfg(unix)]
