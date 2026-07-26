@@ -81,7 +81,9 @@ def test_report_is_sorted_and_tally_partitions_rows(
     report = _build_report_from_grouped_entries(grouped)
 
     ids = [row.comparison_id for row in report.rows]
-    assert ids == sorted(ids), "rows must be ordered by comparison_id"
+    # Comparing against the sorted group keys pins both ordering and the exact
+    # set of ids: exactly one row per input group, none omitted or duplicated.
+    assert ids == sorted(grouped), "rows must be one-per-group, ordered by id"
     assert report.summary.row_count == len(grouped) == len(report.rows), (
         "row_count must equal the number of groups and emitted rows"
     )
