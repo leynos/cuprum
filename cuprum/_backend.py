@@ -296,8 +296,13 @@ def get_stream_backend() -> StreamBackend:
     in tests).
     """
     requested = _read_backend_env()
-    rust_available = _probe_rust_availability(requested)
+    # Probe and resolution share one boundary handler so a forced-RUST failure
+    # emits the structured warning whether the extension probes as unavailable
+    # or the probe itself raises ImportError. ``rust_available`` stays ``None``
+    # in the latter case.
+    rust_available: bool | None = None
     try:
+        rust_available = _probe_rust_availability(requested)
         resolved = _resolve_backend(requested, rust_available=rust_available)
     except ImportError:
         _LOGGER.warning(

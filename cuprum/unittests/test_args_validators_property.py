@@ -42,6 +42,10 @@ _FUZZ_ALPHABET = "ab/.\\-_ \t\x00:@{}é☃"
 _FUZZ_TEXT = st.text(alphabet=_FUZZ_ALPHABET, max_size=12)
 # Ref-safe characters accepted by the git-ref pattern.
 _REF_SEGMENT = st.text(alphabet="abcXYZ0123_-", min_size=1, max_size=5)
+# Segments that never start with '-' and contain no whitespace, for pinning
+# specific rejection categories without collisions between earlier checks.
+_PLAIN_SEGMENT = st.text(alphabet="abcXYZ0123_", min_size=1, max_size=5)
+_WHITESPACE = st.sampled_from([" ", "\t", "\n", "\r", "\f", "\v"])
 # A platform-native absolute anchor. ``safe_path`` treats a leading "/" as
 # absolute on POSIX but not on Windows (where it is drive-relative), so anchor
 # with a drive letter there to keep the round-trip property valid on both.
@@ -136,3 +140,28 @@ def test_simple_refs_are_accepted(segments: list[str]) -> None:
         return
     assert classify_git_ref(raw) is None
     assert git_ref(raw) == raw
+
+
+@given(suffix=_REF_SEGMENT)
+def test_leading_dash_pins_leading_dash_category(suffix: str) -> None:
+    """A ref beginning with '-' is rejected specifically as ``LEADING_DASH``."""
+    assert classify_git_ref("-" + suffix) is GitRefRejection.LEADING_DASH
+
+
+@given(prefix=_PLAIN_SEGMENT, whitespace=_WHITESPACE, suffix=_PLAIN_SEGMENT)
+def test_whitespace_pins_whitespace_category(
+    prefix: str,
+    whitespace: str,
+    suffix: str,
+) -> None:
+    """A whitespace-bearing ref (not '-'-led) is rejected as ``WHITESPACE``."""
+    raw = prefix + whitespace + suffix
+    assert classify_git_ref(raw) is GitRefRejection.WHITESPACE
+
+
+@given(segments=st.lists(_PLAIN_SEGMENT, min_size=1, max_size=3))
+def test_relative_path_pins_not_absolute_category(segments: list[str]) -> None:
+    """A relative, NUL-free, traversal-free path is rejected as ``NOT_ABSOLUTE``."""
+    # No leading anchor -> relative on both POSIX and Windows.
+    raw = "/".join(segments)
+    assert classify_path_string(raw, allow_relative=False) is PathRejection.NOT_ABSOLUTE
