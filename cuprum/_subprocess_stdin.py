@@ -39,6 +39,8 @@ def _emit_stdin_error(
         "stdin_error",
         _EventDetails(
             pid=process.pid,
+            operation=operation,
+            error_type=type(exc).__name__,
             note=f"{type(exc).__name__}: {exc!s}",
         ),
     )

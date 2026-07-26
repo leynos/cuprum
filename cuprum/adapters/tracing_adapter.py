@@ -239,13 +239,15 @@ class TracingHook:
     def __call__(self, event: ExecEvent) -> None:
         """Process an execution event and update tracing."""
         match event.phase:
-            case "plan" | "stdin" | "stdin_error":
+            case "plan" | "stdin":
                 pass
             case "start":
                 self._handle_start(event)
             case "stdout" | "stderr":
                 if self._record_output:
-                    self._handle_output(event)
+                    self._record_span_event(event)
+            case "stdin_error":
+                self._record_span_event(event)
             case "exit":
                 self._handle_exit(event)
             case _:
@@ -267,7 +269,7 @@ class TracingHook:
         seen — a duplicated or reused token — it is detached from the map and
         ended as failed. The lookup and the installation of the replacement run
         together under ``self._lock`` so the exec_id→span mapping transitions
-        atomically: a concurrent ``_handle_output`` or ``_handle_exit`` for the
+        atomically: a concurrent ``_record_span_event`` or ``_handle_exit`` for the
         same token observes either the old span or the replacement, never a
         missing or half-updated entry. The detached stale span is then marked
         failed and ended *outside* the lock — exactly once, since it is already
@@ -303,8 +305,8 @@ class TracingHook:
             stale.set_status(ok=False)
             stale.end()
 
-    def _handle_output(self, event: ExecEvent) -> None:
-        """Record output as a span event, correlated by ``exec_id``."""
+    def _record_span_event(self, event: ExecEvent) -> None:
+        """Record ``event``'s diagnostic fields as a span event, keyed by exec_id."""
         exec_id = event.exec_id
         if exec_id is None:
             return
@@ -315,11 +317,14 @@ class TracingHook:
         if span is None:
             return
 
-        event_name = f"cuprum.{event.phase}"
+        # ``line`` for stdout/stderr; ``operation``/``error_type``/``note`` for
+        # the non-fatal stdin_error path. The span is left open and unmarked.
         event_attrs: dict[str, object] = {}
-        if event.line is not None:
-            event_attrs["line"] = event.line
-        span.add_event(event_name, event_attrs)
+        for field in ("line", "operation", "error_type", "note"):
+            value = getattr(event, field)
+            if value is not None:
+                event_attrs[field] = value
+        span.add_event(f"cuprum.{event.phase}", event_attrs)
 
     def _handle_exit(self, event: ExecEvent) -> None:
         """End the span for command execution, correlated by ``exec_id``."""

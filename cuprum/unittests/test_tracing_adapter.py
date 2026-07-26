@@ -144,6 +144,44 @@ print('stderr-line', file=sys.stderr)""",
             "test_records_output_events should preserve stdout line text"
         )
 
+    def test_records_stdin_error_event(self) -> None:
+        """Hook surfaces stdin_error as a span event with stable fields."""
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+
+        exec_id = new_exec_id()
+        base = {"program": "cat", "argv": ("cat",), "pid": 4321, "exec_id": exec_id}
+        hook(_make_exec_event(phase="start", overrides=base))
+        hook(
+            _make_exec_event(
+                phase="stdin_error",
+                overrides={
+                    **base,
+                    "operation": "write",
+                    "error_type": "OSError",
+                    "note": "OSError: broken pipe",
+                },
+            ),
+        )
+
+        span = tracer.spans[0]
+        stdin_error_attrs = next(
+            (attrs for name, attrs in span.events if name == "cuprum.stdin_error"),
+            None,
+        )
+        assert stdin_error_attrs is not None, (
+            "the tracing hook should surface stdin_error as a span event"
+        )
+        assert stdin_error_attrs.get("operation") == "write", (
+            "the stdin_error span event should carry the failing pipe operation"
+        )
+        assert stdin_error_attrs.get("error_type") == "OSError", (
+            "the stdin_error span event should carry the exception type"
+        )
+        assert span.ended is False, (
+            "a non-fatal stdin_error must not end the execution span"
+        )
+
     def test_disables_output_recording(self) -> None:
         """Hook skips output events when record_output=False."""
         _, span = self._run_traced_command(

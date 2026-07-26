@@ -47,6 +47,8 @@ class _EventDetails:
     duration_s: float | None = None
     note: str | None = None
     byte_count: int | None = None
+    operation: str | None = None
+    error_type: str | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -94,6 +96,8 @@ class _StageObservation:
             tags=self.tags,
             note=details.note,
             byte_count=details.byte_count,
+            operation=details.operation,
+            error_type=details.error_type,
             exec_id=self.exec_id,
         )
         try:

@@ -385,7 +385,12 @@ def test_observe_emits_stdin_error_event_when_process_closes_stdin_early() -> No
             [
                 (
                     "stdin_error",
-                    _EventDetails(pid=123, note="OSError: disk quota-ish"),
+                    _EventDetails(
+                        pid=123,
+                        operation="write",
+                        error_type="OSError",
+                        note="OSError: disk quota-ish",
+                    ),
                 )
             ],
             id="os_error_from_drain",
@@ -397,7 +402,12 @@ def test_observe_emits_stdin_error_event_when_process_closes_stdin_early() -> No
                 ("stdin", _EventDetails(pid=123, byte_count=7)),
                 (
                     "stdin_error",
-                    _EventDetails(pid=123, note="RuntimeError: loop closed"),
+                    _EventDetails(
+                        pid=123,
+                        operation="close",
+                        error_type="RuntimeError",
+                        note="RuntimeError: loop closed",
+                    ),
                 ),
             ],
             id="runtime_error_from_wait_closed",

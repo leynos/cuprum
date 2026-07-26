@@ -60,6 +60,8 @@ def _make_exec_event(
         "tags": {},
         "note": None,
         "byte_count": None,
+        "operation": None,
+        "error_type": None,
         "exec_id": new_exec_id(),
     }
     if overrides is not None:
@@ -82,6 +84,8 @@ def _make_exec_event(
         tags=typ.cast("cabc.Mapping[str, object]", values["tags"]),
         note=typ.cast("str | None", values["note"]),
         byte_count=typ.cast("int | None", values["byte_count"]),
+        operation=typ.cast("str | None", values["operation"]),
+        error_type=typ.cast("str | None", values["error_type"]),
         exec_id=typ.cast("ExecId | None", values["exec_id"]),
     )
 
