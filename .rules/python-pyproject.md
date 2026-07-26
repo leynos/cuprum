@@ -73,31 +73,89 @@ dependencies = [
 
 ______________________________________________________________________
 
-## 3. Optional and Development Dependencies
+## 3. Runtime vs. development dependencies
 
-Modern projects typically distinguish between "production" dependencies (those
-needed at runtime) and "development" dependencies (linters, test frameworks,
-etc.). In PEP 621, you use `[project.optional-dependencies]` for this:
+`uv` (via PEP 621 and PEP 735) exposes three dependency fields. Choosing the
+right one decides whether a dependency ships to every end user or only ever
+exists on a contributor's machine.
+
+| Field | Installed for | Use it for |
+| --- | --- | --- |
+| `project.dependencies` | Everyone who installs the package | Libraries the shipped code imports at runtime |
+| `project.optional-dependencies` | End users who opt into an *extra* | Optional runtime *features* (`package[extra]`) |
+| `dependency-groups` | Local development only | Test, lint, type-check, docs, and other tooling |
+
+### Required runtime dependencies — `project.dependencies`
+
+Packages the shipped code imports unconditionally. They are published in the
+wheel metadata and installed for every consumer. Use PEP 508 specifiers with
+bounded ranges, and add them with `uv add <name>`:
 
 ```toml
-[project.optional-dependencies]
-dev = [
-  "pytest>=7.0",        # Testing framework
-  "black",              # Code formatter
-  "flake8>=4.0"         # Linter
-]
-docs = [
-  "sphinx>=5.0",        # Documentation builder
-  "sphinx-rtd-theme"
+[project]
+dependencies = [
+  "httpx>=0.27,<1",
 ]
 ```
 
-- **`[project.optional-dependencies]`:** Each table key (e.g. `dev`, `docs`)
-  defines a "dependency group." You can install a group via
-  `uv add --group dev` or `uv sync --include dev`. (Python Packaging[^4],
-  DevsJC[^6])
-- **Why use groups?** You keep the lockfile deterministic (via `uv.lock`) while
-  still separating concerns (test‐only vs. production). (Medium[^7], DevsJC[^6])
+### Optional runtime features — `project.optional-dependencies`
+
+Published "extras" that an *end user* opts into to enable an optional feature
+of the package, requested with `package[extra]` syntax (for example,
+`pandas[excel]`). Reach for this only when the extra dependency powers
+user-facing functionality that not everyone needs — never for development
+tooling. Add them with `uv add --optional <extra>`:
+
+```toml
+[project.optional-dependencies]
+# Opt-in feature: end users request it with cuprum[<extra>].
+<extra> = [
+  "some-runtime-lib>=1.2,<2",
+]
+```
+
+### Development-time dependencies — `dependency-groups`
+
+Tooling only contributors need: test frameworks, linters, type checkers,
+documentation builders, and property or mutation testers. These are
+**local-only** — PEP 735 dependency groups are *not* published in the wheel
+metadata and are never installed for end users, so they must live here rather
+than in `project.optional-dependencies`. Add them with `uv add --dev` (the
+`dev` group) or `uv add --group <name>`:
+
+```toml
+[dependency-groups]
+dev = [
+  "pytest<9.1",
+  "ruff",
+  "ty",
+]
+```
+
+**`uv` installs the `dev` group automatically by default.** `uv run` and
+`uv sync` include the `dev` group with no extra flags, so a bare `uv sync`
+gives a contributor the full toolchain. Adjust this with:
+
+- `--no-dev` or `--no-default-groups` to exclude development dependencies (for
+  example, when building a wheel or a production install).
+- `--group <name>` or `--only-group <name>` to include or isolate a
+  non-default group.
+- `[tool.uv].default-groups` to change which groups sync by default:
+
+```toml
+[tool.uv]
+default-groups = ["dev", "docs"]  # or "all"
+```
+
+Groups may nest via `{ include-group = "..." }`, and `uv` resolves every group
+together into a single `uv.lock`, so all groups must be mutually compatible.
+(Astral Docs[^9])
+
+> **Rule of thumb:** if an end user needs it to *run* the code, it belongs
+> in `project.dependencies` (always) or `project.optional-dependencies`
+> (an opt-in feature). If only a contributor needs it to *develop, test,
+> lint, type-check, or document* the code, it belongs in
+> `dependency-groups`.
 
 ______________________________________________________________________
 
@@ -198,11 +256,18 @@ dependencies = [
   "numpy>=1.23"
 ]
 
+# Opt-in runtime feature; end users install it with my_project[fast].
 [project.optional-dependencies]
+fast = [
+  "orjson>=3.9"
+]
+
+# Development-only tooling (PEP 735); never shipped to end users.
+[dependency-groups]
 dev = [
   "pytest>=7.0",
-  "black",
-  "flake8>=4.0"
+  "ruff",
+  "mypy>=1.0"
 ]
 docs = [
   "sphinx>=5.0",
@@ -233,11 +298,14 @@ package = true
    - `dependencies`: runtime requirements, expressed in PEP 508 syntax.
      (Astral Docs[^1], RidgeRun.ai[^2])
 
-2. **Optional Dependencies (`[project.optional-dependencies]`):**
+2. **Optional features vs. development tooling:**
 
-   - Grouped as `dev` (for testing + linting) and `docs` (for documentation).
-     Installing them is as simple as `uv add --group dev` or
-     `uv sync --include dev`. (Python Packaging[^4], DevsJC[^6])
+   - `[project.optional-dependencies]` declares an opt-in runtime *extra*
+     (`fast`), installed by end users via `my_project[fast]`. (Python
+     Packaging[^4])
+   - `[dependency-groups]` (PEP 735) holds development-only tooling (`dev`,
+     `docs`) that is never published; `uv sync` installs the `dev` group by
+     default. (Astral Docs[^9])
 
 3. **Entry Points (`[project.scripts]`):**
 
@@ -294,8 +362,10 @@ ______________________________________________________________________
 
 A "modern" `pyproject.toml` for an Astral `uv` project should:
 
-- Use the PEP 621 `[project]` table for metadata and `dependencies`.
-- Distinguish optional dependencies under `[project.optional-dependencies]`.
+- Use the PEP 621 `[project]` table for metadata and runtime `dependencies`.
+- Declare opt-in runtime *features* as extras under
+  `[project.optional-dependencies]`, and development-only tooling under
+  `[dependency-groups]` (the `dev` group installs by default).
 - Define any CLI or GUI entry points under `[project.scripts]` or
   `[project.gui-scripts]`.
 - Declare a PEP 517 `[build-system]` (e.g. `setuptools>=61.0`, `wheel`,
@@ -313,5 +383,5 @@ easy to maintain, and integrates seamlessly with Astral `uv`.
 [^4]: [Writing your pyproject.toml – Python Packaging User Guide](https://packaging.python.org/en/latest/guides/writing-pyproject-toml/)
 [^5]: [Anyone used UV package manager in production? (Reddit)](https://www.reddit.com/r/Python/comments/1ixryec/anyone_used_uv_package_manager_in_production/)
 [^6]: [The Complete Guide to pyproject.toml – devsjc blogs](https://devsjc.github.io/blog/20240627-the-complete-guide-to-pyproject-toml/)
-[^7]: [Start Using UV Python Package Manager for Better Dependency Management](https://medium.com/%40gnetkov/start-using-uv-python-package-manager-for-better-dependency-management-183e7e428760)
 [^8]: [Configuring projects | uv - Astral Docs](https://docs.astral.sh/uv/concepts/projects/config/)
+[^9]: [Managing dependencies | uv - Astral Docs](https://docs.astral.sh/uv/concepts/projects/dependencies/)
