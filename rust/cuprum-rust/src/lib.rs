@@ -280,6 +280,13 @@ fn pump_stream_files_readwrite(
     writer: &mut StreamHandle,
     buffer_size: BufferSize,
 ) -> Result<u64, PumpError> {
+    let span = tracing::debug_span!(
+        "pump_stream_readwrite",
+        buffer_size = buffer_size.value(),
+        total_bytes = tracing::field::Empty,
+    );
+    let _guard = span.enter();
+
     let mut buffer = vec![0_u8; buffer_size.value()];
     let mut total_written = 0_u64;
     let mut writer_open = true;
@@ -300,6 +307,7 @@ fn pump_stream_files_readwrite(
         writer_open = handle_write_result(writer, chunk, &mut total_written)?;
     }
 
+    span.record("total_bytes", total_written);
     Ok(total_written)
 }
 
@@ -307,15 +315,25 @@ fn consume_stream_files(
     reader: &mut StreamHandle,
     buffer_size: BufferSize,
 ) -> Result<String, PumpError> {
+    let span = tracing::debug_span!(
+        "consume_stream",
+        buffer_size = buffer_size.value(),
+        total_bytes = tracing::field::Empty,
+    );
+    let _guard = span.enter();
+
     let mut buffer = vec![0_u8; buffer_size.value()];
     let mut pending: Vec<u8> = Vec::new();
     let mut output = String::new();
+    let mut total_read = 0_u64;
 
     loop {
         let read_len = read_stream(reader, &mut buffer)?;
         if read_len == 0 {
             break;
         }
+        let read_bytes = u64::try_from(read_len).map_err(|_| PumpError::LengthOverflow)?;
+        total_read = total_read.saturating_add(read_bytes);
         let chunk = buffer
             .get(..read_len)
             .ok_or(PumpError::BufferRangeExceeded)?;
@@ -325,6 +343,7 @@ fn consume_stream_files(
 
     decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(true));
 
+    span.record("total_bytes", total_read);
     Ok(output)
 }
 

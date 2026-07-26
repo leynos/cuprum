@@ -128,10 +128,17 @@ fn read_raw_fd_with(
     loop {
         match read_once() {
             Ok(read_len) => {
-                return usize::try_from(read_len).map_err(|_| PumpError::LengthOverflow);
+                let len = usize::try_from(read_len).map_err(|_| PumpError::LengthOverflow)?;
+                tracing::debug!(bytes = len, platform = "unix", "read stream chunk");
+                return Ok(len);
             }
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-            Err(err) => return Err(PumpError::from(err)),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                tracing::warn!(platform = "unix", "retrying interrupted read (EINTR)");
+            }
+            Err(err) => {
+                tracing::error!(platform = "unix", error = %err, "fatal stream read failure");
+                return Err(PumpError::from(err));
+            }
         }
     }
 }
@@ -169,17 +176,23 @@ fn write_all_unix_with(
     while !chunk.is_empty() {
         match write_once(chunk) {
             Ok(written) if written > 0 => {
-                let written_len =
-                    usize::try_from(written).map_err(|_| PumpError::LengthOverflow)?;
+                let written_len = usize::try_from(written).map_err(|_| {
+                    tracing::error!(platform = "unix", "write length conversion overflowed");
+                    PumpError::LengthOverflow
+                })?;
+                tracing::debug!(bytes = written_len, platform = "unix", "wrote stream chunk");
                 record_write_progress(&mut chunk, written_len, &mut total_written)?;
             }
             Ok(_) => {
+                tracing::error!(platform = "unix", "write made zero progress");
                 return Err(PumpError::from(io::Error::new(
                     io::ErrorKind::WriteZero,
                     "failed to write whole buffer",
                 )));
             }
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                tracing::warn!(platform = "unix", "retrying interrupted write (EINTR)");
+            }
             Err(err) => return map_short_write_error(err, total_written),
         }
     }
