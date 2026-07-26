@@ -280,7 +280,11 @@ fn pump_stream_files_readwrite(
     writer: &mut StreamHandle,
     buffer_size: BufferSize,
 ) -> Result<u64, PumpError> {
-    let span = tracing::debug_span!(
+    // An INFO-level operation span so the EINTR (`warn!`) and fatal-I/O
+    // (`error!`) events emitted from the read/write seams inherit the
+    // operation name, `buffer_size`, and `total_bytes` context under the
+    // conventional production INFO filter, not only when `debug` is enabled.
+    let span = tracing::info_span!(
         "pump_stream_readwrite",
         buffer_size = buffer_size.value(),
         total_bytes = tracing::field::Empty,
@@ -315,7 +319,10 @@ fn consume_stream_files(
     reader: &mut StreamHandle,
     buffer_size: BufferSize,
 ) -> Result<String, PumpError> {
-    let span = tracing::debug_span!(
+    // INFO-level span (see `pump_stream_files_readwrite`) so the read seam's
+    // `warn!`/`error!` events inherit this operation's context under the
+    // production INFO filter, not only under `debug`.
+    let span = tracing::info_span!(
         "consume_stream",
         buffer_size = buffer_size.value(),
         total_bytes = tracing::field::Empty,
