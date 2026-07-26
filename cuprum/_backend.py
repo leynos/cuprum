@@ -152,45 +152,76 @@ def _log_stream_backend_resolution(
     )
 
 
-def _resolve_python_backend(requested: StreamBackend) -> StreamBackend:
-    """Resolve the StreamBackend.PYTHON case."""
-    _log_stream_backend_resolution(requested, StreamBackend.PYTHON, rust_available=None)
-    return StreamBackend.PYTHON
+def _resolve_backend(
+    requested: StreamBackend,
+    *,
+    rust_available: bool | None,
+) -> StreamBackend:
+    """Map a requested backend and probe outcome to a concrete backend.
 
+    This is the pure resolution core: it performs no probing, logging, or
+    caching, so its decision can be reasoned about (and property tested) in
+    isolation from the environment.
 
-def _resolve_rust_forced_backend(requested: StreamBackend) -> StreamBackend:
-    """Resolve the StreamBackend.RUST case, raising if unavailable."""
-    is_rust_available = _check_rust_available()
-    if is_rust_available:
-        _log_stream_backend_resolution(
-            requested, StreamBackend.RUST, rust_available=is_rust_available
-        )
-        return StreamBackend.RUST
-    _LOGGER.warning(
-        "Rust stream backend requested but unavailable",
-        extra={
-            "event": "cuprum.stream_backend_unavailable",
-            "requested_backend": requested.value,
-            "rust_available": is_rust_available,
-        },
-    )
-    msg = (
-        f"Rust stream backend requested via {_ENV_VAR}=rust "
-        "but the Rust extension is not available"
-    )
-    raise ImportError(msg)
+    Parameters
+    ----------
+    requested:
+        The backend requested via ``CUPRUM_STREAM_BACKEND`` (``AUTO``,
+        ``RUST``, or ``PYTHON``).
+    rust_available:
+        ``True``/``False`` for a resolved availability probe, or ``None`` when
+        the probe was skipped (``PYTHON``) or failed (``AUTO``).
 
+    Returns
+    -------
+    StreamBackend
+        Always a concrete backend — ``StreamBackend.RUST`` or
+        ``StreamBackend.PYTHON``. ``StreamBackend.AUTO`` is never returned.
 
-def _resolve_auto_backend(requested: StreamBackend) -> StreamBackend:
-    """Resolve the StreamBackend.AUTO case, falling back to Python."""
-    try:
-        is_rust_available = _check_rust_available()
-        if is_rust_available:
-            _log_stream_backend_resolution(
-                requested, StreamBackend.RUST, rust_available=is_rust_available
+    Raises
+    ------
+    ImportError
+        If ``RUST`` is forced but ``rust_available`` is not truthy.
+
+    Examples
+    --------
+    >>> _resolve_backend(StreamBackend.AUTO, rust_available=False)
+    <StreamBackend.PYTHON: 'python'>
+    """
+    match requested:
+        case StreamBackend.PYTHON:
+            return StreamBackend.PYTHON
+        case StreamBackend.RUST:
+            if rust_available:
+                return StreamBackend.RUST
+            msg = (
+                f"Rust stream backend requested via {_ENV_VAR}=rust "
+                "but the Rust extension is not available"
             )
-            return StreamBackend.RUST
+            raise ImportError(msg)
+        case StreamBackend.AUTO:
+            return StreamBackend.RUST if rust_available else StreamBackend.PYTHON
+        case _:
+            # A new StreamBackend member must be handled explicitly above;
+            # falling off the end would silently return None.
+            msg = f"unreachable backend {requested!r}"
+            raise AssertionError(msg)
+
+
+def _probe_rust_availability(requested: StreamBackend) -> bool | None:
+    """Probe Rust availability for ``requested``, honouring its failure policy.
+
+    ``PYTHON`` never probes (returns ``None``). ``AUTO`` tolerates a probe
+    ``ImportError`` and falls back to ``None``. ``RUST`` lets a probe
+    ``ImportError`` propagate, matching the forced-backend contract.
+    """
+    if requested is StreamBackend.PYTHON:
+        return None
+    try:
+        return _check_rust_available()
     except ImportError:
+        if requested is not StreamBackend.AUTO:
+            raise
         _LOGGER.debug(
             "Rust availability probe failed in auto mode; falling back to Python",
             extra={
@@ -198,11 +229,7 @@ def _resolve_auto_backend(requested: StreamBackend) -> StreamBackend:
                 "requested_backend": requested.value,
             },
         )
-        is_rust_available = None
-    _log_stream_backend_resolution(
-        requested, StreamBackend.PYTHON, rust_available=is_rust_available
-    )
-    return StreamBackend.PYTHON
+        return None
 
 
 @functools.lru_cache(maxsize=1)
@@ -242,19 +269,21 @@ def get_stream_backend() -> StreamBackend:
     in tests).
     """
     requested = _read_backend_env()
-
-    match requested:
-        case StreamBackend.PYTHON:
-            return _resolve_python_backend(requested)
-        case StreamBackend.RUST:
-            return _resolve_rust_forced_backend(requested)
-        case StreamBackend.AUTO:
-            return _resolve_auto_backend(requested)
-        case _:
-            # A new StreamBackend member must be handled explicitly above;
-            # falling off the end would silently return None.
-            msg = f"unreachable backend {requested!r}"
-            raise AssertionError(msg)
+    rust_available = _probe_rust_availability(requested)
+    try:
+        resolved = _resolve_backend(requested, rust_available=rust_available)
+    except ImportError:
+        _LOGGER.warning(
+            "Rust stream backend requested but unavailable",
+            extra={
+                "event": "cuprum.stream_backend_unavailable",
+                "requested_backend": requested.value,
+                "rust_available": rust_available,
+            },
+        )
+        raise
+    _log_stream_backend_resolution(requested, resolved, rust_available=rust_available)
+    return resolved
 
 
 __all__ = ["StreamBackend", "get_stream_backend"]
