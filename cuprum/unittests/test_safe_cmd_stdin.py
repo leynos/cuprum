@@ -259,16 +259,28 @@ def test_stdin_input_with_timeout_escalation(
         )
 
 
-def test_direct_timeout_with_blocked_stdin_writer_does_not_hang(
+@pytest.mark.parametrize(
+    ("capture", "mode"),
+    [
+        pytest.param(False, "direct", id="direct"),
+        pytest.param(True, "capture", id="capture"),
+    ],
+)
+def test_timeout_with_blocked_stdin_writer_does_not_hang(
+    capture: bool,  # noqa: FBT001 - pytest parametrises this value.
+    mode: str,
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
-    """Direct-mode timeout cancels a stdin writer wedged on an unread pipe.
+    """Timeout cancels a stdin writer wedged on an unread pipe, on both paths.
 
     The child never reads its stdin, so a payload larger than the OS pipe
     buffer stalls the writer's ``drain()``. On timeout the runner must cancel
     that writer rather than wait on it, raising ``TimeoutExpired`` promptly
-    instead of blocking on the stalled drain (regression for #117).
+    instead of blocking on the stalled drain. Exercising both the direct output
+    path (``capture=False``) and the capture path (``capture=True``, which also
+    drains the stdout/stderr consumers) keeps this a regression for #117 across
+    both branches.
     """
     _, execute = execution_strategy
     command = python_builder("-c", "import time; time.sleep(3600)")
@@ -282,44 +294,12 @@ def test_direct_timeout_with_blocked_stdin_writer_does_not_hang(
             {
                 "stdin": StdinInput(data=payload),
                 "timeout": 0.2,
-                "output": RunOutputOptions(capture=False),
+                "output": RunOutputOptions(capture=capture),
             },
         )
     elapsed = time.perf_counter() - started
     assert elapsed < 10.0, (
-        "direct-mode timeout with a blocked stdin writer must not hang; "
-        f"took {elapsed:.2f}s"
-    )
-
-
-def test_capture_timeout_with_blocked_stdin_writer_does_not_hang(
-    python_builder: cabc.Callable[..., SafeCmd],
-    execution_strategy: tuple[str, ExecuteFn],
-) -> None:
-    """Capture-mode timeout cancels a stdin writer wedged on an unread pipe.
-
-    The child never reads its stdin, so an oversized payload stalls the
-    writer's ``drain()``. Unlike the direct-mode case this drives the stream
-    path: on timeout the runner must cancel that writer while draining the
-    stdout/stderr consumers, raising ``TimeoutExpired`` promptly instead of
-    blocking on the stalled drain (regression for #117 on the capture path).
-    """
-    _, execute = execution_strategy
-    command = python_builder("-c", "import time; time.sleep(3600)")
-    payload = b"x" * drain_blocking_payload_size()
-    started = time.perf_counter()
-    with pytest.raises(TimeoutExpired):
-        execute(
-            command,
-            {
-                "stdin": StdinInput(data=payload),
-                "timeout": 0.2,
-                "output": RunOutputOptions(capture=True),
-            },
-        )
-    elapsed = time.perf_counter() - started
-    assert elapsed < 10.0, (
-        "capture-mode timeout with a blocked stdin writer must not hang; "
+        f"{mode}-mode timeout with a blocked stdin writer must not hang; "
         f"took {elapsed:.2f}s"
     )
 
