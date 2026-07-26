@@ -52,14 +52,18 @@ def test_build_row_ratio_and_trichotomy(
         python_entry=_ScenarioEntry(scenario_name="py", mean=python_mean),
         rust_entry=_ScenarioEntry(scenario_name="rs", mean=rust_mean),
     )
-    assert row.speedup_ratio == python_mean / rust_mean
-    assert row.faster_backend in {"tie", "rust", "python"}
+    assert row.speedup_ratio == python_mean / rust_mean, (
+        "speedup_ratio must equal python_mean / rust_mean"
+    )
+    assert row.faster_backend in {"tie", "rust", "python"}, (
+        f"faster_backend must be a known label, got {row.faster_backend!r}"
+    )
     if abs(python_mean - rust_mean) <= _FLOAT_TOLERANCE:
-        assert row.faster_backend == "tie"
+        assert row.faster_backend == "tie", "near-equal means must classify as tie"
     elif rust_mean < python_mean:
-        assert row.faster_backend == "rust"
+        assert row.faster_backend == "rust", "the smaller mean (rust) must win"
     else:
-        assert row.faster_backend == "python"
+        assert row.faster_backend == "python", "the smaller mean (python) must win"
 
 
 @given(groups=_GROUPS)
@@ -77,31 +81,44 @@ def test_report_is_sorted_and_tally_partitions_rows(
     report = _build_report_from_grouped_entries(grouped)
 
     ids = [row.comparison_id for row in report.rows]
-    assert ids == sorted(ids)
-    assert report.summary.row_count == len(grouped) == len(report.rows)
+    assert ids == sorted(ids), "rows must be ordered by comparison_id"
+    assert report.summary.row_count == len(grouped) == len(report.rows), (
+        "row_count must equal the number of groups and emitted rows"
+    )
 
     tally = Counter(row.faster_backend for row in report.rows)
-    assert report.summary.rust_wins == tally["rust"]
-    assert report.summary.python_wins == tally["python"]
-    assert report.summary.ties == tally["tie"]
+    assert report.summary.rust_wins == tally["rust"], "rust_wins must match the tally"
+    assert report.summary.python_wins == tally["python"], (
+        "python_wins must match the tally"
+    )
+    assert report.summary.ties == tally["tie"], "ties must match the tally"
     assert (
         report.summary.rust_wins + report.summary.python_wins + report.summary.ties
         == report.summary.row_count
-    )
+    ), "wins and ties must partition every row exactly"
 
 
+@pytest.mark.parametrize(
+    ("present_backend", "missing_pattern"),
+    [
+        ("python", "missing Rust scenario"),
+        ("rust", "missing Python scenario"),
+    ],
+)
 @given(comparison_id=_NAMES, mean=_MEANS)
 def test_group_missing_a_backend_is_rejected(
     comparison_id: str,
     mean: float,
+    present_backend: str,
+    missing_pattern: str,
 ) -> None:
-    """A group lacking either backend raises ``ValueError``."""
+    """A group lacking either backend raises ``ValueError`` for that backend."""
     grouped = {
         comparison_id: {
-            "python": _ScenarioEntry(scenario_name="py", mean=mean),
+            present_backend: _ScenarioEntry(scenario_name=present_backend, mean=mean),
         },
     }
-    with pytest.raises(ValueError, match="missing Rust scenario"):
+    with pytest.raises(ValueError, match=missing_pattern):
         _build_report_from_grouped_entries(grouped)
 
 

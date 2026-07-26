@@ -68,7 +68,9 @@ def test_ranking_follows_composite_key(
     state = _build_state(stacks)
     ranked = _rank_frames(state, state.inclusive, limit=len(state.inclusive) + 5)
     keys = [_inclusive_key(state, typ.cast("str", entry["frame"])) for entry in ranked]
-    assert keys == sorted(keys)
+    assert keys == sorted(keys), (
+        "ranked frames must be ordered by (-inclusive, -leaf, frame)"
+    )
 
 
 @given(stacks=_STACKS, limit=st.integers(min_value=0, max_value=8))
@@ -80,8 +82,10 @@ def test_limit_truncates_a_stable_prefix(
     state = _build_state(stacks)
     full = _rank_frames(state, state.inclusive, limit=len(state.inclusive) + 5)
     limited = _rank_frames(state, state.inclusive, limit=limit)
-    assert len(limited) <= limit
-    assert limited == full[:limit]
+    assert len(limited) <= limit, "a limited ranking must not exceed the limit"
+    assert limited == full[:limit], (
+        "a limited ranking must be the full ranking's prefix"
+    )
 
 
 @given(stacks=_STACKS)
@@ -92,7 +96,7 @@ def test_ranking_is_deterministic(
     state = _build_state(stacks)
     first = _rank_frames(state, state.inclusive, limit=5)
     second = _rank_frames(state, state.inclusive, limit=5)
-    assert first == second
+    assert first == second, "ranking must be deterministic for the same state"
 
 
 @given(stacks=_STACKS)
@@ -106,23 +110,40 @@ def test_entry_fields_and_inclusive_dominates_leaf(
         frame = typ.cast("str", entry["frame"])
         inclusive_samples = typ.cast("int", entry["inclusive_samples"])
         leaf_samples = typ.cast("int", entry["leaf_samples"])
-        assert inclusive_samples == state.inclusive[frame]
-        assert leaf_samples == state.leaf[frame]
+        assert inclusive_samples == state.inclusive[frame], (
+            "inclusive_samples must mirror the inclusive counter"
+        )
+        assert leaf_samples == state.leaf[frame], (
+            "leaf_samples must mirror the leaf counter"
+        )
         assert entry["inclusive_percent"] == _percent(
             state.inclusive[frame], state.total
+        ), "inclusive_percent must be derived from the inclusive counter"
+        assert entry["leaf_percent"] == _percent(state.leaf[frame], state.total), (
+            "leaf_percent must be derived from the leaf counter"
         )
-        assert entry["leaf_percent"] == _percent(state.leaf[frame], state.total)
-        assert inclusive_samples >= leaf_samples
+        assert inclusive_samples >= leaf_samples, (
+            "inclusive samples must dominate leaf samples per frame"
+        )
+
+
+# A representable ceiling for the CrossHair contract. Real sample tallies never
+# approach this; beyond it ``samples * 100.0`` overflows float to infinity (and
+# far larger ints raise ``OverflowError``), which would let CrossHair report a
+# spurious counterexample rather than verify the intended [0, 100] bound.
+_PERCENT_CONTRACT_MAX = 10**12
 
 
 def _assert_percent_bounds(samples: int, total: int) -> None:
     """Contract: ``_percent`` stays within [0, 100] for valid sample counts."""
-    if total <= 0:
+    if not 0 < total <= _PERCENT_CONTRACT_MAX:
         return
     if not 0 <= samples <= total:
         return
     result = _percent(samples, total)
-    assert 0.0 <= result <= 100.0
+    assert 0.0 <= result <= 100.0, (
+        f"_percent({samples}, {total}) = {result} is outside [0, 100]"
+    )
 
 
 @pytest.mark.crosshair
