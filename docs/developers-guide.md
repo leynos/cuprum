@@ -11,6 +11,7 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md)
 - [ADR-005: Unify Rust availability probe](adr-005-unified-rust-availability-probe.md)
 - [ADR-006: Split cuprum/context.py into a context package](adr-006-context-package-split.md)
+- [ADR-007: Subprocess execution module boundaries](adr-007-subprocess-execution-module-boundaries.md)
 
 ## Rust availability probing
 
@@ -327,6 +328,15 @@ the shared `_LockedStore` lock (its mutators, and `reset()`, run under that
 lock), while `InMemorySpan` is a plain mutable record that provides no
 synchronization of its own.
 
+**Phase dispatch.** `TracingHook.__call__` matches every `ExecEvent.phase` in
+a single `match`, and each phase falls into exactly one of four categories:
+span lifecycle (`start` opens a span, `exit` ends it), span event (`stdout`,
+`stderr`, and `stdin_error` record a `cuprum.<phase>` event on the
+already-open span), deliberately ignored (`plan` and `stdin` carry no tracing
+semantics), or unhandled (the `case _` logs via `_log_unhandled_phase`
+instead of failing silently or raising). A new phase should be slotted into
+this policy rather than given an ad-hoc side path.
+
 **State model.** `TracingHook` keeps `_active_spans`, a dictionary keyed by
 `ExecEvent.exec_id` (the per-execution correlation token), guarded by an
 internal `threading.Lock`:
@@ -338,8 +348,19 @@ internal `threading.Lock`:
   the lock, so an arbitrary `Span` that blocks on I/O in `set_status()`/`end()`
   cannot stall other executions' handlers; each replaced span is still ended
   exactly once because it is already unreachable via the map.
-- **stdout/stderr** look up the span for the event's `exec_id` under the lock,
-  then record the line as a span event outside the lock.
+- **stdout/stderr/stdin_error** all route through the single
+  `_record_span_event` helper: it looks up the span for the event's
+  `exec_id` under the lock, then, outside the lock, copies whichever of the
+  `line`, `operation`, `error_type`, and `note` fields are set on the event
+  onto a `cuprum.<phase>` span event (for example `cuprum.stdout` or
+  `cuprum.stdin_error`). New event-recording phases should extend this
+  shared field set rather than add a bespoke per-phase method. The helper
+  never sets the span status or ends the span — only `exit` does that — so a
+  `stdin_error` (the child process may legitimately ignore its stdin) is
+  recorded as a diagnostic without failing or closing the execution span.
+  `stdout`/`stderr` recording is gated by the hook's `record_output` flag;
+  `stdin_error` is recorded unconditionally, so a stdin-write failure stays
+  diagnosable even when line-by-line output recording is switched off.
 - **exit** removes (pops) the span for the event's `exec_id` under the lock,
   then sets the exit attributes and status and ends the span outside the lock.
 
@@ -351,8 +372,9 @@ observability.
 **Legacy or manual events.** An event whose `exec_id` is `None` (a legacy or
 hand-constructed event) cannot be correlated, so it is ignored rather than
 guessed from PID: a `start` without an `exec_id` creates no span, and
-`stdout`/`stderr`/`exit` without one are dropped. Every event Cuprum itself
-emits carries an `exec_id`, so this only affects hand-built event streams.
+`stdout`/`stderr`/`stdin_error`/`exit` without one are dropped. Every event
+Cuprum itself emits carries an `exec_id`, so this only affects hand-built
+event streams.
 
 ## Canonical `_TokenRegistration` handle base
 
@@ -1504,6 +1526,19 @@ arguments only for compatibility. Those flags emit `DeprecationWarning` and
 must not be combined with `output=RunOutputOptions(...)`; mixed usage raises
 `ValueError` before any deprecation warning is emitted, so warning filters do
 not obscure the documented ambiguity error.
+
+## Subprocess execution module boundaries
+
+The subprocess execution implementation is split by lifecycle concern across
+`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stdin.py`, and
+`cuprum/_subprocess_timeout.py`. See [Cuprum design](cuprum-design.md) §8.1.5
+and [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the
+accepted rationale and compatibility constraints.
+
+Keep these boundaries intact. New stdin pipe behaviour belongs in
+`_subprocess_stdin`; timeout or exit-event policy belongs in
+`_subprocess_timeout`; and orchestration that coordinates them belongs in
+`_subprocess_execution`.
 
 ## Subprocess stdin injection
 

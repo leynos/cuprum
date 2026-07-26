@@ -84,6 +84,12 @@ class ExecEvent:
         such as ``stdin_error``.
     byte_count:
         Number of bytes written for byte-counted phases such as ``stdin``.
+    operation:
+        For failure events such as ``stdin_error``, the pipe operation that
+        failed (for example ``write`` or ``close``).
+    error_type:
+        For failure events such as ``stdin_error``, the class name of the
+        raised exception (for example ``OSError``).
     exec_id:
         Stable per-execution correlation token, minted once per execution and
         shared by every lifecycle event for that execution. It is the reliable
@@ -107,6 +113,8 @@ class ExecEvent:
     tags: cabc.Mapping[str, object]
     note: str | None = None
     byte_count: int | None = None
+    operation: str | None = None
+    error_type: str | None = None
     exec_id: ExecId | None = None
 
 
