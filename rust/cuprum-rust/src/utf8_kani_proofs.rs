@@ -146,13 +146,14 @@ fn append_valid_prefix_matches_checked_decode() {
         Err(err) => err.valid_up_to(),
     };
 
-    // Cover proves the meaningful case is reachable: a non-empty valid prefix
-    // that actually reaches the `unsafe from_utf8_unchecked` call, rather than
-    // only the `valid_up_to == 0` early return.
+    // Cover both branches of `append_valid_prefix`: the non-empty prefix that
+    // reaches the `unsafe from_utf8_unchecked` call, and the `valid_up_to == 0`
+    // early return. Pairing them proves neither became unreachable.
     kani::cover!(
         valid_up_to > 0,
         "reaches the unchecked decode of a non-empty prefix"
     );
+    kani::cover!(valid_up_to == 0, "reaches the empty-prefix early return");
 
     let mut output = String::new();
     append_valid_prefix(&bytes, &mut output, ValidUpTo(valid_up_to));
