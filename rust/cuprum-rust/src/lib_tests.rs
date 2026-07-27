@@ -6,8 +6,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::io_utils::read_stream;
 use crate::test_support::{fd_is_open, make_pipe, write_all_to};
-use crate::{stream_from_raw, with_borrowed_reader};
+use crate::tracing_capture::capture;
+use crate::{BufferSize, consume_stream_files, stream_from_raw, with_borrowed_reader};
 use rstest::{fixture, rstest};
+use tracing::Level;
 
 struct BorrowedReaderPipe {
     read_end: OwnedFd,
@@ -77,6 +79,40 @@ fn stream_from_raw_owns_and_reads_the_descriptor() {
     // Dropping `handle` closes the owned descriptor.
     drop(handle);
     assert!(!fd_is_open(raw_fd), "the owned FD must be closed on drop");
+}
+
+#[rstest]
+fn consume_records_total_bytes_and_retries_on_span() {
+    let (read_end, write_end) = make_pipe();
+    let payload = b"boundary-check-payload";
+    write_all_to(&write_end, payload);
+    // Close the write end so the read loop reaches EOF and terminates.
+    drop(write_end);
+
+    let mut reader = read_end;
+    let captured = capture(Level::INFO, || {
+        match consume_stream_files(&mut reader, BufferSize(64)) {
+            Ok(text) => assert_eq!(text.len(), payload.len()),
+            Err(err) => panic!("consume over a closed pipe failed: {err:?}"),
+        }
+    });
+
+    // The completion `span.record` calls must surface the real byte total and
+    // the (zero) retry count; removing or miscounting either fails here.
+    assert_eq!(
+        captured
+            .span_field("consume_stream", "total_bytes")
+            .as_deref(),
+        Some(payload.len().to_string().as_str()),
+        "the consume span must record the total bytes read",
+    );
+    assert_eq!(
+        captured
+            .span_field("consume_stream", "read_retries")
+            .as_deref(),
+        Some("0"),
+        "no interruptions occurred, so read_retries must record as 0",
+    );
 }
 
 fn assert_panicking_reader_keeps_fd_open(raw_fd: i32) {

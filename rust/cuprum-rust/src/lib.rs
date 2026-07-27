@@ -29,6 +29,8 @@ mod lib_tests;
 mod splice;
 #[cfg(all(test, unix))]
 mod test_support;
+#[cfg(all(test, unix))]
+mod tracing_capture;
 mod utf8;
 
 use errors::PumpError;
@@ -286,6 +288,7 @@ fn pump_stream_files_readwrite(
     // a `warn`/`error`-only production filter.
     let span = operation_span("pump_stream_readwrite", buffer_size.value());
     let _guard = span.enter();
+    io_utils::reset_retry_counters();
 
     let mut buffer = vec![0_u8; buffer_size.value()];
     let mut total_written = 0_u64;
@@ -308,6 +311,8 @@ fn pump_stream_files_readwrite(
     }
 
     span.record("total_bytes", total_written);
+    span.record("read_retries", io_utils::read_retry_count());
+    span.record("write_retries", io_utils::write_retry_count());
     Ok(total_written)
 }
 
@@ -320,6 +325,7 @@ fn consume_stream_files(
     // production filter.
     let span = operation_span("consume_stream", buffer_size.value());
     let _guard = span.enter();
+    io_utils::reset_retry_counters();
 
     let mut buffer = vec![0_u8; buffer_size.value()];
     let mut pending: Vec<u8> = Vec::new();
@@ -343,6 +349,7 @@ fn consume_stream_files(
     decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(true));
 
     span.record("total_bytes", total_read);
+    span.record("read_retries", io_utils::read_retry_count());
     Ok(output)
 }
 
