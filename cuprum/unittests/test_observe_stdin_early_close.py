@@ -9,9 +9,7 @@ as an observable ``stdin_error`` event.
 from __future__ import annotations
 
 import asyncio
-import tempfile
 import typing as typ
-from pathlib import Path
 
 from cuprum import sh
 from cuprum._subprocess_stdin import _write_stdin
@@ -21,6 +19,8 @@ from tests.helpers.catalogue import python_catalogue
 from tests.helpers.stream_pipes import drain_blocking_payload_size
 
 if typ.TYPE_CHECKING:
+    from pathlib import Path
+
     import pytest
 
     from cuprum._pipeline_types import _StageObservation
@@ -91,6 +91,7 @@ def _patch_writer_wedge_signal(monkeypatch: pytest.MonkeyPatch) -> asyncio.Event
 
 def test_observe_emits_stdin_error_event_when_process_closes_stdin_early(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Emit a real ``stdin_error`` event when the subprocess closes stdin early.
 
@@ -139,8 +140,7 @@ def test_observe_emits_stdin_error_event_when_process_closes_stdin_early(
             await _wait_for_path(closed_path, timeout=10.0)
             return await asyncio.wait_for(task, timeout=10.0)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        result = asyncio.run(_orchestrate(Path(tmp) / "go", Path(tmp) / "closed"))
+    result = asyncio.run(_orchestrate(tmp_path / "go", tmp_path / "closed"))
 
     assert result.exit_code == 0, (
         f"subprocess exited with non-zero code: {result.exit_code}"

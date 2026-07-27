@@ -365,6 +365,11 @@ enforced. When a timeout expires, Cuprum terminates the subprocess, waits for
 `cancel_grace`, escalates to `SIGKILL` if needed, and raises `TimeoutExpired`
 (mirroring `subprocess.TimeoutExpired`).
 
+Any output already captured before the timeout fired is preserved on the
+exception: `exc.output` / `exc.stderr` hold the partial stdout/stderr (or
+`None` when `capture=False`), so callers can inspect what the command
+produced before it was killed.
+
 Timeout resolution order:
 
 - Explicit `timeout` argument on `run()` / `run_sync` when not `None`.

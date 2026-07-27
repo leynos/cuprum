@@ -282,7 +282,7 @@ def test_timeout_with_blocked_stdin_writer_does_not_hang(
     drains the stdout/stderr consumers) keeps this a regression for #117 across
     both branches.
     """
-    _, execute = execution_strategy
+    label, execute = execution_strategy
     command = python_builder("-c", "import time; time.sleep(3600)")
     # Probe the real pipe capacity so the writer is guaranteed to stall in
     # drain() rather than assuming a ~64 KiB buffer.
@@ -299,8 +299,8 @@ def test_timeout_with_blocked_stdin_writer_does_not_hang(
         )
     elapsed = time.perf_counter() - started
     assert elapsed < 10.0, (
-        f"{mode}-mode timeout with a blocked stdin writer must not hang; "
-        f"took {elapsed:.2f}s"
+        f"{mode}-mode timeout with a blocked stdin writer must not hang under "
+        f"{label} execution; took {elapsed:.2f}s"
     )
 
 
