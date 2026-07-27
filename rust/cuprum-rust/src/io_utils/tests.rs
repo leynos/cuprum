@@ -10,6 +10,15 @@ use super::{
     read_raw_fd_with, read_stream, write_all_unix_with,
 };
 use crate::test_support::{make_pipe, unwrap_err, unwrap_ok, write_all_to};
+use rstest::{fixture, rstest};
+
+/// A fresh `pipe(2)` pair (`read_end`, `write_end`) for descriptor-backed
+/// tests, so the shared setup lives in one place rather than a repeated
+/// `make_pipe()` call per test.
+#[fixture]
+fn pipe() -> (OwnedFd, OwnedFd) {
+    make_pipe()
+}
 
 /// Representative error kinds spanning the non-fatal and fatal partitions.
 const ERROR_KINDS: [io::ErrorKind; 7] = [
@@ -35,9 +44,9 @@ fn ssize(len: usize) -> libc::ssize_t {
     libc::ssize_t::try_from(len).unwrap_or(libc::ssize_t::MAX)
 }
 
-#[test]
-fn read_stream_reads_pipe_bytes() {
-    let (mut read_end, write_end) = make_pipe();
+#[rstest]
+fn read_stream_reads_pipe_bytes(pipe: (OwnedFd, OwnedFd)) {
+    let (mut read_end, write_end) = pipe;
     write_all_to(&write_end, b"chunk");
     drop(write_end);
     let mut buffer = [0_u8; 8];
@@ -48,9 +57,9 @@ fn read_stream_reads_pipe_bytes() {
     assert_eq!(buffer.get(..read_len), Some(&b"chunk"[..]));
 }
 
-#[test]
-fn read_stream_reports_unreadable_descriptor() {
-    let (_read_end, mut write_end) = make_pipe();
+#[rstest]
+fn read_stream_reports_unreadable_descriptor(pipe: (OwnedFd, OwnedFd)) {
+    let (_read_end, mut write_end) = pipe;
     let mut buffer = [0_u8; 8];
 
     let err = unwrap_err(read_stream(&mut write_end, &mut buffer));
@@ -58,9 +67,9 @@ fn read_stream_reports_unreadable_descriptor() {
     assert!(matches!(err, PumpError::Io(_)));
 }
 
-#[test]
-fn read_raw_fd_reports_eof() {
-    let (read_end, write_end) = make_pipe();
+#[rstest]
+fn read_raw_fd_reports_eof(pipe: (OwnedFd, OwnedFd)) {
+    let (read_end, write_end) = pipe;
     drop(write_end);
     let mut buffer = [0_u8; 8];
 
@@ -85,9 +94,9 @@ fn read_raw_fd_retries_after_interruption() {
     assert_eq!(attempts, 2);
 }
 
-#[test]
-fn handle_write_returns_complete_outcome() {
-    let (read_end, mut write_end) = make_pipe();
+#[rstest]
+fn handle_write_returns_complete_outcome(pipe: (OwnedFd, OwnedFd)) {
+    let (read_end, mut write_end) = pipe;
 
     let outcome = unwrap_ok(handle_write(&mut write_end, b"chunk"));
 
@@ -95,9 +104,9 @@ fn handle_write_returns_complete_outcome() {
     drop(read_end);
 }
 
-#[test]
-fn handle_write_reports_unwritable_descriptor() {
-    let (mut read_end, _write_end) = make_pipe();
+#[rstest]
+fn handle_write_reports_unwritable_descriptor(pipe: (OwnedFd, OwnedFd)) {
+    let (mut read_end, _write_end) = pipe;
 
     let err = unwrap_err(handle_write(&mut read_end, b"chunk"));
 
@@ -116,9 +125,9 @@ fn run_handle_write_result(
     (result, total_written)
 }
 
-#[test]
-fn handle_write_result_updates_total_on_success() {
-    let (read_end, mut write_end) = make_pipe();
+#[rstest]
+fn handle_write_result_updates_total_on_success(pipe: (OwnedFd, OwnedFd)) {
+    let (read_end, mut write_end) = pipe;
 
     let (result, total_written) = run_handle_write_result(&mut write_end, 7);
 
@@ -127,9 +136,9 @@ fn handle_write_result_updates_total_on_success() {
     drop(read_end);
 }
 
-#[test]
-fn handle_write_result_preserves_total_on_fatal_error() {
-    let (mut read_end, _write_end) = make_pipe();
+#[rstest]
+fn handle_write_result_preserves_total_on_fatal_error(pipe: (OwnedFd, OwnedFd)) {
+    let (mut read_end, _write_end) = pipe;
 
     let (result, total_written) = run_handle_write_result(&mut read_end, 7);
 
