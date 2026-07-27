@@ -90,6 +90,28 @@ reuse policy is:
   authoritative. Preserve the declared member order — the classifier returns the
   first matching category.
 
+### Stream-backend resolution seam
+
+`cuprum/_backend.py` keeps the same public contract for `get_stream_backend`
+(the algorithm documented in the design document's stream-backend section) but
+factors its internals into three private helpers so each can be reasoned about
+and property tested in isolation:
+
+- `_parse_backend_value(raw)` — pure parsing of a `CUPRUM_STREAM_BACKEND` value
+  (whitespace/case normalisation, empty → `AUTO`, unknown → `ValueError`),
+  taking the raw string so tests inject values without mutating `os.environ`.
+- `_probe_rust_availability(requested)` — the impure availability probe,
+  encapsulating each mode's failure policy (`PYTHON` never probes; `AUTO`
+  tolerates a probe `ImportError`; forced `RUST` propagates it).
+- `_resolve_backend(requested, rust_available)` — the pure decision core that
+  never leaks `AUTO` and raises `ImportError` for forced-`RUST`-unavailable.
+
+`get_stream_backend` composes them inside one boundary `try`/`except`, so a
+forced-`RUST` failure always emits the `cuprum.stream_backend_unavailable`
+warning whether the probe reports unavailable or itself raises. This is an
+internal decomposition for testability; the observable behaviour and precedence
+are unchanged.
+
 ## Command argument construction
 
 `cuprum.sh.build_argv(*args, **kwargs)` is the public, pure argv-construction
