@@ -1377,6 +1377,22 @@ uv run pytest cuprum/unittests/test_maturin_build.py \
     --snapshot-update -k test_maturin_wheel_build_snapshot
 ```
 
+## Rust stream buffer-size validation
+
+`rust/cuprum-rust/src/lib.rs` validates the `buffer_size` argument to
+`rust_pump_stream` / `rust_consume_stream` at the PyO3 boundary through a pure
+`checked_buffer_size(i64) -> Result<usize, &'static str>` helper, wrapped by
+`validate_buffer_size` (which maps the message to `PyValueError`). The contract
+is: reject non-positive values, values that overflow `usize` on the target
+platform, and values above `MAX_BUFFER_SIZE` (1 GiB, `1 << 30`) — the cap
+guards against absurd allocations while comfortably exceeding any realistic
+transfer buffer (the default is 64 KiB). `checked_buffer_size` is kept pure so
+its boundaries are property tested directly in
+`rust/cuprum-rust/src/buffer_size_tests.rs`; the Python-side error mapping is
+exercised in `cuprum/unittests/test_rust_streams_boundary_property.py`. Keep the
+`_streams_rs.py` wrapper docstrings, `docs/cuprum-design.md`, and the
+users' guide aligned with this contract when the cap changes.
+
 ## Workflow pins and Dependabot
 
 Dependabot owns the upgrade of GitHub Actions and reusable workflows, including
