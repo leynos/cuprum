@@ -133,12 +133,11 @@ def test_pump_rejects_invalid_reader_descriptor(
     The writer is a genuinely valid descriptor, so the ``ValueError`` can only
     originate from the invalid reader, not from a coincidentally invalid writer.
     """
-    writer_fd = os.open(os.devnull, os.O_WRONLY)
-    try:
+    with contextlib.ExitStack() as stack:
+        writer_fd = os.open(os.devnull, os.O_WRONLY)
+        stack.callback(_safe_close, writer_fd)
         with pytest.raises(ValueError, match="file descriptor"):
             rust_streams.rust_pump_stream(bad_fd, writer_fd)
-    finally:
-        _safe_close(writer_fd)
 
 
 def _feed_pipe(write_fd: int, payload: bytes) -> None:
