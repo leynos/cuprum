@@ -1146,13 +1146,13 @@ subprocesses, leaving it ensures they are either completed or terminated.
 
 The former combined `_run_before_hooks` helper has been superseded by separate
 authorization and query operations. `_enforce_allowlist` performs authorization
-and may raise before hook dispatch. `_collect_hooks` reads and copies registered
-hooks without performing authorization, dispatching hooks, or mutating the
-context. Pipeline execution preserves this ordering for every stage before
-emitting its `plan` event and dispatching before-hooks.
+and may raise before hook dispatch. `_collect_hooks` reads and copies
+registered hooks without performing authorization, dispatching hooks, or
+mutating the context. Pipeline execution preserves this ordering for every
+stage before emitting its `plan` event and dispatching before-hooks.
 
-`cuprum._pipeline_types` owns the shared pipeline dataclasses and types. Keeping
-these passive definitions separate preserves the dependency-safe import
+`cuprum._pipeline_types` owns the shared pipeline dataclasses and types.
+Keeping these passive definitions separate preserves the dependency-safe import
 boundary and the project file-size constraints; the module does not perform
 execution logic. `cuprum._pipeline_internals` re-exports the shared types only
 for compatibility. Do not reintroduce the combined `_run_before_hooks`
@@ -1335,8 +1335,8 @@ design decisions guide these adapters:
 - The adapters use `cuprum.adapters._support` for the common `ExecEvent`
   projection and reference-collector locking pattern.
 - `_event_common_fields` is the canonical logging/tracing projection helper for
-  optional execution fields. Each adapter supplies its own key-naming
-  function so the wire shape remains backend-specific without duplicating
+  optional execution fields. Each adapter supplies its own key-naming function
+  so the wire shape remains backend-specific without duplicating
   field-selection rules.
 - `_project_tag` centralizes the low-cardinality project tag lookup for
   metrics and any future adapter that needs the same semantics. It returns
@@ -1369,8 +1369,8 @@ design decisions guide these adapters:
   canonical correlation policy in the structured execution events section
   (8.1.3).
 - Events without an `exec_id` (legacy or manually constructed) are ambiguous
-  and are ignored: no span is created for such a `start`, and their
-  `stdout`/`stderr`/`exit` events are dropped rather than guessed from PID.
+  and are ignored: no span is created for such a `start`, and their `stdout`/
+  `stderr`/`exit` events are dropped rather than guessed from PID.
 - Output lines can optionally be recorded as span events (controlled by
   `record_output` parameter).
 - Span status is set based on exit code (OK for 0, ERROR otherwise).
@@ -1585,11 +1585,10 @@ line-emitting consume variant layers one incremental decoder per invocation on
 top of this loop by passing an `on_chunk` delivery hook; the hook itself does
 not own shared state. Fixes to read, echo, and capture behaviour belong in
 `_drain()`, so the capture-only and line-emitting paths cannot diverge. The
-line-emitting variant configures its incremental decoder from
-`config.encoding` and `config.errors`, and `_drain()` applies the same error
-policy when decoding captured bytes. New consume variants should reuse
-`_drain()` unless they deliberately replace the whole stream-consumption
-contract.
+line-emitting variant configures its incremental decoder from `config.encoding`
+and `config.errors`, and `_drain()` applies the same error policy when decoding
+captured bytes. New consume variants should reuse `_drain()` unless they
+deliberately replace the whole stream-consumption contract.
 
 For a 1 GB data stream, this results in:
 
@@ -1846,8 +1845,8 @@ the translation between asyncio streams and file descriptors.
 
 The raw availability probe lives in `cuprum._rust_backend`. Its
 `is_available()` function imports `cuprum._rust_backend_native`, returns
-`False` when that native module is missing, and re-raises other import
-failures after logging a warning. The cached resolver in
+`False` when that native module is missing, and re-raises other import failures
+after logging a warning. The cached resolver in
 `cuprum._backend._check_rust_available()` wraps this probe and feeds both
 `cuprum.rust.is_rust_available()` and `get_stream_backend()`.
 
@@ -1866,7 +1865,8 @@ Cuprum selects the stream backend at runtime using the following precedence:
      `cuprum._backend._check_rust_available()`;
    - `_check_rust_available()` is `functools.lru_cache(maxsize=1)` and honours
      `set_rust_availability_for_testing()`;
-   - `_check_rust_available()` delegates to `cuprum._rust_backend.is_available()`,
+   - `_check_rust_available()` delegates to
+     `cuprum._rust_backend.is_available()`,
      which returns `False` when the native module is missing and re-raises
      other import failures after logging a warning.
 
@@ -2201,14 +2201,13 @@ bias one backend block. On pushes to `main`, the new smoke benchmark output is
 uploaded as the next baseline artefact for future runs. When no prior `main`
 baseline is available yet, or when the existing baseline uses an incompatible
 (older) benchmark profile whose sampling protocol is not comparable, the job
-writes a skip report instead of failing the workflow.
-The baseline fetch helper follows GitHub’s signed archive redirects without
-forwarding GitHub-only authentication headers to the storage host, avoiding
-cross-origin 401 responses during artefact download. The same job also
-generates a Python-versus-Rust comparison report from the candidate smoke
-artefacts and appends a Markdown summary table to `$GITHUB_STEP_SUMMARY`, so
-reviewers can inspect backend speedups even when the Rust ratchet later fails
-the job.
+writes a skip report instead of failing the workflow. The baseline fetch helper
+follows GitHub’s signed archive redirects without forwarding GitHub-only
+authentication headers to the storage host, avoiding cross-origin 401 responses
+during artefact download. The same job also generates a Python-versus-Rust
+comparison report from the candidate smoke artefacts and appends a Markdown
+summary table to `$GITHUB_STEP_SUMMARY`, so reviewers can inspect backend
+speedups even when the Rust ratchet later fails the job.
 
 The ratchet rule is:
 

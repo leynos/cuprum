@@ -21,18 +21,18 @@ Stream backend availability is resolved through one cached entry point:
 `_check_rust_available()` first checks the testing override
 (`set_rust_availability_for_testing`). While active, that override
 short-circuits availability resolution before the raw import probe runs, and
-`set_rust_availability_for_testing()` clears both `_check_rust_available.cache_clear()`
-and `get_stream_backend.cache_clear()`; otherwise the resolver falls back to
-that raw import probe. Cached answers only drift if a long-lived interpreter
-survives a wheel swap or another out-of-band import-path or installation-state
-change.
+`set_rust_availability_for_testing()` clears both
+`_check_rust_available.cache_clear()` and `get_stream_backend.cache_clear()`;
+otherwise the resolver falls back to that raw import probe. Cached answers only
+drift if a long-lived interpreter survives a wheel swap or another out-of-band
+import-path or installation-state change.
 
 User callers should use `cuprum.is_rust_available()`, which delegates to
 `_check_rust_available()`, so the public answer and dispatch resolver cannot
 diverge within a process.
 
-Issue `#128` is resolved in this path: the public helper and backend
-dispatch now share the same cached resolver.
+Issue `#128` is resolved in this path: the public helper and backend dispatch
+now share the same cached resolver.
 
 ## Rust dependency management
 
@@ -211,13 +211,13 @@ Private helpers emit diagnostic logs rather than installing a global metrics or
 tracing backend.  Hook scheduling and hook failures use the
 `cuprum._observability` logger with structured `extra` fields such as
 `cuprum_phase`, `cuprum_program`, `cuprum_error_type`, and
-`cuprum_scheduled_task_count`.  Stream early-close
-decisions use warning-level records on the `cuprum._streams` logger and include
-`cuprum_discarded_bytes` when upstream bytes are drained after the downstream
-writer has closed. Suppressed writer cleanup failures remain debug-level
-diagnostics with `cuprum_operation` and `cuprum_error_type`, because they are
-expected during already-closed pipe teardown.  User-facing metrics and spans
-remain the responsibility of observe-hook adapters such as `MetricsHook` and
+`cuprum_scheduled_task_count`.  Stream early-close decisions use warning-level
+records on the `cuprum._streams` logger and include `cuprum_discarded_bytes`
+when upstream bytes are drained after the downstream writer has closed.
+Suppressed writer cleanup failures remain debug-level diagnostics with
+`cuprum_operation` and `cuprum_error_type`, because they are expected during
+already-closed pipe teardown.  User-facing metrics and spans remain the
+responsibility of observe-hook adapters such as `MetricsHook` and
 `TracingHook`, which consume `ExecEvent` values without coupling core execution
 to a telemetry vendor.
 
@@ -253,10 +253,10 @@ supplied. Any fix to the read/echo/capture mechanics belongs in `_drain` so the
 capture path and the line-emitting path cannot silently diverge; new consume
 variants must layer behaviour through `on_chunk` rather than copying the loop.
 
-When echoing, `_drain` writes raw bytes to sinks with a `.buffer`. For text-only
-sinks, it owns an incremental decoder configured with `config.encoding` and
-`config.errors`, then flushes that decoder at end of stream. This preserves
-multibyte characters that span read chunks.
+When echoing, `_drain` writes raw bytes to sinks with a `.buffer`. For
+text-only sinks, it owns an incremental decoder configured with
+`config.encoding` and `config.errors`, then flushes that decoder at end of
+stream. This preserves multibyte characters that span read chunks.
 
 `cuprum/unittests/test_stream_property_based.py` and
 `tests/behaviour/test_stream_property_preservation_behaviour.py` hold the
@@ -271,8 +271,8 @@ canonical helper contract and the two `_consume_stream` variants.
 
 Each `_drain()` invocation is self-contained. It owns its capture buffer
 (`bytearray`), the line-emitting variant's `codecs.IncrementalDecoder`, and any
-text-only echo decoder. The `on_chunk` callback closes over the line decoder and
-acts only as the chunk delivery hook. Concurrent stdout and stderr drains
+text-only echo decoder. The `on_chunk` callback closes over the line decoder
+and acts only as the chunk delivery hook. Concurrent stdout and stderr drains
 therefore do not share mutable capture or decoder state.
 
 The echo sink (`config.sink`) may be shared between concurrent drains when
@@ -289,13 +289,13 @@ invocations. Each invocation must receive its own reader.
 
 ### Canonical adapter event projection and locked-store base
 
-`cuprum/adapters/_support.py` keeps the three telemetry adapters from
-repeating the same event projection and in-memory collector locking. It owns
-the canonical logging/tracing `(key, value)` projection helper for optional
+`cuprum/adapters/_support.py` keeps the three telemetry adapters from repeating
+the same event projection and in-memory collector locking. It owns the
+canonical logging/tracing `(key, value)` projection helper for optional
 execution fields, the `project` tag helper, the shared unhandled-phase debug
 log, and `_LockedStore` with its lock-guarded `reset()`. Each adapter retains
-backend-specific key names and value shaping, such as tuple versus list
-`argv`, at its call site.
+backend-specific key names and value shaping, such as tuple versus list `argv`,
+at its call site.
 
 This module was extracted to prevent three-way projection drift and keep each
 adapter within its cohesion budget. It is importable only by adapter modules:
@@ -306,8 +306,8 @@ such as `cuprum/unittests/test_adapter_projection.py` may import
 `ExecEvent` field once to `_event_common_fields`; new in-memory collectors
 derive from `_LockedStore` and implement `_clear()` while its lock is held.
 
-`cuprum/unittests/test_adapter_projection.py` pins this contract with Hypothesis
-properties and redacted per-phase syrupy snapshots.
+`cuprum/unittests/test_adapter_projection.py` pins this contract with
+Hypothesis properties and redacted per-phase syrupy snapshots.
 
 ### Build and test worker controls
 
@@ -321,21 +321,21 @@ count to Rust test commands and, through `CARGO_JOB_ENV`, to both
 `cuprum/adapters/tracing_adapter.py` provides `TracingHook`, an observe hook
 that turns the `ExecEvent` stream into OpenTelemetry-style spans. It depends
 only on the `Tracer` and `Span` protocols, so any backend that implements them
-can be plugged in. `cuprum/adapters/tracing_memory.py` supplies `InMemoryTracer`
-and `InMemorySpan`, the reference doubles used by tests and examples:
-`InMemoryTracer` collects spans in memory and protects its span store through
-the shared `_LockedStore` lock (its mutators, and `reset()`, run under that
-lock), while `InMemorySpan` is a plain mutable record that provides no
+can be plugged in. `cuprum/adapters/tracing_memory.py` supplies
+`InMemoryTracer` and `InMemorySpan`, the reference doubles used by tests and
+examples: `InMemoryTracer` collects spans in memory and protects its span store
+through the shared `_LockedStore` lock (its mutators, and `reset()`, run under
+that lock), while `InMemorySpan` is a plain mutable record that provides no
 synchronization of its own.
 
-**Phase dispatch.** `TracingHook.__call__` matches every `ExecEvent.phase` in
-a single `match`, and each phase falls into exactly one of four categories:
-span lifecycle (`start` opens a span, `exit` ends it), span event (`stdout`,
-`stderr`, and `stdin_error` record a `cuprum.<phase>` event on the
-already-open span), deliberately ignored (`plan` and `stdin` carry no tracing
-semantics), or unhandled (the `case _` logs via `_log_unhandled_phase`
-instead of failing silently or raising). A new phase should be slotted into
-this policy rather than given an ad-hoc side path.
+**Phase dispatch.** `TracingHook.__call__` matches every `ExecEvent.phase` in a
+single `match`, and each phase falls into exactly one of four categories: span
+lifecycle (`start` opens a span, `exit` ends it), span event (`stdout`,
+`stderr`, and `stdin_error` record a `cuprum.<phase>` event on the already-open
+span), deliberately ignored (`plan` and `stdin` carry no tracing semantics), or
+unhandled (the `case _` logs via `_log_unhandled_phase` instead of failing
+silently or raising). A new phase should be slotted into this policy rather
+than given an ad-hoc side path.
 
 **State model.** `TracingHook` keeps `_active_spans`, a dictionary keyed by
 `ExecEvent.exec_id` (the per-execution correlation token), guarded by an
@@ -349,18 +349,18 @@ internal `threading.Lock`:
   cannot stall other executions' handlers; each replaced span is still ended
   exactly once because it is already unreachable via the map.
 - **stdout/stderr/stdin_error** all route through the single
-  `_record_span_event` helper: it looks up the span for the event's
-  `exec_id` under the lock, then, outside the lock, copies whichever of the
-  `line`, `operation`, `error_type`, and `note` fields are set on the event
-  onto a `cuprum.<phase>` span event (for example `cuprum.stdout` or
-  `cuprum.stdin_error`). New event-recording phases should extend this
-  shared field set rather than add a bespoke per-phase method. The helper
-  never sets the span status or ends the span — only `exit` does that — so a
-  `stdin_error` (the child process may legitimately ignore its stdin) is
-  recorded as a diagnostic without failing or closing the execution span.
-  `stdout`/`stderr` recording is gated by the hook's `record_output` flag;
-  `stdin_error` is recorded unconditionally, so a stdin-write failure stays
-  diagnosable even when line-by-line output recording is switched off.
+  `_record_span_event` helper: it looks up the span for the event's `exec_id`
+  under the lock, then, outside the lock, copies whichever of the `line`,
+  `operation`, `error_type`, and `note` fields are set on the event onto a
+  `cuprum.<phase>` span event (for example `cuprum.stdout` or
+  `cuprum.stdin_error`). New event-recording phases should extend this shared
+  field set rather than add a bespoke per-phase method. The helper never sets
+  the span status or ends the span — only `exit` does that — so a `stdin_error`
+  (the child process may legitimately ignore its stdin) is recorded as a
+  diagnostic without failing or closing the execution span. `stdout`/`stderr`
+  recording is gated by the hook's `record_output` flag; `stdin_error` is
+  recorded unconditionally, so a stdin-write failure stays diagnosable even
+  when line-by-line output recording is switched off.
 - **exit** removes (pops) the span for the event's `exec_id` under the lock,
   then sets the exit attributes and status and ends the span outside the lock.
 
@@ -371,10 +371,10 @@ observability.
 
 **Legacy or manual events.** An event whose `exec_id` is `None` (a legacy or
 hand-constructed event) cannot be correlated, so it is ignored rather than
-guessed from PID: a `start` without an `exec_id` creates no span, and
-`stdout`/`stderr`/`stdin_error`/`exit` without one are dropped. Every event
-Cuprum itself emits carries an `exec_id`, so this only affects hand-built
-event streams.
+guessed from PID: a `start` without an `exec_id` creates no span, and `stdout`/
+`stderr`/`stdin_error`/`exit` without one are dropped. Every event Cuprum
+itself emits carries an `exec_id`, so this only affects hand-built event
+streams.
 
 ## Canonical `_TokenRegistration` handle base
 
@@ -397,9 +397,9 @@ deliberately carries no token of its own.
 
 `cuprum/unittests/test_token_registration_stateful.py` verifies the token
 discipline with a Hypothesis `RuleBasedStateMachine` driving randomized
-register/detach sequences across all token-backed handle types (nesting, context-manager
-exit, LIFO detach, double-detach), plus an example test pinning the
-documented non-LIFO hazard.
+register/detach sequences across all token-backed handle types (nesting,
+context-manager exit, LIFO detach, double-detach), plus an example test pinning
+the documented non-LIFO hazard.
 
 ## Canonical stage-observation inputs
 
@@ -551,20 +551,19 @@ committing.
 
 ## ConcurrentResult submission mapping
 
-`ConcurrentResult` (in `cuprum/concurrent.py`) exposes the compacted
-results alongside a submission-stable mapping so callers can relate any
-result — or failure — back to the command they submitted:
+`ConcurrentResult` (in `cuprum/concurrent.py`) exposes the compacted results
+alongside a submission-stable mapping so callers can relate any result — or
+failure — back to the command they submitted:
 
 - `submission_indices` is a tuple parallel to `results`; each entry is
-  the original submission index of the corresponding result. It
-  defaults to the identity sequence when omitted (the constructor
-  treats `None` as "omitted"), and a supplied sequence whose length
-  differs from `results` raises `ValueError`.
+  the original submission index of the corresponding result. It defaults to the
+  identity sequence when omitted (the constructor treats `None` as "omitted"),
+  and a supplied sequence whose length differs from `results` raises
+  `ValueError`.
 - `failure_submission_indices` maps each entry of `failures` through
-  `submission_indices`, yielding the original submission positions of
-  the failed commands. Unlike `failures` (positions within the
-  possibly compacted `results`), it is stable across collect-all and
-  fail-fast modes.
+  `submission_indices`, yielding the original submission positions of the
+  failed commands. Unlike `failures` (positions within the possibly compacted
+  `results`), it is stable across collect-all and fail-fast modes.
 
 ## Environment overlay resolution
 
@@ -633,9 +632,9 @@ runner-speed differences and residual startup overhead cancel out of the
 comparison. Its CI profile places each matched Python/Rust scenario pair next
 to each other and records ten measured runs per command, reducing temporal
 runner drift and three-sample outliers. Dry-run plans record
-`benchmark_profile_version` and
-`worker_iterations`; ratchet comparison skips older baseline artefacts whose
-profile metadata does not match the current benchmark shape.
+`benchmark_profile_version` and `worker_iterations`; ratchet comparison skips
+older baseline artefacts whose profile metadata does not match the current
+benchmark shape.
 
 The remaining fields follow the benchmark plan: `output_path` receives
 hyperfine JSON or dry-run plan JSON, `worker_path` points at the worker module,
@@ -923,8 +922,8 @@ the metrics module.
 
 ### `_EnvBackendSelector` concurrency invariants
 
-The two concurrency modules verify the `_EnvBackendSelector` state machine
-that serializes process-local backend selection. The selector is backed by a
+The two concurrency modules verify the `_EnvBackendSelector` state machine that
+serializes process-local backend selection. The selector is backed by a
 process-wide reentrant lock (`_BACKEND_LOCK`) and a thread-local reentrancy
 guard; the tests assert the following invariants:
 
@@ -1046,9 +1045,9 @@ with `thiserror`:
 Conversion to a Python exception happens in exactly one place
 (`From<PumpError> for PyErr`): `Io` preserves a raw operating-system error code
 as Python's machine-readable `OSError.errno`, while errors without a raw code
-use `pyo3`'s standard `io::Error` translation. The overflow variants surface
-as `OSError`. The non-fatal write classification (broken pipe / connection
-reset) lives on the enum as `PumpError::is_nonfatal_write`, replacing the free
+use `pyo3`'s standard `io::Error` translation. The overflow variants surface as
+`OSError`. The non-fatal write classification (broken pipe / connection reset)
+lives on the enum as `PumpError::is_nonfatal_write`, replacing the free
 function the splice and read/write paths previously shared. New failure
 conditions get a variant here rather than a stringly-typed
 `io::Error::other(...)`.
@@ -1366,9 +1365,8 @@ asserts that the installed version matches the pinned development dependency.
 **Wheel build snapshot** (`test_maturin_wheel_build_snapshot`) Requires the
 Rust toolchain (`cargo` and `rustc`). Builds a native wheel into a temporary
 directory, extracts normalized metadata and layout information, and compares
-the result against a
-[syrupy](https://github.com/syrupy-project/syrupy) snapshot stored at
-`cuprum/unittests/__snapshots__/test_maturin_build.ambr`.
+the result against a [syrupy](https://github.com/syrupy-project/syrupy)
+snapshot stored at `cuprum/unittests/__snapshots__/test_maturin_build.ambr`.
 
 To update the snapshot after a maturin or PyO3 bump, run:
 

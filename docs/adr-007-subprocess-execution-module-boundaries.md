@@ -56,12 +56,12 @@ belongs to.
 This reduces the original file size but creates an ambiguous dumping ground and
 does not improve ownership.
 
-| Topic | Combined module | Lifecycle split | Generic helpers |
-| --- | --- | --- | --- |
-| Ownership | Mixed | Explicit | Ambiguous |
-| Module-size policy | Suppression required | Compliant | Likely to drift |
-| Test isolation | Coupled | Focused | Mixed |
-| Spawn coordination | Local | Local | Fragmented |
+| Topic              | Combined module      | Lifecycle split | Generic helpers |
+| ------------------ | -------------------- | --------------- | --------------- |
+| Ownership          | Mixed                | Explicit        | Ambiguous       |
+| Module-size policy | Suppression required | Compliant       | Likely to drift |
+| Test isolation     | Coupled              | Focused         | Mixed           |
+| Spawn coordination | Local                | Local           | Fragmented      |
 
 _Table 1: Trade-offs for organizing private subprocess execution._
 

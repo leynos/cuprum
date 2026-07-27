@@ -1,6 +1,6 @@
 # ADR-006: Split cuprum/context.py into a context package
 
-_____________________________________________________________________
+______________________________________________________________________
 
 ## Status
 
@@ -12,24 +12,23 @@ work tracked in issue #116 and delivered in PR #157.
 
 2026-07-22
 
-_____________________________________________________________________
+______________________________________________________________________
 
 ## Context and Problem Statement
 
-`cuprum/context.py` had grown past the repository's 400-line-per-module
-ceiling enforced by lint, and it mixed four concerns with different
-audiences and change cadences: pure environment-overlay merging, the core
-immutable domain types, the process-wide `ContextVar` plumbing, and the
-registration handles and factories. Keeping all of this in a single file
-made the boundaries between concerns implicit and left the module unable to
-stay within the line-count ceiling as new context features were added.
+`cuprum/context.py` had grown past the repository's 400-line-per-module ceiling
+enforced by lint, and it mixed four concerns with different audiences and
+change cadences: pure environment-overlay merging, the core immutable domain
+types, the process-wide `ContextVar` plumbing, and the registration handles and
+factories. Keeping all of this in a single file made the boundaries between
+concerns implicit and left the module unable to stay within the line-count
+ceiling as new context features were added.
 
-_____________________________________________________________________
+______________________________________________________________________
 
 ## Decision
 
-Split the module into a `cuprum/context/` package with one module per
-concern:
+Split the module into a `cuprum/context/` package with one module per concern:
 
 - `env_overlay.py` holds the pure environment-overlay merging logic, with no
   dependency on `ContextVar`.
@@ -44,11 +43,11 @@ concern:
   factories.
 
 `cuprum/context/__init__.py` re-exports the existing public `__all__`
-unchanged, so `from cuprum.context import …` continues to work without
-changes at call sites. Each module stays under 400 lines, and new context
-features should be added to the module matching their concern.
+unchanged, so `from cuprum.context import …` continues to work without changes
+at call sites. Each module stays under 400 lines, and new context features
+should be added to the module matching their concern.
 
-_____________________________________________________________________
+______________________________________________________________________
 
 ## Consequences
 

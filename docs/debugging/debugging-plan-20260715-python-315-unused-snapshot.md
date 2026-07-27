@@ -11,20 +11,21 @@
 
 ## Problem Statement
 
-The Python 3.15 beta CI job passes all executed tests but exits non-zero because
-Syrupy reports one unused snapshot. Python 3.13 does not reproduce the failure.
-The expected outcome is for supported interpreter jobs to collect every
-snapshot-owning test, or explicitly exclude a snapshot whose owning test cannot
-run, without weakening stale-snapshot detection for the rest of the suite.
+The Python 3.15 beta CI job passes all executed tests but exits non-zero
+because Syrupy reports one unused snapshot. Python 3.13 does not reproduce the
+failure. The expected outcome is for supported interpreter jobs to collect
+every snapshot-owning test, or explicitly exclude a snapshot whose owning test
+cannot run, without weakening stale-snapshot detection for the rest of the
+suite.
 
 ## Context Summary
 
-| Aspect              | Details                                                          |
-| ------------------- | ---------------------------------------------------------------- |
-| First observed      | Actions run 29428346883                                          |
-| Reproduction rate   | Python 3.15.0b3 CI job                                           |
-| Affected components | Pytest collection, Syrupy snapshots, Python 3.15 compatibility   |
-| Recent changes      | Canonical stream-drain branch and current CI dependency set      |
+| Aspect              | Details                                                        |
+| ------------------- | -------------------------------------------------------------- |
+| First observed      | Actions run 29428346883                                        |
+| Reproduction rate   | Python 3.15.0b3 CI job                                         |
+| Affected components | Pytest collection, Syrupy snapshots, Python 3.15 compatibility |
+| Recent changes      | Canonical stream-drain branch and current CI dependency set    |
 
 ### Error Artefacts
 
@@ -41,17 +42,18 @@ The abbreviated log does not name the collection-skipped module or the unused
 snapshot. The successful comparison run may use a different commit and snapshot
 inventory.
 
----
+______________________________________________________________________
 
 ## Hypotheses
 
 ### H1: A snapshot-owning module is skipped during Python 3.15 collection
 
-**Claim**: An import-time compatibility guard skips exactly one module on Python
-3.15, preventing its snapshot test from claiming an otherwise valid snapshot.
+**Claim**: An import-time compatibility guard skips exactly one module on
+Python 3.15, preventing its snapshot test from claiming an otherwise valid
+snapshot.
 
-**Plausibility**: High - the run reports one collection-time skip and one unused
-snapshot, while all collected tests pass.
+**Plausibility**: High - the run reports one collection-time skip and one
+unused snapshot, while all collected tests pass.
 
 **Prediction**: Collection diagnostics identify a skipped module containing a
 snapshot assertion, and removing or narrowing the incompatible import-time
@@ -59,17 +61,18 @@ dependency makes the snapshot active.
 
 #### H1 Falsification Plan
 
-| Step | Action | Expected Negative Result |
-| ---- | ------ | ------------------------ |
-| 1 | Inspect full 3.15 job collection diagnostics and snapshot ownership | The skipped module owns no snapshot |
-| 2 | Collect the suspected module under Python 3.15 with skip reasons enabled | It collects normally or skips only individual tests |
+| Step | Action                                                                   | Expected Negative Result                            |
+| ---- | ------------------------------------------------------------------------ | --------------------------------------------------- |
+| 1    | Inspect full 3.15 job collection diagnostics and snapshot ownership      | The skipped module owns no snapshot                 |
+| 2    | Collect the suspected module under Python 3.15 with skip reasons enabled | It collects normally or skips only individual tests |
 
-**Tooling**: `gh`, pytest collection, source inspection, Python 3.15 if available
+**Tooling**: `gh`, pytest collection, source inspection, Python 3.15 if
+available
 
 **Confidence on falsification**: High; ownership and skip reason directly test
 the claim.
 
----
+______________________________________________________________________
 
 ### H2: Snapshot identity changes under Python 3.15
 
@@ -80,20 +83,20 @@ serialization prevents Syrupy from matching one stored snapshot.
 or representation, but a mismatch normally reports a failed snapshot rather
 than an unused one.
 
-**Prediction**: The owning test is collected under 3.15 but creates a differently
-named snapshot when run with `--snapshot-update`.
+**Prediction**: The owning test is collected under 3.15 but creates a
+differently named snapshot when run with `--snapshot-update`.
 
 #### H2 Falsification Plan
 
-| Step | Action | Expected Negative Result |
-| ---- | ------ | ------------------------ |
-| 1 | Compare collected snapshot test node IDs across 3.13 and 3.15 | Node IDs and snapshot names are identical |
+| Step | Action                                                        | Expected Negative Result                  |
+| ---- | ------------------------------------------------------------- | ----------------------------------------- |
+| 1    | Compare collected snapshot test node IDs across 3.13 and 3.15 | Node IDs and snapshot names are identical |
 
 **Tooling**: pytest collection and snapshot file inspection
 
 **Confidence on falsification**: High.
 
----
+______________________________________________________________________
 
 ### H3: The branch contains a genuinely stale snapshot
 
@@ -108,20 +111,21 @@ supported interpreter.
 
 #### H3 Falsification Plan
 
-| Step | Action | Expected Negative Result |
-| ---- | ------ | ------------------------ |
-| 1 | Map every stored snapshot to its test and compare the successful run | The allegedly stale snapshot is claimed outside Python 3.15 |
+| Step | Action                                                               | Expected Negative Result                                    |
+| ---- | -------------------------------------------------------------------- | ----------------------------------------------------------- |
+| 1    | Map every stored snapshot to its test and compare the successful run | The allegedly stale snapshot is claimed outside Python 3.15 |
 
 **Tooling**: snapshot files, test definitions, successful Actions log
 
 **Confidence on falsification**: High.
 
----
+______________________________________________________________________
 
 ## Recommended Execution Order
 
 1. **H1** - the one-to-one skip/unused correlation is cheapest and strongest.
-2. **H3** - ownership mapping distinguishes a stale artefact from a skipped test.
+2. **H3** - ownership mapping distinguishes a stale artefact from a skipped
+   test.
 3. **H2** - inspect interpreter-specific identity only if ownership is intact.
 
 ## Termination Criteria
@@ -133,9 +137,10 @@ supported interpreter.
 
 ## Notes for Executing Agent
 
-Use the full failing and successful GitHub Actions logs. Prefer a fix that makes
-the owning test collect safely on Python 3.15 or narrowly marks its snapshot as
-intentionally excluded. Do not disable Syrupy's unused-snapshot check globally.
+Use the full failing and successful GitHub Actions logs. Prefer a fix that
+makes the owning test collect safely on Python 3.15 or narrowly marks its
+snapshot as intentionally excluded. Do not disable Syrupy's unused-snapshot
+check globally.
 
 ## Outcome
 

@@ -251,8 +251,8 @@ and echo semantics and returns a structured `CommandResult`:
   `output=RunOutputOptions(capture=False)` to stream only; the result will carry
   `None` for output fields.
 - `output=RunOutputOptions(echo=True)` tees stdout/stderr to the parent process
-  while still capturing them when `capture=True`; configured text sinks preserve
-  multibyte characters split across subprocess reads.
+  while still capturing them when `capture=True`; configured text sinks
+  preserve multibyte characters split across subprocess reads.
 - Pass an `ExecutionContext` via the `context` parameter to override execution
   details:
   - `env` overlays key/value pairs on top of the current environment without
@@ -678,11 +678,10 @@ assert "hello events" in stdout_lines
 assert exit_events[0].tags["run_id"] == "demo"
 ```
 
-`ExecHook` is defined in `cuprum.events` and re-exported from `cuprum`.
-Import it with `from cuprum import ExecHook` or
-`from cuprum.events import ExecHook`. The former
-`from cuprum.context import ExecHook` path is no longer supported; update that
-import without changing the hook implementation.
+`ExecHook` is defined in `cuprum.events` and re-exported from `cuprum`. Import
+it with `from cuprum import ExecHook` or `from cuprum.events import ExecHook`.
+The former `from cuprum.context import ExecHook` path is no longer supported;
+update that import without changing the hook implementation.
 
 `ExecutionContext.tags` is merged into each event's `tags` mapping. Cuprum also
 adds default tags such as the project name and pipeline stage metadata.
@@ -838,8 +837,8 @@ The hook collects:
 - `cuprum_stdout_lines_total`: Counter of stdout lines emitted
 - `cuprum_stderr_lines_total`: Counter of stderr lines emitted
 
-All metrics include `program` and `project` labels. Missing, empty, or
-explicit `None` project tags fall back to `unknown`.
+All metrics include `program` and `project` labels. Missing, empty, or explicit
+`None` project tags fall back to `unknown`.
 
 To integrate with a real metrics library like `prometheus_client`, implement the
 `MetricsCollector` protocol:
@@ -912,14 +911,14 @@ Output lines (stdout/stderr) are recorded as span events when
 `record_output=True` (the default).
 
 **Correlation note:** the hook correlates an execution's `start`, `stdout`,
-`stderr`, and `exit` events by `ExecEvent.exec_id`, a stable token minted
-once per execution (per pipeline stage for pipelines) — not by `pid`, since
-the operating system can recycle a `pid` across executions. `pid` is still
-recorded as the `cuprum.pid` attribute for observability. Events emitted by
-Cuprum always carry an `exec_id`, so ordinary usage is unaffected. Only
-hand-built or legacy events that omit `exec_id` are affected: the hook
-cannot correlate them, so it ignores them — a `start` without an `exec_id`
-creates no span, and `stdout`/`stderr`/`exit` without one are dropped.
+`stderr`, and `exit` events by `ExecEvent.exec_id`, a stable token minted once
+per execution (per pipeline stage for pipelines) — not by `pid`, since the
+operating system can recycle a `pid` across executions. `pid` is still recorded
+as the `cuprum.pid` attribute for observability. Events emitted by Cuprum
+always carry an `exec_id`, so ordinary usage is unaffected. Only hand-built or
+legacy events that omit `exec_id` are affected: the hook cannot correlate them,
+so it ignores them — a `start` without an `exec_id` creates no span, and
+`stdout`/`stderr`/`exit` without one are dropped.
 
 To integrate with OpenTelemetry, implement the `Tracer` and `Span` protocols:
 
@@ -1073,10 +1072,10 @@ with scoped(allowlist=frozenset([ECHO])):
 
 By default, `run_concurrent` uses collect-all mode: all commands run to
 completion regardless of failures. The `ConcurrentResult.failures` tuple
-contains indices of commands that exited non-zero. In fail-fast mode,
-`results` may omit cancelled commands, so `failures` indices are positions
-within the compacted `results`, whereas `failure_submission_indices`
-recovers the original submission positions:
+contains indices of commands that exited non-zero. In fail-fast mode, `results`
+may omit cancelled commands, so `failures` indices are positions within the
+compacted `results`, whereas `failure_submission_indices` recovers the original
+submission positions:
 
 ```python
 from cuprum import run_concurrent_sync, scoped
@@ -1147,9 +1146,9 @@ The `ConcurrentResult` dataclass provides:
 - `first_failure`: The first failed `CommandResult`, or `None` if all
   succeeded.
 - `submission_indices`: Tuple parallel to `results` giving each result's
-  original submission index. In collect-all mode this is the identity
-  sequence; in fail-fast mode it records the submission position of each
-  completed command.
+  original submission index. In collect-all mode this is the identity sequence;
+  in fail-fast mode it records the submission position of each completed
+  command.
 - `failure_submission_indices`: Tuple mapping each failure back to its
   original submission position. Unlike `failures` (positions within the
   possibly compacted `results`), these are stable across collect-all and

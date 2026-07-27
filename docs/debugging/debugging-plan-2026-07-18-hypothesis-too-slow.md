@@ -1,13 +1,10 @@
 # Debugging plan: Hypothesis generation exceeds its health-check budget
 
-**Generated**: 2026-07-18
-**Issue ID**: local validation follow-up
-**Severity**: Medium
-**Falsification sub-agent**: Wyvern (investigation fallback; no Alchemist
-agent is available)
-**Planning agent boundary**: This document was prepared by the planning agent.
-Falsification must be executed by the named sub-agent, not by the planning
-agent.
+**Generated**: 2026-07-18 **Issue ID**: local validation follow-up
+**Severity**: Medium **Falsification sub-agent**: Wyvern (investigation
+fallback; no Alchemist agent is available) **Planning agent boundary**: This
+document was prepared by the planning agent. Falsification must be executed by
+the named sub-agent, not by the planning agent.
 
 ## Problem statement
 
@@ -20,12 +17,12 @@ without suppressing that protection or changing its stated behaviour.
 
 _Table 1: Context summary for the slow-generation health-check observation._
 
-| Aspect | Details |
-| --- | --- |
-| First observed | 2026-07-18 validation run |
-| Reproduction evidence | Observed with seed `617015540253848316034710431685553955` |
-| Affected components | `test_stage_observation_builder.py`, `_TAGS` strategy |
-| Recent changes | Documentation and timeout-branch review follow-up; this test was untouched |
+| Aspect                | Details                                                                    |
+| --------------------- | -------------------------------------------------------------------------- |
+| First observed        | 2026-07-18 validation run                                                  |
+| Reproduction evidence | Observed with seed `617015540253848316034710431685553955`                  |
+| Affected components   | `test_stage_observation_builder.py`, `_TAGS` strategy                      |
+| Recent changes        | Documentation and timeout-branch review follow-up; this test was untouched |
 
 ### Error artefacts
 
@@ -36,38 +33,37 @@ examples in 1.94 seconds. Health check: too_slow.
 
 ### Investigation outcome
 
-Wyvern replayed the supplied seed five times; every replay passed in
-0.18–0.19 seconds. Sampling 100 `_TAGS` examples took 0.098 seconds and 100
-fixed-tag observation constructions took 0.001 seconds. Both hypotheses were
-falsified, so no correction or health-check suppression is justified.
+Wyvern replayed the supplied seed five times; every replay passed in 0.18–0.19
+seconds. Sampling 100 `_TAGS` examples took 0.098 seconds and 100 fixed-tag
+observation constructions took 0.001 seconds. Both hypotheses were falsified,
+so no correction or health-check suppression is justified.
 
 ## Hypotheses
 
 ### H1: The `_TAGS` strategy generates values unexpectedly slowly
 
-**Claim**: Although `_TAGS` is
-bounded and non-recursive — a finite key set via `st.sampled_from`,
-bounded values (`st.text(max_size=5) | st.integers(0, 9)`), and
-`max_size=3` — generating it still exhausts Hypothesis's health-check
+**Claim**: Although `_TAGS` is bounded and non-recursive — a finite key set via
+`st.sampled_from`, bounded values (`st.text(max_size=5) | st.integers(0, 9)`),
+and `max_size=3` — generating it still exhausts Hypothesis's health-check
 budget before a valid dictionary is produced.
 
 **Plausibility**: High — the health check identifies `ctx_tags` generation.
 
 **Prediction**: Replaying the named seed will reproduce the slow-generation
-health check; if the replay completes without it, `_TAGS` generation is not
-the cause.
+health check; if the replay completes without it, `_TAGS` generation is not the
+cause.
 
 #### H1 falsification plan
 
 _Table 2: Falsification steps for the `_TAGS` generation hypothesis._
 
-| Step | Action | Expected Negative Result |
-| --- | --- | --- |
-| 1 | Inspect `_TAGS` and replay the named test seed. | The test completes without a slow-generation health check. |
+| Step | Action                                          | Expected Negative Result                                   |
+| ---- | ----------------------------------------------- | ---------------------------------------------------------- |
+| 1    | Inspect `_TAGS` and replay the named test seed. | The test completes without a slow-generation health check. |
 
 **Tooling**: display the strategy with a repository-native command (no
-`leta workspace add` indexing step required), then replay the focused
-property with its recorded seed:
+`leta workspace add` indexing step required), then replay the focused property
+with its recorded seed:
 
 ```bash
 rg -n -A15 '^_TAGS = ' cuprum/unittests/test_stage_observation_builder.py
@@ -94,9 +90,9 @@ health check or have a comparable per-example cost.
 
 _Table 3: Falsification steps for the observation-construction hypothesis._
 
-| Step | Action | Expected Negative Result |
-| --- | --- | --- |
-| 1 | Run an equivalent focused test with fixed small tags. | It runs promptly, disproving construction cost as the primary cause. |
+| Step | Action                                                | Expected Negative Result                                             |
+| ---- | ----------------------------------------------------- | -------------------------------------------------------------------- |
+| 1    | Run an equivalent focused test with fixed small tags. | It runs promptly, disproving construction cost as the primary cause. |
 
 **Tooling**: Focused pytest test or temporary local instrumentation, reverted
 after measurement.
@@ -122,8 +118,7 @@ generation.
   sampling and observation construction separately for the same tags) to find
   the dominant contributor, apply the narrow correction to that phase first,
   then re-measure; if neither phase dominates, split the fix across both and
-  re-run the focused property until it passes without suppressing health
-  checks.
+  re-run the focused property until it passes without suppressing health checks.
 - **Escalation trigger**: Both hypotheses were falsified. Treat the original
   failure as non-reproducible unless it recurs with new evidence.
 

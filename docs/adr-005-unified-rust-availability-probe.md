@@ -1,6 +1,6 @@
 # ADR-005: Unify Rust availability probes via cached dispatch resolver
 
-_____________________________________________________________________
+______________________________________________________________________
 
 ## Status
 
@@ -11,20 +11,20 @@ availability probing behind the cached dispatcher resolver.
 
 2026-06-16
 
-_____________________________________________________________________
+______________________________________________________________________
 
 ## Context and Problem Statement
 
-Cuprum exposes `cuprum.is_rust_available()` and also resolves backend
-selection through internal dispatch. Before this change, those call paths could
-use different underlying implementations, risking inconsistent answers when module
+Cuprum exposes `cuprum.is_rust_available()` and also resolves backend selection
+through internal dispatch. Before this change, those call paths could use
+different underlying implementations, risking inconsistent answers when module
 state changed during process lifetime (especially under tests using
 `set_rust_availability_for_testing`).
 
 The implementation now needs one source of truth for availability decisions so
 all dispatch and user-facing checks remain aligned.
 
-_____________________________________________________________________
+______________________________________________________________________
 
 ## Decision
 
@@ -35,9 +35,10 @@ Use `cuprum._backend._check_rust_available()` as the shared resolver for:
 
 `_check_rust_available()` remains cached (`lru_cache`) and honours
 `set_rust_availability_for_testing()`. `cuprum._rust_backend.is_available()` is
-retained as the raw, uncached import probe for lower-level/internal callers only.
+retained as the raw, uncached import probe for lower-level/internal callers
+only.
 
-_____________________________________________________________________
+______________________________________________________________________
 
 ## Consequences
 
