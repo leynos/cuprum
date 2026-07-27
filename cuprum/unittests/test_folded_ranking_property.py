@@ -158,9 +158,10 @@ def test_percent_within_bounds(total: int, samples: int) -> None:
 
 
 def test_percent_of_empty_summary_is_zero() -> None:
-    """An empty summary (``total == 0``) yields 0.0 rather than dividing by zero.
+    """Pin the empty-summary branch: ``_percent(0, 0)`` returns ``0.0``.
 
-    The ``0 < total`` guard in the bounded contract and the strategy's
-    ``min_value=1`` both exclude this branch, so it is pinned explicitly.
+    The bounded ``_assert_percent_bounds`` contract (``0 < total``) and the
+    Hypothesis strategy (``min_value=1``) never reach ``total == 0``, so this
+    explicit example covers the guard against dividing by zero.
     """
     assert _percent(0, 0) == 0.0, "zero total must produce a 0.0 percentage"
