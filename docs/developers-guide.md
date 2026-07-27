@@ -98,7 +98,7 @@ factors its internals into three private helpers so each can be reasoned about
 and property tested in isolation:
 
 - `_parse_backend_value(raw)` — pure parsing of a `CUPRUM_STREAM_BACKEND` value
-  (whitespace/case normalisation, empty → `AUTO`, unknown → `ValueError`),
+  (whitespace/case normalization, empty → `AUTO`, unknown → `ValueError`),
   taking the raw string so tests inject values without mutating `os.environ`.
 - `_probe_rust_availability(requested)` — the impure availability probe,
   encapsulating each mode's failure policy (`PYTHON` never probes; `AUTO`
