@@ -103,8 +103,9 @@ and property tested in isolation:
 - `_probe_rust_availability(requested)` — the impure availability probe,
   encapsulating each mode's failure policy (`PYTHON` never probes; `AUTO`
   tolerates a probe `ImportError`; forced `RUST` propagates it).
-- `_resolve_backend(requested, rust_available)` — the pure decision core that
-  never leaks `AUTO` and raises `ImportError` for forced-`RUST`-unavailable.
+- `_resolve_backend(requested, *, rust_available)` — the pure decision core
+  that never leaks `AUTO` and raises `ImportError` for forced-`RUST`-unavailable
+  (`rust_available` is keyword-only).
 
 `get_stream_backend` composes them inside one boundary `try`/`except`, so a
 forced-`RUST` failure always emits the `cuprum.stream_backend_unavailable`

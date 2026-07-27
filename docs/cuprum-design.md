@@ -1869,6 +1869,15 @@ Cuprum selects the stream backend at runtime using the following precedence:
      `cuprum._rust_backend.is_available()`,
      which returns `False` when the native module is missing and re-raises
      other import failures after logging a warning.
+   - Internally, `get_stream_backend()` is factored into three seams for
+     testability without changing this precedence: `_parse_backend_value(raw)`
+     (pure env parsing), `_probe_rust_availability(requested)` (the impure
+     availability probe honouring each mode's failure policy), and
+     `_resolve_backend(requested, *, rust_available)` (the pure decision core,
+     which never returns `AUTO`). They are composed inside one boundary
+     `try`/`except`, so a forced-`rust` failure emits the
+     `cuprum.stream_backend_unavailable` warning whether the probe reports
+     unavailable or itself raises. See the developers' guide for details.
 
 3. **Pipeline pump feasibility check (dispatch-time):**
    - For inter-stage pumping, Rust requires extractable raw file descriptors
