@@ -157,6 +157,34 @@ def test_forced_rust_unavailable_logs_warning(
     ), "expected a structured unavailable-backend warning"
 
 
+def test_forced_rust_probe_import_error_logs_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A forced-Rust probe that raises ImportError still hits the warning boundary."""
+    monkeypatch.setenv(_ENV_VAR, "rust")
+
+    def _broken_probe() -> bool:
+        """Raise ImportError to simulate a broken native backend probe."""
+        msg = "broken native module"
+        raise ImportError(msg)
+
+    monkeypatch.setattr(_rust_backend, "is_available", _broken_probe)
+
+    with (
+        caplog.at_level(logging.WARNING, logger=_BACKEND_LOGGER),
+        pytest.raises(ImportError, match="broken native module"),
+    ):
+        get_stream_backend()
+
+    assert any(
+        record.__dict__.get("event") == "cuprum.stream_backend_unavailable"
+        and record.__dict__.get("requested_backend") == StreamBackend.RUST.value
+        and record.__dict__.get("rust_available") is None
+        for record in caplog.records
+    ), "a forced-Rust probe ImportError must still log the boundary warning"
+
+
 # -- forced python mode -------------------------------------------------------
 
 

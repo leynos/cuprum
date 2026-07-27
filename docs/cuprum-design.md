@@ -1851,7 +1851,8 @@ The raw availability probe lives in `cuprum._rust_backend`. Its
 `False` when that native module is missing, and re-raises other import failures
 after logging a warning. The cached resolver in
 `cuprum._backend._check_rust_available()` wraps this probe and feeds both
-`cuprum.rust.is_rust_available()` and `get_stream_backend()`.
+`cuprum.rust.is_rust_available()` and — through the `_probe_rust_availability()`
+seam — `get_stream_backend()`.
 
 ### 13.4 Fallback Strategy
 
@@ -1860,18 +1861,27 @@ Cuprum selects the stream backend at runtime using the following precedence:
 1. **Environment variable (`CUPRUM_STREAM_BACKEND`):**
    - `rust` – force Rust pathway; raise `ImportError` if unavailable;
    - `python` – force pure Python pathway;
-   - `auto` (default) – use Rust if `_check_rust_available()` succeeds, fall
-     back to Python otherwise.
+   - `auto` (default) – use Rust when the availability probe reports it is
+     available, fall back to Python otherwise.
 
-2. **Cached availability resolver:**
-   - `get_stream_backend()` delegates to
-     `cuprum._backend._check_rust_available()`;
-   - `_check_rust_available()` is `functools.lru_cache(maxsize=1)` and honours
-     `set_rust_availability_for_testing()`;
-   - `_check_rust_available()` delegates to
-     `cuprum._rust_backend.is_available()`,
-     which returns `False` when the native module is missing and re-raises
-     other import failures after logging a warning.
+2. **Availability resolution:**
+   - `get_stream_backend()` resolves the backend through three seams:
+     `_parse_backend_value(raw)` parses the `CUPRUM_STREAM_BACKEND` value (pure),
+     `_probe_rust_availability(requested)` performs the impure availability probe
+     honouring each mode's failure policy, and `_resolve_backend(requested, *,
+     rust_available)` is the pure decision core that never returns `AUTO`;
+   - `_probe_rust_availability()` wraps the cached
+     `cuprum._backend._check_rust_available()`, so the cached availability answer
+     still drives dispatch. `_check_rust_available()` is
+     `functools.lru_cache(maxsize=1)`, honours
+     `set_rust_availability_for_testing()`, and delegates to
+     `cuprum._rust_backend.is_available()`, which returns `False` when the native
+     module is missing and re-raises other import failures after logging a
+     warning;
+   - the three seams are composed inside one boundary `try`/`except`, so a
+     forced-`rust` failure emits the `cuprum.stream_backend_unavailable` warning
+     whether the probe reports unavailable or itself raises. See the developers'
+     guide for details.
 
 3. **Pipeline pump feasibility check (dispatch-time):**
    - For inter-stage pumping, Rust requires extractable raw file descriptors
@@ -1952,7 +1962,8 @@ flowchart TD
 (env var or default auto)"]
 
     C -->|"python"| D["Resolve StreamBackend.PYTHON"]
-    C -->|"rust"| E["Call _check_rust_available()"]
+    C -->|"rust"| E["Probe Rust availability
+(_probe_rust_availability)"]
     C -->|"auto"| E
 
     E -->|"true"| F["Resolve StreamBackend.RUST"]
@@ -1970,6 +1981,7 @@ flowchart TD
     G --> K["Error propagated to caller"]
 
     subgraph Availability Probe
+        Q["cuprum._backend._probe_rust_availability()"]
         L["cuprum._backend._check_rust_available()"]
         M["cuprum._rust_backend.is_available()"]
         N["Import cuprum._rust_backend_native"]
@@ -1977,8 +1989,8 @@ flowchart TD
         P["Log warning and re-raise other ImportError"]
     end
 
-    E -.-> L
-    L --> M --> N
+    E -.-> Q
+    Q --> L --> M --> N
     N --> O
     N --> P
 ```

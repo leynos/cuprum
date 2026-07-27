@@ -67,6 +67,52 @@ Both `TarCreateOptions` and `RsyncOptions` provide `allow_relative`. It
 defaults to `False`, so `safe_path` rejects relative paths unless a caller
 explicitly opts in.
 
+### Rejection classifiers for `safe_path` and `git_ref`
+
+`cuprum/builders/args.py` exposes `classify_path_string` and `classify_git_ref`
+alongside the `PathRejection` and `GitRefRejection` enums. These are the single
+source of truth for *why* an input is rejected: each enum member's value is the
+exact `ValueError` message, and `safe_path` / `git_ref` raise directly from the
+classifier, so the categories cannot drift from the validators. The intended
+reuse policy is:
+
+- These are **developer-facing** helpers, deliberately omitted from the
+  module's `__all__` (whose public surface is `safe_path`, `git_ref`, and their
+  `SafePath` / `GitRef` return types). They remain importable for in-tree use
+  and tests, but are not advertised as end-user API.
+- **In-tree callers and tests** may depend on the classifiers to assert on the
+  rejection *category* (rather than a brittle message substring) — this is what
+  the property tests in `cuprum/unittests/test_args_validators_property.py` do.
+- The enum member *names* are the stable contract; enum *values* (messages) may
+  be reworded, so match on the member, not the string.
+- New validation rules must be added to the classifier (and a matching enum
+  member) rather than inline in the validators, keeping the reason taxonomy
+  authoritative. Preserve the declared member order — the classifier returns the
+  first matching category.
+
+### Stream-backend resolution seam
+
+`cuprum/_backend.py` keeps the same public contract for `get_stream_backend`
+(the algorithm documented in the design document's stream-backend section) but
+factors its internals into three private helpers so each can be reasoned about
+and property tested in isolation:
+
+- `_parse_backend_value(raw)` — pure parsing of a `CUPRUM_STREAM_BACKEND` value
+  (whitespace/case normalization, empty → `AUTO`, unknown → `ValueError`),
+  taking the raw string so tests inject values without mutating `os.environ`.
+- `_probe_rust_availability(requested)` — the impure availability probe,
+  encapsulating each mode's failure policy (`PYTHON` never probes; `AUTO`
+  tolerates a probe `ImportError`; forced `RUST` propagates it).
+- `_resolve_backend(requested, *, rust_available)` — the pure decision core
+  that never leaks `AUTO` and raises `ImportError` for forced-`RUST`-unavailable
+  (`rust_available` is keyword-only).
+
+`get_stream_backend` composes them inside one boundary `try`/`except`, so a
+forced-`RUST` failure always emits the `cuprum.stream_backend_unavailable`
+warning whether the probe reports unavailable or itself raises. This is an
+internal decomposition for testability; the observable behaviour and precedence
+are unchanged.
+
 ## Command argument construction
 
 `cuprum.sh.build_argv(*args, **kwargs)` is the public, pure argv-construction
