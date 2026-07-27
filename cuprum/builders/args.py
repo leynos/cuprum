@@ -201,13 +201,14 @@ def git_ref(value: str) -> GitRef:
     return GitRef(value)
 
 
+# The public API surface is the validators and their return types. The
+# rejection classifiers and their reason enums are developer-facing helpers
+# (a reasoning seam for in-tree callers and property tests), documented in
+# docs/developers-guide.md, so they are importable but intentionally omitted
+# from ``__all__`` rather than advertised as end-user API.
 __all__ = [
     "GitRef",
-    "GitRefRejection",
-    "PathRejection",
     "SafePath",
-    "classify_git_ref",
-    "classify_path_string",
     "git_ref",
     "safe_path",
 ]

@@ -76,6 +76,10 @@ exact `ValueError` message, and `safe_path` / `git_ref` raise directly from the
 classifier, so the categories cannot drift from the validators. The intended
 reuse policy is:
 
+- These are **developer-facing** helpers, deliberately omitted from the
+  module's `__all__` (whose public surface is `safe_path`, `git_ref`, and their
+  `SafePath` / `GitRef` return types). They remain importable for in-tree use
+  and tests, but are not advertised as end-user API.
 - **In-tree callers and tests** may depend on the classifiers to assert on the
   rejection *category* (rather than a brittle message substring) — this is what
   the property tests in `cuprum/unittests/test_args_validators_property.py` do.
