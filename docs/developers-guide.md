@@ -1437,6 +1437,21 @@ exercised in `cuprum/unittests/test_rust_streams_boundary_property.py`. Keep the
 `_streams_rs.py` wrapper docstrings, `docs/cuprum-design.md`, and the
 users' guide aligned with this contract when the cap changes.
 
+## Development dependency pins
+
+Test tooling occasionally needs a temporary upper bound while an upstream
+project catches up with a newer release. These pins live in `pyproject.toml`'s
+`[dependency-groups]` `dev` group — dev-only, never in the runtime
+`[project.optional-dependencies]` — each with an inline rationale and a tracking
+link, and are lifted once the upstream fix lands.
+
+- `pytest<9.1` — pytest 9.1 deprecates the nodeid/baseid path that `pytest-bdd`
+  8.1.0 relies on for fixture registration, raising `PytestRemovedIn10Warning`
+  under the behavioural suite. The constraint holds the dev environment on
+  pytest 9.0.x until `pytest-bdd` migrates to the node-based fixture API. Track
+  [pytest-bdd#823](https://github.com/pytest-dev/pytest-bdd/issues/823); remove
+  the pin and this note once a released `pytest-bdd` supports pytest 9.1.
+
 ## Workflow pins and Dependabot
 
 Dependabot owns the upgrade of GitHub Actions and reusable workflows, including
