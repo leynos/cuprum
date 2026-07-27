@@ -1861,8 +1861,10 @@ Cuprum selects the stream backend at runtime using the following precedence:
      back to Python otherwise.
 
 2. **Cached availability resolver:**
-   - `get_stream_backend()` delegates to
-     `cuprum._backend._check_rust_available()`;
+   - `get_stream_backend()` reaches
+     `cuprum._backend._check_rust_available()` through its
+     `_probe_rust_availability()` seam (see below), so the cached availability
+     answer still drives dispatch;
    - `_check_rust_available()` is `functools.lru_cache(maxsize=1)` and honours
      `set_rust_availability_for_testing()`;
    - `_check_rust_available()` delegates to
