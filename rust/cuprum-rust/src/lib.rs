@@ -32,7 +32,7 @@ mod test_support;
 mod utf8;
 
 use errors::PumpError;
-use io_utils::{StreamHandle, handle_write_result, read_stream};
+use io_utils::{StreamHandle, handle_write_result, operation_span, read_stream};
 use utf8::{FinalChunk, decode_utf8_replace};
 
 /// Report whether the Rust extension is available.
@@ -280,15 +280,11 @@ fn pump_stream_files_readwrite(
     writer: &mut StreamHandle,
     buffer_size: BufferSize,
 ) -> Result<u64, PumpError> {
-    // An INFO-level operation span so the EINTR (`warn!`) and fatal-I/O
-    // (`error!`) events emitted from the read/write seams inherit the
-    // operation name, `buffer_size`, and `total_bytes` context under the
-    // conventional production INFO filter, not only when `debug` is enabled.
-    let span = tracing::info_span!(
-        "pump_stream_readwrite",
-        buffer_size = buffer_size.value(),
-        total_bytes = tracing::field::Empty,
-    );
+    // Operation span (see `operation_span`) so the EINTR (`warn!`) and
+    // fatal-I/O (`error!`) events emitted from the read/write seams inherit
+    // the operation name, `buffer_size`, and `total_bytes` context even under
+    // a `warn`/`error`-only production filter.
+    let span = operation_span("pump_stream_readwrite", buffer_size.value());
     let _guard = span.enter();
 
     let mut buffer = vec![0_u8; buffer_size.value()];
@@ -319,14 +315,10 @@ fn consume_stream_files(
     reader: &mut StreamHandle,
     buffer_size: BufferSize,
 ) -> Result<String, PumpError> {
-    // INFO-level span (see `pump_stream_files_readwrite`) so the read seam's
-    // `warn!`/`error!` events inherit this operation's context under the
-    // production INFO filter, not only under `debug`.
-    let span = tracing::info_span!(
-        "consume_stream",
-        buffer_size = buffer_size.value(),
-        total_bytes = tracing::field::Empty,
-    );
+    // Operation span (see `operation_span`) so the read seam's `warn!`/`error!`
+    // events inherit this operation's context even under a `warn`/`error`-only
+    // production filter.
+    let span = operation_span("consume_stream", buffer_size.value());
     let _guard = span.enter();
 
     let mut buffer = vec![0_u8; buffer_size.value()];

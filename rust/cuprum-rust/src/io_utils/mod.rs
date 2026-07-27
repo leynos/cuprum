@@ -35,6 +35,27 @@ pub(crate) enum WriteOutcome {
     NonFatalShortWrite(u64),
 }
 
+/// Build the tracing span that wraps a read/write pump operation.
+///
+/// The span is created at ERROR level, not INFO, so the read/write seams'
+/// EINTR `warn!` and fatal-I/O `error!` events inherit the `operation`,
+/// `buffer_size`, and `total_bytes` context even when the subscriber is
+/// filtered to `warn`/`error` — the conventional production configuration.
+/// Under such a filter an INFO-level span is disabled, dropping the operation
+/// context from exactly the events operators depend on. ERROR is the least
+/// verbose level, so the span stays enabled under both `warn`- and
+/// `error`-only filters. The span never emits a log line on its own (no span
+/// lifecycle events are subscribed), so raising its level adds no output; the
+/// caller records `total_bytes` on completion.
+pub(crate) fn operation_span(operation: &'static str, buffer_size: usize) -> tracing::Span {
+    tracing::error_span!(
+        "stream_pump",
+        operation,
+        buffer_size,
+        total_bytes = tracing::field::Empty,
+    )
+}
+
 /// Read bytes from the stream into the buffer.
 pub(crate) fn read_stream(
     reader: &mut StreamHandle,
@@ -251,3 +272,6 @@ fn map_short_write_error(err: io::Error, total_written: u64) -> Result<WriteOutc
 
 #[cfg(all(test, unix))]
 mod tests;
+
+#[cfg(all(test, unix))]
+mod tracing_tests;
