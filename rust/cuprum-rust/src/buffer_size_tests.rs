@@ -13,6 +13,22 @@ use crate::{MAX_BUFFER_SIZE, checked_buffer_size};
 /// Kept in sync with the library constant by [`cap_constant_matches_lib`].
 const CAP: i64 = 1 << 30;
 
+/// Reference implementation of the `checked_buffer_size` contract.
+///
+/// Encoded independently of the library function so [`matches_bounds`] can
+/// compare the two directly across the full `i64` domain; the stable messages
+/// mirror `checked_buffer_size` exactly.
+fn expected_buffer_size_result(value: i64) -> Result<usize, &'static str> {
+    if value <= 0 {
+        return Err("buffer_size must be greater than zero");
+    }
+    let size = usize::try_from(value).map_err(|_| "buffer_size is too large")?;
+    if size > MAX_BUFFER_SIZE {
+        return Err("buffer_size exceeds the maximum permitted size");
+    }
+    Ok(size)
+}
+
 #[test]
 fn cap_constant_matches_lib() {
     assert_eq!(usize::try_from(CAP), Ok(MAX_BUFFER_SIZE));
@@ -41,21 +57,10 @@ fn rejects_values_above_the_cap() {
 }
 
 proptest! {
-    /// `checked_buffer_size` accepts exactly the positive, in-range,
-    /// at-or-below-cap values, and returns the matching `usize`.
+    /// `checked_buffer_size` matches the reference contract across the full
+    /// `i64` domain, returning the same value or the same stable message.
     #[test]
     fn matches_bounds(value in any::<i64>()) {
-        let result = checked_buffer_size(value);
-        if value <= 0 {
-            prop_assert!(result.is_err(), "non-positive {value} must be rejected");
-        } else if let Ok(size) = usize::try_from(value) {
-            if size <= MAX_BUFFER_SIZE {
-                prop_assert_eq!(result, Ok(size));
-            } else {
-                prop_assert!(result.is_err(), "{value} above cap must be rejected");
-            }
-        } else {
-            prop_assert!(result.is_err(), "{value} beyond usize must be rejected");
-        }
+        prop_assert_eq!(checked_buffer_size(value), expected_buffer_size_result(value));
     }
 }
