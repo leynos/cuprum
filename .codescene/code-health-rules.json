@@ -1,0 +1,19 @@
+{
+  "usage": "Repo-scoped Code Health overrides. Each rule_set documents why the override is safe; keep them narrowly scoped and justified.",
+  "rule_sets": [
+    {
+      "matching_content_path": "rust/cuprum-rust/src/lib.rs",
+      "matching_content_path_doc": "PyO3 FFI boundary. rust_pump_stream / rust_consume_stream / convert_fd / validate_buffer_size / checked_buffer_size receive raw i64 file descriptors and buffer sizes handed over by Python. Those primitives are the untyped inputs this boundary exists to validate INTO domain newtypes (BufferSize, ReaderFd, WriterFd, PlatformFd). Wrapping the raw i64 inputs in further domain types before validation would add ceremony without value - the conversion IS the abstraction - so Primitive Obsession is disabled for this file only.",
+      "rules": [
+        { "name": "Primitive Obsession", "weight": 0.0 }
+      ]
+    },
+    {
+      "matching_content_path": "rust/cuprum-rust/src/io_utils/tests.rs",
+      "matching_content_path_doc": "The EINTR-retry tests for the read seam (read_raw_fd_with) and the write seam (write_all_unix_with) are deliberately parallel to document that both seams honour the identical retry contract. Extracting a shared representation would couple independent module boundaries and obscure which seam each test exercises. Scoped to this exact file so the exception does not silently cover unrelated future test modules.",
+      "rules": [
+        { "name": "Code Duplication", "weight": 0.0 }
+      ]
+    }
+  ]
+}

@@ -1200,6 +1200,15 @@ The Rust extension now includes an internal pump function exposed as
 Cuprum's internal pipeline dispatcher and may change without notice. Public
 command execution remains unchanged until the dispatcher integration lands.
 
+Both `rust_pump_stream` and `rust_consume_stream` accept an optional
+`buffer_size` (bytes, default 64 KiB). It must be a positive integer no larger
+than 1 GiB (`1 << 30`). Once PyO3 has converted the argument to a signed 64-bit
+integer, Rust validation runs and rejects a value below 1 or above the cap with
+`ValueError`. A value that cannot be converted to that integer in the first
+place — a non-integer, or a Python integer outside the signed 64-bit range —
+may instead fail earlier, during PyO3 argument conversion, with a different
+exception.
+
 ### Rust stream consumption (internal)
 
 The Rust extension also exposes `cuprum._streams_rs.rust_consume_stream`, which

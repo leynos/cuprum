@@ -69,7 +69,8 @@ def rust_pump_stream(
         File descriptor to write to.
     buffer_size : int, optional
         Buffer size in bytes for each read/write cycle. Must be greater than
-        zero. Defaults to ``65536`` (64 KiB).
+        zero and no larger than 1 GiB (``1 << 30``). Defaults to ``65536``
+        (64 KiB).
 
     Returns
     -------
@@ -81,7 +82,8 @@ def rust_pump_stream(
     ImportError
         If the Rust backend native module cannot be imported.
     ValueError
-        If ``buffer_size`` is not a positive integer.
+        If ``buffer_size`` is not a positive integer or exceeds the 1 GiB
+        maximum.
     OSError
         If an I/O error occurs while pumping bytes.
     """
@@ -119,8 +121,8 @@ def rust_consume_stream(
     reader_fd : int
         File descriptor to read from.
     buffer_size : int, optional
-        Buffer size in bytes for each read cycle. Must be greater than zero.
-        Defaults to ``65536`` (64 KiB).
+        Buffer size in bytes for each read cycle. Must be greater than zero and
+        no larger than 1 GiB (``1 << 30``). Defaults to ``65536`` (64 KiB).
 
     Returns
     -------
@@ -132,7 +134,8 @@ def rust_consume_stream(
     ImportError
         If the Rust backend native module cannot be imported.
     ValueError
-        If ``buffer_size`` is not a positive integer.
+        If ``buffer_size`` is not a positive integer or exceeds the 1 GiB
+        maximum.
     OSError
         If an I/O error occurs while reading.
     """

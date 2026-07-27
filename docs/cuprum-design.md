@@ -1706,7 +1706,8 @@ def rust_pump_stream(
     writer_fd:
         File descriptor to write to (stdin of downstream process).
     buffer_size:
-        Size of the internal transfer buffer in bytes.
+        Size of the internal transfer buffer in bytes. Must be at least 1 and
+        no larger than 1 GiB (``1 << 30``).
 
     Returns
     -------
@@ -1716,7 +1717,8 @@ def rust_pump_stream(
     Raises
     ------
     ValueError
-        When ``buffer_size`` is less than 1.
+        When ``buffer_size`` is not a positive integer or exceeds the 1 GiB
+        maximum.
     OSError
         When an I/O error occurs during transfer. Expected broken-pipe
         conditions are swallowed while the reader continues draining.
@@ -1737,7 +1739,8 @@ def rust_consume_stream(
     reader_fd:
         File descriptor to read from.
     buffer_size:
-        Size of the internal read buffer in bytes.
+        Size of the internal read buffer in bytes. Must be at least 1 and no
+        larger than 1 GiB (``1 << 30``).
 
     Returns
     -------
