@@ -79,6 +79,8 @@ ______________________________________________________________________
 right one decides whether a dependency ships to every end user or only ever
 exists on a contributor's machine.
 
+Table 1. Dependency field selection.
+
 | Field | Installed for | Use it for |
 | --- | --- | --- |
 | `project.dependencies` | Everyone who installs the package | Libraries the shipped code imports at runtime |
@@ -108,8 +110,8 @@ tooling. Add them with `uv add --optional <extra>`:
 
 ```toml
 [project.optional-dependencies]
-# Opt-in feature: end users request it with cuprum[<extra>].
-<extra> = [
+# Opt-in feature: end users request it with cuprum[feature].
+feature = [
   "some-runtime-lib>=1.2,<2",
 ]
 ```
@@ -118,8 +120,8 @@ tooling. Add them with `uv add --optional <extra>`:
 
 Tooling only contributors need: test frameworks, linters, type checkers,
 documentation builders, and property or mutation testers. These are
-**local-only** — PEP 735 dependency groups are *not* published in the wheel
-metadata and are never installed for end users, so they must live here rather
+**local-only** — PEP 735 dependency groups are *not* included in published
+package metadata (they are not part of the wheel), so they must live here rather
 than in `project.optional-dependencies`. Add them with `uv add --dev` (the
 `dev` group) or `uv add --group <name>`:
 
@@ -147,9 +149,11 @@ gives a contributor the full toolchain. Adjust this with:
 default-groups = ["dev", "docs"]  # or "all"
 ```
 
-Groups may nest via `{ include-group = "..." }`, and `uv` resolves every group
-together into a single `uv.lock`, so all groups must be mutually compatible.
-(Astral Docs[^9])
+Groups may nest via `{ include-group = "..." }`, and by default `uv` resolves
+every group together into a single `uv.lock`, so groups must be mutually
+compatible unless you declare incompatible sets explicitly under
+`[tool.uv].conflicts`.
+(Astral Docs[^6])
 
 > **Rule of thumb:** if an end user needs it to *run* the code, it belongs
 > in `project.dependencies` (always) or `project.optional-dependencies`
@@ -174,12 +178,12 @@ mygui = "my_project.gui:start"
 ```
 
 - **`[project.scripts]`:** Defines console scripts. When you run `uv run mycli`,
-  `uv` will invoke the `main` function in `my_project/cli.py`. (Astral Docs[^8])
+  `uv` will invoke the `main` function in `my_project/cli.py`. (Astral Docs[^7])
 - **`[project.gui-scripts]`:** On Windows, `uv` will wrap these in a GUI
   executable; on Unix-like systems, they behave like normal console scripts.
-  (Astral Docs[^8])
+  (Astral Docs[^7])
 - **Plugin Entry Points:** If your project supports plugins, use
-  `[project.entry-points.'group.name']` to register them. (Astral Docs[^8])
+  `[project.entry-points.'group.name']` to register them. (Astral Docs[^7])
 
 ______________________________________________________________________
 
@@ -198,14 +202,14 @@ build-backend = "setuptools.build_meta"
 
 - **`requires`:** A list of packages needed at build time. For editable installs
   in `uv`, you need at least `setuptools>=61.0` and `wheel`. (Python
-  Packaging[^4], Astral Docs[^8])
+  Packaging[^4], Astral Docs[^7])
 - **`build-backend`:** The entry point for your build backend.
   `setuptools.build_meta` is the PEP 517-compliant backend for setuptools.
-  (Python Packaging[^4], Astral Docs[^8])
+  (Python Packaging[^4], Astral Docs[^7])
 - **Note:** If you omit `[build-system]`, `uv` will assume
   `setuptools.build_meta:__legacy__` and still install dependencies, but it
   won't editably install your own project unless you set
-  `tool.uv.package = true` (see next section). (Astral Docs[^8])
+  `tool.uv.package = true` (see next section). (Astral Docs[^7])
 
 ______________________________________________________________________
 
@@ -222,10 +226,10 @@ package = true
 - **`tool.uv.package = true`:** Forces `uv` to build and install your project
   into its virtual environment every time you run `uv sync` or `uv run`.
   Without this, `uv` only installs dependencies (not your own package) if
-  `[build-system]` is missing. (Astral Docs[^8])
+  `[build-system]` is missing. (Astral Docs[^7])
 - You may also set other `uv`-specific keys (e.g., custom indexes, resolver
   policies) under `[tool.uv]`, but `package` is the most common. (Python
-  Packaging[^4], Astral Docs[^8])
+  Packaging[^4], Astral Docs[^7])
 
 ______________________________________________________________________
 
@@ -305,26 +309,26 @@ package = true
      Packaging[^4])
    - `[dependency-groups]` (PEP 735) holds development-only tooling (`dev`,
      `docs`) that is never published; `uv sync` installs the `dev` group by
-     default. (Astral Docs[^9])
+     default. (Astral Docs[^6])
 
 3. **Entry Points (`[project.scripts]`):**
 
    - Defines a console command `mycli` that maps to `my_project/cli.py:main`.
-     Invoking `uv run mycli` will run the `main()` function. (Astral Docs[^8])
+     Invoking `uv run mycli` will run the `main()` function. (Astral Docs[^7])
 
 4. **Build System:**
 
    - `setuptools>=61.0` plus `wheel` ensures both legacy and editable installs
      work. ✱ Newer versions of setuptools support PEP 660 editable installs
-     without a `setup.py` stub. (Python Packaging[^4], Astral Docs[^8])
+     without a `setup.py` stub. (Python Packaging[^4], Astral Docs[^7])
    - `build-backend = "setuptools.build_meta"` tells `uv` how to compile your
-     package. (Python Packaging[^4], Astral Docs[^8])
+     package. (Python Packaging[^4], Astral Docs[^7])
 
 5. **`[tool.uv]`:**
 
    - `package = true` ensures that `uv sync` will build and install your own
      project (in editable mode) every time dependencies change. Otherwise, `uv`
-     treats your project as a collection of scripts only (no package). (Astral Docs[^8])
+     treats your project as a collection of scripts only (no package). (Astral Docs[^7])
 
 ______________________________________________________________________
 
@@ -346,10 +350,10 @@ ______________________________________________________________________
 4. **Keep Build Constraints Minimal:** If you don't need editable installs, you
    can omit `[build-system]` (but then `uv` won't build your package; it will
    only install dependencies). To override, set `tool.uv.package = true`.
-   (Astral Docs[^8])
+   (Astral Docs[^7])
 
 5. **Use Exact or Bounded Ranges for Dependencies:** Rather than `requests`, use
-   `requests>=2.25, <3.0` to avoid unexpected major bumps. (DevsJC[^6])
+   `requests>=2.25, <3.0` to avoid unexpected major bumps. (DevsJC[^8])
 
 6. **Consider Dynamic Fields Sparingly:** You can declare fields like
    `dynamic = ["version"]` if your version is computed at build time (e.g. via
@@ -382,6 +386,6 @@ easy to maintain, and integrates seamlessly with Astral `uv`.
 [^3]: [Modern Python Development with pyproject.toml and UV](https://levelup.gitconnected.com/modern-python-development-with-pyproject-toml-and-uv-405dfb8b6ec8)
 [^4]: [Writing your pyproject.toml – Python Packaging User Guide](https://packaging.python.org/en/latest/guides/writing-pyproject-toml/)
 [^5]: [Anyone used UV package manager in production? (Reddit)](https://www.reddit.com/r/Python/comments/1ixryec/anyone_used_uv_package_manager_in_production/)
-[^6]: [The Complete Guide to pyproject.toml – devsjc blogs](https://devsjc.github.io/blog/20240627-the-complete-guide-to-pyproject-toml/)
-[^8]: [Configuring projects | uv - Astral Docs](https://docs.astral.sh/uv/concepts/projects/config/)
-[^9]: [Managing dependencies | uv - Astral Docs](https://docs.astral.sh/uv/concepts/projects/dependencies/)
+[^6]: [Managing dependencies | uv - Astral Docs](https://docs.astral.sh/uv/concepts/projects/dependencies/)
+[^7]: [Configuring projects | uv - Astral Docs](https://docs.astral.sh/uv/concepts/projects/config/)
+[^8]: [The Complete Guide to pyproject.toml – devsjc blogs](https://devsjc.github.io/blog/20240627-the-complete-guide-to-pyproject-toml/)
