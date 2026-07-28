@@ -121,6 +121,33 @@ async def _pump_over_raw_fds(
     restores their prior mode. Returns ``False`` — the signal to fall back to
     the Python pump — when the FDs cannot be made blocking; the writer close is
     left to the caller.
+
+    Examples
+    --------
+    A successful hop reports that Rust handled it, leaving the caller to close
+    the writer::
+
+        handled = await _pump_over_raw_fds(
+            reader=reader,
+            writer=writer,
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+        )
+        assert handled is True
+
+    When the descriptors cannot be switched to blocking mode the call reports
+    ``False`` instead of raising, and the reader transport has already been
+    resumed, so the caller falls back to the Python pump::
+
+        handled = await _pump_over_raw_fds(
+            reader=reader,
+            writer=writer,
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+        )
+        if not handled:
+            await _run_python_pump(reader, writer)
+
     """
     with _paused_reader(reader):
         # Flush any bytes asyncio already buffered in the StreamReader before
