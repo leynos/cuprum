@@ -2651,6 +2651,31 @@ therefore its `finally` — ever runs, so that `finally` cannot reconcile the
 pumps. On the timeout route, `_reconcile_pipe_tasks` cancels and drains the
 pump tasks instead.
 
+## Subprocess timeout observability
+
+Subprocess timeouts emit best-effort structured diagnostics on the
+`cuprum.timeout` logger, mirroring the `cuprum.stdin` convention: consumers
+key on stable `cuprum_*` `extra` fields rather than parsing the message text.
+The diagnostics accompany — never replace — the public `TimeoutExpired`
+exception and the existing `exit` event, and a logging failure is swallowed
+so telemetry can never mask `TimeoutExpired` or `CancelledError`.
+
+Two records are emitted:
+
+- **Timeout expiry** (`WARNING`, message `subprocess_timeout_expired`) when a
+  run exceeds its deadline. Fields: `cuprum_operation` (`"wait"`),
+  `cuprum_pid`, `cuprum_timeout_s` (the configured timeout),
+  `cuprum_error_type` (`"TimeoutError"`), and `cuprum_timeout_mode`, which
+  distinguishes an `"elapsed"` wall-clock deadline from an `"immediate"`
+  expiry taken for a non-positive (`timeout <= 0`) deadline.
+- **Teardown drain failure** (`ERROR`, message
+  `subprocess_teardown_drain_failed`) when cancelling and draining a stream
+  consumer surfaces an unexpected exception. Fields: `cuprum_operation`
+  (`"teardown"`), `cuprum_pid`, `cuprum_teardown_outcome` (`"drain_error"`),
+  and `cuprum_error_type` (the offending exception classes). The failure is
+  absorbed to preserve the primary timeout or cancellation, but stays
+  observable through this record.
+
 ## Subprocess stdin injection
 
 When `stdin: StdinInput` is passed to `SafeCmd.run()`, the following sequence
