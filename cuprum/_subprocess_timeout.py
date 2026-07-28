@@ -7,6 +7,7 @@ exit-event helpers shared by the timeout and normal completion paths.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses as dc
 import logging
@@ -17,8 +18,6 @@ from cuprum._pipeline_internals import _EventDetails
 from cuprum._subprocess_context import _sh_module
 
 if typ.TYPE_CHECKING:
-    import asyncio
-
     from cuprum._pipeline_internals import _StageObservation
     from cuprum._subprocess_execution import _SubprocessExecution
 
@@ -30,7 +29,9 @@ _LOGGER = logging.getLogger("cuprum.timeout")
 
 # Distinguishes an elapsed wall-clock deadline from an immediate expiry forced
 # by a non-positive (``<= 0``) timeout, which cannot await the process at all.
-type _TimeoutMode = typ.Literal["elapsed", "immediate"]
+# These are the stable ``timeout_mode`` values on both the ``cuprum.timeout``
+# log records and the ``timeout`` observe event.
+type _TimeoutMode = typ.Literal["elapsed_deadline", "non_positive_immediate"]
 
 
 def _emit_timeout_log(
@@ -59,9 +60,9 @@ def _log_timeout_expiry(
 ) -> None:
     """Record a structured diagnostic when a subprocess timeout expires.
 
-    ``mode`` distinguishes an elapsed wall-clock deadline (``"elapsed"``) from
-    the deterministic immediate expiry taken for a non-positive timeout
-    (``"immediate"``).
+    ``mode`` distinguishes an elapsed wall-clock deadline
+    (``"elapsed_deadline"``) from the deterministic immediate expiry taken for a
+    non-positive timeout (``"non_positive_immediate"``).
     """
     _emit_timeout_log(
         logging.WARNING,
@@ -103,6 +104,80 @@ def _log_teardown_drain_failure(
             "cuprum_teardown_outcome": "drain_error",
             "cuprum_error_type": joined,
         },
+    )
+
+
+def _safe_emit(
+    observation: _StageObservation,
+    phase: typ.Literal["timeout", "teardown_error"],
+    details: _EventDetails,
+) -> None:
+    """Emit an observe event best-effort so telemetry cannot mask a failure.
+
+    An observe-hook failure — which :meth:`_StageObservation.emit` re-raises —
+    must never replace the ``TimeoutExpired`` / ``CancelledError`` the caller is
+    about to raise, nor abort teardown. ``emit`` records any scheduled
+    async-hook tasks on the observation *before* raising, so those are still
+    drained by the runner; only the synchronous hook failure is swallowed here.
+    Preserving the primary exception and cleanup precedence outranks emitting
+    the observe event.
+    """
+    # Swallow a synchronous observe-hook failure (including a hook raising
+    # CancelledError) so it cannot replace the timeout/cancellation.
+    with contextlib.suppress(Exception, asyncio.CancelledError):
+        observation.emit(phase, details)
+
+
+def _emit_timeout_event(
+    observation: _StageObservation,
+    *,
+    pid: int | None,
+    configured_timeout: float,
+    mode: _TimeoutMode,
+) -> None:
+    """Best-effort ``timeout`` observe event describing an expiry.
+
+    Carries the stable fields callers use to distinguish an elapsed deadline
+    from an immediate non-positive expiry: ``operation="wait"``, ``pid``,
+    ``timeout_s`` (the configured timeout), ``error_type="TimeoutError"``, and
+    ``timeout_mode``. Emitted before the preserved ``exit`` event and
+    ``TimeoutExpired``.
+    """
+    _safe_emit(
+        observation,
+        "timeout",
+        _EventDetails(
+            pid=pid,
+            operation="wait",
+            error_type=TimeoutError.__name__,
+            timeout_s=configured_timeout,
+            timeout_mode=mode,
+        ),
+    )
+
+
+def _emit_teardown_error_event(
+    observation: _StageObservation,
+    *,
+    pid: int | None,
+    error_types: tuple[str, ...],
+) -> None:
+    """Best-effort ``teardown_error`` observe event for a consumer drain failure.
+
+    Carries ``operation="drain"``, ``pid``, and ``error_type`` (the comma-joined
+    failure classes). The failure is absorbed to preserve the primary timeout or
+    cancellation, but stays observable through this event.
+    """
+    joined = ",".join(error_types)
+    _safe_emit(
+        observation,
+        "teardown_error",
+        _EventDetails(
+            pid=pid,
+            operation="drain",
+            error_type=joined,
+            note=f"consumer drain failed: {joined}",
+        ),
     )
 
 
@@ -339,6 +414,8 @@ __all__ = [
     "_TimeoutContext",
     "_TimeoutFallback",
     "_emit_exit_event",
+    "_emit_teardown_error_event",
+    "_emit_timeout_event",
     "_get_exit_code",
     "_handle_stream_timeout",
     "_handle_subprocess_timeout",

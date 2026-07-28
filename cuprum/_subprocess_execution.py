@@ -21,6 +21,8 @@ from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
+    _emit_teardown_error_event,
+    _emit_timeout_event,
     _ExitEventDetails,
     _handle_stream_timeout,
     _handle_subprocess_timeout,
@@ -87,6 +89,7 @@ async def _drain_stream_consumers(
     consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
     *,
     pid: int | None = None,
+    observation: _StageObservation | None = None,
 ) -> tuple[str | None, str | None]:
     """Cancel pending consumers, drain them once, and decode their output.
 
@@ -97,7 +100,9 @@ async def _drain_stream_consumers(
     A consumer that drains with an unexpected exception (anything other than the
     ``CancelledError`` produced by cancelling it) is still absorbed to preserve
     the primary timeout or cancellation, but is reported through
-    :func:`_log_teardown_drain_failure` so the drain failure stays observable.
+    :func:`_log_teardown_drain_failure` and, when ``observation`` is supplied, a
+    best-effort ``teardown_error`` observe event, so the drain failure stays
+    observable.
     """
     _cancel_pending_consumers(consumers)
     stdout_result, stderr_result = await asyncio.gather(
@@ -111,6 +116,8 @@ async def _drain_stream_consumers(
     )
     if drain_errors:
         _log_teardown_drain_failure(pid=pid, error_types=drain_errors)
+        if observation is not None:
+            _emit_teardown_error_event(observation, pid=pid, error_types=drain_errors)
     stdout_text = None if isinstance(stdout_result, BaseException) else stdout_result
     stderr_text = None if isinstance(stderr_result, BaseException) else stderr_result
     return stdout_text, stderr_text
@@ -136,16 +143,25 @@ async def _wait_for_exit_code_within_timeout(
     :func:`_drain_stream_consumers`; terminating the process here lets those
     consumers reach EOF during that drain.
 
-    Both expiry routes emit a structured ``cuprum.timeout`` diagnostic tagged
-    with the timeout mode (``"immediate"`` versus ``"elapsed"``) before the
-    :class:`TimeoutError` propagates; the diagnostic is best-effort and cannot
-    mask the timeout.
+    Both expiry routes emit a structured ``cuprum.timeout`` log record and a
+    best-effort ``timeout`` observe event tagged with the timeout mode
+    (``"non_positive_immediate"`` versus ``"elapsed_deadline"``) before the
+    :class:`TimeoutError` propagates; both are best-effort and cannot mask the
+    timeout.
     """
     timeout = execution.timeout
     if timeout is not None and timeout <= 0:
         await _terminate_process(process, execution.ctx.cancel_grace)
         _log_timeout_expiry(
-            pid=process.pid, configured_timeout=timeout, mode="immediate"
+            pid=process.pid,
+            configured_timeout=timeout,
+            mode="non_positive_immediate",
+        )
+        _emit_timeout_event(
+            execution.observation,
+            pid=process.pid,
+            configured_timeout=timeout,
+            mode="non_positive_immediate",
         )
         raise TimeoutError
     try:
@@ -155,10 +171,17 @@ async def _wait_for_exit_code_within_timeout(
         # Reached only on asyncio.timeout expiry (a positive deadline elapsed);
         # _wait_for_exit_code has already terminated the process, and the caller
         # drains the stream consumers exactly once.
+        configured_timeout = _require_timeout(timeout, exc)
         _log_timeout_expiry(
             pid=process.pid,
-            configured_timeout=_require_timeout(timeout, exc),
-            mode="elapsed",
+            configured_timeout=configured_timeout,
+            mode="elapsed_deadline",
+        )
+        _emit_timeout_event(
+            execution.observation,
+            pid=process.pid,
+            configured_timeout=configured_timeout,
+            mode="elapsed_deadline",
         )
         raise
 
@@ -282,7 +305,9 @@ async def _run_subprocess_with_streams(
         # stream consumers exactly once here, then hand the decoded output to the
         # timeout handler so it survives on the resulting TimeoutExpired.
         await _cancel_stdin_writer(stdin_task)
-        stdout_text, stderr_text = await _drain_stream_consumers(consumers, pid=pid)
+        stdout_text, stderr_text = await _drain_stream_consumers(
+            consumers, pid=pid, observation=execution.observation
+        )
         _handle_stream_timeout(
             exc,
             stdout_text=stdout_text,
@@ -291,7 +316,9 @@ async def _run_subprocess_with_streams(
         )
     except asyncio.CancelledError:
         await _cancel_stdin_writer(stdin_task)
-        await _drain_stream_consumers(consumers, pid=pid)
+        await _drain_stream_consumers(
+            consumers, pid=pid, observation=execution.observation
+        )
         raise
     if stdin_task is not None:
         try:
@@ -301,7 +328,9 @@ async def _run_subprocess_with_streams(
             # this await) must still reconcile the stdout/stderr consumers,
             # mirroring the timeout and cancellation paths above, so those tasks
             # are cancelled and drained before the error propagates.
-            await _drain_stream_consumers(consumers, pid=pid)
+            await _drain_stream_consumers(
+                consumers, pid=pid, observation=execution.observation
+            )
             raise
     stdout_text, stderr_text = await asyncio.gather(*consumers)
     return exit_code, exited_at, stdout_text, stderr_text
