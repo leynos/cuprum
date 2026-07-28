@@ -1545,13 +1545,31 @@ change alters the architecture of the lint gate, update
 
 ## Maturin pin synchronization and native wheel tests
 
-The `tests/helpers/maturin.py` module provides shared helpers for tests that
-validate the maturin version pin contract and native wheel build output. The
-wheel-artefact snapshot parsers (`wheel_build_snapshot` and its private
-helpers) live in the sibling module `tests/helpers/maturin_wheel.py` to keep
-each module below the Pylint module-length limit; `tests/helpers/maturin.py`
+These checks live in `cuprum/unittests/test_maturin_build.py`, and the helpers
+behind them are split across three boundaries.
+
+The **pin-synchronization** checks are inlined in that test module as private
+helpers (`_read_maturin_pins`, `_read_expected_maturin_version`,
+`_read_manylinux_aarch64_container_ref`, and their regexes): they read
+repository files, have a single consumer, and gain nothing from indirection.
+
+The **wheel build and toolchain detection** stay in `tests/helpers/maturin.py`,
+because they wrap `subprocess` and `sysconfig` probing that does not inline
+cleanly: build a wheel with the pinned maturin (`build_native_wheel_artifact`),
+report toolchain availability (`toolchain_available`), and report separately
+whether maturin's own script lookup can find its binary
+(`maturin_script_locatable`).
+
+The **wheel-artefact snapshot** parsers (`wheel_build_snapshot` and its private
+helpers) live in the sibling module `tests/helpers/maturin_wheel.py`, keeping
+each module below the Pylint module-length limit. `tests/helpers/maturin.py`
 re-exports `wheel_build_snapshot`, so import sites use
 `from tests.helpers.maturin import wheel_build_snapshot` unchanged.
+
+The re-use policy for all three is to stay that way — do not re-externalize
+further helpers until a second concrete consumer exists and the shared
+interface can be designed against real requirements rather than anticipated
+ones.
 
 **Pin synchronization** (`test_maturin_pins_are_synchronized`) Asserts that the
 maturin version declared in `pyproject.toml`,
