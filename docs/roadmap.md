@@ -443,8 +443,8 @@ rather than gating the acceleration work.
 
 ### 8.1. Close the Rust pump file-descriptor close race
 
-This step removes a silent failure the baseline observed on the shipped pump
-path. See tee-hotpath-profiling-baseline-2026-06-12.md §"Incidental findings"
+This step aims to remove a silent failure the baseline observed on the shipped
+pump path. See tee-hotpath-profiling-baseline-2026-06-12.md §"Incidental findings"
 item 1, adr-002-additional-rust-components.md (FD ownership risk), and issue
 `#124`.
 
