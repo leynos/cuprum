@@ -5,7 +5,7 @@ use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::io_utils::read_stream;
-use crate::test_support::{fd_is_open, make_pipe, write_all_to};
+use crate::test_support::{fd_is_open, make_pipe, read_all_from, write_all_to};
 use crate::tracing_capture::capture;
 use crate::{
     BufferSize, consume_stream_files, pump_stream_files_readwrite, stream_from_raw,
@@ -93,9 +93,10 @@ fn consume_records_total_bytes_and_retries_on_span() {
     drop(write_end);
 
     let mut reader = read_end;
+    let expected = std::str::from_utf8(payload).unwrap_or("");
     let captured = capture(Level::INFO, || {
         match consume_stream_files(&mut reader, BufferSize(64)) {
-            Ok(text) => assert_eq!(text.len(), payload.len()),
+            Ok(text) => assert_eq!(text, expected, "consume must decode the exact payload"),
             Err(err) => panic!("consume over a closed pipe failed: {err:?}"),
         }
     });
@@ -136,8 +137,14 @@ fn pump_records_span_fields_under_error_filter() {
             Err(err) => panic!("pump over pipes failed: {err:?}"),
         }
     });
-    // The sink read end is held open through the pump so writes do not break.
-    drop(sink_read);
+    // Close the write end, then confirm the sink received exactly the source
+    // payload — a data oracle so same-length corruption cannot pass.
+    drop(writer);
+    assert_eq!(
+        read_all_from(&sink_read).as_slice(),
+        &payload[..],
+        "the pump must deliver the source bytes unchanged to the sink",
+    );
 
     // The pump completion `span.record` calls must surface the real byte total
     // and the (zero) retry counts even under an ERROR-only filter, where the

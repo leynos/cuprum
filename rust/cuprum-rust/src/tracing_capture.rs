@@ -124,8 +124,8 @@ impl Subscriber for FilterCapture {
             state
                 .stack
                 .iter()
-                .filter_map(|id| state.span_fields.get(id).cloned())
-                .flat_map(BTreeMap::into_keys)
+                .filter_map(|id| state.span_fields.get(id))
+                .flat_map(|span| span.keys().cloned())
                 .collect::<BTreeSet<String>>()
         };
         let mut own = BTreeMap::new();
@@ -151,6 +151,11 @@ impl Subscriber for FilterCapture {
 
 /// Run `body` under a subscriber limited to `max_level` and return what it
 /// captured.
+///
+/// Tests using this must run under `cargo nextest` (the project's test
+/// runner), which isolates each test in its own process. That isolation keeps
+/// tracing's process-global callsite `Interest` cache from being shared across
+/// tests that install different subscribers.
 pub(crate) fn capture(max_level: Level, body: impl FnOnce()) -> Captured {
     let state = Arc::new(Mutex::new(CaptureState::default()));
     let subscriber = FilterCapture {
