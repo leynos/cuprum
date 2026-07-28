@@ -19,9 +19,9 @@
   ("-ize" / "-yse" / "-our") spelling and grammar, with the exception of
   references to external APIs. Markdown prose is enforced mechanically by the
   pinned `typos` spelling gate in `make lint` and `make markdownlint`.
-- **Document public methods comprehensively.** Public methods must have
-  comprehensive NumPy-style docstrings, including clear examples that
-  demonstrate usage and outcome where appropriate.
+- **Document public APIs comprehensively.** Public functions, classes, and
+  methods must have comprehensive NumPy-style docstrings, including clear
+  examples that demonstrate usage and outcome where appropriate.
 - **Keep private helper docstrings concise.** Prefer single-line docstrings for
   private helpers. When a private helper needs an explanatory paragraph,
   inspect whether that need exposes conflated responsibilities, an unclear

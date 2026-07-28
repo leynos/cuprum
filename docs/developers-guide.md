@@ -1264,6 +1264,19 @@ The short version is:
   `--with 'pylint==$(PYLINT_VERSION)'` because the shim revision and Pylint
   package version are separate sources of lint behaviour.
 
+### Docstring structure
+
+Public functions, classes, and methods require comprehensive NumPy-style
+docstrings, with examples where appropriate. Prefer single-line docstrings for
+private helpers, and use structured NumPy-style sections only to describe
+non-obvious behaviour.
+
+When a private helper needs an explanatory paragraph, first inspect whether it
+combines query and command responsibilities or unrelated concerns. Split or
+extract a focused helper when doing so makes the boundary or invariant local
+and simpler. Retain the paragraph when the helper remains cohesive and the
+explanation records an unavoidable local constraint.
+
 Run the complete lint gate with:
 
 ```bash
