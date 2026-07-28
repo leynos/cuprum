@@ -1276,6 +1276,21 @@ These raw-fd helpers live in the `io_utils` directory module (`io_utils/mod.rs`,
 with tests in `io_utils/tests.rs`), split from the former single file to stay
 within the per-module line cap.
 
+The read/write fallback's control flow — how each read and write outcome moves
+the running byte total and the latched `writer_open` flag — is factored into a
+pure, `io::Error`-free state machine in `src/pump_machine.rs`. `step` advances a
+`PumpState` given a `ReadEvent` (`Chunk`/`Eof`) and, when a write is performed,
+a `WriteEvent` (`Complete`/`Closed`); `pump_stream_files_readwrite` drives it,
+translating real descriptor I/O into those events and propagating fatal
+`PumpError`s out of band so they never reach the machine. Extracting the
+decision this way lets it be checked without descriptors: proptests fold random
+event scripts through `step` to assert the total is monotonic, the writer never
+reopens once a broken pipe latches it closed, a closed writer drains without
+accruing bytes, and the loop stops exactly on `Eof`. Kani proves the same
+invariants over unbounded byte counts and arbitrary starting states in
+`src/pump_machine_kani_proofs.rs` (`#[cfg(kani)]`, so outside the commit gate),
+closing the model-checking follow-up from issue `#84`.
+
 The path emits bounded `tracing` diagnostics at the three boundaries operators
 need visibility into: support detection logs a `debug` event when the
 descriptors cannot splice and the read/write fallback takes over; the

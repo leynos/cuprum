@@ -4,11 +4,13 @@ use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use crate::errors::PumpError;
 use crate::io_utils::read_stream;
+use crate::pump_machine::WriteEvent;
 use crate::test_support::{fd_is_open, make_pipe, read_all_from, write_all_to};
 use crate::tracing_capture::capture;
 use crate::{
-    BufferSize, consume_stream_files, pump_stream_files_readwrite, stream_from_raw,
+    BufferSize, classify_write, consume_stream_files, pump_stream_files_readwrite, stream_from_raw,
     with_borrowed_reader,
 };
 use rstest::{fixture, rstest};
@@ -180,6 +182,32 @@ fn assert_panicking_reader_keeps_fd_open(raw_fd: i32) {
     }));
 
     assert!(outcome.is_err(), "the panic must propagate to the caller");
+}
+
+#[rstest]
+fn classify_write_reports_a_completed_write() {
+    let (read_end, mut write_end) = make_pipe();
+
+    let event = match classify_write(&mut write_end, b"chunk") {
+        Ok(event) => event,
+        Err(err) => panic!("write to an open pipe failed: {err:?}"),
+    };
+
+    assert_eq!(event, WriteEvent::Complete { bytes: 5 });
+    // Keep the read end open until after the write so the pipe never breaks.
+    drop(read_end);
+}
+
+#[rstest]
+fn classify_write_propagates_a_fatal_error() {
+    // Writing to the read end of a pipe is a fatal `EBADF`, which must
+    // propagate rather than latch the writer closed.
+    let (mut read_end, _write_end) = make_pipe();
+
+    match classify_write(&mut read_end, b"chunk") {
+        Ok(event) => panic!("expected a fatal write error, got {event:?}"),
+        Err(err) => assert!(matches!(err, PumpError::Io(_))),
+    }
 }
 
 fn assert_successful_reader_keeps_fd_usable(raw_fd: i32, write_end: OwnedFd) {

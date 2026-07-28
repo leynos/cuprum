@@ -128,35 +128,6 @@ pub(crate) fn handle_write(
     Ok(outcome)
 }
 
-/// Attempt to write a chunk and update the total written count.
-///
-/// Returns `Ok(true)` if the write succeeded and more writes are possible.
-/// Returns `Ok(false)` if the pipe is broken (caller should drain reader).
-/// Returns `Err` for fatal I/O errors.
-pub(crate) fn handle_write_result(
-    writer: &mut StreamHandle,
-    chunk: &[u8],
-    total_written: &mut u64,
-) -> Result<bool, PumpError> {
-    match handle_write(writer, chunk) {
-        Ok(WriteOutcome::Complete(bytes)) => {
-            *total_written = total_written.saturating_add(bytes);
-            Ok(true)
-        }
-        Ok(WriteOutcome::NonFatalShortWrite(bytes)) => {
-            *total_written = total_written.saturating_add(bytes);
-            Ok(false)
-        }
-        Err(err) => {
-            if err.is_nonfatal_write() {
-                Ok(false)
-            } else {
-                Err(err)
-            }
-        }
-    }
-}
-
 #[cfg(unix)]
 fn read_stream_unix(reader: &StreamHandle, buffer: &mut [u8]) -> Result<usize, PumpError> {
     read_raw_fd(reader.as_raw_fd(), buffer)

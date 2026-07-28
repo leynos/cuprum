@@ -31,6 +31,7 @@ mod fd_tests;
 mod io_utils;
 #[cfg(all(test, unix))]
 mod lib_tests;
+mod pump_machine;
 #[cfg(target_os = "linux")]
 mod splice;
 #[cfg(all(test, unix))]
@@ -40,7 +41,8 @@ mod tracing_capture;
 mod utf8;
 
 use errors::PumpError;
-use io_utils::{StreamHandle, handle_write_result, operation_span, read_stream};
+use io_utils::{StreamHandle, WriteOutcome, handle_write, operation_span, read_stream};
+use pump_machine::{Flow, PumpState, ReadEvent, WriteEvent, step};
 use utf8::{FinalChunk, decode_utf8_replace};
 
 /// Report whether the Rust extension is available.
@@ -297,29 +299,52 @@ fn pump_stream_files_readwrite(
     io_utils::reset_retry_counters();
 
     let mut buffer = vec![0_u8; buffer_size.value()];
-    let mut total_written = 0_u64;
-    let mut writer_open = true;
+    let mut state = PumpState::start();
 
     loop {
         let read_len = read_stream(reader, &mut buffer)?;
-        if read_len == 0 {
+        let read = if read_len == 0 {
+            ReadEvent::Eof
+        } else {
+            ReadEvent::Chunk
+        };
+
+        // Write only when a chunk arrives while the writer is open; a closed
+        // writer just drains the reader. Fatal writes propagate the real error
+        // and never reach the pure state machine.
+        let write = if read == ReadEvent::Chunk && state.writer_open() {
+            let chunk = buffer
+                .get(..read_len)
+                .ok_or(PumpError::BufferRangeExceeded)?;
+            Some(classify_write(writer, chunk)?)
+        } else {
+            None
+        };
+
+        if step(&mut state, read, write) == Flow::Stop {
             break;
         }
-        if !writer_open {
-            continue;
-        }
-
-        let chunk = buffer
-            .get(..read_len)
-            .ok_or(PumpError::BufferRangeExceeded)?;
-
-        writer_open = handle_write_result(writer, chunk, &mut total_written)?;
     }
 
+    let total_written = state.total_written();
     span.record("total_bytes", total_written);
     span.record("read_retries", io_utils::read_retry_count());
     span.record("write_retries", io_utils::write_retry_count());
     Ok(total_written)
+}
+
+/// Attempt one write and classify it into a non-fatal [`WriteEvent`].
+///
+/// Fatal write failures propagate as [`PumpError`]. Non-fatal broken-pipe and
+/// connection-reset failures latch the writer closed, carrying the bytes
+/// accepted before the failure (zero when it preceded any progress).
+fn classify_write(writer: &mut StreamHandle, chunk: &[u8]) -> Result<WriteEvent, PumpError> {
+    match handle_write(writer, chunk) {
+        Ok(WriteOutcome::Complete(bytes)) => Ok(WriteEvent::Complete { bytes }),
+        Ok(WriteOutcome::NonFatalShortWrite(bytes)) => Ok(WriteEvent::Closed { bytes }),
+        Err(err) if err.is_nonfatal_write() => Ok(WriteEvent::Closed { bytes: 0 }),
+        Err(err) => Err(err),
+    }
 }
 
 fn consume_stream_files(

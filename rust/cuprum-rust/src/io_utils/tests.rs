@@ -6,8 +6,8 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use proptest::prelude::*;
 
 use super::{
-    PumpError, WriteOutcome, handle_write, handle_write_result, map_short_write_error, read_raw_fd,
-    read_raw_fd_with, read_stream, write_all_unix_with,
+    PumpError, WriteOutcome, handle_write, map_short_write_error, read_raw_fd, read_raw_fd_with,
+    read_stream, write_all_unix_with,
 };
 use crate::test_support::{make_pipe, unwrap_err, unwrap_ok, write_all_to};
 use rstest::{fixture, rstest};
@@ -111,39 +111,6 @@ fn handle_write_reports_unwritable_descriptor(pipe: (OwnedFd, OwnedFd)) {
     let err = unwrap_err(handle_write(&mut read_end, b"chunk"));
 
     assert!(matches!(err, PumpError::Io(_)));
-}
-
-/// Call [`handle_write_result`] with `b"chunk"` starting from
-/// `initial_total` and return both the call's result and the
-/// (possibly updated) total.
-fn run_handle_write_result(
-    writer: &mut OwnedFd,
-    initial_total: u64,
-) -> (Result<bool, PumpError>, u64) {
-    let mut total_written = initial_total;
-    let result = handle_write_result(writer, b"chunk", &mut total_written);
-    (result, total_written)
-}
-
-#[rstest]
-fn handle_write_result_updates_total_on_success(pipe: (OwnedFd, OwnedFd)) {
-    let (read_end, mut write_end) = pipe;
-
-    let (result, total_written) = run_handle_write_result(&mut write_end, 7);
-
-    assert!(unwrap_ok(result));
-    assert_eq!(total_written, 12);
-    drop(read_end);
-}
-
-#[rstest]
-fn handle_write_result_preserves_total_on_fatal_error(pipe: (OwnedFd, OwnedFd)) {
-    let (mut read_end, _write_end) = pipe;
-
-    let (result, total_written) = run_handle_write_result(&mut read_end, 7);
-
-    assert!(matches!(unwrap_err(result), PumpError::Io(_)));
-    assert_eq!(total_written, 7);
 }
 
 #[test]
