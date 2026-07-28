@@ -231,6 +231,25 @@ async def _terminate_process_via_wait_task(
     )
 
 
+def _stages_to_terminate(
+    failure_index: int,
+    done: cabc.Sequence[bool],
+) -> list[int]:
+    """Return the stage indices to terminate after a fail-fast, each once.
+
+    This is the pure selection behind
+    [`_terminate_pipeline_remaining_stages`][cuprum._process_lifecycle._terminate_pipeline_remaining_stages].
+    Every stage is scheduled at most once — indices come from a single
+    enumeration — and two stages are never scheduled: the failed stage, which
+    owns its own exit, and any already-finished stage, which needs no
+    termination. Cleanup is therefore idempotent: a second pass over settled
+    stages (all ``done``) selects nothing.
+    """
+    return [
+        idx for idx, is_done in enumerate(done) if idx != failure_index and not is_done
+    ]
+
+
 async def _terminate_pipeline_remaining_stages(
     processes: list[asyncio.subprocess.Process],
     wait_tasks: list[asyncio.Task[int]],
@@ -245,22 +264,20 @@ async def _terminate_pipeline_remaining_stages(
     hanging on long-running producers/consumers when downstream work is no
     longer meaningful.
     """
-    termination_tasks: list[asyncio.Task[None]] = []
-    for idx, (process, wait_task) in enumerate(
-        zip(processes, wait_tasks, strict=True),
-    ):
-        if idx == failure_index:
-            continue
-        if wait_task.done():
-            continue
-        termination_tasks.append(
-            asyncio.create_task(
-                _terminate_process_via_wait_task(
-                    process,
-                    wait_task,
-                    cancel_grace,
-                ),
-            ),
+    targets = set(
+        _stages_to_terminate(
+            failure_index,
+            [wait_task.done() for wait_task in wait_tasks],
         )
+    )
+    termination_tasks = [
+        asyncio.create_task(
+            _terminate_process_via_wait_task(process, wait_task, cancel_grace),
+        )
+        for idx, (process, wait_task) in enumerate(
+            zip(processes, wait_tasks, strict=True),
+        )
+        if idx in targets
+    ]
     if termination_tasks:
         await asyncio.gather(*termination_tasks, return_exceptions=True)

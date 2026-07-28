@@ -122,6 +122,7 @@
       'cuprum/unittests/test_stream_property_based.py',
       'cuprum/unittests/test_stream_pump_runtime_behaviour.py',
       'cuprum/unittests/test_subprocess_timeout.py',
+      'cuprum/unittests/test_subprocess_timeout_reducers.py',
       'cuprum/unittests/test_tee_profile_worker_cli.py',
       'cuprum/unittests/test_tee_profile_worker_concurrency.py',
       'cuprum/unittests/test_tee_profile_worker_core.py',
