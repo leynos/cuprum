@@ -316,22 +316,22 @@ Dependencies:
 
 The borrowed-reader mitigation planned above (keeping the reader FD open by
 `std::mem::forget`-ing the `File` wrapper) has been superseded by an RAII
-helper. `with_borrowed_reader` in `rust/cuprum-rust/src/lib.rs` reconstructs the
-reader handle, wraps it in `ManuallyDrop`, and runs the pump closure against it,
-so the caller-owned reader FD is never closed on any exit path — including
-unwinding from a panicking operation. The trailing-`forget` pattern was skipped
-on unwind, closing the caller-owned descriptor and exposing the Python transport
-to a double close; `ManuallyDrop` holds regardless of how the scope exits. The
-writer FD is still deliberately consumed and closes on drop to signal EOF. The
-canonical description of this contract now lives in the developers' guide, "Rust
-FD-borrow ownership contract", with regression coverage in
-`rust/cuprum-rust/src/lib_tests.rs`.
+helper. `with_borrowed_reader` in `rust/cuprum-rust/src/lib.rs` reconstructs
+the reader handle, wraps it in `ManuallyDrop`, and runs the pump closure
+against it, so the caller-owned reader FD is never closed on any exit path —
+including unwinding from a panicking operation. The trailing-`forget` pattern
+was skipped on unwind, closing the caller-owned descriptor and exposing the
+Python transport to a double close; `ManuallyDrop` holds regardless of how the
+scope exits. The writer FD is still deliberately consumed and closes on drop to
+signal EOF. The canonical description of this contract now lives in the
+developers' guide, "Rust FD-borrow ownership contract", with regression
+coverage in `rust/cuprum-rust/src/lib_tests.rs`.
 
 ## Revision note (required when editing an ExecPlan)
 
 Initial draft authored on 2026-01-28 to plan 4.2.1 implementation. Updated on
 2026-01-28 to mark completion, record decisions, and document validation
-results (including the extended timeout for `make nixie`). Updated on 2026-07-28
-to add the FD-borrow ownership contract addendum recording the
+results (including the extended timeout for `make nixie`). Updated on
+2026-07-28 to add the FD-borrow ownership contract addendum recording the
 `with_borrowed_reader`/`ManuallyDrop` helper that superseded the planned
 `std::mem::forget` mitigation (issue `#125`).
