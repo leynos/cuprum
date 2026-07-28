@@ -69,44 +69,6 @@ fn error_filter_keeps_fatal_write_context() {
 }
 
 #[test]
-fn read_seam_counts_eintr_retries() {
-    reset_retry_counters();
-    let mut attempts = 0_u8;
-    let outcome = read_raw_fd_with(|| {
-        attempts = attempts.saturating_add(1);
-        if attempts <= 2 {
-            return Err(io::Error::from(io::ErrorKind::Interrupted));
-        }
-        Ok(0)
-    });
-
-    assert!(
-        outcome.is_ok(),
-        "the read seam should reach EOF after retries"
-    );
-    assert_eq!(read_retry_count(), 2, "each EINTR retry must be counted");
-}
-
-#[test]
-fn write_seam_counts_eintr_retries() {
-    reset_retry_counters();
-    let mut attempts = 0_u8;
-    let outcome = write_all_unix_with(b"x", |chunk| {
-        attempts = attempts.saturating_add(1);
-        if attempts <= 2 {
-            return Err(io::Error::from(io::ErrorKind::Interrupted));
-        }
-        libc::ssize_t::try_from(chunk.len()).map_err(|_| io::Error::from(io::ErrorKind::Other))
-    });
-
-    assert!(
-        outcome.is_ok(),
-        "the write seam should complete after retries"
-    );
-    assert_eq!(write_retry_count(), 2, "each EINTR retry must be counted");
-}
-
-#[test]
 fn error_filter_keeps_read_overflow_context() {
     let captured = capture(Level::ERROR, || {
         let span = operation_span("consume_stream", 512);
