@@ -14,7 +14,7 @@ from unittest import mock
 
 import pytest
 
-from cuprum import _pipeline_streams
+from cuprum import _pipeline_stream_fds, _pipeline_streams
 from cuprum._testing import (
     configure_pump_stream_dispatch_for_testing,
     set_rust_availability_for_testing,
@@ -164,12 +164,12 @@ class TestPumpStreamDispatch:
             fake_drain_reader_buffer,
         )
         monkeypatch.setattr(
-            _pipeline_streams,
+            _pipeline_stream_fds,
             "_set_stream_fds_blocking",
             lambda **_: (True, True),
         )
         monkeypatch.setattr(
-            _pipeline_streams,
+            _pipeline_stream_fds,
             "_restore_stream_fd_blocking",
             lambda **_: call_order.append("restore"),
         )

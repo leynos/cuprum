@@ -32,12 +32,11 @@ from cuprum._pipeline_stage_streams import (
     _create_stage_capture_tasks as _create_stage_capture_tasks,
 )
 from cuprum._pipeline_stream_fds import (
+    _BlockingModeGuard,
     _close_rust_writer_fd,
     _extract_stream_fd,
     _pause_reader_transport,
-    _restore_stream_fd_blocking,
     _resume_reader_transport,
-    _set_stream_fds_blocking,
 )
 from cuprum._pipeline_stream_results import (
     _cancel_stream_tasks as _cancel_stream_tasks,
@@ -84,8 +83,7 @@ class _RustPumpState:
 
     reader_fd: int
     writer_fd: int
-    reader_was_blocking: bool
-    writer_was_blocking: bool
+    blocking_mode_guard: _BlockingModeGuard
     resume_reader: cabc.Callable[[], None] | None
 
 
@@ -121,12 +119,7 @@ def reset_pump_stream_dispatch_for_testing() -> None:
 
 def _restore_rust_pump_state(state: _RustPumpState) -> None:
     """Restore pipe state before returning reader transport control to asyncio."""
-    _restore_stream_fd_blocking(
-        reader_fd=state.reader_fd,
-        writer_fd=state.writer_fd,
-        reader_was_blocking=state.reader_was_blocking,
-        writer_was_blocking=state.writer_was_blocking,
-    )
+    state.blocking_mode_guard.restore()
     _resume_reader_transport(state.resume_reader)
 
 
@@ -206,7 +199,7 @@ async def _run_rust_pump(
         raise
 
     try:
-        reader_was_blocking, writer_was_blocking = _set_stream_fds_blocking(
+        blocking_mode_guard = _BlockingModeGuard.engage(
             reader_fd=reader_fd,
             writer_fd=writer_fd,
         )
@@ -217,8 +210,7 @@ async def _run_rust_pump(
     state = _RustPumpState(
         reader_fd=reader_fd,
         writer_fd=writer_fd,
-        reader_was_blocking=reader_was_blocking,
-        writer_was_blocking=writer_was_blocking,
+        blocking_mode_guard=blocking_mode_guard,
         resume_reader=resume_reader,
     )
     await _run_rust_pump_with_blocking_fds(state=state)

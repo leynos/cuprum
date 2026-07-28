@@ -1,8 +1,14 @@
-"""File-descriptor and transport controls for native pipeline pumping."""
+"""File-descriptor and transport controls for native pipeline pumping.
+
+The Rust inter-stage pump temporarily owns asyncio's pipe descriptors.  The
+blocking-mode guard and paused-reader scope make the two reversible parts of
+that hand-off independently fault-injectable.
+"""
 
 from __future__ import annotations
 
 import contextlib
+import dataclasses as dc
 import os
 import typing as typ
 
@@ -93,6 +99,49 @@ def _restore_stream_fd_blocking(
         os.set_blocking(reader_fd, reader_was_blocking)
     with contextlib.suppress(OSError, ValueError):
         os.set_blocking(writer_fd, writer_was_blocking)
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _BlockingModeGuard:
+    """Prior blocking modes for a reader/writer descriptor pair."""
+
+    reader_fd: int
+    writer_fd: int
+    reader_was_blocking: bool
+    writer_was_blocking: bool
+
+    @classmethod
+    def engage(cls, *, reader_fd: int, writer_fd: int) -> _BlockingModeGuard:
+        """Set both descriptors blocking and capture the modes to restore."""
+        reader_was_blocking, writer_was_blocking = _set_stream_fds_blocking(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+        )
+        return cls(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+            reader_was_blocking=reader_was_blocking,
+            writer_was_blocking=writer_was_blocking,
+        )
+
+    def restore(self) -> None:
+        """Restore the modes captured by :meth:`engage`."""
+        _restore_stream_fd_blocking(
+            reader_fd=self.reader_fd,
+            writer_fd=self.writer_fd,
+            reader_was_blocking=self.reader_was_blocking,
+            writer_was_blocking=self.writer_was_blocking,
+        )
+
+
+@contextlib.contextmanager
+def _paused_reader(reader: asyncio.StreamReader) -> cabc.Iterator[None]:
+    """Pause ``reader`` for the block and always resume it on exit."""
+    resume = _pause_reader_transport(reader)
+    try:
+        yield
+    finally:
+        _resume_reader_transport(resume)
 
 
 def _resume_reader_transport(
