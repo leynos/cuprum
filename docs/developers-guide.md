@@ -1098,6 +1098,39 @@ function the splice and read/write paths previously shared. New failure
 conditions get a variant here rather than a stringly-typed
 `io::Error::other(...)`.
 
+
+## Rust FD-borrow ownership contract
+
+The pump and consume entry points in `rust/cuprum-rust/src/lib.rs` divide the
+descriptors they touch into a *borrowed* reader and a *consumed* writer, and
+centralize the borrow half in one helper, `with_borrowed_reader`. The helper
+rebuilds a `StreamHandle` from the caller-owned raw descriptor, wraps it in
+`ManuallyDrop`, and runs the caller's closure against it. `ManuallyDrop`
+suppresses the close on *every* exit path — a normal return and unwinding from a
+panicking operation alike — so a descriptor the Python side still owns is never
+closed by Rust. `pump_stream` and `consume_stream` both route their reader
+through the helper, keeping the "borrow this FD without owning it" rule in a
+single place.
+
+This supersedes an earlier pattern that reconstructed the handle and called
+`std::mem::forget` after the inner operation returned. Because a panic unwinds
+past the trailing `forget`, that pattern dropped — and therefore closed — the
+caller-owned descriptor on the unwind path, exposing the Python transport to a
+double close of the same FD (the `#125` panic-unwind hazard). `ManuallyDrop`
+holds regardless of how the scope exits, so no drop guard or `forget` call is
+required.
+
+There is deliberately no borrowed *writer* variant. The writer FD handed to
+`pump_stream` is consumed: it must close on drop — including during unwinding —
+so downstream readers observe EOF. Reconstruct the writer with `stream_from_raw`
+(which yields an owning handle) and let it drop; reserve `with_borrowed_reader`
+for descriptors whose ownership stays with the caller. The helper's safety
+contract obliges the caller to guarantee `fd` is a valid open descriptor (or
+Windows handle) for the duration of the call and that ownership remains with the
+caller; in return the helper guarantees it never closes `fd`.
+`rust/cuprum-rust/src/lib_tests.rs` regression-tests both halves: the borrowed
+FD stays open after a normal operation and after a panicking one.
+
 ## Rust splice-loop and drain contract
 
 The Linux zero-copy path in `rust/cuprum-rust/src/splice.rs` follows one
