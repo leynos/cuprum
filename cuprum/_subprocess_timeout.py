@@ -7,7 +7,9 @@ exit-event helpers shared by the timeout and normal completion paths.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses as dc
+import logging
 import time
 import typing as typ
 
@@ -19,6 +21,89 @@ if typ.TYPE_CHECKING:
 
     from cuprum._pipeline_internals import _StageObservation
     from cuprum._subprocess_execution import _SubprocessExecution
+
+# Timeout diagnostics ride the module-scoped ``cuprum.timeout`` logger,
+# mirroring the ``cuprum.stdin`` convention in ``cuprum._subprocess_stdin``:
+# structured ``cuprum_*`` extra fields let observability integrations key on
+# stable attributes rather than parsing the human-readable message.
+_LOGGER = logging.getLogger("cuprum.timeout")
+
+# Distinguishes an elapsed wall-clock deadline from an immediate expiry forced
+# by a non-positive (``<= 0``) timeout, which cannot await the process at all.
+type _TimeoutMode = typ.Literal["elapsed", "immediate"]
+
+
+def _emit_timeout_log(
+    level: int,
+    msg: str,
+    *args: object,
+    extra: dict[str, object],
+) -> None:
+    """Emit a timeout diagnostic that can never mask the timeout it describes.
+
+    Telemetry is strictly best-effort here: a logging failure (for example a
+    misconfigured handler that raises) must not replace the ``TimeoutError`` or
+    ``TimeoutExpired`` the caller is about to raise, nor abort teardown, so any
+    exception raised while logging is swallowed. Preserving cleanup and
+    exception precedence outranks emitting the diagnostic.
+    """
+    with contextlib.suppress(Exception):
+        _LOGGER.log(level, msg, *args, extra=extra)
+
+
+def _log_timeout_expiry(
+    *,
+    pid: int | None,
+    configured_timeout: float,
+    mode: _TimeoutMode,
+) -> None:
+    """Record a structured diagnostic when a subprocess timeout expires.
+
+    ``mode`` distinguishes an elapsed wall-clock deadline (``"elapsed"``) from
+    the deterministic immediate expiry taken for a non-positive timeout
+    (``"immediate"``).
+    """
+    _emit_timeout_log(
+        logging.WARNING,
+        "subprocess_timeout_expired pid=%s timeout=%s mode=%s",
+        pid,
+        configured_timeout,
+        mode,
+        extra={
+            "cuprum_pid": pid,
+            "cuprum_operation": "wait",
+            "cuprum_timeout_s": configured_timeout,
+            "cuprum_timeout_mode": mode,
+            "cuprum_error_type": TimeoutError.__name__,
+        },
+    )
+
+
+def _log_teardown_drain_failure(
+    *,
+    pid: int | None,
+    error_types: tuple[str, ...],
+) -> None:
+    """Record a structured diagnostic when teardown drains a failing consumer.
+
+    Called when cancelling and draining stream consumers surfaces an unexpected
+    exception (anything other than the expected ``CancelledError``). Reports the
+    teardown outcome so a drain failure is observable even though it is absorbed
+    to preserve the primary timeout or cancellation.
+    """
+    joined = ",".join(error_types)
+    _emit_timeout_log(
+        logging.ERROR,
+        "subprocess_teardown_drain_failed pid=%s errors=%s",
+        pid,
+        joined,
+        extra={
+            "cuprum_pid": pid,
+            "cuprum_operation": "teardown",
+            "cuprum_teardown_outcome": "drain_error",
+            "cuprum_error_type": joined,
+        },
+    )
 
 
 class _SubprocessInvariantError(RuntimeError):
@@ -257,6 +342,8 @@ __all__ = [
     "_get_exit_code",
     "_handle_stream_timeout",
     "_handle_subprocess_timeout",
+    "_log_teardown_drain_failure",
+    "_log_timeout_expiry",
     "_raise_timeout_expired",
     "_require_timeout",
     "_resolve_timeout_payload",
