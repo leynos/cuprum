@@ -1236,8 +1236,9 @@ never reports a `timeout` and then falls silent.
 
 Error propagation policy (to be finalized, but roughly):
 
-- Pipelines fail fast: once any stage exits non-zero, Cuprum terminates the
-  remaining stages.
+- Pipelines fail fast: once any stage exits non-zero, Cuprum terminates every
+  other still-running stage — upstream as well as downstream — leaving the
+  failed stage to report its own exit.
 - The overall pipeline result surfaces the stage that triggered termination
   via `PipelineResult.failure` / `PipelineResult.failure_index`, alongside the
   per-stage results for diagnostics.
@@ -1283,6 +1284,32 @@ Keeping the selection in `_stages_to_terminate` makes the rule testable without
 processes: it excludes the failed stage, which owns its own exit, and any stage
 whose wait task has already settled. Cleanup is therefore idempotent — a second
 pass over settled stages selects nothing.
+
+
+#### Completion ordering seam
+
+Deciding *which* completion triggers that termination is separated from the
+asyncio machinery that observes it, so the ordering rules can be verified
+without processes or a clock. `cuprum/_pipeline_wait.py` splits the decision
+into a command and a query on `_PipelineWaitState`, following the project's
+command/query segregation rule:
+
+- `record_completion(completed_idx, exit_code, *, ended_at)` is the command. It
+  stamps the stage's exit code and end time — the clock is injected rather than
+  read, so the transition is deterministic — and latches the first non-zero
+  exit **in completion order** as `failure_index`. Completion order, not stage
+  order, is what decides: a stage that fails earlier in wall-clock time wins
+  over a lower-indexed stage that fails later.
+- `should_terminate_others(completed_idx)` is the query. It inspects state
+  without changing it, so it is repeatable, and answers `True` only when the
+  completion is the latched first failure *and* is not the final stage — a
+  failing final stage has nothing left to stop.
+
+`_process_completed_task` is the only caller that joins the two: it reads the
+clock, invokes the command, then acts on the query by awaiting
+`_terminate_pipeline_remaining_stages`. Keeping the I/O there leaves the
+ordering rules as a pure transition that Hypothesis drives directly over
+randomized completion orders.
 
 ### 8.3 Parallel Execution (non‑pipeline)
 
