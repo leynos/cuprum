@@ -123,6 +123,18 @@ jobs:
             --component clippy
           rustup default 1.85.0
 
+      - name: Install cargo-nextest
+        run: |
+          # `make test` prefers cargo-nextest and only falls back to
+          # `cargo test` when it is absent. The fallback runs every lib test
+          # in one shared process, which exposes process-global state — the
+          # tracing callsite Interest cache and raw file-descriptor numbers —
+          # to cross-test interference, causing intermittent failures.
+          # nextest isolates each test in its own process, matching the local
+          # and scrutineer gate runners.
+          curl -LsSf https://get.nexte.st/latest/linux \
+            | tar zxf - -C "${HOME}/.cargo/bin"
+
       - name: Run typechecker
         run: make typecheck
 
