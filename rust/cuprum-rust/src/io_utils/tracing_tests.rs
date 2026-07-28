@@ -69,6 +69,27 @@ fn error_filter_keeps_fatal_write_context() {
 }
 
 #[test]
+fn error_filter_keeps_ordinary_fatal_write_context() {
+    let captured = capture(Level::ERROR, || {
+        let span = operation_span("pump_stream_readwrite", 2048);
+        let _guard = span.enter();
+        // An ordinary, non-interrupted, non-broken-pipe error makes progress
+        // impossible and routes through `map_short_write_error`, a distinct
+        // fatal `error!` site from the zero-progress branch above.
+        let outcome = write_all_unix_with(b"payload", |_chunk| {
+            Err(io::Error::from(io::ErrorKind::Other))
+        });
+        assert!(outcome.is_err(), "a non-nonfatal write error is fatal",);
+    });
+
+    assert!(
+        captured.event_has_fields(Level::ERROR, &["operation", "buffer_size"]),
+        "map_short_write_error's fatal event must retain operation + \
+         buffer_size context under an error filter",
+    );
+}
+
+#[test]
 fn error_filter_keeps_read_overflow_context() {
     let captured = capture(Level::ERROR, || {
         let span = operation_span("consume_stream", 512);
