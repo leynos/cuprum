@@ -2437,6 +2437,33 @@ that settlement, so cancellation of the awaiting task cannot close or reuse a
 descriptor while native I/O is still running. The duplicate is closed after
 the worker settles, including a native-load failure.
 
+
+#### Raw descriptor lifecycle
+
+Handing a descriptor to the Rust pump means taking it back from asyncio for the
+duration of the transfer, and that hand-off has several partial-failure paths:
+the descriptor may not be extractable from the transport, the reader transport
+may refuse to pause, and either descriptor may refuse to switch to blocking
+mode. `cuprum/_pipeline_stream_fds.py` owns that lifecycle behind two seams so
+each path is testable without a live pump:
+
+- `_BlockingModeGuard` — the FD-state object. `engage()` switches the reader and
+  writer to blocking mode while capturing their prior modes, rolling back a
+  partial change if the second switch fails; `restore()` returns both to the
+  captured modes. This is what stops a descriptor being left blocking after the
+  transfer.
+- `_paused_reader` — a context manager that pauses the reader transport and
+  always resumes it, on every exit path including exceptions and cancellation,
+  so a resume can never be skipped.
+
+The module's scope is deliberately narrow: descriptor extraction plus the
+pause and blocking-mode lifecycle for the Rust pump hand-off. It is consumed
+only by `cuprum/_pipeline_streams.py`. Its reuse policy is that new descriptor
+lifecycle concerns for that hand-off belong here rather than being inlined into
+the pump, but the seams are not a general-purpose descriptor utility — anything
+serving a different caller should be designed against that caller's real
+requirements instead of widening these.
+
 ### 13.7 Linux splice() Optimization
 
 On Linux, the Rust extension can use the `splice()` system call for zero-copy
