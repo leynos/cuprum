@@ -332,12 +332,20 @@ fn consume_stream_files(
     let mut output = String::new();
     let mut total_read = 0_u64;
 
+    #[cfg(unix)]
+    let platform = "unix";
+    #[cfg(windows)]
+    let platform = "windows";
+
     loop {
         let read_len = read_stream(reader, &mut buffer)?;
         if read_len == 0 {
             break;
         }
-        let read_bytes = u64::try_from(read_len).map_err(|_| PumpError::LengthOverflow)?;
+        let read_bytes = u64::try_from(read_len).map_err(|_| {
+            tracing::error!(platform, "read length conversion overflowed");
+            PumpError::LengthOverflow
+        })?;
         total_read = total_read.saturating_add(read_bytes);
         let chunk = buffer
             .get(..read_len)

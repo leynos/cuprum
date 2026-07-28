@@ -104,3 +104,24 @@ fn write_seam_counts_eintr_retries() {
     );
     assert_eq!(write_retry_count(), 2, "each EINTR retry must be counted");
 }
+
+#[test]
+fn error_filter_keeps_read_overflow_context() {
+    let captured = capture(Level::ERROR, || {
+        let span = operation_span("consume_stream", 512);
+        let _guard = span.enter();
+        // A negative `ssize_t` cannot convert to `usize`, exercising the read
+        // length-overflow branch, which emits a fatal `error!` before failing.
+        let outcome = read_raw_fd_with(|| Ok(-1));
+        assert!(
+            outcome.is_err(),
+            "a negative read length is a fatal overflow",
+        );
+    });
+
+    assert!(
+        captured.event_has_fields(Level::ERROR, &["operation", "buffer_size"]),
+        "read length-overflow error event must retain operation + buffer_size \
+         context under an error filter",
+    );
+}

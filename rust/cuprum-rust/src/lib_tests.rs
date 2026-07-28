@@ -7,7 +7,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use crate::io_utils::read_stream;
 use crate::test_support::{fd_is_open, make_pipe, write_all_to};
 use crate::tracing_capture::capture;
-use crate::{BufferSize, consume_stream_files, stream_from_raw, with_borrowed_reader};
+use crate::{
+    BufferSize, consume_stream_files, pump_stream_files_readwrite, stream_from_raw,
+    with_borrowed_reader,
+};
 use rstest::{fixture, rstest};
 use tracing::Level;
 
@@ -112,6 +115,53 @@ fn consume_records_total_bytes_and_retries_on_span() {
             .as_deref(),
         Some("0"),
         "no interruptions occurred, so read_retries must record as 0",
+    );
+}
+
+#[rstest]
+fn pump_records_span_fields_under_error_filter() {
+    // Source pipe: the payload the pump reads. Sink pipe: where it writes.
+    let (source_read, source_write) = make_pipe();
+    let (sink_read, sink_write) = make_pipe();
+    let payload = b"pump-span-check";
+    write_all_to(&source_write, payload);
+    // Close the source's write end so the read loop reaches EOF.
+    drop(source_write);
+
+    let mut reader = source_read;
+    let mut writer = sink_write;
+    let captured = capture(Level::ERROR, || {
+        match pump_stream_files_readwrite(&mut reader, &mut writer, BufferSize(64)) {
+            Ok(total) => assert_eq!(total, u64::try_from(payload.len()).unwrap_or(u64::MAX)),
+            Err(err) => panic!("pump over pipes failed: {err:?}"),
+        }
+    });
+    // The sink read end is held open through the pump so writes do not break.
+    drop(sink_read);
+
+    // The pump completion `span.record` calls must surface the real byte total
+    // and the (zero) retry counts even under an ERROR-only filter, where the
+    // `error_span!` span still applies; removing any of them fails here.
+    assert_eq!(
+        captured
+            .span_field("pump_stream_readwrite", "total_bytes")
+            .as_deref(),
+        Some(payload.len().to_string().as_str()),
+        "the pump span must record the total bytes written",
+    );
+    assert_eq!(
+        captured
+            .span_field("pump_stream_readwrite", "read_retries")
+            .as_deref(),
+        Some("0"),
+        "no interruptions occurred, so read_retries must record as 0",
+    );
+    assert_eq!(
+        captured
+            .span_field("pump_stream_readwrite", "write_retries")
+            .as_deref(),
+        Some("0"),
+        "no interruptions occurred, so write_retries must record as 0",
     );
 }
 

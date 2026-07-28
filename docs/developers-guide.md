@@ -1166,8 +1166,11 @@ overflow — so no fatal boundary stays silent. The `pump_stream_readwrite` and
 (`io_utils::operation_span`) that carries the `operation` and `buffer_size` and,
 on completion, records `total_bytes` and the cumulative `EINTR`
 `read_retries`/`write_retries` counts as structured fields. The retry counts are
-accumulated in operation-scoped thread-local counters (reset when the span is
-entered), so the seams stay parameter-free while the span still reports them.
+accumulated in operation-scoped thread-local counters that
+`pump_stream_readwrite` and `consume_stream` explicitly reset at operation start
+(right after entering the span, via `io_utils::reset_retry_counters`;
+`operation_span` itself does not touch the counters), so the seams stay
+parameter-free while the span still reports them.
 The span is created at `error` level so the `warn`/`error` events keep their
 operation context even under a `warn`/`error`-only production filter, where an
 `info` span would be disabled; it emits no log line of its own.
