@@ -19,6 +19,8 @@ use std::os::windows::io::{FromRawHandle, RawHandle};
 
 #[cfg(test)]
 mod buffer_size_tests;
+#[cfg(all(test, unix))]
+mod consume_snapshot_tests;
 mod errors;
 #[cfg(kani)]
 mod fd_ownership_kani_proofs;
