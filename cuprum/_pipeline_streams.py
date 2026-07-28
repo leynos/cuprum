@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses as dc
-import os
 import typing as typ
 
 from cuprum._backend import StreamBackend, get_stream_backend
@@ -29,6 +28,11 @@ from cuprum._pipeline_config import (
 )
 from cuprum._pipeline_stage_streams import (
     _create_stage_capture_tasks as _create_stage_capture_tasks,
+)
+from cuprum._pipeline_stream_fds import (
+    _BlockingModeGuard,
+    _extract_stream_fd,
+    _paused_reader,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
 
@@ -79,90 +83,6 @@ def reset_pump_stream_dispatch_for_testing() -> None:
     configure_pump_stream_dispatch_for_testing()
 
 
-def _fd_from_transport(transport: object | None) -> int | None:
-    """Extract a raw FD via ``transport.get_extra_info('pipe').fileno()``."""
-    get_extra = getattr(transport, "get_extra_info", None)
-    if get_extra is None:
-        return None
-    pipe: object | None = get_extra("pipe")
-    fileno = getattr(pipe, "fileno", None) if pipe is not None else None
-    if fileno is None:
-        return None
-    try:
-        return int(fileno())
-    except (OSError, ValueError, TypeError, AttributeError):
-        return None
-
-
-def _extract_stream_fd(
-    stream: asyncio.StreamReader | asyncio.StreamWriter | None,
-) -> int | None:
-    """Extract a raw FD from an asyncio stream via its transport."""
-    if stream is None:
-        return None
-    transport = getattr(stream, "transport", None)
-    if transport is None:
-        transport = getattr(stream, "_transport", None)
-    return _fd_from_transport(transport)
-
-
-def _pause_reader_transport(
-    reader: asyncio.StreamReader,
-) -> cabc.Callable[[], None] | None:
-    """Pause reader transport callbacks while Rust pump owns the raw FD."""
-    transport = getattr(reader, "transport", None)
-    if transport is None:
-        transport = getattr(reader, "_transport", None)
-    pause_reading = getattr(transport, "pause_reading", None)
-    resume_reading = getattr(transport, "resume_reading", None)
-    if not callable(pause_reading) or not callable(resume_reading):
-        return None
-    try:
-        pause_reading()
-    except (RuntimeError, OSError):
-        return None
-
-    def _resume() -> None:
-        """Resume the paused reader transport, ignoring teardown errors."""
-        with contextlib.suppress(RuntimeError, OSError):
-            resume_reading()
-
-    return _resume
-
-
-def _set_stream_fds_blocking(*, reader_fd: int, writer_fd: int) -> tuple[bool, bool]:
-    """Switch pipe FDs to blocking mode and return their prior state."""
-    reader_was_blocking = os.get_blocking(reader_fd)
-    writer_was_blocking = os.get_blocking(writer_fd)
-    reader_changed = False
-    try:
-        if not reader_was_blocking:
-            os.set_blocking(reader_fd, True)
-            reader_changed = True
-        if not writer_was_blocking:
-            os.set_blocking(writer_fd, True)
-    except OSError:
-        if reader_changed:
-            with contextlib.suppress(OSError, ValueError):
-                os.set_blocking(reader_fd, reader_was_blocking)
-        raise
-    return reader_was_blocking, writer_was_blocking
-
-
-def _restore_stream_fd_blocking(
-    *,
-    reader_fd: int,
-    writer_fd: int,
-    reader_was_blocking: bool,
-    writer_was_blocking: bool,
-) -> None:
-    """Restore pipe FD blocking mode captured before Rust pumping."""
-    with contextlib.suppress(OSError, ValueError):
-        os.set_blocking(reader_fd, reader_was_blocking)
-    with contextlib.suppress(OSError, ValueError):
-        os.set_blocking(writer_fd, writer_was_blocking)
-
-
 async def _run_rust_pump(
     *,
     reader: asyncio.StreamReader,
@@ -171,50 +91,54 @@ async def _run_rust_pump(
     writer_fd: int,
 ) -> bool:
     """Run the Rust pump for one pipe hop; return ``True`` when handled."""
-    # Flush any bytes asyncio already buffered in the StreamReader
-    # before the Rust pump takes over the raw file descriptor.
-    resume_reader = _pause_reader_transport(reader)
-    try:
-        await _drain_reader_buffer(reader, writer)
-    except Exception:
-        if resume_reader is not None:
-            resume_reader()
-        raise
-
-    try:
-        reader_was_blocking, writer_was_blocking = _set_stream_fds_blocking(
-            reader_fd=reader_fd,
-            writer_fd=writer_fd,
-        )
-    except OSError:
-        if resume_reader is not None:
-            resume_reader()
+    handled = await _pump_over_raw_fds(
+        reader=reader,
+        writer=writer,
+        reader_fd=reader_fd,
+        writer_fd=writer_fd,
+    )
+    if not handled:
         return False
-
-    from cuprum._streams_rs import rust_pump_stream
-
-    loop = asyncio.get_running_loop()
-    try:
-        await loop.run_in_executor(
-            None,
-            rust_pump_stream,
-            reader_fd,
-            writer_fd,
-        )
-    finally:
-        _restore_stream_fd_blocking(
-            reader_fd=reader_fd,
-            writer_fd=writer_fd,
-            reader_was_blocking=reader_was_blocking,
-            writer_was_blocking=writer_was_blocking,
-        )
-        if resume_reader is not None:
-            resume_reader()
     # The Rust pump closes the writer FD on return (drop semantics).
     # Suppress OSError so the asyncio transport close does not raise
     # EBADF when the descriptor is already gone.
     with contextlib.suppress(OSError):
         await _close_stream_writer(writer)
+    return True
+
+
+async def _pump_over_raw_fds(
+    *,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter | None,
+    reader_fd: int,
+    writer_fd: int,
+) -> bool:
+    """Drive the Rust pump over the raw FDs, managing the FD lifecycle.
+
+    Pauses the reader transport (always resuming on exit via ``_paused_reader``)
+    and switches the FDs to blocking mode under a ``_BlockingModeGuard`` that
+    restores their prior mode. Returns ``False`` — the signal to fall back to
+    the Python pump — when the FDs cannot be made blocking; the writer close is
+    left to the caller.
+    """
+    with _paused_reader(reader):
+        # Flush any bytes asyncio already buffered in the StreamReader before
+        # the Rust pump takes over the raw file descriptor.
+        await _drain_reader_buffer(reader, writer)
+
+        try:
+            guard = _BlockingModeGuard.engage(reader_fd=reader_fd, writer_fd=writer_fd)
+        except OSError:
+            return False
+
+        from cuprum._streams_rs import rust_pump_stream
+
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, rust_pump_stream, reader_fd, writer_fd)
+        finally:
+            guard.restore()
     return True
 
 
