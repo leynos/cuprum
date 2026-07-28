@@ -1,11 +1,11 @@
 """Helpers for building and introspecting the native maturin wheel.
 
-Maturin pin-synchronisation checks are inlined in
+Maturin pin-synchronization checks are inlined in
 ``cuprum/unittests/test_maturin_build.py``, their sole consumer. This module
 retains the toolchain detectors and the wheel *build*, which wrap ``subprocess``
 and ``sysconfig`` probing that does not inline cleanly; wheel *inspection* lives
 in ``tests.helpers.maturin_wheel`` and is re-exported here so existing import
-sites keep working. Do not re-externalise further helpers here until a second
+sites keep working. Do not re-externalize further helpers here until a second
 concrete consumer exists and the shared interface can be designed against real
 requirements.
 """
@@ -58,7 +58,15 @@ class MaturinBuildError(subprocess.CalledProcessError):
 
 
 def toolchain_available() -> bool:
-    """Return whether the Rust toolchain and the maturin module are available."""
+    """Report whether the Rust toolchain and the maturin module are available.
+
+    Returns
+    -------
+    bool
+        ``True`` only when ``cargo`` and ``rustc`` are both on ``PATH`` and the
+        ``maturin`` module is importable by the current interpreter; ``False``
+        if any of the three is missing.
+    """
     try:
         maturin_available = importlib.util.find_spec("maturin") is not None
     except ImportError:
@@ -118,7 +126,13 @@ def maturin_script_locatable() -> bool:
 
 
 def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
-    """Build a native wheel with the pinned maturin version.
+    """Build a native wheel using the current interpreter's maturin.
+
+    Invokes ``python -m maturin`` with the running interpreter, so the maturin
+    that builds the wheel is whichever version is installed in that
+    environment. Alignment with the declared pin is asserted separately by
+    ``test_installed_maturin_matches_expected_pin`` and by the snapshot test's
+    generator check, not selected here.
 
     Raises
     ------

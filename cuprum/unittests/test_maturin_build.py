@@ -71,7 +71,7 @@ def _read_expected_maturin_version(root: pth.Path) -> str:
 
 
 def _read_maturin_pins(root: pth.Path) -> dict[str, str]:
-    """Read the maturin version pins from every synchronised location."""
+    """Read the maturin version pins from every synchronized location."""
     return {
         "pyproject.toml": _require_pin_match(
             _MATURIN_PIN_RE.search(_read_text(root, "pyproject.toml")),
@@ -392,3 +392,38 @@ def test_maturin_wheel_build_snapshot(
     assert snapshot_payload == snapshot, (
         "Built wheel metadata, file list, and build settings changed."
     )
+
+
+@pytest.mark.parametrize(
+    ("members", "expected_message"),
+    [
+        pytest.param(
+            {"cuprum-0.1.0.dist-info/METADATA": "Name: cuprum\n"},
+            "wheel is missing .dist-info/WHEEL metadata",
+            id="missing_wheel",
+        ),
+        pytest.param(
+            {"cuprum-0.1.0.dist-info/WHEEL": "Root-Is-Purelib: false\n"},
+            "wheel is missing .dist-info/METADATA metadata",
+            id="missing_metadata",
+        ),
+    ],
+)
+def test_wheel_build_snapshot_reports_missing_dist_info(
+    tmp_path: pth.Path,
+    members: dict[str, str],
+    expected_message: str,
+) -> None:
+    """A wheel missing either dist-info member fails with AssertionError.
+
+    ``wheel_build_snapshot`` documents ``AssertionError`` for absent metadata,
+    so a missing ``METADATA`` must not surface as the ``KeyError`` that
+    ``ZipFile.read`` would otherwise raise.
+    """
+    whl_path = tmp_path / "cuprum-0.1.0-py3-none-any.whl"
+    with zipfile.ZipFile(whl_path, "w") as archive:
+        for name, payload in members.items():
+            archive.writestr(name, payload)
+
+    with pytest.raises(AssertionError, match=re.escape(expected_message)):
+        wheel_build_snapshot(whl_path)

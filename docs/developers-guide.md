@@ -1555,10 +1555,17 @@ repository files, have a single consumer, and gain nothing from indirection.
 
 The **wheel build and toolchain detection** stay in `tests/helpers/maturin.py`,
 because they wrap `subprocess` and `sysconfig` probing that does not inline
-cleanly: build a wheel with the pinned maturin (`build_native_wheel_artifact`),
-report toolchain availability (`toolchain_available`), and report separately
-whether maturin's own script lookup can find its binary
-(`maturin_script_locatable`).
+cleanly: build a wheel (`build_native_wheel_artifact`), report toolchain
+availability (`toolchain_available`), and report separately whether maturin's
+own script lookup can find its binary (`maturin_script_locatable`).
+
+The build runs `python -m maturin` under the current interpreter, so it uses
+whichever maturin that environment provides rather than selecting a version
+itself. Two separate mechanisms enforce alignment with the declared pin:
+`test_installed_maturin_matches_expected_pin` compares the installed CLI
+against the `pyproject.toml` pin, and the snapshot test asserts the built
+wheel's `Generator` matches that same pin, so a wheel built by an unexpected
+maturin fails the suite.
 
 The **wheel-artefact snapshot** parsers (`wheel_build_snapshot` and its private
 helpers) live in the sibling module `tests/helpers/maturin_wheel.py`, keeping
