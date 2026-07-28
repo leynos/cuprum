@@ -35,41 +35,33 @@ _finite_floats = st.floats(allow_nan=False, allow_infinity=False)
 _optional_text = st.none() | st.text()
 
 
-@given(
-    timeout=_finite_floats,
-    stdout=_optional_text,
-    stderr=_optional_text,
-    exited_at=_finite_floats,
-    injected_now=_finite_floats,
-    ctx_stdout=_optional_text,
-    ctx_stderr=_optional_text,
-)
+@st.composite
+def _timeout_details(draw: st.DrawFn) -> _SubprocessTimeoutDetails:
+    """Draw an arbitrary captured `_SubprocessTimeoutDetails`."""
+    return _SubprocessTimeoutDetails(
+        timeout=draw(_finite_floats),
+        stdout=draw(_optional_text),
+        stderr=draw(_optional_text),
+        exited_at=draw(_finite_floats),
+    )
+
+
+@given(details=_timeout_details())
 def test_resolve_uses_carried_payload_for_subprocess_timeout_error(
     *,
-    timeout: float,
-    stdout: str | None,
-    stderr: str | None,
-    exited_at: float,
-    injected_now: float,
-    ctx_stdout: str | None,
-    ctx_stderr: str | None,
+    details: _SubprocessTimeoutDetails,
 ) -> None:
     """A `_SubprocessTimeoutError`'s captured payload is used verbatim."""
-    details = _SubprocessTimeoutDetails(
-        timeout=timeout,
-        stdout=stdout,
-        stderr=stderr,
-        exited_at=exited_at,
-    )
     payload = _resolve_timeout_payload(
         _SubprocessTimeoutError(details),
-        # A None configured timeout would fail for a bare TimeoutError, proving
-        # the carried branch never consults the fallback at all.
+        # A None configured timeout would raise for a bare TimeoutError, so the
+        # absence of a raise proves the carried branch never touches the
+        # fallback; ``== details`` proves nothing from it leaks into the result.
         _TimeoutFallback(
             configured_timeout=None,
-            stdout=ctx_stdout,
-            stderr=ctx_stderr,
-            exited_at=injected_now,
+            stdout="ignored fallback stdout",
+            stderr="ignored fallback stderr",
+            exited_at=-1.0,
         ),
     )
     assert payload == details
