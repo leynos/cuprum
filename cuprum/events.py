@@ -25,6 +25,8 @@ type ExecPhase = typ.Literal[
     "exit",
     "stdin",
     "stdin_error",
+    "timeout",
+    "teardown_error",
 ]
 
 # A stable, per-execution correlation token. It is minted once when an
@@ -77,6 +79,12 @@ class ExecEvent:
     duration_s:
         Elapsed duration in seconds from ``start`` to subprocess exit (not
         including output drain after process termination).
+
+        The ``timeout`` phase marks a run that exceeded its deadline and the
+        ``teardown_error`` phase marks a stream consumer that drained with an
+        unexpected error during cleanup; both are ancillary diagnostics emitted
+        before the existing ``exit`` event and the public ``TimeoutExpired``,
+        which are preserved.
     tags:
         Arbitrary, JSON-like metadata associated with this execution.
     note:
@@ -85,11 +93,24 @@ class ExecEvent:
     byte_count:
         Number of bytes written for byte-counted phases such as ``stdin``.
     operation:
-        For failure events such as ``stdin_error``, the pipe operation that
-        failed (for example ``write`` or ``close``).
+        For failure and lifecycle events, the operation involved. For
+        ``stdin_error`` this is the pipe operation that failed (for example
+        ``write`` or ``close``); for ``timeout`` it is ``wait``; for
+        ``teardown_error`` it is ``drain``.
     error_type:
-        For failure events such as ``stdin_error``, the class name of the
-        raised exception (for example ``OSError``).
+        For failure events such as ``stdin_error``, ``timeout``, and
+        ``teardown_error``, the class name of the raised exception (for example
+        ``OSError``, ``TimeoutError``). For ``teardown_error`` this is the
+        comma-joined class names of the consumer drain failures.
+    timeout_s:
+        For the ``timeout`` phase, the configured wall-clock timeout in seconds
+        that was exceeded. ``None`` for other phases.
+    timeout_mode:
+        For the ``timeout`` phase, the reason the deadline expired:
+        ``"elapsed_deadline"`` when a positive wall-clock deadline elapsed, or
+        ``"non_positive_immediate"`` when a non-positive (``timeout <= 0``)
+        deadline expired immediately without awaiting the process. ``None`` for
+        other phases.
     exec_id:
         Stable per-execution correlation token, minted once per execution and
         shared by every lifecycle event for that execution. It is the reliable
@@ -115,6 +136,8 @@ class ExecEvent:
     byte_count: int | None = None
     operation: str | None = None
     error_type: str | None = None
+    timeout_s: float | None = None
+    timeout_mode: str | None = None
     exec_id: ExecId | None = None
 
 

@@ -157,7 +157,7 @@ class TracingHook:
             case "stdout" | "stderr":
                 if self._record_output:
                     self._record_span_event(event)
-            case "stdin_error":
+            case "stdin_error" | "timeout" | "teardown_error":
                 self._record_span_event(event)
             case "exit":
                 self._handle_exit(event)
@@ -229,7 +229,8 @@ class TracingHook:
             return
 
         # ``line`` for stdout/stderr; ``operation``/``error_type``/``note`` for
-        # the non-fatal stdin_error path. The span is left open and unmarked.
+        # the ancillary stdin_error, timeout, and teardown_error paths. The span
+        # is left open and unmarked; the ``exit`` event still closes it.
         event_attrs: dict[str, object] = {}
         for field in ("line", "operation", "error_type", "note"):
             value = getattr(event, field)

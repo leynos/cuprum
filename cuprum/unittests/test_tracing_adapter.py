@@ -182,6 +182,45 @@ print('stderr-line', file=sys.stderr)""",
             "a non-fatal stdin_error must not end the execution span"
         )
 
+    def test_records_timeout_event(self) -> None:
+        """Hook surfaces a timeout as an ancillary span event without ending it."""
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+
+        exec_id = new_exec_id()
+        base = {"program": "cat", "argv": ("cat",), "pid": 4321, "exec_id": exec_id}
+        hook(_make_exec_event(phase="start", overrides=base))
+        hook(
+            _make_exec_event(
+                phase="timeout",
+                overrides={
+                    **base,
+                    "operation": "wait",
+                    "error_type": "TimeoutError",
+                    "timeout_s": 1.5,
+                    "timeout_mode": "elapsed_deadline",
+                },
+            ),
+        )
+
+        span = tracer.spans[0]
+        timeout_attrs = next(
+            (attrs for name, attrs in span.events if name == "cuprum.timeout"),
+            None,
+        )
+        assert timeout_attrs is not None, (
+            "the tracing hook should surface timeout as a span event"
+        )
+        assert timeout_attrs.get("operation") == "wait", (
+            "the timeout span event should carry the waiting operation"
+        )
+        assert timeout_attrs.get("error_type") == "TimeoutError", (
+            "the timeout span event should carry the exception type"
+        )
+        assert span.ended is False, (
+            "an ancillary timeout event must not end the execution span"
+        )
+
     def test_disables_output_recording(self) -> None:
         """Hook skips output events when record_output=False."""
         _, span = self._run_traced_command(

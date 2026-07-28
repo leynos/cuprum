@@ -250,3 +250,73 @@
     }),
   })
 # ---
+# name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[teardown_error]
+  dict({
+    'logging_extra': dict({
+      'cuprum_argv': tuple(
+        'echo',
+        'hello',
+      ),
+      'cuprum_cwd': '<cwd>',
+      'cuprum_phase': 'teardown_error',
+      'cuprum_pid': '<pid>',
+      'cuprum_program': 'echo',
+      'cuprum_tags': dict({
+        'pipeline_stage_index': 0,
+        'pipeline_stages': 2,
+        'project': 'proj',
+      }),
+    }),
+    'metrics_labels': dict({
+      'program': 'echo',
+      'project': 'proj',
+    }),
+    'tracing_attributes': dict({
+      'cuprum.argv': list([
+        'echo',
+        'hello',
+      ]),
+      'cuprum.cwd': '<cwd>',
+      'cuprum.pid': '<pid>',
+      'cuprum.pipeline_stage_index': 0,
+      'cuprum.pipeline_stages': 2,
+      'cuprum.program': 'echo',
+      'cuprum.project': 'proj',
+    }),
+  })
+# ---
+# name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[timeout]
+  dict({
+    'logging_extra': dict({
+      'cuprum_argv': tuple(
+        'echo',
+        'hello',
+      ),
+      'cuprum_cwd': '<cwd>',
+      'cuprum_phase': 'timeout',
+      'cuprum_pid': '<pid>',
+      'cuprum_program': 'echo',
+      'cuprum_tags': dict({
+        'pipeline_stage_index': 0,
+        'pipeline_stages': 2,
+        'project': 'proj',
+      }),
+    }),
+    'metrics_labels': dict({
+      'program': 'echo',
+      'project': 'proj',
+    }),
+    'tracing_attributes': dict({
+      'cuprum.argv': list([
+        'echo',
+        'hello',
+      ]),
+      'cuprum.cwd': '<cwd>',
+      'cuprum.pid': '<pid>',
+      'cuprum.pipeline_stage_index': 0,
+      'cuprum.pipeline_stages': 2,
+      'cuprum.program': 'echo',
+      'cuprum.project': 'proj',
+    }),
+  })
+# ---

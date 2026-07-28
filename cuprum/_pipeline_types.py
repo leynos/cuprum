@@ -54,6 +54,8 @@ class _EventDetails:
     byte_count: int | None = None
     operation: str | None = None
     error_type: str | None = None
+    timeout_s: float | None = None
+    timeout_mode: str | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -81,6 +83,8 @@ class _StageObservation:
             "exit",
             "stdin",
             "stdin_error",
+            "timeout",
+            "teardown_error",
         ],
         details: _EventDetails,
     ) -> None:
@@ -103,6 +107,8 @@ class _StageObservation:
             byte_count=details.byte_count,
             operation=details.operation,
             error_type=details.error_type,
+            timeout_s=details.timeout_s,
+            timeout_mode=details.timeout_mode,
             exec_id=self.exec_id,
         )
         try:
