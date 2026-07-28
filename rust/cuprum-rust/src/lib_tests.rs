@@ -5,9 +5,14 @@ use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::io_utils::read_stream;
-use crate::test_support::{fd_is_open, make_pipe, write_all_to};
-use crate::{stream_from_raw, with_borrowed_reader};
+use crate::test_support::{fd_is_open, make_pipe, read_all_from, write_all_to};
+use crate::tracing_capture::capture;
+use crate::{
+    BufferSize, consume_stream_files, pump_stream_files_readwrite, stream_from_raw,
+    with_borrowed_reader,
+};
 use rstest::{fixture, rstest};
+use tracing::Level;
 
 struct BorrowedReaderPipe {
     read_end: OwnedFd,
@@ -77,6 +82,94 @@ fn stream_from_raw_owns_and_reads_the_descriptor() {
     // Dropping `handle` closes the owned descriptor.
     drop(handle);
     assert!(!fd_is_open(raw_fd), "the owned FD must be closed on drop");
+}
+
+#[rstest]
+fn consume_records_total_bytes_and_retries_on_span() {
+    let (read_end, write_end) = make_pipe();
+    let payload = b"boundary-check-payload";
+    write_all_to(&write_end, payload);
+    // Close the write end so the read loop reaches EOF and terminates.
+    drop(write_end);
+
+    let mut reader = read_end;
+    let expected = std::str::from_utf8(payload).unwrap_or("");
+    let captured = capture(Level::INFO, || {
+        match consume_stream_files(&mut reader, BufferSize(64)) {
+            Ok(text) => assert_eq!(text, expected, "consume must decode the exact payload"),
+            Err(err) => panic!("consume over a closed pipe failed: {err:?}"),
+        }
+    });
+
+    // The completion `span.record` calls must surface the real byte total and
+    // the (zero) retry count; removing or miscounting either fails here.
+    assert_eq!(
+        captured
+            .span_field("consume_stream", "total_bytes")
+            .as_deref(),
+        Some(payload.len().to_string().as_str()),
+        "the consume span must record the total bytes read",
+    );
+    assert_eq!(
+        captured
+            .span_field("consume_stream", "read_retries")
+            .as_deref(),
+        Some("0"),
+        "no interruptions occurred, so read_retries must record as 0",
+    );
+}
+
+#[rstest]
+fn pump_records_span_fields_under_error_filter() {
+    // Source pipe: the payload the pump reads. Sink pipe: where it writes.
+    let (source_read, source_write) = make_pipe();
+    let (sink_read, sink_write) = make_pipe();
+    let payload = b"pump-span-check";
+    write_all_to(&source_write, payload);
+    // Close the source's write end so the read loop reaches EOF.
+    drop(source_write);
+
+    let mut reader = source_read;
+    let mut writer = sink_write;
+    let captured = capture(Level::ERROR, || {
+        match pump_stream_files_readwrite(&mut reader, &mut writer, BufferSize(64)) {
+            Ok(total) => assert_eq!(total, u64::try_from(payload.len()).unwrap_or(u64::MAX)),
+            Err(err) => panic!("pump over pipes failed: {err:?}"),
+        }
+    });
+    // Close the write end, then confirm the sink received exactly the source
+    // payload — a data oracle so same-length corruption cannot pass.
+    drop(writer);
+    assert_eq!(
+        read_all_from(&sink_read).as_slice(),
+        &payload[..],
+        "the pump must deliver the source bytes unchanged to the sink",
+    );
+
+    // The pump completion `span.record` calls must surface the real byte total
+    // and the (zero) retry counts even under an ERROR-only filter, where the
+    // `error_span!` span still applies; removing any of them fails here.
+    assert_eq!(
+        captured
+            .span_field("pump_stream_readwrite", "total_bytes")
+            .as_deref(),
+        Some(payload.len().to_string().as_str()),
+        "the pump span must record the total bytes written",
+    );
+    assert_eq!(
+        captured
+            .span_field("pump_stream_readwrite", "read_retries")
+            .as_deref(),
+        Some("0"),
+        "no interruptions occurred, so read_retries must record as 0",
+    );
+    assert_eq!(
+        captured
+            .span_field("pump_stream_readwrite", "write_retries")
+            .as_deref(),
+        Some("0"),
+        "no interruptions occurred, so write_retries must record as 0",
+    );
 }
 
 fn assert_panicking_reader_keeps_fd_open(raw_fd: i32) {

@@ -29,10 +29,12 @@ mod lib_tests;
 mod splice;
 #[cfg(all(test, unix))]
 mod test_support;
+#[cfg(all(test, unix))]
+mod tracing_capture;
 mod utf8;
 
 use errors::PumpError;
-use io_utils::{StreamHandle, handle_write_result, read_stream};
+use io_utils::{StreamHandle, handle_write_result, operation_span, read_stream};
 use utf8::{FinalChunk, decode_utf8_replace};
 
 /// Report whether the Rust extension is available.
@@ -280,6 +282,14 @@ fn pump_stream_files_readwrite(
     writer: &mut StreamHandle,
     buffer_size: BufferSize,
 ) -> Result<u64, PumpError> {
+    // Operation span (see `operation_span`) so the EINTR (`warn!`) and
+    // fatal-I/O (`error!`) events emitted from the read/write seams inherit
+    // the operation name, `buffer_size`, and `total_bytes` context even under
+    // a `warn`/`error`-only production filter.
+    let span = operation_span("pump_stream_readwrite", buffer_size.value());
+    let _guard = span.enter();
+    io_utils::reset_retry_counters();
+
     let mut buffer = vec![0_u8; buffer_size.value()];
     let mut total_written = 0_u64;
     let mut writer_open = true;
@@ -300,6 +310,9 @@ fn pump_stream_files_readwrite(
         writer_open = handle_write_result(writer, chunk, &mut total_written)?;
     }
 
+    span.record("total_bytes", total_written);
+    span.record("read_retries", io_utils::read_retry_count());
+    span.record("write_retries", io_utils::write_retry_count());
     Ok(total_written)
 }
 
@@ -307,15 +320,33 @@ fn consume_stream_files(
     reader: &mut StreamHandle,
     buffer_size: BufferSize,
 ) -> Result<String, PumpError> {
+    // Operation span (see `operation_span`) so the read seam's `warn!`/`error!`
+    // events inherit this operation's context even under a `warn`/`error`-only
+    // production filter.
+    let span = operation_span("consume_stream", buffer_size.value());
+    let _guard = span.enter();
+    io_utils::reset_retry_counters();
+
     let mut buffer = vec![0_u8; buffer_size.value()];
     let mut pending: Vec<u8> = Vec::new();
     let mut output = String::new();
+    let mut total_read = 0_u64;
+
+    #[cfg(unix)]
+    let platform = "unix";
+    #[cfg(windows)]
+    let platform = "windows";
 
     loop {
         let read_len = read_stream(reader, &mut buffer)?;
         if read_len == 0 {
             break;
         }
+        let read_bytes = u64::try_from(read_len).map_err(|_| {
+            tracing::error!(platform, "read length conversion overflowed");
+            PumpError::LengthOverflow
+        })?;
+        total_read = total_read.saturating_add(read_bytes);
         let chunk = buffer
             .get(..read_len)
             .ok_or(PumpError::BufferRangeExceeded)?;
@@ -325,6 +356,8 @@ fn consume_stream_files(
 
     decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(true));
 
+    span.record("total_bytes", total_read);
+    span.record("read_retries", io_utils::read_retry_count());
     Ok(output)
 }
 

@@ -5,9 +5,49 @@
 //! errors like broken pipes. Failures are reported through the crate's
 //! canonical [`PumpError`] taxonomy.
 
+use std::cell::Cell;
 use std::io;
 
 use crate::errors::PumpError;
+
+thread_local! {
+    /// EINTR retries observed on the read path of the current operation.
+    static READ_RETRIES: Cell<u64> = const { Cell::new(0) };
+    /// EINTR retries observed on the write path of the current operation.
+    static WRITE_RETRIES: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Reset the per-operation retry counters.
+///
+/// Called when a pump/consume operation enters its span so retry counts are
+/// scoped to that operation and never leak across operations that reuse the
+/// same OS thread. The pump/consume loop runs on a single thread (the GIL is
+/// released for the duration), so thread-local accumulation matches the
+/// operation exactly without threading a counter through every seam.
+pub(crate) fn reset_retry_counters() {
+    READ_RETRIES.with(|counter| counter.set(0));
+    WRITE_RETRIES.with(|counter| counter.set(0));
+}
+
+/// EINTR retries accumulated on the read path since the last reset.
+pub(crate) fn read_retry_count() -> u64 {
+    READ_RETRIES.with(Cell::get)
+}
+
+/// EINTR retries accumulated on the write path since the last reset.
+pub(crate) fn write_retry_count() -> u64 {
+    WRITE_RETRIES.with(Cell::get)
+}
+
+/// Increment the current operation's read-path `EINTR` retry counter.
+fn record_read_retry() {
+    READ_RETRIES.with(|counter| counter.set(counter.get().saturating_add(1)));
+}
+
+/// Increment the current operation's write-path `EINTR` retry counter.
+fn record_write_retry() {
+    WRITE_RETRIES.with(|counter| counter.set(counter.get().saturating_add(1)));
+}
 
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -33,6 +73,29 @@ pub(crate) enum WriteOutcome {
     /// The value is the number of bytes accepted before that error occurred,
     /// and it may be zero.
     NonFatalShortWrite(u64),
+}
+
+/// Build the tracing span that wraps a read/write pump operation.
+///
+/// The span is created at ERROR level, not INFO, so the read/write seams'
+/// EINTR `warn!` and fatal-I/O `error!` events inherit the `operation`,
+/// `buffer_size`, and `total_bytes` context even when the subscriber is
+/// filtered to `warn`/`error` — the conventional production configuration.
+/// Under such a filter an INFO-level span is disabled, dropping the operation
+/// context from exactly the events operators depend on. ERROR is the least
+/// verbose level, so the span stays enabled under both `warn`- and
+/// `error`-only filters. The span never emits a log line on its own (no span
+/// lifecycle events are subscribed), so raising its level adds no output; the
+/// caller records `total_bytes` on completion.
+pub(crate) fn operation_span(operation: &'static str, buffer_size: usize) -> tracing::Span {
+    tracing::error_span!(
+        "stream_pump",
+        operation,
+        buffer_size,
+        total_bytes = tracing::field::Empty,
+        read_retries = tracing::field::Empty,
+        write_retries = tracing::field::Empty,
+    )
 }
 
 /// Read bytes from the stream into the buffer.
@@ -128,10 +191,21 @@ fn read_raw_fd_with(
     loop {
         match read_once() {
             Ok(read_len) => {
-                return usize::try_from(read_len).map_err(|_| PumpError::LengthOverflow);
+                let len = usize::try_from(read_len).map_err(|_| {
+                    tracing::error!(platform = "unix", "read length conversion overflowed");
+                    PumpError::LengthOverflow
+                })?;
+                tracing::debug!(bytes = len, platform = "unix", "read stream chunk");
+                return Ok(len);
             }
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-            Err(err) => return Err(PumpError::from(err)),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                tracing::warn!(platform = "unix", "retrying interrupted read (EINTR)");
+                record_read_retry();
+            }
+            Err(err) => {
+                tracing::error!(platform = "unix", error = %err, "fatal stream read failure");
+                return Err(PumpError::from(err));
+            }
         }
     }
 }
@@ -169,17 +243,24 @@ fn write_all_unix_with(
     while !chunk.is_empty() {
         match write_once(chunk) {
             Ok(written) if written > 0 => {
-                let written_len =
-                    usize::try_from(written).map_err(|_| PumpError::LengthOverflow)?;
+                let written_len = usize::try_from(written).map_err(|_| {
+                    tracing::error!(platform = "unix", "write length conversion overflowed");
+                    PumpError::LengthOverflow
+                })?;
+                tracing::debug!(bytes = written_len, platform = "unix", "wrote stream chunk");
                 record_write_progress(&mut chunk, written_len, &mut total_written)?;
             }
             Ok(_) => {
+                tracing::error!(platform = "unix", "write made zero progress");
                 return Err(PumpError::from(io::Error::new(
                     io::ErrorKind::WriteZero,
                     "failed to write whole buffer",
                 )));
             }
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                tracing::warn!(platform = "unix", "retrying interrupted write (EINTR)");
+                record_write_retry();
+            }
             Err(err) => return map_short_write_error(err, total_written),
         }
     }
@@ -233,8 +314,16 @@ fn map_short_write_error(err: io::Error, total_written: u64) -> Result<WriteOutc
     if pump_error.is_nonfatal_write() {
         return Ok(WriteOutcome::NonFatalShortWrite(total_written));
     }
+    #[cfg(unix)]
+    let platform = "unix";
+    #[cfg(windows)]
+    let platform = "windows";
+    tracing::error!(platform, error = %pump_error, "fatal stream write failure");
     Err(pump_error)
 }
 
 #[cfg(all(test, unix))]
 mod tests;
+
+#[cfg(all(test, unix))]
+mod tracing_tests;

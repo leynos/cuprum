@@ -1157,6 +1157,26 @@ subscriber configuration and higher-level command observation, and `PumpError`
 values with transfer counts are still returned across that boundary as the
 primary signal.
 
+The read/write fallback loop is instrumented to the same standard. Each seam
+emits a `debug` event per successful read or write (carrying the byte count and
+platform), a `warn` event on every `EINTR` retry, and an `error` event on a
+fatal read/write failure, a zero-progress write, or a length-conversion
+overflow — so no fatal boundary stays silent. The `pump_stream_readwrite` and
+`consume_stream` loops wrap these seams in an operation span
+(`io_utils::operation_span`) that carries the `operation` and `buffer_size` and,
+on completion, records `total_bytes` and the cumulative `EINTR` retry counts as
+structured fields. `pump_stream_readwrite` reads and writes, so it records both
+`read_retries` and `write_retries`; `consume_stream` only reads, so it records
+`read_retries` alone (`write_retries` stays unset). The retry counts are
+accumulated in operation-scoped thread-local counters that
+`pump_stream_readwrite` and `consume_stream` explicitly reset at operation start
+(right after entering the span, via `io_utils::reset_retry_counters`;
+`operation_span` itself does not touch the counters), so the seams stay
+parameter-free while the span still reports them.
+The span is created at `error` level so the `warn`/`error` events keep their
+operation context even under a `warn`/`error`-only production filter, where an
+`info` span would be disabled; it emits no log line of its own.
+
 Unix Rust tests share pipe creation, duplicated-file wrapping, result helpers,
 and descriptor-state checks through `test_support`. Re-use that module for
 descriptor-backed test setup; keep production code independent of test helpers.

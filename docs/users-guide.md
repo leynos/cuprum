@@ -1240,6 +1240,19 @@ The backend is resolved once on first use and the result is cached for the
 lifetime of the process. Changing the environment variable after the first
 resolution has no effect.
 
+### Rust stream observability (internal)
+
+Both internal helpers emit `tracing` diagnostics; the crate installs no
+subscriber, so the embedding application owns subscriber configuration. Each
+successful read or write logs a `debug` event (with the byte count and
+platform), every `EINTR` retry logs a `warn`, and fatal I/O failures,
+zero-progress writes, and length-conversion overflows log an `error`. The pump
+and consume loops run inside an operation span that carries the `operation` and
+`buffer_size` fields and, on completion, records `total_bytes` and the
+cumulative `EINTR` `read_retries`/`write_retries` counts. The span sits at
+`error` level so the `warn`/`error` events retain their operation context even
+when the subscriber is filtered to `warn`/`error`; it emits no log line itself.
+
 ### Choosing a stream backend
 
 Most users should leave backend selection on `auto`. This uses the Rust pathway
