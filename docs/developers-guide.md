@@ -2653,28 +2653,41 @@ pump tasks instead.
 
 ## Subprocess timeout observability
 
-Subprocess timeouts emit best-effort structured diagnostics on the
-`cuprum.timeout` logger, mirroring the `cuprum.stdin` convention: consumers
-key on stable `cuprum_*` `extra` fields rather than parsing the message text.
-The diagnostics accompany — never replace — the public `TimeoutExpired`
-exception and the existing `exit` event, and a logging failure is swallowed
-so telemetry can never mask `TimeoutExpired` or `CancelledError`.
+Subprocess timeouts surface through the existing `ExecEvent` / `sh.observe()`
+observe-hook stream (see the [users' guide](users-guide.md) for the public
+event contract) and, mirroring the `cuprum.stdin` convention, through a
+best-effort `cuprum.timeout` log record carrying the same stable `cuprum_*`
+`extra` fields. Both accompany — never replace — the public `TimeoutExpired`
+exception and the existing `start` and `exit` events.
 
-Two records are emitted:
+Two observe events are added to `ExecPhase`:
 
-- **Timeout expiry** (`WARNING`, message `subprocess_timeout_expired`) when a
-  run exceeds its deadline. Fields: `cuprum_operation` (`"wait"`),
-  `cuprum_pid`, `cuprum_timeout_s` (the configured timeout),
-  `cuprum_error_type` (`"TimeoutError"`), and `cuprum_timeout_mode`, which
-  distinguishes an `"elapsed"` wall-clock deadline from an `"immediate"`
-  expiry taken for a non-positive (`timeout <= 0`) deadline.
-- **Teardown drain failure** (`ERROR`, message
-  `subprocess_teardown_drain_failed`) when cancelling and draining a stream
-  consumer surfaces an unexpected exception. Fields: `cuprum_operation`
-  (`"teardown"`), `cuprum_pid`, `cuprum_teardown_outcome` (`"drain_error"`),
-  and `cuprum_error_type` (the offending exception classes). The failure is
-  absorbed to preserve the primary timeout or cancellation, but stays
-  observable through this record.
+- **`timeout`** — emitted before `TimeoutExpired` when a run exceeds its
+  deadline. Fields: `operation` (`"wait"`), `pid`, `timeout_s` (the configured
+  timeout), `error_type` (`"TimeoutError"`), and `timeout_mode`, which
+  distinguishes an `"elapsed_deadline"` wall-clock expiry from a
+  `"non_positive_immediate"` expiry taken for a non-positive (`timeout <= 0`)
+  deadline that never awaits the process.
+- **`teardown_error`** — emitted when cancelling and draining a stream
+  consumer surfaces an unexpected exception during teardown. Fields:
+  `operation` (`"drain"`), `pid`, and `error_type` (the comma-joined failure
+  classes). The failure is absorbed to preserve the primary timeout or
+  cancellation, but stays observable through this event.
+
+Emission is best-effort and cannot alter control flow: an observe-hook failure
+(which `_StageObservation.emit` otherwise re-raises) is swallowed so telemetry
+can never mask `TimeoutExpired` or `CancelledError`, and scheduled async-hook
+tasks are still tracked and drained. The metrics adapter counts the two phases
+as `cuprum_timeouts_total` and `cuprum_teardown_errors_total`; the tracing
+adapter records them as ancillary span events that leave the span open for the
+subsequent `exit`.
+
+The parallel `cuprum.timeout` log records use the same field names under the
+`cuprum_` prefix (`cuprum_operation`, `cuprum_pid`, `cuprum_timeout_s`,
+`cuprum_error_type`, `cuprum_timeout_mode`, and `cuprum_teardown_outcome`):
+`subprocess_timeout_expired` (`WARNING`) for expiry and
+`subprocess_teardown_drain_failed` (`ERROR`, `cuprum_teardown_outcome` of
+`"drain_error"`) for a drain failure. A logging failure is likewise swallowed.
 
 ## Subprocess stdin injection
 

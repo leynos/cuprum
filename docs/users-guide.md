@@ -664,9 +664,23 @@ hooks receive `ExecEvent` values describing:
 - `start` — subprocess spawned (pid available).
 - `stdout` / `stderr` — decoded output emitted as lines.
 - `exit` — subprocess finished (exit code and duration).
+- `timeout` — the run exceeded its deadline (ancillary; emitted before the
+  preserved `exit` event and the public `TimeoutExpired`).
+- `teardown_error` — a stream consumer drained with an unexpected error during
+  cleanup (ancillary; the error is absorbed to preserve the primary exception).
 
 Hooks can be used for structured logging, metrics, or tracing without coupling
 Cuprum to a specific telemetry library.
+
+The `timeout` event carries the stable fields `operation` (`"wait"`), `pid`,
+`timeout_s` (the configured timeout in seconds), `error_type`
+(`"TimeoutError"`), and `timeout_mode`. `timeout_mode` is `"elapsed_deadline"`
+when a positive wall-clock deadline elapses, or `"non_positive_immediate"` when
+a non-positive (`timeout <= 0`) deadline expires immediately without awaiting
+the process. These ancillary events never change the public behaviour: the
+`start` and `exit` events and the `TimeoutExpired` exception (with its partial
+output) are unchanged, and an observe-hook failure while handling a `timeout` or
+`teardown_error` event cannot mask `TimeoutExpired` or `CancelledError`.
 
 Each event carries a stable `exec_id` correlation token: every lifecycle event
 for one execution — a single command, or one stage of a pipeline — shares the
