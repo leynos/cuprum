@@ -55,6 +55,33 @@ class _PipelineWaitState:
             ended_at=[None] * len(processes),
         )
 
+    def record_completion(
+        self,
+        completed_idx: int,
+        exit_code: int,
+        *,
+        ended_at: float,
+    ) -> bool:
+        """Record a stage's completion and report whether to fail fast.
+
+        This is the pure completion-ordering transition behind
+        [`_process_completed_task`][cuprum._pipeline_wait._process_completed_task]:
+        it stamps the completed stage's exit code and end time (the clock is
+        injected as ``ended_at`` so the decision is deterministic), and latches
+        the *first* non-zero exit — in completion order — as ``failure_index``.
+
+        It returns ``True`` exactly when this completion is that first failure
+        *and* the stage is not the final one, which is the sole condition under
+        which the caller terminates the remaining downstream stages. All I/O —
+        reading the clock and terminating stages — stays with the caller.
+        """
+        self.exit_codes[completed_idx] = exit_code
+        self.ended_at[completed_idx] = ended_at
+        if self.failure_index is None and exit_code != 0:
+            self.failure_index = completed_idx
+            return completed_idx != len(self.exit_codes) - 1
+        return False
+
 
 async def _process_completed_task(
     task: asyncio.Task[int],
@@ -65,17 +92,13 @@ async def _process_completed_task(
     """Process a completed wait task, terminating remaining stages on failure."""
     idx = state.task_to_index[task]
     exit_code = task.result()
-    state.exit_codes[idx] = exit_code
-    state.ended_at[idx] = time.perf_counter()
-    if state.failure_index is None and exit_code != 0:
-        state.failure_index = idx
-        if idx != len(processes) - 1:
-            await _terminate_pipeline_remaining_stages(
-                processes,
-                state.wait_tasks,
-                idx,
-                cancel_grace=cancel_grace,
-            )
+    if state.record_completion(idx, exit_code, ended_at=time.perf_counter()):
+        await _terminate_pipeline_remaining_stages(
+            processes,
+            state.wait_tasks,
+            idx,
+            cancel_grace=cancel_grace,
+        )
 
 
 async def _finalize_pipeline_wait(
