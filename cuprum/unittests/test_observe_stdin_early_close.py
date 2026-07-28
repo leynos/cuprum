@@ -35,16 +35,16 @@ if typ.TYPE_CHECKING:
 # forever and orphaning the process.
 _STDIN_EARLY_CLOSE_CHILD = "\n".join((
     "import os, sys, time",
-    'go = os.environ["CUPRUM_STDIN_CLOSE_GO"]',
-    'closed = os.environ["CUPRUM_STDIN_CLOSED"]',
+    "from pathlib import Path",
+    'go = Path(os.environ["CUPRUM_STDIN_CLOSE_GO"])',
+    'closed = Path(os.environ["CUPRUM_STDIN_CLOSED"])',
     "deadline = time.monotonic() + 15.0",
-    "while not os.path.exists(go):",
+    "while not go.exists():",
     "    if time.monotonic() >= deadline:",
     '        sys.exit("cuprum early-close child timed out waiting for go marker")',
     "    time.sleep(0.005)",
     "sys.stdin.close()",
-    'with open(closed, "w") as marker:',
-    '    marker.write("closed")',
+    'closed.write_text("closed")',
     'print("done")',
 ))
 
