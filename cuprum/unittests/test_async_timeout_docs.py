@@ -10,13 +10,15 @@ from __future__ import annotations
 
 import pytest
 
-from tests.helpers import extract_markdown_subsection, read_doc
+from tests.helpers import extract_markdown_subsection, read_doc, read_users_guide
 
 _DEV_GUIDE = "docs/developers-guide.md"
 _ADR_007 = "docs/adr-007-subprocess-execution-module-boundaries.md"
 
 _ASYNC_POLICY_HEADING = "Ruff `ASYNC` (flake8-async) policy"
 _TIMEOUT_OBSERVABILITY_HEADING = "Subprocess timeout observability"
+_USERS_TIMEOUTS_HEADING = "Timeouts"
+_USERS_EVENTS_HEADING = "Structured execution events"
 
 
 # -- Fixtures -----------------------------------------------------------------
@@ -48,6 +50,28 @@ def timeout_observability_section(developers_guide: str) -> str:
 def adr_007() -> str:
     """Load ADR-007 (subprocess execution module boundaries) once per module."""
     return read_doc(_ADR_007)
+
+
+@pytest.fixture(scope="module")
+def users_guide() -> str:
+    """Load the users' guide once per module."""
+    return read_users_guide()
+
+
+@pytest.fixture(scope="module")
+def users_timeouts_section(users_guide: str) -> str:
+    """Extract the users' guide Timeouts section."""
+    return extract_markdown_subsection(
+        users_guide, heading=_USERS_TIMEOUTS_HEADING, level=3
+    )
+
+
+@pytest.fixture(scope="module")
+def users_events_section(users_guide: str) -> str:
+    """Extract the users' guide structured execution events section."""
+    return extract_markdown_subsection(
+        users_guide, heading=_USERS_EVENTS_HEADING, level=3
+    )
 
 
 # -- Ruff ASYNC lint policy ---------------------------------------------------
@@ -89,6 +113,12 @@ def test_developers_guide_documents_async_policy(
 @pytest.mark.parametrize(
     "term",
     [
+        "ExecPhase",
+        "sh.observe",
+        "timeout",
+        "teardown_error",
+        "timeout_s",
+        "timeout_mode",
         "cuprum.timeout",
         "subprocess_timeout_expired",
         "subprocess_teardown_drain_failed",
@@ -98,8 +128,10 @@ def test_developers_guide_documents_async_policy(
         "cuprum_timeout_mode",
         "cuprum_error_type",
         "cuprum_teardown_outcome",
-        '"elapsed"',
-        '"immediate"',
+        "cuprum_timeouts_total",
+        "cuprum_teardown_errors_total",
+        '"elapsed_deadline"',
+        '"non_positive_immediate"',
         '"drain_error"',
         "non-positive",
         "TimeoutExpired",
@@ -109,15 +141,58 @@ def test_developers_guide_documents_async_policy(
 def test_developers_guide_documents_timeout_observability(
     timeout_observability_section: str, term: str
 ) -> None:
-    """The developers' guide must document the ``cuprum.timeout`` telemetry fields.
+    """The developers' guide must document the timeout observability contract.
 
-    Covers the distinguishable expiry and teardown records, the stable
-    ``cuprum_*`` fields, the elapsed-versus-immediate timeout mode, and the
-    guarantee that telemetry never masks ``TimeoutExpired`` / ``CancelledError``.
+    Covers the distinguishable ``timeout`` / ``teardown_error`` observe events
+    and their fields, the parallel ``cuprum.timeout`` log records, the
+    elapsed-versus-immediate timeout mode, and the guarantee that telemetry
+    never masks ``TimeoutExpired`` / ``CancelledError``.
     """
     assert term in timeout_observability_section, (
         f"Missing documentation clause: '{term}'"
     )
+
+
+# -- Users' guide timeout contract --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "term",
+    [
+        "run()",
+        "run_sync",
+        "TimeoutExpired",
+        "expires immediately",
+        "negative",
+    ],
+)
+def test_users_guide_documents_timeout_contract(
+    users_timeouts_section: str, term: str
+) -> None:
+    """The users' guide must document the public run()/run_sync() timeout contract.
+
+    Covers the ``timeout`` parameter, immediate non-positive expiry, and the
+    public ``TimeoutExpired`` mapping.
+    """
+    assert term in users_timeouts_section, f"Missing documentation clause: '{term}'"
+
+
+@pytest.mark.parametrize(
+    "term",
+    [
+        "timeout",
+        "teardown_error",
+        "timeout_mode",
+        "elapsed_deadline",
+        "non_positive_immediate",
+        "TimeoutExpired",
+    ],
+)
+def test_users_guide_documents_timeout_events(
+    users_events_section: str, term: str
+) -> None:
+    """The users' guide structured-events section must document timeout events."""
+    assert term in users_events_section, f"Missing documentation clause: '{term}'"
 
 
 # -- ADR-007 wait-helper addendum ---------------------------------------------

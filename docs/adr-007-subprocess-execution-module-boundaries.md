@@ -135,7 +135,10 @@ boundaries above.
   elapsed deadline, or an immediate non-positive expiry, teardown cancels and
   drains every still-pending stream-consumer task before the exception
   propagates, so no pending stream-consumer task is ever left behind.
-- **Observability.** These paths emit best-effort `cuprum.timeout` diagnostics
-  (documented in the developers' guide) that never mask `TimeoutExpired`.
+- **Observability.** These paths emit best-effort `timeout` and
+  `teardown_error` `ExecEvent` observe events, plus parallel `cuprum.timeout`
+  log diagnostics (documented in the developers' guide), that never mask
+  `TimeoutExpired`. Emission failures are swallowed so cleanup and exception
+  precedence are preserved.
 
 This refinement changes no public API and no observable timeout semantics.
