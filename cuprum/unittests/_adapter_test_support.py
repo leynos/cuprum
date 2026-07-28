@@ -62,6 +62,8 @@ def _make_exec_event(
         "byte_count": None,
         "operation": None,
         "error_type": None,
+        "timeout_s": None,
+        "timeout_mode": None,
         "exec_id": new_exec_id(),
     }
     if overrides is not None:
@@ -86,6 +88,8 @@ def _make_exec_event(
         byte_count=typ.cast("int | None", values["byte_count"]),
         operation=typ.cast("str | None", values["operation"]),
         error_type=typ.cast("str | None", values["error_type"]),
+        timeout_s=typ.cast("float | None", values["timeout_s"]),
+        timeout_mode=typ.cast("str | None", values["timeout_mode"]),
         exec_id=typ.cast("ExecId | None", values["exec_id"]),
     )
 
