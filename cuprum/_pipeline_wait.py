@@ -64,26 +64,84 @@ class _PipelineWaitState:
         exit_code: int,
         *,
         ended_at: float,
-    ) -> bool:
-        """Record a stage's completion and report whether to fail fast.
+    ) -> None:
+        """Record a stage's completion (command).
 
         This is the pure completion-ordering transition behind
         [`_process_completed_task`][cuprum._pipeline_wait._process_completed_task]:
         it stamps the completed stage's exit code and end time (the clock is
-        injected as ``ended_at`` so the decision is deterministic), and latches
+        injected as ``ended_at`` so the transition is deterministic) and latches
         the *first* non-zero exit — in completion order — as ``failure_index``.
 
-        It returns ``True`` exactly when this completion is that first failure
-        *and* the stage is not the final one, which is the sole condition under
-        which the caller terminates the remaining downstream stages. All I/O —
-        reading the clock and terminating stages — stays with the caller.
+        Deciding whether to fail fast is the separate
+        [`should_terminate_others`][cuprum._pipeline_wait._PipelineWaitState.should_terminate_others]
+        query, and all I/O — reading the clock, terminating stages — stays with
+        the caller.
+
+        Examples
+        --------
+        The first non-zero exit *in completion order* latches, even when a
+        lower-indexed stage fails later::
+
+            state = _PipelineWaitState(
+                wait_tasks=[],
+                task_to_index={},
+                exit_codes=[None] * 3,
+                started_at=[0.0] * 3,
+                ended_at=[None] * 3,
+            )
+            state.record_completion(2, 0, ended_at=1.0)
+            state.record_completion(0, 1, ended_at=2.0)
+            state.record_completion(1, 7, ended_at=3.0)
+
+            assert state.failure_index == 0
+            assert state.exit_codes == [1, 7, 0]
+            assert state.ended_at == [2.0, 3.0, 1.0]
+
         """
         self.exit_codes[completed_idx] = exit_code
         self.ended_at[completed_idx] = ended_at
         if self.failure_index is None and exit_code != 0:
             self.failure_index = completed_idx
-            return completed_idx != len(self.exit_codes) - 1
-        return False
+
+    def should_terminate_others(self, completed_idx: int) -> bool:
+        """Report whether completing ``completed_idx`` should fail the pipeline fast.
+
+        This is the query half of the transition: it inspects state without
+        changing it, so it is safe to call repeatedly and in any order after
+        [`record_completion`][cuprum._pipeline_wait._PipelineWaitState.record_completion]
+        has stamped the completion.
+
+        It answers ``True`` exactly when ``completed_idx`` is the latched first
+        failure *and* is not the final stage. A failing final stage has nothing
+        left to stop, so it never triggers termination. When it does answer
+        ``True`` the caller terminates every *other* still-running stage — both
+        upstream and downstream — not merely the ones after the failure.
+
+        Examples
+        --------
+        ::
+
+            state = _PipelineWaitState(
+                wait_tasks=[],
+                task_to_index={},
+                exit_codes=[None] * 3,
+                started_at=[0.0] * 3,
+                ended_at=[None] * 3,
+            )
+
+            state.record_completion(0, 1, ended_at=1.0)
+            assert state.should_terminate_others(0) is True
+
+            # A later failure is not the latched first one.
+            state.record_completion(1, 1, ended_at=2.0)
+            assert state.should_terminate_others(1) is False
+
+        """
+        return (
+            self.failure_index == completed_idx
+            and completed_idx != len(self.exit_codes) - 1
+        )
 
 
 async def _process_completed_task(
@@ -92,10 +150,11 @@ async def _process_completed_task(
     processes: list[asyncio.subprocess.Process],
     cancel_grace: float,
 ) -> None:
-    """Process a completed wait task, terminating remaining stages on failure."""
+    """Process a completed wait task, terminating other stages on failure."""
     idx = state.task_to_index[task]
     exit_code = task.result()
-    if state.record_completion(idx, exit_code, ended_at=time.perf_counter()):
+    state.record_completion(idx, exit_code, ended_at=time.perf_counter())
+    if state.should_terminate_others(idx):
         await _terminate_pipeline_remaining_stages(
             processes,
             state.wait_tasks,
