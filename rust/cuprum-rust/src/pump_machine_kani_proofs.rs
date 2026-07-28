@@ -64,42 +64,24 @@ fn closed_writer_drains_without_writing() {
 }
 
 #[kani::proof]
-fn broken_pipe_latches_closed_and_counts_accepted_bytes() {
+fn write_counts_bytes_and_latches_by_variant() {
+    // Cover both write outcomes in one proof: either counts its accepted bytes,
+    // and only a completed write leaves the writer open (a broken-pipe short
+    // write latches it closed).
     let mut state = PumpState::from_parts(kani::any(), true);
     let before = state.total_written();
-    let bytes: u64 = kani::any();
-    step(
-        &mut state,
-        ReadEvent::Chunk,
-        Some(WriteEvent::Closed { bytes }),
-    );
-    kani::assert(
-        !state.writer_open(),
-        "a non-fatal short write latches the writer closed",
-    );
+    let write = any_write();
+    let bytes = match write {
+        WriteEvent::Complete { bytes } | WriteEvent::Closed { bytes } => bytes,
+    };
+    step(&mut state, ReadEvent::Chunk, Some(write));
     kani::assert(
         state.total_written() == before.saturating_add(bytes),
-        "bytes accepted before the pipe broke are counted",
-    );
-}
-
-#[kani::proof]
-fn completed_write_keeps_open_and_counts_bytes() {
-    let mut state = PumpState::from_parts(kani::any(), true);
-    let before = state.total_written();
-    let bytes: u64 = kani::any();
-    step(
-        &mut state,
-        ReadEvent::Chunk,
-        Some(WriteEvent::Complete { bytes }),
+        "accepted bytes are counted for either write outcome",
     );
     kani::assert(
-        state.writer_open(),
-        "a completed write keeps the writer open",
-    );
-    kani::assert(
-        state.total_written() == before.saturating_add(bytes),
-        "written bytes are counted",
+        state.writer_open() == matches!(write, WriteEvent::Complete { .. }),
+        "only a completed write keeps the writer open",
     );
 }
 
