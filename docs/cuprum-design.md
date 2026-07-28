@@ -2141,6 +2141,22 @@ The splice implementation handles errors as follows:
 - `EPIPE` / `ECONNRESET`: Broken pipe; drain reader and return bytes written
 - `EBADF` / `ESPIPE` / other errors: Propagate to caller as `OSError`
 
+#### Stream instrumentation
+
+Both pathways emit bounded `tracing` diagnostics without installing a subscriber
+(the Python boundary owns subscriber configuration). The read/write seams log a
+`debug` event per successful transfer, a `warn` per `EINTR` retry, and an
+`error` on a fatal read/write failure, a zero-progress write, or a
+length-conversion overflow, so no fatal boundary stays silent.
+`pump_stream_readwrite` and `consume_stream` wrap the loop in an operation span
+created at `error` level — so `warn`/`error` events keep their context under a
+`warn`/`error`-only production filter, where an `info` span would be disabled.
+The span carries `operation` and `buffer_size` and, on completion, records
+`total_bytes` plus the cumulative `EINTR` `read_retries` and `write_retries`.
+Those retry counts accumulate in operation-scoped thread-local counters that the
+loops reset at operation start (keeping the seams parameter-free). See the
+developers' guide for the full contract.
+
 ### 13.8 Build and Distribution
 
 The Rust extension is built using maturin and distributed as platform-specific

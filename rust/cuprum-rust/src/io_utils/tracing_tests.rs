@@ -13,6 +13,7 @@
 
 use std::io;
 
+use proptest::prelude::*;
 use tracing::Level;
 
 use super::{
@@ -124,4 +125,40 @@ fn error_filter_keeps_read_overflow_context() {
         "read length-overflow error event must retain operation + buffer_size \
          context under an error filter",
     );
+}
+
+proptest! {
+    /// The read counter equals the number of `EINTR` retries for any sequence
+    /// of interruptions before the final successful read.
+    #[test]
+    fn read_seam_counts_arbitrary_interrupts(interrupts in 0_u32..64) {
+        reset_retry_counters();
+        let mut remaining = interrupts;
+        let outcome = read_raw_fd_with(|| {
+            if remaining > 0 {
+                remaining -= 1;
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            Ok(0)
+        });
+        prop_assert!(outcome.is_ok());
+        prop_assert_eq!(read_retry_count(), u64::from(interrupts));
+    }
+
+    /// The write counter equals the number of `EINTR` retries for any sequence
+    /// of interruptions before the write completes.
+    #[test]
+    fn write_seam_counts_arbitrary_interrupts(interrupts in 0_u32..64) {
+        reset_retry_counters();
+        let mut remaining = interrupts;
+        let outcome = write_all_unix_with(b"x", |chunk| {
+            if remaining > 0 {
+                remaining -= 1;
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            libc::ssize_t::try_from(chunk.len()).map_err(|_| io::Error::from(io::ErrorKind::Other))
+        });
+        prop_assert!(outcome.is_ok());
+        prop_assert_eq!(write_retry_count(), u64::from(interrupts));
+    }
 }
