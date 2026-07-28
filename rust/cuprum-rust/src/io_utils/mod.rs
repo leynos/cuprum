@@ -9,6 +9,7 @@ use std::cell::Cell;
 use std::io;
 
 use crate::errors::PumpError;
+use crate::pump_machine::WriteEvent;
 
 thread_local! {
     /// EINTR retries observed on the read path of the current operation.
@@ -126,6 +127,40 @@ pub(crate) fn handle_write(
     let outcome = write_all_windows(writer, chunk)?;
 
     Ok(outcome)
+}
+
+/// Attempt one write and classify it into a non-fatal [`WriteEvent`].
+///
+/// This is the adapter between real descriptor I/O and the pure pump state
+/// machine in [`crate::pump_machine`]: it collapses [`WriteOutcome`] and the
+/// non-fatal error partition into the machine's two-variant `WriteEvent`, so
+/// only genuinely fatal failures escape as [`PumpError`]. A broken pipe or
+/// connection reset latches the writer closed, carrying the bytes accepted
+/// before the failure (zero when it preceded any progress).
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // A pipe whose read end is still open accepts the whole chunk.
+/// let event = classify_write(&mut writer, b"chunk")?;
+/// assert_eq!(event, WriteEvent::Complete { bytes: 5 });
+///
+/// // Once the reader hangs up, the same call latches the writer closed
+/// // instead of failing, reporting the bytes that were accepted.
+/// drop(reader);
+/// let event = classify_write(&mut writer, b"chunk")?;
+/// assert_eq!(event, WriteEvent::Closed { bytes: 0 });
+/// ```
+pub(crate) fn classify_write(
+    writer: &mut StreamHandle,
+    chunk: &[u8],
+) -> Result<WriteEvent, PumpError> {
+    match handle_write(writer, chunk) {
+        Ok(WriteOutcome::Complete(bytes)) => Ok(WriteEvent::Complete { bytes }),
+        Ok(WriteOutcome::NonFatalShortWrite(bytes)) => Ok(WriteEvent::Closed { bytes }),
+        Err(err) if err.is_nonfatal_write() => Ok(WriteEvent::Closed { bytes: 0 }),
+        Err(err) => Err(err),
+    }
 }
 
 #[cfg(unix)]

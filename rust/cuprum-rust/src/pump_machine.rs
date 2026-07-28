@@ -86,6 +86,37 @@ pub(crate) enum Flow {
 ///
 /// A closed writer never reopens and never accrues more bytes: once the writer
 /// latches closed, further chunk reads only drain the upstream reader.
+///
+/// # Examples
+///
+/// A completed write accrues its bytes and keeps pumping:
+///
+/// ```rust,ignore
+/// let mut state = PumpState::start();
+/// let flow = step(
+///     &mut state,
+///     ReadEvent::Chunk,
+///     Some(WriteEvent::Complete { bytes: 5 }),
+/// );
+/// assert_eq!(flow, Flow::Continue);
+/// assert_eq!(state.total_written(), 5);
+/// assert!(state.writer_open());
+/// ```
+///
+/// A broken pipe latches the writer closed, after which chunk reads drain the
+/// reader without accruing bytes, and EOF stops the loop:
+///
+/// ```rust,ignore
+/// let mut state = PumpState::start();
+/// step(&mut state, ReadEvent::Chunk, Some(WriteEvent::Closed { bytes: 2 }));
+/// assert!(!state.writer_open());
+///
+/// // The writer is closed, so the caller performs no write: `write` is `None`.
+/// step(&mut state, ReadEvent::Chunk, None);
+/// assert_eq!(state.total_written(), 2, "a drained chunk adds nothing");
+///
+/// assert_eq!(step(&mut state, ReadEvent::Eof, None), Flow::Stop);
+/// ```
 pub(crate) fn step(state: &mut PumpState, read: ReadEvent, write: Option<WriteEvent>) -> Flow {
     match read {
         ReadEvent::Eof => Flow::Stop,

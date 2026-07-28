@@ -41,8 +41,8 @@ mod tracing_capture;
 mod utf8;
 
 use errors::PumpError;
-use io_utils::{StreamHandle, WriteOutcome, handle_write, operation_span, read_stream};
-use pump_machine::{Flow, PumpState, ReadEvent, WriteEvent, step};
+use io_utils::{StreamHandle, classify_write, operation_span, read_stream};
+use pump_machine::{Flow, PumpState, ReadEvent, step};
 use utf8::{FinalChunk, decode_utf8_replace};
 
 /// Report whether the Rust extension is available.
@@ -331,20 +331,6 @@ fn pump_stream_files_readwrite(
     span.record("read_retries", io_utils::read_retry_count());
     span.record("write_retries", io_utils::write_retry_count());
     Ok(total_written)
-}
-
-/// Attempt one write and classify it into a non-fatal [`WriteEvent`].
-///
-/// Fatal write failures propagate as [`PumpError`]. Non-fatal broken-pipe and
-/// connection-reset failures latch the writer closed, carrying the bytes
-/// accepted before the failure (zero when it preceded any progress).
-fn classify_write(writer: &mut StreamHandle, chunk: &[u8]) -> Result<WriteEvent, PumpError> {
-    match handle_write(writer, chunk) {
-        Ok(WriteOutcome::Complete(bytes)) => Ok(WriteEvent::Complete { bytes }),
-        Ok(WriteOutcome::NonFatalShortWrite(bytes)) => Ok(WriteEvent::Closed { bytes }),
-        Err(err) if err.is_nonfatal_write() => Ok(WriteEvent::Closed { bytes: 0 }),
-        Err(err) => Err(err),
-    }
 }
 
 fn consume_stream_files(

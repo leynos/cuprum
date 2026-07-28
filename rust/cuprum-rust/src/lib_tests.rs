@@ -5,12 +5,12 @@ use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::errors::PumpError;
-use crate::io_utils::read_stream;
+use crate::io_utils::{classify_write, read_stream};
 use crate::pump_machine::WriteEvent;
 use crate::test_support::{fd_is_open, make_pipe, read_all_from, write_all_to};
 use crate::tracing_capture::capture;
 use crate::{
-    BufferSize, classify_write, consume_stream_files, pump_stream_files_readwrite, stream_from_raw,
+    BufferSize, consume_stream_files, pump_stream_files_readwrite, stream_from_raw,
     with_borrowed_reader,
 };
 use rstest::{fixture, rstest};
