@@ -444,9 +444,9 @@ rather than gating the acceleration work.
 ### 8.1. Close the Rust pump file-descriptor close race
 
 This step aims to remove a silent failure the baseline observed on the shipped
-pump path. See tee-hotpath-profiling-baseline-2026-06-12.md §"Incidental findings"
-item 1, adr-002-additional-rust-components.md (FD ownership risk), and issue
-`#124`.
+pump path. See tee-hotpath-profiling-baseline-2026-06-12.md §"Incidental
+findings" item 1 and adr-002-additional-rust-components.md (FD ownership risk).
+No dedicated issue tracks this shutdown race yet; it remains outstanding.
 
 The panic-unwind FD ownership hazard tracked under `#125` is **resolved**.
 `with_borrowed_reader` now wraps the borrowed reader in `ManuallyDrop`, so a
@@ -456,8 +456,7 @@ caller-owned reader FD stays open on both success and panic-unwind;
 survives both normal and panicking operations.
 
 - [ ] 8.1.1. Fix the silent `OSError: [Errno 9] Bad file descriptor` raised from
-  `_UnixWritePipeTransport._call_connection_lost` during Rust pump shutdown
-  (`#124`).
+  `_UnixWritePipeTransport._call_connection_lost` during Rust pump shutdown.
   - Success: the `echo-devnull-nocb-s4-rust` scenario logs no bad-FD errors
     across repeated runs, FD ownership at pump teardown is documented, and a
     regression test reproduces the close race and asserts clean shutdown.
