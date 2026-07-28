@@ -14,17 +14,11 @@ import pytest
 
 from tests.helpers.docs import repo_root
 from tests.helpers.maturin import (
-    _AARCH64_CONTAINER_PIN_RE,
-    _AARCH64_CONTAINER_USAGE_RE,
     MaturinBuildError,
     build_native_wheel_artifact,
     maturin_script_locatable,
-    read_expected_maturin_version,
-    read_manylinux_aarch64_container_ref,
-    read_maturin_pins,
     toolchain_available,
     wheel_build_snapshot,
-    workflow_uses_manylinux_aarch64_container_ref,
 )
 
 if typ.TYPE_CHECKING:
@@ -34,14 +28,90 @@ if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
 
+_MATURIN_PIN_RE = re.compile(r"maturin==(\d+\.\d+\.\d+)")
+_WORKFLOW_PIN_RE = re.compile(r'MATURIN_VERSION:\s*"(\d+\.\d+\.\d+)"')
+_ACTION_PIN_RE = re.compile(r'default:\s*"(\d+\.\d+\.\d+)"')
+_AARCH64_CONTAINER_PIN_RE = re.compile(
+    r"^\s*MANYLINUX_AARCH64_CONTAINER:\s*([^\s#]+)\s+#\s*\S.*$",
+    re.MULTILINE,
+)
+_AARCH64_CONTAINER_USAGE_RE = re.compile(
+    r"^\s*container:\s*\$\{\{\s*env\.MANYLINUX_AARCH64_CONTAINER\s*\}\}\s*$",
+    re.MULTILINE,
+)
 _MANYLINUX_CONTAINER_SHA256_RE = re.compile(
     r"^ghcr\.io/rust-cross/manylinux_2_28-cross@sha256:[0-9a-f]{64}$"
 )
 
 
+def _require_pin_match(
+    match: re.Match[str] | None,
+    location: str,
+    *,
+    subject: str = "maturin version pin",
+) -> str:
+    """Return the captured version from a pin match or raise with the location."""
+    if match is None:
+        msg = f"Could not locate {subject} in {location}"
+        raise AssertionError(msg)
+    return match.group(1)
+
+
+def _read_text(root: pth.Path, relative: str) -> str:
+    """Read a repository-relative UTF-8 text file."""
+    return (root / relative).read_text(encoding="utf-8")
+
+
+def _read_expected_maturin_version(root: pth.Path) -> str:
+    """Read the maturin version pinned as the dev dependency in pyproject.toml."""
+    return _require_pin_match(
+        _MATURIN_PIN_RE.search(_read_text(root, "pyproject.toml")),
+        "pyproject.toml",
+    )
+
+
+def _read_maturin_pins(root: pth.Path) -> dict[str, str]:
+    """Read the maturin version pins from every synchronised location."""
+    return {
+        "pyproject.toml": _require_pin_match(
+            _MATURIN_PIN_RE.search(_read_text(root, "pyproject.toml")),
+            "pyproject.toml",
+        ),
+        "build-wheels.yml": _require_pin_match(
+            _WORKFLOW_PIN_RE.search(
+                _read_text(root, ".github/workflows/build-wheels.yml"),
+            ),
+            ".github/workflows/build-wheels.yml",
+        ),
+        "build-wheels/action.yml": _require_pin_match(
+            _ACTION_PIN_RE.search(
+                _read_text(root, ".github/actions/build-wheels/action.yml"),
+            ),
+            ".github/actions/build-wheels/action.yml",
+        ),
+    }
+
+
+def _read_manylinux_aarch64_container_ref(root: pth.Path) -> str:
+    """Read the pinned manylinux aarch64 container reference from the workflow."""
+    return _require_pin_match(
+        _AARCH64_CONTAINER_PIN_RE.search(
+            _read_text(root, ".github/workflows/build-wheels.yml"),
+        ),
+        ".github/workflows/build-wheels.yml",
+        subject="MANYLINUX_AARCH64_CONTAINER pin",
+    )
+
+
+def _workflow_uses_manylinux_aarch64_container_ref(root: pth.Path) -> bool:
+    """Report whether the workflow references the pinned manylinux container."""
+    workflow = _read_text(root, ".github/workflows/build-wheels.yml")
+    return _AARCH64_CONTAINER_USAGE_RE.search(workflow) is not None
+
+
 def test_maturin_pins_are_synchronized() -> None:
     """Maturin version pins stay aligned across CI and dev dependencies."""
-    pins = read_maturin_pins(repo_root())
+    pins = _read_maturin_pins(repo_root())
     assert len(set(pins.values())) == 1, f"Expected one maturin pin, found {pins!r}"
 
 
@@ -49,7 +119,7 @@ def test_installed_maturin_matches_expected_pin() -> None:
     """The active maturin CLI matches the pinned development dependency."""
     if shutil.which("maturin") is None:
         pytest.skip("maturin is not installed.")
-    expected = read_expected_maturin_version(repo_root())
+    expected = _read_expected_maturin_version(repo_root())
     installed = im.version("maturin")
     assert installed == expected, (
         f"Expected maturin {expected}, but {installed} is installed"
@@ -134,7 +204,7 @@ def test_maturin_script_locatable_matches_windows_exe_launcher(
 
 def test_manylinux_aarch64_container_is_pinned_to_sha256() -> None:
     """Aarch64 manylinux container pin must be immutable."""
-    container_ref = read_manylinux_aarch64_container_ref(repo_root())
+    container_ref = _read_manylinux_aarch64_container_ref(repo_root())
     assert _MANYLINUX_CONTAINER_SHA256_RE.fullmatch(container_ref), (
         f"Expected SHA-256 pinned container ref, found {container_ref!r}"
     )
@@ -142,7 +212,7 @@ def test_manylinux_aarch64_container_is_pinned_to_sha256() -> None:
 
 def test_manylinux_aarch64_container_is_referenced_by_build_step() -> None:
     """The build job should consume the pinned aarch64 container variable."""
-    assert workflow_uses_manylinux_aarch64_container_ref(repo_root()), (
+    assert _workflow_uses_manylinux_aarch64_container_ref(repo_root()), (
         "Expected build-wheels.yml to reference env.MANYLINUX_AARCH64_CONTAINER"
     )
 
@@ -295,7 +365,7 @@ def test_maturin_wheel_build_snapshot(
 ) -> None:
     """Native wheel metadata and layout match the expected maturin output."""
     root = repo_root()
-    expected = read_expected_maturin_version(root)
+    expected = _read_expected_maturin_version(root)
     if not toolchain_available():
         pytest.skip("Rust toolchain unavailable.")
     if not maturin_script_locatable():
