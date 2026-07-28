@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
+import logging
 import typing as typ
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from cuprum import _subprocess_timeout
 from cuprum._subprocess_execution import (
     _drain_stream_consumers,
     _wait_for_exit_code,
@@ -366,5 +368,156 @@ def test_non_positive_timeout_terminates_running_process() -> None:
             "the process must be terminated when a non-positive deadline expires, "
             f"but returncode={process.returncode}"
         )
+
+    asyncio.run(run_case())
+
+
+_TIMEOUT_LOGGER = "cuprum.timeout"
+
+
+def _single_timeout_record(
+    caplog: pytest.LogCaptureFixture,
+    level: int,
+) -> logging.LogRecord:
+    """Return the sole ``cuprum.timeout`` record at ``level``, asserting uniqueness."""
+    records = [
+        record
+        for record in caplog.records
+        if record.name == _TIMEOUT_LOGGER and record.levelno == level
+    ]
+    assert len(records) == 1, (
+        f"expected exactly one {_TIMEOUT_LOGGER} record at level {level}, got "
+        f"{[(rec.levelno, rec.getMessage()) for rec in records]}"
+    )
+    return records[0]
+
+
+def test_ordinary_timeout_expiry_logs_elapsed_diagnostic(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An elapsed wall-clock deadline emits a structured ``cuprum.timeout`` warning.
+
+    The diagnostic must carry stable ``cuprum_*`` fields keyed for observability
+    integrations, including ``mode="elapsed"`` to distinguish an elapsed deadline
+    from an immediate non-positive expiry.
+    """
+
+    async def run_case() -> None:
+        """Let a positive deadline elapse and expect a timeout."""
+        process = _TimeoutWaitProcess()
+        execution = _DeadlineExecution(
+            ctx=ExecutionContext(cancel_grace=0.1), timeout=0.05
+        )
+
+        with pytest.raises(TimeoutError):
+            await _wait_for_exit_code_within_timeout(
+                typ.cast("asyncio.subprocess.Process", process),
+                typ.cast("_SubprocessExecution", execution),
+            )
+
+    with caplog.at_level(logging.WARNING, logger=_TIMEOUT_LOGGER):
+        asyncio.run(run_case())
+
+    fields = vars(_single_timeout_record(caplog, logging.WARNING))
+    assert fields["cuprum_timeout_mode"] == "elapsed"
+    assert fields["cuprum_operation"] == "wait"
+    assert fields["cuprum_pid"] == 4321
+    assert fields["cuprum_timeout_s"] == 0.05
+    assert fields["cuprum_error_type"] == "TimeoutError"
+
+
+def test_non_positive_timeout_logs_immediate_diagnostic(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The non-positive fast path emits a diagnostic tagged ``mode="immediate"``."""
+
+    async def run_case() -> None:
+        """Trigger the immediate fast path against an already-exited process."""
+        process = _ExitedProcess()
+        execution = _DeadlineExecution(ctx=ExecutionContext(), timeout=0)
+
+        with pytest.raises(TimeoutError):
+            await _wait_for_exit_code_within_timeout(
+                typ.cast("asyncio.subprocess.Process", process),
+                typ.cast("_SubprocessExecution", execution),
+            )
+
+    with caplog.at_level(logging.WARNING, logger=_TIMEOUT_LOGGER):
+        asyncio.run(run_case())
+
+    fields = vars(_single_timeout_record(caplog, logging.WARNING))
+    assert fields["cuprum_timeout_mode"] == "immediate"
+    assert fields["cuprum_operation"] == "wait"
+    assert fields["cuprum_pid"] == 5678
+    assert fields["cuprum_timeout_s"] == 0
+    assert fields["cuprum_error_type"] == "TimeoutError"
+
+
+def test_teardown_drain_failure_logs_diagnostic(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A consumer draining with an unexpected error emits a teardown diagnostic.
+
+    The failure is absorbed to preserve the primary timeout/cancellation, but it
+    must still surface through a structured ``cuprum.timeout`` error record with
+    ``teardown_outcome="drain_error"`` and the offending error class.
+    """
+
+    async def failing_consumer() -> str | None:
+        """Block until cancelled, then fail during cleanup instead of cancelling."""
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            msg = "consumer boom"
+            raise ValueError(msg) from None
+        return None
+
+    async def run_case() -> None:
+        """Drain a consumer that surfaces a non-cancellation error on teardown."""
+        consumer = asyncio.create_task(failing_consumer())
+        completed = asyncio.create_task(asyncio.sleep(0, result="stderr"))
+        # Let the consumer reach its await before the drain cancels it, so its
+        # cancellation handler runs and surfaces a ValueError rather than a plain
+        # CancelledError during the drain.
+        await asyncio.sleep(0)
+
+        await _drain_stream_consumers((consumer, completed), pid=5678)
+
+    with caplog.at_level(logging.ERROR, logger=_TIMEOUT_LOGGER):
+        asyncio.run(run_case())
+
+    fields = vars(_single_timeout_record(caplog, logging.ERROR))
+    assert fields["cuprum_operation"] == "teardown"
+    assert fields["cuprum_teardown_outcome"] == "drain_error"
+    assert fields["cuprum_pid"] == 5678
+    assert "ValueError" in fields["cuprum_error_type"]
+
+
+def test_timeout_logging_failure_does_not_mask_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A telemetry failure must never replace the ``TimeoutError`` it describes.
+
+    Even if the diagnostic logger raises, the immediate fast path must still
+    propagate ``TimeoutError``; the best-effort emission swallows its own errors.
+    """
+
+    def boom(*_args: object, **_kwargs: object) -> typ.NoReturn:
+        """Simulate a logging handler that raises."""
+        msg = "handler exploded"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(_subprocess_timeout._LOGGER, "log", boom)
+
+    async def run_case() -> None:
+        """Expire immediately while the logger is sabotaged to raise."""
+        process = _ExitedProcess()
+        execution = _DeadlineExecution(ctx=ExecutionContext(), timeout=0)
+
+        with pytest.raises(TimeoutError):
+            await _wait_for_exit_code_within_timeout(
+                typ.cast("asyncio.subprocess.Process", process),
+                typ.cast("_SubprocessExecution", execution),
+            )
 
     asyncio.run(run_case())
