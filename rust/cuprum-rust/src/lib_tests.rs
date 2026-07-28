@@ -1,11 +1,12 @@
 //! Tests for the borrowed file-descriptor ownership contract.
 
 use std::io::Read;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use crate::io_utils::read_stream;
 use crate::test_support::{fd_is_open, make_pipe, write_all_to};
-use crate::with_borrowed_reader;
+use crate::{stream_from_raw, with_borrowed_reader};
 use rstest::{fixture, rstest};
 
 struct BorrowedReaderPipe {
@@ -53,6 +54,29 @@ fn borrowed_reader_stays_open_after_operation(
 
     assert!(fd_is_open(raw_fd), "the borrowed FD must remain open");
     drop(read_end);
+}
+
+#[rstest]
+fn stream_from_raw_owns_and_reads_the_descriptor() {
+    let (read_end, write_end) = make_pipe();
+    write_all_to(&write_end, b"pong");
+    drop(write_end);
+
+    // Transfer ownership of the read descriptor into the constructed handle
+    // exactly once, then read the pending bytes back through it.
+    let raw_fd = read_end.into_raw_fd();
+    let mut handle = stream_from_raw(raw_fd);
+    let mut buffer = [0_u8; 8];
+
+    let read_len = match read_stream(&mut handle, &mut buffer) {
+        Ok(read_len) => read_len,
+        Err(err) => panic!("read through stream_from_raw handle failed: {err:?}"),
+    };
+
+    assert_eq!(buffer.get(..read_len), Some(&b"pong"[..]));
+    // Dropping `handle` closes the owned descriptor.
+    drop(handle);
+    assert!(!fd_is_open(raw_fd), "the owned FD must be closed on drop");
 }
 
 fn assert_panicking_reader_keeps_fd_open(raw_fd: i32) {

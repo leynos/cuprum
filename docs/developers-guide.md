@@ -1130,6 +1130,20 @@ Behavioural tests in the module cover full pipe-to-pipe transfer, the fallback
 signal for regular files, broken-pipe draining, the drain's EOF termination,
 and the syscall-level `EINTR` retry.
 
+The read/write fallback's write half routes through `io_utils::write_all_unix`,
+whose partial-write loop is factored into `write_all_unix_with` — the injectable
+write seam mirroring `read_raw_fd_with`. Unit tests drive it over a scripted
+single-write operation so the write policy is exercised deterministically
+without real descriptors: interrupted writes (`EINTR`) retry, zero progress
+raises `WriteZero`, partial writes accumulate, over-long progress surfaces
+`BufferRangeExceeded`, non-fatal short writes (broken pipe / connection reset)
+report the bytes transferred so far, and other errors propagate. Proptests
+confirm `PumpError::is_nonfatal_write` and `map_short_write_error` suppress
+exactly `BrokenPipe`/`ConnectionReset` while preserving the accepted byte total.
+These raw-fd helpers live in the `io_utils` directory module (`io_utils/mod.rs`,
+with tests in `io_utils/tests.rs`), split from the former single file to stay
+within the per-module line cap.
+
 The path emits bounded `tracing` diagnostics at the three boundaries operators
 need visibility into: support detection logs a `debug` event when the
 descriptors cannot splice and the read/write fallback takes over; the

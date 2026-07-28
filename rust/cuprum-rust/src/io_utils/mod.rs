@@ -137,36 +137,50 @@ fn read_raw_fd_with(
 }
 
 #[cfg(unix)]
-fn write_all_unix(writer: &StreamHandle, mut chunk: &[u8]) -> Result<WriteOutcome, PumpError> {
+fn write_all_unix(writer: &StreamHandle, chunk: &[u8]) -> Result<WriteOutcome, PumpError> {
+    let fd = writer.as_raw_fd();
+    write_all_unix_with(chunk, |buffer| {
+        // SAFETY: `buffer` is valid for reads of `buffer.len()` bytes, and
+        // `fd` stays valid for the duration of this call.
+        let written =
+            unsafe { libc::write(fd, buffer.as_ptr().cast::<libc::c_void>(), buffer.len()) };
+        if written >= 0 {
+            Ok(written)
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    })
+}
+
+/// Drive the partial-write loop over an injectable single-write operation.
+///
+/// `write_once` receives the still-unwritten tail and returns the number of
+/// bytes accepted (never negative) or the raw `io::Error`. This mirrors
+/// [`read_raw_fd_with`] so the write policy — `EINTR` retries, zero-progress
+/// detection, and non-fatal broken-pipe short writes — can be verified without
+/// real descriptors.
+#[cfg(unix)]
+fn write_all_unix_with(
+    mut chunk: &[u8],
+    mut write_once: impl FnMut(&[u8]) -> Result<libc::ssize_t, io::Error>,
+) -> Result<WriteOutcome, PumpError> {
     let mut total_written = 0_u64;
 
     while !chunk.is_empty() {
-        // SAFETY: `chunk` is valid for reads of `chunk.len()` bytes, and
-        // `writer` owns a valid descriptor for the duration of this call.
-        let written = unsafe {
-            libc::write(
-                writer.as_raw_fd(),
-                chunk.as_ptr().cast::<libc::c_void>(),
-                chunk.len(),
-            )
-        };
-
-        if written > 0 {
-            let written_len = usize::try_from(written).map_err(|_| PumpError::LengthOverflow)?;
-            record_write_progress(&mut chunk, written_len, &mut total_written)?;
-            continue;
-        }
-
-        if written == 0 {
-            return Err(PumpError::from(io::Error::new(
-                io::ErrorKind::WriteZero,
-                "failed to write whole buffer",
-            )));
-        }
-
-        let err = io::Error::last_os_error();
-        if err.kind() != io::ErrorKind::Interrupted {
-            return map_short_write_error(err, total_written);
+        match write_once(chunk) {
+            Ok(written) if written > 0 => {
+                let written_len =
+                    usize::try_from(written).map_err(|_| PumpError::LengthOverflow)?;
+                record_write_progress(&mut chunk, written_len, &mut total_written)?;
+            }
+            Ok(_) => {
+                return Err(PumpError::from(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to write whole buffer",
+                )));
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => return map_short_write_error(err, total_written),
         }
     }
 
@@ -223,137 +237,4 @@ fn map_short_write_error(err: io::Error, total_written: u64) -> Result<WriteOutc
 }
 
 #[cfg(all(test, unix))]
-mod tests {
-    //! Direct tests for descriptor-backed I/O helper contracts.
-
-    use std::io;
-    use std::os::fd::{AsRawFd, OwnedFd};
-
-    use super::{
-        PumpError, WriteOutcome, handle_write, handle_write_result, map_short_write_error,
-        read_raw_fd, read_raw_fd_with, read_stream,
-    };
-    use crate::test_support::{make_pipe, unwrap_err, unwrap_ok, write_all_to};
-
-    #[test]
-    fn read_stream_reads_pipe_bytes() {
-        let (mut read_end, write_end) = make_pipe();
-        write_all_to(&write_end, b"chunk");
-        drop(write_end);
-        let mut buffer = [0_u8; 8];
-
-        let read_len = unwrap_ok(read_stream(&mut read_end, &mut buffer));
-
-        assert_eq!(read_len, 5);
-        assert_eq!(buffer.get(..read_len), Some(&b"chunk"[..]));
-    }
-
-    #[test]
-    fn read_stream_reports_unreadable_descriptor() {
-        let (_read_end, mut write_end) = make_pipe();
-        let mut buffer = [0_u8; 8];
-
-        let err = unwrap_err(read_stream(&mut write_end, &mut buffer));
-
-        assert!(matches!(err, PumpError::Io(_)));
-    }
-
-    #[test]
-    fn read_raw_fd_reports_eof() {
-        let (read_end, write_end) = make_pipe();
-        drop(write_end);
-        let mut buffer = [0_u8; 8];
-
-        let read_len = unwrap_ok(read_raw_fd(read_end.as_raw_fd(), &mut buffer));
-
-        assert_eq!(read_len, 0);
-    }
-
-    #[test]
-    fn read_raw_fd_retries_after_interruption() {
-        let mut attempts = 0_u8;
-
-        let read_len = unwrap_ok(read_raw_fd_with(|| {
-            attempts = attempts.saturating_add(1);
-            if attempts == 1 {
-                return Err(io::Error::from(io::ErrorKind::Interrupted));
-            }
-            Ok(0)
-        }));
-
-        assert_eq!(read_len, 0);
-        assert_eq!(attempts, 2);
-    }
-
-    #[test]
-    fn handle_write_returns_complete_outcome() {
-        let (read_end, mut write_end) = make_pipe();
-
-        let outcome = unwrap_ok(handle_write(&mut write_end, b"chunk"));
-
-        assert_eq!(outcome, WriteOutcome::Complete(5));
-        drop(read_end);
-    }
-
-    #[test]
-    fn handle_write_reports_unwritable_descriptor() {
-        let (mut read_end, _write_end) = make_pipe();
-
-        let err = unwrap_err(handle_write(&mut read_end, b"chunk"));
-
-        assert!(matches!(err, PumpError::Io(_)));
-    }
-
-    /// Call [`handle_write_result`] with `b"chunk"` starting from
-    /// `initial_total` and return both the call's result and the
-    /// (possibly updated) total.
-    fn run_handle_write_result(
-        writer: &mut OwnedFd,
-        initial_total: u64,
-    ) -> (Result<bool, PumpError>, u64) {
-        let mut total_written = initial_total;
-        let result = handle_write_result(writer, b"chunk", &mut total_written);
-        (result, total_written)
-    }
-
-    #[test]
-    fn handle_write_result_updates_total_on_success() {
-        let (read_end, mut write_end) = make_pipe();
-
-        let (result, total_written) = run_handle_write_result(&mut write_end, 7);
-
-        assert!(unwrap_ok(result));
-        assert_eq!(total_written, 12);
-        drop(read_end);
-    }
-
-    #[test]
-    fn handle_write_result_preserves_total_on_fatal_error() {
-        let (mut read_end, _write_end) = make_pipe();
-
-        let (result, total_written) = run_handle_write_result(&mut read_end, 7);
-
-        assert!(matches!(unwrap_err(result), PumpError::Io(_)));
-        assert_eq!(total_written, 7);
-    }
-
-    #[test]
-    fn nonfatal_short_write_records_accepted_bytes() {
-        let outcome = unwrap_ok(map_short_write_error(
-            io::Error::from(io::ErrorKind::BrokenPipe),
-            3,
-        ));
-
-        assert_eq!(outcome, WriteOutcome::NonFatalShortWrite(3));
-    }
-
-    #[test]
-    fn fatal_short_write_errors_propagate() {
-        let err = unwrap_err(map_short_write_error(
-            io::Error::from(io::ErrorKind::PermissionDenied),
-            3,
-        ));
-
-        assert!(matches!(err, PumpError::Io(_)));
-    }
-}
+mod tests;
