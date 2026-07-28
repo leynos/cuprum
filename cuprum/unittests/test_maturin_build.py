@@ -98,6 +98,35 @@ def test_maturin_script_locatable_false_when_script_absent(
     assert not maturin_script_locatable()
 
 
+def test_maturin_script_locatable_matches_windows_exe_launcher(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detection accepts ``maturin.exe``, the real launcher on Windows.
+
+    Matching is stem-based on purpose: maturin's own ``get_maturin_path``
+    compares ``os.path.splitext(f)[0]`` against ``"maturin"``, so it accepts
+    any extension. On the ``windows-2022`` wheel target in
+    ``.github/workflows/build-wheels.yml`` the installed launcher *is*
+    ``maturin.exe``. Narrowing this to an exact ``maturin`` filename would
+    make the probe report unavailable on Windows and silently skip the
+    native-wheel contract there, so this test pins the mirrored behaviour.
+    """
+    scripts_dir = tmp_path / "Scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "maturin.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(
+        "tests.helpers.maturin.sysconfig.get_scheme_names", lambda: ("nt",)
+    )
+    monkeypatch.setattr(
+        "tests.helpers.maturin.sysconfig.get_path", lambda *_a, **_k: str(scripts_dir)
+    )
+
+    assert maturin_script_locatable(), (
+        "stem-based matching must accept maturin.exe, the Windows launcher"
+    )
+
+
 def test_manylinux_aarch64_container_is_pinned_to_sha256() -> None:
     """Aarch64 manylinux container pin must be immutable."""
     container_ref = read_manylinux_aarch64_container_ref(repo_root())

@@ -29,6 +29,32 @@ _DIST_INFO_SUFFIXES: dict[str, str] = {
 }
 
 
+class WheelMetadata(typ.TypedDict):
+    """Normalised ``.dist-info/METADATA`` fields captured in the snapshot."""
+
+    name: str | None
+    version: str | None
+    requires_python: str | None
+    requires_dist: list[str]
+    classifiers: list[str]
+
+
+class WheelHeaders(typ.TypedDict):
+    """Normalised ``.dist-info/WHEEL`` fields captured in the snapshot."""
+
+    root_is_purelib: str
+    tag: str
+
+
+class WheelBuildSnapshot(typ.TypedDict):
+    """Stable snapshot of a built wheel's metadata and layout."""
+
+    generator: str
+    metadata: WheelMetadata
+    wheel: WheelHeaders
+    entries: list[str]
+
+
 def _header_value(headers: dict[str, list[str]], key: str) -> str | None:
     """Return the first header value for the given key, or None if absent."""
     values = headers.get(key)
@@ -37,7 +63,7 @@ def _header_value(headers: dict[str, list[str]], key: str) -> str | None:
     return values[0]
 
 
-def _parse_metadata(raw_metadata: str) -> dict[str, typ.Any]:
+def _parse_metadata(raw_metadata: str) -> WheelMetadata:
     """Parse RFC 2822-style metadata headers into a normalised dict."""
     headers: dict[str, list[str]] = {}
     current_key: str | None = None
@@ -133,7 +159,7 @@ def _parse_wheel_header(wheel_payload: str, whl_path: Path) -> tuple[str, str]:
     return generator_match.group(1), root_is_purelib
 
 
-def wheel_build_snapshot(whl_path: Path) -> dict[str, typ.Any]:
+def wheel_build_snapshot(whl_path: Path) -> WheelBuildSnapshot:
     """Return a normalised snapshot of wheel metadata and layout.
 
     Raises
