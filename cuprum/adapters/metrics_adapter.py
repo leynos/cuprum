@@ -181,6 +181,74 @@ class InMemoryMetrics(_LockedStore):
         self.histograms.clear()
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _CounterOp:
+    """A counter increment the metrics hook intends to apply."""
+
+    name: str
+    value: float
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _HistogramOp:
+    """A histogram observation the metrics hook intends to apply."""
+
+    name: str
+    value: float
+
+
+_MetricOp = _CounterOp | _HistogramOp
+
+# Phases that map to a single unit-counter increment, keyed by event phase.
+_PHASE_COUNTERS: dict[str, str] = {
+    "start": "cuprum_executions_total",
+    "stdout": "cuprum_stdout_lines_total",
+    "stderr": "cuprum_stderr_lines_total",
+    "stdin_error": "cuprum_stdin_errors_total",
+}
+
+
+def _exit_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
+    """Return the failure counter and duration histogram ops for an exit event.
+
+    A failure counter is produced only for a known non-zero exit code, and a
+    duration observation only when a duration was measured; a clean exit with
+    no duration therefore produces nothing.
+    """
+    operations: list[_MetricOp] = []
+    if event.exit_code is not None and event.exit_code != 0:
+        operations.append(_CounterOp("cuprum_failures_total", 1.0))
+    if event.duration_s is not None:
+        operations.append(_HistogramOp("cuprum_duration_seconds", event.duration_s))
+    return tuple(operations)
+
+
+def _metric_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
+    """Map an execution event to the metric operations it should produce.
+
+    This is the pure event-to-operation reducer behind
+    [`MetricsHook.__call__`][cuprum.adapters.metrics_adapter.MetricsHook.__call__]
+    — the single source of truth for which counters and histogram observations
+    each phase yields, so the operations can be verified without a collector.
+    Labels are applied by the caller. ``plan`` yields nothing; a ``stdin`` event
+    without a byte count yields nothing; an unknown phase is a contract
+    violation and raises ``_UnhandledMetricsPhaseError``.
+    """
+    phase = event.phase
+    if phase == "plan":
+        return ()
+    counter_name = _PHASE_COUNTERS.get(phase)
+    if counter_name is not None:
+        return (_CounterOp(counter_name, 1.0),)
+    if phase == "stdin":
+        if event.byte_count is None:
+            return ()
+        return (_CounterOp("cuprum_stdin_bytes_total", float(event.byte_count)),)
+    if phase == "exit":
+        return _exit_operations(event)
+    raise _UnhandledMetricsPhaseError(event.phase)
+
+
 class MetricsHook:
     """Observe hook that collects Prometheus-style metrics.
 
@@ -222,76 +290,31 @@ class MetricsHook:
         self._collector = collector
 
     def __call__(self, event: ExecEvent) -> None:
-        """Process an execution event and update metrics."""
-        match event.phase:
-            case "plan":
-                pass
-            case "start":
-                self._increment(
-                    "cuprum_executions_total",
-                    labels=self._extract_labels(event),
-                )
-            case "stdout":
-                self._increment(
-                    "cuprum_stdout_lines_total",
-                    labels=self._extract_labels(event),
-                )
-            case "stderr":
-                self._increment(
-                    "cuprum_stderr_lines_total",
-                    labels=self._extract_labels(event),
-                )
-            case "stdin_error":
-                self._increment(
-                    "cuprum_stdin_errors_total",
-                    labels=self._extract_labels(event),
-                )
-            case "stdin":
-                self._record_stdin_bytes(event, labels=self._extract_labels(event))
-            case "exit":
-                self._record_exit(event, labels=self._extract_labels(event))
-            case _:
-                raise _UnhandledMetricsPhaseError(event.phase)
+        """Process an execution event and update metrics.
 
-    def _increment(
-        self,
-        name: str,
-        *,
-        labels: cabc.Mapping[str, str],
-        value: float = 1.0,
-    ) -> None:
-        """Increment a counter with the current event labels."""
-        self._collector.inc_counter(name, value, labels)
+        The pure ``_metric_operations`` reducer decides which counters and
+        histograms this event yields; the labels are resolved and applied only
+        when there is at least one operation, so a ``plan`` (or a phaseless
+        no-op) event never computes labels.
+        """
+        operations = _metric_operations(event)
+        if not operations:
+            return
+        labels = self._extract_labels(event)
+        for operation in operations:
+            self._apply(operation, labels)
 
-    def _record_stdin_bytes(
+    def _apply(
         self,
-        event: ExecEvent,
-        *,
+        operation: _MetricOp,
         labels: cabc.Mapping[str, str],
     ) -> None:
-        """Record stdin byte throughput when the event carries a byte count."""
-        if event.byte_count is not None:
-            self._increment(
-                "cuprum_stdin_bytes_total",
-                value=float(event.byte_count),
-                labels=labels,
-            )
-
-    def _record_exit(
-        self,
-        event: ExecEvent,
-        *,
-        labels: cabc.Mapping[str, str],
-    ) -> None:
-        """Record exit-code and duration metrics for an exit event."""
-        if event.exit_code is not None and event.exit_code != 0:
-            self._increment("cuprum_failures_total", labels=labels)
-        if event.duration_s is not None:
-            self._collector.observe_histogram(
-                "cuprum_duration_seconds",
-                event.duration_s,
-                labels,
-            )
+        """Apply one metric operation to the collector with the event labels."""
+        match operation:
+            case _CounterOp(name=name, value=value):
+                self._collector.inc_counter(name, value, labels)
+            case _HistogramOp(name=name, value=value):
+                self._collector.observe_histogram(name, value, labels)
 
     @staticmethod
     def _extract_labels(event: ExecEvent) -> dict[str, str]:
