@@ -2152,8 +2152,10 @@ length-conversion overflow, so no fatal boundary stays silent.
 created at `error` level — so `warn`/`error` events keep their context under a
 `warn`/`error`-only production filter, where an `info` span would be disabled.
 The span carries `operation` and `buffer_size` and, on completion, records
-`total_bytes` plus the cumulative `EINTR` `read_retries` and `write_retries`.
-Those retry counts accumulate in operation-scoped thread-local counters that the
+`total_bytes` plus the cumulative `EINTR` retry counts: `pump_stream_readwrite`
+records both `read_retries` and `write_retries`, while the read-only
+`consume_stream` records `read_retries` alone. Those retry counts accumulate in
+operation-scoped thread-local counters that the
 loops reset at operation start (keeping the seams parameter-free). See the
 developers' guide for the full contract.
 

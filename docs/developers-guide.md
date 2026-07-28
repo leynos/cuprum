@@ -1164,8 +1164,10 @@ fatal read/write failure, a zero-progress write, or a length-conversion
 overflow — so no fatal boundary stays silent. The `pump_stream_readwrite` and
 `consume_stream` loops wrap these seams in an operation span
 (`io_utils::operation_span`) that carries the `operation` and `buffer_size` and,
-on completion, records `total_bytes` and the cumulative `EINTR`
-`read_retries`/`write_retries` counts as structured fields. The retry counts are
+on completion, records `total_bytes` and the cumulative `EINTR` retry counts as
+structured fields. `pump_stream_readwrite` reads and writes, so it records both
+`read_retries` and `write_retries`; `consume_stream` only reads, so it records
+`read_retries` alone (`write_retries` stays unset). The retry counts are
 accumulated in operation-scoped thread-local counters that
 `pump_stream_readwrite` and `consume_stream` explicitly reset at operation start
 (right after entering the span, via `io_utils::reset_retry_counters`;

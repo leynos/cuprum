@@ -127,6 +127,38 @@ fn error_filter_keeps_read_overflow_context() {
     );
 }
 
+#[test]
+fn debug_filter_captures_successful_read_event() {
+    let captured = capture(Level::DEBUG, || {
+        // A successful read logs a `debug` event with the byte count and
+        // platform.
+        let outcome = read_raw_fd_with(|| Ok(4));
+        assert!(outcome.is_ok(), "the injected read should succeed");
+    });
+
+    assert!(
+        captured.event_has_fields(Level::DEBUG, &["bytes", "platform"]),
+        "a successful read must log a debug event carrying bytes + platform",
+    );
+}
+
+#[test]
+fn debug_filter_captures_successful_write_event() {
+    let captured = capture(Level::DEBUG, || {
+        // A completed write logs a `debug` event with the byte count and
+        // platform.
+        let outcome = write_all_unix_with(b"data", |chunk| {
+            libc::ssize_t::try_from(chunk.len()).map_err(|_| io::Error::from(io::ErrorKind::Other))
+        });
+        assert!(outcome.is_ok(), "the injected write should succeed");
+    });
+
+    assert!(
+        captured.event_has_fields(Level::DEBUG, &["bytes", "platform"]),
+        "a successful write must log a debug event carrying bytes + platform",
+    );
+}
+
 proptest! {
     /// The read counter equals the number of `EINTR` retries for any sequence
     /// of interruptions before the final successful read.

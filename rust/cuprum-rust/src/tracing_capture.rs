@@ -49,6 +49,7 @@ impl Captured {
     }
 }
 
+/// Mutable state shared between the subscriber and the returned [`Captured`].
 #[derive(Default)]
 struct CaptureState {
     span_fields: HashMap<u64, BTreeMap<String, String>>,
@@ -57,6 +58,7 @@ struct CaptureState {
     events: Vec<CapturedEvent>,
 }
 
+/// Visitor that records each field's name and stringified value into a map.
 struct FieldVisitor<'a>(&'a mut BTreeMap<String, String>);
 
 impl Visit for FieldVisitor<'_> {
@@ -81,11 +83,13 @@ impl Visit for FieldVisitor<'_> {
     }
 }
 
+/// Subscriber that records events and span fields up to a maximum level.
 struct FilterCapture {
     max_level: Level,
     state: Arc<Mutex<CaptureState>>,
 }
 
+/// Lock the shared state, recovering the guard if a previous holder panicked.
 fn lock(state: &Arc<Mutex<CaptureState>>) -> MutexGuard<'_, CaptureState> {
     state.lock().unwrap_or_else(PoisonError::into_inner)
 }

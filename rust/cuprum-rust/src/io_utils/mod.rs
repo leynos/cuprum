@@ -39,10 +39,12 @@ pub(crate) fn write_retry_count() -> u64 {
     WRITE_RETRIES.with(Cell::get)
 }
 
+/// Increment the current operation's read-path `EINTR` retry counter.
 fn record_read_retry() {
     READ_RETRIES.with(|counter| counter.set(counter.get().saturating_add(1)));
 }
 
+/// Increment the current operation's write-path `EINTR` retry counter.
 fn record_write_retry() {
     WRITE_RETRIES.with(|counter| counter.set(counter.get().saturating_add(1)));
 }
