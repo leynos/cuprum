@@ -101,18 +101,17 @@ _TEXTS: tuple[str | None, ...] = (None, "carried", "fallback")
 
 
 def _carried_payload_wins(
-    timeout_pick: int,
-    stdout_pick: int,
-    stderr_pick: int,
-    exited_pick: int,
-    fallback_pick: int,
+    carried_picks: tuple[int, int, int, int], fb_pick: int
 ) -> bool:
     """Report whether a carried payload is returned verbatim.
 
-    The fallback deliberately carries different values and a ``None``
-    configured timeout: a resolver that consulted it would either return the
-    wrong field or raise.
+    ``carried_picks`` indexes the enumerated domains in field order —
+    ``(timeout, stdout, stderr, exited_at)`` — keeping the four values that
+    describe one payload together. The fallback deliberately carries different
+    values and a ``None`` configured timeout: a resolver that consulted it
+    would either return the wrong field or raise.
     """
+    timeout_pick, stdout_pick, stderr_pick, exited_pick = carried_picks
     carried = _SubprocessTimeoutDetails(
         timeout=_TIMES[timeout_pick],
         stdout=_TEXTS[stdout_pick],
@@ -123,9 +122,9 @@ def _carried_payload_wins(
         _SubprocessTimeoutError(carried),
         _TimeoutFallback(
             configured_timeout=None,
-            stdout=_TEXTS[fallback_pick],
-            stderr=_TEXTS[fallback_pick],
-            exited_at=_TIMES[fallback_pick],
+            stdout=_TEXTS[fb_pick],
+            stderr=_TEXTS[fb_pick],
+            exited_at=_TIMES[fb_pick],
         ),
     )
     return (
@@ -183,27 +182,38 @@ def _done_flags(stage_count: int, mask: int) -> list[bool]:
     return [bool((mask >> idx) & 1) for idx in range(stage_count)]
 
 
-def _selection_is_well_formed(stage_count: int, failure_index: int, mask: int) -> bool:
-    """Report whether the selection is in range, unique, ordered, and correct."""
-    done = _done_flags(stage_count, mask)
-    selected = _stages_to_terminate(failure_index, done)
+def _selection_shape_is_valid(selected: list[int], stage_count: int) -> bool:
+    """Report whether the selection is in range, free of repeats, and ordered."""
+    return (
+        all(0 <= idx < stage_count for idx in selected)
+        and len(selected) == len(set(selected))
+        and selected == sorted(selected)
+    )
 
-    in_range = all(0 <= idx < stage_count for idx in selected)
-    unique = len(selected) == len(set(selected))
-    ordered = selected == sorted(selected)
-    excludes_failure = failure_index not in selected
-    only_unfinished = all(done[idx] is False for idx in selected)
+
+def _selection_membership_is_exact(
+    selected: list[int],
+    failure_index: int,
+    done: list[bool],
+) -> bool:
+    """Report whether the selection is exactly the unfinished, non-failed set."""
     expected = [
-        idx for idx in range(stage_count) if idx != failure_index and not done[idx]
+        idx for idx in range(len(done)) if idx != failure_index and not done[idx]
     ]
     return (
-        in_range
-        and unique
-        and ordered
-        and excludes_failure
-        and only_unfinished
+        failure_index not in selected
+        and all(done[idx] is False for idx in selected)
         and selected == expected
     )
+
+
+def _selection_is_well_formed(stage_count: int, failure_index: int, mask: int) -> bool:
+    """Report whether the selection is well shaped and exactly the right set."""
+    done = _done_flags(stage_count, mask)
+    selected = _stages_to_terminate(failure_index, done)
+    return _selection_shape_is_valid(
+        selected, stage_count
+    ) and _selection_membership_is_exact(selected, failure_index, done)
 
 
 def _selection_is_idempotent(stage_count: int, failure_index: int, mask: int) -> bool:
@@ -217,21 +227,19 @@ def _selection_is_idempotent(stage_count: int, failure_index: int, mask: int) ->
     return _stages_to_terminate(failure_index, settled) == []
 
 
-def _carried_payload_contract(
-    timeout_i: int,
-    out_i: int,
-    err_i: int,
-    exit_i: int,
-    fb_i: int,
-) -> None:
+def _carried_payload_contract(picks: tuple[int, int, int, int], fb_i: int) -> None:
     """CrossHair contract: a carried payload is returned verbatim.
 
-    pre: 0 <= timeout_i <= 2
-    pre: 0 <= out_i <= 2
-    pre: 0 <= err_i <= 2
-    pre: 0 <= exit_i <= 2
+    ``picks`` indexes the carried payload's four fields in order; bounding each
+    element individually preserves exactly the domain the former scalar
+    parameters described.
+
+    pre: 0 <= picks[0] <= 2
+    pre: 0 <= picks[1] <= 2
+    pre: 0 <= picks[2] <= 2
+    pre: 0 <= picks[3] <= 2
     pre: 0 <= fb_i <= 2
-    post: _carried_payload_wins(timeout_i, out_i, err_i, exit_i, fb_i)
+    post: _carried_payload_wins(picks, fb_i)
     """
 
 
