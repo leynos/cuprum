@@ -1277,8 +1277,18 @@ command/query segregation rule:
 `_process_completed_task` is the only caller that joins the two: it reads the
 clock, invokes the command, then acts on the query by awaiting
 `_terminate_pipeline_remaining_stages`. Keeping the I/O there leaves the
-ordering rules as a pure transition that Hypothesis drives directly over
-randomized completion orders.
+ordering rules as a pure transition, which is verified twice over — Hypothesis
+drives randomized completion orders, and CrossHair confirms the same invariants
+symbolically over a bounded model of at most three stages.
+
+Fail-fast is also observable rather than silent. `_process_completed_task`
+emits two structured records, distinguished by a stable `cuprum_action` field:
+`pipeline_stage_first_failure` when a completion newly latches `failure_index`,
+and `pipeline_fail_fast_termination` immediately before termination is awaited.
+Both carry the stage index, exit code, and elapsed duration. The logging lives
+with the runtime concerns for the same reason the clock read does: the command
+and query must stay free of side effects to remain symbolically verifiable. The
+developers' guide documents the fields and the verification commands.
 
 ### 8.3 Parallel Execution (non‑pipeline)
 

@@ -14,6 +14,7 @@ async wiring in `_process_completed_task` that joins the two.
 from __future__ import annotations
 
 import asyncio
+import logging
 import typing as typ
 
 from hypothesis import settings
@@ -348,3 +349,172 @@ class TestProcessCompletedTask:
 
         assert state.failure_index == 2, "the final stage must still latch"
         assert terminations == [], "a failing final stage must not request termination"
+
+
+_FIRST_FAILURE_ACTION = "pipeline_stage_first_failure"
+_TERMINATION_ACTION = "pipeline_fail_fast_termination"
+
+
+def _actions(records: list[logging.LogRecord]) -> list[str]:
+    """Return the ``cuprum_action`` field of each pipeline-wait record."""
+    return [
+        typ.cast("str", record.cuprum_action)
+        for record in records
+        if hasattr(record, "cuprum_action")
+    ]
+
+
+class TestCompletionObservability:
+    """The fail-fast branches emit structured records operators can filter.
+
+    Both records are emitted from `_process_completed_task`, never from the
+    pure command or query, so the transition stays free of runtime side
+    effects. The clock is monkeypatched, so elapsed times are exact rather
+    than dependent on real process timing.
+    """
+
+    @staticmethod
+    def _run(
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        *,
+        stage_count: int,
+        completions: list[tuple[int, int]],
+    ) -> list[logging.LogRecord]:
+        """Drive ``completions`` through the real async boundary, capturing logs.
+
+        Each entry is a ``(stage_index, exit_code)`` pair applied in order.
+        ``started_at`` is zero for every stage and the clock is pinned to 12.5,
+        so an emitted duration is always exactly 12.5.
+        """
+        terminations: list[int] = []
+
+        async def fake_terminate(
+            processes: object,
+            wait_tasks: object,
+            failure_index: int,
+            *,
+            cancel_grace: float,
+        ) -> None:
+            """Record the termination request instead of signalling processes."""
+            del processes, wait_tasks, cancel_grace
+            await asyncio.sleep(0)
+            terminations.append(failure_index)
+
+        monkeypatch.setattr(
+            _pipeline_wait,
+            "_terminate_pipeline_remaining_stages",
+            fake_terminate,
+        )
+        monkeypatch.setattr(_pipeline_wait.time, "perf_counter", lambda: 12.5)
+
+        state = _make_wait_state(stage_count)
+
+        async def drive() -> None:
+            """Apply each completion through ``_process_completed_task``."""
+            for idx, exit_code in completions:
+                task = asyncio.create_task(_immediate(exit_code))
+                await task
+                state.wait_tasks = [task]
+                state.task_to_index = {task: idx}
+                await _pipeline_wait._process_completed_task(task, state, [], 0.25)
+
+        with caplog.at_level(logging.WARNING, logger=_pipeline_wait.__name__):
+            asyncio.run(drive())
+
+        # Termination bookkeeping must stay consistent with the records.
+        expected_terminations = _actions(caplog.records).count(_TERMINATION_ACTION)
+        assert len(terminations) == expected_terminations, (
+            "each fail-fast termination record must accompany exactly one "
+            "termination call"
+        )
+        return caplog.records
+
+    def test_first_non_final_failure_emits_both_records(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A non-final first failure latches and starts fail-fast termination."""
+        records = self._run(
+            monkeypatch,
+            caplog,
+            stage_count=3,
+            completions=[(0, 4)],
+        )
+
+        assert _actions(records) == [_FIRST_FAILURE_ACTION, _TERMINATION_ACTION], (
+            "expected exactly one first-failure record then one termination record"
+        )
+        for record in records:
+            assert record.cuprum_stage_index == 0, "records carry the failing stage"
+            assert record.cuprum_exit_code == 4, "records carry the exit code"
+            assert record.cuprum_duration_s == 12.5, (
+                "records carry the elapsed time from the injected clock"
+            )
+
+    def test_successful_completion_emits_neither_record(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A zero exit is silent: nothing latched, nothing terminated."""
+        records = self._run(
+            monkeypatch,
+            caplog,
+            stage_count=3,
+            completions=[(1, 0)],
+        )
+
+        assert _actions(records) == [], "a successful stage must emit no records"
+
+    def test_final_stage_failure_emits_only_the_first_failure_record(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A failing final stage latches but has nothing left to terminate."""
+        records = self._run(
+            monkeypatch,
+            caplog,
+            stage_count=3,
+            completions=[(2, 1)],
+        )
+
+        assert _actions(records) == [_FIRST_FAILURE_ACTION], (
+            "a failing final stage must not emit a termination record"
+        )
+
+    def test_single_stage_failure_emits_only_the_first_failure_record(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A lone failing stage is also the final stage."""
+        records = self._run(
+            monkeypatch,
+            caplog,
+            stage_count=1,
+            completions=[(0, 9)],
+        )
+
+        assert _actions(records) == [_FIRST_FAILURE_ACTION], (
+            "a single-stage pipeline has no other stage to terminate"
+        )
+
+    def test_later_failure_emits_no_further_records(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Once a failure latches, later failures are not re-reported."""
+        records = self._run(
+            monkeypatch,
+            caplog,
+            stage_count=4,
+            completions=[(0, 1), (1, 1)],
+        )
+
+        assert _actions(records) == [_FIRST_FAILURE_ACTION, _TERMINATION_ACTION], (
+            "fail-fast reporting must fire exactly once per pipeline"
+        )

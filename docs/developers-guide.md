@@ -421,6 +421,74 @@ interpreter whose opcode set the tracer cannot handle
 3.15 betas, issue `#109`); every other failure is re-raised. Supported
 interpreters therefore confirm the contracts rather than skipping them.
 
+### `_pipeline_wait` completion command/query seam
+
+`cuprum/_pipeline_wait.py` splits completion handling on the same
+command-query line, so the fail-fast ordering rules can be verified without
+processes or a clock.
+
+- `_PipelineWaitState.record_completion(completed_idx, exit_code, *, ended_at)`
+  is a **command**. It writes the completed stage's exit code and the injected
+  completion time into that stage's slots, and latches `failure_index` only for
+  the *first* non-zero exit in completion order — completion order, not stage
+  order, so a stage failing earlier in time wins over a lower-indexed stage
+  failing later. It stays deterministic because the caller supplies `ended_at`
+  rather than the method reading the clock.
+- `_PipelineWaitState.should_terminate_others(completed_idx)` is a
+  **side-effect-free query**. It returns `True` only for the latched first
+  failure, and `False` for a final-stage failure because no other pipeline
+  stage needs stopping. It reads state without changing it, so it is safe to
+  call repeatedly and in any order after the command has run.
+- `_process_completed_task(...)` owns the runtime concerns: it reads the clock,
+  invokes the command, emits the structured records described below, and acts
+  on the query by awaiting `_terminate_pipeline_remaining_stages`. Keep logging
+  and I/O here — moving either into the command or the query would break the
+  determinism the symbolic verification depends on.
+
+When that fail-fast path fires it is no longer silent. Two structured records
+are emitted through `logging.getLogger("cuprum._pipeline_wait")`, distinguished
+by a stable `cuprum_action` field and sharing `cuprum_stage_index`,
+`cuprum_exit_code`, and `cuprum_duration_s` (elapsed from the stage's recorded
+start to the injected completion time):
+
+- `pipeline_stage_first_failure` — emitted once, when a completion newly
+  latches `failure_index`.
+- `pipeline_fail_fast_termination` — emitted immediately before termination is
+  awaited.
+
+Neither record is emitted for a successful exit, for a later failure once
+`failure_index` is latched, or — in the termination case — for a final-stage or
+single-stage failure, which have no other stage to stop.
+
+Three verification layers cover this seam; keep all three when changing it:
+
+```bash
+# Hypothesis state machine over randomized completion orders, the async
+# boundary, and the log records.
+uv run pytest -q cuprum/unittests/test_pipeline_wait.py
+
+# CrossHair PEP 316 contracts over the bounded symbolic model.
+uv run pytest -q cuprum/unittests/test_pipeline_wait_crosshair.py -m crosshair
+uv run crosshair check \
+  cuprum/unittests/test_pipeline_wait_crosshair.py \
+  --analysis_kind=PEP316
+```
+
+The symbolic model in `cuprum/unittests/test_pipeline_wait_crosshair.py` is
+bounded on purpose: preconditions cap the pipeline at three stages, exit codes
+at `-2..2`, and timestamps at `0.0..4.0`, and the state is built directly with
+only the fields the pure transition reads, so no asyncio task, subprocess, or
+clock enters the symbolic space. The contracts confirm that a completion writes
+only its own slot, that the first non-zero completion latches `failure_index`
+and a later one does not replace it, that `should_terminate_others` is true
+exactly for a non-final first failure (covering the final-stage and
+single-stage cases), and that repeating the query changes nothing.
+
+That module probes CrossHair at import time through the same shared
+helpers described above, so it degrades to a skip only for a missing
+dependency or an unsupported tracer, and confirms its contracts on every
+supported interpreter.
+
 ## Canonical stream-drain loop
 
 `cuprum._streams._drain(stream, config, *, on_chunk=None)` is the single

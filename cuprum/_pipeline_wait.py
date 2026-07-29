@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
+import logging
 import time
 import typing as typ
 
@@ -15,6 +16,8 @@ from cuprum._process_lifecycle import (
     _cleanup_pipeline_on_error,
     _terminate_pipeline_remaining_stages,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -141,17 +144,97 @@ class _PipelineWaitState:
         )
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _CompletionLogFields:
+    """Structured fields shared by the pipeline-wait completion records."""
+
+    stage_index: int
+    exit_code: int
+    duration_s: float
+
+
+def _completion_log_fields(
+    state: _PipelineWaitState,
+    completed_idx: int,
+    exit_code: int,
+    ended_at: float,
+) -> _CompletionLogFields:
+    """Derive the log fields for a completion, including elapsed time.
+
+    The duration comes from the injected completion time and the stage's
+    recorded start, clamped at zero so a non-monotonic clock reading cannot
+    report a negative elapsed time.
+    """
+    return _CompletionLogFields(
+        stage_index=completed_idx,
+        exit_code=exit_code,
+        duration_s=max(0.0, ended_at - state.started_at[completed_idx]),
+    )
+
+
+def _log_completion_event(
+    action: str,
+    message: str,
+    fields: _CompletionLogFields,
+) -> None:
+    """Emit one structured pipeline-wait record with stable ``cuprum_`` keys.
+
+    ``action`` is the stable event name operators filter on, so the two
+    completion records — latching the first failure and starting fail-fast
+    termination — stay distinguishable even though they share their fields.
+    """
+    _LOGGER.warning(
+        message,
+        fields.stage_index,
+        fields.exit_code,
+        extra={
+            "cuprum_action": action,
+            "cuprum_stage_index": fields.stage_index,
+            "cuprum_exit_code": fields.exit_code,
+            "cuprum_duration_s": fields.duration_s,
+        },
+    )
+
+
 async def _process_completed_task(
     task: asyncio.Task[int],
     state: _PipelineWaitState,
     processes: list[asyncio.subprocess.Process],
     cancel_grace: float,
 ) -> None:
-    """Process a completed wait task, terminating other stages on failure."""
+    """Process a completed wait task, terminating other stages on failure.
+
+    This is where the runtime concerns live: reading the clock, invoking the
+    pure command, acting on the pure query, and emitting the structured records
+    that make fail-fast behaviour observable. Logging stays here deliberately —
+    `record_completion` and `should_terminate_others` must remain a
+    side-effect-free mutation and query so they can be verified symbolically.
+    """
     idx = state.task_to_index[task]
     exit_code = task.result()
-    state.record_completion(idx, exit_code, ended_at=time.perf_counter())
+    ended_at = time.perf_counter()
+
+    # Captured before the command so this completion can be distinguished from
+    # one that merely follows an already-latched failure.
+    had_failure = state.failure_index is not None
+    state.record_completion(idx, exit_code, ended_at=ended_at)
+    latched_first_failure = not had_failure and state.failure_index == idx
+
+    fields = _completion_log_fields(state, idx, exit_code, ended_at)
+
+    if latched_first_failure:
+        _log_completion_event(
+            "pipeline_stage_first_failure",
+            "pipeline stage %d exited %d, latching first failure",
+            fields,
+        )
+
     if state.should_terminate_others(idx):
+        _log_completion_event(
+            "pipeline_fail_fast_termination",
+            "terminating other pipeline stages after stage %d exited %d",
+            fields,
+        )
         await _terminate_pipeline_remaining_stages(
             processes,
             state.wait_tasks,
