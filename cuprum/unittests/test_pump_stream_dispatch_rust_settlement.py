@@ -61,11 +61,14 @@ class _CleanupOrder:
         self.order: list[str] = []
         self._restore = _pipeline_stream_fds._restore_stream_fd_blocking
 
-    def pause(self, reader: asyncio.StreamReader) -> cabc.Callable[[], None]:
+    def pause(self, reader: asyncio.StreamReader) -> _pipeline_stream_fds._ReaderPause:
         """Record pausing and return a completion-owned resume callback."""
         del reader
         self.order.append("pause")
-        return self.resume
+        return _pipeline_stream_fds._ReaderPause(
+            may_hand_off=True,
+            resume=self.resume,
+        )
 
     def resume(self) -> None:
         """Record reader resumption after descriptor restoration."""

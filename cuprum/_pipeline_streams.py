@@ -189,13 +189,38 @@ async def _run_rust_pump(
     writer_fd: int,
 ) -> bool:
     """Run the Rust pump while the executor future owns native cleanup."""
+    handled = await _pump_over_raw_fds(
+        reader=reader,
+        writer=writer,
+        reader_fd=reader_fd,
+        writer_fd=writer_fd,
+    )
+    if not handled:
+        return False
+    # Rust closed only its duplicate, so the transport descriptor is still
+    # valid: close it through asyncio to signal EOF downstream.
+    with contextlib.suppress(OSError):
+        await _close_stream_writer(writer)
+    return True
+
+
+async def _pump_over_raw_fds(
+    *,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter | None,
+    reader_fd: int,
+    writer_fd: int,
+) -> bool:
+    """Transfer a hop after acquiring the reader and descriptor hand-off."""
     # Flush any bytes asyncio already buffered in the StreamReader
     # before the Rust pump takes over the raw file descriptor.
-    resume_reader = _pause_reader_transport(reader)
+    reader_pause = _pause_reader_transport(reader)
+    if not reader_pause.may_hand_off:
+        return False
     try:
         await _drain_reader_buffer(reader, writer)
     except BaseException:
-        _resume_reader_transport(resume_reader)
+        _resume_reader_transport(reader_pause.resume)
         raise
 
     try:
@@ -204,20 +229,16 @@ async def _run_rust_pump(
             writer_fd=writer_fd,
         )
     except (OSError, ValueError):
-        _resume_reader_transport(resume_reader)
+        _resume_reader_transport(reader_pause.resume)
         return False
 
     state = _RustPumpState(
         reader_fd=reader_fd,
         writer_fd=writer_fd,
         blocking_mode_guard=blocking_mode_guard,
-        resume_reader=resume_reader,
+        resume_reader=reader_pause.resume,
     )
     await _run_rust_pump_with_blocking_fds(state=state)
-    # Rust closed only its duplicate, so the transport descriptor is still
-    # valid: close it through asyncio to signal EOF downstream.
-    with contextlib.suppress(OSError):
-        await _close_stream_writer(writer)
     return True
 
 

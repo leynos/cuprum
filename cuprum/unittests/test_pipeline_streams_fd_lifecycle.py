@@ -62,15 +62,31 @@ def test_blocking_guard_round_trips_prior_mode(
 
         # While the pump owns the FDs they must both be blocking, whatever
         # their prior mode.
-        assert os.get_blocking(reader_fd) is True
-        assert os.get_blocking(writer_fd) is True
-        assert guard.reader_was_blocking == reader_blocking
-        assert guard.writer_was_blocking == writer_blocking
+        assert os.get_blocking(reader_fd) is True, (
+            "engage must leave the reader FD blocking while the pump owns it"
+        )
+        assert os.get_blocking(writer_fd) is True, (
+            "engage must leave the writer FD blocking while the pump owns it"
+        )
+        assert guard.reader_was_blocking == reader_blocking, (
+            "guard must capture the reader's prior blocking mode, expected "
+            f"{reader_blocking}"
+        )
+        assert guard.writer_was_blocking == writer_blocking, (
+            "guard must capture the writer's prior blocking mode, expected "
+            f"{writer_blocking}"
+        )
 
         guard.restore()
 
-        assert os.get_blocking(reader_fd) == reader_blocking
-        assert os.get_blocking(writer_fd) == writer_blocking
+        assert os.get_blocking(reader_fd) == reader_blocking, (
+            "restore must return the reader FD to its prior mode; now "
+            f"{os.get_blocking(reader_fd)}, expected {reader_blocking}"
+        )
+        assert os.get_blocking(writer_fd) == writer_blocking, (
+            "restore must return the writer FD to its prior mode; now "
+            f"{os.get_blocking(writer_fd)}, expected {writer_blocking}"
+        )
 
 
 @_unix_only
@@ -113,8 +129,14 @@ def test_failed_engage_leaks_no_blocking_state(
             os.set_blocking = real_set_blocking  # type: ignore[assignment]
 
         # No descriptor may be left in the transient blocking mode.
-        assert os.get_blocking(reader_fd) == reader_initial
-        assert os.get_blocking(writer_fd) == writer_initial
+        assert os.get_blocking(reader_fd) == reader_initial, (
+            "a failed engage must leak no blocking state on the reader; now "
+            f"{os.get_blocking(reader_fd)}, expected {reader_initial}"
+        )
+        assert os.get_blocking(writer_fd) == writer_initial, (
+            "a failed engage must leak no blocking state on the writer; now "
+            f"{os.get_blocking(writer_fd)}, expected {writer_initial}"
+        )
 
 
 class _FakeTransport:
@@ -168,8 +190,10 @@ def test_paused_reader_always_resumes_a_pausable_transport(
         with _paused_reader(reader):
             pass
 
-    assert transport.pause_calls == 1
-    assert transport.resume_calls == 1
+    assert transport.pause_calls == 1, "the transport must be paused exactly once"
+    assert transport.resume_calls == 1, (
+        "a completed pause must be resumed exactly once, on every exit path"
+    )
 
 
 def test_paused_reader_skips_resume_when_pause_unavailable() -> None:
@@ -189,8 +213,8 @@ def test_paused_reader_skips_resume_when_pause_fails() -> None:
     with _paused_reader(reader):
         pass
 
-    assert transport.pause_calls == 1
-    assert transport.resume_calls == 0
+    assert transport.pause_calls == 1, "the pause must be attempted exactly once"
+    assert transport.resume_calls == 0, "a pause that raised must never be resumed"
 
 
 def _raise_oserror(**_kwargs: object) -> tuple[bool, bool]:
@@ -207,7 +231,7 @@ def test_run_rust_pump_falls_back_and_resumes_when_blocking_fails(
 
     def fake_pause_reader_transport(
         reader: asyncio.StreamReader,
-    ) -> cabc.Callable[[], None]:
+    ) -> _pipeline_stream_fds._ReaderPause:
         """Return a resume callback that records how often it is invoked."""
         del reader
 
@@ -215,7 +239,7 @@ def test_run_rust_pump_falls_back_and_resumes_when_blocking_fails(
             """Record a resume invocation."""
             resume_calls["count"] += 1
 
-        return _resume
+        return _pipeline_stream_fds._ReaderPause(may_hand_off=True, resume=_resume)
 
     async def fake_drain_reader_buffer(
         reader: asyncio.StreamReader,
@@ -295,3 +319,58 @@ def test_surface_raises_first_unexpected_and_suppresses_pipe_errors(
     else:
         # All results are either plain values or suppressed pipe errors.
         _surface_unexpected_pipe_failures(results)
+
+def test_paused_reader_reports_hand_off_unsafe_when_pause_fails() -> None:
+    """A pause that raises marks the descriptor hand-off unsafe."""
+    transport = _FakeTransport(pause_raises=True)
+    reader = typ.cast("asyncio.StreamReader", _FakeReader(transport))
+
+    with _paused_reader(reader) as may_hand_off:
+        assert may_hand_off is False, (
+            "a failed pause must report the hand-off as unsafe so the caller "
+            "falls back instead of racing a live reader"
+        )
+
+def test_paused_reader_permits_hand_off_without_pause_hooks() -> None:
+    """A transport with no pause hooks has no callbacks to race."""
+    reader = typ.cast("asyncio.StreamReader", _FakeReader(object()))
+
+    with _paused_reader(reader) as may_hand_off:
+        assert may_hand_off is True, (
+            "a transport exposing no pause/resume hooks must still permit the "
+            "Rust hand-off; there are no callbacks to suspend"
+        )
+
+def test_pump_over_raw_fds_falls_back_when_pause_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed pause falls back to Python without touching the descriptors."""
+    engaged = {"count": 0}
+
+    def fake_engage(**_kwargs: object) -> object:
+        """Fail the test if the descriptors are switched after a failed pause."""
+        engaged["count"] += 1
+        msg = "blocking mode must not be engaged after a failed pause"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(
+        _pipeline_streams,
+        "_pause_reader_transport",
+        lambda _reader: _pipeline_stream_fds._ReaderPause(may_hand_off=False),
+    )
+    monkeypatch.setattr(_pipeline_stream_fds._BlockingModeGuard, "engage", fake_engage)
+
+    reader = typ.cast("asyncio.StreamReader", object())
+    handled = asyncio.run(
+        _pipeline_streams._pump_over_raw_fds(
+            reader=reader,
+            writer=None,
+            reader_fd=1,
+            writer_fd=2,
+        )
+    )
+
+    assert handled is False, "a failed pause must report the Python-fallback signal"
+    assert engaged["count"] == 0, (
+        "a failed pause must return before engaging blocking mode"
+    )

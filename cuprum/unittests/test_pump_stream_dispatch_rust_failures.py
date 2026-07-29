@@ -41,11 +41,14 @@ def _install_recording_native_failure(
 
     def pause_reader(
         reader: asyncio.StreamReader,
-    ) -> cabc.Callable[[], None]:
+    ) -> _pipeline_stream_fds._ReaderPause:
         """Record the pause and provide its matching resume callback."""
         del reader
         call_order.append("pause")
-        return lambda: call_order.append("resume")
+        return _pipeline_stream_fds._ReaderPause(
+            may_hand_off=True,
+            resume=lambda: call_order.append("resume"),
+        )
 
     async def drain_reader(
         reader: asyncio.StreamReader,
@@ -107,11 +110,14 @@ class TestRustPumpFailures:
 
         def pause_reader(
             reader: asyncio.StreamReader,
-        ) -> cabc.Callable[[], None]:
+        ) -> _pipeline_stream_fds._ReaderPause:
             """Record the pause and provide its matching resume callback."""
             del reader
             call_order.append("pause")
-            return lambda: call_order.append("resume")
+            return _pipeline_stream_fds._ReaderPause(
+                may_hand_off=True,
+                resume=lambda: call_order.append("resume"),
+            )
 
         async def fail_drain(
             reader: asyncio.StreamReader,

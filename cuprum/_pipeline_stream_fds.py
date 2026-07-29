@@ -44,9 +44,17 @@ def _extract_stream_fd(
     return _fd_from_transport(transport)
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _ReaderPause:
+    """The outcome of attempting to pause a reader transport."""
+
+    may_hand_off: bool
+    resume: cabc.Callable[[], None] | None = None
+
+
 def _pause_reader_transport(
     reader: asyncio.StreamReader,
-) -> cabc.Callable[[], None] | None:
+) -> _ReaderPause:
     """Pause reader transport callbacks while Rust pump owns the raw FD."""
     transport = getattr(reader, "transport", None)
     if transport is None:
@@ -54,18 +62,18 @@ def _pause_reader_transport(
     pause_reading = getattr(transport, "pause_reading", None)
     resume_reading = getattr(transport, "resume_reading", None)
     if not callable(pause_reading) or not callable(resume_reading):
-        return None
+        return _ReaderPause(may_hand_off=True)
     try:
         pause_reading()
     except (RuntimeError, OSError):
-        return None
+        return _ReaderPause(may_hand_off=False)
 
     def _resume() -> None:
         """Resume the paused reader transport, ignoring teardown errors."""
         with contextlib.suppress(RuntimeError, OSError):
             resume_reading()
 
-    return _resume
+    return _ReaderPause(may_hand_off=True, resume=_resume)
 
 
 def _set_stream_fds_blocking(*, reader_fd: int, writer_fd: int) -> tuple[bool, bool]:
@@ -135,13 +143,13 @@ class _BlockingModeGuard:
 
 
 @contextlib.contextmanager
-def _paused_reader(reader: asyncio.StreamReader) -> cabc.Iterator[None]:
-    """Pause ``reader`` for the block and always resume it on exit."""
-    resume = _pause_reader_transport(reader)
+def _paused_reader(reader: asyncio.StreamReader) -> cabc.Iterator[bool]:
+    """Pause ``reader`` for the block and report whether hand-off is safe."""
+    pause = _pause_reader_transport(reader)
     try:
-        yield
+        yield pause.may_hand_off
     finally:
-        _resume_reader_transport(resume)
+        _resume_reader_transport(pause.resume)
 
 
 def _resume_reader_transport(
