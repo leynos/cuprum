@@ -228,3 +228,45 @@ fn assert_successful_reader_keeps_fd_usable(raw_fd: i32, write_end: OwnedFd) {
 
     assert_eq!(collected, b"ping");
 }
+
+#[rstest]
+fn pump_drains_the_reader_after_the_writer_breaks() {
+    // The downstream stage hangs up before the pump writes anything, which is
+    // the real-world `head`-style early exit. The loop must latch the writer
+    // closed, keep draining the upstream reader to EOF, and report success
+    // with the bytes that actually reached the sink — none, here.
+    let (source_read, source_write) = make_pipe();
+    let (sink_read, sink_write) = make_pipe();
+    let payload = b"payload-written-after-the-downstream-hangs-up";
+    write_all_to(&source_write, payload);
+    // Close the source's write end so the read loop can reach EOF.
+    drop(source_write);
+    // Close the sink's read end so every write fails with a broken pipe.
+    drop(sink_read);
+
+    let mut reader = source_read;
+    let mut writer = sink_write;
+    // A small buffer forces several read iterations, so the drain path runs
+    // repeatedly after the writer has latched closed rather than just once.
+    let total = match pump_stream_files_readwrite(&mut reader, &mut writer, BufferSize(8)) {
+        Ok(total) => total,
+        Err(err) => panic!("a broken downstream pipe must not fail the pump: {err:?}"),
+    };
+
+    assert_eq!(
+        total, 0,
+        "no bytes reach a downstream that hung up before the first write",
+    );
+
+    // The reader must have been drained to EOF: a further read returns zero
+    // rather than the bytes the pump skipped.
+    let mut buffer = [0_u8; 8];
+    let remaining = match read_stream(&mut reader, &mut buffer) {
+        Ok(remaining) => remaining,
+        Err(err) => panic!("reading the drained source failed: {err:?}"),
+    };
+    assert_eq!(
+        remaining, 0,
+        "the pump must drain the upstream reader to EOF after the writer breaks",
+    );
+}
