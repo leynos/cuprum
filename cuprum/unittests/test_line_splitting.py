@@ -27,17 +27,20 @@ from __future__ import annotations
 
 import builtins
 import importlib
-import importlib.metadata
 import sys
 import types
 import typing as typ
-import warnings
 
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from cuprum._testing import _split_complete_lines, _strip_line_ending
+from cuprum.unittests._crosshair_support import (
+    _crosshair_probe_failure_reason,
+    _crosshair_unavailable_symbols,
+    _warn_crosshair_unavailable,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -45,56 +48,6 @@ if typ.TYPE_CHECKING:
 
 _CROSSHAIR_PROBE_EXCEPTIONS: tuple[type[BaseException], ...] = (BaseException,)
 _MODULE_NAME: str = "cuprum.unittests.test_line_splitting"
-
-
-def _crosshair_probe_failure_reason(error: BaseException) -> str:
-    """Return a skip reason for expected probe failures and raise the rest."""
-    if isinstance(error, KeyboardInterrupt | SystemExit | GeneratorExit):
-        raise error
-    is_expected = (
-        isinstance(error, ImportError) or error.__class__.__name__ == "TraceException"
-    )
-    if not is_expected:
-        raise error
-    return f"CrossHair unavailable: {error.__class__.__name__}: {error}"
-
-
-def _crosshair_unavailable_symbols(
-    error: BaseException,
-) -> tuple[str, typ.Any, typ.Any, typ.Any, typ.Any]:
-    """Return fallback CrossHair symbols for an expected probe failure."""
-    reason = _crosshair_probe_failure_reason(error)
-    return (
-        reason,
-        typ.cast("typ.Any", None),
-        typ.cast("typ.Any", None),
-        typ.cast("typ.Any", None),
-        typ.cast("typ.Any", None),
-    )
-
-
-def _warn_crosshair_unavailable(reason: str) -> None:
-    """Warn that CrossHair symbolic tests are unavailable."""
-    python_version = ".".join(str(part) for part in sys.version_info[:3])
-    try:
-        crosshair_version = importlib.metadata.version("crosshair-tool")
-    except importlib.metadata.PackageNotFoundError:
-        crosshair_version = "not installed"
-    opcode_context = (
-        " opcode compatibility: CrossHair tracer does not support this "
-        "interpreter opcode set."
-        if "TraceException" in reason
-        else ""
-    )
-    warnings.warn(
-        (
-            f"{reason}; Python {python_version}; "
-            f"CrossHair status: unavailable; CrossHair version: "
-            f"{crosshair_version}.{opcode_context}"
-        ),
-        RuntimeWarning,
-        stacklevel=2,
-    )
 
 
 # CrossHair's C-level tracer must support every bytecode opcode the running

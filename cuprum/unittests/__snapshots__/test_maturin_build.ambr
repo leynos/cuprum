@@ -139,6 +139,7 @@
       'cuprum/unittests/test_pipeline_timeout_telemetry.py',
       'cuprum/unittests/test_pipeline_timeouts.py',
       'cuprum/unittests/test_pipeline_wait.py',
+      'cuprum/unittests/test_pipeline_wait_crosshair.py',
       'cuprum/unittests/test_prerequisite_docs.py',
       'cuprum/unittests/test_process_exit.py',
       'cuprum/unittests/test_profile_driver.py',
