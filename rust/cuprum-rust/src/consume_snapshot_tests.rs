@@ -3,11 +3,19 @@
 //!
 //! The incremental decoder in [`crate::utf8`] is proven equivalent to
 //! `String::from_utf8_lossy` by the property tests there. These snapshots pin
-//! the observable end-to-end output of the full read-and-decode loop across the
-//! four categories the Python oracle suite also covers — pure ASCII, multi-byte
-//! sequences split across buffer boundaries, invalid bytes, and an incomplete
-//! trailing sequence at EOF — so a regression in the loop, the bounds-checked
-//! slicing, or the `final_chunk` handling shows up as a concrete text diff.
+//! the observable end-to-end output of the full read-and-decode loop across
+//! four categories — pure ASCII, multi-byte sequences split across buffer
+//! boundaries, invalid bytes, and an incomplete trailing sequence at EOF — so a
+//! regression in the loop, the bounds-checked slicing, or the `final_chunk`
+//! handling shows up as a concrete text diff.
+//!
+//! `TestRustConsumeStream` in `cuprum/unittests/test_rust_streams.py` declares
+//! the same four categories against `rust_consume_stream`, checked with the
+//! `payload.decode("utf-8", errors="replace")` oracle. Those cases are gated on
+//! the compiled extension being importable, and neither `make build` nor the
+//! CI test job builds it — only the benchmark job runs `maturin develop` — so
+//! they skip in practice. These Rust-side snapshots are therefore the coverage
+//! that actually executes for these categories, not a duplicate of it.
 //!
 //! Each case feeds a fixed payload through a real pipe, so the decode is driven
 //! by actual descriptor reads rather than a synthetic byte buffer.
@@ -72,6 +80,11 @@ fn invalid_bytes_become_replacement_characters() {
 
     assert_eq!(
         byte_at_a_time,
+        consume(payload, 3),
+        "a three-byte buffer must decode identically to a one-byte buffer",
+    );
+    assert_eq!(
+        byte_at_a_time,
         consume(payload, 64),
         "invalid-byte replacement must not depend on the buffer size",
     );
@@ -87,6 +100,11 @@ fn incomplete_trailing_sequence_is_replaced_at_eof() {
     let payload = b"euro sign: \xe2\x82";
     let byte_at_a_time = consume(payload, 1);
 
+    assert_eq!(
+        byte_at_a_time,
+        consume(payload, 3),
+        "a three-byte buffer must decode identically to a one-byte buffer",
+    );
     assert_eq!(
         byte_at_a_time,
         consume(payload, 64),
