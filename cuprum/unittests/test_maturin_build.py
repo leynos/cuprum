@@ -70,7 +70,9 @@ def test_maturin_script_locatable_true_when_script_present(
         "tests.helpers.maturin.sysconfig.get_path", lambda *_a, **_k: str(scripts_dir)
     )
 
-    assert maturin_script_locatable()
+    assert maturin_script_locatable(), (
+        "a maturin script in a scheme's scripts directory must be discovered"
+    )
 
 
 def test_maturin_script_locatable_false_when_script_absent(
@@ -95,7 +97,9 @@ def test_maturin_script_locatable_false_when_script_absent(
         "tests.helpers.maturin.sysconfig.get_path", lambda *_a, **_k: str(scripts_dir)
     )
 
-    assert not maturin_script_locatable()
+    assert not maturin_script_locatable(), (
+        "no maturin script is present, so discovery must report unavailable"
+    )
 
 
 def test_maturin_script_locatable_matches_windows_exe_launcher(

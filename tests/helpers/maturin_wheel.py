@@ -30,7 +30,7 @@ _DIST_INFO_SUFFIXES: dict[str, str] = {
 
 
 class WheelMetadata(typ.TypedDict):
-    """Normalised ``.dist-info/METADATA`` fields captured in the snapshot."""
+    """Normalized ``.dist-info/METADATA`` fields captured in the snapshot."""
 
     name: str | None
     version: str | None
@@ -40,7 +40,7 @@ class WheelMetadata(typ.TypedDict):
 
 
 class WheelHeaders(typ.TypedDict):
-    """Normalised ``.dist-info/WHEEL`` fields captured in the snapshot."""
+    """Normalized ``.dist-info/WHEEL`` fields captured in the snapshot."""
 
     root_is_purelib: str
     tag: str
@@ -64,7 +64,7 @@ def _header_value(headers: dict[str, list[str]], key: str) -> str | None:
 
 
 def _parse_metadata(raw_metadata: str) -> WheelMetadata:
-    """Parse RFC 2822-style metadata headers into a normalised dict."""
+    """Parse RFC 2822-style metadata headers into a normalized dict."""
     headers: dict[str, list[str]] = {}
     current_key: str | None = None
     for line in raw_metadata.splitlines():
@@ -160,7 +160,7 @@ def _parse_wheel_header(wheel_payload: str, whl_path: Path) -> tuple[str, str]:
 
 
 def wheel_build_snapshot(whl_path: Path) -> WheelBuildSnapshot:
-    """Return a normalised snapshot of wheel metadata and layout.
+    """Return a normalized snapshot of wheel metadata and layout.
 
     Raises
     ------
