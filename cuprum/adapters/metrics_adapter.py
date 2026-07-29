@@ -197,7 +197,7 @@ class _HistogramOp:
     value: float
 
 
-_MetricOp = _CounterOp | _HistogramOp
+type _MetricOp = _CounterOp | _HistogramOp
 
 # Phases that map to a single unit-counter increment, keyed by event phase.
 _PHASE_COUNTERS: dict[str, str] = {
@@ -235,18 +235,22 @@ def _metric_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
     violation and raises ``_UnhandledMetricsPhaseError``.
     """
     phase = event.phase
-    if phase == "plan":
-        return ()
-    counter_name = _PHASE_COUNTERS.get(phase)
-    if counter_name is not None:
-        return (_CounterOp(counter_name, 1.0),)
-    if phase == "stdin":
-        if event.byte_count is None:
+    match phase:
+        case "plan":
             return ()
-        return (_CounterOp("cuprum_stdin_bytes_total", float(event.byte_count)),)
-    if phase == "exit":
-        return _exit_operations(event)
-    raise _UnhandledMetricsPhaseError(event.phase)
+        case "stdin":
+            if event.byte_count is None:
+                return ()
+            return (_CounterOp("cuprum_stdin_bytes_total", float(event.byte_count)),)
+        case "exit":
+            return _exit_operations(event)
+        case _ if (counter_name := _PHASE_COUNTERS.get(phase)) is not None:
+            # The unit-counter phases stay keyed by `_PHASE_COUNTERS` rather
+            # than repeated as a literal alternation, so the metric names have
+            # exactly one definition.
+            return (_CounterOp(counter_name, 1.0),)
+        case _:
+            raise _UnhandledMetricsPhaseError(phase)
 
 
 class MetricsHook:
