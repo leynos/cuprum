@@ -205,7 +205,8 @@ def test_users_guide_documents_timeout_events(
         "_wait_for_exit_code_within_timeout",
         "asyncio.timeout",
         "non-positive",
-        "_terminate_and_drain_consumers",
+        "_drain_stream_consumers",
+        "exactly once",
         "cuprum.timeout",
         "stream-consumer task",
     ],
@@ -215,7 +216,8 @@ def test_adr_007_documents_wait_helper_split(adr_007: str, term: str) -> None:
 
     Covers the ``_wait_for_exit_code`` / ``_wait_for_exit_code_within_timeout``
     split, caller-owned ``asyncio.timeout`` deadlines, the non-positive fast
-    path, the shared ``_terminate_and_drain_consumers`` teardown, and the
-    invariant that no pending stream-consumer task is left behind.
+    path, the drain-exactly-once division of labour with
+    ``_drain_stream_consumers``, and the invariant that no pending
+    stream-consumer task is left behind.
     """
     assert term in adr_007, f"Missing documentation clause: '{term}'"
