@@ -421,6 +421,39 @@ interpreter whose opcode set the tracer cannot handle
 3.15 betas, issue `#109`); every other failure is re-raised. Supported
 interpreters therefore confirm the contracts rather than skipping them.
 
+### Rust pump raw-descriptor lifecycle
+
+Routing an inter-stage hop through the Rust pump means taking the raw pipe
+descriptors back from asyncio for the duration of the transfer.
+`cuprum/_pipeline_stream_fds.py` owns that hand-off, keeping its partial-failure
+paths in one place rather than inlined in the pump:
+
+- `_extract_stream_fd` pulls the raw descriptor out of an asyncio transport,
+  returning `None` when the transport does not expose one.
+- `_BlockingModeGuard` is the FD-state object. `engage()` switches both
+  descriptors to blocking mode while capturing their prior modes, rolling back
+  a partial change if the second switch fails; `restore()` returns them to the
+  captured modes. This is what stops a descriptor being left blocking.
+- `_paused_reader` is a context manager that pauses the reader transport and
+  resumes it on every exit path, including exceptions and cancellation. Only a
+  pause that took effect is resumed. It yields whether the descriptor may be
+  handed over: a *failed* pause answers `False`, because asyncio may still be
+  consuming the reader, and the caller falls back to the Python pump rather
+  than racing it. A transport exposing no pause hooks answers `True`, since
+  there are no callbacks to suspend.
+
+Cancellation is handled explicitly. `run_in_executor` cannot interrupt the
+worker thread running the Rust pump, and that thread still owns both
+descriptors, so `_await_rust_pump` shields the executor future and drains it
+before propagating `CancelledError`. Restoring the blocking mode or resuming
+the transport any earlier would hand the descriptors back to asyncio while
+native code was still mid-transfer.
+
+The module's reuse policy is narrow: further descriptor-lifecycle concerns for
+this hand-off belong here, but the seams are not a general-purpose descriptor
+utility. Anything serving a different caller should be designed against that
+caller's real requirements instead of widening these.
+
 ## Canonical stream-drain loop
 
 `cuprum._streams._drain(stream, config, *, on_chunk=None)` is the single
