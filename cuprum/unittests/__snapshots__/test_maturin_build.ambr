@@ -112,6 +112,7 @@
       'cuprum/unittests/test_pipeline_output_options.py',
       'cuprum/unittests/test_pipeline_stream_backend_selection.py',
       'cuprum/unittests/test_pipeline_streams_fd_lifecycle.py',
+      'cuprum/unittests/test_pipeline_streams_observability.py',
       'cuprum/unittests/test_pipeline_timeouts.py',
       'cuprum/unittests/test_prerequisite_docs.py',
       'cuprum/unittests/test_profile_driver.py',

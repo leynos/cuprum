@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses as dc
+import logging
 import typing as typ
 
 from cuprum._backend import StreamBackend, get_stream_backend
@@ -38,6 +39,36 @@ from cuprum._streams import _close_stream_writer, _pump_stream
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _log_rust_pump_declined(reason: str) -> None:
+    """Record why an inter-stage hop fell back from the Rust pump to Python.
+
+    Each decline is a silent performance decision: the hop still completes
+    correctly on the Python pump, so nothing surfaces to the caller. Without a
+    record, a deployment that has quietly stopped taking the fast path is
+    indistinguishable from one that never had it, which is the question an
+    operator actually asks. Logged at debug level because this is a per-hop
+    internal routing decision, not a fault.
+
+    Examples
+    --------
+    Capture the reason a hop declined the fast path::
+
+        with caplog.at_level(logging.DEBUG, logger="cuprum._pipeline_streams"):
+            _log_rust_pump_declined("blocking_mode_unavailable")
+        assert caplog.records[0].__dict__["cuprum_reason"] == (
+            "blocking_mode_unavailable"
+        )
+
+    """
+    _LOGGER.debug(
+        "Inter-stage hop declined the Rust pump (%s); using the Python pump",
+        reason,
+        extra={"cuprum_action": "rust_pump_declined", "cuprum_reason": reason},
+    )
 
 
 @dc.dataclass(slots=True)
@@ -153,6 +184,7 @@ async def _pump_over_raw_fds(
         if not may_hand_off:
             # Pausing failed, so asyncio may still be consuming the reader.
             # Fall back rather than race it for the descriptor.
+            _log_rust_pump_declined("reader_pause_failed")
             return False
 
         # Flush any bytes asyncio already buffered in the StreamReader before
@@ -162,6 +194,7 @@ async def _pump_over_raw_fds(
         try:
             guard = _BlockingModeGuard.engage(reader_fd=reader_fd, writer_fd=writer_fd)
         except OSError:
+            _log_rust_pump_declined("blocking_mode_unavailable")
             return False
 
         await _await_rust_pump(guard, reader_fd=reader_fd, writer_fd=writer_fd)
@@ -254,6 +287,7 @@ async def _try_rust_pump(
     writer_fd = _extract_stream_fd(writer)
 
     if reader_fd is None or writer_fd is None:
+        _log_rust_pump_declined("raw_fd_unavailable")
         return False
 
     return await _run_rust_pump(
