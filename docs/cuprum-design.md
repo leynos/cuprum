@@ -1107,6 +1107,43 @@ sequenceDiagram
     end
 ```
 
+For screen readers: The following sequence diagram shows how a subprocess
+timeout is turned into the public `TimeoutExpired`. `_handle_subprocess_timeout`
+first calls `_resolve_timeout_payload`, passing the timeout exception and a
+`_TimeoutFallback`, and receives a `_SubprocessTimeoutDetails` payload carrying
+the timeout, captured stdout and stderr, and the exit time. It then reads the
+process exit code through `_get_exit_code`, emits an exit event via
+`_emit_exit_event` using `_ExitEventDetails`, and finally calls
+`_raise_timeout_expired`, which raises `TimeoutExpired` back to the caller.
+
+Figure 4: Subprocess timeout handling, from payload resolution to
+`TimeoutExpired`
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant _handle_subprocess_timeout
+    participant _resolve_timeout_payload
+    participant _emit_exit_event
+    participant _raise_timeout_expired
+    participant _get_exit_code
+
+    Caller->>_handle_subprocess_timeout: exc, ctx
+    _handle_subprocess_timeout->>_resolve_timeout_payload: exc, _TimeoutFallback
+    _resolve_timeout_payload-->>_handle_subprocess_timeout: _SubprocessTimeoutDetails payload
+    _handle_subprocess_timeout->>_get_exit_code: ctx.process
+    _get_exit_code-->>_handle_subprocess_timeout: exit_code
+    _handle_subprocess_timeout->>_emit_exit_event: _ExitEventDetails
+    _handle_subprocess_timeout->>_raise_timeout_expired: _TimeoutContext, exc
+    _raise_timeout_expired-->>Caller: TimeoutExpired (exception)
+```
+
+Both timeout variants converge on one payload, so the resulting
+`TimeoutExpired` reports a concrete timeout whichever path expired: a
+`_SubprocessTimeoutError` from the stream-timeout path already carries its
+captured payload and is used verbatim, while a bare `TimeoutError` is resolved
+from the `_TimeoutFallback`.
+
 ### 8.1.5 Subprocess execution module boundaries
 
 The private subprocess implementation is divided by lifecycle concern while
@@ -1165,6 +1202,44 @@ Error propagation policy (to be finalized, but roughly):
 - The overall pipeline result surfaces the stage that triggered termination
   via `PipelineResult.failure` / `PipelineResult.failure_index`, alongside the
   per-stage results for diagnostics.
+
+For screen readers: The following sequence diagram shows how fail-fast
+termination selects which stages to stop.
+`_terminate_pipeline_remaining_stages` passes the failure index and each wait
+task's completion state to the pure `_stages_to_terminate` reducer, which
+returns the list of stage indices to terminate. For each selected index the
+caller schedules `_terminate_process_via_wait_task` with `asyncio.create_task`,
+then awaits the scheduled tasks together using `asyncio.gather`. When the
+reducer selects no stages — every other stage has already settled — no tasks
+are created and no gather occurs.
+
+Figure 5: Fail-fast termination selection via the `_stages_to_terminate`
+reducer
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant _terminate_pipeline_remaining_stages
+    participant _stages_to_terminate
+    participant asyncio_create_task as asyncio.create_task
+    participant _terminate_process_via_wait_task
+    participant asyncio_gather as asyncio.gather
+
+    Caller->>_terminate_pipeline_remaining_stages: processes, wait_tasks, failure_index, cancel_grace
+    _terminate_pipeline_remaining_stages->>_stages_to_terminate: failure_index, [wait_task.done()]
+    _stages_to_terminate-->>_terminate_pipeline_remaining_stages: list[int] targets
+    loop for each idx in targets
+        _terminate_pipeline_remaining_stages->>asyncio_create_task: _terminate_process_via_wait_task(...)
+        asyncio_create_task->>_terminate_process_via_wait_task: process, wait_task, cancel_grace
+    end
+    _terminate_pipeline_remaining_stages->>asyncio_gather: termination_tasks
+    asyncio_gather-->>Caller: termination completed
+```
+
+Keeping the selection in `_stages_to_terminate` makes the rule testable without
+processes: it excludes the failed stage, which owns its own exit, and any stage
+whose wait task has already settled. Cleanup is therefore idempotent — a second
+pass over settled stages selects nothing.
 
 ### 8.3 Parallel Execution (non‑pipeline)
 
@@ -1240,7 +1315,7 @@ concurrently with optional concurrency limits. The implementation uses
 - `failure_submission_indices`: Property mapping each failure back to its
   original submission position, uniformly across both execution modes.
 
-Figure 4: Concurrent execution flow with allowlist validation and semaphore
+Figure 6: Concurrent execution flow with allowlist validation and semaphore
 gating
 
 ```mermaid
@@ -1273,7 +1348,7 @@ sequenceDiagram
     run_concurrent-->>Caller: ConcurrentResult<br/>(results, failures, ok)
 ```
 
-Figure 5: Fail-fast mode cancellation behaviour
+Figure 7: Fail-fast mode cancellation behaviour
 
 ```mermaid
 sequenceDiagram
