@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import logging
-import os
 import sys
 import typing as typ
 from pathlib import Path
@@ -18,7 +16,7 @@ from cuprum._subprocess_stdin import _write_stdin
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
 from cuprum.context import ScopeConfig, current_context, scoped
 from cuprum.program import Program
-from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
+from cuprum.sh import ExecutionContext, RunOutputOptions
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -309,71 +307,6 @@ def test_pipeline_observe_emits_stage_tags_and_env_overlay() -> None:
         if ev.phase == "stdout"
         and typ.cast("int", ev.tags["pipeline_stage_index"]) == 1
     ]
-
-
-def _drain_blocking_payload_size() -> int:
-    """Return a stdin payload size that reliably blocks the writer's drain().
-
-    The early-close ``stdin_error`` only surfaces when ``drain()`` actually
-    blocks, which requires a payload larger than the OS pipe buffer plus the
-    asyncio transport write high-water mark. Probe the real pipe capacity so
-    the assertion does not rely on an assumed ~64 KiB buffer.
-    """
-    read_fd, write_fd = os.pipe()
-    try:
-        pipe_capacity = fcntl.fcntl(write_fd, fcntl.F_GETPIPE_SZ)
-    finally:
-        os.close(read_fd)
-        os.close(write_fd)
-    # Exceed the probed pipe capacity and the default 64 KiB transport
-    # high-water mark with a full extra MiB of headroom.
-    return pipe_capacity + (1 << 20)
-
-
-def test_observe_emits_stdin_error_event_when_process_closes_stdin_early() -> None:
-    """Emit a real ``stdin_error`` event when the subprocess closes stdin early.
-
-    The child closes its stdin immediately, so writing a payload larger than
-    the OS pipe buffer drives the real writer's ``drain()`` into a broken-pipe
-    (EPIPE) failure. The runner must surface that as an observable
-    ``stdin_error`` event rather than propagating or swallowing it silently.
-    """
-    builder, catalogue = _python_builder(project_name="observe-stdin-error")
-    cmd = builder(
-        "-c",
-        "import sys; sys.stdin.close(); print('done')",
-    )
-
-    events: list[ExecEvent] = []
-
-    def hook(ev: ExecEvent) -> None:
-        """Record an emitted execution event."""
-        events.append(ev)
-
-    # Size the payload from the real pipe capacity so the writer is guaranteed
-    # to block in drain() until the child closes the read end, forcing a
-    # deterministic EPIPE rather than assuming a ~64 KiB buffer.
-    payload = b"x" * _drain_blocking_payload_size()
-    with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
-        result = cmd.run_sync(
-            stdin=StdinInput(data=payload),
-            output=RunOutputOptions(capture=True),
-        )
-
-    assert result.exit_code == 0, (
-        f"subprocess exited with non-zero code: {result.exit_code}"
-    )
-    stdin_error_events = [ev for ev in events if ev.phase == "stdin_error"]
-    assert stdin_error_events, (
-        "expected at least one stdin_error event when subprocess closes stdin early"
-    )
-    first = stdin_error_events[0]
-    assert first.pid is not None, (
-        "expected pid to be present on first stdin_error event"
-    )
-    assert first.note is not None, (
-        "expected error note/detail to be present on first stdin_error event"
-    )
 
 
 @pytest.mark.parametrize(

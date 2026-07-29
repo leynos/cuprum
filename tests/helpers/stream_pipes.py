@@ -29,6 +29,62 @@ def _read_all(fd: int, *, chunk_size: int = 4096) -> bytes:
     return b"".join(chunks)
 
 
+# Conservative pipe-buffer estimate for hosts that cannot probe the real
+# capacity: Windows lacks ``fcntl`` entirely, while macOS and other POSIX
+# systems lack Linux's ``F_GETPIPE_SZ``. One mebibyte comfortably exceeds the
+# default pipe buffers seen on those platforms, so the payload still blocks the
+# writer's ``drain()`` without a real probe.
+_FALLBACK_PIPE_CAPACITY = 1 << 20
+
+
+def _probe_pipe_capacity() -> int:
+    """Return the real OS pipe capacity, or a conservative fallback.
+
+    Linux exposes the pipe buffer size through ``fcntl(F_GETPIPE_SZ)``. Hosts
+    without the ``fcntl`` module (Windows) or without that constant (macOS,
+    BSD) cannot probe it, so this returns :data:`_FALLBACK_PIPE_CAPACITY`
+    instead of raising. The ``fcntl`` import stays local so importing this
+    module — and collecting the tests that use it — succeeds everywhere.
+
+    Returns
+    -------
+    int
+        The probed pipe capacity in bytes on Linux, otherwise the conservative
+        fallback capacity.
+    """
+    try:
+        import fcntl
+    except ImportError:
+        return _FALLBACK_PIPE_CAPACITY
+    if not hasattr(fcntl, "F_GETPIPE_SZ"):
+        return _FALLBACK_PIPE_CAPACITY
+    read_fd, write_fd = os.pipe()
+    try:
+        return fcntl.fcntl(write_fd, fcntl.F_GETPIPE_SZ)
+    finally:
+        _safe_close(read_fd)
+        _safe_close(write_fd)
+
+
+def drain_blocking_payload_size() -> int:
+    """Return a stdin payload size that reliably blocks the writer's ``drain()``.
+
+    A blocked-``drain()`` regression only surfaces when the writer's ``drain()``
+    actually blocks, which requires a payload larger than the OS pipe buffer
+    plus the asyncio transport write high-water mark. The capacity is probed via
+    :func:`_probe_pipe_capacity`, which falls back to a conservative default on
+    platforms that cannot probe it, so callers need no platform guard.
+
+    Returns
+    -------
+    int
+        A payload size exceeding the probed (or fallback) pipe capacity, with a
+        full extra mebibyte of headroom above the default transport high-water
+        mark.
+    """
+    return _probe_pipe_capacity() + (1 << 20)
+
+
 @contextlib.contextmanager
 def _pipe_pair() -> cabc.Iterator[tuple[int, int, int, int]]:
     """Manage pipe creation and cleanup for stream tests."""

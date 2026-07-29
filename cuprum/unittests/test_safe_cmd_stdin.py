@@ -22,6 +22,7 @@ from cuprum import ECHO, ForbiddenProgramError, ScopeConfig, TimeoutExpired, sco
 from cuprum._subprocess_stdin import _write_stdin as _real_write_stdin
 from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
 from tests.helpers.catalogue import python_builder as build_python_builder
+from tests.helpers.stream_pipes import drain_blocking_payload_size
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -258,20 +259,34 @@ def test_stdin_input_with_timeout_escalation(
         )
 
 
-def test_direct_timeout_with_blocked_stdin_writer_does_not_hang(
+@pytest.mark.parametrize(
+    ("capture", "mode"),
+    [
+        pytest.param(False, "direct", id="direct"),
+        pytest.param(True, "capture", id="capture"),
+    ],
+)
+def test_timeout_with_blocked_stdin_writer_does_not_hang(
+    capture: bool,  # noqa: FBT001 - pytest parametrises this value.
+    mode: str,
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
-    """Direct-mode timeout cancels a stdin writer wedged on an unread pipe.
+    """Timeout cancels a stdin writer wedged on an unread pipe, on both paths.
 
     The child never reads its stdin, so a payload larger than the OS pipe
     buffer stalls the writer's ``drain()``. On timeout the runner must cancel
     that writer rather than wait on it, raising ``TimeoutExpired`` promptly
-    instead of blocking on the stalled drain (regression for #117).
+    instead of blocking on the stalled drain. Exercising both the direct output
+    path (``capture=False``) and the capture path (``capture=True``, which also
+    drains the stdout/stderr consumers) keeps this a regression for #117 across
+    both branches.
     """
-    _, execute = execution_strategy
+    label, execute = execution_strategy
     command = python_builder("-c", "import time; time.sleep(3600)")
-    payload = b"x" * (1024 * 1024)  # 1 MiB dwarfs the ~64 KiB pipe buffer
+    # Probe the real pipe capacity so the writer is guaranteed to stall in
+    # drain() rather than assuming a ~64 KiB buffer.
+    payload = b"x" * drain_blocking_payload_size()
     started = time.perf_counter()
     with pytest.raises(TimeoutExpired):
         execute(
@@ -279,13 +294,13 @@ def test_direct_timeout_with_blocked_stdin_writer_does_not_hang(
             {
                 "stdin": StdinInput(data=payload),
                 "timeout": 0.2,
-                "output": RunOutputOptions(capture=False),
+                "output": RunOutputOptions(capture=capture),
             },
         )
     elapsed = time.perf_counter() - started
     assert elapsed < 10.0, (
-        "direct-mode timeout with a blocked stdin writer must not hang; "
-        f"took {elapsed:.2f}s"
+        f"{mode}-mode timeout with a blocked stdin writer must not hang under "
+        f"{label} execution; took {elapsed:.2f}s"
     )
 
 
@@ -304,7 +319,9 @@ def test_stdin_input_cancellation_cleans_up_task(
     async def _orchestrate() -> None:
         """Start a blocked-writer command and cancel it once it is wedged."""
         command = python_builder("-c", "import time; time.sleep(30)")
-        payload = b"x" * (1024 * 1024)  # 1 MiB wedges the writer's drain()
+        # Probe the real pipe capacity so the writer wedges in drain() rather
+        # than assuming a ~64 KiB buffer.
+        payload = b"x" * drain_blocking_payload_size()
         writer_wedged = asyncio.Event()
 
         async def _tracked_write_stdin(

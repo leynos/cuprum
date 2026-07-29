@@ -10,9 +10,10 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from cuprum._subprocess_execution import _wait_for_exit_code
+from cuprum._subprocess_execution import _drain_stream_consumers, _wait_for_exit_code
 from cuprum._subprocess_timeout import (
     _handle_stream_timeout,
+    _SubprocessInvariantError,
     _SubprocessTimeoutError,
 )
 from cuprum.sh import ExecutionContext
@@ -25,145 +26,157 @@ _CONSUMER_OUTCOME = st.one_of(
 
 
 @dc.dataclass(frozen=True, slots=True)
-class _StreamTimeoutCase:
-    """Generated scheduling and outcome configuration for timeout cleanup."""
+class _DrainCase:
+    """Generated scheduling and outcome configuration for a consumer drain."""
 
     stdout: tuple[str, str | None]
     stdout_delay: int
     stderr: tuple[str, str | None]
     stderr_delay: int
-    stdin_delay: int
-    timeout: float
 
 
-_STREAM_TIMEOUT_CASE = st.builds(
-    _StreamTimeoutCase,
+_DRAIN_CASE = st.builds(
+    _DrainCase,
     stdout=_CONSUMER_OUTCOME,
     stdout_delay=st.integers(min_value=0, max_value=3),
     stderr=_CONSUMER_OUTCOME,
     stderr_delay=st.integers(min_value=0, max_value=3),
-    stdin_delay=st.integers(min_value=0, max_value=3),
-    timeout=st.floats(min_value=0.001, max_value=3600.0, allow_nan=False),
 )
 
 
-def test_stream_timeout_preserves_timeout_when_consumer_fails() -> None:
-    """A stream-consumer failure cannot mask a timeout during cleanup."""
-
-    async def block_stdin() -> None:
-        """Remain pending until timeout cleanup cancels the task."""
-        await asyncio.Event().wait()
-
-    async def fail_consumer() -> str | None:
-        """Yield once, then raise the stream-consumer failure."""
+async def _consumer(outcome: tuple[str, str | None], delay: int) -> str | None:
+    """Yield ``delay`` times, then either return text or fail."""
+    for _ in range(delay):
         await asyncio.sleep(0)
+    kind, value = outcome
+    if kind == "raise":
         msg = "consumer failed"
         raise ValueError(msg)
-
-    async def handle_timeout() -> None:
-        """Run the timeout handler and assert its cleanup outcome."""
-        stdin_task = asyncio.create_task(block_stdin())
-        consumers = (
-            asyncio.create_task(fail_consumer()),
-            asyncio.create_task(asyncio.sleep(0, result="stderr")),
-        )
-
-        with pytest.raises(_SubprocessTimeoutError) as exc_info:
-            await _handle_stream_timeout(
-                TimeoutError(),
-                stdin_task=stdin_task,
-                consumers=consumers,
-                timeout=1.0,
-            )
-
-        assert stdin_task.cancelled(), (
-            "timeout cleanup must cancel the pending stdin writer, "
-            f"but stdin_task.done()={stdin_task.done()} and it was not cancelled"
-        )
-        assert exc_info.value.stdout is None, (
-            "a failed stdout consumer must surface as None, "
-            f"not {exc_info.value.stdout!r}"
-        )
-        assert exc_info.value.stderr == "stderr", (
-            "a successful stderr consumer must be preserved through timeout "
-            f"cleanup, but got {exc_info.value.stderr!r}"
-        )
-
-    asyncio.run(handle_timeout())
+    return value
 
 
-@settings(max_examples=75, deadline=None, derandomize=True)
-@given(case=_STREAM_TIMEOUT_CASE)
-def test_handle_stream_timeout_upholds_invariants_across_orderings(
-    case: _StreamTimeoutCase,
-) -> None:
-    """_handle_stream_timeout keeps its cleanup contract for any task ordering.
+def test_drain_stream_consumers_cancels_pending_and_decodes() -> None:
+    """Draining cancels a still-pending consumer and preserves a completed one."""
 
-    Across arbitrary interleavings of consumer completion, consumer failure,
-    and a stdin writer that blocks until cancelled, the handler must always:
-
-    - raise ``_SubprocessTimeoutError`` carrying the configured timeout,
-    - cancel and drain the pending stdin writer, and
-    - surface each successful consumer's text while mapping a failed consumer
-      to ``None``.
-    """
-
-    async def consumer(outcome: tuple[str, str | None], delay: int) -> str | None:
-        """Yield ``delay`` times, then either return text or fail."""
-        for _ in range(delay):
-            await asyncio.sleep(0)
-        kind, value = outcome
-        if kind == "raise":
-            msg = "consumer failed"
-            raise ValueError(msg)
-        return value
-
-    async def block_stdin() -> None:
-        """Yield ``case.stdin_delay`` times, then block until cancelled."""
-        for _ in range(case.stdin_delay):
-            await asyncio.sleep(0)
+    async def block() -> str | None:
+        """Remain pending until the drain cancels this task."""
         await asyncio.Event().wait()
 
     async def run_case() -> None:
-        """Drive the handler once and assert its cleanup invariants."""
-        stdin_task = asyncio.create_task(block_stdin())
+        """Drain a still-pending consumer alongside an already-completed one."""
+        pending = asyncio.create_task(block())
+        completed = asyncio.create_task(asyncio.sleep(0, result="stderr"))
+        await completed  # the completed consumer must be genuinely done
+
+        stdout_text, stderr_text = await _drain_stream_consumers((pending, completed))
+
+        assert pending.cancelled(), (
+            "a consumer left pending at drain must be cancelled, "
+            f"but pending.done()={pending.done()}"
+        )
+        assert stdout_text is None, (
+            f"a cancelled consumer must decode to None, not {stdout_text!r}"
+        )
+        assert stderr_text == "stderr", (
+            f"a completed consumer's text must be preserved, got {stderr_text!r}"
+        )
+
+    asyncio.run(run_case())
+
+
+# Number of event-loop turns the harness lets consumers settle before draining.
+# ``_consumer`` needs ``delay + 1`` turns to reach its outcome, and each consumer
+# is scheduled exactly once per turn, so a consumer whose ``delay`` is at least
+# ``_SETTLE_TURNS`` is still pending when the drain runs (and must be cancelled
+# and decoded to ``None``); one with a smaller delay has completed and keeps its
+# outcome.
+_SETTLE_TURNS = 2
+
+
+@settings(max_examples=75, deadline=None, derandomize=True)
+@given(case=_DRAIN_CASE)
+def test_drain_stream_consumers_decodes_across_orderings(case: _DrainCase) -> None:
+    """_drain_stream_consumers drains once, decoding completed and pending readers.
+
+    Consumers settle for a fixed number of event-loop turns before the drain, so
+    those whose delay fits the window complete (their text preserved, a failure
+    mapping to ``None``) while those whose delay exceeds it are still pending at
+    drain time and must be cancelled and decoded to ``None``.
+    """
+
+    async def run_case() -> None:
+        """Drive the drain once and assert its decoding invariants."""
         consumers = (
-            asyncio.create_task(consumer(case.stdout, case.stdout_delay)),
-            asyncio.create_task(consumer(case.stderr, case.stderr_delay)),
+            asyncio.create_task(_consumer(case.stdout, case.stdout_delay)),
+            asyncio.create_task(_consumer(case.stderr, case.stderr_delay)),
         )
+        # Let consumers settle for a bounded number of turns rather than awaiting
+        # every one to completion, so readers slower than the window remain
+        # pending when the drain runs and exercise its cancellation path.
+        for _ in range(_SETTLE_TURNS):
+            await asyncio.sleep(0)
 
-        with pytest.raises(_SubprocessTimeoutError) as exc_info:
-            await _handle_stream_timeout(
-                TimeoutError(),
-                stdin_task=stdin_task,
-                consumers=consumers,
-                timeout=case.timeout,
-            )
+        stdout_text, stderr_text = await _drain_stream_consumers(consumers)
 
-        exc = exc_info.value
-        assert exc.timeout == case.timeout, (
-            f"timeout must survive cleanup unchanged: got {exc.timeout} "
-            f"for configured {case.timeout}"
-        )
-        assert stdin_task.cancelled(), (
-            "the blocked stdin writer must be cancelled during cleanup, "
-            f"but stdin_task.done()={stdin_task.done()}"
-        )
         assert all(task.done() for task in consumers), (
-            "every consumer task must be drained before the handler returns"
+            "every consumer task must be drained before the helper returns"
         )
-        for label, captured, outcome in (
-            ("stdout", exc.stdout, case.stdout),
-            ("stderr", exc.stderr, case.stderr),
+        for label, task, captured, outcome, delay in (
+            ("stdout", consumers[0], stdout_text, case.stdout, case.stdout_delay),
+            ("stderr", consumers[1], stderr_text, case.stderr, case.stderr_delay),
         ):
             kind, value = outcome
-            expected = None if kind == "raise" else value
+            if delay >= _SETTLE_TURNS:
+                assert task.cancelled(), (
+                    f"{label} consumer with delay {delay} must still be pending at "
+                    f"drain and be cancelled, but cancelled()={task.cancelled()}"
+                )
+                expected = None
+            else:
+                assert not task.cancelled(), (
+                    f"{label} consumer with delay {delay} must complete within the "
+                    "settling window rather than being cancelled"
+                )
+                expected = None if kind == "raise" else value
             assert captured == expected, (
                 f"{label} capture must reflect its consumer outcome: "
                 f"expected {expected!r}, got {captured!r}"
             )
 
     asyncio.run(run_case())
+
+
+def test_handle_stream_timeout_preserves_timeout_and_output() -> None:
+    """The handler raises with the configured timeout and pre-drained output."""
+    with pytest.raises(_SubprocessTimeoutError) as exc_info:
+        _handle_stream_timeout(
+            TimeoutError(),
+            stdout_text="captured-out",
+            stderr_text=None,
+            timeout=1.5,
+        )
+
+    assert exc_info.value.timeout == 1.5, (
+        f"the configured timeout must survive unchanged: got {exc_info.value.timeout}"
+    )
+    assert exc_info.value.stdout == "captured-out", (
+        "pre-drained stdout must be preserved on the timeout error, "
+        f"got {exc_info.value.stdout!r}"
+    )
+    assert exc_info.value.stderr is None, (
+        f"pre-drained stderr must be preserved, got {exc_info.value.stderr!r}"
+    )
+
+
+def test_handle_stream_timeout_requires_configured_timeout() -> None:
+    """A timeout handler reached without a configured timeout fails loudly."""
+    with pytest.raises(_SubprocessInvariantError):
+        _handle_stream_timeout(
+            TimeoutError(),
+            stdout_text=None,
+            stderr_text=None,
+            timeout=None,
+        )
 
 
 class _TimeoutWaitProcess:
@@ -199,23 +212,17 @@ class _TimeoutWaitProcess:
         self._exited.set()
 
 
-def test_wait_for_exit_code_cancels_pending_consumers_on_timeout() -> None:
-    """A timed-out wait cancels and drains consumers still pending after kill.
+def test_wait_for_exit_code_terminates_process_on_timeout() -> None:
+    """A timed-out wait terminates the process before propagating TimeoutError.
 
-    The stream path hands its stdout/stderr tasks to ``_wait_for_exit_code`` as
-    ``consumers``. When ``process.wait()`` times out and a consumer remains
-    blocked after termination, cleanup must cancel and drain it so timeout
-    handling cannot hang, while the original ``TimeoutError`` still propagates.
+    ``_wait_for_exit_code`` waits only for the exit code now; on expiry it must
+    still tear the process down so the caller's stream consumers can reach EOF,
+    while the original ``TimeoutError`` propagates unchanged.
     """
-
-    async def blocking_consumer() -> str | None:
-        """Block until timeout cleanup cancels this task."""
-        await asyncio.Event().wait()
 
     async def run_case() -> None:
         """Drive ``_wait_for_exit_code`` through its timeout-cleanup branch."""
         process = _TimeoutWaitProcess()
-        consumer = asyncio.create_task(blocking_consumer())
         ctx = ExecutionContext(cancel_grace=0.1)
 
         with pytest.raises(TimeoutError):
@@ -223,44 +230,34 @@ def test_wait_for_exit_code_cancels_pending_consumers_on_timeout() -> None:
                 typ.cast("asyncio.subprocess.Process", process),
                 ctx,
                 timeout=0.05,
-                consumers=(consumer,),
             )
 
-        assert consumer.cancelled(), (
-            "a consumer left pending at timeout must be cancelled during "
-            f"cleanup, but consumer.done()={consumer.done()}"
-        )
-        assert consumer.done(), (
-            "the cancelled consumer must be drained before the timeout propagates"
+        assert process.returncode == -15, (
+            "the process must be terminated during timeout cleanup, "
+            f"but returncode={process.returncode}"
         )
 
     asyncio.run(run_case())
 
 
-def test_wait_for_exit_code_cancels_pending_consumers_on_cancellation() -> None:
-    """Cancelling the waiter cancels and drains consumers still pending.
+def test_wait_for_exit_code_terminates_process_on_cancellation() -> None:
+    """Cancelling the waiter terminates the process before CancelledError propagates.
 
     This covers the distinct ``asyncio.CancelledError`` cleanup path (not the
     timeout path): when the task running ``_wait_for_exit_code`` is cancelled
-    while a consumer is still blocked, cleanup must cancel and drain that
-    consumer and let the ``CancelledError`` propagate.
+    mid-wait, cleanup must terminate the process and let ``CancelledError``
+    propagate.
     """
-
-    async def blocking_consumer() -> str | None:
-        """Block until cancellation cleanup cancels this task."""
-        await asyncio.Event().wait()
 
     async def run_case() -> None:
         """Cancel ``_wait_for_exit_code`` mid-wait and assert its cleanup."""
         process = _TimeoutWaitProcess()
-        consumer = asyncio.create_task(blocking_consumer())
         ctx = ExecutionContext(cancel_grace=0.1)
 
         task = asyncio.create_task(
             _wait_for_exit_code(
                 typ.cast("asyncio.subprocess.Process", process),
                 ctx,
-                consumers=(consumer,),
             )
         )
         # Wait until the task has actually entered process.wait() before
@@ -272,12 +269,9 @@ def test_wait_for_exit_code_cancels_pending_consumers_on_cancellation() -> None:
         with pytest.raises(asyncio.CancelledError):
             await task
 
-        assert consumer.cancelled(), (
-            "a consumer left pending at cancellation must be cancelled during "
-            f"cleanup, but consumer.done()={consumer.done()}"
-        )
-        assert consumer.done(), (
-            "the cancelled consumer must be drained before cancellation propagates"
+        assert process.returncode == -15, (
+            "the process must be terminated during cancellation cleanup, "
+            f"but returncode={process.returncode}"
         )
 
     asyncio.run(run_case())
