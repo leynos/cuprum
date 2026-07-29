@@ -177,6 +177,7 @@ mod tests {
     use std::convert::Infallible;
 
     use proptest::prelude::*;
+    use rstest::rstest;
 
     use super::{Flow, PumpState, ReadEvent, WriteEvent, drive_step};
 
@@ -207,21 +208,6 @@ mod tests {
             Ok(flow) => (flow, invoked),
             Err(never) => match never {},
         }
-    }
-
-    #[test]
-    fn drive_step_skips_the_write_at_eof() {
-        let mut state = PumpState::start();
-
-        let (flow, invoked) = drive_counting(
-            &mut state,
-            ReadEvent::Eof,
-            WriteEvent::Complete { bytes: 4 },
-        );
-
-        assert_eq!(flow, Flow::Stop);
-        assert!(!invoked, "EOF must not attempt a write");
-        assert_eq!(state.total_written(), 0, "EOF must accrue no bytes");
     }
 
     #[test]
@@ -256,22 +242,31 @@ mod tests {
         );
     }
 
-    #[test]
-    fn drive_step_performs_the_write_for_a_chunk_while_open() {
+    /// From the starting state, the read event alone decides whether the write
+    /// runs: a chunk drives it, EOF stops the loop without attempting one.
+    #[rstest]
+    #[case::chunk_while_open(ReadEvent::Chunk, Flow::Continue, true, 4)]
+    #[case::eof(ReadEvent::Eof, Flow::Stop, false, 0)]
+    fn drive_step_writes_only_for_a_chunk_while_open(
+        #[case] read: ReadEvent,
+        #[case] expected_flow: Flow,
+        #[case] expected_invoked: bool,
+        #[case] expected_total: u64,
+    ) {
         let mut state = PumpState::start();
 
-        let (flow, invoked) = drive_counting(
-            &mut state,
-            ReadEvent::Chunk,
-            WriteEvent::Complete { bytes: 4 },
-        );
+        let (flow, invoked) = drive_counting(&mut state, read, WriteEvent::Complete { bytes: 4 });
 
-        assert_eq!(flow, Flow::Continue);
-        assert!(
-            invoked,
-            "an open writer receiving a chunk must be written to"
+        assert_eq!(flow, expected_flow, "unexpected flow for {read:?}");
+        assert_eq!(
+            invoked, expected_invoked,
+            "the write must run only for a chunk read while the writer is open",
         );
-        assert_eq!(state.total_written(), 4);
+        assert_eq!(
+            state.total_written(),
+            expected_total,
+            "only a performed write may accrue bytes",
+        );
     }
 
     fn read_event() -> impl Strategy<Value = ReadEvent> {
