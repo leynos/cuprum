@@ -73,10 +73,9 @@ def _read_expected_maturin_version(root: pth.Path) -> str:
 def _read_maturin_pins(root: pth.Path) -> dict[str, str]:
     """Read the maturin version pins from every synchronized location."""
     return {
-        "pyproject.toml": _require_pin_match(
-            _MATURIN_PIN_RE.search(_read_text(root, "pyproject.toml")),
-            "pyproject.toml",
-        ),
+        # Reuse the dev-dependency reader so "how to read the pyproject pin"
+        # lives in exactly one place.
+        "pyproject.toml": _read_expected_maturin_version(root),
         "build-wheels.yml": _require_pin_match(
             _WORKFLOW_PIN_RE.search(
                 _read_text(root, ".github/workflows/build-wheels.yml"),
