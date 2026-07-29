@@ -1550,8 +1550,9 @@ behind them are split across three boundaries.
 
 The **pin-synchronization** checks are inlined in that test module as private
 helpers (`_read_maturin_pins`, `_read_expected_maturin_version`,
-`_read_manylinux_aarch64_container_ref`, and their regexes): they read
-repository files, have a single consumer, and gain nothing from indirection.
+`_read_manylinux_aarch64_container_ref`) alongside the module-private pin
+regexes they use, all local to that test file: they read repository files, have
+a single consumer, and gain nothing from indirection.
 
 The **wheel build and toolchain detection** stay in `tests/helpers/maturin.py`,
 because they wrap `subprocess` and `sysconfig` probing that does not inline
@@ -1561,11 +1562,14 @@ own script lookup can find its binary (`maturin_script_locatable`).
 
 The build runs `python -m maturin` under the current interpreter, so it uses
 whichever maturin that environment provides rather than selecting a version
-itself. Two separate mechanisms enforce alignment with the declared pin:
-`test_installed_maturin_matches_expected_pin` compares the installed CLI
-against the `pyproject.toml` pin, and the snapshot test asserts the built
-wheel's `Generator` matches that same pin, so a wheel built by an unexpected
-maturin fails the suite.
+itself. Two separate mechanisms enforce alignment with the declared pin.
+`test_installed_maturin_matches_expected_pin` compares the `pyproject.toml` pin
+against the installed maturin distribution's version, read from the current
+interpreter's package metadata with `importlib.metadata.version("maturin")` —
+the same interpreter that runs the build — while only gating on a `maturin` CLI
+being present on `PATH`. The snapshot test asserts the built wheel's
+`Generator` matches that same pin, so a wheel built by an unexpected maturin
+fails the suite.
 
 The **wheel-artefact snapshot** parsers (`wheel_build_snapshot` and its private
 helpers) live in the sibling module `tests/helpers/maturin_wheel.py`, keeping

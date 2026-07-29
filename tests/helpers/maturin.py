@@ -12,7 +12,7 @@ requirements.
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import shutil
 import subprocess  # noqa: S404 - tests invoke pinned maturin build commands.
 import sys
@@ -64,13 +64,19 @@ def toolchain_available() -> bool:
     -------
     bool
         ``True`` only when ``cargo`` and ``rustc`` are both on ``PATH`` and the
-        ``maturin`` module is importable by the current interpreter; ``False``
-        if any of the three is missing.
+        ``maturin`` module imports successfully in the current interpreter;
+        ``False`` if any of the three is missing.
+
+    The module is imported rather than located with ``find_spec``: the build
+    runs ``python -m maturin``, which needs the module to import, and a module
+    that is findable can still fail to import.
     """
     try:
-        maturin_available = importlib.util.find_spec("maturin") is not None
+        importlib.import_module("maturin")
     except ImportError:
         maturin_available = False
+    else:
+        maturin_available = True
     return (
         shutil.which("cargo") is not None
         and shutil.which("rustc") is not None
@@ -93,8 +99,8 @@ def maturin_script_locatable() -> bool:
     scheme's ``scripts`` directory for a file named ``maturin``, keyed off
     ``sys.prefix``/``sys.exec_prefix`` of the *running* interpreter — not
     ``sys.path`` or ``PATH``. This diverges from :func:`toolchain_available`,
-    whose ``importlib.util.find_spec`` check only confirms the ``maturin``
-    module is importable.
+    whose ``importlib.import_module`` check only confirms the ``maturin``
+    module imports.
 
     The two checks disagree in layered/ephemeral interpreters such as a
     ``uv run --with ...`` overlay: the overlay's ``sys.path`` includes the
