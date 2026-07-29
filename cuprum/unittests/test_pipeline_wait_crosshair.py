@@ -115,12 +115,19 @@ def _writes_matching_slot(
 
 def _latches_first_failure(
     stage_count: int,
-    first_idx: int,
-    second_idx: int,
-    first_exit: int,
-    second_exit: int,
+    first_completion: tuple[int, int],
+    second_completion: tuple[int, int],
 ) -> bool:
-    """Report whether the earliest non-zero completion owns ``failure_index``."""
+    """Report whether the earliest non-zero completion owns ``failure_index``.
+
+    Each completion is a ``(stage_index, exit_code)`` pair, and the parameter
+    order is *completion* order: ``first_completion`` settles before
+    ``second_completion``. Grouping the pair keeps the two values that describe
+    one event together rather than spreading them across parallel arguments.
+    """
+    first_idx, first_exit = first_completion
+    second_idx, second_exit = second_completion
+
     state = _symbolic_state(stage_count)
     state.record_completion(first_idx, first_exit, ended_at=1.0)
     state.record_completion(second_idx, second_exit, ended_at=2.0)
@@ -176,23 +183,27 @@ def _records_completion_contract(
 
 def _first_failure_latch_contract(
     stages: int,
-    idx_a: int,
-    idx_b: int,
-    code_a: int,
-    code_b: int,
+    first_completion: tuple[int, int],
+    second_completion: tuple[int, int],
 ) -> None:
     """CrossHair contract for first-failure latching in completion order.
 
     Covers both the latch and the no-relatch invariant: when the earlier
     completion already failed, the later one must not replace it.
 
+    Each completion is a ``(stage_index, exit_code)`` pair, and the parameter
+    order is completion order. The preconditions bound each element of the
+    pairs individually, so the symbolic domain is exactly the one the previous
+    scalar parameters described: two distinct valid stage indexes and two exit
+    codes in ``-2..2``.
+
     pre: 2 <= stages <= 3
-    pre: 0 <= idx_a < stages
-    pre: 0 <= idx_b < stages
-    pre: idx_a != idx_b
-    pre: -2 <= code_a <= 2
-    pre: -2 <= code_b <= 2
-    post: _latches_first_failure(stages, idx_a, idx_b, code_a, code_b)
+    pre: 0 <= first_completion[0] < stages
+    pre: 0 <= second_completion[0] < stages
+    pre: first_completion[0] != second_completion[0]
+    pre: -2 <= first_completion[1] <= 2
+    pre: -2 <= second_completion[1] <= 2
+    post: _latches_first_failure(stages, first_completion, second_completion)
     """
 
 
