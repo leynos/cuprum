@@ -1280,13 +1280,24 @@ The read/write fallback's control flow — how each read and write outcome moves
 the running byte total and the latched `writer_open` flag — is factored into a
 pure, `io::Error`-free state machine in `src/pump_machine.rs`. `step` advances a
 `PumpState` given a `ReadEvent` (`Chunk`/`Eof`) and, when a write is performed,
-a `WriteEvent` (`Complete`/`Closed`); `pump_stream_files_readwrite` drives it,
-translating real descriptor I/O into those events and propagating fatal
-`PumpError`s out of band so they never reach the machine. Extracting the
-decision this way lets it be checked without descriptors: proptests fold random
-event scripts through `step` to assert the total is monotonic, the writer never
-reopens once a broken pipe latches it closed, a closed writer drains without
-accruing bytes, and the loop stops exactly on `Eof`. Kani proves the same
+a `WriteEvent` (`Complete`/`Closed`).
+
+`drive_step` wraps `step` with the loop's write precondition: it invokes the
+supplied write operation **only** for a chunk read while the writer is still
+open, so EOF and a latched-closed writer never attempt one.
+`pump_stream_files_readwrite` and the property tests both drive the machine
+through `drive_step`, so the precondition has a single definition rather than a
+runtime copy and a test copy that could drift apart. That distinction needs
+testing directly: `step` independently ignores a write it is handed, so a
+`drive_step` that dropped the precondition would leave the resulting state
+identical and only differ in having performed a spurious write. The tests
+therefore assert whether the write operation *ran*, not merely its effect.
+
+Extracting the decision this way lets it be checked without descriptors:
+proptests fold random event scripts through `drive_step` to assert the total is
+monotonic, the writer never reopens once a broken pipe latches it closed, a
+closed writer drains without accruing bytes, the loop stops exactly on `Eof`,
+and the write runs exactly when the transition permits it. Kani proves the same
 invariants over unbounded byte counts and arbitrary starting states in
 `src/pump_machine_kani_proofs.rs` (`#[cfg(kani)]`, so outside the commit gate),
 closing the model-checking follow-up from issue `#84`.

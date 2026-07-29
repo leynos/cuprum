@@ -6,9 +6,10 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use proptest::prelude::*;
 
 use super::{
-    PumpError, WriteOutcome, handle_write, map_short_write_error, read_raw_fd, read_raw_fd_with,
-    read_stream, write_all_unix_with,
+    PumpError, WriteOutcome, classify_write_outcome, handle_write, map_short_write_error,
+    read_raw_fd, read_raw_fd_with, read_stream, write_all_unix_with,
 };
+use crate::pump_machine::WriteEvent;
 use crate::test_support::{make_pipe, unwrap_err, unwrap_ok, write_all_to};
 use rstest::{fixture, rstest};
 
@@ -230,4 +231,35 @@ proptest! {
             Err(_) => prop_assert!(!is_nonfatal_kind(kind)),
         }
     }
+}
+
+#[rstest]
+#[case::zero_bytes(0)]
+#[case::positive_bytes(7)]
+fn classify_write_outcome_maps_nonfatal_short_write_to_closed(#[case] accepted: u64) {
+    // A non-fatal short write latches the writer closed while preserving the
+    // bytes accepted before the pipe broke — including none at all.
+    let event = unwrap_ok(classify_write_outcome(Ok(
+        WriteOutcome::NonFatalShortWrite(accepted),
+    )));
+
+    assert_eq!(event, WriteEvent::Closed { bytes: accepted });
+}
+
+#[test]
+fn classify_write_outcome_maps_complete_write_to_complete() {
+    let event = unwrap_ok(classify_write_outcome(Ok(WriteOutcome::Complete(5))));
+
+    assert_eq!(event, WriteEvent::Complete { bytes: 5 });
+}
+
+#[test]
+fn classify_write_outcome_propagates_fatal_errors() {
+    // map_short_write_error has already absorbed the non-fatal partition, so
+    // every error arriving here is fatal and must not latch the writer closed.
+    let err = unwrap_err(classify_write_outcome(Err(PumpError::from(
+        io::Error::from(io::ErrorKind::PermissionDenied),
+    ))));
+
+    assert!(matches!(err, PumpError::Io(_)));
 }

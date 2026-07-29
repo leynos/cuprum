@@ -42,7 +42,7 @@ mod utf8;
 
 use errors::PumpError;
 use io_utils::{StreamHandle, classify_write, operation_span, read_stream};
-use pump_machine::{Flow, PumpState, ReadEvent, step};
+use pump_machine::{Flow, PumpState, ReadEvent, drive_step};
 use utf8::{FinalChunk, decode_utf8_replace};
 
 /// Report whether the Rust extension is available.
@@ -309,19 +309,18 @@ fn pump_stream_files_readwrite(
             ReadEvent::Chunk
         };
 
-        // Write only when a chunk arrives while the writer is open; a closed
-        // writer just drains the reader. Fatal writes propagate the real error
+        // `drive_step` owns the write precondition — a chunk read while the
+        // writer is still open — so this loop and the machine's property tests
+        // share one definition of it. Fatal writes propagate the real error
         // and never reach the pure state machine.
-        let write = if read == ReadEvent::Chunk && state.writer_open() {
+        let flow = drive_step(&mut state, read, || {
             let chunk = buffer
                 .get(..read_len)
                 .ok_or(PumpError::BufferRangeExceeded)?;
-            Some(classify_write(writer, chunk)?)
-        } else {
-            None
-        };
+            classify_write(writer, chunk)
+        })?;
 
-        if step(&mut state, read, write) == Flow::Stop {
+        if flow == Flow::Stop {
             break;
         }
     }

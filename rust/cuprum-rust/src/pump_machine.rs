@@ -132,6 +132,31 @@ pub(crate) fn step(state: &mut PumpState, read: ReadEvent, write: Option<WriteEv
     }
 }
 
+/// Advance the machine for one loop iteration, writing only when permitted.
+///
+/// This owns the pump loop's write precondition: `write_once` runs **only**
+/// when a chunk was read and the writer is still open. On EOF, or once the
+/// writer has latched closed, no write is attempted and the iteration just
+/// drains the reader. Production and the property tests both drive the machine
+/// through here, so neither can reimplement that precondition differently.
+///
+/// # Errors
+///
+/// Propagates whatever `write_once` returns, so a fatal I/O failure aborts the
+/// iteration before the state is advanced.
+pub(crate) fn drive_step<E>(
+    state: &mut PumpState,
+    read: ReadEvent,
+    write_once: impl FnOnce() -> Result<WriteEvent, E>,
+) -> Result<Flow, E> {
+    let write = if read == ReadEvent::Chunk && state.writer_open() {
+        Some(write_once()?)
+    } else {
+        None
+    };
+    Ok(step(state, read, write))
+}
+
 /// Apply a write outcome to the running total and the `writer_open` latch.
 fn apply_write(state: &mut PumpState, write: WriteEvent) {
     match write {
@@ -149,15 +174,104 @@ fn apply_write(state: &mut PumpState, write: WriteEvent) {
 mod tests {
     //! Property tests for the pure pump state machine.
 
+    use std::convert::Infallible;
+
     use proptest::prelude::*;
 
-    use super::{Flow, PumpState, ReadEvent, WriteEvent, step};
+    use super::{Flow, PumpState, ReadEvent, WriteEvent, drive_step};
 
     /// Drive one iteration exactly as `pump_stream_files_readwrite` does: a
     /// write is applied only when a chunk is read while the writer is open.
     fn drive(state: &mut PumpState, read: ReadEvent, write: WriteEvent) -> Flow {
-        let performs_write = matches!(read, ReadEvent::Chunk) && state.writer_open();
-        step(state, read, performs_write.then_some(write))
+        // Delegate to the production helper so these properties exercise the
+        // same write precondition the pump loop uses, not a copy of it.
+        match drive_step(state, read, || Ok::<WriteEvent, Infallible>(write)) {
+            Ok(flow) => flow,
+            Err(never) => match never {},
+        }
+    }
+
+    /// Drive one iteration, reporting whether the write operation ran.
+    ///
+    /// `drive_step`'s distinctive guarantee over `step` is that it does not
+    /// *invoke* the write at all when the transition forbids one — `step`
+    /// separately ignores a write it is handed, so observing state alone
+    /// cannot tell the two apart.
+    fn drive_counting(state: &mut PumpState, read: ReadEvent, write: WriteEvent) -> (Flow, bool) {
+        let mut invoked = false;
+        let outcome = drive_step(state, read, || {
+            invoked = true;
+            Ok::<WriteEvent, Infallible>(write)
+        });
+        match outcome {
+            Ok(flow) => (flow, invoked),
+            Err(never) => match never {},
+        }
+    }
+
+    #[test]
+    fn drive_step_skips_the_write_at_eof() {
+        let mut state = PumpState::start();
+
+        let (flow, invoked) = drive_counting(
+            &mut state,
+            ReadEvent::Eof,
+            WriteEvent::Complete { bytes: 4 },
+        );
+
+        assert_eq!(flow, Flow::Stop);
+        assert!(!invoked, "EOF must not attempt a write");
+        assert_eq!(state.total_written(), 0, "EOF must accrue no bytes");
+    }
+
+    #[test]
+    fn drive_step_skips_the_write_once_the_writer_is_closed() {
+        let mut state = PumpState::start();
+        // Latch the writer closed with a non-fatal short write.
+        drive_counting(
+            &mut state,
+            ReadEvent::Chunk,
+            WriteEvent::Closed { bytes: 2 },
+        );
+        assert!(
+            !state.writer_open(),
+            "the broken pipe must latch the writer"
+        );
+
+        let (flow, invoked) = drive_counting(
+            &mut state,
+            ReadEvent::Chunk,
+            WriteEvent::Complete { bytes: 9 },
+        );
+
+        assert_eq!(flow, Flow::Continue, "a drained chunk keeps the loop going");
+        assert!(
+            !invoked,
+            "a closed writer must not be written to again; the chunk only drains the reader",
+        );
+        assert_eq!(
+            state.total_written(),
+            2,
+            "draining must not accrue further bytes",
+        );
+    }
+
+    #[test]
+    fn drive_step_performs_the_write_for_a_chunk_while_open() {
+        let mut state = PumpState::start();
+
+        let (flow, invoked) = drive_counting(
+            &mut state,
+            ReadEvent::Chunk,
+            WriteEvent::Complete { bytes: 4 },
+        );
+
+        assert_eq!(flow, Flow::Continue);
+        assert!(
+            invoked,
+            "an open writer receiving a chunk must be written to"
+        );
+        assert_eq!(state.total_written(), 4);
     }
 
     fn read_event() -> impl Strategy<Value = ReadEvent> {
@@ -182,7 +296,15 @@ mod tests {
             let mut state = PumpState::start();
             for (read, write) in script {
                 let before = state;
-                let flow = drive(&mut state, read, write);
+                let (flow, invoked) = drive_counting(&mut state, read, write);
+
+                // `drive_step` must invoke the write exactly when the
+                // transition permits one.
+                prop_assert_eq!(
+                    invoked,
+                    read == ReadEvent::Chunk && before.writer_open(),
+                    "the write runs only for a chunk read while the writer is open",
+                );
 
                 prop_assert!(
                     state.total_written() >= before.total_written(),

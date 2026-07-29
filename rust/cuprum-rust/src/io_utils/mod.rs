@@ -155,10 +155,25 @@ pub(crate) fn classify_write(
     writer: &mut StreamHandle,
     chunk: &[u8],
 ) -> Result<WriteEvent, PumpError> {
-    match handle_write(writer, chunk) {
+    classify_write_outcome(handle_write(writer, chunk))
+}
+
+/// Map a completed write attempt onto the pure machine's `WriteEvent`.
+///
+/// Split from [`classify_write`] so the mapping can be exercised for every
+/// outcome — including a non-fatal short write carrying a positive byte count —
+/// without contriving a partial write against a real descriptor.
+///
+/// There is deliberately no non-fatal `Err` arm: [`map_short_write_error`] has
+/// already turned broken-pipe and connection-reset failures into
+/// [`WriteOutcome::NonFatalShortWrite`], so every `Err` reaching here is fatal
+/// and propagates.
+fn classify_write_outcome(
+    outcome: Result<WriteOutcome, PumpError>,
+) -> Result<WriteEvent, PumpError> {
+    match outcome {
         Ok(WriteOutcome::Complete(bytes)) => Ok(WriteEvent::Complete { bytes }),
         Ok(WriteOutcome::NonFatalShortWrite(bytes)) => Ok(WriteEvent::Closed { bytes }),
-        Err(err) if err.is_nonfatal_write() => Ok(WriteEvent::Closed { bytes: 0 }),
         Err(err) => Err(err),
     }
 }
