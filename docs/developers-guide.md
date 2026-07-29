@@ -267,6 +267,22 @@ responsibility of observe-hook adapters such as `MetricsHook` and
 `TracingHook`, which consume `ExecEvent` values without coupling core execution
 to a telemetry vendor.
 
+`MetricsHook` keeps that consumption in two halves. The pure
+`_metric_operations` reducer maps an `ExecEvent` to a tuple of `_CounterOp` and
+`_HistogramOp` records, and `_apply` is the only step that reaches the
+`MetricsCollector`. The reducer is therefore the single source of truth for
+which counters and observations each phase yields, and it can be property
+tested without a collector at all — `test_metrics_adapter_stateful.py` drives
+random event streams through it and checks the accumulated totals against an
+independent phase-count oracle.
+
+Two consequences are worth preserving when changing the mapping. Labels are
+projected only when the reducer yields at least one operation, so a `plan`
+event never touches `event.program` or the project tag. And the reducer is
+total over the documented phase contract: an unrecognized phase raises
+`_UnhandledMetricsPhaseError` rather than being silently dropped, so a new
+`ExecPhase` cannot reach metrics without a deliberate decision here.
+
 Stream pumping continues to drain the upstream reader after
 `_write_to_stream_writer` reports `_WriteOutcome.CLOSED`.  `_pump_stream`
 closes the writer in a `finally` block, so writer cleanup runs after success,
