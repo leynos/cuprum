@@ -2238,6 +2238,34 @@ operation-scoped thread-local counters that the
 loops reset at operation start (keeping the seams parameter-free). See the
 developers' guide for the full contract.
 
+#### Read/write fallback state machine
+
+The non-splice read/write loop keeps its control flow — how each read and write
+outcome moves the running byte total and the latched writer state — in a pure,
+`io::Error`-free state machine in `rust/cuprum-rust/src/pump_machine.rs`,
+separate from the descriptor I/O that feeds it.
+
+`step` advances a `PumpState` given a `ReadEvent` (`Chunk`/`Eof`) and, when a
+write was performed, a `WriteEvent` (`Complete`/`Closed`). `drive_step` wraps it
+with the loop's write precondition — the write runs only for a chunk read while
+the writer is still open — so `pump_stream_files_readwrite` and the property
+tests drive the machine through one definition of that rule rather than a
+runtime copy and a test copy.
+
+`io_utils::classify_write` is the adapter between the two halves. It collapses
+`WriteOutcome` and the non-fatal error partition into the machine's two-variant
+`WriteEvent`, so a broken pipe or connection reset latches the writer closed
+carrying the bytes accepted before the failure, while genuinely fatal failures
+propagate as `PumpError` and never reach the machine at all.
+
+Keeping the decision `io::Error`-free is what makes it verifiable: proptests
+fold random event scripts through `drive_step`, and Kani proves the same
+invariants — the total is monotonic, the writer never reopens once latched, a
+closed writer drains without accruing bytes, and the loop stops exactly on
+`Eof` — over unbounded byte counts and arbitrary starting states. That is
+deliberately unlike the splice path, whose `io::Error` values are not
+Kani-tractable; the developers' guide records the commands and the bounds.
+
 ### 13.8 Build and Distribution
 
 The Rust extension is built using maturin and distributed as platform-specific
