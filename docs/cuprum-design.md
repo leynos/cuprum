@@ -1462,6 +1462,56 @@ design decisions guide these adapters:
 - Provides configurable log levels per phase (plan, start, output, exit).
 - Includes a `JsonLoggingFormatter` for log aggregation systems.
 
+**Event-to-operation reduction:**
+
+- `MetricsHook` does not touch the collector while deciding what to record.
+  The pure `_metric_operations` reducer maps an `ExecEvent` to a tuple of
+  `_CounterOp` and `_HistogramOp` records, and `_apply` is the only step that
+  reaches the `MetricsCollector`. That split is the single source of truth for
+  which counters and observations each phase yields, and it lets the mapping be
+  property-tested without a collector at all.
+- Labels are resolved only when the reducer yields at least one operation, so a
+  `plan` event — which records nothing — never projects labels off the event.
+- The reducer is total over the documented phase contract: an unrecognized
+  phase raises `_UnhandledMetricsPhaseError` rather than being silently
+  ignored, so a new phase cannot be added without a deliberate decision here.
+
+For screen readers: The following sequence diagram shows how one execution
+event becomes collector calls. The observe-hook dispatcher invokes
+`MetricsHook` with the `ExecEvent`; the hook asks `_metric_operations` for the
+operations that event yields and receives a tuple of `_MetricOp` records. When
+the tuple is empty the hook returns immediately without computing labels.
+Otherwise it extracts the `program` and `project` labels once, then applies
+each operation in turn: a `_CounterOp` becomes `inc_counter(name, value,
+labels)` on the collector, and a `_HistogramOp` becomes `observe_histogram(name,
+value, labels)`.
+
+```mermaid
+sequenceDiagram
+    participant ExecEvent
+    participant MetricsHook
+    participant Reducer as _metric_operations
+    participant Collector as MetricsCollector
+
+    ExecEvent ->> MetricsHook: __call__(event)
+    MetricsHook ->> Reducer: _metric_operations(event)
+    Reducer -->> MetricsHook: tuple[_MetricOp]
+
+    alt no operations
+        MetricsHook -->> ExecEvent: return
+    else has operations
+        MetricsHook ->> MetricsHook: _extract_labels(event)
+        loop for each operation
+            MetricsHook ->> MetricsHook: _apply(operation, labels)
+            alt _CounterOp
+                MetricsHook ->> Collector: inc_counter(name, value, labels)
+            else _HistogramOp
+                MetricsHook ->> Collector: observe_histogram(name, value, labels)
+            end
+        end
+    end
+```
+
 ______________________________________________________________________
 
 ## 9. Error Model
