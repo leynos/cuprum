@@ -149,7 +149,12 @@ async def _pump_over_raw_fds(
             await _run_python_pump(reader, writer)
 
     """
-    with _paused_reader(reader):
+    with _paused_reader(reader) as may_hand_off:
+        if not may_hand_off:
+            # Pausing failed, so asyncio may still be consuming the reader.
+            # Fall back rather than race it for the descriptor.
+            return False
+
         # Flush any bytes asyncio already buffered in the StreamReader before
         # the Rust pump takes over the raw file descriptor.
         await _drain_reader_buffer(reader, writer)
@@ -159,14 +164,39 @@ async def _pump_over_raw_fds(
         except OSError:
             return False
 
-        from cuprum._streams_rs import rust_pump_stream
-
-        loop = asyncio.get_running_loop()
-        try:
-            await loop.run_in_executor(None, rust_pump_stream, reader_fd, writer_fd)
-        finally:
-            guard.restore()
+        await _await_rust_pump(guard, reader_fd=reader_fd, writer_fd=writer_fd)
     return True
+
+
+async def _await_rust_pump(
+    guard: _BlockingModeGuard,
+    *,
+    reader_fd: int,
+    writer_fd: int,
+) -> None:
+    """Run the Rust pump in an executor, restoring the FDs only once it ends.
+
+    Cancelling the awaiting task cannot interrupt the worker thread, which
+    still owns both raw descriptors. Restoring their blocking mode — or letting
+    ``_paused_reader`` resume the transport — while that thread is mid-transfer
+    would race it, so on cancellation this waits for the worker to return
+    before the descriptors are touched.
+    """
+    from cuprum._streams_rs import rust_pump_stream
+
+    loop = asyncio.get_running_loop()
+    future = loop.run_in_executor(None, rust_pump_stream, reader_fd, writer_fd)
+    try:
+        # Shielded so cancelling this task does not mark the executor future
+        # cancelled while its worker thread is still running.
+        await asyncio.shield(future)
+    except asyncio.CancelledError:
+        # Drain the worker before propagating: the descriptors must outlive it.
+        with contextlib.suppress(BaseException):
+            await asyncio.wait([future])
+        raise
+    finally:
+        guard.restore()
 
 
 async def _drain_reader_buffer(

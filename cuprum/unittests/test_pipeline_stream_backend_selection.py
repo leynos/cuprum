@@ -333,7 +333,7 @@ class TestPumpStreamDispatch:
 
         def fake_pause_reader_transport(
             reader: asyncio.StreamReader,
-        ) -> cabc.Callable[[], None]:
+        ) -> _pipeline_stream_fds._ReaderPause:
             """Record a pause and return a resume callback for the reader."""
             del reader
             call_order.append("pause")
@@ -342,7 +342,10 @@ class TestPumpStreamDispatch:
                 """Record that the reader transport was resumed."""
                 call_order.append("resume")
 
-            return _resume
+            return _pipeline_stream_fds._ReaderPause(
+                may_hand_off=True,
+                resume=_resume,
+            )
 
         async def fake_drain_reader_buffer(
             reader: asyncio.StreamReader,

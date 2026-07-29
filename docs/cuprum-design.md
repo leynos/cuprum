@@ -2297,8 +2297,21 @@ each path is testable without a live pump:
   captured modes. This is what stops a descriptor being left blocking after the
   transfer.
 - `_paused_reader` — a context manager that pauses the reader transport and
-  always resumes it, on every exit path including exceptions and cancellation,
-  so a resume can never be skipped.
+  resumes it on every exit path, including exceptions and cancellation, so a
+  resume can never be skipped. Only a pause that actually took effect is
+  resumed: when the transport exposes no pause/resume hooks, or when
+  `pause_reading()` raises, no resume callback is invoked. It yields whether
+  the descriptor may be handed to the Rust pump — a failed pause answers
+  `False`, because asyncio may still be consuming the reader, and the caller
+  falls back to the Python pump rather than racing it. A transport with no
+  pause hooks answers `True`, since it has no callbacks to suspend.
+
+Cancellation is handled explicitly rather than implicitly. `run_in_executor`
+cannot interrupt the worker thread running the Rust pump, and that thread still
+owns both raw descriptors, so cancelling the awaiting task waits for the worker
+to return before the blocking mode is restored and the transport resumed.
+Restoring or resuming earlier would hand the descriptors back to asyncio while
+native code was still mid-transfer.
 
 The module's scope is deliberately narrow: descriptor extraction plus the
 pause and blocking-mode lifecycle for the Rust pump hand-off. It is consumed
