@@ -1328,6 +1328,21 @@ that expose pure behaviour. The UTF-8 decoder tests generate arbitrary byte
 vectors and chunk split points, then compare the decoded output with
 `String::from_utf8_lossy` as the oracle.
 
+Snapshot tests use [insta](https://docs.rs/insta/latest/insta/) as a
+development dependency, declared with `default-features = false` so the crate
+pulls in none of insta's optional format integrations. Prefer insta where the
+valuable assertion is the *exact* output text rather than a property of it —
+`consume_snapshot_tests.rs` pins the UTF-8 replacement output of the
+`consume_stream_files` read loop this way, so a regression in the loop, the
+bounds-checked slicing, or the `final_chunk` handling surfaces as a concrete
+text diff rather than a boolean failure.
+
+Those snapshots are written inline with `insta::assert_snapshot!(value, @"...")`
+rather than as separate `.snap` files, which keeps the expected text beside the
+case that produces it and leaves no snapshot files to review or prune. Accept a
+deliberate change by editing the inline literal; `cargo insta` is not required
+for the inline form.
+
 Kani harnesses are reserved for bounded verification of small, high-value state
 spaces. Gate Kani-only modules and helpers with `#[cfg(kani)]`, and share pure
 test helpers behind `#[cfg(any(test, kani))]` when both proptest and Kani need
