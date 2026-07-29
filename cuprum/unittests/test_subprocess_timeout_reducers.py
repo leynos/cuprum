@@ -31,18 +31,18 @@ from cuprum._subprocess_timeout import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-_finite_floats = st.floats(allow_nan=False, allow_infinity=False)
-_optional_text = st.none() | st.text()
+_FINITE_FLOATS = st.floats(allow_nan=False, allow_infinity=False)
+_OPTIONAL_TEXT = st.none() | st.text()
 
 
 @st.composite
 def _timeout_details(draw: st.DrawFn) -> _SubprocessTimeoutDetails:
     """Draw an arbitrary captured `_SubprocessTimeoutDetails`."""
     return _SubprocessTimeoutDetails(
-        timeout=draw(_finite_floats),
-        stdout=draw(_optional_text),
-        stderr=draw(_optional_text),
-        exited_at=draw(_finite_floats),
+        timeout=draw(_FINITE_FLOATS),
+        stdout=draw(_OPTIONAL_TEXT),
+        stderr=draw(_OPTIONAL_TEXT),
+        exited_at=draw(_FINITE_FLOATS),
     )
 
 
@@ -64,14 +64,17 @@ def test_resolve_uses_carried_payload_for_subprocess_timeout_error(
             exited_at=-1.0,
         ),
     )
-    assert payload == details
+    assert payload == details, (
+        "a carried _SubprocessTimeoutError payload must be returned verbatim, "
+        "with no field taken from the fallback"
+    )
 
 
 @given(
-    configured_timeout=_finite_floats,
-    stdout_text=_optional_text,
-    stderr_text=_optional_text,
-    exited_at=_finite_floats,
+    configured_timeout=_FINITE_FLOATS,
+    stdout_text=_OPTIONAL_TEXT,
+    stderr_text=_OPTIONAL_TEXT,
+    exited_at=_FINITE_FLOATS,
 )
 def test_resolve_builds_consistent_payload_for_bare_timeout(
     *,
@@ -90,10 +93,18 @@ def test_resolve_builds_consistent_payload_for_bare_timeout(
             exited_at=exited_at,
         ),
     )
-    assert payload.timeout == configured_timeout
-    assert payload.exited_at == exited_at
-    assert payload.stdout == stdout_text
-    assert payload.stderr == stderr_text
+    assert payload.timeout == configured_timeout, (
+        "a bare TimeoutError must take its timeout from the fallback"
+    )
+    assert payload.exited_at == exited_at, (
+        "a bare TimeoutError must take its exit time from the fallback"
+    )
+    assert payload.stdout == stdout_text, (
+        "a bare TimeoutError must take its stdout from the fallback"
+    )
+    assert payload.stderr == stderr_text, (
+        "a bare TimeoutError must take its stderr from the fallback"
+    )
 
 
 def test_resolve_bare_timeout_without_configured_timeout_is_an_invariant_error() -> (
@@ -135,12 +146,20 @@ def test_stages_to_terminate_selects_running_non_failed_stages(
     expected = [
         idx for idx in range(len(done)) if idx != failure_index and not done[idx]
     ]
-    assert result == expected
-    assert failure_index not in result
-    assert all(not done[idx] for idx in result)
+    assert result == expected, (
+        "the selection must be exactly the unfinished, non-failed stages"
+    )
+    assert failure_index not in result, (
+        "the failed stage owns its own exit and must never be terminated"
+    )
+    assert all(not done[idx] for idx in result), (
+        "an already-finished stage needs no termination"
+    )
     # No double-termination scheduling: indices are unique and ordered.
-    assert len(result) == len(set(result))
-    assert result == sorted(result)
+    assert len(result) == len(set(result)), (
+        "no stage may be scheduled for termination twice"
+    )
+    assert result == sorted(result), "the selection must stay in ascending stage order"
 
 
 @given(scenario=_termination_scenario())
@@ -157,4 +176,7 @@ def test_stages_to_terminate_is_idempotent(
     settled: cabc.Sequence[bool] = [
         is_done or idx in first for idx, is_done in enumerate(done)
     ]
-    assert _stages_to_terminate(failure_index, settled) == []
+    assert _stages_to_terminate(failure_index, settled) == [], (
+        "cleanup must be idempotent: once the selected stages have settled, "
+        "a second pass must select nothing"
+    )

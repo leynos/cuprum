@@ -161,19 +161,26 @@ def _resolve_timeout_payload(
     violation). Either branch yields a concrete ``timeout``, so the resulting
     ``TimeoutExpired`` report is consistent regardless of which path timed out.
     """
-    if isinstance(exc, _SubprocessTimeoutError):
-        return _SubprocessTimeoutDetails(
-            timeout=exc.timeout,
-            stdout=exc.stdout,
-            stderr=exc.stderr,
-            exited_at=exc.exited_at,
-        )
-    return _SubprocessTimeoutDetails(
-        timeout=_require_timeout(fallback.configured_timeout, exc),
-        stdout=fallback.stdout,
-        stderr=fallback.stderr,
-        exited_at=fallback.exited_at,
-    )
+    match exc:
+        case _SubprocessTimeoutError(
+            timeout=timeout,
+            stdout=stdout,
+            stderr=stderr,
+            exited_at=exited_at,
+        ):
+            return _SubprocessTimeoutDetails(
+                timeout=timeout,
+                stdout=stdout,
+                stderr=stderr,
+                exited_at=exited_at,
+            )
+        case _:
+            return _SubprocessTimeoutDetails(
+                timeout=_require_timeout(fallback.configured_timeout, exc),
+                stdout=fallback.stdout,
+                stderr=fallback.stderr,
+                exited_at=fallback.exited_at,
+            )
 
 
 def _handle_subprocess_timeout(
