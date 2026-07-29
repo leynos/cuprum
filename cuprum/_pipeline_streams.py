@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import dataclasses as dc
 import functools
+import logging
 import os
 import typing as typ
 
@@ -60,6 +61,18 @@ from cuprum._streams import _close_stream_writer, _pump_stream
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _log_rust_pump_declined(reason: str) -> None:
+    """Record the reason an inter-stage hop falls back to Python pumping."""
+    _LOGGER.debug(
+        "Inter-stage hop declined the Rust pump (%s); using the Python pump",
+        reason,
+        extra={"cuprum_action": "rust_pump_declined", "cuprum_reason": reason},
+    )
 
 
 @dc.dataclass(slots=True)
@@ -216,6 +229,7 @@ async def _pump_over_raw_fds(
     # before the Rust pump takes over the raw file descriptor.
     reader_pause = _pause_reader_transport(reader)
     if not reader_pause.may_hand_off:
+        _log_rust_pump_declined("reader_pause_failed")
         return False
     try:
         await _drain_reader_buffer(reader, writer)
@@ -230,6 +244,7 @@ async def _pump_over_raw_fds(
         )
     except (OSError, ValueError):
         _resume_reader_transport(reader_pause.resume)
+        _log_rust_pump_declined("blocking_mode_unavailable")
         return False
 
     state = _RustPumpState(
@@ -293,6 +308,7 @@ async def _try_rust_pump(
     writer_fd = _extract_stream_fd(writer)
 
     if reader_fd is None or writer_fd is None:
+        _log_rust_pump_declined("raw_fd_unavailable")
         return False
 
     return await _run_rust_pump(

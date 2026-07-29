@@ -462,6 +462,39 @@ this hand-off belong here, but the seams are not a general-purpose descriptor
 utility. Anything serving a different caller should be designed against that
 caller's real requirements instead of widening these.
 
+
+#### Observing a declined hand-off
+
+Each of those partial failures ends the same way: the hop falls back to the
+Python pump and completes correctly. That is the point — the fall-back is not
+an error, and nothing surfaces to the caller. It does mean a deployment that
+has quietly stopped taking the fast path is indistinguishable from one that
+never had it, which is the question an operator actually asks.
+
+`_log_rust_pump_declined` in `cuprum/_pipeline_streams.py` records each decline
+against the `cuprum._pipeline_streams` logger, following the same convention as
+the pipeline fail-fast records: a `cuprum_action` of `rust_pump_declined` plus
+a `cuprum_reason` naming the seam that refused.
+
+| `cuprum_reason` | Seam that declined |
+| --- | --- |
+| `raw_fd_unavailable` | `_extract_stream_fd` found no descriptor on either transport |
+| `reader_pause_failed` | `pause_reading()` raised, so asyncio may still be consuming |
+| `blocking_mode_unavailable` | `_BlockingModeGuard.engage` could not switch both descriptors |
+
+These are logged at `DEBUG`, deliberately. A fall-back is a per-hop routing
+decision rather than a fault, so promoting it to a warning would make a
+correctly-working pipeline noisy on any platform where the fast path does not
+apply. To diagnose fast-path coverage, raise that one logger:
+
+```python
+logging.getLogger("cuprum._pipeline_streams").setLevel(logging.DEBUG)
+```
+
+`cuprum/unittests/test_pipeline_streams_observability.py` pins each reason to
+the real code path that emits it, so a decline that stops being recorded fails
+the suite rather than going unnoticed.
+
 ### `_pipeline_wait` completion command/query seam
 
 `cuprum/_pipeline_wait.py` splits completion handling on the same
