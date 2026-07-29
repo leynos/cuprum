@@ -120,21 +120,23 @@ boundaries above.
 
 - **Caller-owned deadlines.** The deadline is applied with `asyncio.timeout()`
   rather than threaded through a `timeout` parameter (which `ASYNC109` flags).
-  `_wait_for_exit_code` awaits the process and owns cancellation teardown but no
-  longer takes a timeout; `_wait_for_exit_code_within_timeout` wraps it and
+  `_wait_for_exit_code` awaits the process and terminates it on cancellation but
+  no longer takes a timeout; `_wait_for_exit_code_within_timeout` wraps it and
   applies `execution.timeout`.
 - **Non-positive fast path.** Because `asyncio.timeout()` only schedules its
   cancellation for the next event-loop iteration, a fast, already-exited process
   could race past a zero or negative deadline. A non-positive timeout is
   therefore special-cased to expire immediately and deterministically,
   preserving the behaviour of the superseded `asyncio.wait_for` implementation.
-- **Shared teardown.** `_terminate_and_drain_consumers` is the single
-  terminate-and-drain routine reused by the cancellation, elapsed-expiry, and
-  immediate-expiry paths.
+- **Terminate here, drain once there.** Both wait helpers terminate the process
+  but never drain: stream consumers belong to the caller, which drains them
+  exactly once through `_drain_stream_consumers`. Terminating first is what lets
+  that single drain reach EOF, and draining in one place keeps the timeout and
+  cancellation paths from reconciling the same tasks twice.
 - **No-orphan invariant.** Whether a run ends through external cancellation, an
-  elapsed deadline, or an immediate non-positive expiry, teardown cancels and
-  drains every still-pending stream-consumer task before the exception
-  propagates, so no pending stream-consumer task is ever left behind.
+  elapsed deadline, or an immediate non-positive expiry, that single drain
+  cancels and drains every still-pending stream-consumer task before the
+  exception propagates, so no pending stream-consumer task is ever left behind.
 - **Observability.** These paths emit best-effort `timeout` and
   `teardown_error` `ExecEvent` observe events, plus parallel `cuprum.timeout`
   log diagnostics (documented in the developers' guide), that never mask
