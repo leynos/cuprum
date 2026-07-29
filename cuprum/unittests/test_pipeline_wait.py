@@ -355,12 +355,24 @@ _FIRST_FAILURE_ACTION = "pipeline_stage_first_failure"
 _TERMINATION_ACTION = "pipeline_fail_fast_termination"
 
 
+def _structured_fields(record: logging.LogRecord) -> dict[str, object]:
+    """Return a record's ``cuprum_``-prefixed structured fields.
+
+    ``extra=`` sets these directly on the record instance, so they are not
+    attributes of ``LogRecord`` itself; read them from the instance dictionary
+    the way ``cuprum.adapters.logging_adapter`` selects its own fields.
+    """
+    return {
+        key: value for key, value in vars(record).items() if key.startswith("cuprum_")
+    }
+
+
 def _actions(records: list[logging.LogRecord]) -> list[str]:
     """Return the ``cuprum_action`` field of each pipeline-wait record."""
     return [
-        typ.cast("str", record.cuprum_action)
-        for record in records
-        if hasattr(record, "cuprum_action")
+        str(fields["cuprum_action"])
+        for fields in (_structured_fields(record) for record in records)
+        if "cuprum_action" in fields
     ]
 
 
@@ -446,12 +458,17 @@ class TestCompletionObservability:
         assert _actions(records) == [_FIRST_FAILURE_ACTION, _TERMINATION_ACTION], (
             "expected exactly one first-failure record then one termination record"
         )
+        # Both records must carry the same payload; only the action differs.
         for record in records:
-            assert record.cuprum_stage_index == 0, "records carry the failing stage"
-            assert record.cuprum_exit_code == 4, "records carry the exit code"
-            assert record.cuprum_duration_s == 12.5, (
-                "records carry the elapsed time from the injected clock"
-            )
+            fields = _structured_fields(record)
+            assert {
+                key: value for key, value in fields.items() if key != "cuprum_action"
+            } == {
+                "cuprum_stage_index": 0,
+                "cuprum_exit_code": 4,
+                # Elapsed from the stage's zero start to the injected clock.
+                "cuprum_duration_s": 12.5,
+            }, "both records carry the stage index, exit code, and elapsed time"
 
     def test_successful_completion_emits_neither_record(
         self,
