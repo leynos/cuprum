@@ -8,6 +8,7 @@ import shutil
 import subprocess  # noqa: S404 - tests assert trusted maturin command handling.
 import sys
 import typing as typ
+import zipfile
 
 import pytest
 
@@ -264,6 +265,27 @@ def test_build_native_wheel_artifact_reports_maturin_stderr(
     assert "cargo fetch failed" in error_text, (
         "maturin failure diagnostics should include captured stderr"
     )
+
+
+def test_wheel_build_snapshot_rejects_wheel_without_metadata(
+    tmp_path: pth.Path,
+) -> None:
+    """A wheel with WHEEL but no METADATA raises the documented error.
+
+    ``metadata_name`` is derived from the WHEEL entry by string
+    substitution rather than looked up in the archive, so without an
+    explicit membership check ``ZipFile.read`` would surface a ``KeyError``
+    that the helper's documented ``Raises`` contract does not advertise.
+    """
+    whl_path = tmp_path / "cuprum-0.0.0-py3-none-any.whl"
+    with zipfile.ZipFile(whl_path, "w") as archive:
+        archive.writestr(
+            "cuprum-0.0.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: maturin (1.0.0)\nRoot-Is-Purelib: false\n",
+        )
+
+    with pytest.raises(AssertionError, match=r"missing \.dist-info/METADATA"):
+        wheel_build_snapshot(whl_path)
 
 
 @pytest.mark.timeout(0)

@@ -236,6 +236,12 @@ def maturin_script_locatable() -> bool:
     genuinely unreachable, without masking a regression in normal CI or
     local-development environments, where ``sys.prefix`` matches the
     virtualenv that installed maturin's script.
+
+    Returns
+    -------
+    bool
+        Whether maturin's own lookup can locate its compiled script in this
+        interpreter.
     """
     script_dirs = (
         Path(sysconfig.get_path("scripts", scheme))
