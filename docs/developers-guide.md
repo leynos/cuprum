@@ -421,6 +421,31 @@ interpreter whose opcode set the tracer cannot handle
 3.15 betas, issue `#109`); every other failure is re-raised. Supported
 interpreters therefore confirm the contracts rather than skipping them.
 
+### Pipeline stream module boundaries
+
+A pipeline's byte movement is split three ways, so each module has one reason
+to change:
+
+Table 1: modules owning each part of a pipeline's byte movement
+
+| Module | Owns |
+| --- | --- |
+| `_pipeline_streams.py` | *how* bytes cross one hop — backend choice, the Rust hand-off, the Python pump |
+| `_pipeline_pipe_tasks.py` | the *tasks* carrying them — creation per stage pair, cancellation, outcome collection |
+| `_pipeline_stream_fds.py` | the raw-descriptor lifecycle behind the Rust hand-off |
+
+`_pipeline_pipe_tasks` imports `_pump_stream_dispatch` from
+`_pipeline_streams`, never the reverse, so the dependency runs one way: task
+bookkeeping depends on the pump, and the pump knows nothing about tasks.
+Callers that need pipe-task helpers — `_pipeline_wait`, `_process_lifecycle`,
+`_pipeline_internals` — import them from `_pipeline_pipe_tasks` directly rather
+than through a re-export, which would reintroduce the cycle.
+
+`_surface_unexpected_pipe_failures` lives with the tasks because it encodes
+which task outcomes a pipeline tolerates: `BrokenPipeError` and
+`ConnectionResetError` are the expected result of a downstream stage exiting
+early, and everything else is a genuine failure that must reach the caller.
+
 ### Rust pump raw-descriptor lifecycle
 
 Routing an inter-stage hop through the Rust pump means taking the raw pipe
@@ -467,7 +492,7 @@ against the `cuprum._pipeline_streams` logger, following the same convention as
 the pipeline fail-fast records: a `cuprum_action` of `rust_pump_declined` plus
 a `cuprum_reason` naming the seam that refused.
 
-Table 1: `cuprum_reason` values and the seam each one reports
+Table 2: `cuprum_reason` values and the seam each one reports
 
 | `cuprum_reason` | Seam that declined |
 | --- | --- |

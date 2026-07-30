@@ -225,20 +225,55 @@ async def _await_rust_pump(
         await asyncio.shield(future)
     except asyncio.CancelledError:
         # Drain the worker before propagating: the descriptors must outlive it.
-        # Only a further cancellation can interrupt this wait, and suppressing
-        # that is the point; KeyboardInterrupt and SystemExit must still travel,
-        # or a shutdown signal arriving here would be swallowed.
-        with contextlib.suppress(asyncio.CancelledError):
-            await asyncio.wait([future])
-        # asyncio.wait never retrieves the outcome, so a pump that failed on a
-        # cancelled hop would resurface at garbage collection as an
-        # unretrieved-exception warning. Consume it here; the cancellation is
-        # what the caller is told about.
-        if future.done() and not future.cancelled():
-            future.exception()
+        # A further cancellation interrupts the wait itself, so loop until the
+        # worker has actually finished — a single suppressed wait survives only
+        # one extra cancellation, and returning early would restore the
+        # descriptors while the worker still owns them, which is the precise
+        # hazard this drain exists to prevent. Only CancelledError is
+        # suppressed: KeyboardInterrupt and SystemExit must still travel, or a
+        # shutdown signal arriving here would be swallowed.
+        while not future.done():
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.wait([future])
+        _report_pump_outcome_after_cancel(future)
         raise
     finally:
         guard.restore()
+
+
+def _report_pump_outcome_after_cancel(future: asyncio.Future[int]) -> None:
+    """Retrieve a drained pump's outcome, recording any failure it carried.
+
+    ``asyncio.wait`` never retrieves a future's outcome, so a pump that failed
+    on a cancelled hop would resurface at garbage collection as an
+    unretrieved-exception warning, detached from the hop that caused it.
+
+    The caller is told about the cancellation, which is what it asked for, so
+    the pump's own error would otherwise vanish entirely. Record it at debug
+    level — the same convention as ``_log_rust_pump_declined`` — so a failure
+    masked by cancellation stays diagnosable.
+
+    Examples
+    --------
+    Consume the outcome of a worker that failed while its hop was cancelled::
+
+        with caplog.at_level(logging.DEBUG, logger="cuprum._pipeline_streams"):
+            _report_pump_outcome_after_cancel(future)
+        assert caplog.records[0].__dict__["cuprum_action"] == (
+            "rust_pump_failed_after_cancel"
+        )
+
+    """
+    if future.cancelled():
+        return
+    error = future.exception()
+    if error is None:
+        return
+    _LOGGER.debug(
+        "Rust pump failed while its hop was being cancelled: %r",
+        error,
+        extra={"cuprum_action": "rust_pump_failed_after_cancel"},
+    )
 
 
 async def _drain_reader_buffer(
@@ -321,95 +356,3 @@ async def _pump_stream_dispatch(
         return
 
     await _run_python_pump(reader, writer)
-
-
-def _create_pipe_tasks(
-    processes: list[asyncio.subprocess.Process],
-) -> list[asyncio.Task[None]]:
-    """Create streaming tasks between adjacent pipeline stages."""
-    return [
-        asyncio.create_task(
-            _pump_stream_dispatch(
-                processes[idx].stdout,
-                processes[idx + 1].stdin,
-            ),
-        )
-        for idx in range(len(processes) - 1)
-    ]
-
-
-def _flatten_stream_tasks(
-    stderr_tasks: list[asyncio.Task[str | None] | None],
-    stdout_task: asyncio.Task[str | None] | None,
-) -> list[asyncio.Task[str | None]]:
-    """Collect all running stream consumer tasks for cancellation cleanup."""
-    tasks = [task for task in stderr_tasks if task is not None]
-    if stdout_task is not None:
-        tasks.append(stdout_task)
-    return tasks
-
-
-async def _cancel_stream_tasks(
-    stderr_tasks: list[asyncio.Task[str | None] | None],
-    stdout_task: asyncio.Task[str | None] | None,
-) -> None:
-    """Cancel stream consumer tasks and await their completion."""
-    tasks = _flatten_stream_tasks(stderr_tasks, stdout_task)
-    for task in tasks:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
-
-
-async def _gather_optional_text_tasks(
-    tasks: list[asyncio.Task[str | None] | None],
-) -> tuple[str | None, ...]:
-    """Await optional capture tasks, returning a tuple aligned with inputs."""
-    return tuple(
-        await asyncio.gather(
-            *(
-                task if task is not None else asyncio.sleep(0, result=None)
-                for task in tasks
-            ),
-        ),
-    )
-
-
-async def _collect_pipe_results(
-    pipe_tasks: list[asyncio.Task[None]],
-) -> list[object]:
-    """Collect pipe task results, capturing exceptions rather than raising them.
-
-    Uses return_exceptions=True to gather all results including any exceptions
-    that occurred during pipe streaming between pipeline stages.
-    """
-    return list(await asyncio.gather(*pipe_tasks, return_exceptions=True))
-
-
-async def _reconcile_pipe_tasks(pipe_tasks: list[asyncio.Task[None]]) -> None:
-    """Cancel and drain the inter-stage pumps after a pipeline deadline.
-
-    Safe to run whether or not ``_wait_for_pipeline`` already reconciled them:
-    cancelling a finished task is a no-op and gathering an already-gathered one
-    returns its recorded outcome. Failures are absorbed because a
-    ``TimeoutExpired`` is already propagating and a broken pump must not
-    replace it.
-    """
-    for task in pipe_tasks:
-        if not task.done():
-            task.cancel()
-    await _collect_pipe_results(pipe_tasks)
-
-
-def _surface_unexpected_pipe_failures(pipe_results: list[object]) -> None:
-    """Raise non-BrokenPipe exceptions from pipe results.
-
-    BrokenPipeError and ConnectionResetError are expected when downstream
-    processes terminate early (e.g., head) and should not fail the pipeline.
-    Other exceptions indicate genuine failures and must be surfaced.
-    """
-    for result in pipe_results:
-        if isinstance(result, Exception) and not isinstance(
-            result,
-            (BrokenPipeError, ConnectionResetError),
-        ):
-            raise result

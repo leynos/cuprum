@@ -22,8 +22,8 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum._pipeline_pipe_tasks import _surface_unexpected_pipe_failures
 from cuprum._pipeline_stream_fds import _BlockingModeGuard, _paused_reader
-from cuprum._pipeline_streams import _surface_unexpected_pipe_failures
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc

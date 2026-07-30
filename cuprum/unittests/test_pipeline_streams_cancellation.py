@@ -51,8 +51,16 @@ async def _cancel_mid_transfer(
     events: list[str],
     worker_started: threading.Event,
     release: threading.Event,
+    *,
+    cancellations: int = 1,
 ) -> None:
-    """Start the pump, cancel it mid-transfer, then release the worker."""
+    """Start the pump, cancel it mid-transfer, then release the worker.
+
+    ``cancellations`` controls how many times the awaiting task is cancelled
+    before the worker is released. More than one exercises the drain's own
+    interruption: each extra cancellation lands while the pump is still
+    waiting for the worker thread.
+    """
     task = asyncio.create_task(
         _pipeline_streams._await_rust_pump(
             typ.cast(
@@ -64,9 +72,10 @@ async def _cancel_mid_transfer(
         )
     )
     await asyncio.to_thread(worker_started.wait, 5.0)
-    task.cancel()
-    # Give the cancellation a chance to be delivered while the worker runs.
-    await asyncio.sleep(0.05)
+    for _ in range(cancellations):
+        task.cancel()
+        # Give the cancellation a chance to be delivered while the worker runs.
+        await asyncio.sleep(0.05)
     events.append("released")
     release.set()
     with pytest.raises(asyncio.CancelledError):
@@ -130,7 +139,10 @@ def test_a_failing_pump_on_a_cancelled_hop_reports_the_cancellation(
 
     _install_fake_pump(monkeypatch, failing_pump)
 
-    with caplog.at_level(logging.ERROR, logger="asyncio"):
+    with (
+        caplog.at_level(logging.ERROR, logger="asyncio"),
+        caplog.at_level(logging.DEBUG, logger="cuprum._pipeline_streams"),
+    ):
         # CancelledError, not OSError: _cancel_mid_transfer asserts it.
         asyncio.run(_cancel_mid_transfer(events, worker_started, release))
         # Force collection of the executor future while capture is still live.
@@ -145,4 +157,51 @@ def test_a_failing_pump_on_a_cancelled_hop_reports_the_cancellation(
     assert not unretrieved, (
         "the pump's failure must be retrieved from the future, but asyncio "
         f"reported it as unhandled: {unretrieved}"
+    )
+    # Retrieving the failure is not enough: discarding it silently would leave
+    # a genuine pump error with no trace at all, since the caller only ever
+    # sees the cancellation.
+    reported = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("cuprum_action") == "rust_pump_failed_after_cancel"
+    ]
+    assert len(reported) == 1, (
+        "a pump failure masked by cancellation must be recorded exactly once, "
+        f"found {len(reported)}"
+    )
+    assert "the pump failed while the hop was being cancelled" in (
+        reported[0].getMessage()
+    ), f"the record must carry the pump's own error, found {reported[0].getMessage()!r}"
+
+
+def test_repeated_cancellation_still_waits_for_the_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Extra cancellations cannot cut the drain short.
+
+    A cancellation delivered *during* the drain interrupts the wait itself. If
+    that ended the drain, the descriptors would be restored while the worker
+    thread still owned them — the same race the single-cancellation path exists
+    to prevent, reachable by any caller that cancels twice.
+    """
+    events: list[str] = []
+    release = threading.Event()
+    worker_started = threading.Event()
+
+    def blocking_pump(reader_fd: int, writer_fd: int) -> int:
+        """Block until released, standing in for an in-flight Rust transfer."""
+        del reader_fd, writer_fd
+        worker_started.set()
+        release.wait(timeout=5.0)
+        events.append("worker_returned")
+        return 0
+
+    _install_fake_pump(monkeypatch, blocking_pump)
+    asyncio.run(_cancel_mid_transfer(events, worker_started, release, cancellations=3))
+
+    assert "restored" in events, "the descriptors must still be restored"
+    assert events.index("worker_returned") < events.index("restored"), (
+        "repeated cancellation must not restore the descriptors before the "
+        f"worker returns; observed order {events}"
     )

@@ -7,7 +7,7 @@ import dataclasses as dc
 import time
 import typing as typ
 
-from cuprum._pipeline_streams import (
+from cuprum._pipeline_pipe_tasks import (
     _collect_pipe_results,
     _surface_unexpected_pipe_failures,
 )
