@@ -43,7 +43,7 @@ def test_make_returns_callable_and_safe_command_metadata() -> None:
     assert cmd.project.documentation_locations, "Documentation links should surface"
 
 
-def test_keyword_arguments_are_serialised_to_flags() -> None:
+def test_keyword_arguments_are_serialized_to_flags() -> None:
     """Keyword arguments are converted into CLI-style flags."""
     builder = sh.make(ECHO)
 
@@ -56,7 +56,7 @@ def test_keyword_arguments_are_serialised_to_flags() -> None:
     assert cmd.argv_with_program[0] == str(ECHO), "Program must remain first element"
 
 
-def test_keyword_arguments_normalise_underscores() -> None:
+def test_keyword_arguments_normalize_underscores() -> None:
     """Kwarg names are normalised from underscores to hyphens."""
     builder = sh.make(ECHO)
 

@@ -20,7 +20,7 @@ if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
 
-def _summarise_folded(
+def _summarize_folded(
     tmp_path: pth.Path,
     content: str,
 ) -> tuple[
@@ -64,7 +64,7 @@ def test_folded_summary_yields_zero_totals_for_degenerate_input(
     description: str,
 ) -> None:
     """Degenerate folded input produces zero samples and empty rankings."""
-    summary, top_leaf, top_inclusive, summary_path = _summarise_folded(
+    summary, top_leaf, top_inclusive, summary_path = _summarize_folded(
         tmp_path, content
     )
     assert summary["total_samples"] == 0, (
@@ -81,7 +81,7 @@ def test_folded_summary_yields_zero_totals_for_degenerate_input(
 
 def test_folded_summary_ranks_inclusive_and_leaf_frames(tmp_path: pth.Path) -> None:
     """Folded stack summaries expose ranked frame costs."""
-    summary, top_leaf, top_inclusive, summary_path = _summarise_folded(
+    summary, top_leaf, top_inclusive, summary_path = _summarize_folded(
         tmp_path, "root;parent;leaf 3\nroot;other 2\nroot;parent;leaf 1\n"
     )
     assert summary["total_samples"] == 6, (
@@ -104,7 +104,7 @@ def test_summarize_folded_snapshot(
     snapshot: SnapshotAssertion,
 ) -> None:
     """summarize_folded_file output structure matches snapshot."""
-    summary, _, _, _ = _summarise_folded(
+    summary, _, _, _ = _summarize_folded(
         tmp_path, "root;parent;leaf 3\nroot;other 2\nroot;parent;leaf 1\n"
     )
     assert redact(summary, _VOLATILE_KEYS) == snapshot
@@ -114,7 +114,7 @@ def test_folded_summary_counts_repeated_frames_once_per_stack(
     tmp_path: pth.Path,
 ) -> None:
     """Inclusive folded counts deduplicate frames within one stack."""
-    summary, _top_leaf, top_inclusive, _summary_path = _summarise_folded(
+    summary, _top_leaf, top_inclusive, _summary_path = _summarize_folded(
         tmp_path, "root;recursive;recursive;leaf 3\n"
     )
 
@@ -254,7 +254,7 @@ def test_folded_summary_total_samples_matches_input(
 ) -> None:
     """total_samples always equals the sum of per-stack counts."""
     lines = "\n".join(f"{';'.join(frames)} {count}" for frames, count in stacks)
-    summary, _leaf, _inclusive, _ = _summarise_folded(tmp_path, lines)
+    summary, _leaf, _inclusive, _ = _summarize_folded(tmp_path, lines)
     expected_total = sum(count for _, count in stacks)
     assert summary["total_samples"] == expected_total, (
         f"expected total_samples {expected_total}, got {summary}"
@@ -292,7 +292,7 @@ def test_inclusive_counts_deduplicate_within_each_stack(
 ) -> None:
     """Inclusive samples count each frame once per folded stack."""
     lines = "\n".join(f"{';'.join(frames)} {count}" for frames, count in stacks)
-    summary, _leaf, inclusive, _ = _summarise_folded(tmp_path, lines)
+    summary, _leaf, inclusive, _ = _summarize_folded(tmp_path, lines)
     expected: dict[str, int] = {}
     for frames, count in stacks:
         for frame in set(frames):

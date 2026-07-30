@@ -139,12 +139,12 @@ _PROPERTY_SETTINGS: settings = settings(
 )
 
 
-def _normalise_line_endings(text: str) -> str:
+def _normalize_line_endings(text: str) -> str:
     """Normalize recognized line endings to line-feed characters."""
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _rebuild_normalised_text(lines: list[str], remainder: str) -> str:
+def _rebuild_normalized_text(lines: list[str], remainder: str) -> str:
     """Rebuild text from split output using normalized line endings."""
     return "".join(f"{line}\n" for line in lines) + remainder
 
@@ -160,10 +160,10 @@ def _line_ending_suffix(line: str) -> str:
     return ""
 
 
-def _split_preserves_normalised_text(text: str) -> bool:
+def _split_preserves_normalized_text(text: str) -> bool:
     """Return whether split output accounts for all input text."""
     lines, remainder = _split_complete_lines(text)
-    return len(_normalise_line_endings(text)) == (
+    return len(_normalize_line_endings(text)) == (
         sum(len(line) + 1 for line in lines) + len(remainder)
     )
 
@@ -545,11 +545,11 @@ def test_split_complete_lines_preserves_all_text(text: str) -> None:
     """
     lines, remainder = _split_complete_lines(text)
 
-    assert _rebuild_normalised_text(lines, remainder) == _normalise_line_endings(
+    assert _rebuild_normalized_text(lines, remainder) == _normalize_line_endings(
         text
     ), (
-        "_split_complete_lines output rebuilt with _rebuild_normalised_text "
-        "must match _normalise_line_endings input"
+        "_split_complete_lines output rebuilt with _rebuild_normalized_text "
+        "must match _normalize_line_endings input"
     )
 
 
@@ -627,7 +627,7 @@ def _split_no_text_loss_contract(text: str) -> None:
 
     pre: len(text) <= 3
     pre: all(character not in "\v\f\x1c\x1d\x1e\x85\u2028\u2029" for character in text)
-    post: _split_preserves_normalised_text(text)
+    post: _split_preserves_normalized_text(text)
     """
 
 
