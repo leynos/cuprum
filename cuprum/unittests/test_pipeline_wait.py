@@ -17,6 +17,7 @@ import asyncio
 import logging
 import typing as typ
 
+import pytest
 from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import (
@@ -31,7 +32,6 @@ from cuprum import _pipeline_wait
 from cuprum._pipeline_wait import _PipelineWaitState
 
 if typ.TYPE_CHECKING:
-    import pytest
     from hypothesis.strategies import DataObject
 
 
@@ -470,68 +470,54 @@ class TestCompletionObservability:
                 "cuprum_duration_s": 12.5,
             }, "both records carry the stage index, exit code, and elapsed time"
 
-    def test_successful_completion_emits_neither_record(
+    @pytest.mark.parametrize(
+        ("stage_count", "completions", "expected_actions", "reason"),
+        [
+            pytest.param(
+                3,
+                [(1, 0)],
+                [],
+                "a successful stage must emit no records",
+                id="successful_completion",
+            ),
+            pytest.param(
+                3,
+                [(2, 1)],
+                [_FIRST_FAILURE_ACTION],
+                "a failing final stage must not emit a termination record",
+                id="final_stage_failure",
+            ),
+            pytest.param(
+                1,
+                [(0, 9)],
+                [_FIRST_FAILURE_ACTION],
+                "a single-stage pipeline has no other stage to terminate",
+                id="single_stage_failure",
+            ),
+            pytest.param(
+                4,
+                [(0, 1), (1, 1)],
+                [_FIRST_FAILURE_ACTION, _TERMINATION_ACTION],
+                "fail-fast reporting must fire exactly once per pipeline",
+                id="later_failure_after_latch",
+            ),
+        ],
+    )
+    def test_completion_emits_the_expected_records(
         self,
+        stage_count: int,
+        completions: list[tuple[int, int]],
+        expected_actions: list[str],
+        reason: str,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """A zero exit is silent: nothing latched, nothing terminated."""
+        """Each completion sequence emits exactly the records it should."""
         records = self._run(
             monkeypatch,
             caplog,
-            stage_count=3,
-            completions=[(1, 0)],
+            stage_count=stage_count,
+            completions=completions,
         )
 
-        assert _actions(records) == [], "a successful stage must emit no records"
-
-    def test_final_stage_failure_emits_only_the_first_failure_record(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """A failing final stage latches but has nothing left to terminate."""
-        records = self._run(
-            monkeypatch,
-            caplog,
-            stage_count=3,
-            completions=[(2, 1)],
-        )
-
-        assert _actions(records) == [_FIRST_FAILURE_ACTION], (
-            "a failing final stage must not emit a termination record"
-        )
-
-    def test_single_stage_failure_emits_only_the_first_failure_record(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """A lone failing stage is also the final stage."""
-        records = self._run(
-            monkeypatch,
-            caplog,
-            stage_count=1,
-            completions=[(0, 9)],
-        )
-
-        assert _actions(records) == [_FIRST_FAILURE_ACTION], (
-            "a single-stage pipeline has no other stage to terminate"
-        )
-
-    def test_later_failure_emits_no_further_records(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """Once a failure latches, later failures are not re-reported."""
-        records = self._run(
-            monkeypatch,
-            caplog,
-            stage_count=4,
-            completions=[(0, 1), (1, 1)],
-        )
-
-        assert _actions(records) == [_FIRST_FAILURE_ACTION, _TERMINATION_ACTION], (
-            "fail-fast reporting must fire exactly once per pipeline"
-        )
+        assert _actions(records) == expected_actions, reason
