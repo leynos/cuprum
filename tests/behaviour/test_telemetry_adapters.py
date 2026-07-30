@@ -8,7 +8,7 @@ dictionaries. This pattern is necessary because pytest-bdd fixtures return
 ``dict[str, object]``) loses type information. More specific types (e.g.
 ``"ExecHook"``, ``"InMemoryMetrics"``) are used when the target type is known;
 ``"typ.Any"`` is used otherwise. The casts reduce type safety but are confined
-to test code where runtime behavior is verified by assertions.
+to test code where runtime behaviour is verified by assertions.
 """
 
 from __future__ import annotations

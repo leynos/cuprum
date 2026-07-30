@@ -62,7 +62,7 @@ _EXPECTED_RSYNC_FLAG_ORDER = (
 )
 
 # Path segments avoid ".", NUL, and separators so generated paths are
-# always SafePath-valid and normalisation is the identity.
+# always SafePath-valid and normalization is the identity.
 _SEGMENTS = st.text(alphabet="abcxyz09-_", min_size=1, max_size=6)
 _ABS_PATHS = st.lists(_SEGMENTS, min_size=1, max_size=4).map(
     lambda parts: "/" + "/".join(parts),

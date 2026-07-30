@@ -57,7 +57,7 @@ def test_keyword_arguments_are_serialized_to_flags() -> None:
 
 
 def test_keyword_arguments_normalize_underscores() -> None:
-    """Kwarg names are normalised from underscores to hyphens."""
+    """Kwarg names are normalized from underscores to hyphens."""
     builder = sh.make(ECHO)
 
     cmd = builder("hello", user_id=42)

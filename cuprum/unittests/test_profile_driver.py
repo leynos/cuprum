@@ -54,7 +54,7 @@ _SCENARIO_NAMES_WITHOUT_RUST: list[str] = [
 def test_profile_plan_scenario_matrix(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
-    rust_available: bool,  # noqa: FBT001 - pytest parametrises this value.
+    rust_available: bool,  # noqa: FBT001 - pytest parametrizes this value.
     expected_names: list[str],
 ) -> None:
     """The default plan includes or omits the Rust scenario.

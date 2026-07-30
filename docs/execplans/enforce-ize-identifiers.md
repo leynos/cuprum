@@ -156,7 +156,10 @@ The final widened `spelling` target must report no unapproved source spelling.
 - [x] 2026-07-30: Milestone 1 renamed all twelve internal identifiers with
   Leta, repaired non-syntactic CrossHair/assertion references, passed 69
   focused tests, and passed the full repository gate stack.
-- [ ] Milestone 2: clean all scanned source spellings and widen the gate.
+- [x] 2026-07-30: Milestone 2 recorded the expected red Makefile-contract
+  test, widened the gate to Markdown/Python/Rust, corrected the complete source
+  corpus, preserved GitHub wire/CLI names through anchored exceptions, and
+  passed the full repository gate stack.
 - [ ] Milestone 3: document and record the policy decision.
 - [ ] Milestone 4: complete final review and publish the draft PR.
 
@@ -172,6 +175,15 @@ The final widened `spelling` target must report no unapproved source spelling.
   the embedded references required explicit edits.
 - `make fmt` reformatted three unrelated existing documentation files. Those
   changes were restored before validation and are not part of this issue.
+- Widening the gate exposed 211 findings rather than only the anticipated
+  `-ise` prose. Most were repository-owned Oxford/British spelling drift. A
+  large cluster used GitHub Actions' external `artifact` vocabulary: internal
+  names moved to `artefact`, while the `"artifacts"` wire key, `/artifacts`
+  URL path, and established `--artifact-name` CLI option remain unchanged via
+  documented anchored patterns.
+- Four test fixtures intentionally contain misspellings or word fragments to
+  exercise the spelling renderer and stream splitting. They require exact
+  pattern ignores; accepting their words globally would weaken the gate.
 
 ## Decision Log
 

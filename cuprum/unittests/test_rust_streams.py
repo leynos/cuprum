@@ -133,7 +133,7 @@ def test_rust_pump_stream_transfers_data(
 ) -> None:
     """Validate rust_pump_stream transfers bytes between pipes.
 
-    Parameterised test covering normal transfer, custom buffer sizes, and empty
+    Parameterized test covering normal transfer, custom buffer sizes, and empty
     input.
 
     Parameters
@@ -141,7 +141,7 @@ def test_rust_pump_stream_transfers_data(
     rust_streams : ModuleType
         The Rust streams module fixture.
     test_id : str
-        Test case identifier for parameterisation.
+        Test case identifier for parameterization.
     payload : bytes
         The payload to transfer through the pump.
     buffer_size : int | None

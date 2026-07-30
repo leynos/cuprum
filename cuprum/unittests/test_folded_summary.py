@@ -1,4 +1,4 @@
-"""Tests for the folded-stack summarisation utility."""
+"""Tests for the folded-stack summarization utility."""
 
 from __future__ import annotations
 

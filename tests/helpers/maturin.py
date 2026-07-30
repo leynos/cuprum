@@ -137,7 +137,7 @@ def maturin_script_locatable() -> bool:
     )
 
 
-def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
+def build_native_wheel_artefact(root: Path, out_dir: Path) -> Path:
     """Build a native wheel using the current interpreter's maturin.
 
     Invokes ``python -m maturin`` with the running interpreter, so the maturin

@@ -493,7 +493,7 @@ def main() -> int:
         Process exit code derived from the worker result's ``exit_code`` field;
         0 on success.
     """
-    # Developer guide: CLIs must initialise warning-level logging explicitly.
+    # Developer guide: CLIs must initialize warning-level logging explicitly.
     logging.basicConfig(
         level=logging.WARNING,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",

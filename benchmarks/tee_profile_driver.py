@@ -35,7 +35,7 @@ def run_profile_plan(*, config: TeeProfileDriverConfig) -> dict[str, object]:
     Returns
     -------
     dict[str, object]
-        JSON-serialisable plan with ``fixture_path``,
+        JSON-serializable plan with ``fixture_path``,
         ``wrapped_fixture_path``, ``output_dir``, ``profiler``,
         ``warmup_count``, ``repeat_count``, ``perf_frequency``,
         ``perf_call_graph``, and ``scenarios`` (list of dicts, each containing

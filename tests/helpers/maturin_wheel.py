@@ -1,4 +1,4 @@
-"""Wheel-artifact inspection helpers for maturin build contract tests.
+"""Wheel-artefact inspection helpers for maturin build contract tests.
 
 Split out of :mod:`tests.helpers.maturin` to keep each module focused: the
 parent module owns pin/version parsing, toolchain probing, and the wheel

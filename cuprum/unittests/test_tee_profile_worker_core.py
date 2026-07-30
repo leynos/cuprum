@@ -18,7 +18,7 @@ if typ.TYPE_CHECKING:
 @pytest.mark.parametrize("with_line_callbacks", [False, True])
 def test_worker_exercises_parent_side_consume_path(
     tmp_path: pth.Path,
-    with_line_callbacks: bool,  # noqa: FBT001 - pytest parametrises this value.
+    with_line_callbacks: bool,  # noqa: FBT001 - pytest parametrizes this value.
 ) -> None:
     """A small fixture can run through echo, capture, and tee modes."""
     fixture = tmp_path / "fixture.b64"

@@ -8,7 +8,7 @@ The invariants checked here are:
 
 - ``build_argv``: positional arguments are stringified in order and
   precede keyword flags; keyword flags preserve insertion order and
-  normalise underscores in keys to hyphens; ``None`` is rejected with
+  normalize underscores in keys to hyphens; ``None`` is rejected with
   ``TypeError`` in both positional and keyword positions.
 - ``make``: builders produce ``SafeCmd`` instances whose argv agrees
   with ``build_argv`` and whose program/project come from the catalogue
@@ -34,7 +34,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 # Bounded alphabets keep examples small and shrinkable while still
-# covering multi-character tokens and key normalisation.
+# covering multi-character tokens and key normalization.
 _TEXT_VALUES = st.text(alphabet="abc xyz0-_./", max_size=8)
 _ARG_VALUES = st.one_of(
     _TEXT_VALUES,
@@ -69,7 +69,7 @@ def test_build_argv_orders_and_normalizes(
     args: list[str | int | bool | Path],
     kwargs: dict[str, str | int | bool | Path],
 ) -> None:
-    """Positionals precede flags; keys normalise underscores to hyphens."""
+    """Positionals precede flags; keys normalize underscores to hyphens."""
     argv = build_argv(*args, **kwargs)
     expected_positional = tuple(str(arg) for arg in args)
     expected_flags = tuple(

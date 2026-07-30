@@ -30,9 +30,16 @@ extend-exclude = [
 [default]
 locale = "en-gb"
 extend-ignore-re = [
+    "\"artifacts\"",
     "(?s)```.*?```",
+    "--artifact-name",
+    "/artifacts",
+    "\\(\"ises\", \"izes\"\\)",
+    "\\(\"teh\", \"(?:the|ten)\"\\)",
     "\\brust-analyzer\\b",
     "`[^`\\n]+`",
+    "b\"ond\\\\n\"",
+    "mappings\\[\"organise\"\\]",
 ]
 
 [default.extend-words]
