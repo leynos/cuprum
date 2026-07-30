@@ -368,7 +368,15 @@ async def _run_subprocess_without_streams(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
 ) -> tuple[int, float]:
-    """Run a subprocess without stream capture or echo."""
+    """Run a subprocess directly, without stdout/stderr capture or echo.
+
+    The direct path spawns no stream consumers, so the only task to reconcile is
+    the stdin writer. On timeout or cancellation it is cancelled and drained
+    through :func:`_cancel_stdin_writer` *before* the exception propagates, so a
+    stdin drain blocked on an unread pipe cannot delay timeout translation or
+    cancellation. An unexpected stdin-writer failure after the process exits
+    normally propagates unchanged.
+    """
     stdin_task = _spawn_stdin_writer(
         process, execution.stdin_data, execution.observation
     )
@@ -378,10 +386,6 @@ async def _run_subprocess_without_streams(
             execution,
         )
     except (TimeoutError, asyncio.CancelledError):
-        # Manage the stdin writer separately from _wait_for_exit_code's
-        # consumers: cancel and drain it before the timeout is
-        # translated or the cancellation propagates, so a stdin drain
-        # blocked on an unread pipe cannot delay completion.
         await _cancel_stdin_writer(stdin_task)
         raise
     if stdin_task is not None:
@@ -396,14 +400,12 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     pid = process.pid
     execution.observation.emit("start", _EventDetails(pid=pid))
 
+    # Left as None by the direct path, which captures nothing; the stream path
+    # overwrites them with whatever it captured before returning.
     stdout_text: str | None = None
     stderr_text: str | None = None
     try:
-        if not execution.capture and not execution.echo:
-            exit_code, exited_at = await _run_subprocess_without_streams(
-                process, execution
-            )
-        else:
+        if execution.capture or execution.echo:
             (
                 exit_code,
                 exited_at,
@@ -413,6 +415,11 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
                 process,
                 execution,
                 pid=pid,
+            )
+        else:
+            exit_code, exited_at = await _run_subprocess_without_streams(
+                process,
+                execution,
             )
     except (TimeoutError, _SubprocessTimeoutError) as exc:
         _handle_subprocess_timeout(
