@@ -56,7 +56,7 @@
 - **Source spelling enforcement:** Check tracked Python and Rust source as well
   as Markdown for en-GB-oxendict spelling, including code identifiers, so
   contributor changes can now fail the spelling gate on source-code drift
-  ([#249](https://github.com/leynos/cuprum/issues/249)).
+  ([#259](https://github.com/leynos/cuprum/pull/259)).
 
 ### Fixed
 
