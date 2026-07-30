@@ -36,6 +36,7 @@ from cuprum._subprocess_timeout import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._subprocess_timeout import _TimeoutMode
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
 
 
@@ -123,6 +124,29 @@ async def _drain_stream_consumers(
     return stdout_text, stderr_text
 
 
+def _report_timeout_expiry(
+    observation: _StageObservation,
+    *,
+    pid: int | None,
+    configured_timeout: float,
+    mode: _TimeoutMode,
+) -> None:
+    """Report an expiry through both timeout telemetry channels.
+
+    The structured ``cuprum.timeout`` log record and the ``timeout`` observe
+    event always travel together and carry the same fields, so both expiry
+    routes report through here rather than repeating the pair. Both emissions
+    are best-effort and cannot mask the timeout they describe.
+    """
+    _log_timeout_expiry(pid=pid, configured_timeout=configured_timeout, mode=mode)
+    _emit_timeout_event(
+        observation,
+        pid=pid,
+        configured_timeout=configured_timeout,
+        mode=mode,
+    )
+
+
 async def _wait_for_exit_code_within_timeout(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
@@ -152,12 +176,7 @@ async def _wait_for_exit_code_within_timeout(
     timeout = execution.timeout
     if timeout is not None and timeout <= 0:
         await _terminate_process(process, execution.ctx.cancel_grace)
-        _log_timeout_expiry(
-            pid=process.pid,
-            configured_timeout=timeout,
-            mode="non_positive_immediate",
-        )
-        _emit_timeout_event(
+        _report_timeout_expiry(
             execution.observation,
             pid=process.pid,
             configured_timeout=timeout,
@@ -171,16 +190,10 @@ async def _wait_for_exit_code_within_timeout(
         # Reached only on asyncio.timeout expiry (a positive deadline elapsed);
         # _wait_for_exit_code has already terminated the process, and the caller
         # drains the stream consumers exactly once.
-        configured_timeout = _require_timeout(timeout, exc)
-        _log_timeout_expiry(
-            pid=process.pid,
-            configured_timeout=configured_timeout,
-            mode="elapsed_deadline",
-        )
-        _emit_timeout_event(
+        _report_timeout_expiry(
             execution.observation,
             pid=process.pid,
-            configured_timeout=configured_timeout,
+            configured_timeout=_require_timeout(timeout, exc),
             mode="elapsed_deadline",
         )
         raise
@@ -432,6 +445,7 @@ __all__ = [
     "_create_stream_callback",
     "_drain_stream_consumers",
     "_execute_subprocess",
+    "_report_timeout_expiry",
     "_run_subprocess_with_streams",
     "_run_subprocess_without_streams",
     "_spawn_stream_consumers",

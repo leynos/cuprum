@@ -163,7 +163,11 @@ print('err1', file=sys.stderr)""",
         [
             (
                 "timeout",
-                {"operation": "wait", "timeout_s": 1.5, "timeout_mode": "elapsed"},
+                {
+                    "operation": "wait",
+                    "timeout_s": 1.5,
+                    "timeout_mode": "elapsed_deadline",
+                },
                 "cuprum_timeouts_total",
             ),
             (

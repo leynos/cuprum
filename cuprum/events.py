@@ -57,7 +57,12 @@ class ExecEvent:
     Attributes
     ----------
     phase:
-        Event phase. See :data:`~cuprum.events.ExecPhase`.
+        Event phase. See :data:`~cuprum.events.ExecPhase`. The ``timeout``
+        phase marks a run that exceeded its deadline and the
+        ``teardown_error`` phase marks a stream consumer that drained with an
+        unexpected error during cleanup; both are ancillary diagnostics
+        emitted before the existing ``exit`` event and the public
+        ``TimeoutExpired``, which are preserved.
     program:
         The allowlisted program that is executing.
     argv:
@@ -79,12 +84,6 @@ class ExecEvent:
     duration_s:
         Elapsed duration in seconds from ``start`` to subprocess exit (not
         including output drain after process termination).
-
-        The ``timeout`` phase marks a run that exceeded its deadline and the
-        ``teardown_error`` phase marks a stream consumer that drained with an
-        unexpected error during cleanup; both are ancillary diagnostics emitted
-        before the existing ``exit`` event and the public ``TimeoutExpired``,
-        which are preserved.
     tags:
         Arbitrary, JSON-like metadata associated with this execution.
     note:
