@@ -1258,6 +1258,27 @@ cumulative `EINTR` `read_retries`/`write_retries` counts. The span sits at
 `error` level so the `warn`/`error` events retain their operation context even
 when the subscriber is filtered to `warn`/`error`; it emits no log line itself.
 
+One further `debug` event reports the pump's own state rather than an
+individual read or write. When a downstream stage hangs up early — the
+`head`-style exit, where a consumer stops reading before the producer has
+finished — the pump latches its writer closed and keeps draining the upstream
+reader to EOF. That transition logs:
+
+```text
+broken pipe; draining reader    bytes_transferred=<count>
+```
+
+`bytes_transferred` is the number of bytes that reached the downstream stage
+before it hung up, so `0` means it closed before receiving anything.
+
+This is not an error and the pipeline still succeeds: the drain is what stops a
+producer blocking forever on a pipe nobody is reading. The event is worth
+watching because it distinguishes "the consumer finished early by design", as
+`head` does, from a consumer crashing partway through — the exit codes look the
+same, but the byte total does not. Both the `splice` fast path and the
+read/write fallback emit it identically, so the message does not depend on
+which path handled the transfer.
+
 ### Choosing a stream backend
 
 Most users should leave backend selection on `auto`. This uses the Rust pathway
