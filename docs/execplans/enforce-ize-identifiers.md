@@ -4,7 +4,7 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`, and
 `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
-Status: IN PROGRESS
+Status: COMPLETE
 
 ## Purpose / big picture
 
@@ -163,7 +163,9 @@ The final widened `spelling` target must report no unapproved source spelling.
 - [x] 2026-07-30: Milestone 3 made the source/identifier policy explicit,
   documented narrow exception handling, added and indexed ADR-008, added the
   Unreleased changelog entry, and passed the full repository gate stack.
-- [ ] Milestone 4: complete final review and publish the draft PR.
+- [x] 2026-07-30: Milestone 4 audited the complete branch, confirmed all three
+  CodeRabbit reviews had zero findings, renamed and pushed the exact requested
+  branch, and opened draft PR #259 with the required issue and Lody references.
 
 ## Surprises & Discoveries
 
@@ -207,5 +209,16 @@ The final widened `spelling` target must report no unapproved source spelling.
 
 ## Outcomes & Retrospective
 
-Implementation is in progress. This section will record the final commits,
-validation evidence, CodeRabbit outcomes, branch publication, and draft PR.
+The branch delivered the policy in three atomic implementation commits:
+`1b99b19` normalized the twelve internal identifiers, `750342b` widened the
+gate and corrected the full source corpus, and `cf3da0b` recorded the policy in
+ADR-008 and contributor documentation. The final gate stack passed at each
+milestone, and three foreground `coderabbit review --agent` runs reported zero
+findings.
+
+The exact requested branch is published and tracks its matching origin branch.
+Draft PR [#259](https://github.com/leynos/cuprum/pull/259) closes issue #249 and
+contains the literal Lody session reference. The main lesson is that whole-file
+spelling enforcement necessarily covers more than identifiers: external wire
+contracts and deliberate fixtures need precise local patterns, while all
+repository-owned source prose must start green before the pathspec widens.
