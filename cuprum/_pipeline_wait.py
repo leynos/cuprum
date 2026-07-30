@@ -1,4 +1,29 @@
-"""Pipeline waiting logic with fail-fast semantics."""
+"""Await a pipeline's stages and decide which completion triggers fail-fast.
+
+The fail-fast decision is split from the asyncio machinery that observes it, so
+the ordering rules can be verified without processes or a clock.
+``_PipelineWaitState`` carries the bookkeeping and exposes the decision as a
+command and a query, per the project's command/query segregation rule:
+
+- ``record_completion`` stamps a stage's exit code and injected end time, and
+  latches the first non-zero exit **in completion order** as ``failure_index``.
+  Completion order decides, not stage order.
+- ``should_terminate_others`` reports, without mutating anything, whether that
+  completion should stop every other still-running stage.
+
+``_process_completed_task`` is the only place the two are joined: it reads the
+clock, applies the command, emits the structured fail-fast records, and acts on
+the query. Keeping the I/O there leaves the ordering rules as a pure transition
+that Hypothesis and CrossHair drive directly.
+
+Work that belongs to neighbouring modules rather than here: terminating and
+cleaning up processes lives in ``cuprum._process_lifecycle``
+(``_terminate_pipeline_remaining_stages``, ``_cleanup_pipeline_on_error``), and
+collecting the inter-stage pipe task outcomes lives in
+``cuprum._pipeline_streams`` (``_collect_pipe_results``,
+``_surface_unexpected_pipe_failures``). This module owns only the waiting and
+the ordering decision.
+"""
 
 from __future__ import annotations
 
