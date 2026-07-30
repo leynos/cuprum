@@ -283,6 +283,34 @@ total over the documented phase contract: an unrecognized phase raises
 `_UnhandledMetricsPhaseError` rather than being silently dropped, so a new
 `ExecPhase` cannot reach metrics without a deliberate decision here.
 
+### Choosing a test shape per observe hook
+
+The three observe-hook adapters are verified differently, and the difference is
+driven by whether the hook accumulates state across events rather than by
+preference:
+
+Table 1: verification shape for each observe hook, and why
+
+| Hook | Shape | Why |
+| --- | --- | --- |
+| `TracingHook` | `RuleBasedStateMachine` (`test_tracing_span_stateful.py`) | holds `_active_spans` keyed by `ExecId`; the interesting bugs are correlation and drain failures across interleaved events |
+| `MetricsHook` | `RuleBasedStateMachine` (`test_metrics_adapter_stateful.py`) | accumulates counters and histograms, checked against an independent phase-count oracle |
+| `structured_logging_hook` | `@given` properties (`test_logging_adapter_properties.py`) | holds no state at all: one record per event, no map to drain |
+
+A state machine over the logging hook would generate interleavings that cannot
+distinguish any two implementations, because nothing carries between events.
+Its risks are per-event and shape-dependent instead: an `extra` key colliding
+with a reserved `LogRecord` attribute — which raises inside the caller's
+logging stack, not in cuprum — a phase falling through the level map, and a tag
+value that `JsonLoggingFormatter` cannot serialize. `ExecEvent.tags` is typed
+`Mapping[str, object]`, so arbitrary values are in contract, which is why
+`_json_serializable` and `json.dumps(..., default=str)` both exist and why the
+generator must produce values that are not JSON-native.
+
+Only `TracingHook` has an active map, so "the active map drains correctly" is a
+claim about that hook alone; `test_tracing_span_stateful.py` asserts it directly
+by cross-checking `hook._active_spans` against a model after every step.
+
 Stream pumping continues to drain the upstream reader after
 `_write_to_stream_writer` reports `_WriteOutcome.CLOSED`.  `_pump_stream`
 closes the writer in a `finally` block, so writer cleanup runs after success,
