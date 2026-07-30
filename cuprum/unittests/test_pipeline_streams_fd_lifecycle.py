@@ -114,7 +114,7 @@ def test_failed_engage_leaks_no_blocking_state(
 
         real_set_blocking = os.set_blocking
 
-        def faulting_set_blocking(fd: int, blocking: bool) -> None:  # noqa: FBT001
+        def faulting_set_blocking(fd: int, blocking: bool) -> None:  # noqa: FBT001  # mirrors os.set_blocking's positional bool
             """Fail when the target FD is toggled to blocking; else delegate."""
             if fd == target_fd and blocking:
                 msg = "injected toggle failure"
@@ -204,19 +204,23 @@ def test_paused_reader_skips_resume_when_pause_unavailable() -> None:
     # No exception and nothing to assert on the bare object: the point is that
     # exiting the context manager does not crash when resume is unavailable.
 
-
-def test_paused_reader_skips_resume_when_pause_fails() -> None:
-    """When pausing raises, the resume is never attempted."""
+def test_paused_reader_undoes_a_half_applied_pause() -> None:
+    """A pause that raises is corrected once, at the failure site."""
     transport = _FakeTransport(pause_raises=True)
     reader = typ.cast("asyncio.StreamReader", _FakeReader(transport))
 
-    with _paused_reader(reader):
-        pass
+    with _paused_reader(reader) as may_hand_off:
+        assert may_hand_off is False, (
+            "a pause that raised must report the hand-off as unsafe"
+        )
 
     assert transport.pause_calls == 1, "the pause must be attempted exactly once"
-    assert transport.resume_calls == 0, "a pause that raised must never be resumed"
-
-
+    # A transport can set its paused flag before whatever raised, and the
+    # Python fallback then reads a descriptor nothing is watching. The resume
+    # runs at the failure site, not at block exit, so exactly one fires.
+    assert transport.resume_calls == 1, (
+        "a pause that raised must be undone, in case it half-applied"
+    )
 def _raise_oserror(**_kwargs: object) -> tuple[bool, bool]:
     """Stand in for ``_set_stream_fds_blocking`` failing to toggle a FD."""
     msg = "cannot switch descriptor to blocking mode"

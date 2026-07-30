@@ -66,6 +66,10 @@ def _pause_reader_transport(
     try:
         pause_reading()
     except (RuntimeError, OSError):
+        # A transport can mark itself paused before raising. Resume here so the
+        # Python fallback never inherits a reader that has lost its callbacks.
+        with contextlib.suppress(RuntimeError, OSError):
+            resume_reading()
         return _ReaderPause(may_hand_off=False)
 
     def _resume() -> None:
