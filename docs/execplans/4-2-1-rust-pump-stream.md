@@ -51,9 +51,11 @@ completion.
 
 - Risk: Rust file descriptor handling may accidentally close file descriptors
   owned by Python, causing subtle downstream failures. Severity: high
-  Likelihood: medium Mitigation: avoid closing the reader file descriptor (FD)
-  by forgetting the `File` wrapper. Allow the writer FD to close when the pump
-  completes.
+  Likelihood: medium Mitigation: keep the reader file descriptor (FD) open on
+  every exit path, and allow the writer FD to close when the pump completes. The
+  `std::mem::forget` mitigation planned here is historical: the reader is now
+  borrowed through `with_borrowed_reader`, whose `ManuallyDrop` wrapper also
+  holds while unwinding from a panic. See the addendum below.
 - Risk: GIL release might not cover the full I/O loop, reducing throughput.
   Severity: medium Likelihood: medium Mitigation: wrap the entire pump loop in
   `Python::allow_threads` and avoid Python calls inside the loop.
@@ -100,6 +102,10 @@ completion.
   forgetting the `File` wrapper. Rationale: matches Python `_pump_stream()`
   semantics while avoiding accidental closure of upstream resources.
   Date/Author: 2026-01-28 / Codex
+  - Superseded 2026-07-28 (issue `#125`): the writer is still consumed, but the
+    reader is now borrowed through `with_borrowed_reader`, which wraps the
+    handle in `ManuallyDrop` so the reader FD stays open on every exit path,
+    panic-unwind included. See the addendum below.
 
 ## Outcomes & retrospective
 
@@ -178,8 +184,10 @@ Extend the Rust module in `rust/cuprum-rust/src/lib.rs` to export
 - Validate `buffer_size > 0`, else raise `ValueError`.
 - Release the GIL with `Python::allow_threads` for the entire read/write loop.
 - Use a reusable buffer sized to `buffer_size`.
-- Avoid closing the reader FD by forgetting the `File` wrapper; allow the
-  writer FD to close so downstream receives EOF, matching Python semantics.
+- Keep the reader FD open on every exit path — as implemented, by borrowing it
+  through `with_borrowed_reader` rather than the originally planned
+  `std::mem::forget` — and allow the writer FD to close so downstream receives
+  EOF, matching Python semantics.
 - On `BrokenPipe`/`ConnectionReset` during writes, stop writing but keep
   draining reads to avoid upstream deadlocks (matching `_pump_stream()`).
 - Map any other `std::io::Error` into `OSError` and propagate to Python.
@@ -315,15 +323,15 @@ Dependencies:
 ## Addendum: FD-borrow ownership contract (issue `#125`)
 
 The borrowed-reader mitigation planned above (keeping the reader FD open by
-`std::mem::forget`-ing the `File` wrapper) has been superseded by an RAII
-helper. `with_borrowed_reader` in `rust/cuprum-rust/src/lib.rs` reconstructs
-the reader handle, wraps it in `ManuallyDrop`, and runs the pump closure
-against it, so the caller-owned reader FD is never closed on any exit path —
-including unwinding from a panicking operation. The trailing-`forget` pattern
-was skipped on unwind, closing the caller-owned descriptor and exposing the
-Python transport to a double close; `ManuallyDrop` holds regardless of how the
-scope exits. The writer FD is still deliberately consumed and closes on drop to
-signal EOF. The canonical description of this contract now lives in the
+calling `std::mem::forget` on the `File` wrapper) has been superseded by an
+RAII helper. `with_borrowed_reader` in `rust/cuprum-rust/src/lib.rs`
+reconstructs the reader handle, wraps it in `ManuallyDrop`, and runs the pump
+closure against it, so the caller-owned reader FD is never closed on any exit
+path — including unwinding from a panicking operation. The trailing-`forget`
+pattern was skipped on unwind, closing the caller-owned descriptor and exposing
+the Python transport to a double close; `ManuallyDrop` holds regardless of how
+the scope exits. The writer FD is still deliberately consumed and closes on
+drop to signal EOF. The canonical description of this contract now lives in the
 developers' guide, "Rust FD-borrow ownership contract", with regression
 coverage in `rust/cuprum-rust/src/lib_tests.rs`.
 
@@ -334,4 +342,6 @@ Initial draft authored on 2026-01-28 to plan 4.2.1 implementation. Updated on
 results (including the extended timeout for `make nixie`). Updated on
 2026-07-28 to add the FD-borrow ownership contract addendum recording the
 `with_borrowed_reader`/`ManuallyDrop` helper that superseded the planned
-`std::mem::forget` mitigation (issue `#125`).
+`std::mem::forget` mitigation (issue `#125`), and to mark that planned
+mitigation as historical in the Risks section, the Decision log, and the
+implementation notes so every section states the same contract.

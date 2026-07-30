@@ -1100,16 +1100,17 @@ conditions get a variant here rather than a stringly-typed
 
 ## Rust FD-borrow ownership contract
 
-The pump and consume entry points in `rust/cuprum-rust/src/lib.rs` divide the
-descriptors they touch into a *borrowed* reader and a *consumed* writer, and
-centralize the borrow half in one helper, `with_borrowed_reader`. The helper
-rebuilds a `StreamHandle` from the caller-owned raw descriptor, wraps it in
-`ManuallyDrop`, and runs the caller's closure against it. `ManuallyDrop`
-suppresses the close on *every* exit path — a normal return and unwinding from
-a panicking operation alike — so a descriptor the Python side still owns is
-never closed by Rust. `pump_stream` and `consume_stream` both route their
-reader through the helper, keeping the "borrow this FD without owning it" rule
-in a single place.
+The pump and consume entry points in `rust/cuprum-rust/src/lib.rs` sort every
+descriptor they touch into a *borrowed* or a *consumed* role. `pump_stream`
+borrows its reader and consumes its writer; `consume_stream` borrows its reader
+and takes no writer at all. The borrow half is centralized in one helper,
+`with_borrowed_reader`. The helper rebuilds a `StreamHandle` from the
+caller-owned raw descriptor, wraps it in `ManuallyDrop`, and runs the caller's
+closure against it. `ManuallyDrop` suppresses the close on *every* exit path —
+a normal return and unwinding from a panicking operation alike — so a
+descriptor the Python side still owns is never closed by Rust. `pump_stream` and
+`consume_stream` both route their reader through the helper, keeping the
+"borrow this FD without owning it" rule in a single place.
 
 This supersedes an earlier pattern that reconstructed the handle and called
 `std::mem::forget` after the inner operation returned. Because a panic unwinds
