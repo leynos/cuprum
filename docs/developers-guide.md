@@ -467,6 +467,8 @@ against the `cuprum._pipeline_streams` logger, following the same convention as
 the pipeline fail-fast records: a `cuprum_action` of `rust_pump_declined` plus
 a `cuprum_reason` naming the seam that refused.
 
+Table 1: `cuprum_reason` values and the seam each one reports
+
 | `cuprum_reason` | Seam that declined |
 | --- | --- |
 | `raw_fd_unavailable` | `_extract_stream_fd` found no descriptor on either transport |

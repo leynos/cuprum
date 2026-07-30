@@ -225,8 +225,17 @@ async def _await_rust_pump(
         await asyncio.shield(future)
     except asyncio.CancelledError:
         # Drain the worker before propagating: the descriptors must outlive it.
-        with contextlib.suppress(BaseException):
+        # Only a further cancellation can interrupt this wait, and suppressing
+        # that is the point; KeyboardInterrupt and SystemExit must still travel,
+        # or a shutdown signal arriving here would be swallowed.
+        with contextlib.suppress(asyncio.CancelledError):
             await asyncio.wait([future])
+        # asyncio.wait never retrieves the outcome, so a pump that failed on a
+        # cancelled hop would resurface at garbage collection as an
+        # unretrieved-exception warning. Consume it here; the cancellation is
+        # what the caller is told about.
+        if future.done() and not future.cancelled():
+            future.exception()
         raise
     finally:
         guard.restore()

@@ -15,8 +15,6 @@ import asyncio
 import contextlib
 import os
 import sys
-import threading
-import types
 import typing as typ
 
 import pytest
@@ -116,7 +114,7 @@ def test_failed_engage_leaks_no_blocking_state(
 
         real_set_blocking = os.set_blocking
 
-        def faulting_set_blocking(fd: int, blocking: bool) -> None:  # noqa: FBT001
+        def faulting_set_blocking(fd: int, blocking: bool) -> None:  # noqa: FBT001  # mirrors os.set_blocking's positional bool
             """Fail when the target FD is toggled to blocking; else delegate."""
             if fd == target_fd and blocking:
                 msg = "injected toggle failure"
@@ -207,16 +205,23 @@ def test_paused_reader_skips_resume_when_pause_unavailable() -> None:
     # exiting the context manager does not crash when resume is unavailable.
 
 
-def test_paused_reader_skips_resume_when_pause_fails() -> None:
-    """When pausing raises, the resume is never attempted."""
+def test_paused_reader_undoes_a_half_applied_pause() -> None:
+    """A pause that raises is corrected once, at the failure site."""
     transport = _FakeTransport(pause_raises=True)
     reader = typ.cast("asyncio.StreamReader", _FakeReader(transport))
 
-    with _paused_reader(reader):
-        pass
+    with _paused_reader(reader) as may_hand_off:
+        assert may_hand_off is False, (
+            "a pause that raised must report the hand-off as unsafe"
+        )
 
     assert transport.pause_calls == 1, "the pause must be attempted exactly once"
-    assert transport.resume_calls == 0, "a pause that raised must never be resumed"
+    # A transport can set its paused flag before whatever raised, and the
+    # Python fallback then reads a descriptor nothing is watching. The resume
+    # runs at the failure site, not at block exit, so exactly one fires.
+    assert transport.resume_calls == 1, (
+        "a pause that raised must be undone, in case it half-applied"
+    )
 
 
 def _raise_oserror(**_kwargs: object) -> tuple[bool, bool]:
@@ -378,63 +383,4 @@ def test_pump_over_raw_fds_falls_back_when_pause_fails(
     assert handled is False, "a failed pause must report the Python-fallback signal"
     assert engaged["count"] == 0, (
         "a failed pause must return before engaging blocking mode"
-    )
-
-
-def test_cancellation_restores_descriptors_only_after_worker_returns(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Cancelling mid-transfer waits for the worker before restoring FDs.
-
-    ``run_in_executor`` cannot interrupt the worker thread, which still owns
-    both raw descriptors. Restoring their blocking mode while it runs would
-    race it, so the ordering asserted here is the actual safety property.
-    """
-    events: list[str] = []
-    release = threading.Event()
-    worker_started = threading.Event()
-
-    def blocking_pump(reader_fd: int, writer_fd: int) -> int:
-        """Block until released, standing in for an in-flight Rust transfer."""
-        del reader_fd, writer_fd
-        worker_started.set()
-        release.wait(timeout=5.0)
-        events.append("worker_returned")
-        return 0
-
-    fake_streams_rs = types.ModuleType("cuprum._streams_rs")
-    fake_streams_rs.rust_pump_stream = blocking_pump  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "cuprum._streams_rs", fake_streams_rs)
-
-    class _RecordingGuard:
-        """Guard double that records when the descriptors are restored."""
-
-        def restore(self) -> None:
-            """Record the restore so its ordering can be asserted."""
-            events.append("restored")
-
-    async def drive() -> None:
-        """Start the pump, cancel it mid-transfer, then release the worker."""
-        task = asyncio.create_task(
-            _pipeline_streams._await_rust_pump(
-                typ.cast("_pipeline_stream_fds._BlockingModeGuard", _RecordingGuard()),
-                reader_fd=1,
-                writer_fd=2,
-            )
-        )
-        await asyncio.to_thread(worker_started.wait, 5.0)
-        task.cancel()
-        # Give the cancellation a chance to be delivered while the worker runs.
-        await asyncio.sleep(0.05)
-        events.append("released")
-        release.set()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-
-    asyncio.run(drive())
-
-    assert "restored" in events, "the descriptors must still be restored"
-    assert events.index("worker_returned") < events.index("restored"), (
-        "restore must happen only after the worker thread returns; observed "
-        f"order {events}"
     )

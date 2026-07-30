@@ -60,9 +60,12 @@ class _ReaderPause:
     - **paused** — callbacks are suspended and ``resume`` restores them;
     - **unsupported** — the transport exposes no pause/resume hooks, so there
       are no callbacks to race and nothing to resume;
-    - **failed** — ``pause_reading()`` raised, so asyncio may still be reading
-      the descriptor. Handing it to the Rust pump would race that reader, so
-      ``may_hand_off`` is ``False`` and the caller falls back to Python.
+    - **failed** — ``pause_reading()`` raised, so the descriptor's state is
+      unknown: asyncio may still be reading it, or the pause may have
+      half-applied and left nothing watching it. Handing it to the Rust pump
+      could race that reader, so ``may_hand_off`` is ``False`` and the caller
+      falls back to Python. A corrective resume has already been attempted at
+      the failure site, so ``resume`` is ``None`` here too.
     """
 
     may_hand_off: bool
@@ -83,9 +86,19 @@ def _pause_reader_transport(reader: asyncio.StreamReader) -> _ReaderPause:
     try:
         pause_reading()
     except (RuntimeError, OSError):
-        # The pause did not take effect, so asyncio may still consume from the
+        # The pause did not complete, so asyncio may still consume from the
         # descriptor. Report that the hand-off is unsafe rather than silently
         # racing the reader.
+        #
+        # A transport can also half-apply the pause: asyncio's own transports
+        # set their paused flag and drop the reader before the trailing debug
+        # log, so a raise from that log leaves the descriptor unwatched. The
+        # Python fallback reads the same StreamReader and would stall on it
+        # forever, which is worse than the error we are already handling. Undo
+        # the half-applied pause here rather than at block exit, since a
+        # transport that never paused ignores resume_reading().
+        with contextlib.suppress(RuntimeError, OSError):
+            resume_reading()
         return _ReaderPause(may_hand_off=False)
 
     def _resume() -> None:
@@ -177,9 +190,10 @@ def _paused_reader(reader: asyncio.StreamReader) -> cabc.Iterator[bool]:
     """Pause the reader transport for the block, resuming it on every exit.
 
     Wraps ``_pause_reader_transport`` so a completed pause is always undone —
-    on normal return, exception, or cancellation. Only a pause that actually
-    took effect is resumed: when the transport exposes no pause/resume hooks,
-    or when ``pause_reading()`` raised, no resume is attempted.
+    on normal return, exception, or cancellation. Exactly one resume ever
+    fires per pause attempt: a transport with no pause/resume hooks needs
+    none, and a ``pause_reading()`` that raised has already had its corrective
+    resume attempted at the failure site, so neither is resumed again here.
 
     Yields ``True`` when the raw descriptor may be handed to the Rust pump and
     ``False`` when pausing failed, so the caller can fall back rather than race
