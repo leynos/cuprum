@@ -1128,8 +1128,34 @@ so downstream readers observe EOF. Reconstruct the writer with
 The helper's safety contract obliges the caller to guarantee `fd` is a valid
 open descriptor (or Windows handle) for the duration of the call and that
 ownership remains with the caller; in return the helper guarantees it never
-closes `fd`. `rust/cuprum-rust/src/lib_tests.rs` regression-tests both halves:
-the borrowed FD stays open after a normal operation and after a panicking one.
+closes `fd`.
+
+The contract is checked at two levels, which are deliberately not
+interchangeable. `rust/cuprum-rust/src/lib_tests.rs` holds the
+integration-level regression tests: they open *real* descriptors, run the
+helper both normally and through a panicking operation, and assert the borrowed
+FD is still open afterwards. That is the only place actual `close(2)` behaviour
+is exercised, and it stays the authority on it. Alongside them,
+`rust/cuprum-rust/src/fd_ownership_kani_proofs.rs` carries a bounded Kani proof
+of the ownership invariant itself: a borrowed reader FD is never closed by Rust
+on a normal or an unwinding exit, and a `pump_stream` writer is always consumed
+and closes exactly once to signal EOF.
+
+Kani does not interpret I/O, so the proof cannot use real descriptors. It runs
+against the pure model in `fd_ownership_model.rs` — gated
+`#[cfg(any(test, kani))]`, so `make test` exercises it as ordinary unit tests
+too — where `ModelFd` records a close on drop instead of issuing one. The
+`ManuallyDrop` wrapper, the closure call, and the early-exit edge are all real
+Rust, so Rust's own drop elaboration decides the outcome rather than any
+hand-written accounting. Because Kani compiles panics as aborts, the unwind
+path is modelled with `?`: a `?` early return and a real unwind both leave the
+frame without running the statements that follow the operation, so
+reintroducing the superseded trailing-`mem::forget` makes the proof fail (that
+mutation was run to confirm the proof is not vacuous). Being a bounded model
+checker, Kani establishes this over an explicitly bounded state space — the two
+exit modes, and at most three repeated borrows — rather than for all
+executions. Active verification tracking, including whether Verus adds anything
+beyond the Kani model once that model is complete, lives in issue `#89`.
 
 ## Rust splice-loop and drain contract
 

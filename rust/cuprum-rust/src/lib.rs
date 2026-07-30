@@ -20,6 +20,10 @@ use std::os::windows::io::{FromRawHandle, RawHandle};
 #[cfg(test)]
 mod buffer_size_tests;
 mod errors;
+#[cfg(kani)]
+mod fd_ownership_kani_proofs;
+#[cfg(any(test, kani))]
+mod fd_ownership_model;
 #[cfg(test)]
 mod fd_tests;
 mod io_utils;
