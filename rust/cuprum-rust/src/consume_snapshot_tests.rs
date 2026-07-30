@@ -114,19 +114,20 @@ fn incomplete_trailing_sequence_is_replaced_at_eof() {
     insta::assert_snapshot!(byte_at_a_time, @"euro sign: �");
 }
 
-/// Randomised coverage complementing the four fixed cases above.
-///
-/// The snapshots pin what the loop produces for four hand-picked payload
-/// categories; they cannot show that the categories are exhaustive. These
-/// properties generate arbitrary bytes and buffer sizes and check the same
-/// invariant the snapshots encode by example: the loop's output is exactly
-/// `String::from_utf8_lossy` of the input, whatever the buffer size, so no
-/// generated payload can straddle a read boundary in a way the fixed cases
-/// missed.
-///
-/// Payloads stay small so the unbuffered write in `consume` cannot fill the
-/// pipe and block, which is the precondition the helper documents.
 mod properties {
+    //! Randomised coverage complementing the four fixed cases above.
+    //!
+    //! The snapshots pin what the loop produces for four hand-picked payload
+    //! categories; they cannot show that the categories are exhaustive. These
+    //! properties generate arbitrary bytes and buffer sizes and check the same
+    //! invariant the snapshots encode by example: the loop's output is exactly
+    //! `String::from_utf8_lossy` of the input, whatever the buffer size, so no
+    //! generated payload can straddle a read boundary in a way the fixed cases
+    //! missed.
+    //!
+    //! Payloads stay small so the unbuffered write in `consume` cannot fill the
+    //! pipe and block, which is the precondition the helper documents.
+
     use super::consume;
     use proptest::prelude::*;
 
