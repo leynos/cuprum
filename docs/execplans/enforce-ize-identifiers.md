@@ -160,7 +160,9 @@ The final widened `spelling` target must report no unapproved source spelling.
   test, widened the gate to Markdown/Python/Rust, corrected the complete source
   corpus, preserved GitHub wire/CLI names through anchored exceptions, and
   passed the full repository gate stack.
-- [ ] Milestone 3: document and record the policy decision.
+- [x] 2026-07-30: Milestone 3 made the source/identifier policy explicit,
+  documented narrow exception handling, added and indexed ADR-008, added the
+  Unreleased changelog entry, and passed the full repository gate stack.
 - [ ] Milestone 4: complete final review and publish the draft PR.
 
 ## Surprises & Discoveries
@@ -178,12 +180,17 @@ The final widened `spelling` target must report no unapproved source spelling.
 - Widening the gate exposed 211 findings rather than only the anticipated
   `-ise` prose. Most were repository-owned Oxford/British spelling drift. A
   large cluster used GitHub Actions' external `artifact` vocabulary: internal
-  names moved to `artefact`, while the `"artifacts"` wire key, `/artifacts`
-  URL path, and established `--artifact-name` CLI option remain unchanged via
+  names moved to `artefact`, while the `"artifacts"` wire key, `/artifacts` URL
+  path, and established `--artifact-name` CLI option remain unchanged via
   documented anchored patterns.
 - Four test fixtures intentionally contain misspellings or word fragments to
   exercise the spelling renderer and stream splitting. They require exact
   pattern ignores; accepting their words globally would weaken the gate.
+- Common Changelog repeats `Changed` headings across releases, while the
+  repository's Markdown configuration rejects duplicate headings globally.
+  The existing released `Changed` heading now carries a one-line MD024
+  exception so the new Unreleased section can use the required conventional
+  heading.
 
 ## Decision Log
 
