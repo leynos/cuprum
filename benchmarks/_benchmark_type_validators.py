@@ -1,6 +1,6 @@
 """Shared validation helpers for benchmark configuration modules.
 
-This module centralises small type-, enum-, path-, and bounds-validation
+This module centralizes small type-, enum-, path-, and bounds-validation
 helpers used by benchmark configuration dataclasses. These helpers were
 extracted from ``benchmarks._benchmark_types``,
 ``benchmarks.tee_profile_scenarios``, and related benchmark modules so
@@ -64,7 +64,7 @@ def _validate_non_empty_string(value: object, *, name: str) -> str:
 
 
 def _validate_path(value: object, *, name: str) -> pth.Path:
-    """Validate path-like values and normalise them as ``pathlib.Path``."""
+    """Validate path-like values and normalize them as ``pathlib.Path``."""
     if isinstance(value, pth.Path):
         return value
     try:

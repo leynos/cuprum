@@ -1,4 +1,4 @@
-"""Unit tests for the benchmark baseline artifact fetch helper."""
+"""Unit tests for the benchmark baseline artefact fetch helper."""
 
 from __future__ import annotations
 
@@ -14,14 +14,14 @@ import pytest
 
 from benchmarks.fetch_main_benchmark_baseline import (
     MAIN_BASELINE_NOT_FOUND_EXIT_CODE,
-    ArtifactQuery,
-    _ArtifactArchiveRedirectHandler,
+    ArtefactQuery,
+    _ArtefactArchiveRedirectHandler,
     _download_bytes,
     _load_json_response,
-    extract_artifact_archive,
-    find_latest_artifact_download_url,
+    extract_artefact_archive,
+    find_latest_artefact_download_url,
     main,
-    select_latest_artifact_download_url,
+    select_latest_artefact_download_url,
 )
 
 if typ.TYPE_CHECKING:
@@ -36,9 +36,9 @@ def _workflow_runs_payload(*run_ids: int) -> dict[str, object]:
     }
 
 
-def _artifacts_payload(*, artifacts: list[dict[str, object]]) -> dict[str, object]:
-    """Return a stub GitHub run-artifacts API payload."""
-    return {"artifacts": artifacts}
+def _artefacts_payload(*, artefacts: list[dict[str, object]]) -> dict[str, object]:
+    """Return a stub GitHub run-artefacts API payload."""
+    return {"artifacts": artefacts}
 
 
 def _main_cli_args(output_dir: pth.Path) -> list[str]:
@@ -55,12 +55,12 @@ def _main_cli_args(output_dir: pth.Path) -> list[str]:
     ]
 
 
-def test_select_latest_artifact_download_url_uses_newest_matching_run() -> None:
-    """Artifact selection should prefer the newest run with a valid baseline."""
+def test_select_latest_artefact_download_url_uses_newest_matching_run() -> None:
+    """Artefact selection should prefer the newest run with a valid baseline."""
     runs_payload = _workflow_runs_payload(300, 200, 100)
-    artifacts_by_run = {
-        300: _artifacts_payload(
-            artifacts=[
+    artefacts_by_run = {
+        300: _artefacts_payload(
+            artefacts=[
                 {
                     "name": "benchmark-ratchet-main-baseline",
                     "expired": True,
@@ -68,8 +68,8 @@ def test_select_latest_artifact_download_url_uses_newest_matching_run() -> None:
                 }
             ]
         ),
-        200: _artifacts_payload(
-            artifacts=[
+        200: _artefacts_payload(
+            artefacts=[
                 {
                     "name": "benchmark-ratchet-main-baseline",
                     "expired": False,
@@ -77,8 +77,8 @@ def test_select_latest_artifact_download_url_uses_newest_matching_run() -> None:
                 }
             ]
         ),
-        100: _artifacts_payload(
-            artifacts=[
+        100: _artefacts_payload(
+            artefacts=[
                 {
                     "name": "benchmark-ratchet-main-baseline",
                     "expired": False,
@@ -88,21 +88,21 @@ def test_select_latest_artifact_download_url_uses_newest_matching_run() -> None:
         ),
     }
 
-    download_url = select_latest_artifact_download_url(
+    download_url = select_latest_artefact_download_url(
         workflow_runs_payload=runs_payload,
-        artifacts_payload_by_run=artifacts_by_run,
-        artifact_name="benchmark-ratchet-main-baseline",
+        artefacts_payload_by_run=artefacts_by_run,
+        artefact_name="benchmark-ratchet-main-baseline",
     )
 
     assert download_url == "https://example.invalid/valid.zip"
 
 
-def test_select_latest_artifact_download_url_returns_none_without_match() -> None:
-    """Artifact selection should report no baseline when nothing matches."""
+def test_select_latest_artefact_download_url_returns_none_without_match() -> None:
+    """Artefact selection should report no baseline when nothing matches."""
     runs_payload = _workflow_runs_payload(200, 100)
-    artifacts_by_run = {
-        200: _artifacts_payload(
-            artifacts=[
+    artefacts_by_run = {
+        200: _artefacts_payload(
+            artefacts=[
                 {
                     "name": "coverage",
                     "expired": False,
@@ -110,26 +110,26 @@ def test_select_latest_artifact_download_url_returns_none_without_match() -> Non
                 }
             ]
         ),
-        100: _artifacts_payload(artifacts=[]),
+        100: _artefacts_payload(artefacts=[]),
     }
 
-    download_url = select_latest_artifact_download_url(
+    download_url = select_latest_artefact_download_url(
         workflow_runs_payload=runs_payload,
-        artifacts_payload_by_run=artifacts_by_run,
-        artifact_name="benchmark-ratchet-main-baseline",
+        artefacts_payload_by_run=artefacts_by_run,
+        artefact_name="benchmark-ratchet-main-baseline",
     )
 
     assert download_url is None
 
 
-def test_extract_artifact_archive_unpacks_json_files(tmp_path: pth.Path) -> None:
-    """Artifact extraction should unpack zip members into the output directory."""
+def test_extract_artefact_archive_unpacks_json_files(tmp_path: pth.Path) -> None:
+    """Artefact extraction should unpack zip members into the output directory."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w") as archive:
         archive.writestr("main-plan.json", '{"dry_run": true}')
         archive.writestr("main-throughput.json", '{"results": []}')
 
-    extracted = extract_artifact_archive(
+    extracted = extract_artefact_archive(
         archive_bytes=buffer.getvalue(),
         output_dir=tmp_path,
     )
@@ -143,14 +143,14 @@ def test_extract_artifact_archive_unpacks_json_files(tmp_path: pth.Path) -> None
     )
 
 
-def test_extract_artifact_archive_rejects_path_traversal(tmp_path: pth.Path) -> None:
-    """Artifact extraction must reject archive members escaping output_dir."""
+def test_extract_artefact_archive_rejects_path_traversal(tmp_path: pth.Path) -> None:
+    """Artefact extraction must reject archive members escaping output_dir."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w") as archive:
         archive.writestr("../escape.json", '{"unsafe": true}')
 
     with pytest.raises(ValueError, match="archive member path"):
-        extract_artifact_archive(
+        extract_artefact_archive(
             archive_bytes=buffer.getvalue(),
             output_dir=tmp_path,
         )
@@ -163,7 +163,7 @@ def test_main_returns_not_found_when_no_baseline_available(
     """CLI should return the bootstrap exit code when no baseline is found."""
     monkeypatch.setenv("GITHUB_TOKEN", "token")
     monkeypatch.setattr(
-        "benchmarks.fetch_main_benchmark_baseline.find_latest_artifact_download_url",
+        "benchmarks.fetch_main_benchmark_baseline.find_latest_artefact_download_url",
         lambda **_: None,
     )
 
@@ -190,7 +190,7 @@ def test_main_downloads_and_extracts_latest_baseline(
     """CLI should download the selected archive and extract it into output_dir."""
     monkeypatch.setenv("GITHUB_TOKEN", "token")
     monkeypatch.setattr(
-        "benchmarks.fetch_main_benchmark_baseline.find_latest_artifact_download_url",
+        "benchmarks.fetch_main_benchmark_baseline.find_latest_artefact_download_url",
         lambda **_: "https://example.invalid/baseline.zip",
     )
 
@@ -273,8 +273,8 @@ def test_load_json_response_retries_transient_urlopen_failures(
     assert timeouts == [10.0, 10.0, 10.0]
 
 
-def _make_github_artifact_request() -> urllib.request.Request:
-    """Build a GitHub artifact download request with standard auth headers."""
+def _make_github_artefact_request() -> urllib.request.Request:
+    """Build a GitHub artefact download request with standard auth headers."""
     return urllib.request.Request(
         "https://api.github.com/repos/leynos/cuprum/actions/artifacts/1/zip",
         headers={
@@ -311,13 +311,13 @@ def _make_github_artifact_request() -> urllib.request.Request:
         ),
     ],
 )
-def test_artifact_redirect_handler_header_policy(
+def test_artefact_redirect_handler_header_policy(
     newurl: str,
     expected_headers: dict[str, str | None],
 ) -> None:
     """Redirect handler strips auth on cross-origin, preserves on same-origin."""
-    handler = _ArtifactArchiveRedirectHandler()
-    request = _make_github_artifact_request()
+    handler = _ArtefactArchiveRedirectHandler()
+    request = _make_github_artefact_request()
 
     redirected_request = handler.redirect_request(
         request,
@@ -335,10 +335,10 @@ def test_artifact_redirect_handler_header_policy(
         )
 
 
-def test_download_bytes_uses_artifact_redirect_handler(
+def test_download_bytes_uses_artefact_redirect_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Artifact downloads should use the redirect policy that strips auth."""
+    """Artefact downloads should use the redirect policy that strips auth."""
 
     class _Response:
         """Minimal stub of an HTTP response context manager."""
@@ -379,7 +379,7 @@ def test_download_bytes_uses_artifact_redirect_handler(
     ) -> _Opener:
         """Assert the redirect handler is installed, then return the stub opener."""
         assert any(
-            isinstance(handler, _ArtifactArchiveRedirectHandler) for handler in handlers
+            isinstance(handler, _ArtefactArchiveRedirectHandler) for handler in handlers
         )
         return _Opener()
 
@@ -396,10 +396,10 @@ def test_download_bytes_uses_artifact_redirect_handler(
     assert archive_bytes == b"archive-bytes"
 
 
-def test_find_latest_artifact_download_url_queries_workflow_and_artifacts(
+def test_find_latest_artefact_download_url_queries_workflow_and_artefacts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Artifact lookup should fetch workflow runs and then per-run artifacts."""
+    """Artefact lookup should fetch workflow runs and then per-run artefacts."""
     auth_token = "".join(("tok", "en"))
     payloads: list[cabc.Mapping[str, object]] = [
         {"workflow_runs": [{"id": 42}]},
@@ -426,13 +426,13 @@ def test_find_latest_artifact_download_url_queries_workflow_and_artifacts(
         fake_load_json_response,
     )
 
-    download_url = find_latest_artifact_download_url(
-        query=ArtifactQuery(
+    download_url = find_latest_artefact_download_url(
+        query=ArtefactQuery(
             repository="leynos/cuprum",
             workflow="ci.yml",
             branch="main",
             event="push",
-            artifact_name="benchmark-ratchet-main-baseline",
+            artefact_name="benchmark-ratchet-main-baseline",
         ),
         token=auth_token,
     )

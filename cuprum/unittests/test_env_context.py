@@ -46,7 +46,7 @@ def _execute_sync(cmd: SafeCmd, kwargs: dict[str, typ.Any]) -> CommandResult:
 
 @pytest.fixture(params=["async", "sync"], ids=["run()", "run_sync()"])
 def execution_strategy(request: pytest.FixtureRequest) -> tuple[str, ExecuteFn]:
-    """Provide async and sync execution strategies for parameterised tests."""
+    """Provide async and sync execution strategies for parameterized tests."""
     if request.param == "async":
         return ("async", _execute_async)
     return ("sync", _execute_sync)

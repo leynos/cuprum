@@ -111,7 +111,7 @@ def _validate_path_string(raw_value: str, *, allow_relative: bool) -> None:
 
 
 def safe_path(value: str | Path, *, allow_relative: bool = False) -> SafePath:
-    """Validate and normalise a filesystem path.
+    """Validate and normalize a filesystem path.
 
     Parameters
     ----------
@@ -123,7 +123,7 @@ def safe_path(value: str | Path, *, allow_relative: bool = False) -> SafePath:
     Returns
     -------
     SafePath
-        Normalised path string.
+        Normalized path string.
     """
     raw_value = _convert_to_string(value)
     _validate_path_string(raw_value, allow_relative=allow_relative)

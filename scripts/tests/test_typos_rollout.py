@@ -19,6 +19,17 @@ if typ.TYPE_CHECKING:
     import types
 
 SCRIPT_DIRECTORY = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = SCRIPT_DIRECTORY.parent
+
+
+def test_spelling_target_checks_documentation_and_source() -> None:
+    """The spelling gate checks Markdown, Python, and Rust files."""
+    makefile = (REPOSITORY_ROOT / "Makefile").read_text(encoding="utf-8")
+    spelling_recipe = makefile.split("\nspelling:", maxsplit=1)[1].split(
+        "\nspelling-helper-test:", maxsplit=1
+    )[0]
+
+    assert {"'*.md'", "'*.py'", "'*.rs'"} <= set(spelling_recipe.split())
 
 
 def test_rollout_scripts_support_python_313() -> None:
@@ -61,8 +72,8 @@ def test_rollout_generates_oxford_corrections(
 
     mappings = rollout.generate_word_mappings(rollout.Dictionary(stems=("organ",)))
 
-    assert mappings["organize"] == "organize"
     assert mappings["organise"] == "organize"
+    assert mappings["organize"] == "organize"
 
 
 def test_local_refresh_keeps_a_newer_cache(

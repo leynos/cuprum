@@ -11,7 +11,18 @@ accepted = []
 [words.corrections]
 
 [patterns]
-ignore = []
+ignore = [
+  # GitHub's Actions API and the established CLI expose these literal names.
+  '"artifacts"',
+  '/artifacts',
+  '--artifact-name',
+  # Spelling-policy tests must contain the deliberately invalid input tokens.
+  'mappings\["organise"\]',
+  '\("teh", "(?:the|ten)"\)',
+  '\("ises", "izes"\)',
+  # This byte-splitting fixture deliberately divides "second" after "sec".
+  'b"ond\\n"',
+]
 
 [files]
 exclude = []

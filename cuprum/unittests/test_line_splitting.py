@@ -5,7 +5,7 @@ This module verifies the text-only helpers that support line callbacks in
 asyncio streams, or backend dispatch so failures point at the line-splitting
 contract rather than at process I/O.
 
-``_split_complete_lines`` returns completed lines with their recognised line
+``_split_complete_lines`` returns completed lines with their recognized line
 endings removed plus the final partial line, if any. ``_strip_line_ending``
 removes one trailing ``"\r\n"``, ``"\n"``, or ``"\r"`` sequence and leaves the
 rest of the text untouched.  The Hypothesis tests exercise generated text with
@@ -541,7 +541,7 @@ def test_split_complete_lines_preserves_all_text(text: str) -> None:
     Parameters
     ----------
     text : str
-        Generated text containing arbitrary recognised line endings.
+        Generated text containing arbitrary recognized line endings.
     """
     lines, remainder = _split_complete_lines(text)
 
@@ -561,7 +561,7 @@ def test_split_complete_lines_remainder_has_no_line_ending(text: str) -> None:
     Parameters
     ----------
     text : str
-        Generated text containing arbitrary recognised line endings.
+        Generated text containing arbitrary recognized line endings.
     """
     _lines, remainder = _split_complete_lines(text)
 
@@ -596,7 +596,7 @@ def test_strip_line_ending_idempotent(line: str) -> None:
     Parameters
     ----------
     line : str
-        Generated line with an optional recognised line ending.
+        Generated line with an optional recognized line ending.
     """
     stripped = _strip_line_ending(line)
 
@@ -613,7 +613,7 @@ def test_strip_line_ending_removes_only_trailing(line: str) -> None:
     Parameters
     ----------
     line : str
-        Generated line with an optional recognised line ending.
+        Generated line with an optional recognized line ending.
     """
     suffix = _line_ending_suffix(line)
 

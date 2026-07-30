@@ -94,7 +94,7 @@ class _LabelRecordingCollector:
     """Record labelled metrics calls for adapter assertions."""
 
     def __init__(self, *, record_histograms: bool = True) -> None:
-        """Initialise the recorder with optional histogram capture."""
+        """Initialize the recorder with optional histogram capture."""
         self.calls: list[tuple[str, float, dict[str, str]]] = []
         self.labels: list[dict[str, str]] = []
         self._record_histograms = record_histograms

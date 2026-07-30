@@ -55,7 +55,7 @@ class TeeProfileScenario:
     errors: str = "replace"
 
     def as_dict(self) -> dict[str, object]:
-        """Return a JSON-serialisable scenario mapping."""
+        """Return a JSON-serializable scenario mapping."""
         return {
             "name": self.name,
             "fixture_path": str(self.fixture_path),

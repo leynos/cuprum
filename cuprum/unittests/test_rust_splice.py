@@ -28,7 +28,7 @@ if typ.TYPE_CHECKING:
 
 
 class TestSpliceOptimization:
-    """Tests for Linux splice() optimisation and fallback behaviour."""
+    """Tests for Linux splice() optimization and fallback behaviour."""
 
     @staticmethod
     def test_large_pipe_transfer(

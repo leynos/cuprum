@@ -1,4 +1,4 @@
-"""Download the latest successful `main` benchmark baseline artifact."""
+"""Download the latest successful `main` benchmark baseline artefact."""
 
 from __future__ import annotations
 
@@ -39,14 +39,14 @@ _GITHUB_REDIRECT_HEADERS_TO_STRIP = (
 
 
 @dc.dataclass(frozen=True, slots=True)
-class ArtifactQuery:
-    """GitHub Actions workflow artifact lookup configuration."""
+class ArtefactQuery:
+    """GitHub Actions workflow artefact lookup configuration."""
 
     repository: str
     workflow: str
     branch: str
     event: str
-    artifact_name: str
+    artefact_name: str
     api_base_url: str = GITHUB_API_BASE_URL
 
 
@@ -97,7 +97,7 @@ def _with_retry[T](
     raise last_exc
 
 
-class _ArtifactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
+class _ArtefactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Strip GitHub-only headers when following cross-origin archive redirects."""
 
     def _strip_cross_origin_headers(  # noqa: PLR6301
@@ -162,7 +162,7 @@ def _download_bytes(*, url: str, token: str) -> bytes:
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
-    opener = urllib.request.build_opener(_ArtifactArchiveRedirectHandler())
+    opener = urllib.request.build_opener(_ArtefactArchiveRedirectHandler())
 
     def _open_archive() -> bytes:
         with opener.open(
@@ -174,46 +174,46 @@ def _download_bytes(*, url: str, token: str) -> bytes:
     return _with_retry(_open_archive, description=f"download archive from {url}")
 
 
-def _find_artifact_url_in_run(
+def _find_artefact_url_in_run(
     *,
-    artifacts_payload: cabc.Mapping[str, object],
+    artefacts_payload: cabc.Mapping[str, object],
     run_id: int,
-    artifact_name: str,
+    artefact_name: str,
 ) -> str | None:
-    """Return the download URL for a matching non-expired artifact, or ``None``."""
-    artifacts = _require_list(
-        artifacts_payload.get("artifacts"),
-        name=f"artifacts for run {run_id}",
+    """Return the download URL for a matching non-expired artefact, or ``None``."""
+    artefacts = _require_list(
+        artefacts_payload.get("artifacts"),
+        name=f"artefacts for run {run_id}",
     )
-    for artifact_index, artifact_value in enumerate(artifacts):
-        artifact = _require_mapping(
-            artifact_value,
-            name=f"artifacts[{artifact_index}] for run {run_id}",
+    for artefact_index, artefact_value in enumerate(artefacts):
+        artefact = _require_mapping(
+            artefact_value,
+            name=f"artefacts[{artefact_index}] for run {run_id}",
         )
         name = _require_non_empty_string(
-            artifact.get("name"),
-            name=f"artifacts[{artifact_index}].name for run {run_id}",
+            artefact.get("name"),
+            name=f"artefacts[{artefact_index}].name for run {run_id}",
         )
         expired = _require_bool(
-            artifact.get("expired"),
-            name=f"artifacts[{artifact_index}].expired for run {run_id}",
+            artefact.get("expired"),
+            name=f"artefacts[{artefact_index}].expired for run {run_id}",
         )
-        if name != artifact_name or expired:
+        if name != artefact_name or expired:
             continue
         return _require_non_empty_string(
-            artifact.get("archive_download_url"),
-            name=(f"artifacts[{artifact_index}].archive_download_url for run {run_id}"),
+            artefact.get("archive_download_url"),
+            name=(f"artefacts[{artefact_index}].archive_download_url for run {run_id}"),
         )
     return None
 
 
-def select_latest_artifact_download_url(
+def select_latest_artefact_download_url(
     *,
     workflow_runs_payload: cabc.Mapping[str, object],
-    artifacts_payload_by_run: cabc.Mapping[int, cabc.Mapping[str, object]],
-    artifact_name: str,
+    artefacts_payload_by_run: cabc.Mapping[int, cabc.Mapping[str, object]],
+    artefact_name: str,
 ) -> str | None:
-    """Return the latest non-expired artifact download URL, if available."""
+    """Return the latest non-expired artefact download URL, if available."""
     workflow_runs = _require_list(
         workflow_runs_payload.get("workflow_runs"),
         name="workflow_runs",
@@ -221,20 +221,20 @@ def select_latest_artifact_download_url(
     for index, run_value in enumerate(workflow_runs):
         run = _require_mapping(run_value, name=f"workflow_runs[{index}]")
         run_id = _require_int(run.get("id"), name=f"workflow_runs[{index}].id")
-        artifacts_payload = artifacts_payload_by_run.get(run_id)
-        if artifacts_payload is None:
+        artefacts_payload = artefacts_payload_by_run.get(run_id)
+        if artefacts_payload is None:
             continue
-        url = _find_artifact_url_in_run(
-            artifacts_payload=artifacts_payload,
+        url = _find_artefact_url_in_run(
+            artefacts_payload=artefacts_payload,
             run_id=run_id,
-            artifact_name=artifact_name,
+            artefact_name=artefact_name,
         )
         if url is not None:
             return url
     return None
 
 
-def _artifact_member_path(*, output_dir: pth.Path, archive_name: str) -> pth.Path:
+def _artefact_member_path(*, output_dir: pth.Path, archive_name: str) -> pth.Path:
     """Return the normalized extraction path for an archive member."""
     destination = (output_dir / archive_name).resolve()
     output_root = output_dir.resolve()
@@ -244,19 +244,19 @@ def _artifact_member_path(*, output_dir: pth.Path, archive_name: str) -> pth.Pat
     return destination
 
 
-def extract_artifact_archive(
+def extract_artefact_archive(
     *,
     archive_bytes: bytes,
     output_dir: pth.Path,
 ) -> tuple[pth.Path, ...]:
-    """Extract a downloaded artifact zip into *output_dir* safely."""
+    """Extract a downloaded artefact zip into *output_dir* safely."""
     output_dir.mkdir(parents=True, exist_ok=True)
     extracted_paths: list[pth.Path] = []
     with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
         for member in archive.infolist():
             if member.is_dir():
                 continue
-            destination = _artifact_member_path(
+            destination = _artefact_member_path(
                 output_dir=output_dir,
                 archive_name=member.filename,
             )
@@ -267,12 +267,12 @@ def extract_artifact_archive(
     return tuple(extracted_paths)
 
 
-def find_latest_artifact_download_url(
+def find_latest_artefact_download_url(
     *,
-    query: ArtifactQuery,
+    query: ArtefactQuery,
     token: str,
 ) -> str | None:
-    """Query GitHub Actions and return the latest matching artifact URL."""
+    """Query GitHub Actions and return the latest matching artefact URL."""
     encoded_repository = urllib.parse.quote(query.repository, safe="/")
     encoded_workflow = urllib.parse.quote(query.workflow, safe="")
     params = urllib.parse.urlencode({
@@ -291,23 +291,23 @@ def find_latest_artifact_download_url(
         name="workflow_runs",
     )
 
-    artifacts_payload_by_run: dict[int, cabc.Mapping[str, object]] = {}
+    artefacts_payload_by_run: dict[int, cabc.Mapping[str, object]] = {}
     for index, run_value in enumerate(workflow_runs):
         run = _require_mapping(run_value, name=f"workflow_runs[{index}]")
         run_id = _require_int(run.get("id"), name=f"workflow_runs[{index}].id")
-        artifacts_url = (
+        artefacts_url = (
             f"{query.api_base_url}/repos/{encoded_repository}/actions/runs/"
             f"{run_id}/artifacts?per_page=100"
         )
-        artifacts_payload_by_run[run_id] = _load_json_response(
-            url=artifacts_url,
+        artefacts_payload_by_run[run_id] = _load_json_response(
+            url=artefacts_url,
             token=token,
         )
 
-    return select_latest_artifact_download_url(
+    return select_latest_artefact_download_url(
         workflow_runs_payload=workflow_runs_payload,
-        artifacts_payload_by_run=artifacts_payload_by_run,
-        artifact_name=query.artifact_name,
+        artefacts_payload_by_run=artefacts_payload_by_run,
+        artefact_name=query.artefact_name,
     )
 
 
@@ -326,14 +326,15 @@ def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--artifact-name",
+        dest="artefact_name",
         required=True,
-        help="Artifact name to download from the latest successful run.",
+        help="Artefact name to download from the latest successful run.",
     )
     parser.add_argument(
         "--output-dir",
         type=pth.Path,
         required=True,
-        help="Directory that receives the extracted artifact files.",
+        help="Directory that receives the extracted artefact files.",
     )
     parser.add_argument(
         "--branch",
@@ -354,20 +355,20 @@ def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
 
 
 def main(argv: cabc.Sequence[str] | None = None) -> int:
-    """Run the baseline artifact fetch CLI."""
+    """Run the baseline artefact fetch CLI."""
     args = _parse_args(argv)
     token = os.environ.get(args.token_env, "").strip()
     if not token:
         msg = f"missing GitHub token in environment variable {args.token_env}"
         raise SystemExit(msg)
 
-    download_url = find_latest_artifact_download_url(
-        query=ArtifactQuery(
+    download_url = find_latest_artefact_download_url(
+        query=ArtefactQuery(
             repository=args.repository,
             workflow=args.workflow,
             branch=args.branch,
             event=args.event,
-            artifact_name=args.artifact_name,
+            artefact_name=args.artefact_name,
         ),
         token=token,
     )
@@ -375,7 +376,7 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
         return MAIN_BASELINE_NOT_FOUND_EXIT_CODE
 
     archive_bytes = _download_bytes(url=download_url, token=token)
-    extract_artifact_archive(
+    extract_artefact_archive(
         archive_bytes=archive_bytes,
         output_dir=args.output_dir,
     )

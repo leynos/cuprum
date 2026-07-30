@@ -73,7 +73,7 @@ def _stringify_arg(value: _ArgValue) -> str:
 
 
 def _serialize_kwargs(kwargs: dict[str, _ArgValue]) -> tuple[str, ...]:
-    """Serialise keyword arguments to CLI-style ``--flag=value`` entries."""
+    """Serialize keyword arguments to CLI-style ``--flag=value`` entries."""
     flags: list[str] = []
     for key, value in kwargs.items():
         normalized_key = key.replace("_", "-")
@@ -100,7 +100,7 @@ def build_argv(*args: _ArgValue, **kwargs: _ArgValue) -> tuple[str, ...]:
         Positional argument values. Values are stringified with ``str()`` in
         the order supplied and appear before generated keyword flags.
     **kwargs
-        Keyword flag values. Each key is normalised by replacing underscores
+        Keyword flag values. Each key is normalized by replacing underscores
         with hyphens, then serialized as ``--flag=value`` in insertion order.
         ``None`` is rejected in positional and keyword positions.
 

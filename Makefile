@@ -171,9 +171,9 @@ markdownlint: $(MDLINT) ## Lint Markdown files
 	$(LOCAL_TOOL_ENV) $(MDLINT) '**/*.md'
 	+$(MAKE) spelling
 
-spelling: spelling-helper-test ## Enforce en-GB-oxendict spelling in Markdown prose
+spelling: spelling-helper-test ## Enforce en-GB-oxendict spelling in prose and source
 	@$(UV_RUN_ENV) uv run scripts/generate_typos_config.py
-	@git ls-files -z '*.md' | \
+	@git ls-files -z '*.md' '*.py' '*.rs' | \
 		xargs -0 -r $(TYPOS) --config typos.toml --force-exclude
 
 spelling-helper-test: build ## Validate the shared spelling-policy integration

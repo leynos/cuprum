@@ -137,7 +137,7 @@ def maturin_script_locatable() -> bool:
     )
 
 
-def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
+def build_native_wheel_artefact(root: Path, out_dir: Path) -> Path:
     """Build a native wheel using the current interpreter's maturin.
 
     Invokes ``python -m maturin`` with the running interpreter, so the maturin
@@ -185,6 +185,6 @@ def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
     return wheels[0]
 
 
-# The wheel-artifact snapshot helpers live in a sibling module to keep this
+# The wheel-artefact snapshot helpers live in a sibling module to keep this
 # module focused; re-exported here so existing import sites keep working.
 wheel_build_snapshot = _maturin_wheel.wheel_build_snapshot

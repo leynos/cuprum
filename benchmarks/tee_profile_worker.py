@@ -14,7 +14,7 @@ and timing behaviour in tests.
 Backend selection is handled by ``_EnvBackendSelector``, a deliberately
 non-reentrant context manager that mutates the process-wide environment while
 holding ``_BACKEND_LOCK``. ``_BackendSelectorState`` provides the thread-local
-reentrancy guard, while ``_BACKEND_LOCK`` is an ``RLock`` that serialises
+reentrancy guard, while ``_BACKEND_LOCK`` is an ``RLock`` that serializes
 ``os.environ`` changes across workers and still allows same-thread helper code
 to re-enter the lock safely.
 
@@ -364,7 +364,7 @@ def _build_command(
 class _EnvBackendSelector:
     """Activate a named stream backend by mutating ``os.environ``.
 
-    Acquires ``_BACKEND_LOCK`` for the duration of the context to serialise
+    Acquires ``_BACKEND_LOCK`` for the duration of the context to serialize
     access to ``os.environ`` and the backend LRU caches. This selector is
     not re-entrant; attempted nested entry raises ``RuntimeError`` and logs
     the rejected backend and thread identifier.
@@ -683,7 +683,7 @@ def main() -> int:
         Process exit code derived from the worker result's ``exit_code`` field;
         0 on success.
     """
-    # Developer guide: CLIs must initialise warning-level logging explicitly.
+    # Developer guide: CLIs must initialize warning-level logging explicitly.
     logging.basicConfig(
         level=logging.WARNING,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",

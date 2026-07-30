@@ -14,7 +14,7 @@ if typ.TYPE_CHECKING:
 
 @dc.dataclass(frozen=True, slots=True)
 class _PipelineRunConfig:
-    """Normalised runtime options for pipeline execution."""
+    """Normalized runtime options for pipeline execution."""
 
     ctx: ExecutionContext
     capture: bool
@@ -47,7 +47,7 @@ def _prepare_pipeline_config(
     timeout: float | None,
     context: ExecutionContext | None,
 ) -> _PipelineRunConfig:
-    """Normalise runtime options for pipeline execution."""
+    """Normalize runtime options for pipeline execution."""
     from cuprum._pipeline_internals import _sh_module
 
     sh = _sh_module()

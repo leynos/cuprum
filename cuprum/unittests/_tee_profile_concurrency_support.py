@@ -300,7 +300,7 @@ class _BackendEnvironmentRace:
     """Own coordination state for the backend environment preservation test."""
 
     def __init__(self, fixture: pth.Path) -> None:
-        """Initialise events, result capture, and the injected selector."""
+        """Initialize events, result capture, and the injected selector."""
         self.events = {
             "first_inside": threading.Event(),
             "second_selector_attempting": threading.Event(),

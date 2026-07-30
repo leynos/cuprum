@@ -40,7 +40,7 @@ class TextBlackhole(io.TextIOBase):
 class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
     """TTY-like sink with a background drainer for throughput profiling.
 
-    Synchronisation contract
+    Synchronization contract
     ------------------------
     The master file-descriptor is owned exclusively by the ``_drain`` daemon
     thread after ``__enter__`` returns. The slave ``IO[str]`` stream returned

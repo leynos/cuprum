@@ -58,7 +58,7 @@ BackendName = typ.Literal["python", "rust"]
 
 
 class PipelineBenchmarkScenarioDict(typ.TypedDict):
-    """Represent the serialisable shape for a benchmark scenario.
+    """Represent the serializable shape for a benchmark scenario.
 
     Examples
     --------
@@ -131,7 +131,7 @@ payload_bytes=1024, stages=3, with_line_callbacks=False)
         _validate_backend(self.backend)
 
     def as_dict(self) -> PipelineBenchmarkScenarioDict:
-        """Convert the scenario into a JSON-serialisable mapping.
+        """Convert the scenario into a JSON-serializable mapping.
 
         Returns
         -------

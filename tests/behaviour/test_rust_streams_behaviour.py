@@ -56,7 +56,7 @@ def _expose_rust_stream_function(
     "Rust pump stream transfers data between pipes",
 )
 def test_rust_pump_stream_behaviour() -> None:
-    """Validate the Rust pump stream behavior.
+    """Validate the Rust pump stream behaviour.
 
     Parameters
     ----------
