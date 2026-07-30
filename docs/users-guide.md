@@ -247,6 +247,52 @@ Notes:
   first. Neither says why it stopped; read them alongside that stage's exit
   status.
 
+
+### Diagnosing a fail-fast pipeline
+
+`result.failure_index` reports which stage triggered fail-fast, but not why
+the other stages ended when they did. Two records fill that gap. Both are
+emitted at `WARNING` on the `cuprum._pipeline_wait` logger, so they appear in
+a default logging configuration without any opt-in.
+
+Table 1: fail-fast records emitted while a pipeline is being torn down
+
+| `cuprum_action` | Emitted when |
+| --- | --- |
+| `pipeline_stage_first_failure` | the first stage to exit non-zero is latched |
+| `pipeline_fail_fast_termination` | that failure causes the remaining stages to be terminated |
+
+Each record carries `cuprum_stage_index`, `cuprum_exit_code`, and
+`cuprum_duration_s` — the stage's elapsed run time — so the failing stage can
+be identified without correlating against the result object.
+
+Only the *first* failure is reported. Fail-fast terminates the other stages,
+so those stages then exit non-zero too; reporting each would bury the cause
+under its own consequences. A pipeline therefore emits at most one
+`pipeline_stage_first_failure` record, and a second one indicates a real
+defect rather than a second failure.
+
+A stage that fails last emits `pipeline_stage_first_failure` without a
+matching `pipeline_fail_fast_termination`: it latched the failure, but there
+was nothing left running to terminate. The same is true of a single-stage
+pipeline.
+
+The fields are prefixed so they cannot collide with `LogRecord`'s own
+attributes. To surface them, read them off the record:
+
+```python
+import logging
+
+class StageFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        stage = record.__dict__.get("cuprum_stage_index")
+        if stage is not None:
+            record.msg = f"[stage {stage}] {record.msg}"
+        return True
+
+logging.getLogger("cuprum._pipeline_wait").addFilter(StageFilter())
+```
+
 ## Execution runtime
 
 `SafeCmd.run` executes curated commands asynchronously with predictable capture
