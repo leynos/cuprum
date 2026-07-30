@@ -1595,6 +1595,41 @@ itself succeeded.
 Both the `splice` fast path and the read/write fallback emit the event
 identically, so the message does not depend on which path handled the transfer.
 
+
+### Why a hop fell back to Python
+
+Selecting the `rust` backend does not guarantee every inter-stage hop takes it.
+Handing the raw pipe descriptors to the Rust pump can fail in ways that are not
+errors — the hop simply runs on the Python pump instead and produces the same
+result, slower. Nothing surfaces to the caller, so a deployment that has
+quietly stopped taking the fast path looks exactly like one that never had it.
+
+Each fall-back is recorded on the `cuprum._pipeline_streams` logger with a
+`cuprum_action` of `rust_pump_declined` and a `cuprum_reason`:
+
+Table 1: reasons an inter-stage hop declines the Rust pump
+
+| `cuprum_reason` | Meaning |
+| --- | --- |
+| `raw_fd_unavailable` | the asyncio transport exposed no raw descriptor, so there was nothing to hand over |
+| `reader_pause_failed` | the reader transport could not be paused, so asyncio might still consume the descriptor |
+| `blocking_mode_unavailable` | the descriptors could not be switched to the blocking mode the pump requires |
+
+These sit at `DEBUG`, not `WARNING`: a fall-back is a routing decision rather
+than a fault, and on platforms where the fast path does not apply every hop
+would otherwise warn. Raise that one logger when investigating throughput:
+
+```python
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("cuprum._pipeline_streams").setLevel(logging.DEBUG)
+```
+
+`raw_fd_unavailable` on every hop usually means the streams are not real OS
+pipes. The other two indicate the descriptors were found but could not be
+borrowed safely, which is worth investigating rather than accepting.
+
 ### Choosing a stream backend
 
 Most users should leave backend selection on `auto`. This uses the Rust pathway
