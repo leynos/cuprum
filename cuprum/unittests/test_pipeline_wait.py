@@ -14,6 +14,7 @@ async wiring in `_process_completed_task` that joins the two.
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import logging
 import typing as typ
 
@@ -355,6 +356,16 @@ _FIRST_FAILURE_ACTION = "pipeline_stage_first_failure"
 _TERMINATION_ACTION = "pipeline_fail_fast_termination"
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _RecordCase:
+    """One completion sequence and the records it must produce."""
+
+    stage_count: int
+    completions: list[tuple[int, int]]
+    expected_actions: list[str]
+    reason: str
+
+
 def _structured_fields(record: logging.LogRecord) -> dict[str, object]:
     """Return a record's ``cuprum_``-prefixed structured fields.
 
@@ -471,44 +482,49 @@ class TestCompletionObservability:
             }, "both records carry the stage index, exit code, and elapsed time"
 
     @pytest.mark.parametrize(
-        ("stage_count", "completions", "expected_actions", "reason"),
+        "case",
         [
             pytest.param(
-                3,
-                [(1, 0)],
-                [],
-                "a successful stage must emit no records",
+                _RecordCase(
+                    stage_count=3,
+                    completions=[(1, 0)],
+                    expected_actions=[],
+                    reason="a successful stage must emit no records",
+                ),
                 id="successful_completion",
             ),
             pytest.param(
-                3,
-                [(2, 1)],
-                [_FIRST_FAILURE_ACTION],
-                "a failing final stage must not emit a termination record",
+                _RecordCase(
+                    stage_count=3,
+                    completions=[(2, 1)],
+                    expected_actions=[_FIRST_FAILURE_ACTION],
+                    reason="a failing final stage must not emit a termination record",
+                ),
                 id="final_stage_failure",
             ),
             pytest.param(
-                1,
-                [(0, 9)],
-                [_FIRST_FAILURE_ACTION],
-                "a single-stage pipeline has no other stage to terminate",
+                _RecordCase(
+                    stage_count=1,
+                    completions=[(0, 9)],
+                    expected_actions=[_FIRST_FAILURE_ACTION],
+                    reason="a single-stage pipeline has no other stage to terminate",
+                ),
                 id="single_stage_failure",
             ),
             pytest.param(
-                4,
-                [(0, 1), (1, 1)],
-                [_FIRST_FAILURE_ACTION, _TERMINATION_ACTION],
-                "fail-fast reporting must fire exactly once per pipeline",
+                _RecordCase(
+                    stage_count=4,
+                    completions=[(0, 1), (1, 1)],
+                    expected_actions=[_FIRST_FAILURE_ACTION, _TERMINATION_ACTION],
+                    reason="fail-fast reporting must fire exactly once per pipeline",
+                ),
                 id="later_failure_after_latch",
             ),
         ],
     )
     def test_completion_emits_the_expected_records(
         self,
-        stage_count: int,
-        completions: list[tuple[int, int]],
-        expected_actions: list[str],
-        reason: str,
+        case: _RecordCase,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
@@ -516,8 +532,8 @@ class TestCompletionObservability:
         records = self._run(
             monkeypatch,
             caplog,
-            stage_count=stage_count,
-            completions=completions,
+            stage_count=case.stage_count,
+            completions=case.completions,
         )
 
-        assert _actions(records) == expected_actions, reason
+        assert _actions(records) == case.expected_actions, case.reason
