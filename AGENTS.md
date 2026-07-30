@@ -15,10 +15,11 @@
   responsibility, and obey command/query segregation.
 - **Clear commit messages.** Commit messages should be descriptive, explaining
   what was changed and why.
-- **Use consistent spelling and grammar.** Comments must use en-GB-oxendict
-  ("-ize" / "-yse" / "-our") spelling and grammar, with the exception of
-  references to external APIs. Markdown prose is enforced mechanically by the
-  pinned `typos` spelling gate in `make lint` and `make markdownlint`.
+- **Use consistent spelling and grammar.** Code identifiers, comments,
+  docstrings, and prose must use en-GB-oxendict ("-ize" / "-yse" / "-our")
+  spelling and grammar, except where an external API requires another spelling.
+  The pinned `typos` spelling gate in `make lint` and `make markdownlint`
+  checks tracked Markdown, Python, and Rust files.
 - **Document public APIs comprehensively.** Public functions, classes, and
   methods must have comprehensive NumPy-style docstrings, including clear
   examples that demonstrate usage and outcome where appropriate.
@@ -341,11 +342,13 @@ working on the Rust portions of the project:
 ## Markdown guidance
 
 - Validate Markdown files using `make markdownlint`; this also runs the pinned
-  en-GB-oxendict `typos` spelling gate.
+  en-GB-oxendict `typos` spelling gate across tracked Markdown, Python, and
+  Rust files.
 - The spelling configuration `typos.toml` is generated. Put narrow
-  repository-only exceptions in `typos.local.toml`, then regenerate with
-  `uv run scripts/generate_typos_config.py`; never edit generated entries by
-  hand.
+  repository-only exceptions for unavoidable external contracts in
+  `typos.local.toml`, document the upstream contract beside each exception,
+  then regenerate with `uv run scripts/generate_typos_config.py`; never edit
+  generated entries by hand.
 - Run `make fmt` after documentation changes to format Markdown and fix table
   markup.
 - Validate Mermaid diagrams in Markdown by running `make nixie`.

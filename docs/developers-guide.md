@@ -12,6 +12,7 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-005: Unify Rust availability probe](adr-005-unified-rust-availability-probe.md)
 - [ADR-006: Split cuprum/context.py into a context package](adr-006-context-package-split.md)
 - [ADR-007: Subprocess execution module boundaries](adr-007-subprocess-execution-module-boundaries.md)
+- [ADR-008: Enforce Oxford spelling in source](adr-008-enforce-oxford-spelling-in-source.md)
 
 ## Rust availability probing
 
@@ -1871,15 +1872,31 @@ fix the Ruff findings first, then the `interrogate` gaps, then rerun
 ### Spelling policy
 
 The lint and Markdown gates run pinned `typos` 1.48.0 with British English and
-Oxford `-ize` conventions. Before checking maintained Markdown, the generator
-refreshes the shared estate dictionary into an untracked local cache only when
-the authority is newer, then merges `typos.local.toml`. The generated
-`typos.toml` is reviewed and committed so a clean, network-restricted checkout
-can still enforce the last known-good policy.
+Oxford `-ize` conventions. The single spelling recipe checks tracked Markdown,
+Python, and Rust files, so the policy governs code identifiers, comments,
+docstrings, string fixtures, and prose. Spellings fixed by an external API are
+the only exception.
 
-Add repository-only proper names or quoted upstream terms to
-`typos.local.toml`; never edit generated entries in `typos.toml` by hand. The
-gate also runs the helper's Python 3.13 tests with at least 90% line coverage.
+Before checking the repository, the generator refreshes the shared estate
+dictionary into an untracked local cache only when the authority is newer,
+then merges `typos.local.toml`. The generated `typos.toml` is reviewed and
+committed so a clean, network-restricted checkout can still enforce the last
+known-good policy.
+
+Put an unavoidable external-contract spelling or a deliberate spelling-test
+fixture in `typos.local.toml` as a narrowly anchored `[patterns].ignore` entry.
+Document the specific upstream contract or fixture beside the entry. Do not
+accept a globally incorrect Oxford form under `[words].accepted`, and never
+edit generated entries in `typos.toml` by hand. Regenerate after changing the
+overlay:
+
+```bash
+uv run scripts/generate_typos_config.py
+```
+
+Run `make spelling` to verify the generated configuration and all three file
+types. The gate also runs the helper's Python 3.13 tests with at least 90% line
+coverage.
 
 Ruff must be invoked through the project virtual environment, not as a floating
 host tool. The `RUFF` variable expands to `$(UV_RUN_ENV) uv run ruff`, and the
