@@ -130,24 +130,73 @@ class _SubprocessTimeoutContext:
     stderr_text: str | None
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _TimeoutFallback:
+    """Fields for resolving a bare ``TimeoutError`` into a timeout payload.
+
+    The stream-timeout path captures its own payload, but a bare
+    ``TimeoutError`` carries none, so these are the caller-supplied fallbacks:
+    the configured timeout, the captured stdout/stderr, and the clock reading
+    taken as the exit time.
+    """
+
+    configured_timeout: float | None
+    stdout: str | None
+    stderr: str | None
+    exited_at: float
+
+
+def _resolve_timeout_payload(
+    exc: TimeoutError | _SubprocessTimeoutError,
+    fallback: _TimeoutFallback,
+) -> _SubprocessTimeoutDetails:
+    """Resolve the timeout payload from either timeout variant.
+
+    This is the pure timeout-payload seam behind
+    [`_handle_subprocess_timeout`][cuprum._subprocess_timeout._handle_subprocess_timeout].
+    A [`_SubprocessTimeoutError`][cuprum._subprocess_timeout._SubprocessTimeoutError]
+    already carries a captured payload from the stream-timeout path, so it is
+    used verbatim. A bare ``TimeoutError`` is resolved from ``fallback`` — whose
+    configured timeout must be present (a missing one is an internal invariant
+    violation). Either branch yields a concrete ``timeout``, so the resulting
+    ``TimeoutExpired`` report is consistent regardless of which path timed out.
+    """
+    match exc:
+        case _SubprocessTimeoutError(
+            timeout=timeout,
+            stdout=stdout,
+            stderr=stderr,
+            exited_at=exited_at,
+        ):
+            return _SubprocessTimeoutDetails(
+                timeout=timeout,
+                stdout=stdout,
+                stderr=stderr,
+                exited_at=exited_at,
+            )
+        case _:
+            return _SubprocessTimeoutDetails(
+                timeout=_require_timeout(fallback.configured_timeout, exc),
+                stdout=fallback.stdout,
+                stderr=fallback.stderr,
+                exited_at=fallback.exited_at,
+            )
+
+
 def _handle_subprocess_timeout(
     ctx: _SubprocessTimeoutContext,
     exc: TimeoutError | _SubprocessTimeoutError,
 ) -> typ.NoReturn:
     """Handle a subprocess timeout by emitting exit event and raising TimeoutExpired."""
-    match exc:
-        case _SubprocessTimeoutError(
-            timeout=timeout,
-            exited_at=exited_at,
-            stdout=stdout,
-            stderr=stderr,
-        ):
-            pass
-        case TimeoutError():
-            timeout = _require_timeout(ctx.execution.timeout, exc)
-            exited_at = time.perf_counter()
-            stdout = ctx.stdout_text
-            stderr = ctx.stderr_text
+    payload = _resolve_timeout_payload(
+        exc,
+        _TimeoutFallback(
+            configured_timeout=ctx.execution.timeout,
+            stdout=ctx.stdout_text,
+            stderr=ctx.stderr_text,
+            exited_at=time.perf_counter(),
+        ),
+    )
 
     exit_code = _get_exit_code(ctx.process)
     _emit_exit_event(
@@ -156,15 +205,15 @@ def _handle_subprocess_timeout(
             pid=ctx.process.pid,
             exit_code=exit_code,
             started_at=ctx.started_at,
-            exited_at=exited_at,
+            exited_at=payload.exited_at,
         ),
     )
     _raise_timeout_expired(
         _TimeoutContext(
             cmd_argv=ctx.execution.cmd.argv_with_program,
-            timeout=timeout,
-            stdout=stdout,
-            stderr=stderr,
+            timeout=payload.timeout,
+            stdout=payload.stdout,
+            stderr=payload.stderr,
         ),
         exc,
     )
@@ -200,10 +249,12 @@ __all__ = [
     "_SubprocessTimeoutDetails",
     "_SubprocessTimeoutError",
     "_TimeoutContext",
+    "_TimeoutFallback",
     "_emit_exit_event",
     "_get_exit_code",
     "_handle_stream_timeout",
     "_handle_subprocess_timeout",
     "_raise_timeout_expired",
     "_require_timeout",
+    "_resolve_timeout_payload",
 ]

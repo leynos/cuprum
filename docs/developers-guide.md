@@ -280,6 +280,79 @@ exceptions, and cancellation.  Tests cover this contract at four levels:
   `cuprum/unittests/test_cqrs_hook_behaviour.py`, covering allowlist
   enforcement, before/after/observe hooks, and async observe-task scheduling
 
+## Timeout and fail-fast reducer verification
+
+The temporal, branch-heavy subprocess-timeout and pipeline-cleanup paths are
+backed by two pure reducers, each verified twice: Hypothesis samples them
+randomly, and CrossHair confirms the same invariants symbolically over a
+bounded state space. Keep both layers when changing either reducer.
+
+`_resolve_timeout_payload` (`cuprum/_subprocess_timeout.py`) — the
+timeout-payload seam. The symbolic contracts confirm that:
+
+- a carried `_SubprocessTimeoutError` returns exactly its own timeout, stdout,
+  stderr, and exit time, independently of the fallback (the fallback in that
+  contract deliberately holds different values and a `None` configured timeout,
+  so a resolver that consulted it would return a wrong field or raise);
+- a bare `TimeoutError` with a configured timeout present returns exactly the
+  fallback's timeout, stdout, stderr, and exit time;
+- a bare `TimeoutError` with `configured_timeout is None` raises
+  `_SubprocessInvariantError` rather than inventing a timeout.
+
+`_stages_to_terminate` (`cuprum/_process_lifecycle.py`) — the fail-fast
+selection. The symbolic contracts confirm that:
+
+- every selected index is in range, unique, and ordered;
+- no selected index is the `failure_index`;
+- every selected index corresponds to a stage whose `done` flag is `False`;
+- the selection is exactly the set of unfinished, non-failed indices;
+- cleanup is idempotent — after marking the selected stages done, a second
+  invocation selects nothing.
+
+Run the verification with either of:
+
+```bash
+uv run pytest -q cuprum/unittests/test_subprocess_timeout_reducers_crosshair.py
+uv run crosshair check \
+  cuprum/unittests/test_subprocess_timeout_reducers_crosshair.py \
+  --analysis_kind=PEP316
+```
+
+The ordinary Hypothesis module remains alongside it:
+
+```bash
+uv run pytest -q cuprum/unittests/test_subprocess_timeout_reducers.py
+```
+
+### Deliberate bounds
+
+The symbolic domains are kept small and finite so CrossHair exhausts them
+rather than returning `CANNOT_CONFIRM`:
+
+- pipelines are capped at three stages, with `failure_index` constrained to a
+  valid index by precondition;
+- the per-stage `done` flags are encoded as a single bounded integer bitmask
+  rather than a symbolic list of symbolic booleans, which is what makes the
+  space enumerable;
+- timeouts and exit times come from a three-value enumeration instead of
+  unrestricted floats, and stdout/stderr from a three-value enumeration that
+  includes `None`. The reducers only ever copy these values, so representative
+  values suffice — what matters is that carried and fallback values stay
+  distinguishable, which the enumerations preserve.
+
+These checks run in CI rather than only on demand: the module matches the
+`cuprum/unittests/test_*.py` pattern in the Makefile's `PYTEST_TARGETS`, so
+`make test` collects and executes it. `check_states` requires
+`MessageType.CONFIRMED`, so an available-but-unconfirmed result
+(`CANNOT_CONFIRM`) or a refuted postcondition (`POST_FAIL`) fails the run
+instead of being downgraded to a skip or a warning. Availability is probed
+through the shared helpers in `cuprum/unittests/_crosshair_support.py`, which
+degrade to a skip only for a missing CrossHair dependency (`ImportError`) or an
+interpreter whose opcode set the tracer cannot handle
+(`crosshair.tracers.TraceException`, as with the `CALL_KW` gap on early Python
+3.15 betas, issue `#109`); every other failure is re-raised. Supported
+interpreters therefore confirm the contracts rather than skipping them.
+
 ## Canonical stream-drain loop
 
 `cuprum._streams._drain(stream, config, *, on_chunk=None)` is the single
