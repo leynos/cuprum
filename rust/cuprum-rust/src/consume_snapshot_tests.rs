@@ -113,3 +113,53 @@ fn incomplete_trailing_sequence_is_replaced_at_eof() {
 
     insta::assert_snapshot!(byte_at_a_time, @"euro sign: �");
 }
+
+/// Randomised coverage complementing the four fixed cases above.
+///
+/// The snapshots pin what the loop produces for four hand-picked payload
+/// categories; they cannot show that the categories are exhaustive. These
+/// properties generate arbitrary bytes and buffer sizes and check the same
+/// invariant the snapshots encode by example: the loop's output is exactly
+/// `String::from_utf8_lossy` of the input, whatever the buffer size, so no
+/// generated payload can straddle a read boundary in a way the fixed cases
+/// missed.
+///
+/// Payloads stay small so the unbuffered write in `consume` cannot fill the
+/// pipe and block, which is the precondition the helper documents.
+mod properties {
+    use super::consume;
+    use proptest::prelude::*;
+
+    /// The largest payload a single unbuffered pipe write must accept.
+    const MAX_PAYLOAD: usize = 512;
+
+    proptest! {
+        /// The loop reproduces `from_utf8_lossy` for any payload and buffer size.
+        #[test]
+        fn decodes_exactly_like_from_utf8_lossy(
+            payload in prop::collection::vec(any::<u8>(), 0..MAX_PAYLOAD),
+            buffer_size in 1_usize..=64,
+        ) {
+            let expected = String::from_utf8_lossy(&payload);
+            prop_assert_eq!(
+                consume(&payload, buffer_size),
+                expected.into_owned(),
+                "the read loop must decode identically to from_utf8_lossy",
+            );
+        }
+
+        /// Where the read boundaries fall never changes the decoded text.
+        #[test]
+        fn decoding_is_independent_of_the_buffer_size(
+            payload in prop::collection::vec(any::<u8>(), 0..MAX_PAYLOAD),
+            first in 1_usize..=64,
+            second in 1_usize..=64,
+        ) {
+            prop_assert_eq!(
+                consume(&payload, first),
+                consume(&payload, second),
+                "two buffer sizes must split the same payload to the same text",
+            );
+        }
+    }
+}
