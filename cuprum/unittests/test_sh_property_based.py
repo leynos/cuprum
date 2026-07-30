@@ -65,7 +65,7 @@ _CMDS = st.builds(_cmd, _STAGE_NAMES)
 
 @settings(max_examples=200)
 @given(args=_ARGS, kwargs=_KWARGS)
-def test_build_argv_orders_and_normalises(
+def test_build_argv_orders_and_normalizes(
     args: list[str | int | bool | Path],
     kwargs: dict[str, str | int | bool | Path],
 ) -> None:

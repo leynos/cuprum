@@ -98,10 +98,10 @@ def test_absolute_paths_without_traversal_round_trip(segments: list[str]) -> Non
     # drive is root-relative (not absolute), so anchor with a drive there.
     raw = _ABSOLUTE_ANCHOR + "/".join(segments)
     assert classify_path_string(raw, allow_relative=False) is None
-    normalised = safe_path(raw)
+    normalized = safe_path(raw)
     # A valid, traversal-free absolute path stays valid and normalises stably.
-    assert classify_path_string(normalised, allow_relative=False) is None
-    assert safe_path(normalised) == normalised
+    assert classify_path_string(normalized, allow_relative=False) is None
+    assert safe_path(normalized) == normalized
 
 
 @given(raw=_FUZZ_TEXT)
