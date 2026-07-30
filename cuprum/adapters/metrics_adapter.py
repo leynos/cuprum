@@ -60,6 +60,7 @@ Example with prometheus_client::
 from __future__ import annotations
 
 import dataclasses as dc
+import types
 import typing as typ
 
 from cuprum.adapters._support import (
@@ -200,12 +201,14 @@ class _HistogramOp:
 type _MetricOp = _CounterOp | _HistogramOp
 
 # Phases that map to a single unit-counter increment, keyed by event phase.
-_PHASE_COUNTERS: dict[str, str] = {
+# Read-only, so the single source of truth for these metric names cannot be
+# rewritten at runtime by an importing module.
+_PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
     "start": "cuprum_executions_total",
     "stdout": "cuprum_stdout_lines_total",
     "stderr": "cuprum_stderr_lines_total",
     "stdin_error": "cuprum_stdin_errors_total",
-}
+})
 
 
 def _exit_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
