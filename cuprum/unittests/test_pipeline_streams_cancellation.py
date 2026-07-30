@@ -53,6 +53,8 @@ async def _cancel_mid_transfer(
     worker_started: threading.Event,
     worker_finished: threading.Event,
     release: threading.Event,
+    *,
+    cancellations: int = 1,
 ) -> None:
     """Start the pump, cancel it mid-transfer, then release the worker."""
     reader_fd, writer_fd = os.pipe()
@@ -70,7 +72,8 @@ async def _cancel_mid_transfer(
             _pipeline_streams._run_rust_pump_with_blocking_fds(state=state)
         )
         await asyncio.to_thread(worker_started.wait, 5.0)
-        task.cancel()
+        for _ in range(cancellations):
+            task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
         events.append("released")
@@ -145,7 +148,10 @@ def test_a_failing_pump_on_a_cancelled_hop_reports_the_cancellation(
 
     _install_fake_pump(monkeypatch, failing_pump)
 
-    with caplog.at_level(logging.ERROR, logger="asyncio"):
+    with (
+        caplog.at_level(logging.ERROR, logger="asyncio"),
+        caplog.at_level(logging.DEBUG, logger="cuprum._pipeline_streams"),
+    ):
         # CancelledError, not OSError: _cancel_mid_transfer asserts it.
         asyncio.run(
             _cancel_mid_transfer(
@@ -167,4 +173,51 @@ def test_a_failing_pump_on_a_cancelled_hop_reports_the_cancellation(
     assert not unretrieved, (
         "the pump's failure must be retrieved from the future, but asyncio "
         f"reported it as unhandled: {unretrieved}"
+    )
+    reported = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("cuprum_action") == "rust_pump_failed_after_cancel"
+    ]
+    assert len(reported) == 1, (
+        "a pump failure masked by cancellation must be recorded exactly once, "
+        f"found {len(reported)}"
+    )
+    assert "the pump failed while the hop was being cancelled" in (
+        reported[0].getMessage()
+    ), f"the record must carry the pump error, found {reported[0].getMessage()!r}"
+
+
+def test_repeated_cancellation_keeps_cleanup_worker_owned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Extra cancellation requests cannot restore descriptors before the worker."""
+    events: list[str] = []
+    release = threading.Event()
+    worker_started = threading.Event()
+    worker_finished = threading.Event()
+
+    def blocking_pump(reader_fd: int, writer_fd: int) -> int:
+        """Block until released, standing in for an in-flight Rust transfer."""
+        del reader_fd, writer_fd
+        worker_started.set()
+        release.wait(timeout=5.0)
+        events.append("worker_returned")
+        worker_finished.set()
+        return 0
+
+    _install_fake_pump(monkeypatch, blocking_pump)
+    asyncio.run(
+        _cancel_mid_transfer(
+            events,
+            worker_started,
+            worker_finished,
+            release,
+            cancellations=3,
+        )
+    )
+
+    assert events.index("worker_returned") < events.index("restored"), (
+        "repeated cancellation must not restore descriptors before the worker; "
+        f"observed order {events}"
     )

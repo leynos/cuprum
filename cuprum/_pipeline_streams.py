@@ -90,7 +90,7 @@ class _PumpStreamDispatchTestHooks:
     ) = None
 
 
-@dc.dataclass(frozen=True, slots=True)
+@dc.dataclass(slots=True)
 class _RustPumpState:
     """Capture transport-owned state that native pumping must restore."""
 
@@ -98,6 +98,7 @@ class _RustPumpState:
     writer_fd: int
     blocking_mode_guard: _BlockingModeGuard
     resume_reader: cabc.Callable[[], None] | None
+    was_cancelled: bool = False
 
 
 _PUMP_STREAM_DISPATCH_TEST_HOOKS = _PumpStreamDispatchTestHooks()
@@ -146,7 +147,9 @@ def _complete_rust_pump(
     """Release native-pump resources after its executor worker settles."""
     try:
         if not completed.cancelled():
-            completed.exception()
+            error = completed.exception()
+            if state.was_cancelled and error is not None:
+                _log_rust_pump_failed_after_cancel(error)
     finally:
         _close_rust_writer_fd(rust_writer_fd)
         _restore_rust_pump_state(state)
@@ -187,11 +190,21 @@ async def _run_rust_pump_with_blocking_fds(
     try:
         await asyncio.shield(native_pump)
     except asyncio.CancelledError:
+        state.was_cancelled = True
         raise
     except BaseException:
         await asyncio.shield(cleanup_complete)
         raise
     await asyncio.shield(cleanup_complete)
+
+
+def _log_rust_pump_failed_after_cancel(error: BaseException) -> None:
+    """Record a native-pump failure masked by caller-requested cancellation."""
+    _LOGGER.debug(
+        "Rust pump failed after cancellation: %s",
+        error,
+        extra={"cuprum_action": "rust_pump_failed_after_cancel"},
+    )
 
 
 async def _run_rust_pump(
