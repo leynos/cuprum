@@ -133,13 +133,15 @@ mod properties {
 
     /// The largest payload a single unbuffered pipe write must accept.
     const MAX_PAYLOAD: usize = 512;
+    /// The largest read buffer the properties exercise.
+    const MAX_BUFFER: usize = 64;
 
     proptest! {
         /// The loop reproduces `from_utf8_lossy` for any payload and buffer size.
         #[test]
         fn decodes_exactly_like_from_utf8_lossy(
             payload in prop::collection::vec(any::<u8>(), 0..MAX_PAYLOAD),
-            buffer_size in 1_usize..=64,
+            buffer_size in 1_usize..=MAX_BUFFER,
         ) {
             let expected = String::from_utf8_lossy(&payload);
             prop_assert_eq!(
@@ -150,12 +152,17 @@ mod properties {
         }
 
         /// Where the read boundaries fall never changes the decoded text.
+        ///
+        /// Equal sizes are rejected rather than merely tolerated: comparing a
+        /// payload against itself at one buffer size holds for any
+        /// implementation, so such a case would assert nothing.
         #[test]
         fn decoding_is_independent_of_the_buffer_size(
             payload in prop::collection::vec(any::<u8>(), 0..MAX_PAYLOAD),
-            first in 1_usize..=64,
-            second in 1_usize..=64,
+            first in 1_usize..=MAX_BUFFER,
+            second in 1_usize..=MAX_BUFFER,
         ) {
+            prop_assume!(first != second);
             prop_assert_eq!(
                 consume(&payload, first),
                 consume(&payload, second),
