@@ -265,8 +265,13 @@ fn pump_drains_the_reader_after_the_writer_breaks() {
     // splice path reports it, so the read/write fallback must too, or the same
     // hang-up is diagnosable on one path and silent on the other.
     assert!(
-        captured.event_has_fields(Level::DEBUG, &["bytes_transferred"]),
-        "the writer-close latch must report the hang-up with its byte total",
+        captured.event_matches(
+            Level::DEBUG,
+            "broken pipe; draining reader",
+            &[("bytes_transferred", "0")],
+        ),
+        "the writer-close latch must report the hang-up by name, with the zero \
+         byte total that reached the hung-up downstream",
     );
 
     // The reader must have been drained to EOF: a further read returns zero

@@ -16,12 +16,20 @@ use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
 use tracing::{Event, Level, Metadata, Subscriber};
 
-/// A captured event: its level and the field names reachable from the active
-/// span stack when it was emitted.
+/// A captured event: its level, the field names reachable from the active span
+/// stack when it was emitted, and the values it carried itself.
+///
+/// `fields` and `values` answer different questions. `fields` includes names
+/// inherited from enclosing spans, so it shows whether an event kept its
+/// operation context. `values` holds only what the event recorded directly —
+/// including its message, which `tracing` stores under the `message` field —
+/// so it can identify *which* event fired rather than merely that some event
+/// carried a given field name.
 #[derive(Debug, Clone)]
 pub(crate) struct CapturedEvent {
     pub(crate) level: Level,
     pub(crate) fields: BTreeSet<String>,
+    pub(crate) values: BTreeMap<String, String>,
 }
 
 /// The result of a capture run.
@@ -37,6 +45,27 @@ impl Captured {
         self.events
             .iter()
             .any(|event| event.level == level && fields.iter().all(|f| event.fields.contains(*f)))
+    }
+
+    /// True when some event at `level` carried exactly `message` and every
+    /// listed field/value pair.
+    ///
+    /// Stricter than [`Self::event_has_fields`], which any event carrying the
+    /// named fields satisfies: this pins the specific event, so an unrelated
+    /// one cannot stand in for a missing or malformed diagnostic.
+    pub(crate) fn event_matches(
+        &self,
+        level: Level,
+        message: &str,
+        values: &[(&str, &str)],
+    ) -> bool {
+        self.events.iter().any(|event| {
+            event.level == level
+                && event.values.get("message").map(String::as_str) == Some(message)
+                && values.iter().all(|(name, value)| {
+                    event.values.get(*name).map(String::as_str) == Some(*value)
+                })
+        })
     }
 
     /// The recorded value of `field` on the span whose `operation` field equals
@@ -134,10 +163,11 @@ impl Subscriber for FilterCapture {
         };
         let mut own = BTreeMap::new();
         event.record(&mut FieldVisitor(&mut own));
-        fields.extend(own.into_keys());
+        fields.extend(own.keys().cloned());
         lock(&self.state).events.push(CapturedEvent {
             level: *event.metadata().level(),
             fields,
+            values: own,
         });
     }
 
