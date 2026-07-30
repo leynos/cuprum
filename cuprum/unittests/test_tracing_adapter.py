@@ -144,81 +144,93 @@ print('stderr-line', file=sys.stderr)""",
             "test_records_output_events should preserve stdout line text"
         )
 
-    def test_records_stdin_error_event(self) -> None:
-        """Hook surfaces stdin_error as a span event with stable fields."""
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-
-        exec_id = new_exec_id()
-        base = {"program": "cat", "argv": ("cat",), "pid": 4321, "exec_id": exec_id}
-        hook(_make_exec_event(phase="start", overrides=base))
-        hook(
-            _make_exec_event(
-                phase="stdin_error",
-                overrides={
-                    **base,
+    @pytest.mark.parametrize(
+        ("phase", "extra_fields", "expected_operation", "expected_error_type"),
+        [
+            pytest.param(
+                "stdin_error",
+                {
                     "operation": "write",
                     "error_type": "OSError",
                     "note": "OSError: broken pipe",
                 },
+                "write",
+                "OSError",
+                id="stdin_error",
             ),
-        )
-
-        span = tracer.spans[0]
-        stdin_error_attrs = next(
-            (attrs for name, attrs in span.events if name == "cuprum.stdin_error"),
-            None,
-        )
-        assert stdin_error_attrs is not None, (
-            "the tracing hook should surface stdin_error as a span event"
-        )
-        assert stdin_error_attrs.get("operation") == "write", (
-            "the stdin_error span event should carry the failing pipe operation"
-        )
-        assert stdin_error_attrs.get("error_type") == "OSError", (
-            "the stdin_error span event should carry the exception type"
-        )
-        assert span.ended is False, (
-            "a non-fatal stdin_error must not end the execution span"
-        )
-
-    def test_records_timeout_event(self) -> None:
-        """Hook surfaces a timeout as an ancillary span event without ending it."""
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-
-        exec_id = new_exec_id()
-        base = {"program": "cat", "argv": ("cat",), "pid": 4321, "exec_id": exec_id}
-        hook(_make_exec_event(phase="start", overrides=base))
-        hook(
-            _make_exec_event(
-                phase="timeout",
-                overrides={
-                    **base,
+            pytest.param(
+                "timeout",
+                {
                     "operation": "wait",
                     "error_type": "TimeoutError",
                     "timeout_s": 1.5,
                     "timeout_mode": "elapsed_deadline",
                 },
+                "wait",
+                "TimeoutError",
+                id="timeout",
+            ),
+            pytest.param(
+                "teardown_error",
+                {
+                    "operation": "drain",
+                    "error_type": "ValueError",
+                    "note": "consumer drain failed: ValueError",
+                },
+                "drain",
+                "ValueError",
+                id="teardown_error",
+            ),
+        ],
+    )
+    def test_records_ancillary_event_without_ending_span(
+        self,
+        phase: str,
+        extra_fields: dict[str, object],
+        expected_operation: str,
+        expected_error_type: str,
+    ) -> None:
+        """Ancillary phases become span events and leave the span open.
+
+        ``stdin_error``, ``timeout``, and ``teardown_error`` are all diagnostics
+        that accompany rather than conclude an execution, so each must be
+        recorded as a ``cuprum.<phase>`` span event carrying its stable
+        ``operation`` / ``error_type`` fields while the span stays open for the
+        subsequent ``exit``.
+        """
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+
+        exec_id = new_exec_id()
+        base = {"program": "cat", "argv": ("cat",), "pid": 4321, "exec_id": exec_id}
+        hook(_make_exec_event(phase="start", overrides=base))
+        hook(
+            _make_exec_event(
+                phase=typ.cast("ExecPhase", phase),
+                overrides={**base, **extra_fields},
             ),
         )
 
         span = tracer.spans[0]
-        timeout_attrs = next(
-            (attrs for name, attrs in span.events if name == "cuprum.timeout"),
+        event_name = f"cuprum.{phase}"
+        attrs = next(
+            (attrs for name, attrs in span.events if name == event_name),
             None,
         )
-        assert timeout_attrs is not None, (
-            "the tracing hook should surface timeout as a span event"
+        assert attrs is not None, (
+            f"the tracing hook should surface {phase} as a {event_name} span event, "
+            f"but recorded {[name for name, _ in span.events]}"
         )
-        assert timeout_attrs.get("operation") == "wait", (
-            "the timeout span event should carry the waiting operation"
+        assert attrs.get("operation") == expected_operation, (
+            f"the {phase} span event should carry operation="
+            f"{expected_operation!r}, got {attrs.get('operation')!r}"
         )
-        assert timeout_attrs.get("error_type") == "TimeoutError", (
-            "the timeout span event should carry the exception type"
+        assert attrs.get("error_type") == expected_error_type, (
+            f"the {phase} span event should carry error_type="
+            f"{expected_error_type!r}, got {attrs.get('error_type')!r}"
         )
         assert span.ended is False, (
-            "an ancillary timeout event must not end the execution span"
+            f"an ancillary {phase} event must not end the execution span"
         )
 
     def test_disables_output_recording(self) -> None:

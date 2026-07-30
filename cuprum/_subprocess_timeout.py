@@ -412,6 +412,7 @@ __all__ = [
     "_SubprocessTimeoutError",
     "_TimeoutContext",
     "_TimeoutFallback",
+    "_TimeoutMode",
     "_emit_exit_event",
     "_emit_teardown_error_event",
     "_emit_timeout_event",

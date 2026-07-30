@@ -417,11 +417,26 @@ def test_observe_emits_timeout_event_on_immediate_expiry() -> None:
         f"expected exactly one timeout event, got phases {phases}"
     )
     timeout_event = timeout_events[0]
-    assert timeout_event.timeout_mode == "non_positive_immediate"
-    assert timeout_event.timeout_s == 0
-    assert timeout_event.operation == "wait"
-    assert timeout_event.error_type == "TimeoutError"
-    assert timeout_event.pid is not None
+    assert timeout_event.timeout_mode == "non_positive_immediate", (
+        "the immediate fast path must tag the event "
+        f"timeout_mode='non_positive_immediate', got "
+        f"{timeout_event.timeout_mode!r}"
+    )
+    assert timeout_event.timeout_s == 0, (
+        f"the timeout event must carry the configured timeout_s=0, "
+        f"got {timeout_event.timeout_s!r}"
+    )
+    assert timeout_event.operation == "wait", (
+        f"the timeout event must carry operation='wait', "
+        f"got {timeout_event.operation!r}"
+    )
+    assert timeout_event.error_type == "TimeoutError", (
+        f"the timeout event must carry error_type='TimeoutError', "
+        f"got {timeout_event.error_type!r}"
+    )
+    assert timeout_event.pid is not None, (
+        "the timeout event must carry the pid of the timed-out subprocess"
+    )
 
 
 def test_observe_hook_failure_on_timeout_does_not_mask_timeout_expired() -> None:
