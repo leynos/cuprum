@@ -235,9 +235,10 @@ Notes:
   deprecated and emit a `DeprecationWarning`.
 - `RunOutputOptions(echo=True)` echoes the final stage stdout and all stage
   stderr streams to their configured sinks.
-- Pipelines fail fast: when a stage exits non-zero, Cuprum terminates the
-  remaining stages. The failing stage is available via `result.failure` /
-  `result.failure_index`.
+- Pipelines fail fast: when a stage exits non-zero, Cuprum terminates every
+  other still-running stage — upstream producers as well as downstream
+  consumers, not only the stages after the failure. The failing stage is
+  available via `result.failure` / `result.failure_index`.
 - When a downstream writer closes early, Cuprum drains the upstream reader
   until EOF or a short timeout elapses, even on a stalled upstream, so
   discarded input stays bounded. On the Rust backend that drain is reported —
@@ -259,7 +260,7 @@ Table 1: fail-fast records emitted while a pipeline is being torn down
 | `cuprum_action` | Emitted when |
 | --- | --- |
 | `pipeline_stage_first_failure` | the first stage to exit non-zero is latched |
-| `pipeline_fail_fast_termination` | that failure causes the remaining stages to be terminated |
+| `pipeline_fail_fast_termination` | that failure causes every other still-running stage to be terminated |
 
 Each record carries `cuprum_stage_index`, `cuprum_exit_code`, and
 `cuprum_duration_s` — the stage's elapsed run time — so the failing stage can
