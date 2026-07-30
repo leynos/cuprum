@@ -1128,7 +1128,7 @@ sequenceDiagram
     participant _raise_timeout_expired
     participant _get_exit_code
 
-    Caller->>_handle_subprocess_timeout: exc, ctx
+    Caller->>_handle_subprocess_timeout: ctx, exc
     _handle_subprocess_timeout->>_resolve_timeout_payload: exc, _TimeoutFallback
     _resolve_timeout_payload-->>_handle_subprocess_timeout: _SubprocessTimeoutDetails payload
     _handle_subprocess_timeout->>_get_exit_code: ctx.process
@@ -1228,12 +1228,16 @@ sequenceDiagram
     Caller->>_terminate_pipeline_remaining_stages: processes, wait_tasks, failure_index, cancel_grace
     _terminate_pipeline_remaining_stages->>_stages_to_terminate: failure_index, [wait_task.done()]
     _stages_to_terminate-->>_terminate_pipeline_remaining_stages: list[int] targets
-    loop for each idx in targets
-        _terminate_pipeline_remaining_stages->>asyncio_create_task: _terminate_process_via_wait_task(...)
-        asyncio_create_task->>_terminate_process_via_wait_task: process, wait_task, cancel_grace
+    alt targets is non-empty
+        loop for each idx in targets
+            _terminate_pipeline_remaining_stages->>asyncio_create_task: _terminate_process_via_wait_task(...)
+            asyncio_create_task->>_terminate_process_via_wait_task: process, wait_task, cancel_grace
+        end
+        _terminate_pipeline_remaining_stages->>asyncio_gather: termination_tasks
+        asyncio_gather-->>Caller: termination completed
+    else targets is empty
+        _terminate_pipeline_remaining_stages-->>Caller: return without gathering
     end
-    _terminate_pipeline_remaining_stages->>asyncio_gather: termination_tasks
-    asyncio_gather-->>Caller: termination completed
 ```
 
 Keeping the selection in `_stages_to_terminate` makes the rule testable without
