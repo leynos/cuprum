@@ -424,5 +424,11 @@ def test_wheel_build_snapshot_reports_missing_dist_info(
         for name, payload in members.items():
             archive.writestr(name, payload)
 
-    with pytest.raises(AssertionError, match=re.escape(expected_message)):
+    # `match=` searches rather than fullmatches, so it would still pass if the
+    # diagnostic gained a prefix or suffix. Compare the message exactly.
+    with pytest.raises(AssertionError) as exc_info:
         wheel_build_snapshot(whl_path)
+
+    assert str(exc_info.value) == expected_message, (
+        f"expected exactly {expected_message!r}, found {str(exc_info.value)!r}"
+    )
