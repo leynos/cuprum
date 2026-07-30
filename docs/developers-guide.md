@@ -1331,6 +1331,16 @@ accumulated in operation-scoped thread-local counters that
 (right after entering the span, via `io_utils::reset_retry_counters`;
 `operation_span` itself does not touch the counters), so the seams stay
 parameter-free while the span still reports them.
+
+One event in that loop comes from the pump's own state rather than a seam.
+When the writer-close latch first closes — the downstream stage hung up and the
+remaining reads only drain the upstream, the `head`-style early exit — the loop
+emits a `debug` event carrying `bytes_transferred`, using the same field and
+message as the splice path's broken-pipe report so a hang-up looks identical
+whichever path handled it. It is observed in the loop rather than in
+`pump_machine`, which stays free of I/O and logging so its bounded proofs stay
+tractable.
+
 The span is created at `error` level so the `warn`/`error` events keep their
 operation context even under a `warn`/`error`-only production filter, where an
 `info` span would be disabled; it emits no log line of its own.

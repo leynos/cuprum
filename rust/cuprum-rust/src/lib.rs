@@ -309,6 +309,8 @@ fn pump_stream_files_readwrite(
             ReadEvent::Chunk
         };
 
+        let writer_was_open = state.writer_open();
+
         // `drive_step` owns the write precondition — a chunk read while the
         // writer is still open — so this loop and the machine's property tests
         // share one definition of it. Fatal writes propagate the real error
@@ -319,6 +321,16 @@ fn pump_stream_files_readwrite(
                 .ok_or(PumpError::BufferRangeExceeded)?;
             classify_write(writer, chunk)
         })?;
+
+        // The latch closing is the `head`-style early exit. Mirror splice's
+        // field and message so the event is not visible on one path only, and
+        // observe it here rather than in the deliberately pure `pump_machine`.
+        if writer_was_open && !state.writer_open() {
+            tracing::debug!(
+                bytes_transferred = state.total_written(),
+                "broken pipe; draining reader"
+            );
+        }
 
         if flow == Flow::Stop {
             break;

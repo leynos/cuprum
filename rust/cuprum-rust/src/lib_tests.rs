@@ -248,14 +248,25 @@ fn pump_drains_the_reader_after_the_writer_breaks() {
     let mut writer = sink_write;
     // A small buffer forces several read iterations, so the drain path runs
     // repeatedly after the writer has latched closed rather than just once.
-    let total = match pump_stream_files_readwrite(&mut reader, &mut writer, BufferSize(8)) {
-        Ok(total) => total,
-        Err(err) => panic!("a broken downstream pipe must not fail the pump: {err:?}"),
-    };
+    let mut total = 0_u64;
+    let captured = capture(Level::DEBUG, || {
+        total = match pump_stream_files_readwrite(&mut reader, &mut writer, BufferSize(8)) {
+            Ok(delivered) => delivered,
+            Err(err) => panic!("a broken downstream pipe must not fail the pump: {err:?}"),
+        };
+    });
 
     assert_eq!(
         total, 0,
         "no bytes reach a downstream that hung up before the first write",
+    );
+
+    // The latch closing is an operational event, not just internal state: the
+    // splice path reports it, so the read/write fallback must too, or the same
+    // hang-up is diagnosable on one path and silent on the other.
+    assert!(
+        captured.event_has_fields(Level::DEBUG, &["bytes_transferred"]),
+        "the writer-close latch must report the hang-up with its byte total",
     );
 
     // The reader must have been drained to EOF: a further read returns zero
