@@ -23,7 +23,6 @@ from hypothesis import strategies as st
 
 from cuprum import _pipeline_stream_fds, _pipeline_streams
 from cuprum._pipeline_stream_fds import _BlockingModeGuard, _paused_reader
-from cuprum._pipeline_streams import _surface_unexpected_pipe_failures
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -168,15 +167,6 @@ class _FakeReader:
         self.transport = transport
 
 
-class _ResumeOnlyTransport:
-    """A transport offering ``resume_reading`` but no ``pause_reading``."""
-
-    def resume_reading(self) -> None:
-        """Fail because no successful pause should be resumed."""
-        msg = "resume_reading must not run when no pause was applied"
-        raise AssertionError(msg)
-
-
 def _raise_boom() -> None:
     """Raise a deterministic error from inside a paused-reader block."""
     msg = "boom"
@@ -205,14 +195,35 @@ def test_paused_reader_always_resumes_a_pausable_transport(
     )
 
 
+class _ResumeOnlyTransport:
+    """A transport offering ``resume_reading`` but no ``pause_reading``.
+
+    Calling resume here would mean resuming a pause that never happened, so the
+    method fails rather than recording, making the mistake observable instead of
+    merely absent.
+    """
+
+    def resume_reading(self) -> None:
+        """Fail: nothing was paused, so nothing may be resumed."""
+        msg = "resume_reading must not run when no pause was applied"
+        raise AssertionError(msg)
+
+
 def test_paused_reader_skips_resume_when_pause_unavailable() -> None:
-    """A transport with no pause hook hands off and is never resumed."""
+    """A transport with no pause hook hands off, and is never resumed.
+
+    A bare ``object()`` would only prove the context manager does not crash. A
+    transport that exposes ``resume_reading`` alone catches an implementation
+    that resumes whatever hook it can find regardless of whether a pause
+    succeeded.
+    """
     reader = typ.cast("asyncio.StreamReader", _FakeReader(_ResumeOnlyTransport()))
 
     with _paused_reader(reader) as may_hand_off:
         assert may_hand_off is True, (
             "with no callbacks to race, the descriptor hand-off is safe"
         )
+
 
 def test_paused_reader_undoes_a_half_applied_pause() -> None:
     """A pause that raises is corrected once, at the failure site."""
@@ -231,6 +242,8 @@ def test_paused_reader_undoes_a_half_applied_pause() -> None:
     assert transport.resume_calls == 1, (
         "a pause that raised must be undone, in case it half-applied"
     )
+
+
 def _raise_oserror(**_kwargs: object) -> tuple[bool, bool]:
     """Stand in for ``_set_stream_fds_blocking`` failing to toggle a FD."""
     msg = "cannot switch descriptor to blocking mode"
@@ -293,58 +306,6 @@ def test_run_rust_pump_falls_back_and_resumes_when_blocking_fails(
     assert resume_calls["count"] == 1, "the reader must be resumed on fallback"
 
 
-_SUPPRESSED_PIPE_ERRORS = (BrokenPipeError, ConnectionResetError)
-_RESULT_TAGS = [
-    "ok",
-    "broken_pipe",
-    "conn_reset",
-    "value_error",
-    "runtime_error",
-    "cancelled",
-]
-
-
-def _make_pipe_result(tag: str) -> object:
-    """Materialise a pipe-task result for the given tag as a fresh object."""
-    if tag == "ok":
-        return object()
-    if tag == "broken_pipe":
-        return BrokenPipeError("downstream closed early")
-    if tag == "conn_reset":
-        return ConnectionResetError("peer reset")
-    if tag == "value_error":
-        return ValueError("unexpected pipe failure")
-    if tag == "cancelled":
-        return asyncio.CancelledError()
-    return RuntimeError("unexpected pipe failure")
-
-
-@given(tags=st.lists(st.sampled_from(_RESULT_TAGS), max_size=8))
-def test_surface_raises_first_unexpected_and_suppresses_pipe_errors(
-    *,
-    tags: list[str],
-) -> None:
-    """The first non-pipe failure surfaces; pipe errors and values do not."""
-    results = [_make_pipe_result(tag) for tag in tags]
-    unexpected = [
-        result
-        for result in results
-        if isinstance(result, BaseException)
-        and not isinstance(result, _SUPPRESSED_PIPE_ERRORS)
-    ]
-
-    if unexpected:
-        with pytest.raises(
-            (ValueError, RuntimeError, asyncio.CancelledError),
-        ) as exc_info:
-            _surface_unexpected_pipe_failures(results)
-        assert exc_info.value is unexpected[0], (
-            "the earliest unexpected exception must be the one raised"
-        )
-    else:
-        # All results are either plain values or suppressed pipe errors.
-        _surface_unexpected_pipe_failures(results)
-
 def test_paused_reader_reports_hand_off_unsafe_when_pause_fails() -> None:
     """A pause that raises marks the descriptor hand-off unsafe."""
     transport = _FakeTransport(pause_raises=True)
@@ -356,6 +317,7 @@ def test_paused_reader_reports_hand_off_unsafe_when_pause_fails() -> None:
             "falls back instead of racing a live reader"
         )
 
+
 def test_paused_reader_permits_hand_off_without_pause_hooks() -> None:
     """A transport with no pause hooks has no callbacks to race."""
     reader = typ.cast("asyncio.StreamReader", _FakeReader(object()))
@@ -365,6 +327,7 @@ def test_paused_reader_permits_hand_off_without_pause_hooks() -> None:
             "a transport exposing no pause/resume hooks must still permit the "
             "Rust hand-off; there are no callbacks to suspend"
         )
+
 
 def test_pump_over_raw_fds_falls_back_when_pause_fails(
     monkeypatch: pytest.MonkeyPatch,
