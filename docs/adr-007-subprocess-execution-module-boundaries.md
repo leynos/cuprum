@@ -143,4 +143,8 @@ boundaries above.
   `TimeoutExpired`. Emission failures are swallowed so cleanup and exception
   precedence are preserved.
 
-This refinement changes no public API and no observable timeout semantics.
+This refinement changes no public API: `SafeCmd`, `Pipeline`,
+`TimeoutExpired`, its payload of partial captured output, and
+timeout/exception precedence are all unchanged. The telemetry above is
+additive new observable behaviour, emitted best-effort alongside, never in
+place of, those existing results.

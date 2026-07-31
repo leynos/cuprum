@@ -25,13 +25,12 @@ from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
-    _emit_teardown_error_event,
     _emit_timeout_event,
     _ExitEventDetails,
     _handle_stream_timeout,
     _handle_subprocess_timeout,
-    _log_teardown_drain_failure,
     _log_timeout_expiry,
+    _report_teardown_drain_failure,
     _require_timeout,
     _SubprocessTimeoutContext,
     _SubprocessTimeoutError,
@@ -111,9 +110,9 @@ async def _drain_stream_consumers(
     A consumer that drains with an unexpected exception (anything other than the
     ``CancelledError`` produced by cancelling it) is still absorbed to preserve
     the primary timeout or cancellation, but is reported through
-    :func:`_log_teardown_drain_failure` and, when ``observation`` is supplied, a
-    best-effort ``teardown_error`` observe event, so the drain failure stays
-    observable.
+    :func:`_report_teardown_drain_failure` — a structured log record plus, when
+    ``observation`` is supplied, a best-effort ``teardown_error`` observe event
+    — so the drain failure stays observable.
 
     Returns
     -------
@@ -132,9 +131,7 @@ async def _drain_stream_consumers(
         and not isinstance(result, asyncio.CancelledError)
     )
     if drain_errors:
-        _log_teardown_drain_failure(pid=pid, error_types=drain_errors)
-        if observation is not None:
-            _emit_teardown_error_event(observation, pid=pid, error_types=drain_errors)
+        _report_teardown_drain_failure(observation, pid=pid, error_types=drain_errors)
     stdout_text = None if isinstance(stdout_result, BaseException) else stdout_result
     stderr_text = None if isinstance(stderr_result, BaseException) else stderr_result
     return stdout_text, stderr_text
@@ -355,7 +352,12 @@ async def _run_subprocess_with_streams(
             stderr_text=stderr_text,
             timeout=execution.timeout,
         )
-    except asyncio.CancelledError:
+    except BaseException:
+        # Cancellation, and any other failure escaping the wait — an OS error
+        # while terminating, say — need the same reconciliation: the timeout
+        # clause above already handled its own case, so everything reaching
+        # here cancels the stdin writer, drains the consumers, and re-raises
+        # unchanged rather than leaking those tasks.
         await _cancel_stdin_writer(stdin_task)
         await _drain_stream_consumers(
             consumers, pid=pid, observation=execution.observation
@@ -384,11 +386,12 @@ async def _run_subprocess_without_streams(
     """Run a subprocess directly, without stdout/stderr capture or echo.
 
     The direct path spawns no stream consumers, so the only task to reconcile is
-    the stdin writer. On timeout or cancellation it is cancelled and drained
-    through :func:`_cancel_stdin_writer` *before* the exception propagates, so a
-    stdin drain blocked on an unread pipe cannot delay timeout translation or
-    cancellation. An unexpected stdin-writer failure after the process exits
-    normally propagates unchanged.
+    the stdin writer. Whatever escapes the wait — a timeout, a cancellation, or
+    an unexpected failure — it is cancelled and drained through
+    :func:`_cancel_stdin_writer` *before* the exception propagates, so a stdin
+    drain blocked on an unread pipe cannot delay timeout translation or
+    cancellation, and no writer is left running behind a failure. An unexpected
+    stdin-writer failure after the process exits normally propagates unchanged.
     """
     stdin_task = _spawn_stdin_writer(
         process, execution.stdin_data, execution.observation
@@ -398,7 +401,7 @@ async def _run_subprocess_without_streams(
             process,
             execution,
         )
-    except (TimeoutError, asyncio.CancelledError):
+    except BaseException:
         await _cancel_stdin_writer(stdin_task)
         raise
     if stdin_task is not None:

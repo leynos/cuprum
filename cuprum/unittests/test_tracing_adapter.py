@@ -145,7 +145,13 @@ print('stderr-line', file=sys.stderr)""",
         )
 
     @pytest.mark.parametrize(
-        ("phase", "extra_fields", "expected_operation", "expected_error_type"),
+        (
+            "phase",
+            "extra_fields",
+            "expected_operation",
+            "expected_error_type",
+            "expected_extras",
+        ),
         [
             pytest.param(
                 "stdin_error",
@@ -156,6 +162,7 @@ print('stderr-line', file=sys.stderr)""",
                 },
                 "write",
                 "OSError",
+                {},
                 id="stdin_error",
             ),
             pytest.param(
@@ -168,6 +175,7 @@ print('stderr-line', file=sys.stderr)""",
                 },
                 "wait",
                 "TimeoutError",
+                {"timeout_s": 1.5, "timeout_mode": "elapsed_deadline"},
                 id="timeout",
             ),
             pytest.param(
@@ -179,6 +187,7 @@ print('stderr-line', file=sys.stderr)""",
                 },
                 "drain",
                 "ValueError",
+                {},
                 id="teardown_error",
             ),
         ],
@@ -189,6 +198,7 @@ print('stderr-line', file=sys.stderr)""",
         extra_fields: dict[str, object],
         expected_operation: str,
         expected_error_type: str,
+        expected_extras: dict[str, object],
     ) -> None:
         """Ancillary phases become span events and leave the span open.
 
@@ -229,6 +239,11 @@ print('stderr-line', file=sys.stderr)""",
             f"the {phase} span event should carry error_type="
             f"{expected_error_type!r}, got {attrs.get('error_type')!r}"
         )
+        for key, want in expected_extras.items():
+            assert attrs.get(key) == want, (
+                f"the {phase} span event should carry {key}={want!r} so consumers "
+                f"can distinguish expiry modes, got {attrs.get(key)!r}"
+            )
         assert span.ended is False, (
             f"an ancillary {phase} event must not end the execution span"
         )

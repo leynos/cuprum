@@ -72,8 +72,9 @@ class ExecEvent:
     env:
         Environment overlay provided for this execution, when set.
     pid:
-        Process identifier for the running subprocess (available for ``start``
-        and ``exit`` phases).
+        Process identifier for the running subprocess (populated for every
+        phase except ``plan``, which fires before the subprocess is
+        spawned).
     timestamp:
         Wall-clock timestamp (seconds since epoch) when the phase occurred.
     line:
