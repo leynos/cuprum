@@ -2003,7 +2003,7 @@ The root `Makefile` exposes the following lint-related variables:
 | `PYLINT_VERSION`        | `4.0.5`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.         |
 | `PYLINT_CACHE`          | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                         |
 | `PYLINT`                | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                       |
-| `DF12_PYTHON_LINTS_REF` | `v0.1.0`                                                                     | Git tag used to provision the standalone `ambrleaks` tool.                 |
+| `DF12_PYTHON_LINTS_REF` | `755b26f5792f71b37f3a9e656aef714ed98b2c3b`                                   | Immutable v0.1.0 revision used for the standalone `ambrleaks` tool.        |
 | `DF12_PYTHON`           | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                      |
 | `DF12_PYLINT_MESSAGES`  | All v0.1.0 message IDs                                                       | Explicit allowlist for the df12 Pylint pass.                               |
 | `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                   |
@@ -2025,7 +2025,8 @@ Do not change `PYLINT_PYPY_SHIM_REF` casually. Updating the pinned shim
 revision changes the lint runtime and must be reviewed like any other toolchain
 update. Update the `df12-python-lints` development dependency and
 `DF12_PYTHON_LINTS_REF` together so the Pylint plugin and standalone scanner
-remain on the same release.
+remain on the same immutable revision. When adopting a new release, resolve its
+tag to a commit before updating both pins.
 
 ### Episodic lint policy
 
@@ -2086,7 +2087,8 @@ The canonical lint configuration lives in `pyproject.toml`:
   [Docstring consistency gate](#docstring-consistency-gate) below.
 - `[tool.pylint.main]`, `[tool.pylint.design]`, and
   `[tool.pylint."messages control"]` configure the second-tier Pylint pass.
-- `[dependency-groups].dev` pins the df12 plugin used by the CPython 3.14 pass.
+- `[dependency-groups].dev` pins the df12 plugin used by the CPython 3.14 pass
+  to the same immutable revision as the standalone scanner.
 - `ambrleaks.toml` contains narrow value allowlists for deterministic public
   fixture data that matches a scanner pattern.
 

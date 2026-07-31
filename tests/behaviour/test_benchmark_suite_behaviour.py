@@ -140,7 +140,11 @@ def then_benchmark_plan_indicates_dry_run(
     )
     assert benchmark_plan_payload.get("benchmark_profile_version") == (
         BENCHMARK_PROFILE_VERSION
-    ), "Expectation failed in then_benchmark_plan_indicates_dry_run"
+    ), (
+        "benchmark profile version mismatch: expected "
+        f"{BENCHMARK_PROFILE_VERSION!r}, got "
+        f"{benchmark_plan_payload.get('benchmark_profile_version')!r}"
+    )
     assert benchmark_plan_payload.get("worker_iterations") == 20, (
         'Expected benchmark_plan_payload.get("worker_iterations") == 20'
     )
@@ -218,7 +222,7 @@ def then_benchmark_plan_includes_valid_command(
     assert scenario_commands, "expected benchmark plan to include scenario commands"
     assert all(
         " uv run python " not in f" {scenario}" for scenario in scenario_commands
-    ), "Expectation failed in then_benchmark_plan_includes_valid_command"
+    ), "scenario commands must not contain the forbidden 'uv run python' text"
     scenario_iterations = [
         iterations
         for scenario in scenario_commands
@@ -232,12 +236,15 @@ def then_benchmark_plan_includes_valid_command(
         "--iterations values in scenario commands"
     )
     assert any(sys.executable in scenario for scenario in scenario_commands), (
-        "Expectation failed in then_benchmark_plan_includes_valid_command"
+        f"no scenario command contains sys.executable {sys.executable!r}"
     )
     assert any(
         scenario.startswith(_expected_backend_env_prefix())
         for scenario in scenario_commands
-    ), "Expectation failed in then_benchmark_plan_includes_valid_command"
+    ), (
+        "no scenario command starts with the required CUPRUM_STREAM_BACKEND "
+        f"prefix {_expected_backend_env_prefix()!r}"
+    )
 
 
 # -- Scenario matrix steps (4.4.2) -------------------------------------------

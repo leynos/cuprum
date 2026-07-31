@@ -17,7 +17,7 @@ Repository = "https://github.com/leynos/cuprum"
 [dependency-groups]
 dev = [
     "crosshair-tool",
-    "df12-python-lints @ git+https://github.com/leynos/df12-python-lints.git@v0.1.0",
+    "df12-python-lints @ git+https://github.com/leynos/df12-python-lints.git@755b26f5792f71b37f3a9e656aef714ed98b2c3b",
     "hypothesis",
     "hypothesis-crosshair",
     "interrogate",

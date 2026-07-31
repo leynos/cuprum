@@ -122,7 +122,7 @@ dev = [
 [package.metadata.requires-dev]
 dev = [
     { name = "crosshair-tool" },
-    { name = "df12-python-lints", git = "https://github.com/leynos/df12-python-lints.git?rev=v0.1.0" },
+    { name = "df12-python-lints", git = "https://github.com/leynos/df12-python-lints.git?rev=755b26f5792f71b37f3a9e656aef714ed98b2c3b" },
     { name = "hypothesis" },
     { name = "hypothesis-crosshair" },
     { name = "interrogate" },
@@ -142,7 +142,7 @@ dev = [
 [[package]]
 name = "df12-python-lints"
 version = "0.1.0"
-source = { git = "https://github.com/leynos/df12-python-lints.git?rev=v0.1.0#755b26f5792f71b37f3a9e656aef714ed98b2c3b" }
+source = { git = "https://github.com/leynos/df12-python-lints.git?rev=755b26f5792f71b37f3a9e656aef714ed98b2c3b#755b26f5792f71b37f3a9e656aef714ed98b2c3b" }
 dependencies = [
     { name = "pylint" },
 ]

@@ -98,8 +98,9 @@ The canonical policy lives in `pyproject.toml`:
   `typing.*` aliases.
 - `[tool.pylint.main]`, `[tool.pylint.design]`, and
   `[tool.pylint."messages control"]` define the focused second tier.
-- The development dependency pins `df12-python-lints` at `v0.1.0`; the
-  Makefile's `DF12_PYTHON_LINTS_REF` independently pins the `ambrleaks` tool.
+- The development dependency pins the `df12-python-lints` v0.1.0 release at an
+  immutable commit; the Makefile's `DF12_PYTHON_LINTS_REF` pins the standalone
+  `ambrleaks` tool to the same commit.
 - `ambrleaks.toml` records exact deterministic fixture values that resemble
   paths without weakening any scanner rule.
 
@@ -108,6 +109,8 @@ The canonical policy lives in `pyproject.toml`:
 - The second tier requires PyPy to be resolvable by `uv tool run --python pypy`.
 - The shim revision is another toolchain pin that must be maintained.
 - The project dependency and standalone `ambrleaks` pins must move together.
+  When adopting a new release, resolve its tag to an immutable commit and use
+  that revision for both pins.
 - CPython 3.14 must be resolvable by `uv` for the df12 checks.
 - Pylint is intentionally focused; messages outside the selected set remain out
   of scope unless the policy is updated deliberately.
