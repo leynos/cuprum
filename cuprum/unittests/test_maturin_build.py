@@ -58,7 +58,19 @@ def _require_pin_match(
 
 
 def _read_text(root: pth.Path, relative: str) -> str:
-    """Read a repository-relative UTF-8 text file."""
+    """Read a repository-relative UTF-8 text file.
+
+    Deliberately uncached. A full run of this module reads seven files —
+    ``pyproject.toml`` and ``build-wheels.yml`` three times each, ``action.yml``
+    once — totalling roughly 93 microseconds against a module runtime of about
+    0.8 seconds, so a cache could save at most four redundant reads and about
+    0.006% of the time.
+
+    Against that, a cache would have to stay correct: these tests assert on
+    repository files, and a memoized read would serve stale content to any
+    future test that writes one. Paying a correctness hazard in a test helper
+    for a saving three orders of magnitude below the noise is the wrong trade.
+    """
     return (root / relative).read_text(encoding="utf-8")
 
 
