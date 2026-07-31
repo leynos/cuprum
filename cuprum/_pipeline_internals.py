@@ -270,8 +270,14 @@ def _build_pipeline_stage_results(
 async def _drain_tasks_during_cleanup(
     pending_tasks: list[asyncio.Task[None]],
     active_error: BaseException,
+    *,
+    message: str = _PIPELINE_FINALIZATION_ERROR,
 ) -> None:
-    """Drain observe tasks in cleanup, aggregating a failure with ``active_error``."""
+    """Drain observe tasks in cleanup, aggregating a failure with ``active_error``.
+
+    Shared by the pipeline and single-command cleanup paths; ``message`` names
+    whichever finalization failed.
+    """
     try:
         await _wait_for_exec_hook_tasks(pending_tasks)
     except BaseException as task_error:  # noqa: BLE001
@@ -279,7 +285,7 @@ async def _drain_tasks_during_cleanup(
         # non-Exception BaseExceptions, must be aggregated with active_error so
         # cleanup never masks the error that triggered it.
         raise BaseExceptionGroup(
-            _PIPELINE_FINALIZATION_ERROR,
+            message,
             (active_error, task_error),
         ) from None
 
