@@ -303,6 +303,28 @@ class MetricsHook:
         histograms this event yields; the labels are resolved and applied only
         when there is at least one operation, so a ``plan`` (or a phaseless
         no-op) event never computes labels.
+
+        Partial-failure semantics
+        -------------------------
+        An ``exit`` event can yield two operations — a failure counter and a
+        duration observation — applied as two independent collector calls, in
+        that order. There is no atomicity across them, and none is attempted:
+        the collector wraps an arbitrary backend (``prometheus_client``,
+        statsd, OpenTelemetry), and this adapter cannot make two writes to such
+        a backend transactional. Buffering them to apply together would only
+        move the problem, while delaying when metrics appear.
+
+        So if the collector raises on the second call, the first stays applied:
+        a failure can be recorded without its duration. That is accepted rather
+        than hidden. The exception propagates out of this hook, where
+        :func:`cuprum._observability._emit_exec_event` catches it, logs
+        ``observe_hook_failed``, and lets the command continue — a broken
+        metrics backend must not fail the user's command.
+
+        Collector implementations should therefore treat each call as
+        independent and idempotent-safe, and must not assume that seeing a
+        ``cuprum_failures_total`` increment guarantees a matching
+        ``cuprum_duration_seconds`` observation will follow.
         """
         operations = _metric_operations(event)
         if not operations:

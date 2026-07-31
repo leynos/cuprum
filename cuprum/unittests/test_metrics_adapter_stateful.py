@@ -28,6 +28,8 @@ from cuprum.adapters.metrics_adapter import (
 from cuprum.events import ExecEvent
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum.events import ExecPhase
     from cuprum.program import Program
 
@@ -243,3 +245,48 @@ TestMetricsAccumulation.settings = settings(
     stateful_step_count=20,
     deadline=None,
 )
+
+
+class _FailingHistogramCollector(InMemoryMetrics):
+    """A collector whose histogram writes always fail.
+
+    Stands in for a metrics backend that is reachable for one call and not the
+    next — the case that decides what a partially-applied event leaves behind.
+    """
+
+    @typ.override
+    def observe_histogram(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Fail as a backend rejecting the observation would."""
+        msg = f"metrics backend rejected {name}"
+        raise RuntimeError(msg)
+
+
+def test_a_failing_second_operation_leaves_the_first_applied() -> None:
+    """A partly-applied exit event keeps what already landed, and reports.
+
+    An exit event yields a failure counter then a duration observation, as two
+    independent collector calls. There is no atomicity across them and none is
+    attempted, so this pins what a caller actually observes rather than leaving
+    it to chance: the counter stays, the histogram is absent, and the error
+    reaches the hook's caller — which isolates it, so the command survives.
+    """
+    collector = _FailingHistogramCollector()
+    hook = MetricsHook(collector)
+    event = _event("exit", exit_code=3, duration_s=1.5)
+
+    with pytest.raises(RuntimeError, match="rejected cuprum_duration_seconds"):
+        hook(event)
+
+    assert collector.counters == {"cuprum_failures_total": 1.0}, (
+        "the counter applied before the failure must remain recorded, found "
+        f"{collector.counters!r}"
+    )
+    assert collector.histograms == {}, (
+        "the observation that raised must not be recorded, found "
+        f"{collector.histograms!r}"
+    )
