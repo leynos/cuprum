@@ -104,6 +104,20 @@ def test_rollout_scripts_parse_at_their_declared_baseline(
         )
 
 
+def test_spelling_target_checks_documentation_and_source(
+    script_directory: Path,
+) -> None:
+    """The spelling gate checks Markdown, Python, and Rust files."""
+    makefile = (script_directory.parent / "Makefile").read_text(encoding="utf-8")
+    spelling_recipe = makefile.split("\nspelling:", maxsplit=1)[1].split(
+        "\nspelling-helper-test:", maxsplit=1
+    )[0]
+
+    assert {"'*.md'", "'*.py'", "'*.rs'"} <= set(spelling_recipe.split()), (
+        "spelling target must include Markdown, Python, and Rust pathspecs"
+    )
+
+
 def test_rollout_generates_oxford_corrections(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
 ) -> None:

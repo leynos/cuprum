@@ -2164,8 +2164,8 @@ assertion, alias, suppression rationale, or dispatch structure instead.
 The lint and Markdown gates run pinned `typos` 1.48.0 with British English and
 Oxford `-ize` conventions. The single spelling recipe checks tracked Markdown,
 Python, and Rust files, so the policy governs code identifiers, comments,
-docstrings, string fixtures, and prose. Spellings fixed by an external API are
-the only exception.
+docstrings, string fixtures, and prose. Only spellings required by external
+contracts or deliberate spelling-test fixtures are exempt.
 
 Before checking the repository, the generator refreshes the shared estate
 dictionary into an untracked local cache only when the authority is newer,
