@@ -1275,13 +1275,21 @@ broken pipe; draining reader    bytes_transferred=<count>
 `bytes_transferred` is the number of bytes that reached the downstream stage
 before it hung up, so `0` means it closed before receiving anything.
 
-This is not an error and the pipeline still succeeds: the drain is what stops a
-producer blocking forever on a pipe nobody is reading. The event is worth
-watching because it distinguishes "the consumer finished early by design", as
-`head` does, from a consumer crashing partway through — the exit codes look the
-same, but the byte total does not. Both the `splice` fast path and the
-read/write fallback emit it identically, so the message does not depend on
-which path handled the transfer.
+The event is not itself an error. It records that the pump classified the
+writer's closure as non-fatal and drained the rest of the input, which is what
+stops a producer blocking forever on a pipe nobody is reading — the pump
+returns success.
+
+It does not, on its own, say *why* the downstream stage stopped reading. A
+consumer that finished by design, as `head` does, and one that crashed partway
+through can both close the pipe after the same number of bytes. Read the event
+alongside that stage's exit status: a zero exit means the early stop was
+deliberate, and a non-zero exit means the stage failed — in which case the
+pipeline still fails through the usual fail-fast path, even though the pump
+itself succeeded.
+
+Both the `splice` fast path and the read/write fallback emit the event
+identically, so the message does not depend on which path handled the transfer.
 
 ### Choosing a stream backend
 

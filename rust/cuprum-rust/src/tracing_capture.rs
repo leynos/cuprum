@@ -203,3 +203,54 @@ pub(crate) fn capture(max_level: Level, body: impl FnOnce()) -> Captured {
         spans: guard.span_fields.values().cloned().collect(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Tests for the capture harness's own matchers.
+    //!
+    //! `event_matches` is what other modules assert their diagnostics with, so
+    //! a predicate it quietly ignores would weaken every one of those tests at
+    //! once. The negative cases below vary exactly one of level, message, and
+    //! field value, so no single dropped predicate can pass them all.
+
+    use rstest::rstest;
+    use tracing::Level;
+
+    use super::capture;
+
+    /// Emit one known event and return what the harness captured.
+    fn captured_probe() -> super::Captured {
+        capture(Level::DEBUG, || {
+            tracing::debug!(bytes_transferred = 0_u64, "probe event");
+        })
+    }
+
+    #[rstest]
+    fn event_matches_accepts_the_exact_event() {
+        assert!(
+            captured_probe().event_matches(
+                Level::DEBUG,
+                "probe event",
+                &[("bytes_transferred", "0")],
+            ),
+            "the event that fired must match its own level, message, and fields",
+        );
+    }
+
+    #[rstest]
+    #[case::wrong_level(Level::WARN, "probe event", "bytes_transferred", "0")]
+    #[case::wrong_message(Level::DEBUG, "a different event", "bytes_transferred", "0")]
+    #[case::wrong_value(Level::DEBUG, "probe event", "bytes_transferred", "1")]
+    #[case::absent_field(Level::DEBUG, "probe event", "no_such_field", "0")]
+    fn event_matches_rejects_a_single_mismatch(
+        #[case] level: Level,
+        #[case] message: &str,
+        #[case] field: &str,
+        #[case] value: &str,
+    ) {
+        assert!(
+            !captured_probe().event_matches(level, message, &[(field, value)]),
+            "event_matches must require every predicate, not just some",
+        );
+    }
+}
