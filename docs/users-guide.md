@@ -240,7 +240,11 @@ Notes:
   `result.failure_index`.
 - When a downstream writer closes early, Cuprum drains the upstream reader
   until EOF or a short timeout elapses, even on a stalled upstream, so
-  discarded input stays bounded.
+  discarded input stays bounded. On the Rust backend that drain is reported —
+  see [Rust stream observability](#rust-stream-observability-internal) for the
+  `broken pipe; draining reader` event and the `bytes_transferred` count, which
+  distinguish a consumer that finished early by design from one that failed
+  partway through.
 
 ## Execution runtime
 
