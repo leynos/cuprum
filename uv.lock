@@ -197,15 +197,15 @@ wheels = [
 
 [[package]]
 name = "hypothesis-crosshair"
-version = "0.0.28"
+version = "0.0.29"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "crosshair-tool" },
     { name = "hypothesis" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/81/2e/8c00562bdd92e5f27263b1e150a439f6949ba862c26eab124aed10d4f21f/hypothesis_crosshair-0.0.28.tar.gz", hash = "sha256:5b881d6178162dfa393852bc92e59186894c48f3879c64382f4681494af9757e", size = 13795, upload-time = "2026-04-29T00:13:57.91Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d7/ce/075ebdeb53d17964fda7f99d0e9445606ad326e4a248eb675a898c2e7660/hypothesis_crosshair-0.0.29.tar.gz", hash = "sha256:603c728ec4df5c10841fcade91eb670cabef0a9690a9ba26dd4b380c6efc4eb1", size = 13851, upload-time = "2026-07-21T20:22:56.113Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/15/ff/4e4b289884514859034154361855ba4ae8f163342b67f24a013f60a058ff/hypothesis_crosshair-0.0.28-py3-none-any.whl", hash = "sha256:fa7651a4f74d219db84743370ddc206fcfed612d80a49d58988baf75f497f018", size = 15968, upload-time = "2026-04-29T00:13:56.594Z" },
+    { url = "https://files.pythonhosted.org/packages/99/c9/fcfcced6948d7b3d7f9b381c6953ad1afd3d495501cf72bdeb4c36649065/hypothesis_crosshair-0.0.29-py3-none-any.whl", hash = "sha256:f49efbe023b99b017bdb2ab42dafb3db457196cf3cfe168576cd40c62571c7e4", size = 16033, upload-time = "2026-07-21T20:22:55.062Z" },
 ]
 
 [[package]]
