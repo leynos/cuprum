@@ -108,6 +108,7 @@
       'cuprum/unittests/test_prerequisite_docs.py',
       'cuprum/unittests/test_profile_driver.py',
       'cuprum/unittests/test_public_api.py',
+      'cuprum/unittests/test_rust_errno.py',
       'cuprum/unittests/test_rust_extension.py',
       'cuprum/unittests/test_rust_splice.py',
       'cuprum/unittests/test_rust_streams.py',

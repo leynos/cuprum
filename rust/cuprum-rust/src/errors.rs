@@ -60,15 +60,54 @@ impl PumpError {
 impl From<PumpError> for PyErr {
     fn from(err: PumpError) -> Self {
         match err {
-            // Delegate to PyO3's conversion so I/O failures keep their
-            // specific Python exception subclasses (e.g. ``BrokenPipeError``,
-            // ``FileNotFoundError``) instead of collapsing to a base
-            // ``OSError``.
-            PumpError::Io(io_err) => io_err.into(),
+            PumpError::Io(io_err) => io_error_to_py_err(io_err),
             other @ (PumpError::LengthOverflow | PumpError::BufferRangeExceeded) => {
                 PyOSError::new_err(other.py_os_error_message().unwrap_or("stream pump failed"))
             }
         }
+    }
+}
+
+/// Strip the `" (os error N)"` suffix Rust appends to a raw OS error.
+///
+/// `io::Error`'s `Display` renders a raw OS error as `"{strerror} (os error
+/// {code})"`. Passing that whole string as `strerror` would render as
+/// `"[Errno 9] Bad file descriptor (os error 9)"`, stating the number twice.
+/// If the format ever changes the suffix simply will not match and the full
+/// message is used, so this degrades to the previous wording rather than
+/// mangling it.
+fn strip_os_error_suffix(message: &str, code: i32) -> String {
+    let suffix = format!(" (os error {code})");
+    message.strip_suffix(&suffix).unwrap_or(message).to_owned()
+}
+
+/// Convert an [`io::Error`] into a Python exception that keeps its `errno`.
+///
+/// `PyO3`'s own `From<io::Error> for PyErr` picks the exception *type* from
+/// `io::ErrorKind`, then constructs it with a single argument — the error's
+/// `Display` string. Python only populates `OSError.errno` and
+/// `OSError.strerror` when it receives **two or more** arguments, so a
+/// single-argument construction leaves `errno` as `None`: the number survives
+/// in the message text but not anywhere a caller can branch on. Callers are
+/// then forced to parse English to tell `EBADF` from `EPIPE`, and message text
+/// is not a stable interface.
+///
+/// Constructing `OSError(code, strerror)` instead fixes both halves at once,
+/// because `CPython` maps the errno to the matching subclass itself:
+/// `OSError(32, ...)` *is* a `BrokenPipeError`. That is the same subclass
+/// selection `PyO3` was reaching for through `ErrorKind`, obtained from the
+/// authoritative source rather than a parallel table.
+///
+/// An `io::Error` with no `raw_os_error` — one synthesized in Rust rather than
+/// returned by a syscall — has no number to preserve, so `PyO3`'s `ErrorKind`
+/// mapping remains the best available and is used unchanged.
+fn io_error_to_py_err(err: io::Error) -> PyErr {
+    match err.raw_os_error() {
+        Some(code) => {
+            let strerror = strip_os_error_suffix(&err.to_string(), code);
+            PyOSError::new_err((code, strerror))
+        }
+        None => err.into(),
     }
 }
 
@@ -77,6 +116,7 @@ mod tests {
     //! Unit tests for the canonical `PumpError` taxonomy: variant mapping,
     //! the non-fatal write predicate, and stable display messages.
     use super::PumpError;
+    use rstest::rstest;
     use std::io;
 
     #[test]
@@ -137,6 +177,30 @@ mod tests {
         assert_eq!(
             PumpError::from(io::Error::other("boom")).py_os_error_message(),
             None,
+        );
+    }
+
+    #[rstest]
+    #[case::raw_os_error("Bad file descriptor (os error 9)", 9, "Bad file descriptor")]
+    #[case::other_code("Broken pipe (os error 32)", 32, "Broken pipe")]
+    #[case::no_suffix("something went wrong", 9, "something went wrong")]
+    #[case::mismatched_code(
+        "Bad file descriptor (os error 9)",
+        22,
+        "Bad file descriptor (os error 9)"
+    )]
+    fn strip_os_error_suffix_removes_only_its_own_code(
+        #[case] message: &str,
+        #[case] code: i32,
+        #[case] expected: &str,
+    ) {
+        // A mismatched code must leave the message intact rather than trimming
+        // a suffix that belongs to a different error: the `strerror` a caller
+        // reads should never be silently truncated.
+        assert_eq!(
+            super::strip_os_error_suffix(message, code),
+            expected,
+            "stripping must be anchored to this error's own code",
         );
     }
 }
