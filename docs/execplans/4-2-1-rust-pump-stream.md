@@ -344,4 +344,4 @@ results (including the extended timeout for `make nixie`). Updated on
 `with_borrowed_reader`/`ManuallyDrop` helper that superseded the planned
 `std::mem::forget` mitigation (issue `#125`), and to mark that planned
 mitigation as historical in the Risks section, the Decision log, and the
-implementation notes so every section states the same contract.
+implementation notes, so every section states the same contract.
