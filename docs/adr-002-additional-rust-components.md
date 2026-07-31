@@ -356,7 +356,12 @@ spawn, pipe wiring, and lifecycle coordination into Rust.
   flushing, and callback semantics if dispatch predicates are too broad.
 - Raw file descriptor ownership remains subtle. A Rust helper must not close a
   descriptor still owned by an asyncio transport unless the Python side has
-  explicitly transferred that responsibility.
+  explicitly transferred that responsibility. The borrow half of this contract
+  is now centralized in the `with_borrowed_reader` RAII helper, which wraps the
+  reconstructed handle in `ManuallyDrop` so a caller-owned reader FD is never
+  closed on any exit path, including panic-unwind (issue `#125`); the writer FD
+  is still deliberately consumed so it closes to signal EOF. See the
+  developers' guide, "Rust FD-borrow ownership contract".
 - A native subprocess fast path duplicates timeout and termination behaviour,
   which is correctness-sensitive and platform-dependent.
 - Pseudo-terminal and terminal sinks can block differently from `/dev/null` or
