@@ -1337,6 +1337,28 @@ valuable assertion is the *exact* output text rather than a property of it —
 bounds-checked slicing, or the `final_chunk` handling surfaces as a concrete
 text diff rather than a boolean failure.
 
+These Rust-side cases are not the only coverage of these categories, and it is
+worth knowing why they carry the load. `TestRustConsumeStream` in
+`cuprum/unittests/test_rust_streams.py` already defines Python/Rust boundary
+tests over the same four inputs — ASCII, multibyte UTF-8 split across a read
+boundary, invalid UTF-8, and an incomplete trailing sequence — and each one
+calls `rust_consume_stream` and compares the result against Python's own
+replacement decoding, `payload.decode("utf-8", errors="replace")`.
+
+Normal CI does not execute them. The test jobs reach the suite through
+`make build`, which is only `uv sync --group dev`; nothing builds
+`cuprum._rust_backend_native`, so those cases are skipped rather than run.
+Issue `#258` tracks building the extension in the test jobs and adding a
+fail-loud guard so the skip cannot pass unnoticed, and issue `#265` tracks a
+pre-existing PyO3 defect — `OSError` crossing the boundary loses its `errno` —
+that currently fails one extension-enabled test.
+
+So the `consume_stream_files` snapshots and properties are the coverage of the
+read-and-decode loop that actually executes on every commit. They do not
+replace executed Python/Rust boundary coverage, and are not a reason to leave
+`#258` unresolved: the two verify different things, one the loop and the other
+the exported surface.
+
 Those snapshots are written inline with `insta::assert_snapshot!(value, @"...")`
 rather than as separate `.snap` files, which keeps the expected text beside the
 case that produces it and leaves no snapshot files to review or prune. Accept a
