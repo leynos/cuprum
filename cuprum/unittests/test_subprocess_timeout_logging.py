@@ -162,10 +162,23 @@ def test_teardown_drain_failure_logs_diagnostic(
         asyncio.run(run_case())
 
     fields = vars(_single_timeout_record(caplog, logging.ERROR))
-    assert fields["cuprum_operation"] == "teardown"
-    assert fields["cuprum_teardown_outcome"] == "drain_error"
-    assert fields["cuprum_pid"] == 5678
-    assert "ValueError" in fields["cuprum_error_type"]
+    assert fields["cuprum_operation"] == "teardown", (
+        "the drain-failure record must carry cuprum_operation='teardown', "
+        f"got {fields['cuprum_operation']!r}"
+    )
+    assert fields["cuprum_teardown_outcome"] == "drain_error", (
+        "the drain-failure record must carry "
+        "cuprum_teardown_outcome='drain_error', got "
+        f"{fields['cuprum_teardown_outcome']!r}"
+    )
+    assert fields["cuprum_pid"] == 5678, (
+        f"the drain-failure record must carry cuprum_pid=5678, "
+        f"got {fields['cuprum_pid']!r}"
+    )
+    assert "ValueError" in fields["cuprum_error_type"], (
+        "the drain-failure record must name ValueError in cuprum_error_type, "
+        f"got {fields['cuprum_error_type']!r}"
+    )
 
 
 def test_timeout_logging_failure_does_not_mask_timeout(

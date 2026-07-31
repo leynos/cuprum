@@ -81,6 +81,10 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook, ExecId
 
 
+# Ancillary span-event fields; the timeout pair distinguishes expiry modes.
+_SPAN_FIELDS = ("line", "operation", "error_type", "note", "timeout_s", "timeout_mode")
+
+
 class Span(typ.Protocol):
     """Protocol for a tracing span.
 
@@ -317,11 +321,9 @@ class TracingHook:
         if span is None:
             return
 
-        # ``line`` for stdout/stderr; ``operation``/``error_type``/``note`` for
-        # the ancillary stdin_error, timeout, and teardown_error paths. The span
-        # is left open and unmarked; the ``exit`` event still closes it.
+        # The span is left open and unmarked; the ``exit`` event still closes it.
         event_attrs: dict[str, object] = {}
-        for field in ("line", "operation", "error_type", "note"):
+        for field in _SPAN_FIELDS:
             value = getattr(event, field)
             if value is not None:
                 event_attrs[field] = value

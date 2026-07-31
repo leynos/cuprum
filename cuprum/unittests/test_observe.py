@@ -416,6 +416,15 @@ def test_observe_emits_timeout_event_on_immediate_expiry() -> None:
     assert len(timeout_events) == 1, (
         f"expected exactly one timeout event, got phases {phases}"
     )
+    # Order, not just membership: the ancillary timeout event must land between
+    # the preserved start and exit events, so a regression that emitted it after
+    # exit (or dropped the ordering entirely) fails here.
+    assert phases.index("start") < phases.index("timeout"), (
+        f"start must precede the timeout event, got phases {phases}"
+    )
+    assert phases.index("timeout") < phases.index("exit"), (
+        f"the timeout event must precede exit, got phases {phases}"
+    )
     timeout_event = timeout_events[0]
     assert timeout_event.timeout_mode == "non_positive_immediate", (
         "the immediate fast path must tag the event "
