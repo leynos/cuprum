@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import dataclasses as dc
 import http.client
+import inspect
 import io
 import json
 import os
@@ -34,7 +35,12 @@ _RETRY_DELAYS_SECONDS = (0.5, 1.0)
 _HTTP_TOO_MANY_REQUESTS = 429
 _HTTP_SERVER_ERROR_MIN = 500
 _HTTP_SERVER_ERROR_MAX = 600
-_REDIRECT_ARGUMENT_COUNT = 5
+_REDIRECT_ARGUMENT_SIGNATURE = inspect.Signature(
+    tuple(
+        inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        for name in ("fp", "code", "msg", "headers", "newurl")
+    )
+)
 _GITHUB_REDIRECT_HEADERS_TO_STRIP = (
     "Authorization",
     "X-github-api-version",
@@ -68,41 +74,31 @@ def _require_int(value: object, *, name: str) -> int:
         raise TypeError(msg)
     return value
 
+def _require_type[T](value: object, expected_type: type[T], *, name: str) -> T:
+    """Validate that *value* has the expected runtime type."""
+    if not isinstance(value, expected_type):
+        msg = f"{name} must be a {expected_type.__name__}"
+        raise TypeError(msg)
+    return value
 def _redirect_request_arguments(
     args: tuple[object, ...],
     kwargs: dict[str, object],
 ) -> _RedirectRequestArguments:
     """Normalize the positional and keyword forms supported by urllib."""
-    match args, kwargs:
-        case (
-            (
-                fp,
-                int() as code,
-                str() as msg,
-                http.client.HTTPMessage() as headers,
-                str() as newurl,
-            ),
-            {},
-        ) if not isinstance(code, bool):
-            pass
-        case (
-            (),
-            {
-                "fp": fp,
-                "code": int() as code,
-                "msg": str() as msg,
-                "headers": http.client.HTTPMessage() as headers,
-                "newurl": str() as newurl,
-            },
-        ) if len(kwargs) == _REDIRECT_ARGUMENT_COUNT and not isinstance(code, bool):
-            pass
-        case _:
-            msg = "redirect_request expects fp, code, msg, headers, and newurl"
-            raise TypeError(msg)
+    bound_arguments = _REDIRECT_ARGUMENT_SIGNATURE.bind(*args, **kwargs).arguments
+    fp = bound_arguments["fp"]
+    code = _require_int(bound_arguments["code"], name="code")
+    message = _require_type(bound_arguments["msg"], str, name="msg")
+    headers = _require_type(
+        bound_arguments["headers"],
+        http.client.HTTPMessage,
+        name="headers",
+    )
+    newurl = _require_type(bound_arguments["newurl"], str, name="newurl")
 
     # urllib owns this callback contract, so its opaque response stream is the
     # authoritative source of the IO type at this adapter boundary.
-    return typ.cast("typ.IO[bytes]", fp), code, msg, headers, newurl
+    return typ.cast("typ.IO[bytes]", fp), code, message, headers, newurl
 def _should_retry_request_failure(exc: Exception) -> bool:
     """Return ``True`` when a GitHub API failure is transient."""
     if isinstance(exc, urllib.error.HTTPError):
