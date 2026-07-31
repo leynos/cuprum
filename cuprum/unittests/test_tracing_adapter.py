@@ -145,13 +145,7 @@ print('stderr-line', file=sys.stderr)""",
         )
 
     @pytest.mark.parametrize(
-        (
-            "phase",
-            "extra_fields",
-            "expected_operation",
-            "expected_error_type",
-            "expected_extras",
-        ),
+        ("phase", "extra_fields", "expected_attributes"),
         [
             pytest.param(
                 "stdin_error",
@@ -160,9 +154,7 @@ print('stderr-line', file=sys.stderr)""",
                     "error_type": "OSError",
                     "note": "OSError: broken pipe",
                 },
-                "write",
-                "OSError",
-                {},
+                {"operation": "write", "error_type": "OSError"},
                 id="stdin_error",
             ),
             pytest.param(
@@ -173,9 +165,12 @@ print('stderr-line', file=sys.stderr)""",
                     "timeout_s": 1.5,
                     "timeout_mode": "elapsed_deadline",
                 },
-                "wait",
-                "TimeoutError",
-                {"timeout_s": 1.5, "timeout_mode": "elapsed_deadline"},
+                {
+                    "operation": "wait",
+                    "error_type": "TimeoutError",
+                    "timeout_s": 1.5,
+                    "timeout_mode": "elapsed_deadline",
+                },
                 id="timeout",
             ),
             pytest.param(
@@ -185,9 +180,7 @@ print('stderr-line', file=sys.stderr)""",
                     "error_type": "ValueError",
                     "note": "consumer drain failed: ValueError",
                 },
-                "drain",
-                "ValueError",
-                {},
+                {"operation": "drain", "error_type": "ValueError"},
                 id="teardown_error",
             ),
         ],
@@ -196,17 +189,17 @@ print('stderr-line', file=sys.stderr)""",
         self,
         phase: str,
         extra_fields: dict[str, object],
-        expected_operation: str,
-        expected_error_type: str,
-        expected_extras: dict[str, object],
+        expected_attributes: dict[str, object],
     ) -> None:
         """Ancillary phases become span events and leave the span open.
 
         ``stdin_error``, ``timeout``, and ``teardown_error`` are all diagnostics
         that accompany rather than conclude an execution, so each must be
-        recorded as a ``cuprum.<phase>`` span event carrying its stable
-        ``operation`` / ``error_type`` fields while the span stays open for the
-        subsequent ``exit``.
+        recorded as a ``cuprum.<phase>`` span event carrying the stable
+        attributes in ``expected_attributes`` — ``operation`` and
+        ``error_type`` for every phase, plus ``timeout_s`` / ``timeout_mode``
+        for ``timeout`` — while the span stays open for the subsequent
+        ``exit``.
         """
         tracer = InMemoryTracer()
         hook = TracingHook(tracer)
@@ -231,18 +224,10 @@ print('stderr-line', file=sys.stderr)""",
             f"the tracing hook should surface {phase} as a {event_name} span event, "
             f"but recorded {[name for name, _ in span.events]}"
         )
-        assert attrs.get("operation") == expected_operation, (
-            f"the {phase} span event should carry operation="
-            f"{expected_operation!r}, got {attrs.get('operation')!r}"
-        )
-        assert attrs.get("error_type") == expected_error_type, (
-            f"the {phase} span event should carry error_type="
-            f"{expected_error_type!r}, got {attrs.get('error_type')!r}"
-        )
-        for key, want in expected_extras.items():
+        for key, want in expected_attributes.items():
             assert attrs.get(key) == want, (
-                f"the {phase} span event should carry {key}={want!r} so consumers "
-                f"can distinguish expiry modes, got {attrs.get(key)!r}"
+                f"the {phase} span event should carry {key}={want!r}, "
+                f"got {attrs.get(key)!r}"
             )
         assert span.ended is False, (
             f"an ancillary {phase} event must not end the execution span"
