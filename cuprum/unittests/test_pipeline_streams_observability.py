@@ -107,18 +107,9 @@ def test_declining_the_rust_pump_records_its_reason(
         f"expected the decline to be attributed to {expected_reason!r}, "
         f"found {records[0]['cuprum_reason']!r}"
     )
-
-
-def test_a_decline_is_recorded_below_warning_level(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Declines stay at debug level so a working fall-back is not alarming."""
-    with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
-        _decline_on_missing_fds()
-
-    records = _decline_records(caplog)
-    assert records, "a hop without raw descriptors must record a decline"
+    # Asserted per reason so a regression that promotes a single fall-back
+    # path above DEBUG does not hide behind the other two cases.
     assert records[0]["levelno"] == logging.DEBUG, (
-        "falling back to the Python pump is a routing decision, not a fault, "
-        f"but it was logged at level {records[0]['levelname']}"
+        f"{expected_reason!r} must be recorded at DEBUG, found "
+        f"{records[0]['levelname']}"
     )
