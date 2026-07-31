@@ -86,7 +86,11 @@ def _run_perf(
     started = time.perf_counter()
     env = os.environ.copy()
     env.setdefault("PYTHONPERFSUPPORT", "1")
-    completed = subprocess.run(command, check=False, env=env)  # noqa: S603
+    completed = subprocess.run(  # noqa: S603  # command uses validated inputs
+        command,
+        check=False,
+        env=env,
+    )
     wall_time = time.perf_counter() - started
     if completed.returncode != 0:
         msg = f"perf record failed for {scenario.name} with {completed.returncode}"
@@ -101,7 +105,7 @@ def _run_perf(
 def _postprocess_perf(*, scenario_dir: pth.Path) -> None:
     """Create text call tree, folded stacks, and summary artefacts."""
     perf = _require_tool("perf")
-    report = subprocess.run(  # noqa: S603
+    report = subprocess.run(  # noqa: S603  # perf path comes from _require_tool
         [
             perf,
             "report",
@@ -120,12 +124,12 @@ def _postprocess_perf(*, scenario_dir: pth.Path) -> None:
         raise RuntimeError(msg)
 
     inferno = _require_tool("inferno-collapse-perf")
-    with subprocess.Popen(  # noqa: S603
+    with subprocess.Popen(  # noqa: S603  # perf path comes from _require_tool
         [perf, "script", "-i", str(scenario_dir / "perf.data")],
         stdout=subprocess.PIPE,
         text=True,
     ) as script:
-        folded = subprocess.run(  # noqa: S603
+        folded = subprocess.run(  # noqa: S603  # inferno path comes from _require_tool
             [inferno],
             stdin=script.stdout,
             check=False,
@@ -166,7 +170,10 @@ def _run_py_spy(
         "--output",
         str(scenario_dir / "worker-result.json"),
     ]
-    completed = subprocess.run(command, check=False)  # noqa: S603
+    completed = subprocess.run(  # noqa: S603  # path comes from _require_tool
+        command,
+        check=False,
+    )
     if completed.returncode != 0:
         msg = f"py-spy failed for {scenario.name} with {completed.returncode}"
         raise RuntimeError(msg)

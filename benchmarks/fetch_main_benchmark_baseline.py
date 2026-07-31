@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses as dc
+import http.client
 import io
 import json
 import os
@@ -33,10 +34,19 @@ _RETRY_DELAYS_SECONDS = (0.5, 1.0)
 _HTTP_TOO_MANY_REQUESTS = 429
 _HTTP_SERVER_ERROR_MIN = 500
 _HTTP_SERVER_ERROR_MAX = 600
+_REDIRECT_ARGUMENT_COUNT = 5
 _GITHUB_REDIRECT_HEADERS_TO_STRIP = (
     "Authorization",
     "X-github-api-version",
 )
+
+type _RedirectRequestArguments = tuple[
+    typ.IO[bytes],
+    int,
+    str,
+    http.client.HTTPMessage,
+    str,
+]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -58,7 +68,41 @@ def _require_int(value: object, *, name: str) -> int:
         raise TypeError(msg)
     return value
 
+def _redirect_request_arguments(
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+) -> _RedirectRequestArguments:
+    """Normalize the positional and keyword forms supported by urllib."""
+    match args, kwargs:
+        case (
+            (
+                fp,
+                int() as code,
+                str() as msg,
+                http.client.HTTPMessage() as headers,
+                str() as newurl,
+            ),
+            {},
+        ) if not isinstance(code, bool):
+            pass
+        case (
+            (),
+            {
+                "fp": fp,
+                "code": int() as code,
+                "msg": str() as msg,
+                "headers": http.client.HTTPMessage() as headers,
+                "newurl": str() as newurl,
+            },
+        ) if len(kwargs) == _REDIRECT_ARGUMENT_COUNT and not isinstance(code, bool):
+            pass
+        case _:
+            msg = "redirect_request expects fp, code, msg, headers, and newurl"
+            raise TypeError(msg)
 
+    # urllib owns this callback contract, so its opaque response stream is the
+    # authoritative source of the IO type at this adapter boundary.
+    return typ.cast("typ.IO[bytes]", fp), code, msg, headers, newurl
 def _should_retry_request_failure(exc: Exception) -> bool:
     """Return ``True`` when a GitHub API failure is transient."""
     if isinstance(exc, urllib.error.HTTPError):
@@ -93,8 +137,8 @@ def _with_retry[T](
 class _ArtifactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Strip GitHub-only headers when following cross-origin archive redirects."""
 
-    def _strip_cross_origin_headers(  # noqa: PLR6301
-        self,
+    @staticmethod
+    def _strip_cross_origin_headers(
         req: urllib.request.Request,
         redirected_request: urllib.request.Request,
     ) -> None:
@@ -114,7 +158,15 @@ class _ArtifactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
         *args: object,
         **kwargs: object,
     ) -> urllib.request.Request | None:
-        redirected_request = super().redirect_request(req, *args, **kwargs)  # type: ignore[arg-type]
+        fp, code, msg, headers, newurl = _redirect_request_arguments(args, kwargs)
+        redirected_request = super().redirect_request(
+            req,
+            fp,
+            code,
+            msg,
+            headers,
+            newurl,
+        )
         if redirected_request is None:
             return None
         self._strip_cross_origin_headers(req, redirected_request)

@@ -14,7 +14,7 @@ import argparse
 import json
 import logging
 import pathlib as pth
-import sys  # noqa: F401
+import sys  # noqa: F401  # re-exported for compatibility importers
 import typing as typ
 
 from benchmarks._validation import (
@@ -296,7 +296,10 @@ def main() -> int:
         _logger.info("benchmark ratchet skipped: %s", exc)
         return 0
     except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
-        _logger.error("benchmark ratchet failed to evaluate inputs: %s", exc)  # noqa: TRY400
+        _logger.error(  # noqa: TRY400  # invalid inputs are an expected CLI outcome
+            "benchmark ratchet failed to evaluate inputs: %s",
+            exc,
+        )
         return 2
 
     if report.passed:

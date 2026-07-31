@@ -2,8 +2,10 @@
 
 ## Status
 
-Accepted on 2026-05-15. Cuprum adopts Ruff as the first lint tier and
-PyPy-backed Pylint as the second lint tier.
+Accepted on 2026-05-15 and amended on 2026-07-31. Cuprum adopts Ruff as the
+first lint tier, PyPy-backed Pylint for selected built-in checks, and a pinned
+`df12-python-lints` pass under CPython 3.14. The companion `ambrleaks` scanner
+covers Syrupy snapshots.
 
 ## Date
 
@@ -31,6 +33,8 @@ easy to run from the existing `make lint` workflow.
 - Keep Pylint isolated from the project virtual environment.
 - Make the complete gate available through one command: `make lint`.
 - Keep the lint runtime reproducible by pinning the shim revision.
+- Run the df12 house checks against Cuprum's real syntax under CPython 3.14.
+- Detect secret-like values and unredacted paths in Syrupy snapshots.
 
 ## Options Considered
 
@@ -82,9 +86,10 @@ Choose Option C. The root `Makefile` defines the Pylint command in terms of:
 - `PYLINT_PYPY_SHIM`, the Git source for the shim; and
 - `PYLINT`, the full `uv tool run` command.
 
-The `lint` target runs `ruff check` first and the PyPy-backed Pylint tier
-second. Ruff failures stop the target before Pylint runs, keeping the feedback
-order predictable.
+The `lint` target runs `ruff check` first and the PyPy-backed Pylint tier after
+`interrogate`. It then runs all `df12-python-lints` v0.1.0 messages under
+CPython 3.14 and scans both snapshot roots with `ambrleaks`. Earlier failures
+stop the target before later stages, keeping the feedback order predictable.
 
 The canonical policy lives in `pyproject.toml`:
 
@@ -93,11 +98,17 @@ The canonical policy lives in `pyproject.toml`:
   `typing.*` aliases.
 - `[tool.pylint.main]`, `[tool.pylint.design]`, and
   `[tool.pylint."messages control"]` define the focused second tier.
+- The development dependency pins `df12-python-lints` at `v0.1.0`; the
+  Makefile's `DF12_PYTHON_LINTS_REF` independently pins the `ambrleaks` tool.
+- `ambrleaks.toml` records exact deterministic fixture values that resemble
+  paths without weakening any scanner rule.
 
 ## Known Risks and Limitations
 
 - The second tier requires PyPy to be resolvable by `uv tool run --python pypy`.
 - The shim revision is another toolchain pin that must be maintained.
+- The project dependency and standalone `ambrleaks` pins must move together.
+- CPython 3.14 must be resolvable by `uv` for the df12 checks.
 - Pylint is intentionally focused; messages outside the selected set remain out
   of scope unless the policy is updated deliberately.
 - Some existing large modules need narrow suppressions for `too-many-lines`
@@ -111,6 +122,9 @@ The canonical policy lives in `pyproject.toml`:
   policy.
 - Ruff continues to provide fast, high-signal feedback before the slower tier.
 - Pylint adds checks that catch issues outside Ruff's current coverage.
+- The df12 plugin enforces the shared house policy on assertions, aliases,
+  suppressions, snapshots, type dispatch, and type-alias syntax.
+- `ambrleaks` catches unredacted values outside Python's lintable source tree.
 - The lint policy remains aligned with `leynos/episodic`.
 
 ### Negative

@@ -35,15 +35,7 @@ def current_context() -> CuprumContext:
     return _current_context.get()
 
 
-def get_context() -> CuprumContext:
-    """Alias for current_context().
-
-    Returns
-    -------
-    CuprumContext
-        The context bound to the current execution scope.
-    """
-    return current_context()
+get_context = current_context
 
 
 def _set_context(ctx: CuprumContext) -> Token[CuprumContext]:

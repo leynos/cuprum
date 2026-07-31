@@ -1704,12 +1704,14 @@ requires that surface.
 
 ## Python linting
 
-Cuprum uses a three-tier Python lint gate. Ruff is the first tier and remains
+Cuprum uses a five-stage Python lint gate. Ruff is the first stage and remains
 the fast, broad lint pass for formatting-adjacent checks, import order,
 docstring *style*, security checks, naming, complexity, and Ruff's native
-Pylint-derived rules. `interrogate` is the second tier and enforces docstring
-*presence* at 100 per cent across the `cuprum` package. Pylint is the third
-tier and runs through the `leynos/pylint-pypy-shim` package under PyPy.
+Pylint-derived rules. `interrogate` is the second stage and enforces docstring
+*presence* at 100 per cent across the `cuprum` package. Built-in Pylint checks
+run third through the `leynos/pylint-pypy-shim` package under PyPy. The pinned
+`df12-python-lints` plugin runs fourth under CPython 3.14, and `ambrleaks`
+scans Syrupy snapshots fifth under the same interpreter.
 
 The decisions are recorded in
 [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md) and
@@ -1729,6 +1731,11 @@ The short version is:
 - `$(PYLINT)` pins Pylint itself with
   `--with 'pylint==$(PYLINT_VERSION)'` because the shim revision and Pylint
   package version are separate sources of lint behaviour.
+- `$(DF12_PYLINT)` enables every message shipped by
+  `df12-python-lints` v0.1.0 under CPython 3.14 while retaining Cuprum's
+  `py-version = "3.12"` semantic baseline.
+- `$(AMBRLEAKS)` scans `cuprum/unittests` and `tests`; exact deterministic
+  fixture values that resemble secrets belong in `ambrleaks.toml`.
 
 ### Docstring structure
 
@@ -1755,10 +1762,14 @@ make lint
 2. `$(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum`
 3. The PyPy-backed `pylint-pypy` command stored in `$(PYLINT)`, with
    `$(PYLINT_TARGETS)` appended.
+4. The CPython 3.14 `df12-python-lints` pass stored in `$(DF12_PYLINT)`, over
+   the same targets.
+5. The CPython 3.14 `ambrleaks` scanner over both Syrupy snapshot roots.
 
-Each tier must pass before the next runs. When investigating a lint failure,
-fix the Ruff findings first, then the `interrogate` gaps, then rerun
-`make lint` to reach the Pylint tier.
+Each stage must pass before the next runs. When investigating a lint failure,
+fix findings in execution order, then rerun `make lint` to reach the next
+stage. Do not disable df12 messages to absorb existing findings; repair the
+assertion, alias, suppression rationale, or dispatch structure instead.
 
 ### Spelling policy
 
@@ -1810,19 +1821,25 @@ The root `Makefile` exposes the following lint-related variables:
 
 <!-- markdownlint-disable MD013 -->
 
-| Variable               | Default                                                                      | Purpose                                                                    |
-| ---------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `VENV_TOOLS`           | `pytest ruff`                                                                | Tools that must resolve through `uv run` from the locked virtualenv.       |
-| `RUFF`                 | `$(UV_RUN_ENV) uv run ruff`                                                  | Locked Ruff command used by `fmt`, `check-fmt`, and `lint`.                |
-| `PYLINT_PYTHON`        | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.         |
-| `PYLINT_TARGETS`       | `benchmarks conftest.py cuprum tests`                                        | Directories and files passed to `pylint-pypy`.                             |
-| `PYLINT_PYPY_SHIM_REF` | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                              |
-| `PYLINT_PYPY_SHIM`     | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                      |
-| `PYLINT_VERSION`       | `4.0.5`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.         |
-| `PYLINT`               | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                       |
-| `LOCAL_TOOL_ENV`       | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools. |
-| `UV_ENV`               | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                  |
-| `UV_RUN_ENV`           | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment for locked `uv run` commands such as `$(RUFF)`.         |
+| Variable                | Default                                                                      | Purpose                                                                    |
+| ----------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `VENV_TOOLS`            | `pytest ruff`                                                                | Tools that must resolve through `uv run` from the locked virtualenv.       |
+| `RUFF`                  | `$(UV_RUN_ENV) uv run ruff`                                                  | Locked Ruff command used by `fmt`, `check-fmt`, and `lint`.                |
+| `PYLINT_PYTHON`         | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.         |
+| `PYLINT_TARGETS`        | `benchmarks conftest.py cuprum tests`                                        | Directories and files passed to `pylint-pypy`.                             |
+| `PYLINT_PYPY_SHIM_REF`  | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                              |
+| `PYLINT_PYPY_SHIM`      | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                      |
+| `PYLINT_VERSION`        | `4.0.5`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.         |
+| `PYLINT_CACHE`          | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                         |
+| `PYLINT`                | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                       |
+| `DF12_PYTHON_LINTS_REF` | `v0.1.0`                                                                     | Git tag used to provision the standalone `ambrleaks` tool.                 |
+| `DF12_PYTHON`           | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                      |
+| `DF12_PYLINT_MESSAGES`  | All v0.1.0 message IDs                                                       | Explicit allowlist for the df12 Pylint pass.                               |
+| `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                   |
+| `AMBRLEAKS`             | Derived command                                                              | Pinned snapshot-scanner command used by `make lint`.                       |
+| `LOCAL_TOOL_ENV`        | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools. |
+| `UV_ENV`                | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                  |
+| `UV_RUN_ENV`            | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment for locked `uv run` commands such as `$(RUFF)`.         |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -1835,7 +1852,9 @@ PYLINT_TARGETS=cuprum/sh.py make lint
 
 Do not change `PYLINT_PYPY_SHIM_REF` casually. Updating the pinned shim
 revision changes the lint runtime and must be reviewed like any other toolchain
-update.
+update. Update the `df12-python-lints` development dependency and
+`DF12_PYTHON_LINTS_REF` together so the Pylint plugin and standalone scanner
+remain on the same release.
 
 ### Episodic lint policy
 
@@ -1849,6 +1868,8 @@ a separate house style. The imported policy consists of:
 - A focused Pylint configuration that disables all messages by default, then
   enables only the selected messages that complement Ruff.
 - A PyPy-backed Pylint invocation through the pinned shim repository.
+- Every `df12-python-lints` v0.1.0 message, executed under CPython 3.14.
+- `ambrleaks` coverage for both in-package and behavioural Syrupy snapshots.
 
 This means new code should prefer:
 
@@ -1894,6 +1915,9 @@ The canonical lint configuration lives in `pyproject.toml`:
   [Docstring consistency gate](#docstring-consistency-gate) below.
 - `[tool.pylint.main]`, `[tool.pylint.design]`, and
   `[tool.pylint."messages control"]` configure the second-tier Pylint pass.
+- `[dependency-groups].dev` pins the df12 plugin used by the CPython 3.14 pass.
+- `ambrleaks.toml` contains narrow value allowlists for deterministic public
+  fixture data that matches a scanner pattern.
 
 When changing lint policy, update both `pyproject.toml` and this guide. If the
 change alters the architecture of the lint gate, update

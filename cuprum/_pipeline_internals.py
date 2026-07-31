@@ -169,10 +169,9 @@ async def _drain_tasks_during_cleanup(
     """Drain observe tasks in cleanup, aggregating a failure with ``active_error``."""
     try:
         await _wait_for_exec_hook_tasks(pending_tasks)
+    # Catch every task failure, including non-Exception BaseExceptions, so
+    # cleanup cannot mask the error that triggered it.
     except BaseException as task_error:  # noqa: BLE001
-        # A blind catch is intentional: every task failure, including
-        # non-Exception BaseExceptions, must be aggregated with active_error so
-        # cleanup never masks the error that triggered it.
         raise BaseExceptionGroup(
             _PIPELINE_FINALIZATION_ERROR,
             (active_error, task_error),

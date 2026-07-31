@@ -1,0 +1,7 @@
+[allowlist]
+# Deterministic base64 fixture lines are public test data. These two lines begin
+# with slash-separated segments that resemble POSIX paths to the scanner.
+values = [
+    '^/e6y2XJJDpMXP8Cs5eXFz/SRVOMwLLauMMNBYkoaAd/BVdz5b5/ggZ5KepdLZLVr$',
+    '^/6a\+G1dAD\+nKUASogWl5FzyCB8H90WGN/C9Ymex2Lk\+/tldn1J3jgixVTWvW/8W4$',
+]

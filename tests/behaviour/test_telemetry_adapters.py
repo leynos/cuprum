@@ -149,7 +149,7 @@ def given_structured_logging_hook(
             self.records: list[logging.LogRecord] = []
 
         def emit(self, record: logging.LogRecord) -> None:
-            self.records.append(record)
+            self.records = [*self.records, record]
 
     handler = RecordCapture()
     logger.addHandler(handler)

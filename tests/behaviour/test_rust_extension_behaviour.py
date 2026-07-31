@@ -56,7 +56,7 @@ def when_check_availability(probe: cabc.Callable[[], bool]) -> bool:
 @then("the probe returns a boolean")
 def then_probe_returns_boolean(availability: object) -> None:
     """Assert the availability probe returns a boolean value."""
-    assert isinstance(availability, bool)
+    assert isinstance(availability, bool), "Expected isinstance(availability, bool)"
 
 
 @then("the probe agrees with the native module when it is installed")
@@ -82,4 +82,6 @@ def then_probe_matches_native(availability: object) -> None:
         ):
             return
         raise
-    assert availability is native.is_available()
+    assert availability is native.is_available(), (
+        "Expected availability is native.is_available()"
+    )

@@ -44,8 +44,19 @@ PYLINT_PYPY_SHIM = git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_P
 # dependency of it, so new pylint releases would otherwise change lint
 # behaviour without any repository change (same skew class as ruff above).
 PYLINT_VERSION ?= 4.0.5
-PYLINT = $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) \
+PYLINT_CACHE ?= .cache/pylint
+PYLINT_ENV = PYLINTHOME=$(PYLINT_CACHE)
+PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) \
   --from '$(PYLINT_PYPY_SHIM)' --with 'pylint==$(PYLINT_VERSION)' pylint-pypy
+DF12_PYTHON_LINTS_REF ?= v0.1.0
+DF12_PYTHON_LINTS = git+https://github.com/leynos/df12-python-lints.git@$(DF12_PYTHON_LINTS_REF)
+DF12_PYTHON ?= 3.14
+DF12_PYLINT_MESSAGES = R9101,C9102,R9103,R9104,C9105,C9106,C9107,R9108,R9109,R9110,R9111,C9112
+DF12_PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv run --python $(DF12_PYTHON) pylint \
+  --disable=all --load-plugins=df12_python_lints \
+  --enable=$(DF12_PYLINT_MESSAGES)
+AMBRLEAKS = $(UV_RUN_ENV) uv tool run --python $(DF12_PYTHON) \
+  --from '$(DF12_PYTHON_LINTS)' ambrleaks
 
 .PHONY: help all clean build build-release lint fmt check-fmt \
         markdownlint spelling spelling-helper-test nixie test typecheck \
@@ -112,6 +123,8 @@ check-fmt: ruff ## Verify formatting
 
 lint: ruff uv ## Run linters (Ruff, pylint, Clippy, Whitaker)
 	$(RUFF) check && $(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum && $(PYLINT) $(PYLINT_TARGETS)
+	$(DF12_PYLINT) $(PYLINT_TARGETS)
+	$(AMBRLEAKS) cuprum/unittests tests
 	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps $(DOC_FLAGS) && $(CARGO) clippy $(CLIPPY_FLAGS)
 	@if ! $(LOCAL_TOOL_ENV) command -v $(WHITAKER) >/dev/null 2>&1; then echo "whitaker is required for linting. Install it before running this target." >&2; exit 1; fi
 	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- $(WHITAKER_CARGO_FLAGS)

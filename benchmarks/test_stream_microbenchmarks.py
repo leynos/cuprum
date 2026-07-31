@@ -87,10 +87,10 @@ def test_benchmark_pump_latency(
             return pipeline.run_sync(output=RunOutputOptions(capture=True))
 
     result = benchmark(run_once)
-    assert result.ok
-    assert result.stdout is not None
+    assert result.ok, "Expected result.ok"
+    assert result.stdout is not None, "Expected result.stdout is not None"
     output = result.stdout
-    assert output == expected
+    assert output == expected, "Expected output == expected"
 
 
 @pytest.mark.benchmark(group="consume-throughput")
@@ -103,9 +103,9 @@ def test_benchmark_consume_throughput(
     def run_once() -> int:
         with scoped(ScopeConfig(allowlist=allowlist)):
             result = command.run_sync(output=RunOutputOptions(capture=True))
-        assert result.ok
-        assert result.stdout is not None
+        assert result.ok, "Expected result.ok"
+        assert result.stdout is not None, "Expected result.stdout is not None"
         return len(result.stdout)
 
     consumed = benchmark(run_once)
-    assert consumed == payload_bytes
+    assert consumed == payload_bytes, "Expected consumed == payload_bytes"
