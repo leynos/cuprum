@@ -23,6 +23,7 @@ from cuprum._observability import (
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
     _collect_hooks,
+    _drain_tasks_during_cleanup,
     _enforce_allowlist,
     _EventDetails,
     _ExecutionHooks,
@@ -55,6 +56,9 @@ type _EnvMapping = cabc.Mapping[str, str] | None
 type _CwdType = str | Path | None
 
 _DEFAULT_CANCEL_GRACE = 0.5
+# Names the aggregate raised when draining observe-hook tasks fails while a
+# single-command execution is already unwinding.
+_COMMAND_FINALIZATION_ERROR = "command finalization failed"
 _DEFAULT_ENCODING = "utf-8"
 _DEFAULT_ERROR_HANDLING = "replace"
 
@@ -396,16 +400,36 @@ async def _execute_with_hooks(
     execution: _SubprocessExecution,
     tracking: _ExecutionTracking,
 ) -> CommandResult:
-    """Execute *execution*, dispatch after-hooks, and handle cancellation."""
+    """Execute *execution*, dispatch after-hooks, and handle cancellation.
+
+    Draining the observe-hook tasks during cleanup must not let a failing
+    background hook stand in for the error that triggered the cleanup: a caller
+    awaiting ``TimeoutExpired`` (or a cancellation) would otherwise see the
+    hook's exception instead. Both cleanup paths therefore drain through
+    :func:`_drain_tasks_during_cleanup`, which aggregates a drain failure with
+    the active error into a ``BaseExceptionGroup`` rather than replacing it —
+    matching the pipeline path. The drain on the success path still surfaces a
+    hook failure directly, because there is no primary error to preserve.
+    """
     try:
         result = await _execute_subprocess(execution)
         for hook in tracking.execution_hooks.after_hooks:
             hook(cmd, result)
-    except asyncio.CancelledError:
-        await asyncio.shield(_wait_for_exec_hook_tasks(tracking.pending_tasks))
+    except asyncio.CancelledError as cancelled:
+        await asyncio.shield(
+            _drain_tasks_during_cleanup(
+                tracking.pending_tasks,
+                cancelled,
+                message=_COMMAND_FINALIZATION_ERROR,
+            )
+        )
         raise
-    except BaseException:
-        await _wait_for_exec_hook_tasks(tracking.pending_tasks)
+    except BaseException as run_error:
+        await _drain_tasks_during_cleanup(
+            tracking.pending_tasks,
+            run_error,
+            message=_COMMAND_FINALIZATION_ERROR,
+        )
         raise
     await _wait_for_exec_hook_tasks(tracking.pending_tasks)
     return result
