@@ -208,3 +208,8 @@ target/
 # Untracked shared spelling-policy cache and freshness metadata.
 .typos-oxendict-base.json
 .typos-oxendict-base.toml
+
+# Proptest seed files record cases that failed in the past. Ours only ever
+# capture deliberately-injected mutants from verification runs, so checking them
+# in would re-run seeds that never failed against correct code.
+rust/cuprum-rust/proptest-regressions/
