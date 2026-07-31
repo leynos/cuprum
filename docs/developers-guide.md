@@ -1581,26 +1581,73 @@ boundary, invalid UTF-8, and an incomplete trailing sequence — and each one
 calls `rust_consume_stream` and compares the result against Python's own
 replacement decoding, `payload.decode("utf-8", errors="replace")`.
 
-Normal CI does not execute them. The test jobs reach the suite through
-`make build`, which is only `uv sync --group dev`; nothing builds
-`cuprum._rust_backend_native`, so those cases are skipped rather than run.
-Issue `#258` tracks building the extension in the test jobs and adding a
-fail-loud guard so the skip cannot pass unnoticed. Issue `#265` — `OSError`
-crossing the boundary lost its `errno`, failing one extension-enabled test —
-is resolved; see [Preserving the operating-system error
+Those cases do now execute in CI — see [Building the extension for
+tests](#building-the-extension-for-tests) — but they did not until `#258` was
+resolved, because `make build` only runs `uv sync --group dev` and never
+compiled `cuprum._rust_backend_native`. Running them also surfaced `#265`,
+where an `OSError` crossing the boundary lost its `errno`; that is fixed too,
+under [Preserving the operating-system error
 code](#preserving-the-operating-system-error-code).
 
-So the `consume_stream_files` snapshots and properties are the coverage of the
-read-and-decode loop that actually executes on every commit. They do not
-replace executed Python/Rust boundary coverage, and are not a reason to leave
-`#258` unresolved: the two verify different things, one the loop and the other
-the exported surface.
+The two layers verify different things and neither replaces the other: the
+snapshots and properties cover the `consume_stream_files` read-and-decode loop,
+while `TestRustConsumeStream` covers the exported surface a caller actually
+touches. Keep both when changing either.
 
 Those snapshots are written inline with `insta::assert_snapshot!(value, @"...")`
 rather than as separate `.snap` files, which keeps the expected text beside the
 case that produces it and leaves no snapshot files to review or prune. Accept a
 deliberate change by editing the inline literal; `cargo insta` is not required
 for the inline form.
+
+
+### Building the extension for tests
+
+Several test modules exercise the compiled PyO3 extension and are gated on it
+being importable. `make build` does not build it — that target only syncs
+dependencies — so build it explicitly:
+
+```bash
+make develop
+```
+
+That runs `maturin develop` against `rust/cuprum-rust/Cargo.toml` in the
+project virtual environment, preceded by `ensurepip` because maturin resolves
+its own script through the interpreter's `sysconfig` scheme. CI runs the same
+target, so a local run and a CI run build the extension identically.
+
+Without it these modules skip rather than fail, which is the right default
+locally — most changes do not need the native path rebuilt — and the wrong one
+in CI, where a job that never built the extension reports a green run
+indistinguishable from one that exercised the whole boundary. Set
+`CUPRUM_REQUIRE_RUST_EXTENSION=1` to make that silence fatal:
+
+```bash
+CUPRUM_REQUIRE_RUST_EXTENSION=1 make test
+```
+
+The check runs once per session in `conftest.py`, so it covers every gated
+module regardless of how each one gates — fixture, module-level guard, or
+availability probe — and a new module cannot opt out by skipping differently.
+
+CI runs these in a dedicated `extension-tests` job rather than folding the
+extension into `typecheck-test`. That is a deliberate constraint, not tidiness:
+with the extension present, `test_pipeline.py` trips the file-descriptor close
+race tracked by issue `#124` (roadmap 8.1.1) and aborts the interpreter part
+way through the suite, reproducibly. Until that is fixed, the extension must
+not be installed for the general test run. Widening the job is the natural
+follow-up once `#124` lands.
+
+Table 1: modules gated on the compiled extension
+
+| Module | Covers |
+| --- | --- |
+| `test_rust_streams.py` | pump and consume entry points, including the four `TestRustConsumeStream` replacement scenarios that are the end-to-end regression coverage for `#105` |
+| `test_rust_streams_boundary_property.py` | randomized payloads across the boundary |
+| `test_rust_extension.py` | extension availability and module surface |
+| `test_rust_splice.py` | the Linux `splice` fast path |
+| `test_rust_errno.py` | `OSError.errno` and subclass selection across the boundary |
+| `test_backend.py` | the extension-dependent backend-selection cases |
 
 Kani harnesses are reserved for bounded verification of small, high-value state
 spaces. Gate Kani-only modules and helpers with `#[cfg(kani)]`, and share pure

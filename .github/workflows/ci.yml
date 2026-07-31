@@ -141,6 +141,49 @@ jobs:
       - name: Run tests
         run: make test
 
+  extension-tests:
+    name: Extension-gated tests (Python/Rust boundary)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Prepare Cargo dependencies
+        run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml
+
+      # `make build` only syncs dependencies; `make develop` compiles the PyO3
+      # extension into the same virtual environment. It is the target
+      # contributors run locally, so this job cannot drift from local setup.
+      - name: Build the native extension
+        run: make develop
+
+      # These modules are gated on `cuprum._rust_backend_native` being
+      # importable and skip silently without it, so before this job existed a
+      # green run was indistinguishable from one that never exercised the
+      # Python/Rust boundary. `CUPRUM_REQUIRE_RUST_EXTENSION` turns a missing
+      # extension into a failure, so the gate cannot close again unnoticed.
+      #
+      # This runs the gated modules rather than the whole suite on purpose.
+      # With the extension present, `test_pipeline.py` trips the FD close race
+      # tracked by issue #124 (roadmap 8.1.1) and aborts the interpreter, so
+      # widening this job must wait for that fix.
+      - name: Run extension-gated tests
+        env:
+          CUPRUM_REQUIRE_RUST_EXTENSION: '1'
+        run: |
+          uv run pytest -v \
+            cuprum/unittests/test_rust_streams.py \
+            cuprum/unittests/test_rust_streams_boundary_property.py \
+            cuprum/unittests/test_rust_extension.py \
+            cuprum/unittests/test_rust_splice.py \
+            cuprum/unittests/test_rust_errno.py \
+            cuprum/unittests/test_backend.py
+
   coverage:
     # Pull requests only. Pushes to main are handled by coverage-main.yml,
     # which also uploads the report to CodeScene; guarding here stops

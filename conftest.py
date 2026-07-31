@@ -11,6 +11,7 @@ def test_pumps_bytes(rust_streams):
 
 from __future__ import annotations
 
+import os
 import typing as typ
 
 import pytest
@@ -20,6 +21,37 @@ from cuprum._backend import _check_rust_available, get_stream_backend
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
+
+
+_REQUIRE_EXTENSION_ENV = "CUPRUM_REQUIRE_RUST_EXTENSION"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Fail the run when the extension is required but absent.
+
+    The extension-gated modules skip when `cuprum._rust_backend_native` cannot
+    be imported, which is right locally — most contributors do not build the
+    native extension for every change. In CI it is the wrong default: a job
+    that never builds the extension reports a green run indistinguishable from
+    one that exercised the whole Python/Rust boundary.
+
+    Setting `CUPRUM_REQUIRE_RUST_EXTENSION=1` makes that silence fatal. One
+    session-level check covers every gated module regardless of how each one
+    gates — fixture, module-level guard, or availability probe — so a new
+    module cannot opt out of the requirement by skipping differently.
+    """
+    del config
+    if not os.environ.get(_REQUIRE_EXTENSION_ENV):
+        return
+    if _rust_backend.is_available():
+        return
+    msg = (
+        f"{_REQUIRE_EXTENSION_ENV} is set, but cuprum._rust_backend_native "
+        "could not be imported, so every extension-gated test would skip "
+        "silently. Build it with `make develop` before running the suite. "
+        "Unset the variable to allow skipping."
+    )
+    raise pytest.UsageError(msg)
 
 
 @pytest.fixture(name="rust_streams")
