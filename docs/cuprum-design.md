@@ -1072,6 +1072,22 @@ Semantics (aligned with `subprocess.run` and plumbum):
   capture rules as successful runs (final stage stdout plus all stderr when
   capture is enabled).
 
+For screen readers: The following sequence diagram shows the logging hook's
+start and exit sequence around one command. The user calls `run_sync()` on a
+`SafeCmd`, which invokes the `on_start` hook. That hook first asks the logger
+whether the *exit* level is enabled — not the start level — because the only
+reason to take a timestamp now is to compute a duration for the exit record
+later; when it is enabled, the hook takes the store's lock, records
+`time.perf_counter()` against the command, and releases the lock. It then asks
+whether the start level is enabled and, if so, logs the `cuprum.start` record.
+The `SafeCmd` executes the process and returns a `CommandResult` to the user,
+then invokes the `on_exit` hook with the command and that result. The exit hook
+asks again whether the exit level is enabled: if it is disabled it returns
+immediately, leaving nothing to clean up because nothing was stored; if it is
+enabled it takes the lock, pops the recorded start time — removing the entry, so
+the store cannot grow without bound — releases the lock, computes `duration_s`,
+and logs the `cuprum.exit` record.
+
 Figure 3: Sequence of start/exit logging hook execution
 
 ```mermaid
