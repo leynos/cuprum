@@ -1328,6 +1328,18 @@ concurrently with optional concurrency limits. The implementation uses
 - `failure_submission_indices`: Property mapping each failure back to its
   original submission position, uniformly across both execution modes.
 
+For screen readers: The following sequence diagram shows how `run_concurrent`
+executes several commands at once. The caller invokes `run_concurrent` with the
+commands and a config. It first validates every program against the context
+allowlist in one step, and if any is forbidden a `ForbiddenProgramError` returns
+to the caller immediately, before anything runs. Otherwise each `SafeCmd` runs
+concurrently: it acquires the semaphore when one is configured, which gates how
+many run at once; fires its before hook; executes the process; fires its exit
+hook; records its result and status with the result aggregator; and releases the
+semaphore. Once all have finished, the aggregator returns the results in
+submission order and `run_concurrent` returns a `ConcurrentResult` carrying the
+results, the failures, and the `ok` flag.
+
 Figure 6: Concurrent execution flow with allowlist validation and semaphore
 gating
 
@@ -1360,6 +1372,16 @@ sequenceDiagram
     ResultAggregator->>run_concurrent: Aggregate results<br/>in submission order
     run_concurrent-->>Caller: ConcurrentResult<br/>(results, failures, ok)
 ```
+
+For screen readers: The following sequence diagram shows what changes when
+fail-fast mode is enabled. The caller invokes `run_concurrent` with a config
+whose `fail_fast` is true. Every command is launched as a task in a task group.
+When the first non-zero exit is detected, the group raises `_FirstFailureError`
+and cancels the tasks still pending; each cancelled process is signalled with
+`SIGTERM`, given a grace period, then `SIGKILL`. The group returns partial
+results — those that completed alongside those that were cancelled — and
+`run_concurrent` returns a `ConcurrentResult` carrying those partial results and
+the failure indices.
 
 Figure 7: Fail-fast mode cancellation behaviour
 
