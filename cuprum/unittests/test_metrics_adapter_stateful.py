@@ -76,12 +76,16 @@ def _event(
 @pytest.mark.parametrize(("phase", "counter"), _UNIT_COUNTER_PHASES)
 def test_unit_counter_phases_yield_one_increment(phase: str, counter: str) -> None:
     """Each simple phase yields exactly one unit increment of its counter."""
-    assert _metric_operations(_event(phase)) == (_CounterOp(counter, 1.0),)
+    assert _metric_operations(_event(phase)) == (_CounterOp(counter, 1.0),), (
+        f"phase {phase!r} must yield exactly one unit increment of {counter!r}"
+    )
 
 
 def test_plan_phase_yields_no_operations() -> None:
     """The plan phase produces no metric operations."""
-    assert _metric_operations(_event("plan")) == ()
+    assert _metric_operations(_event("plan")) == (), (
+        "the plan phase precedes execution, so it must yield no operations"
+    )
 
 
 @given(byte_count=st.none() | st.integers(min_value=0, max_value=1_000_000))
@@ -92,10 +96,15 @@ def test_stdin_yields_bytes_counter_only_when_counted(
     """A stdin event yields a bytes counter iff it carries a byte count."""
     operations = _metric_operations(_event("stdin", byte_count=byte_count))
     if byte_count is None:
-        assert operations == ()
+        assert operations == (), (
+            f"an uncounted stdin event must yield no operations, found {operations!r}"
+        )
     else:
         assert operations == (
             _CounterOp("cuprum_stdin_bytes_total", float(byte_count)),
+        ), (
+            f"a stdin event carrying {byte_count} bytes must yield exactly that "
+            f"counter, found {operations!r}"
         )
 
 
@@ -118,7 +127,10 @@ def test_exit_yields_failure_and_duration_only_when_present(
         expected.append(_CounterOp("cuprum_failures_total", 1.0))
     if duration_s is not None:
         expected.append(_HistogramOp("cuprum_duration_seconds", duration_s))
-    assert list(operations) == expected
+    assert list(operations) == expected, (
+        f"exit(exit_code={exit_code!r}, duration_s={duration_s!r}) must yield "
+        f"{expected!r}, found {list(operations)!r}"
+    )
 
 
 def test_unknown_phase_raises_structured_error() -> None:
@@ -207,13 +219,22 @@ class _MetricsAccumulationMachine(RuleBasedStateMachine):
     @invariant()
     def collector_matches_independent_expectations(self) -> None:
         """Check the collector reflects exactly the counted per-phase effects."""
-        assert self.metrics.counters == self.expected_counters
-        assert (
-            self.metrics.histograms.get("cuprum_duration_seconds", [])
-            == self.expected_durations
+        assert self.metrics.counters == self.expected_counters, (
+            "collected counters must match the independent phase-count oracle; "
+            f"collected {self.metrics.counters!r}, expected "
+            f"{self.expected_counters!r}"
+        )
+        observed_durations = self.metrics.histograms.get("cuprum_duration_seconds", [])
+        assert observed_durations == self.expected_durations, (
+            "the duration histogram must hold exactly the measured durations, in "
+            f"order; observed {observed_durations!r}, expected "
+            f"{self.expected_durations!r}"
         )
         # The duration histogram is the only histogram the hook ever writes.
-        assert set(self.metrics.histograms) <= {"cuprum_duration_seconds"}
+        assert set(self.metrics.histograms) <= {"cuprum_duration_seconds"}, (
+            "the hook must write no histogram beyond cuprum_duration_seconds, "
+            f"found {sorted(self.metrics.histograms)}"
+        )
 
 
 TestMetricsAccumulation = _MetricsAccumulationMachine.TestCase
