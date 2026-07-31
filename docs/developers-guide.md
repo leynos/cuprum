@@ -463,9 +463,15 @@ single-stage failure, which have no other stage to stop.
 Three verification layers cover this seam; keep all three when changing it:
 
 ```bash
-# Hypothesis state machine over randomized completion orders, the async
-# boundary, and the log records.
-uv run pytest -q cuprum/unittests/test_pipeline_wait.py
+# Hypothesis state machine over randomized completion orders, the pinned
+# boundary cases, the async boundary, and the log records. These are four
+# modules by test concern, sharing scaffolding via
+# `cuprum/unittests/_pipeline_wait_support.py`.
+uv run pytest -q \
+  cuprum/unittests/test_pipeline_wait_state_machine.py \
+  cuprum/unittests/test_pipeline_wait_examples.py \
+  cuprum/unittests/test_pipeline_wait_async.py \
+  cuprum/unittests/test_pipeline_wait_observability.py
 
 # CrossHair PEP 316 contracts over the bounded symbolic model.
 uv run pytest -q cuprum/unittests/test_pipeline_wait_crosshair.py -m crosshair
