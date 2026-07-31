@@ -196,13 +196,34 @@ def test_paused_reader_always_resumes_a_pausable_transport(
     )
 
 
+class _ResumeOnlyTransport:
+    """A transport offering ``resume_reading`` but no ``pause_reading``.
+
+    Calling resume here would mean resuming a pause that never happened, so the
+    method fails rather than recording, making the mistake observable instead of
+    merely absent.
+    """
+
+    def resume_reading(self) -> None:
+        """Fail: nothing was paused, so nothing may be resumed."""
+        msg = "resume_reading must not run when no pause was applied"
+        raise AssertionError(msg)
+
+
 def test_paused_reader_skips_resume_when_pause_unavailable() -> None:
-    """A transport without pause/resume yields without attempting a resume."""
-    reader = typ.cast("asyncio.StreamReader", _FakeReader(object()))
-    with _paused_reader(reader):
-        pass
-    # No exception and nothing to assert on the bare object: the point is that
-    # exiting the context manager does not crash when resume is unavailable.
+    """A transport with no pause hook hands off, and is never resumed.
+
+    A bare ``object()`` would only prove the context manager does not crash. A
+    transport that exposes ``resume_reading`` alone catches an implementation
+    that resumes whatever hook it can find regardless of whether a pause
+    succeeded.
+    """
+    reader = typ.cast("asyncio.StreamReader", _FakeReader(_ResumeOnlyTransport()))
+
+    with _paused_reader(reader) as may_hand_off:
+        assert may_hand_off is True, (
+            "with no callbacks to race, the descriptor hand-off is safe"
+        )
 
 
 def test_paused_reader_undoes_a_half_applied_pause() -> None:
@@ -287,7 +308,14 @@ def test_run_rust_pump_falls_back_and_resumes_when_blocking_fails(
 
 
 _SUPPRESSED_PIPE_ERRORS = (BrokenPipeError, ConnectionResetError)
-_RESULT_TAGS = ["ok", "broken_pipe", "conn_reset", "value_error", "runtime_error"]
+_RESULT_TAGS = [
+    "ok",
+    "broken_pipe",
+    "conn_reset",
+    "value_error",
+    "runtime_error",
+    "cancelled",
+]
 
 
 def _make_pipe_result(tag: str) -> object:
@@ -300,6 +328,10 @@ def _make_pipe_result(tag: str) -> object:
         return ConnectionResetError("peer reset")
     if tag == "value_error":
         return ValueError("unexpected pipe failure")
+    if tag == "cancelled":
+        # A cancelled pump task. `CancelledError` derives from `BaseException`,
+        # not `Exception`, so it is exactly the case an `Exception` guard drops.
+        return asyncio.CancelledError()
     return RuntimeError("unexpected pipe failure")
 
 
@@ -308,17 +340,24 @@ def test_surface_raises_first_unexpected_and_suppresses_pipe_errors(
     *,
     tags: list[str],
 ) -> None:
-    """The first non-pipe exception surfaces; pipe errors and values do not."""
+    """The first non-pipe failure surfaces; pipe errors and values do not.
+
+    The oracle is deliberately over ``BaseException``: a cancelled pump task
+    delivered no bytes, so letting it pass as success would report a pipeline
+    that never finished moving data as having completed.
+    """
     results = [_make_pipe_result(tag) for tag in tags]
     unexpected = [
         result
         for result in results
-        if isinstance(result, Exception)
+        if isinstance(result, BaseException)
         and not isinstance(result, _SUPPRESSED_PIPE_ERRORS)
     ]
 
     if unexpected:
-        with pytest.raises((ValueError, RuntimeError)) as exc_info:
+        with pytest.raises(
+            (ValueError, RuntimeError, asyncio.CancelledError),
+        ) as exc_info:
             _surface_unexpected_pipe_failures(results)
         assert exc_info.value is unexpected[0], (
             "the earliest unexpected exception must be the one raised"

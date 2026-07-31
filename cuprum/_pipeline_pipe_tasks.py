@@ -98,14 +98,20 @@ async def _reconcile_pipe_tasks(pipe_tasks: list[asyncio.Task[None]]) -> None:
 
 
 def _surface_unexpected_pipe_failures(pipe_results: list[object]) -> None:
-    """Raise non-BrokenPipe exceptions from pipe results.
+    """Raise the first pipe-task failure that is not an expected broken pipe.
 
-    BrokenPipeError and ConnectionResetError are expected when downstream
-    processes terminate early (e.g., head) and should not fail the pipeline.
-    Other exceptions indicate genuine failures and must be surfaced.
+    ``BrokenPipeError`` and ``ConnectionResetError`` are expected when a
+    downstream process exits early — ``head`` is the canonical case — and must
+    not fail the pipeline. Everything else did stop the data moving and has to
+    reach the caller.
+
+    The check is against ``BaseException``, not ``Exception``. Since Python 3.8
+    ``asyncio.CancelledError`` derives from ``BaseException``, so an
+    ``Exception`` guard silently ignores a cancelled pump task and lets the
+    pipeline report success for bytes that were never delivered.
     """
     for result in pipe_results:
-        if isinstance(result, Exception) and not isinstance(
+        if isinstance(result, BaseException) and not isinstance(
             result,
             (BrokenPipeError, ConnectionResetError),
         ):

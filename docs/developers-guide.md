@@ -506,6 +506,8 @@ correctly-working pipeline noisy on any platform where the fast path does not
 apply. To diagnose fast-path coverage, raise that one logger:
 
 ```python
+import logging
+
 logging.getLogger("cuprum._pipeline_streams").setLevel(logging.DEBUG)
 ```
 
