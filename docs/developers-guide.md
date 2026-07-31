@@ -1278,29 +1278,41 @@ within the per-module line cap.
 
 The read/write fallback's control flow — how each read and write outcome moves
 the running byte total and the latched `writer_open` flag — is factored into a
-pure, `io::Error`-free state machine in `src/pump_machine.rs`. `step` advances a
-`PumpState` given a `ReadEvent` (`Chunk`/`Eof`) and, when a write is performed,
-a `WriteEvent` (`Complete`/`Closed`).
+pure, `io::Error`-free state machine in `src/pump_machine.rs`.
 
-`drive_step` wraps `step` with the loop's write precondition: it invokes the
-supplied write operation **only** for a chunk read while the writer is still
-open, so EOF and a latched-closed writer never attempt one.
-`pump_stream_files_readwrite` and the property tests both drive the machine
-through `drive_step`, so the precondition has a single definition rather than a
-runtime copy and a test copy that could drift apart. That distinction needs
-testing directly: `step` independently ignores a write it is handed, so a
-`drive_step` that dropped the precondition would leave the resulting state
-identical and only differ in having performed a spurious write. The tests
-therefore assert whether the write operation *ran*, not merely its effect.
+`advance` is the machine's only production entry point. It takes the raw read
+length and a write operation, and owns both decisions the loop would otherwise
+have to make for itself: a zero-length read is end of input, anything else is a
+chunk; and the write runs **only** for a chunk read while the writer is still
+open. `pump_stream_files_readwrite`, the property tests, and the bounded proofs
+all go through it, so there is one definition of that policy rather than three
+copies that could drift.
+
+The precondition is enforced by the type rather than by a check. Internally
+`advance` builds a private `Transition` — `Wrote(WriteEvent)`, `Drained`, or
+`Eof` — and `Wrote` is constructible only on the branch that has already
+established the writer is open. An earlier API took a read event and an
+`Option<WriteEvent>` independently, which let a caller pass a write for an EOF
+read or for a closed writer; both were silently ignored, so the precondition
+lived in a doc comment. Making those states unrepresentable also removed the
+defensive re-check inside `step`, which had been masking exactly the mistake it
+looked like it was guarding against.
+
+Whether the write *ran* is what the tests assert, not merely its effect: a
+dropped precondition would leave the resulting state identical and differ only
+in having performed a spurious write, so the drivers report invocation.
 
 Extracting the decision this way lets it be checked without descriptors:
-proptests fold random event scripts through `drive_step` to assert the total is
-monotonic, the writer never reopens once a broken pipe latches it closed, a
-closed writer drains without accruing bytes, the loop stops exactly on `Eof`,
-and the write runs exactly when the transition permits it. Kani proves the same
-invariants over unbounded byte counts and arbitrary starting states in
-`src/pump_machine_kani_proofs.rs` (`#[cfg(kani)]`, so outside the commit gate),
-closing the model-checking follow-up from issue `#84`.
+proptests fold random scripts of `(read_len, WriteEvent)` through `advance` to
+assert the total is monotonic, the writer never reopens once a broken pipe
+latches it closed, a closed writer drains without accruing bytes, the loop
+stops exactly on a zero-length read, and the write runs exactly when the
+transition permits it. Kani proves the same invariants over unbounded byte
+counts and arbitrary starting states in `src/pump_machine_kani_proofs.rs`
+(`#[cfg(kani)]`, so outside the commit gate), closing the model-checking
+follow-up from issue `#84`. Those proofs target `advance` rather than the
+private `step`, because `advance` is where the precondition lives — proving
+`step` in isolation would establish nothing about a closed writer.
 
 The path emits bounded `tracing` diagnostics at the three boundaries operators
 need visibility into: support detection logs a `debug` event when the

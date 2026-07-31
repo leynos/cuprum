@@ -6,8 +6,8 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use proptest::prelude::*;
 
 use super::{
-    PumpError, WriteOutcome, classify_write_outcome, handle_write, map_short_write_error,
-    read_raw_fd, read_raw_fd_with, read_stream, write_all_unix_with,
+    PumpError, WriteOutcome, classify_write_outcome, classify_write_with, handle_write,
+    map_short_write_error, read_raw_fd, read_raw_fd_with, read_stream, write_all_unix_with,
 };
 use crate::pump_machine::WriteEvent;
 use crate::test_support::{make_pipe, unwrap_err, unwrap_ok, write_all_to};
@@ -260,6 +260,79 @@ fn classify_write_outcome_propagates_fatal_errors() {
     let err = unwrap_err(classify_write_outcome(Err(PumpError::from(
         io::Error::from(io::ErrorKind::PermissionDenied),
     ))));
+
+    assert!(matches!(err, PumpError::Io(_)));
+}
+
+/// Both non-fatal mappings, driven through `classify_write`'s own pipeline.
+///
+/// These go through [`classify_write_with`], which is what `classify_write`
+/// itself calls with the real `write(2)`; only the syscall differs. So the
+/// partial-write loop, the non-fatal error partitioning in
+/// `map_short_write_error`, and the outcome mapping all run exactly as they do
+/// in production — unlike a test that hands `classify_write_outcome` a
+/// pre-built `WriteOutcome` and therefore skips the two steps that produce it.
+///
+/// The short-write case cannot be forced through a real descriptor: it needs
+/// the peer to close *after* the kernel has accepted some bytes but before the
+/// rest, which no test can schedule deterministically.
+#[rstest]
+#[case::non_fatal_after_partial_progress(io::ErrorKind::BrokenPipe, 3, 3)]
+#[case::non_fatal_before_any_progress(io::ErrorKind::BrokenPipe, 0, 0)]
+#[case::reset_after_partial_progress(io::ErrorKind::ConnectionReset, 2, 2)]
+#[case::reset_before_any_progress(io::ErrorKind::ConnectionReset, 0, 0)]
+fn classify_write_latches_closed_carrying_accepted_bytes(
+    #[case] kind: io::ErrorKind,
+    #[case] accepted: usize,
+    #[case] expected_bytes: u64,
+) {
+    let chunk = b"chunk-of-bytes";
+    assert!(
+        accepted < chunk.len(),
+        "the injected write must stop short of the whole chunk",
+    );
+
+    // Accept `accepted` bytes on the first call, then fail non-fatally. With
+    // `accepted == 0` the failure precedes any progress.
+    let mut calls = 0_u32;
+    let event = unwrap_ok(classify_write_with(chunk, |_buffer| {
+        calls += 1;
+        if calls == 1 && accepted > 0 {
+            Ok(libc::ssize_t::try_from(accepted).unwrap_or(0))
+        } else {
+            Err(io::Error::from(kind))
+        }
+    }));
+
+    assert_eq!(
+        event,
+        WriteEvent::Closed {
+            bytes: expected_bytes
+        },
+        "a non-fatal write must latch the writer closed carrying the bytes it accepted",
+    );
+}
+
+/// A completed write through the same seam reports the full byte count and
+/// does not latch the writer closed.
+#[rstest]
+fn classify_write_with_reports_a_completed_write() {
+    let chunk = b"chunk";
+
+    let event = unwrap_ok(classify_write_with(chunk, |buffer| {
+        Ok(libc::ssize_t::try_from(buffer.len()).unwrap_or(0))
+    }));
+
+    assert_eq!(event, WriteEvent::Complete { bytes: 5 });
+}
+
+/// A fatal error is not swallowed by the non-fatal partition: it propagates
+/// out of `classify_write` rather than latching the writer closed.
+#[rstest]
+fn classify_write_with_propagates_a_fatal_error() {
+    let err = unwrap_err(classify_write_with(b"chunk", |_buffer| {
+        Err(io::Error::from(io::ErrorKind::PermissionDenied))
+    }));
 
     assert!(matches!(err, PumpError::Io(_)));
 }

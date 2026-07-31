@@ -158,6 +158,29 @@ pub(crate) fn classify_write(
     classify_write_outcome(handle_write(writer, chunk))
 }
 
+/// Classify a write driven by an injectable single-write operation.
+///
+/// Substitutes only the `write(2)` syscall. Everything downstream of it — the
+/// partial-write loop in [`write_all_unix_with`], the non-fatal partitioning
+/// in [`map_short_write_error`], and the mapping in [`classify_write_outcome`]
+/// — is the same code [`classify_write`] reaches through [`handle_write`], in
+/// the same order. What this does *not* cover is the `write(2)` call inside
+/// [`write_all_unix`]; the descriptor-backed tests above exercise that.
+///
+/// The seam exists because the two non-fatal mappings cannot both be forced
+/// through a real descriptor. A broken pipe *before* any progress is easy —
+/// drop the read end and write — but a partial write *followed by* a broken
+/// pipe depends on when the peer closes relative to the kernel accepting
+/// bytes, which no test can schedule deterministically. Test-only, so
+/// production keeps exactly one write path.
+#[cfg(all(unix, test))]
+pub(crate) fn classify_write_with(
+    chunk: &[u8],
+    write_once: impl FnMut(&[u8]) -> Result<libc::ssize_t, io::Error>,
+) -> Result<WriteEvent, PumpError> {
+    classify_write_outcome(write_all_unix_with(chunk, write_once))
+}
+
 /// Map a completed write attempt onto the pure machine's `WriteEvent`.
 ///
 /// Split from [`classify_write`] so the mapping can be exercised for every

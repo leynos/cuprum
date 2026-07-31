@@ -4,16 +4,17 @@
 //! counts and arbitrary starting states: the running total is monotonic, the
 //! writer latch is sticky, a closed writer drains without accruing bytes, and
 //! the loop stops exactly on EOF.
+//!
+//! They drive [`advance`](super::advance) rather than the private `step`,
+//! because `advance` is where the write precondition lives. Proving `step`
+//! alone would establish nothing about a closed writer: the narrowed
+//! `Transition` type makes an invalid combination unrepresentable, so the
+//! guarantee is that `advance` never builds one — which is a property of
+//! `advance`.
 
-use super::{Flow, PumpState, ReadEvent, WriteEvent, step};
+use std::convert::Infallible;
 
-fn any_read() -> ReadEvent {
-    if kani::any() {
-        ReadEvent::Chunk
-    } else {
-        ReadEvent::Eof
-    }
-}
+use super::{Flow, PumpState, WriteEvent, advance};
 
 fn any_write() -> WriteEvent {
     let bytes: u64 = kani::any();
@@ -24,15 +25,24 @@ fn any_write() -> WriteEvent {
     }
 }
 
-fn any_opt_write() -> Option<WriteEvent> {
-    if kani::any() { Some(any_write()) } else { None }
+/// Drive one iteration with a symbolic write, reporting whether it ran.
+fn drive(state: &mut PumpState, read_len: usize, write: WriteEvent) -> (Flow, bool) {
+    let mut invoked = false;
+    let outcome = advance(state, read_len, || {
+        invoked = true;
+        Ok::<WriteEvent, Infallible>(write)
+    });
+    match outcome {
+        Ok(flow) => (flow, invoked),
+        Err(never) => match never {},
+    }
 }
 
 #[kani::proof]
 fn total_is_monotonic_across_a_step() {
     let mut state = PumpState::from_parts(kani::any(), kani::any());
     let before = state.total_written();
-    step(&mut state, any_read(), any_opt_write());
+    drive(&mut state, kani::any(), any_write());
     kani::assert(
         state.total_written() >= before,
         "the running total never decreases",
@@ -42,11 +52,11 @@ fn total_is_monotonic_across_a_step() {
 #[kani::proof]
 fn loop_stops_exactly_on_eof() {
     let mut state = PumpState::from_parts(kani::any(), kani::any());
-    let read = any_read();
-    let flow = step(&mut state, read, any_opt_write());
+    let read_len: usize = kani::any();
+    let (flow, _) = drive(&mut state, read_len, any_write());
     kani::assert(
-        (flow == Flow::Stop) == (read == ReadEvent::Eof),
-        "the loop stops iff the read reached EOF",
+        (flow == Flow::Stop) == (read_len == 0),
+        "the loop stops iff the read returned zero bytes",
     );
 }
 
@@ -55,12 +65,25 @@ fn closed_writer_drains_without_writing() {
     // Start from an already-closed writer with an arbitrary running total.
     let mut state = PumpState::from_parts(kani::any(), false);
     let before = state.total_written();
-    step(&mut state, any_read(), any_opt_write());
+    let (_, invoked) = drive(&mut state, kani::any(), any_write());
+    kani::assert(!invoked, "a closed writer is never written to");
     kani::assert(!state.writer_open(), "a closed writer never reopens");
     kani::assert(
         state.total_written() == before,
         "a closed writer accrues no further bytes",
     );
+}
+
+#[kani::proof]
+fn eof_never_writes() {
+    // A zero-length read must stop without attempting a write, whatever the
+    // writer's state.
+    let mut state = PumpState::from_parts(kani::any(), kani::any());
+    let before = state;
+    let (flow, invoked) = drive(&mut state, 0, any_write());
+    kani::assert(!invoked, "EOF must not attempt a write");
+    kani::assert(flow == Flow::Stop, "EOF stops the loop");
+    kani::assert(state == before, "EOF leaves the state unchanged");
 }
 
 #[kani::proof]
@@ -74,7 +97,10 @@ fn write_counts_bytes_and_latches_by_variant() {
     let bytes = match write {
         WriteEvent::Complete { bytes } | WriteEvent::Closed { bytes } => bytes,
     };
-    step(&mut state, ReadEvent::Chunk, Some(write));
+    let read_len: usize = kani::any();
+    kani::assume(read_len != 0);
+    let (_, invoked) = drive(&mut state, read_len, write);
+    kani::assert(invoked, "an open writer and a chunk must perform the write");
     kani::assert(
         state.total_written() == before.saturating_add(bytes),
         "accepted bytes are counted for either write outcome",
@@ -91,7 +117,7 @@ fn total_stays_monotonic_over_three_steps() {
     let mut state = PumpState::start();
     let mut before = state.total_written();
     for _ in 0..3 {
-        step(&mut state, any_read(), any_opt_write());
+        drive(&mut state, kani::any(), any_write());
         kani::assert(
             state.total_written() >= before,
             "the running total never decreases across iterations",
