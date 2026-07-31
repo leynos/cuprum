@@ -29,7 +29,9 @@ def test_spelling_target_checks_documentation_and_source() -> None:
         "\nspelling-helper-test:", maxsplit=1
     )[0]
 
-    assert {"'*.md'", "'*.py'", "'*.rs'"} <= set(spelling_recipe.split())
+    assert {"'*.md'", "'*.py'", "'*.rs'"} <= set(spelling_recipe.split()), (
+        "spelling target must include Markdown, Python, and Rust pathspecs"
+    )
 
 
 def test_rollout_scripts_support_python_313() -> None:
@@ -73,7 +75,9 @@ def test_rollout_generates_oxford_corrections(
     mappings = rollout.generate_word_mappings(rollout.Dictionary(stems=("organ",)))
 
     assert mappings["organise"] == "organize"
-    assert mappings["organize"] == "organize"
+    assert mappings["organize"] == "organize", (
+        "Oxford correction mappings must preserve 'organize'"
+    )
 
 
 def test_local_refresh_keeps_a_newer_cache(
