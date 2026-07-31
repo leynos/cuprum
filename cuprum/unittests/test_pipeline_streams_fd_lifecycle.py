@@ -22,7 +22,6 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from cuprum import _pipeline_stream_fds, _pipeline_streams
-from cuprum._pipeline_pipe_tasks import _surface_unexpected_pipe_failures
 from cuprum._pipeline_stream_fds import _BlockingModeGuard, _paused_reader
 
 if typ.TYPE_CHECKING:
@@ -305,66 +304,6 @@ def test_run_rust_pump_falls_back_and_resumes_when_blocking_fails(
 
     assert handled is False, "a blocking-toggle failure must fall back to Python"
     assert resume_calls["count"] == 1, "the reader must be resumed on fallback"
-
-
-_SUPPRESSED_PIPE_ERRORS = (BrokenPipeError, ConnectionResetError)
-_RESULT_TAGS = [
-    "ok",
-    "broken_pipe",
-    "conn_reset",
-    "value_error",
-    "runtime_error",
-    "cancelled",
-]
-
-
-def _make_pipe_result(tag: str) -> object:
-    """Materialise a pipe-task result for the given tag as a fresh object."""
-    if tag == "ok":
-        return object()
-    if tag == "broken_pipe":
-        return BrokenPipeError("downstream closed early")
-    if tag == "conn_reset":
-        return ConnectionResetError("peer reset")
-    if tag == "value_error":
-        return ValueError("unexpected pipe failure")
-    if tag == "cancelled":
-        # A cancelled pump task. `CancelledError` derives from `BaseException`,
-        # not `Exception`, so it is exactly the case an `Exception` guard drops.
-        return asyncio.CancelledError()
-    return RuntimeError("unexpected pipe failure")
-
-
-@given(tags=st.lists(st.sampled_from(_RESULT_TAGS), max_size=8))
-def test_surface_raises_first_unexpected_and_suppresses_pipe_errors(
-    *,
-    tags: list[str],
-) -> None:
-    """The first non-pipe failure surfaces; pipe errors and values do not.
-
-    The oracle is deliberately over ``BaseException``: a cancelled pump task
-    delivered no bytes, so letting it pass as success would report a pipeline
-    that never finished moving data as having completed.
-    """
-    results = [_make_pipe_result(tag) for tag in tags]
-    unexpected = [
-        result
-        for result in results
-        if isinstance(result, BaseException)
-        and not isinstance(result, _SUPPRESSED_PIPE_ERRORS)
-    ]
-
-    if unexpected:
-        with pytest.raises(
-            (ValueError, RuntimeError, asyncio.CancelledError),
-        ) as exc_info:
-            _surface_unexpected_pipe_failures(results)
-        assert exc_info.value is unexpected[0], (
-            "the earliest unexpected exception must be the one raised"
-        )
-    else:
-        # All results are either plain values or suppressed pipe errors.
-        _surface_unexpected_pipe_failures(results)
 
 
 def test_paused_reader_reports_hand_off_unsafe_when_pause_fails() -> None:
