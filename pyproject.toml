@@ -17,6 +17,7 @@ Repository = "https://github.com/leynos/cuprum"
 [dependency-groups]
 dev = [
     "crosshair-tool",
+    "df12-python-lints @ git+https://github.com/leynos/df12-python-lints.git@v0.1.0",
     "hypothesis",
     "hypothesis-crosshair",
     "interrogate",
@@ -208,6 +209,8 @@ max-bool-expr = 2
 max-locals = 10
 
 [tool.pylint.main]
+# Activate rules whose behaviour depends on Cuprum's supported Python baseline.
+py-version = "3.12"
 # Expand directory targets like tests even when they are not packages.
 recursive = true
 # Match the project file-size ceiling enforced during review.

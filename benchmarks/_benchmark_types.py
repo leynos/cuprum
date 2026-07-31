@@ -53,7 +53,7 @@ from benchmarks._benchmark_type_validators import (
 )
 from benchmarks._validation import _require_non_empty_string
 
-BackendName = typ.Literal["python", "rust"]
+type BackendName = typ.Literal["python", "rust"]
 
 
 class PipelineBenchmarkScenarioDict(typ.TypedDict):

@@ -212,7 +212,9 @@ def then_git_argv_matches(
     ref : str
         The expected reference argument.
     """
-    assert git_result.argv_with_program == (program, verb, ref)
+    assert git_result.argv_with_program == (program, verb, ref), (
+        "Expected git_result.argv_with_program == (program, verb, ref)"
+    )
 
 
 @then("a git ref validation error is raised")
@@ -255,7 +257,7 @@ def then_rsync_argv_matches(
         flag,
         rsync_paths.source,
         rsync_paths.destination,
-    )
+    ), "Expectation failed in then_rsync_argv_matches"
 
 
 @then(
@@ -284,4 +286,4 @@ def then_tar_argv_matches(
         "-f",
         tar_inputs.archive,
         *tar_inputs.sources,
-    )
+    ), "Expectation failed in then_tar_argv_matches"

@@ -22,7 +22,6 @@ import dataclasses as dc
 import json
 import typing as typ
 
-from benchmarks import tee_profile_scenarios as _scenarios
 from benchmarks.tee_profile_driver import (
     _base_parser,
     _matrix_exit_status,
@@ -50,13 +49,12 @@ from benchmarks.tee_profile_scenarios import (
     _line_callback_scenarios,
     _single_stage_no_callback_scenarios,
     _worker_command,
+    can_use_rust_backend,
 )
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
-
-_ORIGINAL_CAN_USE_RUST_BACKEND = _scenarios.can_use_rust_backend
 
 __all__ = [
     "ProfilerAdapter",
@@ -90,18 +88,6 @@ __all__ = [
     "run_profile_plan",
     "run_profile_scenario",
 ]
-
-
-def can_use_rust_backend() -> bool:
-    """Return whether Rust backend scenarios can run in this environment.
-
-    Returns
-    -------
-    bool
-        ``True`` when the Cuprum Rust extension is importable in the current
-        environment; ``False`` otherwise.
-    """
-    return _ORIGINAL_CAN_USE_RUST_BACKEND()
 
 
 def _multi_stage_backend_scenarios(

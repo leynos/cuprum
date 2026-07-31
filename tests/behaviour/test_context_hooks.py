@@ -129,14 +129,14 @@ def when_enter_scoped_echo_only(
 def then_echo_allowed_inner(behaviour_state: dict[str, object]) -> None:
     """Verify ECHO is allowed in inner scope."""
     inner = typ.cast("CuprumContext", behaviour_state["inner_context"])
-    assert inner.is_allowed(ECHO) is True
+    assert inner.is_allowed(ECHO) is True, "Expected inner.is_allowed(ECHO) is True"
 
 
 @then("ls is not allowed in the inner scope")
 def then_ls_not_allowed_inner(behaviour_state: dict[str, object]) -> None:
     """Verify LS is not allowed in inner scope."""
     inner = typ.cast("CuprumContext", behaviour_state["inner_context"])
-    assert inner.is_allowed(LS) is False
+    assert inner.is_allowed(LS) is False, "Expected inner.is_allowed(LS) is False"
 
 
 @when("I enter and exit a scoped context allowing only echo")
@@ -157,7 +157,9 @@ def when_enter_exit_scoped(
 def then_ls_allowed_outer(behaviour_state: dict[str, object]) -> None:
     """Verify LS is allowed after exiting inner scope."""
     after_exit = typ.cast("CuprumContext", behaviour_state["after_exit"])
-    assert after_exit.is_allowed(LS) is True
+    assert after_exit.is_allowed(LS) is True, (
+        "Expected after_exit.is_allowed(LS) is True"
+    )
 
 
 @given(
@@ -198,7 +200,7 @@ def when_invoke_before_hooks(
 def then_before_hooks_in_order(behaviour_state: dict[str, object]) -> None:
     """Verify before hooks ran in order."""
     call_order = typ.cast("list[int]", behaviour_state["call_order"])
-    assert call_order == [1, 2, 3]
+    assert call_order == [1, 2, 3], "Expected call_order == [1, 2, 3]"
 
 
 @given(
@@ -239,7 +241,7 @@ def when_invoke_after_hooks(
 def then_after_hooks_in_reverse(behaviour_state: dict[str, object]) -> None:
     """Verify after hooks ran in reverse order (inner first)."""
     call_order = typ.cast("list[int]", behaviour_state["after_call_order"])
-    assert call_order == [3, 2, 1]
+    assert call_order == [3, 2, 1], "Expected call_order == [3, 2, 1]"
 
 
 @given(
@@ -291,8 +293,12 @@ def when_detach_hook(
 @then("the hook is no longer in the context")
 def then_hook_not_in_context(behaviour_state: dict[str, object]) -> None:
     """Verify hook was removed after detach."""
-    assert behaviour_state["hook_in_context_before"] is True
-    assert behaviour_state["hook_in_context_after"] is False
+    assert behaviour_state["hook_in_context_before"] is True, (
+        'Expected behaviour_state["hook_in_context_before"] is True'
+    )
+    assert behaviour_state["hook_in_context_after"] is False, (
+        'Expected behaviour_state["hook_in_context_after"] is False'
+    )
 
 
 @given(
@@ -341,9 +347,13 @@ def then_threads_see_own_allowlist(behaviour_state: dict[str, object]) -> None:
         behaviour_state["thread_results"],
     )
     # thread1 allows ECHO only
-    assert results["thread1"] == (True, False)
+    assert results["thread1"] == (True, False), (
+        'Expected results["thread1"] == (True, False)'
+    )
     # thread2 allows LS only
-    assert results["thread2"] == (False, True)
+    assert results["thread2"] == (False, True), (
+        'Expected results["thread2"] == (False, True)'
+    )
 
 
 @given(
@@ -390,6 +400,10 @@ def then_tasks_see_own_allowlist(behaviour_state: dict[str, object]) -> None:
         behaviour_state["async_results"],
     )
     # task1 allows ECHO only
-    assert results["task1"] == (True, False)
+    assert results["task1"] == (True, False), (
+        'Expected results["task1"] == (True, False)'
+    )
     # task2 allows LS only
-    assert results["task2"] == (False, True)
+    assert results["task2"] == (False, True), (
+        'Expected results["task2"] == (False, True)'
+    )

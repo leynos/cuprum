@@ -239,15 +239,8 @@ class _EnvBackendSelector:
         """Return the metrics accumulator owned by this selector."""
         return self._metrics
 
-    def __call__(
-        self,
-        backend: BackendName,
-    ) -> contextlib.AbstractContextManager[None]:
-        """Return a context manager that activates *backend*."""
-        return self._activate(backend)
-
     @contextlib.contextmanager
-    def _activate(self, backend: BackendName) -> cabc.Iterator[None]:
+    def __call__(self, backend: BackendName) -> cabc.Iterator[None]:
         """Select the stream backend for parent-side pipeline pumping."""
         lock_start = self._clock()
         with _BACKEND_LOCK:

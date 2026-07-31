@@ -120,5 +120,7 @@ def then_output_matches_snapshot(
     snapshot: SnapshotAssertion,
 ) -> None:
     """Verify the pipeline output matches the expected snapshot."""
-    assert pipeline_result.ok
-    assert pipeline_result.stdout == snapshot
+    assert pipeline_result.ok, "Expected pipeline_result.ok"
+    assert pipeline_result.stdout == snapshot, (
+        "Expected pipeline_result.stdout == snapshot"
+    )

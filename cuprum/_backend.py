@@ -87,19 +87,23 @@ def _read_backend_env() -> StreamBackend:
 
 @functools.lru_cache(maxsize=1)
 def _check_rust_available() -> bool:
-    """Return whether the Rust extension is available, with caching.
+    """Report whether the optional Rust extension is available, with caching.
 
     Returns
     -------
     bool
-        ``True`` when the native Rust extension is importable and reports
+        True when the native Rust extension can be imported and reports
         availability.
 
     Notes
     -----
-    The result is cached for the lifetime of the process.  Call
-    ``_check_rust_available.cache_clear()`` to force a re-check (useful in
-    tests).
+    This resolver is the canonical availability query used by both the public
+    :func:`cuprum.is_rust_available` alias and stream-backend dispatch. Testing
+    overrides short-circuit the raw import probe and clear both backend caches.
+    Backend selection can still differ from this availability answer: forced
+    Python mode selects ``StreamBackend.PYTHON`` even when this function
+    returns ``True``. The result is cached for the lifetime of the process;
+    call ``_check_rust_available.cache_clear()`` to force a re-check in tests.
     """
     if _RUST_AVAILABILITY_FOR_TESTING is not None:
         _LOGGER.debug(

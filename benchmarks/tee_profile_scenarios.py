@@ -12,7 +12,7 @@ from benchmarks._benchmark_type_validators import (
     _validate_minimum_int,
 )
 from benchmarks.tee_profile_worker import TeeProfileWorkerConfig
-from cuprum import is_rust_available
+from cuprum import is_rust_available as can_use_rust_backend
 
 if typ.TYPE_CHECKING:
     import argparse
@@ -25,18 +25,6 @@ type ProfilerName = typ.Literal["none", "perf", "py-spy"]
 _DEFAULT_OUTPUT_DIR = pth.Path("dist/profiles")
 _DEFAULT_FIXTURE = pth.Path("dist/fixtures/seed12345-nowrap.b64")
 _DEFAULT_WRAPPED_FIXTURE = pth.Path("dist/fixtures/seed12345-wrap76.b64")
-
-
-def can_use_rust_backend() -> bool:
-    """Return whether Rust backend scenarios can run in this environment.
-
-    Returns
-    -------
-    bool
-        ``True`` when the Cuprum Rust extension is importable in the current
-        environment; ``False`` otherwise.
-    """
-    return is_rust_available()
 
 
 @dc.dataclass(frozen=True, slots=True)
