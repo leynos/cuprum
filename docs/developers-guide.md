@@ -1546,7 +1546,12 @@ change alters the architecture of the lint gate, update
 ## Maturin pin synchronization and native wheel tests
 
 The `tests/helpers/maturin.py` module provides shared helpers for tests that
-validate the maturin version pin contract and native wheel build output.
+validate the maturin version pin contract and native wheel build output. The
+wheel-artefact snapshot parsers (`wheel_build_snapshot` and its private
+helpers) live in the sibling module `tests/helpers/maturin_wheel.py` to keep
+each module below the Pylint module-length limit; `tests/helpers/maturin.py`
+re-exports `wheel_build_snapshot`, so import sites use
+`from tests.helpers.maturin import wheel_build_snapshot` unchanged.
 
 **Pin synchronization** (`test_maturin_pins_are_synchronized`) Asserts that the
 maturin version declared in `pyproject.toml`,
@@ -1599,6 +1604,47 @@ To update the snapshot after a maturin or PyO3 bump, run:
 uv run pytest cuprum/unittests/test_maturin_build.py \
     --snapshot-update -k test_maturin_wheel_build_snapshot
 ```
+
+### `maturin_script_locatable()` — native-wheel skip boundary
+
+`maturin_script_locatable()` (in `tests/helpers/maturin.py`) is the shared
+probe that decides whether the native-wheel build contract can actually run.
+It mirrors `maturin.__main__.get_maturin_path`: maturin resolves its bundled
+binary by scanning each `sysconfig` scheme's `scripts` directory for a file
+named `maturin`, keyed off the running interpreter's `sys.prefix` — **not**
+`sys.path` or `PATH`.
+
+This is deliberately narrower than `toolchain_available()`, and the two answer
+different questions:
+
+- `toolchain_available()` — is the `maturin` module importable and are `cargo`
+  and `rustc` on `PATH`? It uses `importlib.util.find_spec`, which succeeds
+  whenever the module is reachable via `sys.path`.
+- `maturin_script_locatable()` — can maturin find its own compiled script the
+  way `python -m maturin build` will at runtime?
+
+The two disagree in layered or ephemeral interpreters — most importantly the
+`uv run --with mutmut==3.6.0` overlay used by the mutation-testing workflow.
+There, the project virtualenv is on `sys.path` (so the module imports and
+`toolchain_available()` returns `True`), but `sys.prefix` points at a
+temporary environment that never received maturin's script, so
+`python -m maturin build` fails with ``Unable to find `maturin` script``
+before it can invoke `cargo`. This previously aborted the whole mutmut
+baseline. In a
+normal virtualenv (CI, `build-wheels.yml`, local `uv run pytest`) `sys.prefix`
+matches the install location, the probe returns `True`, and the real build
+runs — so the skip never masks a genuine regression.
+
+**Reuse policy.** Any test that shells out to `python -m maturin build` (or
+otherwise depends on maturin locating its own binary) — for example a new
+wheel-layout, packaging, or reproducibility test — should gate on **both**
+`toolchain_available()` and `maturin_script_locatable()`, skipping with a
+reason that names `sys.prefix` when the script is unreachable. Tests that only
+import the `maturin` Python module, or that inspect pins/metadata without
+building, need only the checks they already use and should **not** adopt this
+probe. Reuse the existing helper rather than re-deriving the `sysconfig` scan;
+extend `maturin_script_locatable()` in place if maturin changes how it locates
+its binary.
 
 ## Rust stream buffer-size validation
 

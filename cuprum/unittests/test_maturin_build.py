@@ -6,7 +6,9 @@ import importlib.metadata as im
 import re
 import shutil
 import subprocess  # noqa: S404 - tests assert trusted maturin command handling.
+import sys
 import typing as typ
+import zipfile
 
 import pytest
 
@@ -16,6 +18,7 @@ from tests.helpers.maturin import (
     _AARCH64_CONTAINER_USAGE_RE,
     MaturinBuildError,
     build_native_wheel_artifact,
+    maturin_script_locatable,
     read_expected_maturin_version,
     read_manylinux_aarch64_container_ref,
     read_maturin_pins,
@@ -50,6 +53,82 @@ def test_installed_maturin_matches_expected_pin() -> None:
     installed = im.version("maturin")
     assert installed == expected, (
         f"Expected maturin {expected}, but {installed} is installed"
+    )
+
+
+def test_maturin_script_locatable_true_when_script_present(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detection succeeds when a ``maturin`` script sits in a scheme's dir."""
+    scripts_dir = tmp_path / "bin"
+    scripts_dir.mkdir()
+    (scripts_dir / "maturin").write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "tests.helpers.maturin.sysconfig.get_scheme_names", lambda: ("posix_prefix",)
+    )
+    monkeypatch.setattr(
+        "tests.helpers.maturin.sysconfig.get_path", lambda *_a, **_k: str(scripts_dir)
+    )
+
+    assert maturin_script_locatable(), (
+        "a maturin script in a scheme's scripts directory must be discovered"
+    )
+
+
+def test_maturin_script_locatable_false_when_script_absent(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detection reports unavailable when no scheme dir has the script.
+
+    This reproduces the layered ``uv run --with ...`` overlay from issue
+    #211: the scripts directory exists (populated with unrelated tools such
+    as mutmut itself) but contains no file named ``maturin``, which is
+    exactly the condition under which maturin's own ``python -m maturin``
+    entry point fails with "Unable to find `maturin` script".
+    """
+    scripts_dir = tmp_path / "bin"
+    scripts_dir.mkdir()
+    (scripts_dir / "mutmut").write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "tests.helpers.maturin.sysconfig.get_scheme_names", lambda: ("posix_prefix",)
+    )
+    monkeypatch.setattr(
+        "tests.helpers.maturin.sysconfig.get_path", lambda *_a, **_k: str(scripts_dir)
+    )
+
+    assert not maturin_script_locatable(), (
+        "no maturin script is present, so discovery must report unavailable"
+    )
+
+
+def test_maturin_script_locatable_matches_windows_exe_launcher(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detection accepts ``maturin.exe``, the real launcher on Windows.
+
+    Matching is stem-based on purpose: maturin's own ``get_maturin_path``
+    compares ``os.path.splitext(f)[0]`` against ``"maturin"``, so it accepts
+    any extension. On the ``windows-2022`` wheel target in
+    ``.github/workflows/build-wheels.yml`` the installed launcher *is*
+    ``maturin.exe``. Narrowing this to an exact ``maturin`` filename would
+    make the probe report unavailable on Windows and silently skip the
+    native-wheel contract there, so this test pins the mirrored behaviour.
+    """
+    scripts_dir = tmp_path / "Scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "maturin.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(
+        "tests.helpers.maturin.sysconfig.get_scheme_names", lambda: ("nt",)
+    )
+    monkeypatch.setattr(
+        "tests.helpers.maturin.sysconfig.get_path", lambda *_a, **_k: str(scripts_dir)
+    )
+
+    assert maturin_script_locatable(), (
+        "stem-based matching must accept maturin.exe, the Windows launcher"
     )
 
 
@@ -188,6 +267,27 @@ def test_build_native_wheel_artifact_reports_maturin_stderr(
     )
 
 
+def test_wheel_build_snapshot_rejects_wheel_without_metadata(
+    tmp_path: pth.Path,
+) -> None:
+    """A wheel with WHEEL but no METADATA raises the documented error.
+
+    ``metadata_name`` is derived from the WHEEL entry by string
+    substitution rather than looked up in the archive, so without an
+    explicit membership check ``ZipFile.read`` would surface a ``KeyError``
+    that the helper's documented ``Raises`` contract does not advertise.
+    """
+    whl_path = tmp_path / "cuprum-0.0.0-py3-none-any.whl"
+    with zipfile.ZipFile(whl_path, "w") as archive:
+        archive.writestr(
+            "cuprum-0.0.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: maturin (1.0.0)\nRoot-Is-Purelib: false\n",
+        )
+
+    with pytest.raises(AssertionError, match=r"missing \.dist-info/METADATA"):
+        wheel_build_snapshot(whl_path)
+
+
 @pytest.mark.timeout(0)
 def test_maturin_wheel_build_snapshot(
     tmp_path: pth.Path,
@@ -198,6 +298,21 @@ def test_maturin_wheel_build_snapshot(
     expected = read_expected_maturin_version(root)
     if not toolchain_available():
         pytest.skip("Rust toolchain unavailable.")
+    if not maturin_script_locatable():
+        # A layered/ephemeral interpreter (for example, a `uv run --with
+        # ...` overlay, as used by the mutmut mutation-testing workflow)
+        # can import the maturin module via sys.path while sys.prefix
+        # points at a temporary environment that never received maturin's
+        # own compiled script. maturin's `python -m maturin` entry point
+        # then fails with "Unable to find `maturin` script" before it can
+        # invoke cargo. See tests.helpers.maturin.maturin_script_locatable
+        # for the detection logic, which mirrors maturin's own lookup.
+        pytest.skip(
+            "maturin's compiled script is not locatable via this "
+            "interpreter's sysconfig scripts directories (sys.prefix="
+            f"{sys.prefix!r}); this is expected in layered/ephemeral "
+            "interpreters such as a `uv run --with ...` overlay."
+        )
 
     wheel_path = build_native_wheel_artifact(root, tmp_path / "wheelhouse")
     snapshot_payload = wheel_build_snapshot(wheel_path)
