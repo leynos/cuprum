@@ -1545,14 +1545,25 @@ change alters the architecture of the lint gate, update
 
 ## Maturin pin synchronization and native wheel tests
 
-These checks live in `cuprum/unittests/test_maturin_build.py`, and the helpers
-behind them are split across three boundaries.
+These checks span three test modules, one per concern —
+`test_maturin_pins.py`, `test_maturin_toolchain.py`, and
+`test_maturin_build.py` — and the helpers behind them are split across three
+boundaries.
 
-The **pin-synchronization** checks are inlined in that test module as private
-helpers (`_read_maturin_pins`, `_read_expected_maturin_version`,
-`_read_manylinux_aarch64_container_ref`) alongside the module-private pin
-regexes they use, all local to that test file: they read repository files, have
-a single consumer, and gain nothing from indirection.
+The **pin-synchronization** checks live in
+`cuprum/unittests/test_maturin_pins.py`, with their readers and regexes local
+to that module: they read repository
+files, have a single consumer, and gain nothing from indirection. The one
+exception is `read_expected_maturin_version`, which sits in
+`cuprum/unittests/_maturin_pin_support.py` because it genuinely has two
+consumers — the pin comparison here and the wheel snapshot's `Generator`
+assertion. That is the second concrete consumer this policy asks for before
+sharing anything, so it is shared and the rest are not.
+
+The **availability detectors** are tested together in
+`cuprum/unittests/test_maturin_toolchain.py`: `toolchain_available` and
+`maturin_script_locatable` answer adjacent questions about the same build, and
+the wheel test is gated on both.
 
 The **wheel build and toolchain detection** stay in `tests/helpers/maturin.py`,
 because they wrap `subprocess` and `sysconfig` probing that does not inline

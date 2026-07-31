@@ -5,7 +5,7 @@ from __future__ import annotations
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from cuprum.unittests.test_maturin_build import _MANYLINUX_CONTAINER_SHA256_RE
+from cuprum.unittests.test_maturin_pins import _MANYLINUX_CONTAINER_SHA256_RE
 
 _MANYLINUX_IMAGE = "ghcr.io/rust-cross/manylinux_2_28-cross"
 

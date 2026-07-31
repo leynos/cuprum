@@ -15,10 +15,11 @@ import typing as typ
 import pytest
 
 from tests.helpers import maturin as maturin_helper
-from tests.helpers.maturin import toolchain_available
+from tests.helpers.maturin import maturin_script_locatable, toolchain_available
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    import pathlib as pth
     import types
 
 
@@ -150,3 +151,79 @@ def test_toolchain_available_propagates_a_non_import_error(
 
     with pytest.raises(RuntimeError, match="import crashed"):
         toolchain_available()
+
+
+def test_maturin_script_locatable_true_when_script_present(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detection succeeds when a ``maturin`` script sits in a scheme's dir."""
+    scripts_dir = tmp_path / "bin"
+    scripts_dir.mkdir()
+    (scripts_dir / "maturin").write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "tests.helpers.maturin.sysconfig.get_scheme_names", lambda: ("posix_prefix",)
+    )
+    monkeypatch.setattr(
+        "tests.helpers.maturin.sysconfig.get_path", lambda *_a, **_k: str(scripts_dir)
+    )
+
+    assert maturin_script_locatable(), (
+        "a maturin script in a scheme's scripts directory must be discovered"
+    )
+
+
+def test_maturin_script_locatable_false_when_script_absent(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detection reports unavailable when no scheme dir has the script.
+
+    This reproduces the layered ``uv run --with ...`` overlay from issue
+    #211: the scripts directory exists (populated with unrelated tools such
+    as mutmut itself) but contains no file named ``maturin``, which is
+    exactly the condition under which maturin's own ``python -m maturin``
+    entry point fails with "Unable to find `maturin` script".
+    """
+    scripts_dir = tmp_path / "bin"
+    scripts_dir.mkdir()
+    (scripts_dir / "mutmut").write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "tests.helpers.maturin.sysconfig.get_scheme_names", lambda: ("posix_prefix",)
+    )
+    monkeypatch.setattr(
+        "tests.helpers.maturin.sysconfig.get_path", lambda *_a, **_k: str(scripts_dir)
+    )
+
+    assert not maturin_script_locatable(), (
+        "no maturin script is present, so discovery must report unavailable"
+    )
+
+
+def test_maturin_script_locatable_matches_windows_exe_launcher(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detection accepts ``maturin.exe``, the real launcher on Windows.
+
+    Matching is stem-based on purpose: maturin's own ``get_maturin_path``
+    compares ``os.path.splitext(f)[0]`` against ``"maturin"``, so it accepts
+    any extension. On the ``windows-2022`` wheel target in
+    ``.github/workflows/build-wheels.yml`` the installed launcher *is*
+    ``maturin.exe``. Narrowing this to an exact ``maturin`` filename would
+    make the probe report unavailable on Windows and silently skip the
+    native-wheel contract there, so this test pins the mirrored behaviour.
+    """
+    scripts_dir = tmp_path / "Scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "maturin.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(
+        "tests.helpers.maturin.sysconfig.get_scheme_names", lambda: ("nt",)
+    )
+    monkeypatch.setattr(
+        "tests.helpers.maturin.sysconfig.get_path", lambda *_a, **_k: str(scripts_dir)
+    )
+
+    assert maturin_script_locatable(), (
+        "stem-based matching must accept maturin.exe, the Windows launcher"
+    )
