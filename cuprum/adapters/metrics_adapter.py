@@ -352,11 +352,7 @@ class MetricsHook:
 
     @staticmethod
     def _extract_labels(event: ExecEvent) -> dict[str, str]:
-        """Extract low-cardinality label values from an event.
-
-        Labels deliberately use only the program and project tag;
-        high-cardinality fields (pid, argv, lines) are excluded by design.
-        """
+        """Extract low-cardinality label values from an event."""
         # Labels deliberately use only the program and project tag;
         # high-cardinality fields (pid, argv, lines) are excluded by design.
         return {

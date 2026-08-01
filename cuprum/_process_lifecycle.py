@@ -146,13 +146,10 @@ async def _cleanup_pipeline_on_error(
     pipe_tasks: list[asyncio.Task[None]],
     cancel_grace: float,
 ) -> list[object]:
-    """Clean up pipeline resources after an error or cancellation.
-
-    Terminates all processes and collects pipe task results. Stream consumer
-    tasks are owned by the caller (``_run_pipeline``).
-
-    Returns the collected pipe results for use in the finally block.
-    """
+    """Clean up pipeline resources after an error or cancellation."""
+    # Terminates every process and collects the pipe task results, which are
+    # returned for the caller's ``finally`` block. Stream consumer tasks are
+    # owned by the caller (``_run_pipeline``), not by this helper.
     await _terminate_all_shielded(processes, cancel_grace)
     return await _collect_pipe_results(pipe_tasks)
 
@@ -162,27 +159,7 @@ def _merge_env(
     *,
     include_context_overlay: bool = True,
 ) -> dict[str, str] | None:
-    """Overlay environment variables on the live :func:`os.environ`.
-
-    By default, the scoped overlay from the active :class:`CuprumContext`
-    (managed via :func:`cuprum.context.env`) is layered first, then ``extra``
-    — typically the per-call :attr:`ExecutionContext.env` — wins over it. The
-    process environment is read at spawn time (right now), so any updates
-    callers make to ``os.environ`` after Cuprum was imported are reflected in
-    the subprocess.
-
-    When both layers are empty the function returns ``None`` so the subprocess
-    inherits ``os.environ`` directly without an extra copy.
-
-    Parameters
-    ----------
-    extra:
-        Per-call overlay, usually :attr:`ExecutionContext.env`.
-    include_context_overlay:
-        Set to ``False`` to bypass the scoped overlay. Used by call sites
-        that resolve the overlay separately (for example to record the
-        effective overlay in observation events).
-    """
+    """Overlay environment variables on the live :func:`os.environ`."""
     overlay = current_context().env_overlay if include_context_overlay else None
     return resolve_env(overlay, extra)
 
@@ -191,17 +168,13 @@ def _build_spawn_observations(
     parts: tuple[SafeCmd, ...],
     config: _PipelineRunConfig,
 ) -> tuple[_StageObservation, ...]:
-    """Build per-stage observation state for spawning a pipeline.
-
-    Delegates to the canonical pipeline observation builder so the
-    env-overlay resolution and observation tag schema are computed in exactly
-    one place, then enforces this entry point's additional constraint: spawn
-    helpers must be handed explicit observations when observe hooks exist,
-    because the pending-task list created here is discarded.
-    """
+    """Build per-stage observation state for spawning a pipeline."""
     from cuprum._pipeline_internals import _build_pipeline_observations
 
     observations = _build_pipeline_observations(parts, config, pending_tasks=[])
+    # The pending-task list built here is discarded, so observe hooks (which
+    # rely on it) cannot run on the spawn path; callers must supply explicit
+    # observations instead.
     if any(obs.hooks.observe_hooks for obs in observations):
         msg = "spawn helpers require explicit observations when observe hooks exist"
         raise RuntimeError(msg)
@@ -289,16 +262,13 @@ def _stages_to_terminate(
     failure_index: int,
     done: cabc.Sequence[bool],
 ) -> list[int]:
-    """Return the stage indices to terminate after a fail-fast, each once.
-
-    This is the pure selection behind
-    [`_terminate_pipeline_remaining_stages`][cuprum._process_lifecycle._terminate_pipeline_remaining_stages].
-    Every stage is scheduled at most once — indices come from a single
-    enumeration — and two stages are never scheduled: the failed stage, which
-    owns its own exit, and any already-finished stage, which needs no
-    termination. Cleanup is therefore idempotent: a second pass over settled
-    stages (all ``done``) selects nothing.
-    """
+    """Return the stage indices to terminate after a fail-fast, each once."""
+    # This is the pure selection behind _terminate_pipeline_remaining_stages.
+    # Every stage is scheduled at most once — indices come from a single
+    # enumeration — and two stages are never scheduled: the failed stage, which
+    # owns its own exit, and any already-finished stage, which needs no
+    # termination. Cleanup is therefore idempotent: a second pass over settled
+    # stages (all ``done``) selects nothing.
     return [
         idx for idx, is_done in enumerate(done) if idx != failure_index and not is_done
     ]

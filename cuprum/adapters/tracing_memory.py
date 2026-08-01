@@ -67,10 +67,7 @@ class InMemorySpan:
         value : object
             Attribute value, stored verbatim.
 
-        Returns
-        -------
-        None
-            The span's :attr:`attributes` mapping is mutated in place.
+        The span's :attr:`attributes` mapping is mutated in place.
         """
         self.attributes[key] = value
 
@@ -91,10 +88,7 @@ class InMemorySpan:
             event; when ``None`` (the default), an empty attribute mapping is
             recorded.
 
-        Returns
-        -------
-        None
-            The new event is appended to :attr:`events` in place.
+        The new event is appended to :attr:`events` in place.
         """
         self.events.append((name, dict(attributes) if attributes else {}))
 
@@ -106,22 +100,14 @@ class InMemorySpan:
         ok : bool
             Keyword-only. ``True`` marks the span as successful and ``False``
             marks it as failed; the value is stored on :attr:`status_ok`.
-
-        Returns
-        -------
-        None
-            :attr:`status_ok` is updated in place.
         """
         self.status_ok = ok
 
     def end(self) -> None:
         """Mark the span as ended.
 
-        Returns
-        -------
-        None
-            Sets :attr:`ended` to ``True``. No further recording is expected
-            after a span has ended, though the double does not enforce this.
+        Sets :attr:`ended` to ``True``. No further recording is expected
+        after a span has ended, though the double does not enforce this.
         """
         self.ended = True
 

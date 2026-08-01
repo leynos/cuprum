@@ -275,11 +275,7 @@ async def _try_rust_pump(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter | None,
 ) -> bool:
-    """Attempt to route the pipe hop through the Rust pump.
-
-    Returns ``True`` when Rust handled the pump, ``False`` to fall back
-    to the Python implementation.
-    """
+    """Attempt to route the pipe hop through the Rust pump."""
     rust_fd_attempt_hook = _PUMP_STREAM_DISPATCH_TEST_HOOKS.on_rust_fd_path_attempt
     if rust_fd_attempt_hook is not None:
         rust_fd_attempt_hook()

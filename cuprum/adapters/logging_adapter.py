@@ -177,7 +177,19 @@ class JsonLoggingFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
-        """Format the log record as a JSON string."""
+        """Format the log record as a JSON string.
+
+        Parameters
+        ----------
+        record : logging.LogRecord
+            The log record to render as a JSON object.
+
+        Returns
+        -------
+        str
+            The record serialized as a JSON object, including
+            ``cuprum_*`` extra fields.
+        """
         output: dict[str, object] = {
             "timestamp": self.formatTime(record),
             "level": record.levelname,
