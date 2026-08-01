@@ -166,12 +166,13 @@ async def _drain_tasks_during_cleanup(
     pending_tasks: list[asyncio.Task[None]],
     active_error: BaseException,
     *,
-    message: str = _PIPELINE_FINALIZATION_ERROR,
+    message: str,
 ) -> None:
     """Drain observe tasks in cleanup, aggregating a failure with ``active_error``.
 
-    Shared by the pipeline and single-command cleanup paths; ``message`` names
-    whichever finalization failed.
+    Shared by the pipeline and single-command cleanup paths. ``message`` is
+    required rather than defaulted so a caller cannot silently inherit another
+    path's finalization label.
     """
     try:
         await _wait_for_exec_hook_tasks(pending_tasks)
@@ -195,7 +196,9 @@ async def _finalize_pipeline_execution(
     try:
         _run_pipeline_after_hooks(parts, hooks_by_stage, stage_results)
     except BaseException as after_hook_error:
-        await _drain_tasks_during_cleanup(pending_tasks, after_hook_error)
+        await _drain_tasks_during_cleanup(
+            pending_tasks, after_hook_error, message=_PIPELINE_FINALIZATION_ERROR
+        )
         raise
     await _wait_for_exec_hook_tasks(pending_tasks)
 
@@ -230,7 +233,9 @@ async def _run_pipeline(
             started_at=started_at,
         )
     except BaseException as spawn_error:
-        await _drain_tasks_during_cleanup(pending_tasks, spawn_error)
+        await _drain_tasks_during_cleanup(
+            pending_tasks, spawn_error, message=_PIPELINE_FINALIZATION_ERROR
+        )
         raise
     try:
         inputs = await _collect_pipeline_inputs(
@@ -239,11 +244,15 @@ async def _run_pipeline(
             config,
         )
     except _sh_module().TimeoutExpired as timeout_error:
-        await _drain_tasks_during_cleanup(pending_tasks, timeout_error)
+        await _drain_tasks_during_cleanup(
+            pending_tasks, timeout_error, message=_PIPELINE_FINALIZATION_ERROR
+        )
         raise
     except BaseException as run_error:
         await _cancel_stream_tasks(spawn.stderr_tasks, spawn.stdout_task)
-        await _drain_tasks_during_cleanup(pending_tasks, run_error)
+        await _drain_tasks_during_cleanup(
+            pending_tasks, run_error, message=_PIPELINE_FINALIZATION_ERROR
+        )
         raise
     stage_results = _build_pipeline_stage_results(
         parts,
