@@ -6,6 +6,7 @@ import ast
 import email.message
 import importlib
 import json
+import logging
 import os
 import tomllib
 import typing as typ
@@ -16,6 +17,7 @@ from pathlib import Path
 import pytest
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import types
 
 SCRIPT_DIRECTORY = Path(__file__).resolve().parents[1]
@@ -43,6 +45,50 @@ def rollout_modules_fixture(
     return cache, rollout, generator
 
 
+@pytest.fixture(name="refresh_module")
+def refresh_module_fixture(
+    rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
+) -> types.ModuleType:
+    """Import the cache-refresh module through the runtime module path.
+
+    Returns
+    -------
+    types.ModuleType
+        The ``typos_rollout_refresh`` module.
+    """
+    _ = rollout_modules  # Ensures the script directory is on ``sys.path``.
+    return importlib.import_module("typos_rollout_refresh")
+
+
+def _patch_https_opener(
+    monkeypatch: pytest.MonkeyPatch,
+    open_response: cabc.Callable[..., object],
+) -> None:
+    """Route HTTPS fetches through *open_response*, asserting the redirect policy.
+
+    The refresh module builds its own opener so the HTTPS-only redirect handler
+    applies, so tests patch ``build_opener`` rather than ``urlopen``.
+    """
+    refresh = importlib.import_module("typos_rollout_refresh")
+
+    class _StubOpener:
+        """Minimal stand-in for ``urllib.request.OpenerDirector``."""
+
+        def open(self, *args: object, **kwargs: object) -> object:
+            """Delegate to the supplied response factory."""
+            return open_response(*args, **kwargs)
+
+    def build_opener(*handlers: object) -> _StubOpener:
+        """Return the stub opener once the redirect policy is confirmed."""
+        assert any(
+            isinstance(handler, refresh._HttpsOnlyRedirectHandler)
+            for handler in handlers
+        ), "HTTPS refresh must install the HTTPS-only redirect handler"
+        return _StubOpener()
+
+    monkeypatch.setattr(urllib.request, "build_opener", build_opener)
+
+
 def _dictionary_text(stem: str = "organ") -> str:
     """Return a minimal valid shared-dictionary document."""
     return (
@@ -61,8 +107,10 @@ def test_rollout_generates_oxford_corrections(
 
     mappings = rollout.generate_word_mappings(rollout.Dictionary(stems=("organ",)))
 
-    assert mappings["organize"] == "organize"
-    assert mappings["organise"] == "organize"
+    assert mappings["organize"] == "organize", "an Oxford spelling must map to itself"
+    assert mappings["organise"] == "organize", (
+        "a plain-British spelling must map to its Oxford form"
+    )
 
 
 def test_local_refresh_keeps_a_newer_cache(
@@ -85,7 +133,9 @@ def test_local_refresh_keeps_a_newer_cache(
 
     result = rollout.refresh_base(source, cache, metadata=metadata)
 
-    assert result.status == "current"
+    assert result.status == "current", (
+        "a newer cache must not be replaced by an older local authority"
+    )
     assert rollout.load_dictionary(cache).stems == ("newer",)
 
 
@@ -101,14 +151,19 @@ def test_https_failure_reuses_valid_tracked_config(
 
     def unavailable(*_args: object, **_kwargs: object) -> None:
         """Model an unavailable HTTPS authority."""
-        raise urllib.error.URLError("offline")
+        message = "offline"
+        raise urllib.error.URLError(message)
 
     monkeypatch.setattr(rollout, "refresh_base", unavailable)
 
     result = generator.main(repository=tmp_path, source="https://example.invalid/base")
 
-    assert result.status == "tracked-config"
-    assert result.cache == tracked_config
+    assert result.status == "tracked-config", (
+        "an unreachable HTTPS authority must fall back to the tracked config"
+    )
+    assert result.cache == tracked_config, (
+        "the fallback must point at the tracked configuration file"
+    )
 
 
 def test_dictionary_validation_rejects_invalid_documents(
@@ -162,10 +217,18 @@ def test_render_and_write_are_deterministic_valid_toml(
     first = rollout.render_typos_config(dictionary)
     rollout.write_config(output, dictionary)
 
-    assert first == rollout.render_typos_config(dictionary)
-    assert output.read_text(encoding="utf-8") == first
-    assert tomllib.loads(first)["default"]["locale"] == "en-gb"
-    assert list(output.parent.glob(".typos.toml.*")) == []
+    assert first == rollout.render_typos_config(dictionary), (
+        "rendering must be deterministic across repeated calls"
+    )
+    assert output.read_text(encoding="utf-8") == first, (
+        "the written file must match the rendered document"
+    )
+    assert tomllib.loads(first)["default"]["locale"] == "en-gb", (
+        "the rendered document must be valid TOML with the en-gb locale"
+    )
+    assert list(output.parent.glob(".typos.toml.*")) == [], (
+        "the atomic write must leave no temporary files behind"
+    )
 
 
 def test_offline_refresh_requires_and_reuses_valid_cache(
@@ -187,7 +250,9 @@ def test_offline_refresh_requires_and_reuses_valid_cache(
         "https://example.invalid/base", cache, metadata=metadata, offline=True
     )
 
-    assert result.status == "offline-cache"
+    assert result.status == "offline-cache", (
+        "offline mode must reuse the existing valid cache"
+    )
 
 
 def test_local_refresh_switches_authority_and_records_metadata(
@@ -208,7 +273,9 @@ def test_local_refresh_switches_authority_and_records_metadata(
 
     result = rollout.refresh_base(second, cache, metadata=metadata)
 
-    assert result.status == "refreshed"
+    assert result.status == "refreshed", (
+        "a newer local authority must refresh the cache"
+    )
     assert rollout.load_dictionary(cache).stems == ("second",)
     assert json.loads(metadata.read_text(encoding="utf-8"))["source"] == str(
         second.resolve()
@@ -248,11 +315,11 @@ def test_http_refresh_uses_validators_and_preserves_newer_cache(
 
     def open_response(request: urllib.request.Request, *, timeout: float) -> Response:
         """Capture the request passed to the network boundary."""
-        assert timeout == 30.0
+        assert timeout == 30.0, "the HTTPS fetch must use the configured 30s timeout"
         requests.append(request)
         return Response()
 
-    monkeypatch.setattr(rollout.urllib.request, "urlopen", open_response)
+    _patch_https_opener(monkeypatch, open_response)
 
     first = rollout.refresh_base(
         "https://example.test/base.toml", cache, metadata=metadata
@@ -261,9 +328,13 @@ def test_http_refresh_uses_validators_and_preserves_newer_cache(
         "https://example.test/base.toml", cache, metadata=metadata
     )
 
-    assert first.status == "refreshed"
-    assert second.status == "current"
-    assert requests[1].get_header("If-none-match") == '"estate-v1"'
+    assert first.status == "refreshed", "the first refresh must populate the cache"
+    assert second.status == "current", (
+        "a validated second refresh must report the cache as current"
+    )
+    assert requests[1].get_header("If-none-match") == '"estate-v1"', (
+        "the conditional request must carry the saved ETag validator"
+    )
 
 
 def test_remote_failure_reuses_only_a_valid_stale_cache(
@@ -281,7 +352,7 @@ def test_remote_failure_reuses_only_a_valid_stale_cache(
         message = "offline"
         raise urllib.error.URLError(message)
 
-    monkeypatch.setattr(rollout.urllib.request, "urlopen", fail)
+    _patch_https_opener(monkeypatch, fail)
 
     with pytest.raises(urllib.error.URLError):
         rollout.refresh_base("https://example.test/base", cache, metadata=metadata)
@@ -289,7 +360,9 @@ def test_remote_failure_reuses_only_a_valid_stale_cache(
     cache.write_text(_dictionary_text(), encoding="utf-8")
     result = rollout.refresh_base("https://example.test/base", cache, metadata=metadata)
 
-    assert result.status == "stale-cache"
+    assert result.status == "stale-cache", (
+        "an unreachable authority must fall back to the stale cache"
+    )
 
 
 def test_remote_refresh_rejects_insecure_and_invalid_content(
@@ -322,35 +395,35 @@ def test_remote_refresh_rejects_insecure_and_invalid_content(
         def __exit__(self, *_args: object) -> None:
             """Leave the fake response context."""
 
-    monkeypatch.setattr(
-        rollout.urllib.request, "urlopen", lambda *_args, **_kwargs: InvalidResponse()
-    )
+    _patch_https_opener(monkeypatch, lambda *_args, **_kwargs: InvalidResponse())
 
     with pytest.raises(tomllib.TOMLDecodeError):
         rollout.refresh_base("https://example.test/base", cache, metadata=metadata)
-    assert not cache.exists()
+    assert not cache.exists(), "an invalid download must not leave a cache behind"
 
 
 def test_metadata_reader_handles_invalid_and_non_object_json(
-    rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
+    refresh_module: types.ModuleType,
     tmp_path: Path,
 ) -> None:
     """Malformed or non-object freshness metadata is safely ignored."""
-    _, rollout, _ = rollout_modules
     metadata = tmp_path / "cache.json"
 
     metadata.write_text("not-json", encoding="utf-8")
-    assert rollout._read_metadata(metadata) == {}
+    assert refresh_module._read_metadata(metadata) == {}, (
+        "malformed metadata must degrade to an empty mapping"
+    )
     metadata.write_text("[]", encoding="utf-8")
-    assert rollout._read_metadata(metadata) == {}
+    assert refresh_module._read_metadata(metadata) == {}, (
+        "non-object metadata must degrade to an empty mapping"
+    )
 
 
 def test_http_error_translation_handles_not_modified_and_stale_cache(
-    rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
+    refresh_module: types.ModuleType,
     tmp_path: Path,
 ) -> None:
     """HTTP status handling distinguishes current, stale and absent data."""
-    _, rollout, _ = rollout_modules
     cache = tmp_path / "cache.toml"
     cache.write_text(_dictionary_text(), encoding="utf-8")
     headers = email.message.Message()
@@ -361,24 +434,80 @@ def test_http_error_translation_handles_not_modified_and_stale_cache(
         "https://example.test/base", 503, "unavailable", headers, None
     )
 
-    assert rollout._http_error_result(cache, not_modified).status == "current"
-    assert rollout._http_error_result(cache, unavailable).status == "stale-cache"
+    assert refresh_module._http_error_result(cache, not_modified).status == "current"
+    assert refresh_module._http_error_result(cache, unavailable).status == "stale-cache"
     cache.unlink()
     with pytest.raises(urllib.error.HTTPError):
-        rollout._http_error_result(cache, unavailable)
+        refresh_module._http_error_result(cache, unavailable)
 
 
 def test_remote_freshness_uses_dates_and_falls_back_on_invalid_values(
-    rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
+    refresh_module: types.ModuleType,
 ) -> None:
     """Last-Modified comparison remains conservative for malformed dates."""
-    _, rollout, _ = rollout_modules
-
-    assert rollout._remote_is_not_newer(
+    assert refresh_module._remote_is_not_newer(
         {"last_modified": "Fri, 10 Jul 2026 08:00:00 GMT"},
         {"Last-Modified": "Fri, 10 Jul 2026 07:00:00 GMT"},
     )
-    assert rollout._remote_is_not_newer(
+    assert refresh_module._remote_is_not_newer(
         {"last_modified": "invalid"}, {"Last-Modified": "invalid"}
     )
-    assert not rollout._remote_is_not_newer({}, {"Last-Modified": "invalid"})
+    assert not refresh_module._remote_is_not_newer({}, {"Last-Modified": "invalid"})
+
+
+def test_https_redirect_to_http_is_rejected(
+    refresh_module: types.ModuleType,
+) -> None:
+    """A redirect that downgrades HTTPS to HTTP is refused before reissue."""
+    handler = refresh_module._HttpsOnlyRedirectHandler()
+    request = urllib.request.Request("https://example.test/base.toml")
+    headers = email.message.Message()
+
+    allowed = handler.redirect_request(
+        request, None, 302, "Found", headers, "https://cdn.example.test/base.toml"
+    )
+
+    assert allowed is not None, "an HTTPS redirect target must be followed"
+    assert allowed.full_url == "https://cdn.example.test/base.toml", (
+        "an HTTPS redirect target must be followed"
+    )
+
+    with pytest.raises(urllib.error.URLError, match="must stay on HTTPS"):
+        handler.redirect_request(
+            request, None, 302, "Found", headers, "http://cdn.example.test/base.toml"
+        )
+
+
+def test_https_redirect_downgrade_is_logged_and_counted(
+    refresh_module: types.ModuleType,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A refused downgrade emits a structured warning and bumps the counter."""
+    handler = refresh_module._HttpsOnlyRedirectHandler()
+    request = urllib.request.Request("https://example.test/base.toml")
+    headers = email.message.Message()
+    before = refresh_module.REFRESH_DEGRADATIONS["https_redirect_downgrade"]
+
+    with (
+        caplog.at_level(logging.WARNING, logger=refresh_module.__name__),
+        pytest.raises(urllib.error.URLError),
+    ):
+        handler.redirect_request(
+            request, None, 302, "Found", headers, "http://cdn.example.test/base.toml"
+        )
+
+    assert (
+        refresh_module.REFRESH_DEGRADATIONS["https_redirect_downgrade"] == before + 1
+    ), "a refused downgrade must increment the bounded degradation counter"
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "typos_rollout.https_redirect_downgrade"
+    ]
+    assert records, "the downgrade must emit a structured warning"
+    assert records[0].redirect_scheme == "http", (
+        "the rejected scheme must be recorded for diagnosis"
+    )
+    assert "cdn.example.test" not in caplog.text, (
+        "the redirect URL must never be logged"
+    )
