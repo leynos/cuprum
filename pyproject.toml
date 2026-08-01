@@ -81,6 +81,7 @@ select = [
     "PERF",
     "TRY",
     "D",
+    "DOC",      # Enforce docstring signature/return/yield/raises consistency
     "ANN",
     "C90",
     "PLR",
@@ -191,6 +192,12 @@ typing = "typ"
 # Enforce NumPy docstring style
 convention = "numpy"
 
+[tool.ruff.lint.pydoclint]
+# Per repository convention (.rules/python-00.md), NumPy-format section
+# docstrings are for public APIs; private helpers use concise single-line
+# docstrings. Exempt one-line docstrings from the DOC signature checks so those
+# private helpers need not carry Returns/Yields/Raises sections.
+ignore-one-line-docstrings = true
 [tool.ruff.lint.mccabe]
 max-complexity = 8
 

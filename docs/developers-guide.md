@@ -2060,6 +2060,9 @@ The canonical lint configuration lives in `pyproject.toml`:
 - `[tool.ruff.lint.flake8-tidy-imports.banned-api]` bans deprecated
   `typing.*` aliases and explains each replacement.
 - `[tool.ruff.lint.pylint]` sets Ruff's Pylint-derived thresholds.
+- `[tool.ruff.lint.pydocstyle]` and `[tool.ruff.lint.pydoclint]` configure the
+  `DOC` docstring-consistency gate; see
+  [Docstring consistency gate](#docstring-consistency-gate) below.
 - `[tool.pylint.main]`, `[tool.pylint.design]`, and
   `[tool.pylint."messages control"]` configure the second-tier Pylint pass.
 
@@ -2101,6 +2104,53 @@ family:
 
 When changing either suppression, keep the `pyproject.toml` comments and this
 section in step.
+
+### Docstring consistency gate
+
+Ruff's `DOC` rule family, configured under `[tool.ruff.lint.pydocstyle]` (NumPy
+convention, section order Parameters -> Returns -> Raises) and
+`[tool.ruff.lint.pydoclint]`, checks that a docstring's structured sections
+match the signature it documents:
+
+- `DOC201` — a value-returning function documents no `Returns` section.
+- `DOC402` — a generator documents no `Yields` section.
+- `DOC501` — an exception raised directly in the function body is not
+  documented in a `Raises` section.
+- `DOC502` — a documented exception is not raised directly in the function
+  body (it only propagates from a callee).
+
+`ruff==0.14.7` is pinned in the dev dependency group because the `DOC` rules
+are preview-only (`[tool.ruff]` sets `preview = true`). An unpinned Ruff could
+change which docstrings pass the gate and make it non-reproducible between
+machines and CI.
+
+`[tool.ruff.lint.pydoclint]` sets `ignore-one-line-docstrings = true`, so a
+single-line docstring needs no structured sections at all. This drives a
+recurring judgement call: a multi-line docstring on a value-returning function
+must carry a `Returns` section, so there are exactly two legal shapes — a
+one-line summary, or a multi-line docstring with the required sections. An
+explanatory paragraph cannot be kept while dropping `Returns`. When a private
+helper's rationale is worth keeping but the structured sections would be
+noise, the established pattern is to collapse the docstring to one line and
+move the rationale to an inline `#` comment immediately above the relevant
+code.
+
+When an exception merely propagates from a callee rather than being raised by
+a literal `raise` in the function's own body, documenting it trips `DOC502`.
+The house convention is a scoped suppression on the docstring's closing line,
+with a justification naming where the exception comes from:
+
+```python
+    """Run the command.
+
+    Raises
+    ------
+    ForbiddenProgramError
+        If the program is not permitted by the active context allowlist.
+    """  # noqa: DOC502 - propagates from the allowlist check
+```
+
+Use only one such suppression per docstring.
 
 ## Maturin pin synchronization and native wheel tests
 
