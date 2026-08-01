@@ -180,6 +180,7 @@ spelling-helper-test: build ## Validate the shared spelling-policy integration
 	@PYTHONPATH=scripts $(UV_RUN_ENV) uv run --python 3.13 \
 		--with pytest-cov==7.0.0 \
 		python -m pytest scripts/tests/test_typos_rollout.py \
+		scripts/tests/test_typos_rollout_refresh.py \
 		--cov=generate_typos_config --cov=typos_rollout \
 		--cov=typos_rollout_cache --cov=typos_rollout_dictionary \
 		--cov=typos_rollout_refresh --cov-fail-under=90

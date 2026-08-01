@@ -13,6 +13,7 @@ import email.utils
 import json
 import logging
 import pathlib
+import threading
 import tomllib
 import typing as typ
 import urllib.error
@@ -39,17 +40,41 @@ _logger = logging.getLogger(__name__)
 # Bounded refresh-failure counter: one entry per known degradation reason, so
 # the mapping cannot grow with attacker- or network-controlled input. URLs are
 # deliberately never recorded — only the redirect target's scheme is.
-REFRESH_DEGRADATIONS: typ.Final[dict[str, int]] = {
-    "https_redirect_downgrade": 0,
-    "stale_cache": 0,
-    "offline_cache": 0,
-}
+_DEGRADATION_REASONS: typ.Final = (
+    "https_redirect_downgrade",
+    "stale_cache",
+    "offline_cache",
+)
+
+# ``+=`` on a dict value is a read-modify-write, so concurrent refreshes could
+# lose an increment. The counter is process-wide, so it is guarded by a
+# process-wide lock rather than being made per-refresh.
+_DEGRADATIONS_LOCK: typ.Final = threading.Lock()
+REFRESH_DEGRADATIONS: typ.Final[dict[str, int]] = dict.fromkeys(_DEGRADATION_REASONS, 0)
 
 
 def _record_degradation(reason: str) -> None:
     """Increment the bounded degradation counter for a known *reason*."""
-    if reason in REFRESH_DEGRADATIONS:
+    if reason not in REFRESH_DEGRADATIONS:
+        return
+    with _DEGRADATIONS_LOCK:
         REFRESH_DEGRADATIONS[reason] += 1
+
+
+def reset_degradations() -> None:
+    """Reset every degradation counter to zero.
+
+    Exists so tests own the counter's starting state explicitly instead of
+    asserting on deltas against whatever earlier tests left behind.
+    """
+    with _DEGRADATIONS_LOCK:
+        REFRESH_DEGRADATIONS.update(dict.fromkeys(_DEGRADATION_REASONS, 0))
+
+
+def degradation_snapshot() -> dict[str, int]:
+    """Return a consistent copy of the degradation counters."""
+    with _DEGRADATIONS_LOCK:
+        return dict(REFRESH_DEGRADATIONS)
 
 
 def _read_metadata(path: pathlib.Path) -> dict[str, object]:
@@ -203,7 +228,7 @@ class _HttpsOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
                 },
             )
             message = (
-                f"shared dictionary redirect must stay on HTTPS: {redirected.full_url}"
+                f"shared dictionary redirect must stay on HTTPS, got scheme {scheme!r}"
             )
             raise urllib.error.URLError(message)
         return redirected
@@ -214,8 +239,12 @@ def _https_request(
     headers: cabc.Mapping[str, str],
 ) -> urllib.request.Request:
     """Build a request after constraining the shared source to HTTPS."""
-    if urllib.parse.urlsplit(source).scheme != "https":
-        message = f"shared dictionary URL must use HTTPS: {source}"
+    scheme = urllib.parse.urlsplit(source).scheme
+    if scheme != "https":
+        # The URL is omitted deliberately: it can carry userinfo or query
+        # tokens, and an exception message reaches tracebacks and any caller
+        # doing ``str(exc)``, neither of which is redacted like the logs are.
+        message = f"shared dictionary URL must use HTTPS, got scheme {scheme!r}"
         raise ValueError(message)
     return urllib.request.Request(source, headers=dict(headers))  # noqa: S310 - HTTPS is required above.
 
