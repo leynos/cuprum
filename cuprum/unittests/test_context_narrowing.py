@@ -30,7 +30,7 @@ if typ.TYPE_CHECKING:
 _PROPERTY_SETTINGS = settings(derandomize=True, deadline=None, max_examples=50)
 
 # Run the symbolic backend for these tests with:
-#   uv run pytest cuprum/unittests/test_context.py -m crosshair \
+#   uv run pytest cuprum/unittests/test_context_narrowing.py -m crosshair \
 #     --hypothesis-profile=crosshair
 
 # =============================================================================
