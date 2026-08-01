@@ -97,6 +97,7 @@ def test_with_allowlist_non_empty_replacement_is_restricted() -> None:
     with pytest.raises(ForbiddenProgramError):
         emptied.check_allowed(ECHO)
 
+
 def test_current_context_returns_context() -> None:
     """current_context() returns the current context."""
     ctx = current_context()

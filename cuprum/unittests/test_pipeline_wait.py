@@ -65,6 +65,7 @@ class _StubPipelineWaitProcess:
             self.returncode = self._exit_code
         return self.returncode
 
+
 class _PublishedExitPipelineProcess(_StubPipelineWaitProcess):
     """Stub that publishes an exit code while leaving ``wait`` pending."""
 
@@ -172,6 +173,7 @@ async def _exercise_wait_for_pipeline(
     )
 
     return processes[0], processes[1], processes[2], result
+
 
 def test_wait_for_pipeline_accepts_published_returncode() -> None:
     """Complete when a process publishes its code but strands ``wait``."""

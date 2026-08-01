@@ -347,6 +347,7 @@ async def _terminate_pipeline_remaining_stages(
     if termination_tasks:
         await _await_teardown_shielded(termination_tasks)
 
+
 async def _await_process_exit(process: asyncio.subprocess.Process) -> int:
     """Return the process exit code without trusting a stranded wait future."""
     if process.returncode is not None:

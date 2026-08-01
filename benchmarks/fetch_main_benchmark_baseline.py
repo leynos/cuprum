@@ -74,12 +74,15 @@ def _require_int(value: object, *, name: str) -> int:
         raise TypeError(msg)
     return value
 
+
 def _require_type[T](value: object, expected_type: type[T], *, name: str) -> T:
     """Validate that *value* has the expected runtime type."""
     if not isinstance(value, expected_type):
         msg = f"{name} must be a {expected_type.__name__}"
         raise TypeError(msg)
     return value
+
+
 def _redirect_request_arguments(
     args: tuple[object, ...],
     kwargs: dict[str, object],
@@ -99,6 +102,8 @@ def _redirect_request_arguments(
     # urllib owns this callback contract, so its opaque response stream is the
     # authoritative source of the IO type at this adapter boundary.
     return typ.cast("typ.IO[bytes]", fp), code, message, headers, newurl
+
+
 def _should_retry_request_failure(exc: Exception) -> bool:
     """Return ``True`` when a GitHub API failure is transient."""
     if isinstance(exc, urllib.error.HTTPError):
