@@ -74,9 +74,11 @@ def test_pipeline_output_options_echo_for_run_and_run_sync(
             },
         )
 
-    assert result.ok is True
-    assert result.stdout == "echoed"
-    assert stdout_sink.getvalue() == "echoed"
+    assert result.ok is True, "the pipeline should succeed"
+    assert result.stdout == "echoed", "capture must return the final stage output"
+    assert stdout_sink.getvalue() == "echoed", (
+        "echo must also tee the output to the sink"
+    )
 
 
 @pytest.mark.usefixtures("stream_backend")
@@ -101,9 +103,11 @@ def test_pipeline_flat_capture_echo_kwargs_are_deprecated_for_public_entrypoints
             },
         )
 
-    assert result.ok is True
-    assert result.stdout == "echoed"
-    assert stdout_sink.getvalue() == "echoed"
+    assert result.ok is True, "the pipeline should succeed"
+    assert result.stdout == "echoed", "capture must return the final stage output"
+    assert stdout_sink.getvalue() == "echoed", (
+        "echo must also tee the output to the sink"
+    )
 
 
 _OUTPUT_OPTIONS = st.one_of(
@@ -143,4 +147,119 @@ def test_resolve_pipeline_output_preserves_option_invariants(
         return
 
     resolved = _resolve_pipeline_output(output, flags)
-    assert resolved == (output or RunOutputOptions())
+    assert resolved == (output or RunOutputOptions()), (
+        "omitted flags must resolve to the supplied or default options"
+    )
+
+
+@pytest.mark.usefixtures("stream_backend")
+def test_pipeline_run_sync_accepts_run_output_options() -> None:
+    """Pipeline.run_sync accepts ``output=RunOutputOptions`` like SafeCmd."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    echo = sh.make(ECHO)
+
+    pipeline = echo("-n", "unified") | python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read())",
+    )
+
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO, python_program]))):
+        result = pipeline.run_sync(output=RunOutputOptions(capture=False, echo=False))
+
+    assert result.ok is True, "the pipeline should succeed"
+    assert result.stdout is None, "capture=False must leave stdout unset"
+
+
+@pytest.mark.usefixtures("stream_backend")
+def test_pipeline_flat_capture_echo_kwargs_are_deprecated() -> None:
+    """The flat ``capture``/``echo`` kwargs still work but warn."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    echo = sh.make(ECHO)
+
+    pipeline = echo("-n", "legacy") | python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read())",
+    )
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([ECHO, python_program]))),
+        pytest.warns(DeprecationWarning, match="RunOutputOptions"),
+    ):
+        result = pipeline.run_sync(capture=True, echo=False)
+
+    assert result.ok is True, "the pipeline should succeed"
+    assert result.stdout == "legacy", "the deprecated flags must still capture output"
+
+
+def test_pipeline_rejects_output_combined_with_flat_kwargs() -> None:
+    """Supplying both ``output`` and the deprecated flags raises ValueError."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+
+    pipeline = python("-c", "print('a')") | python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read())",
+    )
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        with pytest.raises(ValueError, match="not both"):
+            pipeline.run_sync(output=RunOutputOptions(), capture=True)
+
+        unknown_output_kwargs: dict[str, bool] = {"captuer": True}
+        run_sync = typ.cast("cabc.Callable[..., object]", pipeline.run_sync)
+        with pytest.raises(TypeError, match="unexpected keyword"):
+            run_sync(**unknown_output_kwargs)
+
+
+@pytest.mark.parametrize(
+    ("capture", "expected_stdout", "expected_stderr"),
+    [
+        pytest.param(True, "INTERMEDIATE", "", id="capture-final-stdio"),
+        pytest.param(False, None, None, id="discard-final-stdio"),
+    ],
+)
+def test_pipeline_stdio_policy_streams_intermediate_stdout_end_to_end(
+    *,
+    capture: bool,
+    expected_stdout: str | None,
+    expected_stderr: str | None,
+) -> None:
+    """Pipeline execution streams intermediate stdout and applies final capture."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+
+    producer = python("-c", "import sys; sys.stdout.write('intermediate')")
+    transformer = python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read().upper())",
+    )
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        result = (producer | transformer).run_sync(
+            output=RunOutputOptions(capture=capture),
+        )
+
+    assert result.stdout == expected_stdout, (
+        f"capture={capture}: result.stdout mismatch"
+    )
+    assert len(result.stages) == 2, f"capture={capture}: result.stages length mismatch"
+    assert result.stages[0].stdout is None, (
+        f"capture={capture}: stage 0 stdout mismatch"
+    )
+    assert result.stages[0].stderr == expected_stderr, (
+        f"capture={capture}: stage 0 stderr mismatch"
+    )
+    assert result.stages[0].exit_code == 0, (
+        f"capture={capture}: stage 0 exit_code mismatch"
+    )
+    assert result.stages[1].stdout == expected_stdout, (
+        f"capture={capture}: stage 1 stdout mismatch"
+    )
+    assert result.stages[1].stderr == expected_stderr, (
+        f"capture={capture}: stage 1 stderr mismatch"
+    )
+    assert result.stages[1].exit_code == 0, (
+        f"capture={capture}: stage 1 exit_code mismatch"
+    )

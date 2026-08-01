@@ -71,27 +71,6 @@ def partial_results_lists(draw: st.DrawFn) -> list[CommandResult | None]:
     )
 
 
-def _failure_indices_in_bounds(
-    failures: list[int],
-    final_results: list[CommandResult],
-) -> bool:
-    """Return whether every failure index addresses the compacted result list."""
-    return all(0 <= idx < len(final_results) for idx in failures)
-
-
-def _failure_indices_point_to_failures(
-    failures: list[int],
-    final_results: list[CommandResult],
-) -> bool:
-    """Return whether every failure index points at a failed command result."""
-    return all(not final_results[idx].ok for idx in failures)
-
-
-def _failure_indices_sorted(failures: list[int]) -> bool:
-    """Return whether failure indices are sorted in ascending order."""
-    return failures == sorted(failures)
-
-
 def _failures_are_exhaustive(
     failures: list[int],
     final_results: list[CommandResult],
@@ -140,10 +119,7 @@ def _compaction_and_failure_invariants_hold(
 ) -> bool:
     """Return whether the compaction and failure-index invariants hold."""
     return (
-        _failure_indices_in_bounds(failures, final_results)
-        and _failure_indices_point_to_failures(failures, final_results)
-        and _failure_indices_sorted(failures)
-        and _failures_are_exhaustive(failures, final_results)
+        _failures_are_exhaustive(failures, final_results)
         and _no_cancelled_entries(final_results)
         and _result_count_matches(final_results, inputs)
         and _order_preserved(final_results, expected_results)

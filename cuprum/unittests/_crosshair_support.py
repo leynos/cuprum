@@ -21,6 +21,14 @@ import sys
 import typing as typ
 import warnings
 
+# The four symbol slots are ``AnalysisOptionSet``, ``AnalysisKind``,
+# ``MessageType``, and ``check_states``. On the success path each is a real
+# CrossHair class or function; on the fallback path each is ``None``. A tighter
+# alias would need the real CrossHair types imported for annotations, which
+# this module must not require — it exists precisely for when CrossHair is
+# absent — so the symbol slots stay ``typ.Any``.
+type CrossHairSymbols = tuple[str, typ.Any, typ.Any, typ.Any, typ.Any]
+
 
 def _crosshair_probe_failure_reason(error: BaseException) -> str:
     """Return a skip reason for expected probe failures and raise the rest.
@@ -30,6 +38,11 @@ def _crosshair_probe_failure_reason(error: BaseException) -> str:
     ``BaseException``. Control-flow exceptions and anything else are re-raised
     so an unexpected CrossHair break is never downgraded to a skip.
     """
+    # Expected unavailability is a missing CrossHair dependency
+    # (``ImportError``) or tracer incompatibility, which surfaces as a
+    # ``TraceException``-named ``BaseException``. Control-flow exceptions and
+    # anything else are re-raised so an unexpected CrossHair break is never
+    # downgraded to a skip.
     if isinstance(error, KeyboardInterrupt | SystemExit | GeneratorExit):
         raise error
     is_expected = (
@@ -40,23 +53,18 @@ def _crosshair_probe_failure_reason(error: BaseException) -> str:
     return f"CrossHair unavailable: {error.__class__.__name__}: {error}"
 
 
-def _crosshair_unavailable_symbols(
-    error: BaseException,
-) -> tuple[str, typ.Any, typ.Any, typ.Any, typ.Any]:
+def _crosshair_unavailable_symbols(error: BaseException) -> CrossHairSymbols:
     """Return fallback CrossHair symbols for an expected probe failure.
 
     The four ``None`` bindings stand in for ``AnalysisOptionSet``,
     ``AnalysisKind``, ``MessageType``, and ``check_states`` so a consuming
     module can skip its symbolic tests instead of failing collection.
     """
+    # The four ``None`` bindings stand in for ``AnalysisOptionSet``,
+    # ``AnalysisKind``, ``MessageType``, and ``check_states`` so a consuming
+    # module can skip its symbolic tests instead of failing collection.
     reason = _crosshair_probe_failure_reason(error)
-    return (
-        reason,
-        typ.cast("typ.Any", None),
-        typ.cast("typ.Any", None),
-        typ.cast("typ.Any", None),
-        typ.cast("typ.Any", None),
-    )
+    return (reason, None, None, None, None)
 
 
 def _warn_crosshair_unavailable(reason: str) -> None:

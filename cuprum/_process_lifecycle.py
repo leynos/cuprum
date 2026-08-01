@@ -148,6 +148,9 @@ def _build_spawn_observations(
     from cuprum._pipeline_internals import _build_pipeline_observations
 
     observations = _build_pipeline_observations(parts, config, pending_tasks=[])
+    # The pending-task list built here is discarded, so observe hooks (which
+    # rely on it) cannot run on the spawn path; callers must supply explicit
+    # observations instead.
     if any(obs.hooks.observe_hooks for obs in observations):
         msg = "spawn helpers require explicit observations when observe hooks exist"
         raise RuntimeError(msg)
@@ -245,6 +248,12 @@ def _stages_to_terminate(
     termination. Cleanup is therefore idempotent: a second pass over settled
     stages (all ``done``) selects nothing.
     """
+    # This is the pure selection behind _terminate_pipeline_remaining_stages.
+    # Every stage is scheduled at most once — indices come from a single
+    # enumeration — and two stages are never scheduled: the failed stage, which
+    # owns its own exit, and any already-finished stage, which needs no
+    # termination. Cleanup is therefore idempotent: a second pass over settled
+    # stages (all ``done``) selects nothing.
     return [
         idx for idx, is_done in enumerate(done) if idx != failure_index and not is_done
     ]
