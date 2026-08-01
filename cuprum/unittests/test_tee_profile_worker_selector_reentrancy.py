@@ -11,12 +11,13 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
+import threading
 import typing as typ
 
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from benchmarks import tee_profile_worker
+from benchmarks import BenchmarkError, _tee_profile_worker_backend, tee_profile_worker
 from cuprum.unittests._tee_profile_backend_support import _backends_strategy
 
 if typ.TYPE_CHECKING:
@@ -25,15 +26,15 @@ if typ.TYPE_CHECKING:
 
 def test_backend_lock_is_reentrant() -> None:
     """The backend lock can be acquired twice by the same thread."""
-    with tee_profile_worker._BACKEND_LOCK:
+    with _tee_profile_worker_backend._BACKEND_LOCK:
         # A plain Lock would deadlock on this same-thread second acquisition;
         # RLock tracks ownership and recursion depth, so it succeeds here.
-        acquired = tee_profile_worker._BACKEND_LOCK.acquire(
+        acquired = _tee_profile_worker_backend._BACKEND_LOCK.acquire(
             blocking=True,
             timeout=0.5,
         )
         assert acquired, "expected same-thread backend lock acquisition to succeed"
-        tee_profile_worker._BACKEND_LOCK.release()
+        _tee_profile_worker_backend._BACKEND_LOCK.release()
 
 
 @settings(
@@ -47,33 +48,55 @@ def test_nested_selector_rejects_generated_backend_pairs(
     inner_backend: tee_profile_worker.BackendName,
 ) -> None:
     """Same-thread nested selector entry always raises before mutation."""
-    selector = tee_profile_worker._EnvBackendSelector()
+    selector = _tee_profile_worker_backend._EnvBackendSelector()
     with (
         selector(outer_backend),
         pytest.raises(
-            RuntimeError,
-            match=tee_profile_worker._REENTRANT_SELECTOR_MESSAGE,
+            _tee_profile_worker_backend.ReentrantBackendSelectorError,
+            match=_tee_profile_worker_backend._REENTRANT_SELECTOR_MESSAGE,
         ),
         selector(inner_backend),
     ):
         pass
 
 
-def test_nested_selector_raises_runtime_error_and_recovers(
+def test_nested_selector_raises_dedicated_error_and_recovers(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Nested backend selector entry fails explicitly and cleans up state."""
+    """Nested selector entry raises the dedicated error and cleans up state."""
     expected_message = (
         "_EnvBackendSelector is not re-entrant; nested calls are forbidden"
     )
     expected_warning = "Rejected re-entrant backend selector activation"
-    selector = tee_profile_worker._EnvBackendSelector()
-    with selector("python"):  # noqa: SIM117 - nested so caplog captures warning.
-        with caplog.at_level(logging.WARNING):
-            with pytest.raises(RuntimeError, match=expected_message):
-                with selector("auto"):
-                    pass
+    selector = _tee_profile_worker_backend._EnvBackendSelector()
+    with (
+        selector("python"),
+        caplog.at_level(logging.WARNING),
+        pytest.raises(
+            _tee_profile_worker_backend.ReentrantBackendSelectorError,
+            match=expected_message,
+        ) as exc_info,
+        selector("auto"),
+    ):
+        pass
 
+    error = exc_info.value
+    # RuntimeError ancestry is retained for backwards compatibility, and the
+    # package base class is present for structured handling.
+    assert isinstance(error, RuntimeError), (
+        "RuntimeError ancestry is retained for backwards compatibility"
+    )
+    assert isinstance(error, BenchmarkError), (
+        "the package base class must be present for structured handling"
+    )
+    assert error.backend == "auto", "the rejected backend must be recorded on the error"
+    assert error.thread_id == threading.get_ident(), (
+        "the rejecting thread must be recorded on the error"
+    )
+    assert error.rejection_count >= 1, "the error must report at least one rejection"
+    assert str(error) == expected_message, (
+        "the error message must name the re-entrancy contract"
+    )
     assert expected_warning in caplog.text
 
     with selector("auto"):
@@ -90,7 +113,7 @@ def test_nested_selector_logs_rejection_warning(
     a thread-id field are all present in the logged message. The thread_id
     value is redacted for snapshot determinism.
     """
-    selector = tee_profile_worker._EnvBackendSelector()
+    selector = _tee_profile_worker_backend._EnvBackendSelector()
     with (
         caplog.at_level(
             logging.WARNING,
