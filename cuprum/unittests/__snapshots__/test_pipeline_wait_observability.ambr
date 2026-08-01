@@ -1,0 +1,23 @@
+# serializer version: 1
+# name: TestCompletionObservability.test_the_emitted_records_match_their_snapshot
+  list([
+    dict({
+      'cuprum_action': 'pipeline_stage_first_failure',
+      'cuprum_duration_s': 12.5,
+      'cuprum_exit_code': 4,
+      'cuprum_stage_index': 0,
+      'level': 'WARNING',
+      'logger': 'cuprum._pipeline_wait',
+      'message': 'pipeline stage 0 exited 4, latching first failure',
+    }),
+    dict({
+      'cuprum_action': 'pipeline_fail_fast_termination',
+      'cuprum_duration_s': 12.5,
+      'cuprum_exit_code': 4,
+      'cuprum_stage_index': 0,
+      'level': 'WARNING',
+      'logger': 'cuprum._pipeline_wait',
+      'message': 'terminating other pipeline stages after stage 0 exited 4',
+    }),
+  ])
+# ---
