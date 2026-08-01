@@ -220,8 +220,8 @@ def test_merge_hooks_preserves_scope_ordering(
     ``scoped_first=False`` keeps ``parent + config`` (FIFO order used for
     before and observe hooks); ``scoped_first=True`` keeps ``config + parent``
     (LIFO order used for after hooks). Length and membership are preserved in
-    both modes. The before-, after-, and observe-hook casts are all exercised
-    so their tuple compatibility with the generic helper stays type-checked.
+    both modes. The before- and after-hook casts are exercised, while observe
+    hooks verify direct tuple compatibility with the generic helper.
     """
     before_result = _merge_hooks(
         typ.cast("tuple[BeforeHook, ...]", parent),
@@ -234,8 +234,8 @@ def test_merge_hooks_preserves_scope_ordering(
         scoped_first=scoped_first,
     )
     observe_result = _merge_hooks(
-        typ.cast("tuple[cabc.Callable[..., None], ...]", parent),
-        typ.cast("tuple[cabc.Callable[..., None], ...]", config),
+        parent,
+        config,
         scoped_first=scoped_first,
     )
 
