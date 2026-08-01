@@ -32,10 +32,14 @@ from tests.helpers.catalogue import python_catalogue
 def _run_sleeper_then_failure(exit_code: int) -> tuple[ConcurrentResult, float]:
     """Run a cancelled sleeper alongside a command failing with *exit_code*.
 
-    Returns the fail-fast result and the elapsed wall-clock seconds. The
-    sleeper is submitted first so fail-fast must cancel it, which is what
+    The sleeper is submitted first so fail-fast must cancel it, which is what
     compacts ``results`` and makes the position-based and submission-stable
     index views diverge.
+
+    Returns
+    -------
+    tuple[ConcurrentResult, float]
+        The fail-fast result and the elapsed wall-clock seconds.
     """
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
