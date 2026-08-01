@@ -1197,7 +1197,7 @@ ConcurrentConfig(concurrency=True)   # TypeError: concurrency must be an int, go
 
 `ConcurrentResult` is normally returned by `run_concurrent`/
 `run_concurrent_sync` rather than constructed directly, but the same
-validation applies if you build one in tests:
+validation applies when constructed directly in tests:
 
 - Each entry in `failures` must be an `int` (again, `bool` is rejected),
   otherwise `TypeError` is raised.
@@ -1209,6 +1209,14 @@ validation applies if you build one in tests:
   empty. Any supplied sequence whose length differs from `results` raises
   `ValueError`; an explicit empty tuple paired with non-empty `results` is
   therefore rejected rather than backfilled.
+- A supplied sequence must also satisfy entry-level constraints, in addition
+  to matching the length of `results`: each entry must be an exact `int`
+  (`bool` is rejected, raising `TypeError`), non-negative, and strictly
+  ascending (and therefore unique); violations raise `ValueError`. Entries
+  are *not* bounded above by `len(results)` — after fail-fast compaction a
+  surviving command's original submission index can exceed the compacted
+  result length, so direct construction must permit values greater than or
+  equal to `len(results)`.
 
 ## Performance extensions (optional Rust)
 
