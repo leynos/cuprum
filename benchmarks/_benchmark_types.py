@@ -50,7 +50,6 @@ from benchmarks._benchmark_type_validators import (
     _validate_non_empty_string,
     _validate_path,
     _validate_payload_bytes,
-    _validate_scenario_name,
     _validate_stages,
 )
 
@@ -124,7 +123,7 @@ payload_bytes=1024, stages=3, with_line_callbacks=False)
 
     def __post_init__(self) -> None:
         """Validate scenario values that are critical for execution."""
-        _validate_scenario_name(self.name)
+        _validate_non_empty_string(self.name, name="name")
         _validate_payload_bytes(self.payload_bytes)
         _validate_stages(self.stages)
         _validate_bool(self.with_line_callbacks, name="with_line_callbacks")
