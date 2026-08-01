@@ -1002,8 +1002,9 @@ concurrent benchmark workers cannot race on `os.environ` or the backend
 availability and selection caches. The selector clears those caches before
 entering the context and again when restoring the previous environment value.
 It is intentionally not re-entrant: a thread-local guard detects nested entry
-on the same thread, logs the rejected backend and thread identifier, and raises
-`RuntimeError` before mutating backend state.
+on the same thread, logs the rejected backend and thread identifier, and
+raises `ReentrantBackendSelectorError` (a `RuntimeError` subclass, retained
+for backward compatibility) before mutating backend state.
 
 ### Selector observability metrics
 
@@ -1184,8 +1185,8 @@ that fixed examples cannot cover exhaustively:
 
 - `test_nested_selector_rejects_generated_backend_pairs` draws an outer and an
   inner backend from the available set and asserts that same-thread nested
-  entry always raises `RuntimeError` before mutating backend state, regardless
-  of which backend pair is generated.
+  entry always raises `ReentrantBackendSelectorError` before mutating backend
+  state, regardless of which backend pair is generated.
 - `test_generated_concurrent_workers_complete` draws a thread count (2–8) and a
   same-length sequence of backend selections, then runs one worker per backend
   concurrently and asserts every worker completes with `status == "ok"` and
@@ -1764,6 +1765,19 @@ Add repository-only proper names or quoted upstream terms to
 `typos.local.toml`; never edit generated entries in `typos.toml` by hand. The
 gate also runs the helper's Python 3.13 tests with at least 90% line coverage.
 
+The cache refresh in `scripts/typos_rollout_refresh.py` fetches the shared
+dictionary only over HTTPS and rejects any redirect that would downgrade the
+connection to plain HTTP: a dedicated `_HttpsOnlyRedirectHandler` refuses the
+redirect before urllib reissues the request, so a compromised or
+misconfigured upstream cannot silently serve the dictionary in cleartext.
+Refresh degradations — a rejected HTTPS-downgrade redirect, falling back to a
+stale cache after a failed refresh, or reusing the cache in offline mode —
+are counted in a bounded, fixed-key counter and reported through structured
+`logging` warnings (or info, for the offline case). Those log records never
+include the request URL; they carry only the event name and non-sensitive
+context such as the rejected redirect's scheme or the triggering error's
+type.
+
 Ruff must be invoked through the project virtual environment, not as a floating
 host tool. The `RUFF` variable expands to `$(UV_RUN_ENV) uv run ruff`, and the
 `ruff` probe lives in `VENV_TOOLS` so `make` verifies that the locked
@@ -1852,8 +1866,14 @@ for type checking.
 
 The canonical lint configuration lives in `pyproject.toml`:
 
+- `[dependency-groups] dev` pins `ruff==0.14.7`. The pin exists so that Ruff's
+  version — and therefore its rule set and preview-rule behaviour — is
+  reproducible between developer machines and CI; an unpinned Ruff could
+  silently gain or lose findings when a new release ships.
 - `[tool.ruff]` sets line length, preview mode, and target Python version.
-- `[tool.ruff.lint]` selects the active Ruff rule families.
+- `[tool.ruff.lint]` selects the active Ruff rule families, including `EM`
+  (require exception messages to be assigned to a variable before `raise`,
+  rather than written inline in the `raise` statement).
 - `[tool.ruff.lint.per-file-ignores]` records test-specific exceptions.
 - `[tool.ruff.lint.flake8-import-conventions]` and
   `[tool.ruff.lint.flake8-import-conventions.aliases]` enforce import aliases
