@@ -71,26 +71,52 @@ class ConcurrentConfig:
                 raise ValueError(msg)
 
 
+def _validate_index_sequence(
+    indices: tuple[int, ...],
+    *,
+    subject: str,
+    type_error_message: str,
+    upper_bound: int | None,
+) -> None:
+    """Validate exact-int, in-bounds, strictly ascending index sequences.
+
+    ``upper_bound`` is the exclusive ceiling each index must fall below, or
+    ``None`` when only non-negativity is required. The two callers differ in
+    exactly that respect, so it is the sole behavioural parameter; ``subject``
+    and ``type_error_message`` keep each call site's diagnostic wording.
+    """
+    previous = -1
+    for index in indices:
+        # ``type(...) is not int`` rejects ``bool`` (an ``int`` subclass) so
+        # ``True``/``False`` are not treated as valid indexes.
+        if type(index) is not int:
+            msg = f"{type_error_message}, got {type(index).__name__}"
+            raise TypeError(msg)
+        if upper_bound is None:
+            if index < 0:
+                msg = f"{subject} must be non-negative, got {index}"
+                raise ValueError(msg)
+        elif not 0 <= index < upper_bound:
+            msg = f"{subject} index {index} is out of range for {upper_bound} results"
+            raise ValueError(msg)
+        if index <= previous:
+            msg = f"{subject} must be strictly ascending and unique, got {indices}"
+            raise ValueError(msg)
+        previous = index
+
+
 def _validate_failure_indices(
     failures: tuple[int, ...],
     *,
     result_count: int,
 ) -> None:
     """Validate that failure indices are in range and strictly ascending."""
-    previous = -1
-    for failure in failures:
-        # ``type(...) is not int`` rejects ``bool`` (an ``int`` subclass) so
-        # ``True``/``False`` are not treated as valid failure indexes.
-        if type(failure) is not int:
-            msg = f"failures index must be an int, got {type(failure).__name__}"
-            raise TypeError(msg)
-        if not 0 <= failure < result_count:
-            msg = f"failures index {failure} is out of range for {result_count} results"
-            raise ValueError(msg)
-        if failure <= previous:
-            msg = f"failures must be strictly ascending and unique, got {failures}"
-            raise ValueError(msg)
-        previous = failure
+    _validate_index_sequence(
+        failures,
+        subject="failures",
+        type_error_message="failures index must be an int",
+        upper_bound=result_count,
+    )
 
 
 def _validate_submission_index_values(submission_indices: tuple[int, ...]) -> None:
@@ -110,21 +136,12 @@ def _validate_submission_index_values(submission_indices: tuple[int, ...]) -> No
     ValueError
         If an index is negative, or the sequence is not strictly ascending.
     """
-    previous = -1
-    for index in submission_indices:
-        if type(index) is not int:
-            msg = f"submission_indices must be ints, got {type(index).__name__}"
-            raise TypeError(msg)
-        if index < 0:
-            msg = f"submission_indices must be non-negative, got {index}"
-            raise ValueError(msg)
-        if index <= previous:
-            msg = (
-                "submission_indices must be strictly ascending and unique, got "
-                f"{submission_indices}"
-            )
-            raise ValueError(msg)
-        previous = index
+    _validate_index_sequence(
+        submission_indices,
+        subject="submission_indices",
+        type_error_message="submission_indices must be ints",
+        upper_bound=None,
+    )
 
 
 def _resolve_submission_indices(

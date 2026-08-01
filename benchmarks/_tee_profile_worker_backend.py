@@ -205,11 +205,15 @@ class _EnvBackendSelector:
     """Activate a named stream backend by mutating ``os.environ``.
 
     Acquires ``_BACKEND_LOCK`` for the duration of the context to serialize
-    access to ``os.environ`` and the backend LRU caches. This selector is
-    not re-entrant; attempted nested entry raises ``RuntimeError`` and logs
-    the rejected backend and thread identifier. The nested-entry error is
-    ``ReentrantBackendSelectorError``, which retains ``RuntimeError``
-    ancestry so existing callers that catch ``RuntimeError`` still work.
+    access to ``os.environ`` and the backend LRU caches. Callers hold this
+    context open for their entire repeat loop, so the lock serializes
+    concurrent workers for that whole loop -- including each iteration's
+    subprocess execution -- not merely the backend-selection step. This
+    selector is not re-entrant; attempted nested entry raises
+    ``RuntimeError`` and logs the rejected backend and thread identifier.
+    The nested-entry error is ``ReentrantBackendSelectorError``, which
+    retains ``RuntimeError`` ancestry so existing callers that catch
+    ``RuntimeError`` still work.
     """
 
     def __init__(

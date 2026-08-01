@@ -40,12 +40,7 @@ def _execute_python_command(
     hook: ExecHook,
     script: str,
 ) -> None:
-    """Execute a Python command with the given hook and store the result.
-
-    This helper extracts catalogue and builder from python_cmd_fixture, builds
-    a command with the given script, runs it inside scoped/observe contexts,
-    and stores the result in behaviour_state.
-    """
+    """Execute a Python command with the given hook and store the result."""
     catalogue = typ.cast("typ.Any", python_cmd_fixture["catalogue"])
     builder = typ.cast("typ.Any", python_cmd_fixture["builder"])
     cmd = builder("-c", script)
@@ -62,19 +57,6 @@ def _run_command_with_hook(
     hook_fixture: dict[str, object],
     script: str,
 ) -> None:
-    """Run a Python command with a hook extracted from a fixture.
-
-    Parameters
-    ----------
-    behaviour_state:
-        Shared mutable state dictionary.
-    python_cmd_fixture:
-        Python command builder fixture.
-    hook_fixture:
-        Fixture containing a hook under the "hook" key.
-    script:
-        Python script to execute with -c flag.
-
-    """
+    """Run a Python command with a hook extracted from a fixture."""
     hook = typ.cast("ExecHook", hook_fixture["hook"])
     _execute_python_command(behaviour_state, python_cmd_fixture, hook, script)

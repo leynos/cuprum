@@ -171,8 +171,7 @@ def test_wait_for_pipeline_fail_fast_scenarios(
     """Validate fail-fast termination behaviour across different failure scenarios.
 
     Tests that:
-    - Early stage failures terminate all downstream stages
-    - Middle stage failures terminate all downstream stages
+    - Early and middle stage failures terminate all other stages
     - Final stage failures record failure index without terminating others
     """
     p0, p1, p2, result = asyncio.run(
