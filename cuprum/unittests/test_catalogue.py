@@ -51,6 +51,9 @@ def test_unknown_programs_are_blocked_by_default() -> None:
 def test_visible_settings_surface_project_metadata() -> None:
     """Project metadata is available to downstream services."""
     settings = DEFAULT_CATALOGUE.visible_settings()
+    assert settings is DEFAULT_CATALOGUE.visible_settings(), (
+        "Visible settings should reuse the catalogue's read-only view"
+    )
     project = settings[CORE_OPS_PROJECT]
     assert project.noise_rules, "Noise rules should be populated"
     assert project.documentation_locations, "Docs links should be populated"

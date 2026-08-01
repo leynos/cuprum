@@ -120,6 +120,7 @@ class ProgramCatalogue:
         self._projects = self._index_projects(projects)
         self._program_to_project = self._index_programs(self._projects)
         self._allowlist = frozenset(self._program_to_project)
+        self._visible_settings_cache: cabc.Mapping[str, ProjectSettings] | None = None
 
     @property
     def allowlist(self) -> frozenset[Program]:
@@ -193,9 +194,13 @@ class ProgramCatalogue:
         Returns
         -------
         Mapping[str, ProjectSettings]
-            A read-only mapping of project name to its settings.
+            A cached read-only mapping of project name to its settings.
         """
-        return MappingProxyType(self._projects.copy())
+        settings = self._visible_settings_cache
+        if settings is None:
+            settings = MappingProxyType(self._projects)
+            self._visible_settings_cache = settings
+        return settings
 
     @staticmethod
     def _index_projects(
