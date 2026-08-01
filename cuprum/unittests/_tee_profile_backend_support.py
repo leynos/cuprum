@@ -13,10 +13,12 @@ import typing as typ
 import pytest
 from hypothesis import strategies as st
 
-from benchmarks import tee_profile_worker
+from cuprum import _backend
 
 if typ.TYPE_CHECKING:
     from _pytest.mark.structures import ParameterSet
+
+    from benchmarks import tee_profile_worker
 
 
 def _rust_backend_available() -> bool:
@@ -25,7 +27,7 @@ def _rust_backend_available() -> bool:
     Consolidates the single private-chain probe into the worker's backend
     module so the callers below share one access point.
     """
-    return tee_profile_worker._backend._check_rust_available()
+    return _backend._check_rust_available()
 
 
 def _available_backend_names() -> tuple[tee_profile_worker.BackendName, ...]:
