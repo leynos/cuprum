@@ -110,6 +110,14 @@ def _validate_index_sequence(
     ``None`` when only non-negativity is required. The two callers differ in
     exactly that respect, so it is the sole behavioural parameter; ``subject``
     and ``type_error_message`` keep each call site's diagnostic wording.
+
+    Raises
+    ------
+    TypeError
+        If an index is not an exact ``int`` (``bool`` is rejected).
+    ValueError
+        If an index is negative, exceeds ``upper_bound``, or the sequence is
+        not strictly ascending.
     """
     previous = -1
     for index in indices:
@@ -151,7 +159,7 @@ def _validate_submission_index_values(submission_indices: tuple[int, ...]) -> No
         If an index is not an exact ``int`` (``bool`` is rejected).
     ValueError
         If an index is negative, or the sequence is not strictly ascending.
-    """
+    """  # noqa: DOC502 - both propagate from the shared index validator
     _validate_index_sequence(
         submission_indices,
         subject="submission_indices",
