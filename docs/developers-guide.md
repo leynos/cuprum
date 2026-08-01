@@ -1600,7 +1600,6 @@ case that produces it and leaves no snapshot files to review or prune. Accept a
 deliberate change by editing the inline literal; `cargo insta` is not required
 for the inline form.
 
-
 ### Building the extension for tests
 
 Several test modules exercise the compiled PyO3 extension and are gated on it
@@ -1629,6 +1628,11 @@ CUPRUM_REQUIRE_RUST_EXTENSION=1 make test
 The check runs once per session in `conftest.py`, so it covers every gated
 module regardless of how each one gates — fixture, module-level guard, or
 availability probe — and a new module cannot opt out by skipping differently.
+The decision itself lives in `tests/helpers/extension_requirement.py` rather
+than in the root `conftest.py`, because a root conftest is shadowed by the
+per-package one and so cannot be imported by name from a test module;
+`test_extension_requirement_guard.py` covers it, and reaches the hook through
+the plugin manager to check that it actually raises.
 
 CI runs these in a dedicated `extension-tests` job rather than folding the
 extension into `typecheck-test`. That is a deliberate constraint, not tidiness:
@@ -1648,6 +1652,16 @@ Table 1: modules gated on the compiled extension
 | `test_rust_splice.py` | the Linux `splice` fast path |
 | `test_rust_errno.py` | `OSError.errno` and subclass selection across the boundary |
 | `test_backend.py` | the extension-dependent backend-selection cases |
+| `test_extension_requirement_guard.py` | the fail-loud guard itself |
+| `tests/behaviour/test_rust_streams_behaviour.py` | the consumer-facing pump and consume scenarios |
+| `tests/behaviour/test_rust_extension_behaviour.py` | availability agreeing with the installed native module |
+| `tests/behaviour/test_stream_backend_pipeline.py` | pipelines dispatched through the Rust backend |
+
+The behavioural modules are listed for the same reason as the unit ones: their
+extension-dependent scenarios skip in the ordinary test jobs, so they were
+never boundary coverage there either. Confirm with `pytest -rs` against a
+virtual environment that has no extension — four scenarios report `Rust
+extension is not installed`.
 
 Kani harnesses are reserved for bounded verification of small, high-value state
 spaces. Gate Kani-only modules and helpers with `#[cfg(kani)]`, and share pure

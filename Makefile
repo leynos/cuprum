@@ -62,13 +62,12 @@ all: build check-fmt lint typecheck test
 build: uv .venv ## Build virtual-env and install deps
 	$(UV_RUN_ENV) uv sync --group dev
 
+# `build` only syncs dependencies and never compiles the PyO3 extension, so
+# the extension-gated Python tests skip without this target. `ensurepip` comes
+# first because maturin resolves its own script through the interpreter's
+# sysconfig scheme, which needs pip present. See "Building the extension for
+# tests" in docs/developers-guide.md.
 develop: build ## Build the native extension into the dev virtual-env
-	# `build` only syncs dependencies; it never compiles the PyO3 extension,
-	# so the extension-gated Python tests skip without this. One definition
-	# here keeps the local and CI invocations identical.
-	# maturin resolves its own script through the interpreter's sysconfig
-	# scheme, which needs pip present in the environment; the benchmark job
-	# already proved this ordering necessary on a fresh venv.
 	$(UV_RUN_ENV) uv run python -m ensurepip --upgrade
 	$(UV_RUN_ENV) uv run maturin develop --manifest-path $(RUST_DIR)/cuprum-rust/Cargo.toml
 

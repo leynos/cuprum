@@ -87,6 +87,7 @@
       'cuprum/unittests/test_cqrs_hook_behaviour.py',
       'cuprum/unittests/test_env_context.py',
       'cuprum/unittests/test_env_context_properties.py',
+      'cuprum/unittests/test_extension_requirement_guard.py',
       'cuprum/unittests/test_fetch_main_benchmark_baseline.py',
       'cuprum/unittests/test_fixture_generation.py',
       'cuprum/unittests/test_folded_ranking_property.py',
