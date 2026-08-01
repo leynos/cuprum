@@ -651,8 +651,8 @@ replacement allowlist is empty, and a non-empty replacement establishes an
 explicit policy by setting restriction. So direct replacement cannot turn a
 deny-all context into the permissive default.
 
-The allowlist, hook, and timeout rules are split into pure helpers so the
-invariants can be tested directly:
+The allowlist, hook, and timeout rules are split into pure helpers in
+`cuprum/context/_policy.py` so the invariants can be tested directly:
 
 - `_narrow_allowlist(parent, config, parent_is_restricted=...)` returns the
   narrowed allowlist for the three parent/config cases without mutating either
@@ -660,19 +660,21 @@ invariants can be tested directly:
 - `_is_narrowed_allowlist_restricted(config, parent_is_restricted=...)`
   returns whether the child context should enforce allowlist policy after
   narrowing.
-- `_merge_before_hooks(parent, config)` appends scoped before hooks after
-  parent hooks so execution stays FIFO.
-- `_merge_after_hooks(parent, config)` prepends scoped after hooks before
-  parent hooks so teardown stays LIFO.
-- `_merge_observe_hooks(parent, config)` appends scoped observation hooks after
-  parent hooks so execution stays FIFO.
+- `_merge_hooks(parent, config, *, scoped_first)` merges parent and scoped
+  hooks under one generic ordering contract. With `scoped_first=False` it
+  returns `parent + config`, preserving FIFO ordering for before hooks and
+  observe hooks. With `scoped_first=True` it returns `config + parent`,
+  preserving LIFO teardown ordering for after hooks.
 - `_validate_timeout(timeout, class_name)` coerces non-negative timeout values
-  to `float`, preserves `None`, and rejects negative values.
+  to `float`, preserves `None`, and rejects negative values as well as
+  non-finite values (NaN and positive or negative infinity).
 - `_resolve_narrowed_timeout(parent, config)` inherits the parent timeout when
   the scoped config is silent and otherwise uses the scoped value.
 
-Context property tests live in `cuprum/unittests/test_context.py`. Run them
-directly with:
+Context property tests live in `cuprum/unittests/test_context.py`, which
+exercises both ordering modes of `_merge_hooks` (parent-first FIFO and
+scoped-first LIFO) through the generic helper rather than per-hook variants.
+Run them directly with:
 
 ```bash
 uv run pytest -q cuprum/unittests/test_context.py
@@ -682,6 +684,55 @@ The same test module marks pure-helper properties for optional CrossHair
 execution. The `crosshair` Hypothesis profile is registered in
 `cuprum/unittests/conftest.py`; using it requires the `hypothesis-crosshair`
 package from the dev dependency group.
+
+
+### Extracted module boundaries
+
+Several implementation modules were split out of larger files to keep each
+seam small and single-purpose. `cuprum/context/_policy.py` is described above;
+the subprocess module boundaries (`cuprum/_subprocess_execution.py`,
+`cuprum/_subprocess_stdin.py`, `cuprum/_subprocess_timeout.py`) and concurrent
+execution are covered in [Cuprum design](cuprum-design.md) §8.1.5 (with
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md)) and §8.3.1
+respectively, and are not repeated here.
+
+Runtime (`cuprum/`):
+
+- `cuprum/_concurrent_config.py` — the `ConcurrentConfig`/`ConcurrentResult`
+  dataclasses and their validation; an implementation detail of
+  `cuprum.concurrent`.
+- `cuprum/_pipeline_collect.py` — drives a spawned pipeline to completion and
+  collects its output; also hosts the `cuprum.sh` lazy-import shim.
+- `cuprum/_pipeline_stream_results.py` — pipe-result triage for pipeline
+  stages.
+- `cuprum/_streams_pump.py` — the stream pump loop with backpressure.
+- `cuprum/adapters/_tracing_protocols.py` — the PEP 544 `Span`/`Tracer`
+  protocols for the tracing adapter.
+
+Benchmarks (`benchmarks/`):
+
+- `benchmarks/ratchet_ratio_extraction.py` — extracts within-run Rust/Python
+  ratio maps and validates that baseline and candidate comparison groups
+  match. `benchmarks/ratchet_rust_performance.py` owns report-value
+  construction; this module owns ratio extraction and ratio-map validation.
+- `benchmarks/_tee_profile_worker_backend.py` — backend selection for the tee
+  hot-path profiling worker (`_EnvBackendSelector` and its supporting state).
+
+Spelling policy (`scripts/`):
+
+- `scripts/typos_rollout_dictionary.py` — the shared dictionary model, TOML
+  parsing, and merging; standard library only.
+- `scripts/typos_rollout_refresh.py` — cache freshness policy: HTTP validator
+  metadata, local mtime comparison, and the conditional HTTPS fetch with its
+  HTTPS-only redirect handler and stale-cache fallback.
+- `scripts/typos_rollout.py` remains the rendering module and public façade,
+  re-exporting the API so callers keep one entry point.
+
+Test helpers:
+
+- `tests/helpers/maturin_pins.py` — reads and validates the synchronized
+  maturin version pins (see
+  [Maturin pin synchronization and native wheel tests](#maturin-pin-synchronization-and-native-wheel-tests)).
 
 ## `rust_consume_stream` integration status
 
