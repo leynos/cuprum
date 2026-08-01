@@ -46,6 +46,10 @@ def _make_exec_event(
     thread a shared ``exec_id`` override; pass ``{"exec_id": None}`` to build a
     legacy, uncorrelated event.
     """
+    # Each event carries a fresh ``exec_id`` by default, mirroring real
+    # executions. Tests that span several lifecycle phases of one execution
+    # must thread a shared ``exec_id`` override; pass ``{"exec_id": None}``
+    # to build a legacy, uncorrelated event.
     values: dict[str, object] = {
         "phase": phase,
         "program": "cat",
