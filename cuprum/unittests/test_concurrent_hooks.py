@@ -1,0 +1,104 @@
+"""Unit tests for context-hook integration during concurrent execution.
+
+These verify that before, after, and observe hooks fire once per command
+when commands are run concurrently within a scoped allowlist.
+"""
+
+from __future__ import annotations
+
+import typing as typ
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+    import contextlib
+
+from cuprum import (
+    ECHO,
+    CommandResult,
+    ScopeConfig,
+    scoped,
+    sh,
+)
+from cuprum.concurrent import (
+    run_concurrent_sync,
+)
+
+
+def _run_hook_test[T](
+    hook_context: cabc.Callable[[list[T]], contextlib.AbstractContextManager[None]],
+    num_commands: int = 3,
+) -> list[T]:
+    """Run concurrent echo commands within a hook context and return hook calls."""
+    echo = sh.make(ECHO)
+    commands = [echo("-n", f"cmd{i}") for i in range(num_commands)]
+    hook_calls: list[T] = []
+
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), hook_context(hook_calls):
+        run_concurrent_sync(*commands)
+
+    return hook_calls
+
+
+def test_before_hooks_fire_per_command() -> None:
+    """Before hooks fire for each command in concurrent execution."""
+    from cuprum import SafeCmd, before
+
+    def make_tracker(calls: list[str]) -> cabc.Callable[[SafeCmd], None]:
+        """Build a before-hook that records each command's program."""
+
+        def track_before(cmd: SafeCmd) -> None:
+            """Append the command's program to the tracked before-hook calls."""
+            calls.append(str(cmd.program))
+
+        return track_before
+
+    hook_calls = _run_hook_test(lambda calls: before(make_tracker(calls)))
+
+    assert len(hook_calls) == 3, "the before hook must fire once per command"
+    assert all(call == "echo" for call in hook_calls), (
+        "each before hook call must report the echo program"
+    )
+
+
+def test_after_hooks_fire_per_command() -> None:
+    """After hooks fire for each command in concurrent execution."""
+    from cuprum import SafeCmd, after
+
+    def make_tracker(calls: list[int]) -> cabc.Callable[[SafeCmd, CommandResult], None]:
+        """Build an after-hook that records each command's exit code."""
+
+        def track_after(cmd: SafeCmd, result: CommandResult) -> None:
+            """Append the command's exit code to the tracked after-hook calls."""
+            _ = cmd  # Unused
+            calls.append(result.exit_code)
+
+        return track_after
+
+    hook_calls = _run_hook_test(lambda calls: after(make_tracker(calls)))
+
+    assert len(hook_calls) == 3, "the after hook must fire once per command"
+    assert all(code == 0 for code in hook_calls), (
+        "each after hook call must report a successful exit code"
+    )
+
+
+def test_observe_hooks_receive_events_per_command() -> None:
+    """Observe hooks receive events for each command."""
+    from cuprum import ExecEvent, observe
+
+    echo = sh.make(ECHO)
+    commands = [echo("-n", f"cmd{i}") for i in range(2)]
+    events: list[ExecEvent] = []
+
+    def track_events(ev: ExecEvent) -> None:
+        """Append each received execution event to the tracked list."""
+        events.append(ev)
+
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), observe(track_events):
+        run_concurrent_sync(*commands)
+
+    # Each command should emit plan, start, stdout (if any), exit events
+    phases = [ev.phase for ev in events]
+    assert phases.count("plan") == 2, "each command must emit one plan event"
+    assert phases.count("start") == 2, "each command must emit one start event"
+    assert phases.count("exit") == 2, "each command must emit one exit event"
