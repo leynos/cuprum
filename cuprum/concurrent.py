@@ -8,141 +8,20 @@ aggregated results.
 from __future__ import annotations
 
 import asyncio
-import dataclasses as dc
 import typing as typ
 
+from cuprum._concurrent_config import (
+    ConcurrentConfig,
+    ConcurrentResult,
+    _ConcurrentRunConfig,
+)
 from cuprum.context import current_context
 from cuprum.sh import RunOutputOptions
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _ConcurrentRunConfig:
-    """Internal configuration for concurrent command execution."""
-
-    output: RunOutputOptions
-    context: ExecutionContext | None
-
-
-@dc.dataclass(frozen=True, slots=True)
-class ConcurrentConfig:
-    """Configuration for concurrent command execution.
-
-    Attributes
-    ----------
-    concurrency:
-        Maximum number of commands to execute concurrently. When None,
-        all commands are started immediately with no throttling.
-        Must be >= 1 when provided.
-    capture:
-        When True, capture stdout/stderr for each command into the
-        CommandResult. When False, output is not captured and stdout
-        will be None in results.
-    echo:
-        When True, tee output to configured sinks (stdout/stderr by
-        default) in addition to capturing.
-    context:
-        Shared execution context for all commands. When None, uses
-        the current context from the execution environment.
-    fail_fast:
-        When True, cancel remaining commands after the first command
-        exits with a non-zero status. When False (default), all
-        commands run to completion regardless of individual failures.
-
-    """
-
-    concurrency: int | None = None
-    capture: bool = True
-    echo: bool = False
-    context: ExecutionContext | None = None
-    fail_fast: bool = False
-
-    def __post_init__(self) -> None:
-        """Validate configuration parameters."""
-        if self.concurrency is not None and self.concurrency < 1:
-            msg = f"concurrency must be >= 1, got {self.concurrency}"
-            raise ValueError(msg)
-
-
-@dc.dataclass(frozen=True, slots=True)
-class ConcurrentResult:
-    """Aggregated result from concurrent command execution.
-
-    Attributes
-    ----------
-    results:
-        CommandResult instances in submission order (not completion order).
-        When ``fail_fast=True`` is used, execution may cancel remaining
-        commands after the first failure; in this case, results contains
-        only the completed (non-cancelled) CommandResult instances and
-        may be a subset of the originally submitted commands.
-    failures:
-        Indices into ``results`` for commands that exited non-zero, in
-        ascending order. These are positions within the (possibly compacted)
-        ``results`` tuple, **not** original submission positions; in fail-fast
-        mode ``results`` omits cancelled commands, so a ``failures`` index does
-        not equal the submitted command's position. Use
-        :attr:`failure_submission_indices` for the submission-stable mapping.
-    submission_indices:
-        Original submission index of each entry in ``results``, parallel to it.
-        In collect-all mode this is the identity ``(0, 1, …, n-1)``; in
-        fail-fast mode it lists the submission positions of the completed
-        commands. Lets callers map any result — or failure — back to the
-        command they submitted, uniformly across both execution modes. Pass
-        ``None`` (the default) to backfill the identity sequence (even for
-        empty ``results``); any supplied sequence — including an empty tuple —
-        whose length differs from ``results`` raises :class:`ValueError`.
-
-    """
-
-    results: tuple[CommandResult, ...]
-    failures: tuple[int, ...] = ()
-    submission_indices: tuple[int, ...] | None = None
-
-    def __post_init__(self) -> None:
-        """Backfill or validate ``submission_indices`` against ``results``.
-
-        Treat ``None`` as "omitted" and backfill the identity sequence (even
-        for empty ``results``); validate any supplied sequence, so a length
-        mismatch fails fast here rather than as a later ``IndexError``.
-        """
-        if self.submission_indices is None:
-            identity = tuple(range(len(self.results)))
-            object.__setattr__(self, "submission_indices", identity)
-            return
-        if len(self.submission_indices) != len(self.results):
-            msg = (
-                f"submission_indices length ({len(self.submission_indices)}) "
-                f"must match results length ({len(self.results)})"
-            )
-            raise ValueError(msg)
-
-    @property
-    def ok(self) -> bool:
-        """Return True when all commands exited successfully."""
-        return not self.failures
-
-    @property
-    def first_failure(self) -> CommandResult | None:
-        """Return the first failed result, or None if all succeeded."""
-        if not self.failures:
-            return None
-        return self.results[self.failures[0]]
-
-    @property
-    def failure_submission_indices(self) -> tuple[int, ...]:
-        """Original submission indices of failed commands, ascending.
-
-        Unlike :attr:`failures` (positions within the compacted ``results``),
-        these are stable across both collect-all and fail-fast modes: each
-        value is the position at which the failing command was submitted.
-        """
-        # ``__post_init__`` backfills the mapping, so it is never None here.
-        return tuple((self.submission_indices or ())[index] for index in self.failures)
+    from cuprum.sh import CommandResult, SafeCmd
 
 
 class _FirstFailureError(Exception):
