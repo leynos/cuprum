@@ -155,6 +155,11 @@ class CuprumContext:
         allowlists. Use check_allowed() for enforcement; it applies the
         two-mode empty-allowlist policy, permitting empty unrestricted
         contexts and denying empty restricted contexts.
+
+        Returns
+        -------
+        bool
+            ``True`` when the program is a member of the allowlist.
         """
         return program in self.allowlist
 
@@ -241,6 +246,11 @@ class CuprumContext:
 
         Unlike narrow(), this sets the allowlist directly without intersection.
         Use with care; prefer narrow() for enforcing safety invariants.
+
+        Returns
+        -------
+        CuprumContext
+            A new context with the supplied allowlist.
         """
         return dc.replace(
             self,
@@ -251,38 +261,86 @@ class CuprumContext:
         )
 
     def with_before_hook(self, hook: BeforeHook) -> CuprumContext:
-        """Return a context with an additional before hook."""
+        """Return a context with an additional before hook.
+
+        Returns
+        -------
+        CuprumContext
+            A new context with the before hook appended.
+        """
         return dc.replace(self, before_hooks=(*self.before_hooks, hook))
 
     def without_before_hook(self, hook: BeforeHook) -> CuprumContext:
-        """Return a context with the specified before hook removed."""
+        """Return a context with the specified before hook removed.
+
+        Returns
+        -------
+        CuprumContext
+            A new context without the given before hook.
+        """
         new_hooks = tuple(h for h in self.before_hooks if h is not hook)
         return dc.replace(self, before_hooks=new_hooks)
 
     def with_after_hook(self, hook: AfterHook) -> CuprumContext:
-        """Return a context with an additional after hook (prepended for LIFO)."""
+        """Return a context with an additional after hook (prepended for LIFO).
+
+        Returns
+        -------
+        CuprumContext
+            A new context with the after hook prepended.
+        """
         return dc.replace(self, after_hooks=(hook, *self.after_hooks))
 
     def without_after_hook(self, hook: AfterHook) -> CuprumContext:
-        """Return a context with the specified after hook removed."""
+        """Return a context with the specified after hook removed.
+
+        Returns
+        -------
+        CuprumContext
+            A new context without the given after hook.
+        """
         new_hooks = tuple(h for h in self.after_hooks if h is not hook)
         return dc.replace(self, after_hooks=new_hooks)
 
     def with_observe_hook(self, hook: ExecHook) -> CuprumContext:
-        """Return a context with an additional observe hook."""
+        """Return a context with an additional observe hook.
+
+        Returns
+        -------
+        CuprumContext
+            A new context with the observe hook appended.
+        """
         return dc.replace(self, observe_hooks=(*self.observe_hooks, hook))
 
     def without_observe_hook(self, hook: ExecHook) -> CuprumContext:
-        """Return a context with the specified observe hook removed."""
+        """Return a context with the specified observe hook removed.
+
+        Returns
+        -------
+        CuprumContext
+            A new context without the given observe hook.
+        """
         new_hooks = tuple(h for h in self.observe_hooks if h is not hook)
         return dc.replace(self, observe_hooks=new_hooks)
 
     def with_program(self, program: Program) -> CuprumContext:
-        """Return a context with the program added to the allowlist."""
+        """Return a context with the program added to the allowlist.
+
+        Returns
+        -------
+        CuprumContext
+            A new context whose allowlist includes the program.
+        """
         return self.with_allowlist(self.allowlist | {program})
 
     def without_program(self, program: Program) -> CuprumContext:
-        """Return a context with the program removed from the allowlist."""
+        """Return a context with the program removed from the allowlist.
+
+        Returns
+        -------
+        CuprumContext
+            A new context whose allowlist excludes the program.
+        """
         return self.with_allowlist(self.allowlist - {program})
 
     def with_env_overlay(
@@ -295,6 +353,11 @@ class CuprumContext:
         ever displaces the live :func:`os.environ`; the live process
         environment is read at subprocess spawn time. Passing ``None`` returns
         an unchanged copy.
+
+        Returns
+        -------
+        CuprumContext
+            A new context with the merged environment overlay.
         """
         return dc.replace(
             self,

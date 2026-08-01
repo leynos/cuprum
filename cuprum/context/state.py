@@ -25,12 +25,24 @@ _current_context: ContextVar[CuprumContext] = ContextVar(
 
 
 def current_context() -> CuprumContext:
-    """Return the current execution context."""
+    """Return the current execution context.
+
+    Returns
+    -------
+    CuprumContext
+        The context bound to the current execution scope.
+    """
     return _current_context.get()
 
 
 def get_context() -> CuprumContext:
-    """Alias for current_context()."""
+    """Alias for current_context().
+
+    Returns
+    -------
+    CuprumContext
+        The context bound to the current execution scope.
+    """
     return current_context()
 
 

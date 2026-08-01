@@ -21,6 +21,12 @@ def is_available() -> bool:
     bool
         True when the native module can be imported and reports availability.
 
+    Raises
+    ------
+    ImportError
+        If importing the native module fails for any reason other than the
+        module being absent, so genuine extension load errors stay visible.
+
     Notes
     -----
     This is the raw, uncached import probe. It does *not* honour the backend

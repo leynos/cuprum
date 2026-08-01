@@ -81,19 +81,7 @@ def _parse_backend_value(raw: str) -> StreamBackend:
 
 
 def _read_backend_env() -> StreamBackend:
-    """Read and validate the stream backend from the environment.
-
-    Returns
-    -------
-    StreamBackend
-        The requested backend parsed from ``CUPRUM_STREAM_BACKEND``, or
-        ``StreamBackend.AUTO`` when the variable is unset or empty.
-
-    Raises
-    ------
-    ValueError
-        If the environment variable contains an unrecognized value.
-    """
+    """Read and validate the stream backend from the environment."""
     return _parse_backend_value(os.environ.get(_ENV_VAR, ""))
 
 
@@ -209,6 +197,8 @@ def _resolve_backend(
     ------
     ImportError
         If ``RUST`` is forced but ``rust_available`` is not truthy.
+    AssertionError
+        If a new ``StreamBackend`` member is added without a matching case.
 
     Examples
     --------
@@ -241,6 +231,17 @@ def _probe_rust_availability(requested: StreamBackend) -> bool | None:
     ``PYTHON`` never probes (returns ``None``). ``AUTO`` tolerates a probe
     ``ImportError`` and falls back to ``None``. ``RUST`` lets a probe
     ``ImportError`` propagate, matching the forced-backend contract.
+
+    Returns
+    -------
+    bool | None
+        The probe result, or ``None`` when probing is skipped (``PYTHON``) or
+        an ``AUTO`` probe failed.
+
+    Raises
+    ------
+    ImportError
+        If a non-``AUTO`` requested backend's availability probe fails.
     """
     if requested is StreamBackend.PYTHON:
         return None
@@ -294,7 +295,7 @@ def get_stream_backend() -> StreamBackend:
     ``get_stream_backend.cache_clear()`` (and
     ``_check_rust_available.cache_clear()``) to force re-resolution (useful
     in tests).
-    """
+    """  # noqa: DOC502 - ValueError propagates from _read_backend_env
     requested = _read_backend_env()
     # Probe and resolution share one boundary handler so a forced-RUST failure
     # emits the structured warning whether the extension probes as unavailable
