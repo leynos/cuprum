@@ -105,18 +105,20 @@ extend-ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# ASYNC109/ASYNC240 are ignored for tests: the async scaffolding polls a PID
-# file with asyncio-only helpers, so a ``timeout`` parameter and blocking
-# ``pathlib`` calls are acceptable here (trio/anyio async paths are not in use).
 "**/test_*.py" = [
     "S101",
     "PLR0913",
     "PLR0917",
     "PLR2004",
     "PLR6301",
-    "ASYNC109",
-    "ASYNC240",
 ]
+# ASYNC109/ASYNC240 are ignored only for the two modules whose async
+# scaffolding polls a PID/marker file with asyncio-only helpers, so a
+# ``timeout`` parameter and blocking ``pathlib`` calls are acceptable there
+# (trio/anyio async paths are not in use). Scoped to these paths so unrelated
+# and future async tests do not silently inherit the exemption.
+"cuprum/unittests/test_observe_stdin_early_close.py" = ["ASYNC109", "ASYNC240"]
+"tests/behaviour/test_execution_runtime.py" = ["ASYNC109", "ASYNC240"]
 # Test scaffolding modules (shared helpers imported by test_*.py) get the same
 # allowances as the tests they support; they use bare ``assert`` for fixtures.
 "cuprum/unittests/*_test_helpers.py" = ["S101", "PLR0913", "PLR0917", "PLR2004", "PLR6301"]
