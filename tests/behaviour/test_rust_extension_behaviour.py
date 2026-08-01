@@ -22,6 +22,7 @@ if typ.TYPE_CHECKING:
 def test_rust_extension_availability() -> None:
     """Behavioural coverage for the Rust availability probe."""
 
+
 @pytest.mark.parametrize(
     "invalid_availability",
     [
@@ -46,6 +47,8 @@ def test_rust_extension_availability_rejects_non_bool(
         match="Rust availability resolver must return bool",
     ):
         rust_api.is_rust_available()
+
+
 @given("the Cuprum Rust availability probe", target_fixture="probe")
 def given_probe() -> cabc.Callable[[], bool]:
     """Expose the Rust backend availability probe.
