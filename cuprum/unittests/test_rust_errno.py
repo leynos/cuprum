@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import os
+import sys
 import typing as typ
 
 import pytest
@@ -23,6 +24,16 @@ import pytest
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from types import ModuleType
+
+# These cases name POSIX errnos and the subclasses CPython derives from them.
+# Windows reaches the same conversion but carries a Win32 code through
+# `winerror`, from which CPython derives a different errno, so the expected
+# numbers here do not hold there. Skip rather than encode both taxonomies:
+# the Windows arm has no test job to run in.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="asserts POSIX errno values and the subclasses derived from them",
+)
 
 
 @pytest.fixture(name="broken_pipe_fds")

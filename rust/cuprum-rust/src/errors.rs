@@ -81,32 +81,56 @@ fn strip_os_error_suffix(message: &str, code: i32) -> String {
     message.strip_suffix(&suffix).unwrap_or(message).to_owned()
 }
 
-/// Convert an [`io::Error`] into a Python exception that keeps its `errno`.
+/// Build a Python `OSError` from a POSIX `errno` and its message.
+///
+/// The two-argument form is what makes the number reachable: Python populates
+/// `OSError.errno` and `OSError.strerror` only when it receives **two or more**
+/// arguments. It also fixes the exception type, because `CPython` maps the
+/// errno to the matching subclass itself — `OSError(32, ...)` *is* a
+/// `BrokenPipeError`. That is the same subclass selection `PyO3` reaches for
+/// through `io::ErrorKind`, taken from the authoritative source rather than a
+/// parallel table.
+#[cfg(unix)]
+fn os_error_to_py_err(code: i32, strerror: String) -> PyErr {
+    PyOSError::new_err((code, strerror))
+}
+
+/// Build a Python `OSError` from a Win32 error code and its message.
+///
+/// On Windows `raw_os_error` carries a `GetLastError` code, not an `errno`.
+/// Passing it where Python expects an `errno` would assign an unrelated number
+/// — `ERROR_INVALID_HANDLE` is 6, which as an `errno` is `ENXIO` — leave
+/// `winerror` unset, and select the subclass from that wrong number.
+///
+/// The five-argument form `OSError(errno, strerror, filename, winerror,
+/// filename2)` is the one that carries a native code. Given a `winerror`,
+/// `CPython` ignores the `errno` argument, derives `errno` from the Win32 code
+/// itself, and then selects the subclass from the derived value, so all three
+/// fields agree. The leading zero is therefore a placeholder, and the two
+/// `None`s are the absent filenames.
+#[cfg(windows)]
+fn os_error_to_py_err(code: i32, strerror: String) -> PyErr {
+    PyOSError::new_err((0, strerror, None::<String>, code, None::<String>))
+}
+
+/// Convert an [`io::Error`] into a Python exception that keeps its OS code.
 ///
 /// `PyO3`'s own `From<io::Error> for PyErr` picks the exception *type* from
 /// `io::ErrorKind`, then constructs it with a single argument — the error's
-/// `Display` string. Python only populates `OSError.errno` and
-/// `OSError.strerror` when it receives **two or more** arguments, so a
-/// single-argument construction leaves `errno` as `None`: the number survives
-/// in the message text but not anywhere a caller can branch on. Callers are
-/// then forced to parse English to tell `EBADF` from `EPIPE`, and message text
-/// is not a stable interface.
+/// `Display` string. A single-argument construction leaves `errno` as `None`:
+/// the number survives in the message text but not anywhere a caller can
+/// branch on. Callers are then forced to parse English to tell `EBADF` from
+/// `EPIPE`, and message text is not a stable interface.
 ///
-/// Constructing `OSError(code, strerror)` instead fixes both halves at once,
-/// because `CPython` maps the errno to the matching subclass itself:
-/// `OSError(32, ...)` *is* a `BrokenPipeError`. That is the same subclass
-/// selection `PyO3` was reaching for through `ErrorKind`, obtained from the
-/// authoritative source rather than a parallel table.
+/// The platform decides how the number must be handed over, so the
+/// construction itself lives in the `cfg`-selected [`os_error_to_py_err`].
 ///
 /// An `io::Error` with no `raw_os_error` — one synthesized in Rust rather than
 /// returned by a syscall — has no number to preserve, so `PyO3`'s `ErrorKind`
 /// mapping remains the best available and is used unchanged.
 fn io_error_to_py_err(err: io::Error) -> PyErr {
     match err.raw_os_error() {
-        Some(code) => {
-            let strerror = strip_os_error_suffix(&err.to_string(), code);
-            PyOSError::new_err((code, strerror))
-        }
+        Some(code) => os_error_to_py_err(code, strip_os_error_suffix(&err.to_string(), code)),
         None => err.into(),
     }
 }
@@ -202,5 +226,92 @@ mod tests {
             expected,
             "stripping must be anchored to this error's own code",
         );
+    }
+
+    mod properties {
+        //! Generated coverage for [`super::super::strip_os_error_suffix`].
+        //!
+        //! The `rstest` cases above fix four hand-picked messages. They cannot
+        //! show that stripping is anchored to *this* error's code for every
+        //! message and every `i32`, which is the whole point of the helper: it
+        //! must never truncate a `strerror` a caller reads, and must never
+        //! leave the number stated twice.
+
+        use proptest::prelude::*;
+
+        /// Messages shaped like the ones this helper meets, plus near-misses.
+        ///
+        /// An unconstrained `".*"` almost never produces a string ending in
+        /// `)`, so it cannot tell a correct implementation from one that trims
+        /// trailing punctuation off messages it does not recognise. The arms
+        /// are: a plain `strerror`, one already carrying a rendered suffix, and
+        /// one that merely ends the way a suffix does.
+        fn os_error_message() -> impl Strategy<Value = String> {
+            prop_oneof![
+                "[^()]*",
+                ("[^()]*", any::<i32>())
+                    .prop_map(|(text, code)| format!("{text} (os error {code})")),
+                "[^()]*\\)",
+            ]
+        }
+
+        proptest! {
+            /// Stripping undoes appending, for any message and any code.
+            ///
+            /// This is the case that actually occurs: `io::Error` renders a raw
+            /// OS error as exactly `"{strerror} (os error {code})"`, so the
+            /// helper must recover `strerror` whatever the two contain.
+            #[test]
+            fn stripping_undoes_appending_the_matching_suffix(
+                message in os_error_message(),
+                code in any::<i32>(),
+            ) {
+                let rendered = format!("{message} (os error {code})");
+                prop_assert_eq!(
+                    super::super::strip_os_error_suffix(&rendered, code),
+                    message,
+                    "the rendered form must strip back to the bare strerror",
+                );
+            }
+
+            /// A suffix bearing a different code is left in place.
+            ///
+            /// Trimming it would hand the caller a truncated `strerror`, and
+            /// would hide that the message came from another error entirely.
+            #[test]
+            fn a_mismatched_code_leaves_the_message_untouched(
+                message in os_error_message(),
+                code in any::<i32>(),
+                other in any::<i32>(),
+            ) {
+                prop_assume!(code != other);
+                let rendered = format!("{message} (os error {other})");
+                prop_assert_eq!(
+                    super::super::strip_os_error_suffix(&rendered, code),
+                    rendered.clone(),
+                    "only this error's own suffix may be removed",
+                );
+            }
+
+            /// The result is never longer than the input, and only ever shrinks
+            /// by the exact suffix.
+            ///
+            /// Nothing above rules out the helper *rewriting* a message it does
+            /// not recognise; this pins that it either returns the input
+            /// verbatim or removes precisely one known suffix.
+            #[test]
+            fn the_message_is_returned_verbatim_or_minus_its_own_suffix(
+                message in os_error_message(),
+                code in any::<i32>(),
+            ) {
+                let stripped = super::super::strip_os_error_suffix(&message, code);
+                let removed = format!(" (os error {code})");
+                prop_assert!(
+                    stripped == message
+                        || format!("{stripped}{removed}") == message,
+                    "unrecognised messages must pass through unchanged",
+                );
+            }
+        }
     }
 }
