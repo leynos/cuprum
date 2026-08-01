@@ -1,21 +1,25 @@
 """Tests for the maturin version and container pins staying synchronized.
 
-The pin readers live here rather than in `tests/helpers/maturin.py`: they read
-repository files, have this module as their only consumer, and gain nothing
-from indirection. Wheel building and inspection keep their helpers, because
-those wrap `subprocess` and `zipfile` work that does not inline cleanly.
+This module owns the pin-synchronization checks. The readers live here rather
+than in `tests/helpers/maturin.py`: they read repository files, have this
+module as their only consumer, and gain nothing from indirection. The two that
+do have a second consumer — the pyproject version reader and the container
+reference pattern — sit in `_maturin_pin_support.py`, which documents why.
+Wheel building and inspection keep their helpers, because those wrap
+`subprocess` and `zipfile` work that does not inline cleanly.
 """
 
 from __future__ import annotations
 
+import importlib
 import importlib.metadata as im
 import re
-import shutil
 import typing as typ
 
 import pytest
 
 from cuprum.unittests._maturin_pin_support import (
+    MANYLINUX_CONTAINER_SHA256_RE,
     read_expected_maturin_version,
     read_text,
     require_pin_match,
@@ -35,9 +39,6 @@ _AARCH64_CONTAINER_PIN_RE = re.compile(
 _AARCH64_CONTAINER_USAGE_RE = re.compile(
     r"^\s*container:\s*\$\{\{\s*env\.MANYLINUX_AARCH64_CONTAINER\s*\}\}\s*$",
     re.MULTILINE,
-)
-_MANYLINUX_CONTAINER_SHA256_RE = re.compile(
-    r"^ghcr\.io/rust-cross/manylinux_2_28-cross@sha256:[0-9a-f]{64}$"
 )
 
 
@@ -86,9 +87,17 @@ def test_maturin_pins_are_synchronized() -> None:
 
 
 def test_installed_maturin_matches_expected_pin() -> None:
-    """The active maturin CLI matches the pinned development dependency."""
-    if shutil.which("maturin") is None:
-        pytest.skip("maturin is not installed.")
+    """The active maturin matches the pinned development dependency.
+
+    Skip on the *module* rather than on a launcher found via `PATH`.
+    `build_native_wheel_artifact` runs `python -m maturin` in the current
+    interpreter, so an unrelated `maturin` earlier on `PATH` would let this
+    test compare a version the build never uses.
+    """
+    try:
+        importlib.import_module("maturin")
+    except ImportError:
+        pytest.skip("maturin is not installed in this interpreter.")
     expected = read_expected_maturin_version(repo_root())
     installed = im.version("maturin")
     assert installed == expected, (
@@ -99,7 +108,7 @@ def test_installed_maturin_matches_expected_pin() -> None:
 def test_manylinux_aarch64_container_is_pinned_to_sha256() -> None:
     """Aarch64 manylinux container pin must be immutable."""
     container_ref = _read_manylinux_aarch64_container_ref(repo_root())
-    assert _MANYLINUX_CONTAINER_SHA256_RE.fullmatch(container_ref), (
+    assert MANYLINUX_CONTAINER_SHA256_RE.fullmatch(container_ref), (
         f"Expected SHA-256 pinned container ref, found {container_ref!r}"
     )
 
@@ -125,7 +134,7 @@ def test_manylinux_aarch64_container_ref_rejects_mutable_tag(
     container_ref: str,
 ) -> None:
     """Aarch64 manylinux container refs reject mutable or invalid pins."""
-    assert _MANYLINUX_CONTAINER_SHA256_RE.fullmatch(container_ref) is None
+    assert MANYLINUX_CONTAINER_SHA256_RE.fullmatch(container_ref) is None
 
 
 def test_manylinux_aarch64_container_pin_regex_rejects_missing_comment() -> None:

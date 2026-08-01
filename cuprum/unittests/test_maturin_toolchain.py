@@ -149,8 +149,16 @@ def test_toolchain_available_propagates_a_non_import_error(
 
     monkeypatch.setattr(maturin_helper.importlib, "import_module", exploding_import)
 
-    with pytest.raises(RuntimeError, match="import crashed"):
+    # `match=` searches rather than fullmatches, so a diagnostic that gained a
+    # prefix or suffix would still pass. Compare the message exactly, so the
+    # failure a caller sees is the one the import actually raised.
+    with pytest.raises(RuntimeError) as exc_info:
         toolchain_available()
+
+    assert str(exc_info.value) == "maturin is installed but its import crashed", (
+        f"toolchain_available must propagate the import failure verbatim, "
+        f"found {str(exc_info.value)!r}"
+    )
 
 
 def test_maturin_script_locatable_true_when_script_present(

@@ -107,27 +107,6 @@ def test_build_native_wheel_artifact_reports_maturin_stderr(
     )
 
 
-def test_wheel_build_snapshot_rejects_wheel_without_metadata(
-    tmp_path: pth.Path,
-) -> None:
-    """A wheel with WHEEL but no METADATA raises the documented error.
-
-    ``metadata_name`` is derived from the WHEEL entry by string
-    substitution rather than looked up in the archive, so without an
-    explicit membership check ``ZipFile.read`` would surface a ``KeyError``
-    that the helper's documented ``Raises`` contract does not advertise.
-    """
-    whl_path = tmp_path / "cuprum-0.0.0-py3-none-any.whl"
-    with zipfile.ZipFile(whl_path, "w") as archive:
-        archive.writestr(
-            "cuprum-0.0.0.dist-info/WHEEL",
-            "Wheel-Version: 1.0\nGenerator: maturin (1.0.0)\nRoot-Is-Purelib: false\n",
-        )
-
-    with pytest.raises(AssertionError, match=r"missing \.dist-info/METADATA"):
-        wheel_build_snapshot(whl_path)
-
-
 @pytest.mark.timeout(0)
 def test_maturin_wheel_build_snapshot(
     tmp_path: pth.Path,
@@ -187,8 +166,11 @@ def test_wheel_build_snapshot_reports_missing_dist_info(
     """A wheel missing either dist-info member fails with AssertionError.
 
     ``wheel_build_snapshot`` documents ``AssertionError`` for absent metadata,
-    so a missing ``METADATA`` must not surface as the ``KeyError`` that
-    ``ZipFile.read`` would otherwise raise.
+    so neither member may surface as the ``KeyError`` that ``ZipFile.read``
+    would otherwise raise. ``METADATA`` is the easier one to get wrong:
+    ``metadata_name`` is derived from the ``WHEEL`` entry by string
+    substitution rather than looked up in the archive, so it needs an explicit
+    membership check to honour the documented contract.
     """
     whl_path = tmp_path / "cuprum-0.1.0-py3-none-any.whl"
     with zipfile.ZipFile(whl_path, "w") as archive:

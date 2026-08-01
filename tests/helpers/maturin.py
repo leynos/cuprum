@@ -1,13 +1,19 @@
 """Helpers for building and introspecting the native maturin wheel.
 
-Maturin pin-synchronization checks are inlined in
-``cuprum/unittests/test_maturin_build.py``, their sole consumer. This module
-retains the toolchain detectors and the wheel *build*, which wrap ``subprocess``
-and ``sysconfig`` probing that does not inline cleanly; wheel *inspection* lives
-in ``tests.helpers.maturin_wheel`` and is re-exported here so existing import
-sites keep working. Do not re-externalize further helpers here until a second
-concrete consumer exists and the shared interface can be designed against real
-requirements.
+Maturin pin-synchronization checks are not here. They belong to
+``cuprum/unittests/test_maturin_pins.py``, which owns the readers and patterns
+that compare the pins across CI files. The subset with a second consumer — the
+pyproject reader and the container-reference pattern — sits in
+``cuprum/unittests/_maturin_pin_support.py``, from which
+``cuprum/unittests/test_maturin_build.py`` takes the expected version to assert
+against the built wheel's ``Generator``.
+
+This module retains the toolchain detectors and the wheel *build*, which wrap
+``subprocess`` and ``sysconfig`` probing that does not inline cleanly; wheel
+*inspection* lives in ``tests.helpers.maturin_wheel`` and is re-exported here
+so existing import sites keep working. Do not re-externalize further helpers
+here until a second concrete consumer exists and the shared interface can be
+designed against real requirements.
 """
 
 from __future__ import annotations

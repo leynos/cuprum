@@ -1552,13 +1552,17 @@ boundaries.
 
 The **pin-synchronization** checks live in
 `cuprum/unittests/test_maturin_pins.py`, with their readers and regexes local
-to that module: they read repository
-files, have a single consumer, and gain nothing from indirection. The one
-exception is `read_expected_maturin_version`, which sits in
-`cuprum/unittests/_maturin_pin_support.py` because it genuinely has two
-consumers — the pin comparison here and the wheel snapshot's `Generator`
-assertion. That is the second concrete consumer this policy asks for before
-sharing anything, so it is shared and the rest are not.
+to that module: they read repository files, have a single consumer, and gain
+nothing from indirection. Two exceptions sit in
+`cuprum/unittests/_maturin_pin_support.py`, each because it genuinely has a
+second consumer — the threshold this policy asks for before sharing anything:
+
+- `read_expected_maturin_version` — the pin comparison here, and the wheel
+  snapshot's `Generator` assertion in `test_maturin_build.py`.
+- `MANYLINUX_CONTAINER_SHA256_RE` — the container-pin assertion here, and the
+  generated references in `test_manylinux_container_ref_properties.py`.
+  Sharing it through the support module keeps one test module from importing a
+  private name out of another.
 
 The **availability detectors** are tested together in
 `cuprum/unittests/test_maturin_toolchain.py`: `toolchain_available` and
@@ -1624,13 +1628,17 @@ To update the pinned digest, resolve the tag digest for
 `MANYLINUX_AARCH64_CONTAINER`, and rerun:
 
 ```bash
-uv run pytest cuprum/unittests/test_maturin_build.py \
+uv run pytest cuprum/unittests/test_maturin_pins.py \
     -k "manylinux_aarch64_container"
 ```
 
 **Installed version check** (`test_installed_maturin_matches_expected_pin`)
-Skipped automatically when `maturin` is not on `PATH`. When it is present,
-asserts that the installed version matches the pinned development dependency.
+Skipped automatically when the `maturin` *module* cannot be imported by the
+running interpreter. That is the right boundary rather than `PATH`, because the
+build runs `python -m maturin`: a `maturin` launcher earlier on `PATH` can
+belong to an entirely different environment from the one the build uses. When
+the module is importable, asserts that the installed version matches the
+pinned development dependency.
 
 **Wheel build snapshot** (`test_maturin_wheel_build_snapshot`) Requires the
 Rust toolchain (`cargo` and `rustc`). Builds a native wheel into a temporary
@@ -1658,8 +1666,10 @@ This is deliberately narrower than `toolchain_available()`, and the two answer
 different questions:
 
 - `toolchain_available()` — is the `maturin` module importable and are `cargo`
-  and `rustc` on `PATH`? It uses `importlib.util.find_spec`, which succeeds
-  whenever the module is reachable via `sys.path`.
+  and `rustc` on `PATH`? It uses `importlib.import_module` rather than
+  `importlib.util.find_spec`, because the build runs `python -m maturin`,
+  which needs the module to *import*: a module that is merely findable can
+  still fail to import.
 - `maturin_script_locatable()` — can maturin find its own compiled script the
   way `python -m maturin build` will at runtime?
 
