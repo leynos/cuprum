@@ -12,7 +12,7 @@ import typing as typ
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from benchmarks import tee_profile_worker
+from benchmarks import _tee_profile_worker_backend, tee_profile_worker
 from cuprum.unittests._tee_profile_backend_support import (
     _backend_lists,
     _backend_pairs,
@@ -118,10 +118,10 @@ def test_selector_interleaving_blocks_environment_observation_until_unlock(
     result_lock = threading.Lock()
     selector = _CheckpointBackendSelector(events, observations, observation_lock)
     monkeypatch.setattr(
-        tee_profile_worker,
+        _tee_profile_worker_backend,
         "_BACKEND_LOCK",
         _SignallingRLock(
-            tee_profile_worker._BACKEND_LOCK,
+            _tee_profile_worker_backend._BACKEND_LOCK,
             events["second_waiting_for_lock"],
         ),
     )

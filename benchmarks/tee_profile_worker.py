@@ -30,17 +30,21 @@ machine-readable JSON result to stdout or to the requested output path.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import dataclasses as dc
 import json
 import logging
-import os
 import pathlib as pth
 import sys
-import threading
-import time
 import typing as typ
 
+from benchmarks._tee_profile_worker_backend import (
+    BackendName,
+    BackendSelector,
+    Clock,
+    _default_clock,
+    _EnvBackendSelector,
+    _SelectorMetrics,
+)
 from benchmarks.sinks import SinkKind, open_sink
 from cuprum import (
     ExecEvent,
@@ -49,134 +53,17 @@ from cuprum import (
     ProgramCatalogue,
     ProjectSettings,
     ScopeConfig,
-    _backend,
     scoped,
     sh,
 )
 
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
 type TeeMode = typ.Literal["echo", "capture", "tee"]
-type BackendName = typ.Literal["auto", "python", "rust"]
 type WorkerCommandResult = sh.CommandResult | sh.PipelineResult
 
 _VALID_MODES = {"echo", "capture", "tee"}
 _VALID_SINKS = {"devnull", "text_blackhole", "pty_blackhole"}
 _VALID_BACKENDS = {"auto", "python", "rust"}
 _MAX_REPEAT_COUNT = 1000
-_REENTRANT_SELECTOR_MESSAGE = (
-    "_EnvBackendSelector is not re-entrant; nested calls are forbidden"
-)
-_logger = logging.getLogger(__name__)
-
-
-class BackendSelector(typ.Protocol):
-    """Interface for activating a named stream backend for a context.
-
-    Implementations must be usable as a context manager that sets the backend
-    on entry and restores the previous state on exit. Metrics state is exposed
-    explicitly so worker result assembly does not depend on module globals.
-    """
-
-    @property
-    def metrics_state(self) -> _MetricsState:
-        """Return the metrics accumulator owned by this selector."""
-        ...
-
-    def __call__(self, backend: BackendName) -> contextlib.AbstractContextManager[None]:
-        """Return a context manager that activates *backend*."""
-        ...
-
-
-class Clock(typ.Protocol):
-    """Interface for wall-clock time measurement.
-
-    The return value is a monotonically increasing float in seconds,
-    compatible with ``time.perf_counter``.
-    """
-
-    def __call__(self) -> float:
-        """Return the current time in seconds."""
-        ...
-
-
-_default_clock: Clock = time.perf_counter
-_BACKEND_LOCK = threading.RLock()
-_lock_state = threading.local()
-
-
-class _BackendSelectorState:
-    """Track selector activation for the current thread."""
-
-    def __init__(self, state: threading.local) -> None:
-        """Store the thread-local state object used by the selector."""
-        self._state = state
-
-    def enter(self) -> bool:
-        """Mark this thread active, returning ``False`` for nested entry."""
-        if self.is_active:
-            return False
-        self._state.is_active = True
-        return True
-
-    def exit(self) -> None:
-        """Mark this thread inactive."""
-        self._state.is_active = False
-
-    @property
-    def is_active(self) -> bool:
-        """Return whether the current thread already owns the selector."""
-        return bool(getattr(self._state, "is_active", False))
-
-
-_selector_state = _BackendSelectorState(_lock_state)
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _SelectorMetrics:
-    """Thread-local selector observability metrics."""
-
-    lock_wait_seconds: float = 0.0
-    reentrant_rejection_count: int = 0
-
-
-class _MetricsState:
-    """Accumulate selector metrics for the current thread."""
-
-    # Why keep this small wrapper instead of inlining thread-local fields:
-    # CodeScene separately asked for explicit selector metrics ownership.
-    # ``BackendSelector.metrics_state`` declares this type as the protocol
-    # boundary, and property tests exercise its accumulation/reset invariants.
-    # Removing it would hide the dependency again and drop that coverage.
-
-    def __init__(self, state: threading.local) -> None:
-        """Store the thread-local state object used by metrics."""
-        self._state = state
-
-    def reset(self) -> None:
-        """Clear accumulated metrics for the current thread."""
-        self._state.lock_wait_seconds = 0.0
-        self._state.reentrant_rejection_count = 0
-
-    def add_lock_wait(self, seconds: float) -> None:
-        """Accumulate backend-lock wait duration."""
-        self._state.lock_wait_seconds = self.snapshot().lock_wait_seconds + seconds
-
-    def increment_rejections(self) -> int:
-        """Increment and return the reentrant-rejection count."""
-        count = self.snapshot().reentrant_rejection_count + 1
-        self._state.reentrant_rejection_count = count
-        return count
-
-    def snapshot(self) -> _SelectorMetrics:
-        """Return current-thread selector metrics."""
-        return _SelectorMetrics(
-            lock_wait_seconds=float(getattr(self._state, "lock_wait_seconds", 0.0)),
-            reentrant_rejection_count=int(
-                getattr(self._state, "reentrant_rejection_count", 0),
-            ),
-        )
 
 
 class TeeProfileWorkerResult(typ.TypedDict):
@@ -359,94 +246,6 @@ def _build_command(
     for _ in range(config.stages - 2):
         command |= python("-c", _passthrough_script())
     return _WorkerCommand(cmd=command, allowlist=allowlist)
-
-
-class _EnvBackendSelector:
-    """Activate a named stream backend by mutating ``os.environ``.
-
-    Acquires ``_BACKEND_LOCK`` for the duration of the context to serialise
-    access to ``os.environ`` and the backend LRU caches. This selector is
-    not re-entrant; attempted nested entry raises ``RuntimeError`` and logs
-    the rejected backend and thread identifier.
-    """
-
-    def __init__(
-        self,
-        *,
-        clock: Clock | None = None,
-        metrics_state: _MetricsState | None = None,
-        selector_state: _BackendSelectorState | None = None,
-    ) -> None:
-        """Store selector collaborators used for timing and state tracking."""
-        self._clock = clock if clock is not None else _default_clock
-        self._metrics = (
-            metrics_state
-            if metrics_state is not None
-            else _MetricsState(threading.local())
-        )
-        self._selector_state = (
-            selector_state if selector_state is not None else _selector_state
-        )
-
-    @property
-    def metrics_state(self) -> _MetricsState:
-        """Return the metrics accumulator owned by this selector."""
-        return self._metrics
-
-    def __call__(
-        self,
-        backend: BackendName,
-    ) -> contextlib.AbstractContextManager[None]:
-        """Return a context manager that activates *backend*."""
-        return self._activate(backend)
-
-    @contextlib.contextmanager
-    def _activate(self, backend: BackendName) -> cabc.Iterator[None]:
-        """Select the stream backend for parent-side pipeline pumping."""
-        lock_start = self._clock()
-        with _BACKEND_LOCK:
-            lock_end = self._clock()
-            if not self._selector_state.enter():
-                rejection_count = self._metrics.increment_rejections()
-                _logger.warning(
-                    "Rejected re-entrant backend selector activation: "
-                    "backend=%r thread_id=%s selector_active=%s",
-                    backend,
-                    threading.get_ident(),
-                    self._selector_state.is_active,
-                )
-                if rejection_count > 1:
-                    _logger.error(
-                        "Repeated re-entrant backend selector rejection: "
-                        "backend=%r thread_id=%s reentrant_rejection_count=%s",
-                        backend,
-                        threading.get_ident(),
-                        rejection_count,
-                    )
-                raise RuntimeError(_REENTRANT_SELECTOR_MESSAGE)
-
-            # Record the lock wait only for activations that actually enter, so
-            # rejected re-entrant attempts do not inflate ``lock_wait_seconds``.
-            self._metrics.add_lock_wait(lock_end - lock_start)
-            try:
-                previous = os.environ.get("CUPRUM_STREAM_BACKEND")
-                try:
-                    if backend == "auto":
-                        os.environ.pop("CUPRUM_STREAM_BACKEND", None)
-                    else:
-                        os.environ["CUPRUM_STREAM_BACKEND"] = backend
-                    _backend._check_rust_available.cache_clear()
-                    _backend.get_stream_backend.cache_clear()
-                    yield
-                finally:
-                    if previous is None:
-                        os.environ.pop("CUPRUM_STREAM_BACKEND", None)
-                    else:
-                        os.environ["CUPRUM_STREAM_BACKEND"] = previous
-                    _backend._check_rust_available.cache_clear()
-                    _backend.get_stream_backend.cache_clear()
-            finally:
-                self._selector_state.exit()
 
 
 def _capture_and_echo_flags(mode: TeeMode) -> tuple[bool, bool]:
