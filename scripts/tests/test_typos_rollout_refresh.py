@@ -14,9 +14,8 @@ import urllib.request
 
 import pytest
 
-from conftest import _dictionary_text, _patch_https_opener
-
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import types
     from pathlib import Path
 
@@ -24,6 +23,7 @@ if typ.TYPE_CHECKING:
 def test_offline_refresh_requires_and_reuses_valid_cache(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
     tmp_path: Path,
+    dictionary_text: cabc.Callable[..., str],
 ) -> None:
     """Offline mode fails closed before reusing a validated cache."""
     _, rollout, _ = rollout_modules
@@ -35,7 +35,7 @@ def test_offline_refresh_requires_and_reuses_valid_cache(
             "https://example.invalid/base", cache, metadata=metadata, offline=True
         )
 
-    cache.write_text(_dictionary_text(), encoding="utf-8")
+    cache.write_text(dictionary_text(), encoding="utf-8")
     result = rollout.refresh_base(
         "https://example.invalid/base", cache, metadata=metadata, offline=True
     )
@@ -48,6 +48,7 @@ def test_offline_refresh_requires_and_reuses_valid_cache(
 def test_local_refresh_switches_authority_and_records_metadata(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
     tmp_path: Path,
+    dictionary_text: cabc.Callable[..., str],
 ) -> None:
     """A different explicit authority replaces a cache regardless of mtime."""
     _, rollout, _ = rollout_modules
@@ -55,8 +56,8 @@ def test_local_refresh_switches_authority_and_records_metadata(
     second = tmp_path / "second.toml"
     cache = tmp_path / "cache.toml"
     metadata = tmp_path / "cache.json"
-    first.write_text(_dictionary_text("first"), encoding="utf-8")
-    second.write_text(_dictionary_text("second"), encoding="utf-8")
+    first.write_text(dictionary_text("first"), encoding="utf-8")
+    second.write_text(dictionary_text("second"), encoding="utf-8")
     os.utime(first, ns=(3_000_000_000, 3_000_000_000))
     os.utime(second, ns=(1_000_000_000, 1_000_000_000))
     rollout.refresh_base(first, cache, metadata=metadata)
@@ -76,6 +77,8 @@ def test_http_refresh_uses_validators_and_preserves_newer_cache(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    dictionary_text: cabc.Callable[..., str],
+    patch_https_opener: cabc.Callable[[cabc.Callable[..., object]], None],
 ) -> None:
     """Remote refresh persists validators and sends them on the next request."""
     _, rollout, _ = rollout_modules
@@ -94,7 +97,7 @@ def test_http_refresh_uses_validators_and_preserves_newer_cache(
 
         def read(self) -> bytes:
             """Return a valid shared dictionary."""
-            return _dictionary_text().encode()
+            return dictionary_text().encode()
 
         def __enter__(self) -> Response:
             """Enter the fake response context."""
@@ -109,7 +112,7 @@ def test_http_refresh_uses_validators_and_preserves_newer_cache(
         requests.append(request)
         return Response()
 
-    _patch_https_opener(monkeypatch, open_response)
+    patch_https_opener(open_response)
 
     first = rollout.refresh_base(
         "https://example.test/base.toml", cache, metadata=metadata
@@ -131,6 +134,8 @@ def test_remote_failure_reuses_only_a_valid_stale_cache(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    dictionary_text: cabc.Callable[..., str],
+    patch_https_opener: cabc.Callable[[cabc.Callable[..., object]], None],
 ) -> None:
     """Network failure keeps validated data and propagates without it."""
     _, rollout, _ = rollout_modules
@@ -142,12 +147,12 @@ def test_remote_failure_reuses_only_a_valid_stale_cache(
         message = "offline"
         raise urllib.error.URLError(message)
 
-    _patch_https_opener(monkeypatch, fail)
+    patch_https_opener(fail)
 
     with pytest.raises(urllib.error.URLError):
         rollout.refresh_base("https://example.test/base", cache, metadata=metadata)
 
-    cache.write_text(_dictionary_text(), encoding="utf-8")
+    cache.write_text(dictionary_text(), encoding="utf-8")
     result = rollout.refresh_base("https://example.test/base", cache, metadata=metadata)
 
     assert result.status == "stale-cache", (
@@ -159,6 +164,7 @@ def test_remote_refresh_rejects_insecure_and_invalid_content(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    patch_https_opener: cabc.Callable[[cabc.Callable[..., object]], None],
 ) -> None:
     """The remote boundary requires HTTPS and validates bytes before install."""
     _, rollout, _ = rollout_modules
@@ -185,7 +191,7 @@ def test_remote_refresh_rejects_insecure_and_invalid_content(
         def __exit__(self, *_args: object) -> None:
             """Leave the fake response context."""
 
-    _patch_https_opener(monkeypatch, lambda *_args, **_kwargs: InvalidResponse())
+    patch_https_opener(lambda *_args, **_kwargs: InvalidResponse())
 
     with pytest.raises(tomllib.TOMLDecodeError):
         rollout.refresh_base("https://example.test/base", cache, metadata=metadata)
@@ -212,10 +218,11 @@ def test_metadata_reader_handles_invalid_and_non_object_json(
 def test_http_error_translation_handles_not_modified_and_stale_cache(
     refresh_module: types.ModuleType,
     tmp_path: Path,
+    dictionary_text: cabc.Callable[..., str],
 ) -> None:
     """HTTP status handling distinguishes current, stale and absent data."""
     cache = tmp_path / "cache.toml"
-    cache.write_text(_dictionary_text(), encoding="utf-8")
+    cache.write_text(dictionary_text(), encoding="utf-8")
     headers = email.message.Message()
     not_modified = urllib.error.HTTPError(
         "https://example.test/base", 304, "not modified", headers, None

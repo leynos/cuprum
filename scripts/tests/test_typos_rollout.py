@@ -6,20 +6,19 @@ import ast
 import os
 import tomllib
 import typing as typ
-import urllib.request
+import urllib.error
 
 import pytest
 
-from conftest import SCRIPT_DIRECTORY, _dictionary_text
-
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import types
     from pathlib import Path
 
 
-def test_rollout_scripts_support_python_313() -> None:
+def test_rollout_scripts_support_python_313(script_directory: Path) -> None:
     """Every rollout script parses with the declared minimum Python version."""
-    for script in SCRIPT_DIRECTORY.glob("*.py"):
+    for script in script_directory.glob("*.py"):
         ast.parse(
             script.read_text(encoding="utf-8"),
             filename=str(script),
@@ -44,16 +43,17 @@ def test_rollout_generates_oxford_corrections(
 def test_local_refresh_keeps_a_newer_cache(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
     tmp_path: Path,
+    dictionary_text: cabc.Callable[..., str],
 ) -> None:
     """An older local authority cannot replace a newer untracked cache."""
     _, rollout, _ = rollout_modules
     source = tmp_path / "shared.toml"
     cache = tmp_path / ".typos-base.toml"
     metadata = tmp_path / ".typos-base.json"
-    source.write_text(_dictionary_text(), encoding="utf-8")
+    source.write_text(dictionary_text(), encoding="utf-8")
     source.touch()
     rollout.refresh_base(source, cache, metadata=metadata)
-    cache.write_text(_dictionary_text("newer"), encoding="utf-8")
+    cache.write_text(dictionary_text("newer"), encoding="utf-8")
     cache.touch()
     source_mtime = source.stat().st_mtime_ns
     cache_mtime = max(cache.stat().st_mtime_ns, source_mtime + 1)
@@ -97,15 +97,16 @@ def test_https_failure_reuses_valid_tracked_config(
 def test_dictionary_validation_rejects_invalid_documents(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
     tmp_path: Path,
+    dictionary_text: cabc.Callable[..., str],
 ) -> None:
     """Schema, table, string-list and correction types remain validated."""
     _, rollout, _ = rollout_modules
     source = tmp_path / "base.toml"
     invalid_documents = (
-        _dictionary_text().replace("schema = 1", "schema = 2"),
-        _dictionary_text().replace('[oxford]\nstems = ["organ"]', 'oxford = "bad"'),
-        _dictionary_text().replace('stems = ["organ"]', "stems = [1]"),
-        _dictionary_text().replace(
+        dictionary_text().replace("schema = 1", "schema = 2"),
+        dictionary_text().replace('[oxford]\nstems = ["organ"]', 'oxford = "bad"'),
+        dictionary_text().replace('stems = ["organ"]', "stems = [1]"),
+        dictionary_text().replace(
             "[words.corrections]", "[words.corrections]\nteh = 1"
         ),
     )
