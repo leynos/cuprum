@@ -122,6 +122,7 @@ extend-ignore = [
 "cuprum/unittests/test_observe_stdin_early_close.py" = ["ASYNC109", "ASYNC240"]
 "tests/behaviour/_execution_runtime_support.py" = ["ASYNC109", "ASYNC240"]
 "cuprum/unittests/*_test_helpers.py" = ["S101", "PLR0913", "PLR0917", "PLR2004", "PLR6301"]
+"cuprum/unittests/*_support.py" = ["S101", "PLR0913", "PLR0917", "PLR2004", "PLR6301"]
 "tests/steps/*.py" = ["S101", "PLR0913", "PLR0917", "PLR2004", "PLR6301"]
 
 [tool.ruff.lint.flake8-import-conventions]
