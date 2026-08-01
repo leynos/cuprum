@@ -55,16 +55,6 @@ def _validate_bool(value: object, *, name: str) -> bool:
     return value
 
 
-def _validate_non_empty_string(value: object, *, name: str) -> str:
-    """Validate non-empty string values."""
-    msg = f"{name} must be a non-empty string"
-    if not isinstance(value, str):
-        raise TypeError(msg)
-    if not value.strip():
-        raise ValueError(msg)
-    return value
-
-
 def _validate_path(value: object, *, name: str) -> pth.Path:
     """Validate path-like values and normalise them as ``pathlib.Path``."""
     if isinstance(value, pth.Path):
@@ -151,7 +141,6 @@ __all__ = [
     "_validate_int",
     "_validate_iteration_count",
     "_validate_minimum_int",
-    "_validate_non_empty_string",
     "_validate_path",
     "_validate_payload_bytes",
     "_validate_stages",

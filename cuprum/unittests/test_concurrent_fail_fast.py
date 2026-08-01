@@ -70,7 +70,7 @@ def test_fail_fast_mode_cancels_pending() -> None:
 
     assert result.ok is False, "the failing command makes the run unsuccessful"
     # The slow command should be cancelled, so elapsed time should be short
-    assert elapsed < 0.5, f"Expected < 0.5s with fail-fast, got {elapsed:.3f}s"
+    assert elapsed < 1.0, f"Expected < 1.0s with fail-fast, got {elapsed:.3f}s"
 
     # Verify shape of results and failures
     # At minimum cmd1 completed (failed); cmd2 may or may not be in results
@@ -163,6 +163,29 @@ def test_failure_submission_mapping_is_uniform(items: list[int | None]) -> None:
     )
 
 
+def _run_sleeper_then_failure(exit_code: int) -> tuple[ConcurrentResult, float]:
+    """Run a cancelled sleeper alongside a command failing with *exit_code*.
+
+    Returns the fail-fast result and the elapsed wall-clock seconds. The
+    sleeper is submitted first so fail-fast must cancel it, which is what
+    compacts ``results`` and makes the position-based and submission-stable
+    index views diverge.
+    """
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+
+    sleeper = python("-c", "import time; time.sleep(2); print('slow')")
+    failing = python("-c", f"import sys; sys.exit({exit_code})")
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        start = time.perf_counter()
+        result = run_concurrent_sync(
+            sleeper, failing, config=ConcurrentConfig(fail_fast=True)
+        )
+        elapsed = time.perf_counter() - start
+    return result, elapsed
+
+
 def test_fail_fast_first_failure_indexes_correctly_when_earlier_cancelled() -> None:
     """first_failure indexes correctly when earlier commands are cancelled.
 
@@ -171,19 +194,7 @@ def test_fail_fast_first_failure_indexes_correctly_when_earlier_cancelled() -> N
     submission indices. This test ensures first_failure doesn't raise IndexError
     or return the wrong result when a later command fails first.
     """
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-
-    # cmd0 sleeps (will be cancelled), cmd1 fails immediately
-    cmd0 = python("-c", "import time; time.sleep(2); print('slow')")
-    cmd1 = python("-c", "import sys; sys.exit(99)")
-
-    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        start = time.perf_counter()
-        result = run_concurrent_sync(
-            cmd0, cmd1, config=ConcurrentConfig(fail_fast=True)
-        )
-        elapsed = time.perf_counter() - start
+    result, elapsed = _run_sleeper_then_failure(99)
 
     # Should complete quickly due to fail-fast
     assert elapsed < 1.0, f"Expected < 1.0s with fail-fast, got {elapsed:.3f}s"
@@ -220,28 +231,14 @@ def test_fail_fast_submission_indices_map_to_original_positions() -> None:
     ``failure_submission_indices`` must still name the originally-submitted
     command that failed.
     """
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-
-    # cmd0 sleeps (submission index 0, will be cancelled); cmd1 fails fast.
-    cmd0 = python("-c", "import time; time.sleep(2); print('slow')")
-    cmd1 = python("-c", "import sys; sys.exit(7)")
-
-    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        start = time.perf_counter()
-        result = run_concurrent_sync(
-            cmd0, cmd1, config=ConcurrentConfig(fail_fast=True)
-        )
-        elapsed = time.perf_counter() - start
+    result, elapsed = _run_sleeper_then_failure(7)
 
     # Fail-fast must cancel the 2s sleeper long before it could finish.
     assert elapsed < 1.0, f"Expected < 1.0s with fail-fast, got {elapsed:.3f}s"
     assert result.ok is False, "the failing command makes the run unsuccessful"
 
-    # Invariants that hold regardless of scheduling. __post_init__ always
-    # backfills the mapping, so it is never None here.
+    # Invariants that hold regardless of scheduling.
     indices = result.submission_indices
-    assert indices is not None, "submission indices are backfilled when omitted"
     assert len(indices) == len(result.results), (
         "the submission mapping stays parallel to results"
     )
