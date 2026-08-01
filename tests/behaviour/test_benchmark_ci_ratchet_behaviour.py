@@ -7,9 +7,9 @@ import subprocess  # noqa: S404  # behavioural test intentionally invokes CLI pr
 import sys
 import typing as typ
 
-from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 from tests.behaviour._benchmark_ratchet_support import (
     FixtureBundle,
+    _plan_payload,
     _prepare_fixture_bundle,
     _scenario_payload,
     _write_json,
@@ -82,17 +82,14 @@ def given_malformed_fixtures(tmp_path: pth.Path) -> FixtureBundle:
     )
     _write_json(
         path=fixture_bundle["candidate_plan_path"],
-        payload={
-            "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
-            "dry_run": True,
-            "rust_available": True,
-            "worker_iterations": 20,
-            "command": ["hyperfine", "placeholder"],
-            "scenarios": [
+        payload=_plan_payload(
+            scenarios=[
                 _scenario_payload(name="python-small-single-nocb", backend="python"),
+                # ``native`` is not a valid backend: this is the malformation
+                # that drives the CLI's malformed-input exit path.
                 _scenario_payload(name="rust-small-single-nocb", backend="native"),
             ],
-        },
+        ),
     )
     return fixture_bundle
 

@@ -52,25 +52,13 @@ class _TransportWithoutPause:
         self._fd = fd
 
     def get_extra_info(self, name: str) -> object | None:
-        """Return stub transport info for the requested key.
-
-        Returns
-        -------
-        object | None
-            This transport when ``name`` is ``"pipe"``, otherwise ``None``.
-        """
+        """Return stub transport info for the requested key."""
         if name != "pipe":
             return None
         return self
 
     def fileno(self) -> int:
-        """Return the file descriptor exposed by this stub transport.
-
-        Returns
-        -------
-        int
-            The file descriptor backing this stub transport.
-        """
+        """Return the file descriptor exposed by this stub transport."""
         return self._fd
 
 

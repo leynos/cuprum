@@ -86,10 +86,17 @@ def _surface_unexpected_pipe_failures(pipe_results: list[object]) -> None:
     BrokenPipeError and ConnectionResetError are expected when downstream
     processes terminate early (e.g., head) and should not fail the pipeline.
     Other exceptions indicate genuine failures and must be surfaced.
+
+    The final case matches ``BaseException`` rather than ``Exception`` so a
+    cancelled pipe task cannot be dropped: ``asyncio.CancelledError`` derives
+    from ``BaseException``, and ``_collect_pipe_results`` gathers with
+    ``return_exceptions=True``, so a cancellation arrives as an ordinary
+    element here. Matching only ``Exception`` would skip it and let the
+    pipeline report success.
     """
     for result in pipe_results:
         match result:
             case BrokenPipeError() | ConnectionResetError():
                 continue
-            case Exception():
+            case BaseException():
                 raise result

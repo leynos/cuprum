@@ -38,15 +38,17 @@ def _scenario_payload(*, name: str, backend: str) -> dict[str, object]:
     }
 
 
-def _plan_payload() -> dict[str, object]:
-    """Create plan payload."""
+def _plan_payload(scenarios: list[object] | None = None) -> dict[str, object]:
+    """Create plan payload, optionally overriding the default scenarios."""
     return {
         "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
         "dry_run": True,
         "rust_available": True,
         "worker_iterations": 20,
         "command": ["hyperfine", "placeholder"],
-        "scenarios": [
+        "scenarios": scenarios
+        if scenarios is not None
+        else [
             _scenario_payload(name="python-small-single-nocb", backend="python"),
             _scenario_payload(name="rust-small-single-nocb", backend="rust"),
         ],
