@@ -123,12 +123,7 @@ _JOIN_TIMEOUT_SECONDS = 10.0
 
 
 def _join_or_raise(thread: threading.Thread, label: str) -> None:
-    """Join ``thread`` within a bounded timeout, raising if it stays alive.
-
-    A worker thread that never terminates would otherwise hang the join
-    indefinitely; bounding it converts a deadlock into a clear failure that
-    names the offending ``label`` worker.
-    """
+    """Join ``thread`` within a bounded timeout, raising if it stays alive."""
     thread.join(_JOIN_TIMEOUT_SECONDS)
     if thread.is_alive():
         msg = f"{label} thread did not terminate within {_JOIN_TIMEOUT_SECONDS}s"

@@ -23,7 +23,13 @@ def test_rust_extension_availability() -> None:
 
 @given("the Cuprum Rust availability probe", target_fixture="probe")
 def given_probe() -> cabc.Callable[[], bool]:
-    """Expose the Rust backend availability probe."""
+    """Expose the Rust backend availability probe.
+
+    Returns
+    -------
+    cabc.Callable[[], bool]
+        The ``is_rust_available`` probe callable.
+    """
     return c.is_rust_available
 
 
@@ -32,7 +38,18 @@ def given_probe() -> cabc.Callable[[], bool]:
     target_fixture="availability",
 )
 def when_check_availability(probe: cabc.Callable[[], bool]) -> bool:
-    """Invoke the availability probe."""
+    """Invoke the availability probe.
+
+    Parameters
+    ----------
+    probe : cabc.Callable[[], bool]
+        The callable that probes whether the Rust extension is available.
+
+    Returns
+    -------
+    bool
+        Whether the Rust backend reports itself available.
+    """
     return probe()
 
 
@@ -44,7 +61,19 @@ def then_probe_returns_boolean(availability: object) -> None:
 
 @then("the probe agrees with the native module when it is installed")
 def then_probe_matches_native(availability: object) -> None:
-    """Assert the probe matches the native module when installed."""
+    """Assert the probe matches the native module when installed.
+
+    Parameters
+    ----------
+    availability : object
+        The availability result reported by the probe.
+
+    Raises
+    ------
+    ImportError
+        If importing the native module fails for a reason other than the
+        module being absent.
+    """
     try:
         native = importlib.import_module("cuprum._rust_backend_native")
     except ImportError as exc:

@@ -22,22 +22,46 @@ PROPERTY_SETTINGS = settings(derandomize=True, deadline=None, max_examples=50)
 
 
 def programs() -> SearchStrategy[Program]:
-    """Generate valid program names."""
+    """Generate valid program names.
+
+    Returns
+    -------
+    SearchStrategy[Program]
+        A strategy producing syntactically valid ``Program`` names.
+    """
     return st.from_regex(r"[a-z][a-z0-9_-]{0,15}", fullmatch=True).map(Program)
 
 
 def allowlists() -> SearchStrategy[frozenset[Program]]:
-    """Generate finite allowlists."""
+    """Generate finite allowlists.
+
+    Returns
+    -------
+    SearchStrategy[frozenset[Program]]
+        A strategy producing bounded frozensets of programs.
+    """
     return st.frozensets(programs(), max_size=10)
 
 
 def optional_allowlists() -> SearchStrategy[frozenset[Program] | None]:
-    """Generate optional allowlists."""
+    """Generate optional allowlists.
+
+    Returns
+    -------
+    SearchStrategy[frozenset[Program] | None]
+        A strategy producing an allowlist or ``None``.
+    """
     return st.none() | allowlists()
 
 
 def timeouts() -> SearchStrategy[float | None]:
-    """Generate valid optional timeout values."""
+    """Generate valid optional timeout values.
+
+    Returns
+    -------
+    SearchStrategy[float | None]
+        A strategy producing a finite non-negative timeout or ``None``.
+    """
     return st.none() | st.floats(
         min_value=0.0,
         max_value=3600.0,
@@ -47,7 +71,13 @@ def timeouts() -> SearchStrategy[float | None]:
 
 
 def hook_tuples() -> SearchStrategy[tuple[cabc.Callable[..., None], ...]]:
-    """Generate tuples of identity-distinct no-op hook callables."""
+    """Generate tuples of identity-distinct no-op hook callables.
+
+    Returns
+    -------
+    SearchStrategy[tuple[cabc.Callable[..., None], ...]]
+        A strategy producing tuples of distinct no-op hook callables.
+    """
 
     def make_hook(index: int) -> cabc.Callable[..., None]:
         """Build a distinct no-op hook closing over ``index``."""

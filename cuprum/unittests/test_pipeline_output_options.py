@@ -38,7 +38,13 @@ def _execute_sync(pipeline: Pipeline, kwargs: dict[str, typ.Any]) -> PipelineRes
 def pipeline_execution_strategy(
     request: pytest.FixtureRequest,
 ) -> tuple[str, PipelineExecuteFn]:
-    """Provide Pipeline execution strategies for run() and run_sync()."""
+    """Provide Pipeline execution strategies for run() and run_sync().
+
+    Returns
+    -------
+    tuple[str, PipelineExecuteFn]
+        The strategy label and its execution callable.
+    """
     if request.param == "async":
         return ("async", _execute_async)
     return ("sync", _execute_sync)

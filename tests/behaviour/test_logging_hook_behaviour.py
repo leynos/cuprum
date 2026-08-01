@@ -26,7 +26,13 @@ def test_logging_hook_behaviour() -> None:
 
 @pytest.fixture
 def behaviour_state() -> dict[str, object]:
-    """Shared mutable state for behaviour scenarios."""
+    """Shared mutable state for behaviour scenarios.
+
+    Returns
+    -------
+    dict[str, object]
+        A fresh empty mapping for scenarios to accumulate state.
+    """
     return {}
 
 

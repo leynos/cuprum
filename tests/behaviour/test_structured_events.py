@@ -25,7 +25,13 @@ def test_observe_hook_receives_output_and_timing() -> None:
 
 @pytest.fixture
 def behaviour_state() -> dict[str, object]:
-    """Shared mutable state for behaviour scenarios."""
+    """Shared mutable state for behaviour scenarios.
+
+    Returns
+    -------
+    dict[str, object]
+        An empty mapping seeded fresh for each scenario.
+    """
     return {}
 
 
@@ -34,7 +40,14 @@ def behaviour_state() -> dict[str, object]:
     target_fixture="observed_command",
 )
 def given_observed_command() -> dict[str, object]:
-    """Build a SafeCmd that writes to stdout and stderr."""
+    """Build a SafeCmd that writes to stdout and stderr.
+
+    Returns
+    -------
+    dict[str, object]
+        Scenario state holding the ``catalogue`` and ``cmd`` entries for
+        the configured command.
+    """
     catalogue, python_program = python_catalogue()
     script = "\n".join(
         (

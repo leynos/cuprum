@@ -26,7 +26,13 @@ if typ.TYPE_CHECKING:
 
 @pytest.fixture
 def python_builder() -> cabc.Callable[..., SafeCmd]:
-    """Provide a SafeCmd builder for the current Python interpreter."""
+    """Provide a SafeCmd builder for the current Python interpreter.
+
+    Returns
+    -------
+    collections.abc.Callable[..., SafeCmd]
+        A builder that constructs ``SafeCmd`` instances for Python.
+    """
     return build_python_builder()
 
 

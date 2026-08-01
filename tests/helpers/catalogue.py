@@ -17,7 +17,13 @@ if typ.TYPE_CHECKING:
 
 
 def python_catalogue() -> tuple[ProgramCatalogue, Program]:
-    """Construct a catalogue and expose the allowlisted Python program."""
+    """Construct a catalogue and expose the allowlisted Python program.
+
+    Returns
+    -------
+    tuple[ProgramCatalogue, Program]
+        The catalogue and the Python program it allowlists.
+    """
     python_program = Program(str(Path(sys.executable)))
     project = ProjectSettings(
         name="runtime-tests",
@@ -29,13 +35,25 @@ def python_catalogue() -> tuple[ProgramCatalogue, Program]:
 
 
 def python_builder() -> cabc.Callable[..., SafeCmd]:
-    """Provide a SafeCmd builder for the current Python interpreter."""
+    """Provide a SafeCmd builder for the current Python interpreter.
+
+    Returns
+    -------
+    cabc.Callable[..., SafeCmd]
+        A builder that produces SafeCmd instances for the interpreter.
+    """
     catalogue, program = python_catalogue()
     return sh.make(program, catalogue=catalogue)
 
 
 def cat_program() -> Program:
-    """Return the cat program for stream fidelity tests."""
+    """Return the cat program for stream fidelity tests.
+
+    Returns
+    -------
+    Program
+        The ``cat`` program.
+    """
     return Program("cat")
 
 

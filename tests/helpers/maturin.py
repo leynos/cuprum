@@ -146,6 +146,18 @@ def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
     ``test_installed_maturin_matches_expected_pin`` and by the snapshot test's
     generator check, not selected here.
 
+    Parameters
+    ----------
+    root : Path
+        The repository root the wheel is built from.
+    out_dir : Path
+        The directory the built wheel is written to.
+
+    Returns
+    -------
+    Path
+        The path to the single built wheel.
+
     Raises
     ------
     AssertionError

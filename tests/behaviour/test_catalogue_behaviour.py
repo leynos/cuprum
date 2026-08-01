@@ -55,13 +55,25 @@ def test_safe_command_builder() -> None:
 
 @given("the default catalogue", target_fixture="catalogue")
 def given_default_catalogue() -> ProgramCatalogue:
-    """Provide the default catalogue fixture."""
+    """Provide the default catalogue fixture.
+
+    Returns
+    -------
+    ProgramCatalogue
+        The default program catalogue.
+    """
     return DEFAULT_CATALOGUE
 
 
 @given("the cuprum public API surface", target_fixture="public_api")
 def given_public_api() -> ModuleType:
-    """Expose the top-level cuprum re-exports to scenarios."""
+    """Expose the top-level cuprum re-exports to scenarios.
+
+    Returns
+    -------
+    ModuleType
+        The top-level ``cuprum`` module.
+    """
     return c
 
 
@@ -73,7 +85,20 @@ def when_request_program(
     catalogue: ProgramCatalogue,
     program_name: str,
 ) -> dict[str, object]:
-    """Attempt to resolve a program name using the catalogue."""
+    """Attempt to resolve a program name using the catalogue.
+
+    Parameters
+    ----------
+    catalogue : ProgramCatalogue
+        The catalogue fixture to look up the program in.
+    program_name : str
+        The program name captured from the scenario step text.
+
+    Returns
+    -------
+    dict[str, object]
+        A mapping with either an ``entry`` or an ``error`` key.
+    """
     result: dict[str, object] = {}
     try:
         result["entry"] = catalogue.lookup(program_name)
@@ -90,7 +115,20 @@ def when_lookup_curated_program(
     public_api: ModuleType,
     program_name: str,
 ) -> dict[str, ProgramEntry | UnknownProgramError]:
-    """Lookup a curated program through the public API."""
+    """Lookup a curated program through the public API.
+
+    Parameters
+    ----------
+    public_api : ModuleType
+        The top-level ``cuprum`` module exposing the public re-exports.
+    program_name : str
+        The program name captured from the scenario step text.
+
+    Returns
+    -------
+    dict[str, ProgramEntry | UnknownProgramError]
+        A mapping with either an ``entry`` or an ``error`` key.
+    """
     result: dict[str, ProgramEntry | UnknownProgramError] = {}
     try:
         program = public_api.Program(program_name)
@@ -105,7 +143,18 @@ def when_lookup_curated_program(
     target_fixture="curated_program",
 )
 def given_curated_program(program_name: str) -> Program:
-    """Provide a curated Program value for sh.make scenarios."""
+    """Provide a curated Program value for sh.make scenarios.
+
+    Parameters
+    ----------
+    program_name : str
+        The program name captured from the scenario step text.
+
+    Returns
+    -------
+    Program
+        The curated program value.
+    """
     return Program(program_name)
 
 
@@ -123,7 +172,18 @@ def then_catalogue_rejects(catalogue_result: dict[str, object]) -> None:
 def when_request_visible_settings(
     catalogue: ProgramCatalogue,
 ) -> cabc.Mapping[str, ProjectSettings]:
-    """Expose project metadata to the scenario."""
+    """Expose project metadata to the scenario.
+
+    Parameters
+    ----------
+    catalogue : ProgramCatalogue
+        The catalogue fixture whose visible settings are requested.
+
+    Returns
+    -------
+    collections.abc.Mapping[str, ProjectSettings]
+        The catalogue's visible project settings.
+    """
     return catalogue.visible_settings()
 
 
@@ -136,7 +196,22 @@ def when_build_safe_command(
     first: str,
     second: str,
 ) -> SafeCmd:
-    """Construct a safe command using the sh.make facade."""
+    """Construct a safe command using the sh.make facade.
+
+    Parameters
+    ----------
+    curated_program : Program
+        The curated program fixture to build a command for.
+    first : str
+        The first argument captured from the scenario step text.
+    second : str
+        The second argument captured from the scenario step text.
+
+    Returns
+    -------
+    SafeCmd
+        The constructed safe command.
+    """
     builder = sh.make(curated_program)
     return builder(first, second)
 

@@ -185,7 +185,13 @@ def test_profile_matrix_stops_after_first_worker_failure(
     observed: list[str | None] = []
 
     def fail_scenario(*, config: TeeProfileDriverConfig) -> dict[str, object]:
-        """Record the scenario name and report a failed run."""
+        """Record the scenario name and report a failed run.
+
+        Returns
+        -------
+        dict[str, object]
+            A result payload marking the scenario as failed.
+        """
         observed.append(config.scenario_name)
         return {"status": "failed", "exit_code": 9}
 

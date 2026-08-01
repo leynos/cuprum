@@ -37,7 +37,18 @@ def test_smoke_dry_run_contains_full_matrix() -> None:
 
 @given("a benchmark output path", target_fixture="benchmark_output_path")
 def given_output_path(tmp_path: pth.Path) -> pth.Path:
-    """Provide an output path for benchmark plan JSON."""
+    """Provide an output path for benchmark plan JSON.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest-provided temporary directory unique to the test.
+
+    Returns
+    -------
+    pathlib.Path
+        The path where the benchmark plan JSON will be written.
+    """
     return tmp_path / "benchmark-plan.json"
 
 
@@ -48,7 +59,18 @@ def given_output_path(tmp_path: pth.Path) -> pth.Path:
 def when_generate_plans(
     benchmark_output_path: pth.Path,
 ) -> dict[str, object]:
-    """Run the benchmark CLI in dry-run mode and parse JSON output."""
+    """Run the benchmark CLI in dry-run mode and parse JSON output.
+
+    Parameters
+    ----------
+    benchmark_output_path : pathlib.Path
+        The path where the benchmark plan JSON will be written.
+
+    Returns
+    -------
+    dict[str, object]
+        The parsed benchmark plan payload.
+    """
     command = [
         sys.executable,
         "benchmarks/pipeline_throughput.py",
@@ -74,7 +96,13 @@ def when_generate_plans(
 
 @then("the benchmark plan file exists")
 def then_plan_exists(benchmark_output_path: pth.Path) -> None:
-    """Assert that the benchmark runner wrote a JSON plan file."""
+    """Assert that the benchmark runner wrote a JSON plan file.
+
+    Parameters
+    ----------
+    benchmark_output_path : pathlib.Path
+        The path where the benchmark plan JSON should have been written.
+    """
     assert benchmark_output_path.is_file(), (
         "expected benchmark_output_path to be a file but it does not exist"
     )

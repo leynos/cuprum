@@ -85,7 +85,13 @@ def test_context_isolated_async_tasks() -> None:
 
 @pytest.fixture
 def behaviour_state() -> dict[str, object]:
-    """Shared mutable state for behaviour scenarios."""
+    """Shared mutable state for behaviour scenarios.
+
+    Returns
+    -------
+    dict[str, object]
+        An empty dictionary shared across scenario steps.
+    """
     return {}
 
 
@@ -94,7 +100,13 @@ def behaviour_state() -> dict[str, object]:
     target_fixture="outer_context",
 )
 def given_context_allows_echo_and_ls() -> CuprumContext:
-    """Set up an outer context allowing both ECHO and LS."""
+    """Set up an outer context allowing both ECHO and LS.
+
+    Returns
+    -------
+    CuprumContext
+        A context whose allowlist contains ECHO and LS.
+    """
     return CuprumContext(allowlist=frozenset([ECHO, LS]))
 
 
@@ -155,7 +167,13 @@ def then_ls_allowed_outer(behaviour_state: dict[str, object]) -> None:
 def given_multi_before_hooks(
     behaviour_state: dict[str, object],
 ) -> CuprumContext:
-    """Create context with multiple before hooks for ordering test."""
+    """Create context with multiple before hooks for ordering test.
+
+    Returns
+    -------
+    CuprumContext
+        A context registering the ordered before hooks.
+    """
     call_order: list[int] = []
     behaviour_state["call_order"] = call_order
     return build_before_hook_context(call_order)
@@ -184,7 +202,13 @@ def then_before_hooks_in_order(behaviour_state: dict[str, object]) -> None:
 def given_multi_after_hooks(
     behaviour_state: dict[str, object],
 ) -> CuprumContext:
-    """Create context with multiple after hooks for ordering test."""
+    """Create context with multiple after hooks for ordering test.
+
+    Returns
+    -------
+    CuprumContext
+        A context registering the ordered after hooks.
+    """
     call_order: list[int] = []
     behaviour_state["after_call_order"] = call_order
     return build_after_hook_context(call_order)
@@ -213,7 +237,13 @@ def then_after_hooks_in_reverse(behaviour_state: dict[str, object]) -> None:
 def given_context_with_hook(
     behaviour_state: dict[str, object],
 ) -> dict[str, object]:
-    """Set up a context with a hook that can be detached."""
+    """Set up a context with a hook that can be detached.
+
+    Returns
+    -------
+    dict[str, object]
+        A mapping exposing the detachable hook under ``"hook"``.
+    """
 
     def my_hook(cmd: object) -> None:
         _ = cmd  # Unused
@@ -252,7 +282,13 @@ def then_hook_not_in_context(behaviour_state: dict[str, object]) -> None:
     target_fixture="thread_setup",
 )
 def given_two_threads_different_allowlists() -> dict[str, frozenset[Program]]:
-    """Set up allowlists for two threads."""
+    """Set up allowlists for two threads.
+
+    Returns
+    -------
+    dict[str, frozenset[Program]]
+        The per-thread allowlists keyed by thread name.
+    """
     return {
         "thread1": frozenset([ECHO]),
         "thread2": frozenset([LS]),
@@ -288,7 +324,13 @@ def then_threads_see_own_allowlist(behaviour_state: dict[str, object]) -> None:
     target_fixture="async_setup",
 )
 def given_two_async_tasks_different_allowlists() -> dict[str, frozenset[Program]]:
-    """Set up allowlists for two async tasks."""
+    """Set up allowlists for two async tasks.
+
+    Returns
+    -------
+    dict[str, frozenset[Program]]
+        The per-task allowlists keyed by task name.
+    """
     return {
         "task1": frozenset([ECHO]),
         "task2": frozenset([LS]),

@@ -66,17 +66,7 @@ def _build_scenario_pipeline_from_commands(
     commands: list[tuple[typ.Any, tuple[str, ...]]],
     allowlist: frozenset[Program],
 ) -> _ScenarioPipeline:
-    """Build a _ScenarioPipeline from command builders and arguments.
-
-    Args:
-        commands: List of (command_builder, args_tuple) pairs.
-        allowlist: Programs to allow during execution.
-
-    Returns
-    -------
-        A _ScenarioPipeline with the constructed pipeline and allowlist.
-
-    """
+    """Build a _ScenarioPipeline from command builders and arguments."""
     if len(commands) < 2:
         msg = "Pipeline requires at least two stages"
         raise ValueError(msg)
@@ -133,7 +123,13 @@ def _make_test_pipeline(
 
 @given("a simple two stage pipeline", target_fixture="pipeline_under_test")
 def given_simple_pipeline() -> _ScenarioPipeline:
-    """Create a two stage pipeline that uppercases its input."""
+    """Create a two stage pipeline that uppercases its input.
+
+    Returns
+    -------
+    _ScenarioPipeline
+        The pipeline under test with its allowlist.
+    """
     _, python_program = python_catalogue()
     return _make_test_pipeline(
         (ECHO, ("-n", "behaviour")),
@@ -149,7 +145,13 @@ def given_simple_pipeline() -> _ScenarioPipeline:
     target_fixture="pipeline_under_test",
 )
 def given_failing_pipeline() -> _ScenarioPipeline:
-    """Create a three stage pipeline where the first stage exits non-zero."""
+    """Create a three stage pipeline where the first stage exits non-zero.
+
+    Returns
+    -------
+    _ScenarioPipeline
+        The pipeline under test with its allowlist.
+    """
     _, python_program = python_catalogue()
     return _make_test_pipeline(
         (python_program, ("-c", "import sys; sys.exit(7)")),
@@ -163,7 +165,13 @@ def given_failing_pipeline() -> _ScenarioPipeline:
     target_fixture="pipeline_under_test",
 )
 def given_middle_stage_failure_pipeline() -> _ScenarioPipeline:
-    """Create a three stage pipeline where the middle stage exits non-zero."""
+    """Create a three stage pipeline where the middle stage exits non-zero.
+
+    Returns
+    -------
+    _ScenarioPipeline
+        The pipeline under test with its allowlist.
+    """
     _, python_program = python_catalogue()
     return _make_test_pipeline(
         (python_program, ("-c", "import time, sys; time.sleep(2); sys.exit(0)")),
@@ -177,7 +185,13 @@ def given_middle_stage_failure_pipeline() -> _ScenarioPipeline:
     target_fixture="pipeline_under_test",
 )
 def given_final_stage_failure_pipeline() -> _ScenarioPipeline:
-    """Create a three stage pipeline where the final stage exits non-zero."""
+    """Create a three stage pipeline where the final stage exits non-zero.
+
+    Returns
+    -------
+    _ScenarioPipeline
+        The pipeline under test with its allowlist.
+    """
     _, python_program = python_catalogue()
     return _make_test_pipeline(
         (python_program, ("-c", "import sys; sys.exit(0)")),
@@ -188,14 +202,26 @@ def given_final_stage_failure_pipeline() -> _ScenarioPipeline:
 
 @when("I run the pipeline synchronously", target_fixture="pipeline_result")
 def when_run_pipeline_sync(pipeline_under_test: _ScenarioPipeline) -> PipelineResult:
-    """Execute the pipeline via run_sync()."""
+    """Execute the pipeline via run_sync().
+
+    Returns
+    -------
+    PipelineResult
+        The result of the synchronous pipeline run.
+    """
     with scoped(ScopeConfig(allowlist=pipeline_under_test.allowlist)):
         return pipeline_under_test.pipeline.run_sync()
 
 
 @when("I run the pipeline asynchronously", target_fixture="pipeline_result")
 def when_run_pipeline_async(pipeline_under_test: _ScenarioPipeline) -> PipelineResult:
-    """Execute the pipeline via run()."""
+    """Execute the pipeline via run().
+
+    Returns
+    -------
+    PipelineResult
+        The result of the asynchronous pipeline run.
+    """
 
     async def run() -> PipelineResult:
         with scoped(ScopeConfig(allowlist=pipeline_under_test.allowlist)):

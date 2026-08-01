@@ -39,13 +39,7 @@ def _make_exec_event(
     phase: ExecPhase,
     overrides: cabc.Mapping[str, object] | None = None,
 ) -> ExecEvent:
-    """Build an ExecEvent with sensible test defaults.
-
-    Each event carries a fresh ``exec_id`` by default, mirroring real
-    executions. Tests that span several lifecycle phases of one execution must
-    thread a shared ``exec_id`` override; pass ``{"exec_id": None}`` to build a
-    legacy, uncorrelated event.
-    """
+    """Build an ExecEvent with sensible test defaults."""
     # Each event carries a fresh ``exec_id`` by default, mirroring real
     # executions. Tests that span several lifecycle phases of one execution
     # must thread a shared ``exec_id`` override; pass ``{"exec_id": None}``

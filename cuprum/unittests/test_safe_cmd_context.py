@@ -37,7 +37,13 @@ def _execute_sync(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
 
 @pytest.fixture(params=["async", "sync"], ids=["run()", "run_sync()"])
 def execution_strategy(request: pytest.FixtureRequest) -> tuple[str, ExecuteFn]:
-    """Provide parametrised execution strategies for run() and run_sync()."""
+    """Provide parameterized execution strategies for run() and run_sync().
+
+    Returns
+    -------
+    tuple[str, ExecuteFn]
+        The strategy label and its matching execution callable.
+    """
     if request.param == "async":
         return ("async", _execute_async)
     return ("sync", _execute_sync)
@@ -45,7 +51,13 @@ def execution_strategy(request: pytest.FixtureRequest) -> tuple[str, ExecuteFn]:
 
 @pytest.fixture
 def python_builder() -> cabc.Callable[..., SafeCmd]:
-    """Provide a SafeCmd builder for the current Python interpreter."""
+    """Provide a SafeCmd builder for the current Python interpreter.
+
+    Returns
+    -------
+    cabc.Callable[..., SafeCmd]
+        A factory that builds SafeCmd instances for this interpreter.
+    """
     return build_python_builder()
 
 

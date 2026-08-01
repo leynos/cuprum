@@ -63,7 +63,14 @@ class _ConcurrentExecution:
 
 @given("three quick echo commands", target_fixture="commands_under_test")
 def given_three_quick_echo_commands() -> _ScenarioCommands:
-    """Create three quick echo commands."""
+    """Create three quick echo commands.
+
+    Returns
+    -------
+    _ScenarioCommands
+        The echo commands paired with their execution allowlist.
+
+    """
     echo = sh.make(ECHO)
     commands = (
         echo("-n", "first"),
@@ -75,7 +82,14 @@ def given_three_quick_echo_commands() -> _ScenarioCommands:
 
 @given("four commands that sleep briefly", target_fixture="commands_under_test")
 def given_four_sleeping_commands() -> _ScenarioCommands:
-    """Create four commands that sleep briefly to test concurrency limiting."""
+    """Create four commands that sleep briefly to test concurrency limiting.
+
+    Returns
+    -------
+    _ScenarioCommands
+        The sleeping commands paired with their execution allowlist.
+
+    """
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
     commands = tuple(
@@ -89,7 +103,14 @@ def given_four_sleeping_commands() -> _ScenarioCommands:
     target_fixture="commands_under_test",
 )
 def given_mixed_success_failure_commands() -> _ScenarioCommands:
-    """Create commands where one fails."""
+    """Create commands where one fails.
+
+    Returns
+    -------
+    _ScenarioCommands
+        Two succeeding and one failing command with their allowlist.
+
+    """
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
     commands = (
@@ -105,7 +126,14 @@ def given_mixed_success_failure_commands() -> _ScenarioCommands:
     target_fixture="commands_under_test",
 )
 def given_failing_and_slow_commands() -> _ScenarioCommands:
-    """Create a failing command and a slow command for fail-fast testing."""
+    """Create a failing command and a slow command for fail-fast testing.
+
+    Returns
+    -------
+    _ScenarioCommands
+        The failing and slow commands with their execution allowlist.
+
+    """
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
     commands = (
@@ -147,7 +175,14 @@ def _execute_concurrent(
 def when_run_concurrently(
     commands_under_test: _ScenarioCommands,
 ) -> _ConcurrentExecution:
-    """Execute commands concurrently with default settings."""
+    """Execute commands concurrently with default settings.
+
+    Returns
+    -------
+    _ConcurrentExecution
+        The concurrent result and its measured elapsed time.
+
+    """
     return _execute_concurrent(commands_under_test)
 
 
@@ -158,7 +193,14 @@ def when_run_concurrently(
 def when_run_with_concurrency_limit(
     commands_under_test: _ScenarioCommands,
 ) -> _ConcurrentExecution:
-    """Execute commands with concurrency limit of 2."""
+    """Execute commands with concurrency limit of 2.
+
+    Returns
+    -------
+    _ConcurrentExecution
+        The concurrent result and its measured elapsed time.
+
+    """
     return _execute_concurrent(
         commands_under_test, config=ConcurrentConfig(concurrency=2)
     )
@@ -171,7 +213,14 @@ def when_run_with_concurrency_limit(
 def when_run_collect_all(
     commands_under_test: _ScenarioCommands,
 ) -> _ConcurrentExecution:
-    """Execute commands in collect-all mode (fail_fast=False)."""
+    """Execute commands in collect-all mode (fail_fast=False).
+
+    Returns
+    -------
+    _ConcurrentExecution
+        The concurrent result and its measured elapsed time.
+
+    """
     return _execute_concurrent(
         commands_under_test, config=ConcurrentConfig(fail_fast=False)
     )
@@ -181,7 +230,14 @@ def when_run_collect_all(
 def when_run_fail_fast(
     commands_under_test: _ScenarioCommands,
 ) -> _ConcurrentExecution:
-    """Execute commands with fail-fast enabled."""
+    """Execute commands with fail-fast enabled.
+
+    Returns
+    -------
+    _ConcurrentExecution
+        The concurrent result and its measured elapsed time.
+
+    """
     return _execute_concurrent(
         commands_under_test, config=ConcurrentConfig(fail_fast=True)
     )

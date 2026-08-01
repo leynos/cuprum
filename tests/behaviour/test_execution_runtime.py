@@ -90,20 +90,38 @@ def test_run_passes_direct_stdin_input() -> None:
 
 @pytest.fixture
 def behaviour_state() -> dict[str, object]:
-    """Shared mutable state for behaviour scenarios."""
+    """Shared mutable state for behaviour scenarios.
+
+    Returns
+    -------
+    dict[str, object]
+        An empty dictionary for scenario steps to share state through.
+    """
     return {}
 
 
 @given("a simple safe echo command", target_fixture="simple_echo_command")
 def given_simple_echo_command() -> SafeCmd:
-    """Provide a SafeCmd that writes to stdout."""
+    """Provide a SafeCmd that writes to stdout.
+
+    Returns
+    -------
+    SafeCmd
+        An echo command that prints ``behaviour``.
+    """
     builder = sh.make(ECHO)
     return builder("-n", "behaviour")
 
 
 @given("a safe command that reads stdin", target_fixture="stdin_reader_command")
 def given_stdin_reader_command() -> SafeCmd:
-    """Provide a SafeCmd that echoes stdin to stdout."""
+    """Provide a SafeCmd that echoes stdin to stdout.
+
+    Returns
+    -------
+    SafeCmd
+        A Python command that copies stdin to stdout.
+    """
     catalogue, python_program = python_catalogue()
     return sh.make(python_program, catalogue=catalogue)(
         "-c",
@@ -116,7 +134,13 @@ def given_stdin_reader_command() -> SafeCmd:
     target_fixture="run_result",
 )
 def when_run_command(simple_echo_command: SafeCmd) -> CommandResult:
-    """Execute the SafeCmd using the async runtime."""
+    """Execute the SafeCmd using the async runtime.
+
+    Returns
+    -------
+    CommandResult
+        The result of running the command.
+    """
     return asyncio.run(simple_echo_command.run())
 
 
@@ -125,7 +149,13 @@ def when_run_command(simple_echo_command: SafeCmd) -> CommandResult:
     target_fixture="run_result",
 )
 def when_run_command_sync(simple_echo_command: SafeCmd) -> CommandResult:
-    """Execute the SafeCmd using the sync runtime."""
+    """Execute the SafeCmd using the sync runtime.
+
+    Returns
+    -------
+    CommandResult
+        The result of running the command.
+    """
     return simple_echo_command.run_sync()
 
 
@@ -134,7 +164,13 @@ def when_run_command_sync(simple_echo_command: SafeCmd) -> CommandResult:
     target_fixture="run_result",
 )
 def when_run_command_with_direct_stdin(stdin_reader_command: SafeCmd) -> CommandResult:
-    """Execute the SafeCmd with text fed directly to stdin."""
+    """Execute the SafeCmd with text fed directly to stdin.
+
+    Returns
+    -------
+    CommandResult
+        The result of running the command.
+    """
     return stdin_reader_command.run_sync(stdin=StdinInput(text="behaviour stdin\n"))
 
 
@@ -159,7 +195,13 @@ def then_command_result_has_stdin_text(run_result: CommandResult) -> None:
     target_fixture="long_running_command",
 )
 def given_long_running_command(tmp_path: Path) -> WorkerCommand:
-    """Construct a SafeCmd that blocks until cancelled."""
+    """Construct a SafeCmd that blocks until cancelled.
+
+    Returns
+    -------
+    WorkerCommand
+        The worker command and the PID file it writes.
+    """
     return _create_worker_command(
         tmp_path,
         script_name="sleepy_worker.py",
@@ -270,7 +312,13 @@ def test_cancellation_escalates_non_cooperative() -> None:
     target_fixture="non_cooperative_command",
 )
 def given_non_cooperative_command(tmp_path: Path) -> WorkerCommand:
-    """Construct a SafeCmd that ignores termination signals."""
+    """Construct a SafeCmd that ignores termination signals.
+
+    Returns
+    -------
+    WorkerCommand
+        The worker command and the PID file it writes.
+    """
     return _create_worker_command(
         tmp_path,
         script_name="stubborn_worker.py",

@@ -138,7 +138,19 @@ def _prepare_fixture_bundle(
 def given_paired_candidate_benchmark_artefacts(
     tmp_path: pth.Path,
 ) -> FixtureBundle:
-    """Create valid benchmark comparison inputs."""
+    """Create valid benchmark comparison inputs.
+
+    Parameters
+    ----------
+    tmp_path : pth.Path
+        The pytest temporary directory the fixture artefacts are written to.
+
+    Returns
+    -------
+    FixtureBundle
+        The prepared artefact paths for a valid comparison run.
+
+    """
     return _prepare_fixture_bundle(tmp_path=tmp_path, malformed=False)
 
 
@@ -149,7 +161,19 @@ def given_paired_candidate_benchmark_artefacts(
 def given_malformed_candidate_benchmark_artefacts(
     tmp_path: pth.Path,
 ) -> FixtureBundle:
-    """Create malformed benchmark comparison inputs."""
+    """Create malformed benchmark comparison inputs.
+
+    Parameters
+    ----------
+    tmp_path : pth.Path
+        The pytest temporary directory the fixture artefacts are written to.
+
+    Returns
+    -------
+    FixtureBundle
+        The prepared artefact paths with a malformed candidate throughput.
+
+    """
     return _prepare_fixture_bundle(tmp_path=tmp_path, malformed=True)
 
 
@@ -160,7 +184,19 @@ def given_malformed_candidate_benchmark_artefacts(
 def when_run_benchmark_comparison_report_cli(
     comparison_fixture_bundle: FixtureBundle,
 ) -> CliResult:
-    """Execute the benchmark comparison-report CLI."""
+    """Execute the benchmark comparison-report CLI.
+
+    Parameters
+    ----------
+    comparison_fixture_bundle : FixtureBundle
+        The fixture paths the comparison report CLI is run against.
+
+    Returns
+    -------
+    CliResult
+        ``completed``, the subprocess result of running the CLI, and the CLI
+        output destinations ``output_json_path`` and ``output_markdown_path``.
+    """
     command = [
         sys.executable,
         "benchmarks/python_vs_rust_comparison_report.py",
