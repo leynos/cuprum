@@ -27,6 +27,16 @@ if typ.TYPE_CHECKING:
     import pathlib as pth
 
 
+import http.client
+import sys
+
+"""Unit tests for the benchmark baseline artefact fetch helper."""
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+    import pathlib as pth
+    from syrupy.assertion import SnapshotAssertion
+
+
 def _workflow_runs_payload(*run_ids: int) -> dict[str, object]:
     """Return a stub GitHub workflow-runs API payload."""
     return {
@@ -138,6 +148,28 @@ def test_extract_artefact_archive_rejects_path_traversal(tmp_path: pth.Path) -> 
             archive_bytes=buffer.getvalue(),
             output_dir=tmp_path,
         )
+
+def test_cli_help_and_missing_token_snapshot(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    snapshot: SnapshotAssertion,
+    tmp_path: pth.Path,
+) -> None:
+    """CLI help and token errors retain their user-facing contract."""
+    monkeypatch.setattr(sys, "argv", ["fetch_main_benchmark_baseline.py"])
+    with pytest.raises(SystemExit) as help_exit:
+        main(["--help"])
+    help_text = capsys.readouterr().out
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    with pytest.raises(SystemExit) as token_exit:
+        main(_main_cli_args(tmp_path))
+    token_error = str(token_exit.value)
+
+    assert help_exit.value.code == 0
+    assert "--artifact-name" in help_text
+    assert "Artefact name to download" in help_text
+    assert "missing GitHub token" in token_error
+    assert {"help": help_text.splitlines(), "missing_token": token_error} == snapshot
 
 
 def test_load_json_response_retries_transient_urlopen_failures(

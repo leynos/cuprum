@@ -197,7 +197,8 @@ spelling: spelling-helper-test ## Enforce en-GB-oxendict spelling in prose and s
 		xargs -0 -r $(TYPOS) --config typos.toml --force-exclude
 
 spelling-helper-test: build ## Validate the shared spelling-policy integration
-	@PYTHONPATH=scripts $(UV_RUN_ENV) uv run --python 3.13 \
+	@TYPOS_TEST_COMMAND=$(call shell_quote,$(TYPOS)) PYTHONPATH=scripts \
+		$(UV_RUN_ENV) uv run --python 3.13 \
 		--with pytest-cov==7.0.0 \
 		python -m pytest scripts/tests/test_typos_rollout.py \
 		scripts/tests/test_typos_rollout_properties.py \

@@ -1,0 +1,31 @@
+# serializer version: 1
+# name: test_cli_help_and_missing_token_snapshot
+  dict({
+    'help': list([
+      'usage: fetch_main_benchmark_baseline.py [-h] --repository REPOSITORY',
+      '                                        --workflow WORKFLOW',
+      '                                        --artifact-name ARTEFACT_NAME',
+      '                                        --output-dir OUTPUT_DIR',
+      '                                        [--branch BRANCH] [--event EVENT]',
+      '                                        [--token-env TOKEN_ENV]',
+      '',
+      'Download the latest successful `main` benchmark baseline artefact.',
+      '',
+      'options:',
+      '  -h, --help            show this help message and exit',
+      '  --repository REPOSITORY',
+      '                        GitHub repository in owner/name form.',
+      '  --workflow WORKFLOW   Workflow file name or workflow identifier.',
+      '  --artifact-name ARTEFACT_NAME',
+      '                        Artefact name to download from the latest successful',
+      '                        run.',
+      '  --output-dir OUTPUT_DIR',
+      '                        Directory that receives the extracted artefact files.',
+      '  --branch BRANCH       Branch to query for successful workflow runs.',
+      '  --event EVENT         Workflow event to query for successful runs.',
+      '  --token-env TOKEN_ENV',
+      '                        Environment variable containing the GitHub token.',
+    ]),
+    'missing_token': 'missing GitHub token in environment variable GITHUB_TOKEN',
+  })
+# ---
