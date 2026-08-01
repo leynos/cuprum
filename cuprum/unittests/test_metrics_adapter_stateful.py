@@ -10,6 +10,7 @@ so counters and observations are created exactly when intended, and only then.
 
 from __future__ import annotations
 
+import types
 import typing as typ
 
 import pytest
@@ -49,6 +50,15 @@ _UNIT_COUNTER_PHASES = [
     ("stderr", "cuprum_stderr_lines_total"),
     ("stdin_error", "cuprum_stdin_errors_total"),
 ]
+
+# The same pairs keyed for lookup, so the stateful oracle and the parametrized
+# cases cannot drift apart. This stays a *test-local* restatement of the
+# mapping rather than an import of the adapter's `_PHASE_COUNTERS`: an oracle
+# that read the production table would agree with it by construction and could
+# not catch a wrong metric name.
+_UNIT_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType(
+    dict(_UNIT_COUNTER_PHASES)
+)
 
 
 def _event(
@@ -201,22 +211,23 @@ class _MetricsAccumulationMachine(RuleBasedStateMachine):
         """Apply an event to the hook and to the independent expectations."""
         self.hook(event)
 
-        phase = event.phase
-        simple = {
-            "start": "cuprum_executions_total",
-            "stdout": "cuprum_stdout_lines_total",
-            "stderr": "cuprum_stderr_lines_total",
-            "stdin_error": "cuprum_stdin_errors_total",
-        }
-        if phase in simple:
-            self._expect_counter(simple[phase], 1.0)
-        elif phase == "stdin" and event.byte_count is not None:
-            self._expect_counter("cuprum_stdin_bytes_total", float(event.byte_count))
-        elif phase == "exit":
-            if event.exit_code is not None and event.exit_code != 0:
-                self._expect_counter("cuprum_failures_total", 1.0)
-            if event.duration_s is not None:
-                self.expected_durations.append(event.duration_s)
+        match event.phase:
+            case _ if (counter := _UNIT_COUNTERS.get(event.phase)) is not None:
+                self._expect_counter(counter, 1.0)
+            case "stdin" if event.byte_count is not None:
+                self._expect_counter(
+                    "cuprum_stdin_bytes_total",
+                    float(event.byte_count),
+                )
+            case "exit":
+                if event.exit_code is not None and event.exit_code != 0:
+                    self._expect_counter("cuprum_failures_total", 1.0)
+                if event.duration_s is not None:
+                    self.expected_durations.append(event.duration_s)
+            case _:
+                # `plan` records nothing, and a `stdin` event carrying no byte
+                # count contributes no bytes. Both leave the oracle unchanged.
+                pass
 
     @invariant()
     def collector_matches_independent_expectations(self) -> None:

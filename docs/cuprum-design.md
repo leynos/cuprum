@@ -1486,6 +1486,8 @@ each operation in turn: a `_CounterOp` becomes `inc_counter(name, value,
 labels)` on the collector, and a `_HistogramOp` becomes `observe_histogram(name,
 value, labels)`.
 
+Figure 8: Metrics hook dispatch, from `ExecEvent` to collector calls
+
 ```mermaid
 sequenceDiagram
     participant ExecEvent
@@ -1511,6 +1513,41 @@ sequenceDiagram
         end
     end
 ```
+
+For screen readers: an `ExecEvent` calls the `MetricsHook`, which asks
+`_metric_operations` for that event's operations and receives a tuple of
+`_MetricOp` records. If the tuple is empty the hook returns immediately,
+without computing labels. Otherwise it extracts the labels once and then loops
+over the operations, applying each: a `_CounterOp` calls `inc_counter(name,
+value, labels)` on the collector, and a `_HistogramOp` calls
+`observe_histogram(name, value, labels)`.
+
+The loop is the contract, and it is deliberately **not** atomic. An `exit`
+event yields up to two operations — the failure counter, then the duration
+observation — applied as two independent collector calls in that order.
+Atomicity is not attempted: the collector wraps an arbitrary backend
+(`prometheus_client`, statsd, OpenTelemetry) that this adapter cannot make
+transactional, and buffering the pair to apply together would only move the
+problem while delaying when metrics appear.
+
+Three consequences follow, and collector implementations depend on them:
+
+- **Partial application is possible.** If the collector raises on the second
+  call, the first stays applied — a failure can be recorded without its
+  duration.
+- **The order is fixed.** The failure counter is applied before the duration
+  observation, so a partial application is always the prefix, never the
+  suffix.
+- **The exception propagates.** It leaves the hook, and
+  `cuprum._observability._emit_exec_event` catches it, logs
+  `observe_hook_failed`, and lets the command continue: a broken metrics
+  backend must not fail a user's command.
+
+So a collector must treat each call as independent and idempotent-safe, and
+must never assume that seeing a `cuprum_failures_total` increment guarantees a
+matching `cuprum_duration_seconds` observation will follow. The label mapping
+is read-only for the duration of the loop — it is extracted once, before the
+first call, and the same mapping is passed to every operation.
 
 ______________________________________________________________________
 
