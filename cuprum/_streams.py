@@ -73,14 +73,6 @@ async def _drain(
     Returns the captured text decoded with the configured encoding/errors, or
     ``None`` when capture is disabled.
     """
-    # This is the single source of truth for the consume mechanics shared by
-    # :func:`_consume_stream_without_lines` and
-    # :func:`_consume_stream_with_lines`: read in ``_READ_SIZE`` chunks, extend
-    # the capture buffer when capturing, echo each chunk to the configured
-    # sink when echoing, then hand the chunk to ``on_chunk`` for
-    # variant-specific processing (for example incremental line decoding).
-    # Fixes to the loop must be made here so the capture path and the
-    # line-emitting path cannot drift.
     buffer = bytearray() if config.capture_output else None
     echo_decoder = _echo_decoder(config)
     while True:

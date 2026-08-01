@@ -161,13 +161,6 @@ def _resolve_timeout_payload(
     violation). Either branch yields a concrete ``timeout``, so the resulting
     ``TimeoutExpired`` report is consistent regardless of which path timed out.
     """
-    # This is the pure timeout-payload seam behind _handle_subprocess_timeout.
-    # A _SubprocessTimeoutError already carries a captured payload from the
-    # stream-timeout path, so it is used verbatim. A bare TimeoutError is
-    # resolved from ``fallback`` — whose configured timeout must be present (a
-    # missing one is an internal invariant violation). Either branch yields a
-    # concrete ``timeout``, so the resulting TimeoutExpired report is
-    # consistent regardless of which path timed out.
     match exc:
         case _SubprocessTimeoutError(
             timeout=timeout,

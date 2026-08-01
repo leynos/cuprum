@@ -21,7 +21,7 @@ from cuprum.unittests import strategies as cuprum_st
 _PROPERTY_SETTINGS = settings(derandomize=True, deadline=None, max_examples=50)
 
 # Run the symbolic backend for these tests with:
-#   uv run pytest cuprum/unittests/test_context.py -m crosshair \
+#   uv run pytest cuprum/unittests/test_context_timeouts.py -m crosshair \
 #     --hypothesis-profile=crosshair
 
 # =============================================================================
