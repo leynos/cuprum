@@ -29,7 +29,13 @@ class ScenarioComparison:
         return (self.regression_ratio - self.max_regression) > _FLOAT_TOLERANCE
 
     def as_dict(self) -> dict[str, object]:
-        """Serialize the scenario comparison for JSON output."""
+        """Serialize the scenario comparison for JSON output.
+
+        Returns
+        -------
+        dict[str, object]
+            The scenario comparison fields as a JSON-ready mapping.
+        """
         return {
             "scenario_name": self.scenario_name,
             "baseline_ratio": self.baseline_ratio,
@@ -72,7 +78,14 @@ class ComparisonReport:
         return max(comparison.regression_ratio for comparison in self.comparisons)
 
     def as_dict(self) -> dict[str, object]:
-        """Serialize the report for JSON output."""
+        """Serialize the report for JSON output.
+
+        Returns
+        -------
+        dict[str, object]
+            The report summary and per-scenario comparisons as a
+            JSON-ready mapping.
+        """
         return {
             "max_regression": self.max_regression,
             "passed": self.passed,

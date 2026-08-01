@@ -75,7 +75,13 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    """Run the benchmark CLI entry point."""
+    """Run the benchmark CLI entry point.
+
+    Returns
+    -------
+    int
+        The process exit code.
+    """
     args = _parse_args()
     rust_available = is_rust_available()
     scenarios = default_pipeline_scenarios(

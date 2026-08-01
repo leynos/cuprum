@@ -11,15 +11,13 @@ inputs, ``TeeProfileWorkerResult`` for the JSON-compatible result payload,
 ``BackendSelector`` and ``Clock`` protocols used to inject backend selection
 and timing behaviour in tests.
 
-Backend selection is handled by ``_EnvBackendSelector``, a deliberately
-non-reentrant context manager that mutates the process-wide environment while
-holding ``_BACKEND_LOCK``. ``_BackendSelectorState`` provides the thread-local
-reentrancy guard, while ``_BACKEND_LOCK`` is an ``RLock`` that serialises
-``os.environ`` changes across workers and still allows same-thread helper code
-to re-enter the lock safely.
+Backend selection lives in ``benchmarks._tee_profile_worker_backend``, which
+provides ``_EnvBackendSelector`` and the ``BackendSelector``/``Clock``
+protocols re-exported here for existing production imports and type
+annotations. That module mutates ``CUPRUM_STREAM_BACKEND`` under an ``RLock``,
+rejects same-thread nested activation, and clears the ``cuprum._backend``
+caches so backend discovery reflects the active environment.
 
-The worker clears caches in ``cuprum._backend`` whenever it changes or restores
-``CUPRUM_STREAM_BACKEND`` so backend discovery reflects the active environment.
 Command output is sent through ``benchmarks.sinks`` to exercise the same sink
 families used by the benchmark suite.
 
@@ -285,6 +283,11 @@ def _run_command_sync(
     without a lock. This is safe because ``sh.observe`` calls the callback
     synchronously in the same thread that calls ``run_sync``; no concurrent
     access to ``line_count`` is possible.
+
+    Returns
+    -------
+    tuple[WorkerCommandResult, int]
+        The command result and the number of stdout line events observed.
     """
     line_count = 0
 
@@ -327,7 +330,15 @@ def _result_exit_code(result: WorkerCommandResult) -> int:
 
 
 def _run_once(config: TeeProfileWorkerConfig) -> tuple[int, int, int]:
-    """Run one Cuprum command and return status, exit code, and capture length."""
+    """Run one Cuprum command and report its captured output and exit code.
+
+    Returns
+    -------
+    tuple[int, int, int]
+        ``(captured_output_length, exit_code, stdout_line_count)``. The first
+        element is the length of the captured stdout — not a status value —
+        and is ``0`` when nothing was captured.
+    """
     worker_cmd = _build_command(config)
     capture, echo = _capture_and_echo_flags(config.mode)
     result, line_count = _run_command_sync(

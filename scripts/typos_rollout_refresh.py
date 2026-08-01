@@ -407,7 +407,7 @@ def refresh_base(
         If the refreshed dictionary source is not valid TOML.
     urllib.error.URLError
         If the HTTP refresh path fails and no stale cache is available.
-    """
+    """  # noqa: DOC502 - refresh and parse errors propagate from the callees
     if offline:
         if not _valid_cache(cache):
             message = f"no cached shared dictionary at {cache}"

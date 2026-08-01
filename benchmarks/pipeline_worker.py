@@ -84,15 +84,7 @@ def _parse_args() -> PipelineWorkerConfig:
 
 
 def _writer_script(*, with_line_callbacks: bool) -> str:
-    """Return script for upstream payload generation.
-
-    Parameters
-    ----------
-    with_line_callbacks:
-        When ``True``, emit newline-terminated lines so downstream
-        line-by-line readers process multiple lines rather than one
-        giant blob.  When ``False``, emit raw binary bytes.
-    """
+    """Return script for upstream payload generation."""
     # With line callbacks the payload is newline-terminated so downstream
     # line-by-line readers process many lines rather than one giant blob;
     # without them it is raw binary bytes.
@@ -182,7 +174,19 @@ def _build_pipeline(config: PipelineWorkerConfig) -> tuple[sh.Pipeline, Program]
 
 
 def run_pipeline_worker(config: PipelineWorkerConfig) -> int:
-    """Execute one configured throughput benchmark pipeline run."""
+    """Execute one configured throughput benchmark pipeline run.
+
+    Parameters
+    ----------
+    config : PipelineWorkerConfig
+        The worker settings driving the run.
+
+    Returns
+    -------
+    int
+        ``0`` when every iteration succeeds, otherwise the exit code of the
+        first failing iteration.
+    """
     pipeline, python_program = _build_pipeline(config)
     _logger.debug(
         "starting pipeline worker: iterations=%d, payload_bytes=%d, "
@@ -217,7 +221,13 @@ def run_pipeline_worker(config: PipelineWorkerConfig) -> int:
 
 
 def main() -> int:
-    """Run the throughput benchmark worker process."""
+    """Run the throughput benchmark worker process.
+
+    Returns
+    -------
+    int
+        Process exit code from the pipeline run.
+    """
     config = _parse_args()
     return run_pipeline_worker(config)
 
