@@ -7,6 +7,8 @@ import email.message
 import importlib
 import json
 import os
+import shlex
+import subprocess  # noqa: S404 - integration tests run the pinned spelling tool.
 import tomllib
 import typing as typ
 import urllib.error
@@ -20,6 +22,29 @@ if typ.TYPE_CHECKING:
 
 SCRIPT_DIRECTORY = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = SCRIPT_DIRECTORY.parent
+TYPOS_VERSION = "1.48.0"
+
+
+def _run_spelling_gate(*paths: Path) -> subprocess.CompletedProcess[str]:
+    """Run the pinned spelling scanner with the repository policy."""
+    command = shlex.split(
+        os.environ.get(
+            "TYPOS_TEST_COMMAND",
+            f"uv tool run typos@{TYPOS_VERSION}",
+        )
+    )
+    return subprocess.run(  # noqa: S603 - arguments are fixed except test paths.
+        [
+            *command,
+            "--config",
+            str(REPOSITORY_ROOT / "typos.toml"),
+            "--force-exclude",
+            *(str(path) for path in paths),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_spelling_target_checks_documentation_and_source() -> None:
@@ -32,6 +57,38 @@ def test_spelling_target_checks_documentation_and_source() -> None:
     assert {"'*.md'", "'*.py'", "'*.rs'"} <= set(spelling_recipe.split()), (
         "spelling target must include Markdown, Python, and Rust pathspecs"
     )
+
+
+@pytest.mark.parametrize("suffix", [".md", ".py", ".rs"])
+def test_spelling_gate_detects_plain_british_spelling(
+    tmp_path: Path,
+    suffix: str,
+) -> None:
+    """The spelling scanner rejects Oxford-incompatible text in every scope."""
+    fixture = tmp_path / f"invalid{suffix}"
+    plain_british = "organi" + "se"
+    fixture.write_text(f"{plain_british}\n", encoding="utf-8")
+
+    result = _run_spelling_gate(fixture)
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, f"expected spelling failure, got: {output}"
+    assert plain_british in output, f"expected offending spelling in: {output}"
+
+
+def test_spelling_gate_preserves_documented_exceptions(tmp_path: Path) -> None:
+    """External contracts and deliberate fixtures remain accepted."""
+    markdown = tmp_path / "external.md"
+    python = tmp_path / "fixture.py"
+    rust = tmp_path / "wire.rs"
+    markdown.write_text("Use `--artifact-name` to organize output.\n", encoding="utf-8")
+    python.write_text('mappings["organise"] = "organize"\n', encoding="utf-8")
+    rust.write_text('const KEY: &str = "artifacts";\n', encoding="utf-8")
+
+    result = _run_spelling_gate(markdown, python, rust)
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, f"expected documented exceptions to pass: {output}"
 
 
 def test_rollout_scripts_support_python_313() -> None:

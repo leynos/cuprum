@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import io
 import math
+import sys
 import typing as typ
 import urllib.error
 import urllib.request
@@ -27,6 +28,8 @@ from benchmarks.fetch_main_benchmark_baseline import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
+
+    from syrupy.assertion import SnapshotAssertion
 
 
 def _workflow_runs_payload(*run_ids: int) -> dict[str, object]:
@@ -181,6 +184,29 @@ def test_main_requires_github_token(
 
     with pytest.raises(SystemExit, match="missing GitHub token"):
         main(_main_cli_args(tmp_path))
+
+
+def test_cli_help_and_missing_token_snapshot(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    snapshot: SnapshotAssertion,
+    tmp_path: pth.Path,
+) -> None:
+    """CLI help and token errors retain their user-facing contract."""
+    monkeypatch.setattr(sys, "argv", ["fetch_main_benchmark_baseline.py"])
+    with pytest.raises(SystemExit) as help_exit:
+        main(["--help"])
+    help_text = capsys.readouterr().out
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    with pytest.raises(SystemExit) as token_exit:
+        main(_main_cli_args(tmp_path))
+    token_error = str(token_exit.value)
+
+    assert help_exit.value.code == 0
+    assert "--artifact-name" in help_text
+    assert "Artefact name to download" in help_text
+    assert "missing GitHub token" in token_error
+    assert {"help": help_text.splitlines(), "missing_token": token_error} == snapshot
 
 
 def test_main_downloads_and_extracts_latest_baseline(
