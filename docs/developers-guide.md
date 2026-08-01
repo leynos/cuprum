@@ -1328,6 +1328,24 @@ that expose pure behaviour. The UTF-8 decoder tests generate arbitrary byte
 vectors and chunk split points, then compare the decoded output with
 `String::from_utf8_lossy` as the oracle.
 
+When a property fails, proptest writes the shrunk case to a seed file under
+`rust/cuprum-rust/proptest-regressions/`. Commit that file: it re-runs the
+failing case ahead of the generated ones, so the same regression cannot return
+unnoticed.
+
+Seeds are only worth keeping when they came from a genuine failure. Running
+the Rust suite against deliberately-broken code — to prove a property is not
+vacuous — also writes a seed, and that one pins a case that never failed
+against correct code. Disable persistence for those runs so the file is never
+created:
+
+```bash
+PROPTEST_DISABLE_FAILURE_PERSISTENCE=1 make test
+```
+
+If a seed file does appear after a mutation run, delete it rather than
+committing it. Checking it in would imply a history the code does not have.
+
 Snapshot tests use [insta](https://docs.rs/insta/latest/insta/) as a
 development dependency, declared with `default-features = false` so the crate
 pulls in none of insta's optional format integrations. Prefer insta where the
