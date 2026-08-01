@@ -306,29 +306,6 @@ def test_run_rust_pump_falls_back_and_resumes_when_blocking_fails(
     assert resume_calls["count"] == 1, "the reader must be resumed on fallback"
 
 
-def test_paused_reader_reports_hand_off_unsafe_when_pause_fails() -> None:
-    """A pause that raises marks the descriptor hand-off unsafe."""
-    transport = _FakeTransport(pause_raises=True)
-    reader = typ.cast("asyncio.StreamReader", _FakeReader(transport))
-
-    with _paused_reader(reader) as may_hand_off:
-        assert may_hand_off is False, (
-            "a failed pause must report the hand-off as unsafe so the caller "
-            "falls back instead of racing a live reader"
-        )
-
-
-def test_paused_reader_permits_hand_off_without_pause_hooks() -> None:
-    """A transport with no pause hooks has no callbacks to race."""
-    reader = typ.cast("asyncio.StreamReader", _FakeReader(object()))
-
-    with _paused_reader(reader) as may_hand_off:
-        assert may_hand_off is True, (
-            "a transport exposing no pause/resume hooks must still permit the "
-            "Rust hand-off; there are no callbacks to suspend"
-        )
-
-
 def test_pump_over_raw_fds_falls_back_when_pause_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

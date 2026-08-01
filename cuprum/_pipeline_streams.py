@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses as dc
+import enum
 import logging
 import typing as typ
 
@@ -43,7 +44,21 @@ if typ.TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-def _log_rust_pump_declined(reason: str) -> None:
+class _RustPumpDeclineReason(enum.StrEnum):
+    """Why an inter-stage hop fell back from the Rust pump to the Python one.
+
+    A closed set rather than free text. Operators filter on ``cuprum_reason``,
+    so a typo at a new call site would produce a value their filters silently
+    miss; as an enum it is a type error instead. Members are `str`, so the
+    logged field stays a plain string.
+    """
+
+    RAW_FD_UNAVAILABLE = "raw_fd_unavailable"
+    READER_PAUSE_FAILED = "reader_pause_failed"
+    BLOCKING_MODE_UNAVAILABLE = "blocking_mode_unavailable"
+
+
+def _log_rust_pump_declined(reason: _RustPumpDeclineReason) -> None:
     """Record why an inter-stage hop fell back from the Rust pump to Python.
 
     Each decline is a silent performance decision: the hop still completes
@@ -58,7 +73,9 @@ def _log_rust_pump_declined(reason: str) -> None:
     Capture the reason a hop declined the fast path::
 
         with caplog.at_level(logging.DEBUG, logger="cuprum._pipeline_streams"):
-            _log_rust_pump_declined("blocking_mode_unavailable")
+            _log_rust_pump_declined(
+                _RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE,
+            )
         assert caplog.records[0].__dict__["cuprum_reason"] == (
             "blocking_mode_unavailable"
         )
@@ -66,8 +83,8 @@ def _log_rust_pump_declined(reason: str) -> None:
     """
     _LOGGER.debug(
         "Inter-stage hop declined the Rust pump (%s); using the Python pump",
-        reason,
-        extra={"cuprum_action": "rust_pump_declined", "cuprum_reason": reason},
+        reason.value,
+        extra={"cuprum_action": "rust_pump_declined", "cuprum_reason": reason.value},
     )
 
 
@@ -184,7 +201,7 @@ async def _pump_over_raw_fds(
         if not may_hand_off:
             # Pausing failed, so asyncio may still be consuming the reader.
             # Fall back rather than race it for the descriptor.
-            _log_rust_pump_declined("reader_pause_failed")
+            _log_rust_pump_declined(_RustPumpDeclineReason.READER_PAUSE_FAILED)
             return False
 
         # Flush any bytes asyncio already buffered in the StreamReader before
@@ -194,7 +211,7 @@ async def _pump_over_raw_fds(
         try:
             guard = _BlockingModeGuard.engage(reader_fd=reader_fd, writer_fd=writer_fd)
         except OSError:
-            _log_rust_pump_declined("blocking_mode_unavailable")
+            _log_rust_pump_declined(_RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
             return False
 
         await _await_rust_pump(guard, reader_fd=reader_fd, writer_fd=writer_fd)
@@ -269,9 +286,12 @@ def _report_pump_outcome_after_cancel(future: asyncio.Future[int]) -> None:
     error = future.exception()
     if error is None:
         return
+    # `exc_info` rather than `%r`: this record exists so a cancellation-masked
+    # failure stays diagnosable, and the type and message alone do not say
+    # where in the pump it happened.
     _LOGGER.debug(
-        "Rust pump failed while its hop was being cancelled: %r",
-        error,
+        "Rust pump failed while its hop was being cancelled",
+        exc_info=error,
         extra={"cuprum_action": "rust_pump_failed_after_cancel"},
     )
 
@@ -331,7 +351,7 @@ async def _try_rust_pump(
     writer_fd = _extract_stream_fd(writer)
 
     if reader_fd is None or writer_fd is None:
-        _log_rust_pump_declined("raw_fd_unavailable")
+        _log_rust_pump_declined(_RustPumpDeclineReason.RAW_FD_UNAVAILABLE)
         return False
 
     return await _run_rust_pump(

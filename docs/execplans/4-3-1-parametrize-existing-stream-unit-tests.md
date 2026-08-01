@@ -196,6 +196,16 @@ All quality gates passed:
   not built, which is expected)
 - `make markdownlint`: 0 errors
 
+> **Since superseded.** The file inventory below records where the code landed
+> when 4.3.1 completed, not where it lives now. The descriptor extractors and
+> the pause/blocking-mode lifecycle (`_fd_from_transport`,
+> `_extract_stream_fd`, `_paused_reader`, `_BlockingModeGuard`) have since moved
+> out of `cuprum/_pipeline_streams.py` into `cuprum/_pipeline_stream_fds.py`,
+> and the pipe-task bookkeeping into `cuprum/_pipeline_pipe_tasks.py`, to keep
+> each module within the per-module line cap. `_pipeline_streams.py` still owns
+> the backend choice and the hand-off itself. See "Raw descriptor lifecycle" in
+> `docs/cuprum-design.md` for the current layering.
+
 Files modified (8 total, within tolerance of 10):
 
 1. `cuprum/_pipeline_streams.py` — Added dispatch function and FD extractors

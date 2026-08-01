@@ -71,7 +71,15 @@ async def _cancel_mid_transfer(
             writer_fd=2,
         )
     )
-    await asyncio.to_thread(worker_started.wait, 5.0)
+    # `Event.wait` reports timeout by returning False rather than raising, so
+    # discarding it would let the test cancel a task that never reached the
+    # pause point — passing without exercising mid-transfer cancellation at
+    # all, which is the whole scenario.
+    started = await asyncio.to_thread(worker_started.wait, 5.0)
+    assert started, (
+        "the pump worker did not start within 5s, so the cancellation below "
+        "would not be mid-transfer"
+    )
     for _ in range(cancellations):
         task.cancel()
         # Give the cancellation a chance to be delivered while the worker runs.
@@ -170,9 +178,19 @@ def test_a_failing_pump_on_a_cancelled_hop_reports_the_cancellation(
         "a pump failure masked by cancellation must be recorded exactly once, "
         f"found {len(reported)}"
     )
-    assert "the pump failed while the hop was being cancelled" in (
-        reported[0].getMessage()
-    ), f"the record must carry the pump's own error, found {reported[0].getMessage()!r}"
+    # The error travels as `exc_info` rather than in the message text, so the
+    # record carries the traceback — without it the record would say a pump
+    # failed but not where, which is the one thing it exists to answer.
+    exc_info = reported[0].exc_info
+    assert exc_info is not None, (
+        "the record must attach the exception, so its traceback is preserved"
+    )
+    assert isinstance(exc_info[1], OSError), (
+        f"the attached exception must be the pump's own, found {exc_info[1]!r}"
+    )
+    assert str(exc_info[1]) == "the pump failed while the hop was being cancelled", (
+        f"the attached exception must carry the pump's message, found {exc_info[1]!r}"
+    )
 
 
 def test_repeated_cancellation_still_waits_for_the_worker(
