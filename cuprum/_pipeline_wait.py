@@ -7,7 +7,11 @@ command and a query, per the project's command/query segregation rule:
 
 - ``record_completion`` stamps a stage's exit code and injected end time, and
   latches the first non-zero exit **in completion order** as ``failure_index``.
-  Completion order decides, not stage order.
+  Completion order decides, not stage order. Stages that complete together are
+  the one case order cannot separate: ``asyncio.wait`` hands back an unordered
+  set, so ``_wait_for_pipeline`` feeds a batch through in stage order, making
+  the earliest stage — the upstream one that caused the rest — the reported
+  failure rather than whichever the set yielded first.
 - ``should_terminate_others`` reports, without mutating anything, whether that
   completion should stop every other still-running stage.
 
@@ -245,21 +249,26 @@ async def _process_completed_task(
     state.record_completion(idx, exit_code, ended_at=ended_at)
     latched_first_failure = not had_failure and state.failure_index == idx
 
-    fields = _completion_log_fields(state, idx, exit_code, ended_at)
+    terminate_others = state.should_terminate_others(idx)
 
-    if latched_first_failure:
-        _log_completion_event(
-            "pipeline_stage_first_failure",
-            "pipeline stage %d exited %d, latching first failure",
-            fields,
-        )
+    # Every stage passes through here, and most emit nothing: a success logs
+    # neither record. Derive the fields once it is known one will carry them.
+    if latched_first_failure or terminate_others:
+        fields = _completion_log_fields(state, idx, exit_code, ended_at)
+        if latched_first_failure:
+            _log_completion_event(
+                "pipeline_stage_first_failure",
+                "pipeline stage %d exited %d, latching first failure",
+                fields,
+            )
+        if terminate_others:
+            _log_completion_event(
+                "pipeline_fail_fast_termination",
+                "terminating other pipeline stages after stage %d exited %d",
+                fields,
+            )
 
-    if state.should_terminate_others(idx):
-        _log_completion_event(
-            "pipeline_fail_fast_termination",
-            "terminating other pipeline stages after stage %d exited %d",
-            fields,
-        )
+    if terminate_others:
         await _terminate_pipeline_remaining_stages(
             processes,
             state.wait_tasks,
@@ -301,7 +310,13 @@ async def _wait_for_pipeline(
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
-            for wait_task in done:
+            # `asyncio.wait` returns an unordered set, so stages that land in
+            # the same batch have no completion order left to observe; taking
+            # them as they fall out of the set would make `failure_index`
+            # depend on set iteration. Break the tie by stage index: in a
+            # pipeline an upstream failure is what causes the downstream ones
+            # it triggers, so the earliest stage is the one worth reporting.
+            for wait_task in sorted(done, key=lambda task: state.task_to_index[task]):
                 await _process_completed_task(
                     typ.cast("asyncio.Task[int]", wait_task),
                     state,

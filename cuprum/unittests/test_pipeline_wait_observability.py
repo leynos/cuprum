@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses as dc
 import logging
+import typing as typ
 
 import pytest
 
@@ -21,6 +22,9 @@ from cuprum.unittests._pipeline_wait_support import (
     pin_clock,
     record_terminations,
 )
+
+if typ.TYPE_CHECKING:
+    from syrupy.assertion import SnapshotAssertion
 
 _FIRST_FAILURE_ACTION = "pipeline_stage_first_failure"
 _TERMINATION_ACTION = "pipeline_fail_fast_termination"
@@ -189,3 +193,82 @@ class TestCompletionObservability:
         )
 
         assert _actions(records) == case.expected_actions, case.reason
+
+    def test_a_completion_timed_before_its_start_reports_zero(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A backwards clock reading clamps to 0.0 rather than going negative.
+
+        Every other case here starts a stage at zero and reads a later clock,
+        so they hold whether or not the duration is clamped. This one inverts
+        the pair: the stage records a start of 100.0 while the completion reads
+        12.5, which without the clamp would publish ``-87.5`` seconds as an
+        elapsed time.
+        """
+        record_terminations(monkeypatch)
+        pin_clock(monkeypatch, 12.5)
+
+        state = make_wait_state(3)
+        # Recorded after the pinned completion reading, so elapsed is -87.5.
+        state.started_at[0] = 100.0
+
+        async def drive() -> None:
+            """Fail stage 0 through the real async completion boundary."""
+            task = asyncio.create_task(immediate(4))
+            await task
+            state.wait_tasks = [task]
+            state.task_to_index = {task: 0}
+            await _pipeline_wait._process_completed_task(task, state, [], 0.25)
+
+        with caplog.at_level(logging.WARNING, logger=_pipeline_wait.__name__):
+            asyncio.run(drive())
+
+        durations = [
+            fields["cuprum_duration_s"]
+            for fields in (_structured_fields(record) for record in caplog.records)
+            if "cuprum_duration_s" in fields
+        ]
+
+        assert durations, "a failing stage must emit records carrying a duration"
+        assert all(duration == 0.0 for duration in durations), (
+            f"a backwards clock must report 0.0, found {durations!r}"
+        )
+
+    def test_the_emitted_records_match_their_snapshot(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        snapshot: SnapshotAssertion,
+    ) -> None:
+        """The whole shape of both records is pinned, not just their fields.
+
+        The assertions above check the pieces each test is about. This pins
+        everything a consumer actually sees at once — logger name, level,
+        rendered message, and every ``cuprum_`` field — so a change to any of
+        them surfaces as a diff rather than passing because no test happened to
+        assert on that part.
+
+        These records reach a default logging configuration at ``WARNING``, so
+        the level and the message text are as much a contract as the fields.
+        The clock is pinned, so the payload is deterministic.
+        """
+        records = self._run(
+            monkeypatch,
+            caplog,
+            stage_count=3,
+            completions=[(0, 4)],
+        )
+
+        payload = [
+            {
+                "logger": record.name,
+                "level": record.levelname,
+                "message": record.getMessage(),
+                **_structured_fields(record),
+            }
+            for record in records
+        ]
+
+        assert payload == snapshot

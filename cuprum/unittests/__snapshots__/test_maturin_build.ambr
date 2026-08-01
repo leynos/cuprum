@@ -54,6 +54,7 @@
       'cuprum/unittests/__snapshots__/test_fixture_generation.ambr',
       'cuprum/unittests/__snapshots__/test_folded_summary.ambr',
       'cuprum/unittests/__snapshots__/test_maturin_build.ambr',
+      'cuprum/unittests/__snapshots__/test_pipeline_wait_observability.ambr',
       'cuprum/unittests/__snapshots__/test_profile_driver.ambr',
       'cuprum/unittests/__snapshots__/test_stage_observation_builder.ambr',
       'cuprum/unittests/__snapshots__/test_tee_profile_worker_core.ambr',
