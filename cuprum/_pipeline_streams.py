@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses as dc
+import enum
 import functools
 import logging
 import os
@@ -66,12 +67,20 @@ if typ.TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-def _log_rust_pump_declined(reason: str) -> None:
+class _RustPumpDeclineReason(enum.StrEnum):
+    """Why an inter-stage hop falls back from the Rust pump to the Python one."""
+
+    RAW_FD_UNAVAILABLE = "raw_fd_unavailable"
+    READER_PAUSE_FAILED = "reader_pause_failed"
+    BLOCKING_MODE_UNAVAILABLE = "blocking_mode_unavailable"
+
+
+def _log_rust_pump_declined(reason: _RustPumpDeclineReason) -> None:
     """Record the reason an inter-stage hop falls back to Python pumping."""
     _LOGGER.debug(
         "Inter-stage hop declined the Rust pump (%s); using the Python pump",
-        reason,
-        extra={"cuprum_action": "rust_pump_declined", "cuprum_reason": reason},
+        reason.value,
+        extra={"cuprum_action": "rust_pump_declined", "cuprum_reason": reason.value},
     )
 
 
@@ -201,8 +210,8 @@ async def _run_rust_pump_with_blocking_fds(
 def _log_rust_pump_failed_after_cancel(error: BaseException) -> None:
     """Record a native-pump failure masked by caller-requested cancellation."""
     _LOGGER.debug(
-        "Rust pump failed after cancellation: %s",
-        error,
+        "Rust pump failed while its hop was being cancelled",
+        exc_info=error,
         extra={"cuprum_action": "rust_pump_failed_after_cancel"},
     )
 
@@ -242,7 +251,7 @@ async def _pump_over_raw_fds(
     # before the Rust pump takes over the raw file descriptor.
     reader_pause = _pause_reader_transport(reader)
     if not reader_pause.may_hand_off:
-        _log_rust_pump_declined("reader_pause_failed")
+        _log_rust_pump_declined(_RustPumpDeclineReason.READER_PAUSE_FAILED)
         return False
     try:
         await _drain_reader_buffer(reader, writer)
@@ -257,7 +266,7 @@ async def _pump_over_raw_fds(
         )
     except (OSError, ValueError):
         _resume_reader_transport(reader_pause.resume)
-        _log_rust_pump_declined("blocking_mode_unavailable")
+        _log_rust_pump_declined(_RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
         return False
 
     state = _RustPumpState(
@@ -321,7 +330,7 @@ async def _try_rust_pump(
     writer_fd = _extract_stream_fd(writer)
 
     if reader_fd is None or writer_fd is None:
-        _log_rust_pump_declined("raw_fd_unavailable")
+        _log_rust_pump_declined(_RustPumpDeclineReason.RAW_FD_UNAVAILABLE)
         return False
 
     return await _run_rust_pump(

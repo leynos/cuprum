@@ -18,13 +18,21 @@ if typ.TYPE_CHECKING:
 
 
 def _fd_from_transport(transport: object | None) -> int | None:
-    """Extract a raw FD via ``transport.get_extra_info('pipe').fileno()``."""
+    """Extract a raw FD via ``transport.get_extra_info('pipe').fileno()``.
+
+    Every attribute here is duck-typed, so each is checked for callability
+    before use: a transport double, or an unusual implementation carrying a
+    non-callable ``get_extra_info``, would otherwise raise ``TypeError`` from
+    outside the ``try`` below. Nothing upstream catches that —
+    ``_extract_stream_fd`` calls straight through — so it would surface as a
+    crash where the contract is to decline the fast path and return ``None``.
+    """
     get_extra = getattr(transport, "get_extra_info", None)
-    if get_extra is None:
+    if not callable(get_extra):
         return None
     pipe: object | None = get_extra("pipe")
     fileno = getattr(pipe, "fileno", None) if pipe is not None else None
-    if fileno is None:
+    if not callable(fileno):
         return None
     try:
         return int(fileno())

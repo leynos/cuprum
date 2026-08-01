@@ -1515,10 +1515,12 @@ fail-fast mode is enabled. The caller invokes `run_concurrent` with a config
 whose `fail_fast` is true. Every command is launched as a task in a task group.
 When the first non-zero exit is detected, the group raises `_FirstFailureError`
 and cancels the tasks still pending; each cancelled process is signalled with
-`SIGTERM`, given a grace period, then `SIGKILL`. The group returns partial
-results — those that completed alongside those that were cancelled — and
-`run_concurrent` returns a `ConcurrentResult` carrying those partial results and
-the failure indices.
+`SIGTERM`, given a grace period, then `SIGKILL`. The group returns the partial
+results — the commands that *completed*; cancelled ones produced no
+`CommandResult` and are omitted — and `run_concurrent` returns a
+`ConcurrentResult` carrying those, compacted, alongside `submission_indices`
+mapping each back to its original position and the failure indices within the
+compacted tuple.
 
 Figure 7: Fail-fast mode cancellation behaviour
 
@@ -2441,27 +2443,38 @@ explicitly.
 
 The Rust extension releases the GIL during I/O operations, allowing other
 Python threads and asyncio tasks to proceed. Integration with asyncio uses
-`loop.run_in_executor()`:
+`loop.run_in_executor()`.
+
+The dispatcher itself only chooses; `_try_rust_pump` owns the whole attempt and
+reports whether it succeeded, so the caller never runs the native pump itself:
 
 ```python
 async def _pump_stream_dispatch(
     reader: asyncio.StreamReader | None,
     writer: asyncio.StreamWriter | None,
 ) -> None:
+    if reader is None:
+        await _run_python_pump(reader, writer)
+        return
+
     backend = get_stream_backend()
     if backend is StreamBackend.RUST and await _try_rust_pump(reader, writer):
-        loop = asyncio.get_running_loop()
-        reader_fd = _extract_fd(reader)
-        writer_fd = _extract_fd(writer)
-        await loop.run_in_executor(
-            None,
-            _streams_rs.rust_pump_stream,
-            reader_fd,
-            writer_fd,
-        )
-    else:
-        await _pump_stream(reader, writer)
+        return
+
+    await _run_python_pump(reader, writer)
 ```
+
+`_try_rust_pump` extracts both descriptors — declining with
+`raw_fd_unavailable` if either is missing — and hands off to `_run_rust_pump`,
+which drives `_pump_over_raw_fds` under the pause and blocking-mode lifecycle
+described below and closes the writer only once the pump has returned.
+
+The layering matters, and this example used to get it wrong. Awaiting
+`_try_rust_pump` and *then* calling `rust_pump_stream` would run the native
+pump twice, and extracting the descriptors in the dispatcher would restore
+their state before the cancellation-safe drain in `_await_rust_pump` had let
+the worker thread finish with them — which is the exact hazard that drain
+exists to prevent.
 
 Error propagation from Rust to Python uses standard exception mechanisms. The
 Rust extension raises `OSError` for I/O failures, matching the behaviour of
@@ -2492,9 +2505,14 @@ each path is testable without a live pump:
   transfer.
 - `_paused_reader` — a context manager that pauses the reader transport and
   resumes it on every exit path, including exceptions and cancellation, so a
-  resume can never be skipped. Only a pause that actually took effect is
-  resumed: when the transport exposes no pause/resume hooks, or when
-  `pause_reading()` raises, no resume callback is invoked. It yields whether
+  resume can never be skipped. Exactly one resume fires per pause attempt, but
+  not always at block exit. A transport exposing no pause/resume hooks needs
+  none. A `pause_reading()` that *raises* gets one corrective
+  `resume_reading()` immediately, at the failure site rather than at block
+  exit, because the transport may have set its paused flag before whatever
+  raised — leaving a reader nobody resumes while the Python fallback reads a
+  descriptor nothing is watching. Having already been corrected, it is not
+  resumed again on exit. It yields whether
   the descriptor may be handed to the Rust pump — a failed pause answers
   `False`, because asyncio may still be consuming the reader, and the caller
   falls back to the Python pump rather than racing it. A transport with no

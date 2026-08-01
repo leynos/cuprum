@@ -71,9 +71,14 @@ async def _cancel_mid_transfer(
         task = asyncio.create_task(
             _pipeline_streams._run_rust_pump_with_blocking_fds(state=state)
         )
-        await asyncio.to_thread(worker_started.wait, 5.0)
+        started = await asyncio.to_thread(worker_started.wait, 5.0)
+        assert started, (
+            "the pump worker did not start within 5s, so cancellation would "
+            "not be mid-transfer"
+        )
         for _ in range(cancellations):
             task.cancel()
+            await asyncio.sleep(0.05)
         with pytest.raises(asyncio.CancelledError):
             await task
         events.append("released")
@@ -183,9 +188,14 @@ def test_a_failing_pump_on_a_cancelled_hop_reports_the_cancellation(
         "a pump failure masked by cancellation must be recorded exactly once, "
         f"found {len(reported)}"
     )
-    assert "the pump failed while the hop was being cancelled" in (
-        reported[0].getMessage()
-    ), f"the record must carry the pump error, found {reported[0].getMessage()!r}"
+    exc_info = reported[0].exc_info
+    assert exc_info is not None, "the record must attach the pump exception"
+    assert isinstance(exc_info[1], OSError), (
+        f"the attached exception must be the pump's own, found {exc_info[1]!r}"
+    )
+    assert str(exc_info[1]) == "the pump failed while the hop was being cancelled", (
+        f"the attached exception must carry the pump's message, found {exc_info[1]!r}"
+    )
 
 
 def test_repeated_cancellation_keeps_cleanup_worker_owned(
