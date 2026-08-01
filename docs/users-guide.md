@@ -1172,6 +1172,44 @@ The `ConcurrentResult` dataclass provides:
   possibly compacted `results`), these are stable across collect-all and
   fail-fast modes.
 
+
+### Validation and error handling
+
+`ConcurrentConfig` and `ConcurrentResult` validate their arguments eagerly, so
+misuse is reported at construction time rather than surfacing later as a
+confusing failure.
+
+`ConcurrentConfig(concurrency=...)`:
+
+- `None` (the default) means unthrottled concurrency; otherwise the value
+  must be an `int` greater than or equal to `1`.
+- A non-integer value raises `TypeError`. `bool` values are rejected too:
+  since `True`/`False` are `int` subclasses in Python, they are excluded
+  deliberately rather than being silently treated as `1`/`0`.
+- A value below `1` (for example `0` or `-1`) raises `ValueError`.
+
+```python
+from cuprum import ConcurrentConfig
+
+ConcurrentConfig(concurrency=0)      # ValueError: concurrency must be >= 1
+ConcurrentConfig(concurrency=True)   # TypeError: concurrency must be an int, got bool
+```
+
+`ConcurrentResult` is normally returned by `run_concurrent`/
+`run_concurrent_sync` rather than constructed directly, but the same
+validation applies if you build one in tests:
+
+- Each entry in `failures` must be an `int` (again, `bool` is rejected),
+  otherwise `TypeError` is raised.
+- A failure index outside `range(len(results))` raises `ValueError`.
+- `failures` must be strictly ascending, and therefore unique; duplicate or
+  descending indices raise `ValueError`.
+- `submission_indices` defaults to `None`, which backfills the identity
+  sequence `(0, 1, …, n-1)`, including the empty tuple when `results` is
+  empty. Any supplied sequence whose length differs from `results` raises
+  `ValueError`; an explicit empty tuple paired with non-empty `results` is
+  therefore rejected rather than backfilled.
+
 ## Performance extensions (optional Rust)
 
 Cuprum ships as a pure Python wheel by default. Some platforms also provide
