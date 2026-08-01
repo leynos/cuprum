@@ -54,6 +54,11 @@ async def _wait_for_path(path: Path, *, timeout: float) -> None:
 
     Awaiting a marker file that a child writes keeps the coordination
     deterministic rather than guessing readiness with a fixed sleep.
+
+    Raises
+    ------
+    TimeoutError
+        If ``path`` does not appear before ``timeout`` elapses.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
@@ -71,6 +76,11 @@ def _patch_writer_wedge_signal(monkeypatch: pytest.MonkeyPatch) -> asyncio.Event
     then buffers the oversized payload and suspends on ``drain()`` before
     control returns to the awaiting orchestrator, so the writer is genuinely
     wedged once the flag is observed.
+
+    Returns
+    -------
+    asyncio.Event
+        The flag set once the patched stdin writer engages.
     """
     writer_wedged = asyncio.Event()
 

@@ -140,6 +140,12 @@ def chunk_sizes_from_cut_points(
     -------
     tuple[int, ...]
         A tuple of positive chunk sizes that sums to ``payload_size``.
+
+    Raises
+    ------
+    ValueError
+        If ``payload_size`` is negative or the cut points are not strictly
+        increasing within the payload.
     """
     if payload_size < 0:
         msg = f"payload_size must be non-negative, got {payload_size}"
@@ -185,6 +191,11 @@ def deterministic_property_case(
     -------
     tuple[bytes, tuple[int, ...]]
         The payload bytes and derived chunk sizes.
+
+    Raises
+    ------
+    ValueError
+        If ``payload_size`` or ``max_cuts`` is negative.
     """
     if payload_size < 0:
         msg = f"payload_size must be non-negative, got {payload_size}"
@@ -212,6 +223,11 @@ def chunked_writer_script() -> str:
 
     - argv[1]: base64-encoded payload bytes;
     - argv[2]: comma-separated chunk sizes, or an empty string.
+
+    Returns
+    -------
+    str
+        The Python source that writes the payload in the configured chunks.
     """
     return "\n".join(
         [
@@ -236,12 +252,29 @@ def chunked_writer_script() -> str:
 
 
 def payload_to_base64(payload: bytes) -> str:
-    """Encode payload bytes to an ASCII base64 string."""
+    """Encode payload bytes to an ASCII base64 string.
+
+    Parameters
+    ----------
+    payload : bytes
+        The raw bytes encoded as base64.
+
+    Returns
+    -------
+    str
+        The ASCII base64 representation of ``payload``.
+    """
     return base64.b64encode(payload).decode("ascii")
 
 
 def hex_sink_script() -> str:
-    """Return Python code that reads stdin bytes and prints lowercase hex."""
+    """Return Python code that reads stdin bytes and prints lowercase hex.
+
+    Returns
+    -------
+    str
+        The Python source that hex-encodes stdin onto stdout.
+    """
     return "import sys; data = sys.stdin.buffer.read(); sys.stdout.write(data.hex())"
 
 

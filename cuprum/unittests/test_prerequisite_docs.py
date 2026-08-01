@@ -18,19 +18,52 @@ from tests.helpers import (
 
 @pytest.fixture(scope="module")
 def users_guide() -> str:
-    """Load the users' guide once per module."""
+    """Load the users' guide once per module.
+
+    Returns
+    -------
+    str
+        The full users' guide text.
+
+    """
     return read_users_guide()
 
 
 @pytest.fixture(scope="module")
 def prerequisites_section(users_guide: str) -> str:
-    """Extract the build prerequisites section from the users' guide."""
+    """Extract the build prerequisites section from the users' guide.
+
+    Parameters
+    ----------
+    users_guide : str
+        The users' guide text the prerequisites subsection is extracted
+        from.
+
+    Returns
+    -------
+    str
+        The build prerequisites subsection text.
+
+    """
     return extract_markdown_subsection(users_guide, heading=BUILD_PREREQUISITES_HEADING)
 
 
 @pytest.fixture(scope="module")
 def troubleshooting_section(users_guide: str) -> str:
-    """Extract the troubleshooting section from the users' guide."""
+    """Extract the troubleshooting section from the users' guide.
+
+    Parameters
+    ----------
+    users_guide : str
+        The users' guide text the troubleshooting subsection is
+        extracted from.
+
+    Returns
+    -------
+    str
+        The troubleshooting subsection text.
+
+    """
     return extract_markdown_subsection(users_guide, heading=TROUBLESHOOTING_HEADING)
 
 

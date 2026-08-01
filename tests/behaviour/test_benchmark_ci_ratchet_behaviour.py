@@ -57,7 +57,19 @@ def test_ratchet_reports_malformed_inputs() -> None:
     target_fixture="ratchet_fixture_bundle",
 )
 def given_candidate_within_threshold(tmp_path: pth.Path) -> FixtureBundle:
-    """Create fixture JSON files with a 10% Rust/Python ratio increase (passes)."""
+    """Create fixture JSON files with a 10% Rust/Python ratio increase (passes).
+
+    Parameters
+    ----------
+    tmp_path : pth.Path
+        The pytest temporary directory the fixture files are written to.
+
+    Returns
+    -------
+    FixtureBundle
+        Paths to the baseline and candidate fixture files, plus the
+        report_path the CLI writes its ratchet report to.
+    """
     return _prepare_fixture_bundle(tmp_path=tmp_path, candidate_rust_mean=2.20)
 
 
@@ -66,7 +78,19 @@ def given_candidate_within_threshold(tmp_path: pth.Path) -> FixtureBundle:
     target_fixture="ratchet_fixture_bundle",
 )
 def given_candidate_exceeds_threshold(tmp_path: pth.Path) -> FixtureBundle:
-    """Create fixture JSON files with a 25% Rust/Python ratio increase (fails)."""
+    """Create fixture JSON files with a 25% Rust/Python ratio increase (fails).
+
+    Parameters
+    ----------
+    tmp_path : pth.Path
+        The pytest temporary directory the fixture files are written to.
+
+    Returns
+    -------
+    FixtureBundle
+        Paths to the baseline and candidate fixture files, plus the
+        report_path the CLI writes its ratchet report to.
+    """
     return _prepare_fixture_bundle(tmp_path=tmp_path, candidate_rust_mean=2.50)
 
 
@@ -75,7 +99,19 @@ def given_candidate_exceeds_threshold(tmp_path: pth.Path) -> FixtureBundle:
     target_fixture="ratchet_fixture_bundle",
 )
 def given_malformed_fixtures(tmp_path: pth.Path) -> FixtureBundle:
-    """Create fixture JSON files that trigger the CLI malformed-input path."""
+    """Create fixture JSON files that trigger the CLI malformed-input path.
+
+    Parameters
+    ----------
+    tmp_path : pth.Path
+        The pytest temporary directory the fixture files are written to.
+
+    Returns
+    -------
+    FixtureBundle
+        Paths to the baseline and malformed candidate fixture files, plus
+        the report_path the CLI writes its ratchet report to.
+    """
     fixture_bundle = _prepare_fixture_bundle(
         tmp_path=tmp_path,
         candidate_rust_mean=1.0,
@@ -98,7 +134,19 @@ def given_malformed_fixtures(tmp_path: pth.Path) -> FixtureBundle:
 def when_run_ratchet_cli(
     ratchet_fixture_bundle: FixtureBundle,
 ) -> CliResult:
-    """Execute the ratchet CLI against prepared baseline/candidate fixtures."""
+    """Execute the ratchet CLI against prepared baseline/candidate fixtures.
+
+    Parameters
+    ----------
+    ratchet_fixture_bundle : FixtureBundle
+        The prepared fixture paths the ratchet CLI is run against.
+
+    Returns
+    -------
+    CliResult
+        ``completed``, the subprocess result of the ratchet CLI invocation,
+        and ``report_path``, the output report destination.
+    """
     command = [
         sys.executable,
         "benchmarks/ratchet_rust_performance.py",
@@ -141,7 +189,13 @@ def _assert_returncode(ratchet_cli_result: CliResult, *, expected: int) -> None:
 def then_ratchet_exits_successfully(
     ratchet_cli_result: CliResult,
 ) -> None:
-    """CLI should return zero for within-threshold regression."""
+    """CLI should return zero for within-threshold regression.
+
+    Parameters
+    ----------
+    ratchet_cli_result : CliResult
+        The captured ratchet CLI result.
+    """
     _assert_returncode(ratchet_cli_result, expected=0)
 
 
@@ -149,7 +203,13 @@ def then_ratchet_exits_successfully(
 def then_ratchet_exits_with_failure(
     ratchet_cli_result: CliResult,
 ) -> None:
-    """CLI should return non-zero for above-threshold regression."""
+    """CLI should return non-zero for above-threshold regression.
+
+    Parameters
+    ----------
+    ratchet_cli_result : CliResult
+        The captured ratchet CLI result.
+    """
     _assert_returncode(ratchet_cli_result, expected=1)
 
 
@@ -157,7 +217,13 @@ def then_ratchet_exits_with_failure(
 def then_ratchet_exits_with_malformed_input_failure(
     ratchet_cli_result: CliResult,
 ) -> None:
-    """CLI should return 2 when the benchmark inputs are malformed."""
+    """CLI should return 2 when the benchmark inputs are malformed.
+
+    Parameters
+    ----------
+    ratchet_cli_result : CliResult
+        The captured ratchet CLI result.
+    """
     _assert_returncode(ratchet_cli_result, expected=2)
 
 
@@ -165,7 +231,13 @@ def then_ratchet_exits_with_malformed_input_failure(
 def then_ratchet_report_indicates_success(
     ratchet_cli_result: CliResult,
 ) -> None:
-    """Report JSON should indicate the comparison passed."""
+    """Report JSON should indicate the comparison passed.
+
+    Parameters
+    ----------
+    ratchet_cli_result : CliResult
+        The captured ratchet CLI result.
+    """
     payload = json.loads(ratchet_cli_result["report_path"].read_text(encoding="utf-8"))
 
     assert payload["passed"] is True, "expected ratchet report passed=True"
@@ -178,7 +250,13 @@ def then_ratchet_report_indicates_success(
 def then_ratchet_report_indicates_failure(
     ratchet_cli_result: CliResult,
 ) -> None:
-    """Report JSON should indicate the comparison failed with regressions."""
+    """Report JSON should indicate the comparison failed with regressions.
+
+    Parameters
+    ----------
+    ratchet_cli_result : CliResult
+        The captured ratchet CLI result.
+    """
     payload = json.loads(ratchet_cli_result["report_path"].read_text(encoding="utf-8"))
 
     assert payload["passed"] is False, "expected ratchet report passed=False"

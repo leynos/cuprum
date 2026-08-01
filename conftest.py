@@ -34,11 +34,6 @@ def fixture_rust_streams() -> ModuleType:
     -------
     ModuleType
         The imported ``cuprum._streams_rs`` module.
-
-    Raises
-    ------
-    pytest.Skip
-        If the Rust extension is not installed.
     """
     if not _rust_backend.is_available():
         pytest.skip("Rust extension is not installed.")

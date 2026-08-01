@@ -216,10 +216,6 @@ def then_payload_matches(pumped_payload: tuple[bytes, bytes]) -> None:
     ----------
     pumped_payload : tuple[bytes, bytes]
         The input payload and the output captured from the pipe.
-
-    Returns
-    -------
-    None
     """
     payload, output = pumped_payload
     assert output == payload, "expected output to match the pumped payload"
@@ -235,10 +231,6 @@ def then_output_matches_replacement(
     ----------
     consumed_payload : tuple[bytes, str]
         The input payload and decoded output.
-
-    Returns
-    -------
-    None
     """
     payload, output = consumed_payload
     expected = payload.decode("utf-8", errors="replace")
@@ -282,10 +274,6 @@ def then_large_payload_matches(large_pumped_payload: tuple[bytes, bytes, int]) -
     ----------
     large_pumped_payload : tuple[bytes, bytes, int]
         The input payload, the output captured from the pipe, and bytes pumped.
-
-    Returns
-    -------
-    None
     """
     payload, output, pumped_bytes = large_pumped_payload
     assert output == payload, "expected output to match the large pumped payload"

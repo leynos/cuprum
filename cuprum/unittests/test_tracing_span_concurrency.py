@@ -68,12 +68,7 @@ def _block_span_end(
     monkeypatch: pytest.MonkeyPatch,
     target_span: InMemorySpan,
 ) -> tuple[threading.Event, threading.Event]:
-    """Make ``target_span.end()`` block until released.
-
-    Returns ``(entered, release)``: ``entered`` is set when the blocked
-    ``end`` is reached, and setting ``release`` lets it proceed. Other spans'
-    ``end`` calls are unaffected.
-    """
+    """Make ``target_span.end()`` block until released."""
     # Other spans' ``end`` calls are unaffected. Returns a
     # ``(entered, release)`` pair: ``entered`` is set when the blocked
     # ``end`` is reached, and setting ``release`` lets it proceed.

@@ -146,10 +146,6 @@ def test_rust_pump_stream_transfers_data(
         The payload to transfer through the pump.
     buffer_size : int | None
         Optional buffer size parameter; None uses default.
-
-    Returns
-    -------
-    None
     """
     output, transferred = _pump_rust_stream_payload(
         rust_streams, payload, buffer_size=buffer_size
@@ -170,10 +166,6 @@ def test_rust_pump_stream_raises_on_invalid_buffer(
     ----------
     rust_streams : ModuleType
         The Rust streams module fixture.
-
-    Returns
-    -------
-    None
     """
     with contextlib.ExitStack() as stack:
         in_read, in_write = os.pipe()
@@ -192,10 +184,6 @@ def test_rust_pump_stream_propagates_io_errors(
     ----------
     rust_streams : ModuleType
         The Rust streams module fixture.
-
-    Returns
-    -------
-    None
     """
     with contextlib.ExitStack() as stack:
         read_fd, write_fd = os.pipe()
@@ -222,9 +210,10 @@ def test_rust_pump_stream_ignores_broken_pipe(
     rust_streams : ModuleType
         The Rust streams module fixture.
 
-    Returns
-    -------
-    None
+    Raises
+    ------
+    OSError
+        If the pump fails for a reason other than a broken pipe.
     """
     payload = b"x" * (64 * 1024)
     with _pipe_pair() as (in_read, in_write, out_read, out_write):
@@ -317,7 +306,14 @@ class TestRustConsumeStream:
     def test_does_not_close_fd(
         rust_streams: ModuleType,
     ) -> None:
-        """Ensure rust_consume_stream does not close the underlying FD."""
+        """Ensure rust_consume_stream does not close the underlying FD.
+
+        Raises
+        ------
+        OSError
+            If reading the file descriptor fails for a reason other than
+            it being closed.
+        """
         with contextlib.ExitStack() as stack:
             read_fd, write_fd = os.pipe()
             stack.callback(_safe_close, read_fd)

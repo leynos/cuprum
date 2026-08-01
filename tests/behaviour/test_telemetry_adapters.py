@@ -91,13 +91,25 @@ def test_tracing_hook_error_status() -> None:
 
 @pytest.fixture
 def behaviour_state() -> dict[str, object]:
-    """Shared mutable state for behaviour scenarios."""
+    """Shared mutable state for behaviour scenarios.
+
+    Returns
+    -------
+    dict[str, object]
+        An empty mapping that scenarios populate as they run.
+    """
     return {}
 
 
 @given("a curated Python command for testing", target_fixture="python_cmd_fixture")
 def given_python_command() -> dict[str, object]:
-    """Set up a Python command builder and catalogue."""
+    """Set up a Python command builder and catalogue.
+
+    Returns
+    -------
+    dict[str, object]
+        The catalogue, Python program and command builder for the scenario.
+    """
     catalogue, python_program = python_catalogue()
     return {
         "catalogue": catalogue,
@@ -113,7 +125,13 @@ def given_python_command() -> dict[str, object]:
 def given_structured_logging_hook(
     behaviour_state: dict[str, object],
 ) -> dict[str, object]:
-    """Set up a structured logging hook with a dedicated test logger."""
+    """Set up a structured logging hook with a dedicated test logger.
+
+    Returns
+    -------
+    dict[str, object]
+        The test logger, the logging hook and the record-capturing handler.
+    """
     logger = logging.getLogger("cuprum.test.adapters.bdd")
     logger.setLevel(logging.DEBUG)
     logger.handlers.clear()
@@ -137,7 +155,13 @@ def given_structured_logging_hook(
 
 @given("an in-memory metrics collector", target_fixture="metrics_fixture")
 def given_metrics_collector(behaviour_state: dict[str, object]) -> dict[str, object]:
-    """Set up an in-memory metrics collector."""
+    """Set up an in-memory metrics collector.
+
+    Returns
+    -------
+    dict[str, object]
+        The in-memory metrics collector and its metrics hook.
+    """
     metrics = InMemoryMetrics()
     hook = MetricsHook(metrics)
     behaviour_state["metrics"] = metrics
@@ -146,7 +170,13 @@ def given_metrics_collector(behaviour_state: dict[str, object]) -> dict[str, obj
 
 @given("an in-memory tracer", target_fixture="tracer_fixture")
 def given_tracer(behaviour_state: dict[str, object]) -> dict[str, object]:
-    """Set up an in-memory tracer."""
+    """Set up an in-memory tracer.
+
+    Returns
+    -------
+    dict[str, object]
+        The in-memory tracer and its tracing hook.
+    """
     tracer = InMemoryTracer()
     hook = TracingHook(tracer, record_output=True)
     behaviour_state["tracer"] = tracer

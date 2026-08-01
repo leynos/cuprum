@@ -208,7 +208,7 @@ def test_metrics_are_thread_local() -> None:
     main_snapshot_taken = threading.Event()
 
     def record_active_thread_metrics() -> None:
-        """Populate metrics on a non-main thread for isolation checks."""
+        """Publish this thread's metrics, then wait for the main thread."""
         metrics_state.reset()
         metrics_state.add_lock_wait(0.5)
         metrics_state.increment_rejections()
@@ -297,7 +297,7 @@ def test_metrics_accumulate_and_reset(
 
 
 def test_reentrant_rejection_increments_counter() -> None:
-    """Nested backend selector entry increments the rejection metric."""
+    """Nested selector entry raises the dedicated error and bumps the metric."""
     metrics_state = _tee_profile_worker_backend._MetricsState(threading.local())
     selector = _tee_profile_worker_backend._EnvBackendSelector(
         metrics_state=metrics_state

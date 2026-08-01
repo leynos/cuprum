@@ -22,11 +22,7 @@ if typ.TYPE_CHECKING:
 
 
 def _rust_backend_available() -> bool:
-    """Report whether the Rust tee-profile backend can run in this environment.
-
-    Consolidates the single private-chain probe into the worker's backend
-    module so the callers below share one access point.
-    """
+    """Report whether the Rust tee-profile backend can run in this environment."""
     return _backend._check_rust_available()
 
 

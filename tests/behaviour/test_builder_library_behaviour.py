@@ -77,7 +77,18 @@ def given_core_git_builders() -> None:
 
 @given("valid rsync paths", target_fixture="rsync_paths")
 def given_valid_rsync_paths(tmp_path: Path) -> _RsyncPaths:
-    """Provide absolute paths for rsync builder scenarios."""
+    """Provide absolute paths for rsync builder scenarios.
+
+    Parameters
+    ----------
+    tmp_path : Path
+        The pytest temporary directory the rsync paths are rooted in.
+
+    Returns
+    -------
+    _RsyncPaths
+        The source and destination paths for building rsync commands.
+    """
     source = tmp_path / "source"
     destination = tmp_path / "destination"
     return _RsyncPaths(source=source.as_posix(), destination=destination.as_posix())
@@ -85,7 +96,18 @@ def given_valid_rsync_paths(tmp_path: Path) -> _RsyncPaths:
 
 @given("a tar archive and source paths", target_fixture="tar_inputs")
 def given_tar_inputs(tmp_path: Path) -> _TarInputs:
-    """Provide tar inputs for builder scenarios."""
+    """Provide tar inputs for builder scenarios.
+
+    Parameters
+    ----------
+    tmp_path : Path
+        The pytest temporary directory the tar inputs are rooted in.
+
+    Returns
+    -------
+    _TarInputs
+        The archive path and source paths for building tar commands.
+    """
     archive = tmp_path / "archive.tar.gz"
     sources = (tmp_path / "data", tmp_path / "more")
     return _TarInputs(
@@ -99,7 +121,19 @@ def given_tar_inputs(tmp_path: Path) -> _TarInputs:
     target_fixture="git_result",
 )
 def when_build_git_checkout(ref: str) -> _CommandResult:
-    """Build a git checkout command and capture errors."""
+    """Build a git checkout command and capture errors.
+
+    Parameters
+    ----------
+    ref : str
+        The git reference the checkout command is built for.
+
+    Returns
+    -------
+    _CommandResult
+        The built command's argv, or the captured error if the ref is
+        rejected.
+    """
     try:
         cmd = git_checkout(ref)
     except ValueError as exc:
@@ -112,7 +146,19 @@ def when_build_git_checkout(ref: str) -> _CommandResult:
     target_fixture="rsync_result",
 )
 def when_build_rsync_command(rsync_paths: _RsyncPaths) -> _CommandResult:
-    """Build an rsync sync command."""
+    """Build an rsync sync command.
+
+    Parameters
+    ----------
+    rsync_paths : _RsyncPaths
+        The source and destination paths the rsync command is built
+        from.
+
+    Returns
+    -------
+    _CommandResult
+        The built rsync command's argv.
+    """
     cmd = rsync_sync(
         rsync_paths.source,
         rsync_paths.destination,
@@ -126,7 +172,18 @@ def when_build_rsync_command(rsync_paths: _RsyncPaths) -> _CommandResult:
     target_fixture="tar_result",
 )
 def when_build_tar_command(tar_inputs: _TarInputs) -> _CommandResult:
-    """Build a tar create command with gzip compression."""
+    """Build a tar create command with gzip compression.
+
+    Parameters
+    ----------
+    tar_inputs : _TarInputs
+        The archive and source paths the tar command is built from.
+
+    Returns
+    -------
+    _CommandResult
+        The built tar command's argv.
+    """
     cmd = tar_create(
         tar_inputs.archive,
         tar_inputs.sources,
@@ -142,13 +199,31 @@ def then_git_argv_matches(
     verb: str,
     ref: str,
 ) -> None:
-    """Verify the git command argv matches expectation."""
+    """Verify the git command argv matches expectation.
+
+    Parameters
+    ----------
+    git_result : _CommandResult
+        The built git command or captured error.
+    program : str
+        The expected program name.
+    verb : str
+        The expected git subcommand.
+    ref : str
+        The expected reference argument.
+    """
     assert git_result.argv_with_program == (program, verb, ref)
 
 
 @then("a git ref validation error is raised")
 def then_git_ref_error_raised(git_result: _CommandResult) -> None:
-    """Verify git ref validation raised an error."""
+    """Verify git ref validation raised an error.
+
+    Parameters
+    ----------
+    git_result : _CommandResult
+        The captured result expected to hold a validation error.
+    """
     assert isinstance(git_result.error, ValueError), (
         "Expected git_ref validation to raise ValueError"
     )
@@ -164,7 +239,17 @@ def then_rsync_argv_matches(
     rsync_paths: _RsyncPaths,
     flag: str,
 ) -> None:
-    """Verify the rsync command argv includes expected flag and paths."""
+    """Verify the rsync command argv includes expected flag and paths.
+
+    Parameters
+    ----------
+    rsync_result : _CommandResult
+        The built rsync command.
+    rsync_paths : _RsyncPaths
+        The paths expected in the argv.
+    flag : str
+        The flag expected in the argv.
+    """
     assert rsync_result.argv_with_program == (
         "rsync",
         flag,
@@ -181,7 +266,17 @@ def then_tar_argv_matches(
     tar_inputs: _TarInputs,
     flag: str,
 ) -> None:
-    """Verify the tar command argv includes expected flag and paths."""
+    """Verify the tar command argv includes expected flag and paths.
+
+    Parameters
+    ----------
+    tar_result : _CommandResult
+        The built tar command.
+    tar_inputs : _TarInputs
+        The archive and sources expected in the argv.
+    flag : str
+        The flag expected in the argv.
+    """
     assert tar_result.argv_with_program == (
         "tar",
         "-c",

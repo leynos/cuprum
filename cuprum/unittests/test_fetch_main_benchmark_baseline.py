@@ -246,7 +246,13 @@ def test_load_json_response_retries_transient_urlopen_failures(
     timeouts: list[float] = []
 
     def fake_urlopen(request: object, *, timeout: float) -> _Response:
-        """Fail twice then return the stub response, recording timeouts."""
+        """Fail twice then return the stub response, recording timeouts.
+
+        Raises
+        ------
+        urllib.error.URLError
+            On the first two calls, to exercise the retry loop.
+        """  # noqa: DOC201 - summary states the return; Raises documents the retry
         nonlocal attempts
         del request
         attempts += 1
