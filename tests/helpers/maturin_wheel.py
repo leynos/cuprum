@@ -184,11 +184,7 @@ def wheel_build_snapshot(whl_path: Path) -> WheelBuildSnapshot:
     AssertionError
         If the wheel is missing its ``.dist-info/METADATA`` member or the
         expected maturin metadata fields.
-    OSError
-        If the wheel file cannot be opened or read.
-    zipfile.BadZipFile
-        If the wheel file is not a valid zip archive.
-    """  # noqa: DOC502 - OSError/BadZipFile propagate from zipfile
+    """
     with zipfile.ZipFile(whl_path) as archive:
         entry_names = archive.namelist()
         wheel_name = _locate_dist_info_wheel(entry_names)
