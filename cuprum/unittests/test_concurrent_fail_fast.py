@@ -46,7 +46,9 @@ def test_collect_all_mode_continues_after_failure() -> None:
     assert len(result.results) == 3, (
         "collect-all runs every command despite the failure"
     )
-    assert result.failures == (1,)
+    assert result.failures == (1,), (
+        "only the second of the three commands exits non-zero"
+    )
     assert result.results[0].ok is True, "the first command succeeded"
     assert result.results[1].ok is False, "the second command is the failing one"
     assert result.results[2].ok is True, "the third command still ran to completion"
@@ -100,7 +102,9 @@ def test_failures_tuple_contains_correct_indices() -> None:
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
         result = run_concurrent_sync(cmd0, cmd1, cmd2, cmd3)
 
-    assert result.failures == (1, 3)
+    assert result.failures == (1, 3), (
+        "the second and fourth commands fail, in ascending result order"
+    )
     assert result.first_failure is result.results[1], (
         "first_failure indexes into results, not submissions"
     )
@@ -254,11 +258,17 @@ def test_fail_fast_submission_indices_map_to_original_positions() -> None:
     assert len(result.results) == 1, (
         "only the completed command remains after cancellation"
     )
-    assert result.failures == (0,)
-    assert result.submission_indices == (1,)
+    assert result.failures == (0,), (
+        "after compaction the sole survivor sits at result position 0"
+    )
+    assert result.submission_indices == (1,), (
+        "the surviving result was submitted second, at index 1"
+    )
     # The position-based view says "result 0"; the submission-stable view names
     # the originally-submitted command 1 — the regression this guards.
-    assert result.failure_submission_indices == (1,)
+    assert result.failure_submission_indices == (1,), (
+        "the failure maps back to submission index 1, not result position 0"
+    )
     assert result.first_failure is not None, (
         "a failed run must expose its first failure"
     )
@@ -284,6 +294,12 @@ def test_collect_all_submission_indices_are_identity_end_to_end() -> None:
         result = run_concurrent_sync(cmd0, cmd1, cmd2)
 
     assert len(result.results) == 3, "collect-all keeps every command's result"
-    assert result.submission_indices == (0, 1, 2)
-    assert result.failures == (1,)
-    assert result.failure_submission_indices == (1,)
+    assert result.submission_indices == (0, 1, 2), (
+        "without cancellation the mapping is the identity sequence"
+    )
+    assert result.failures == (1,), (
+        "the second command is the only failure, at result position 1"
+    )
+    assert result.failure_submission_indices == (1,), (
+        "result position and submission index coincide when nothing is cancelled"
+    )
