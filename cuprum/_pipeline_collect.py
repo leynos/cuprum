@@ -127,7 +127,11 @@ async def _collect_pipeline_inputs(
         timeout_deadline = time.monotonic() + timeout
 
     pipe_tasks = _create_pipe_tasks(spawn.processes)
-    try:
+    # ``no-else-raise`` treats the ``else`` as removable because the handler
+    # raises, but here it is load-bearing: it keeps the output gathering out of
+    # the ``try`` so ``except TimeoutError`` covers only the wait, and a timeout
+    # raised while gathering is not misreported as a pipeline timeout.
+    try:  # pylint: disable=no-else-raise
         wait_result = await _await_pipeline_wait_result(
             spawn,
             config,
@@ -147,14 +151,10 @@ async def _collect_pipeline_inputs(
             capture=config.capture,
         )
         raise _build_timeout_expired_error(parts, timeout, outputs) from exc
-
-    # Collecting output sits outside the ``try`` so ``except TimeoutError``
-    # covers only the wait above; a timeout raised while gathering would be a
-    # different failure and must not be reported as a pipeline timeout. Every
-    # branch of the handler raises, so this is reached only on success.
-    stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)
-    return _PipelineStageResultInputs(
-        wait_result=wait_result,
-        stderr_by_stage=stderr_by_stage,
-        final_stdout=final_stdout,
-    )
+    else:
+        stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)
+        return _PipelineStageResultInputs(
+            wait_result=wait_result,
+            stderr_by_stage=stderr_by_stage,
+            final_stdout=final_stdout,
+        )
