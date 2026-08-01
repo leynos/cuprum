@@ -1,5 +1,4 @@
 """Process lifecycle management for pipeline execution."""
-
 from __future__ import annotations
 
 import asyncio
@@ -14,9 +13,9 @@ from cuprum._process_exit import _await_process_exit
 from cuprum._subprocess_context import _cwd_arg
 from cuprum.context import current_context, resolve_env
 
+_PROCESS_EXIT_POLL_INTERVAL = 0.01
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
     from cuprum._pipeline_streams import _PipelineRunConfig
     from cuprum.sh import SafeCmd
 
@@ -347,3 +346,30 @@ async def _terminate_pipeline_remaining_stages(
     ]
     if termination_tasks:
         await _await_teardown_shielded(termination_tasks)
+
+async def _await_process_exit(process: asyncio.subprocess.Process) -> int:
+    """Return the process exit code without trusting a stranded wait future."""
+    if process.returncode is not None:
+        return process.returncode
+
+    async def _published_returncode() -> int:
+        """Poll the authoritative return code at a low frequency."""
+        while process.returncode is None:
+            await asyncio.sleep(_PROCESS_EXIT_POLL_INTERVAL)
+        return process.returncode
+
+    wait_task = asyncio.create_task(process.wait())
+    published_task = asyncio.create_task(_published_returncode())
+    try:
+        completed, _ = await asyncio.wait(
+            (wait_task, published_task),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if wait_task in completed:
+            return wait_task.result()
+        return published_task.result()
+    finally:
+        for task in (wait_task, published_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(wait_task, published_task, return_exceptions=True)

@@ -15,7 +15,11 @@ from cuprum._process_exit import _await_process_exit
 from cuprum._process_lifecycle import (
     _cleanup_pipeline_on_error,
     _terminate_pipeline_remaining_stages,
+    _await_process_exit,
 )
+
+
+"""Pipeline waiting logic with fail-fast semantics."""
 
 
 @dc.dataclass(frozen=True, slots=True)

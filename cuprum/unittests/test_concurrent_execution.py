@@ -104,7 +104,24 @@ def _assert_concurrent_timing(
             f"got {elapsed:.3f}s"
         )
 
+def test_repeated_short_lived_captured_commands_complete() -> None:
+    """Repeated short-lived captured commands complete without stalling."""
+    echo = sh.make(ECHO)
+    command = echo("-n", "hello")
 
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
+        for iteration in range(20):
+            result = run_concurrent_sync(command)
+            command_result = result.results[0]
+            assert command_result.ok, (
+                "short-lived captured command failed: "
+                f"iteration={iteration}, exit_code={command_result.exit_code}"
+            )
+            assert command_result.stdout == "hello", (
+                "captured output length mismatch: "
+                f"iteration={iteration}, expected=5, "
+                f"actual={len(command_result.stdout or '')}"
+            )
 class TestConcurrentExecution:
     """Verify concurrent execution results and argument handling."""
 
