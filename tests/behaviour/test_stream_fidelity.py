@@ -33,6 +33,8 @@ def _generate_test_data() -> str:
     Uses a local RNG with fixed seed so the output is identical across runs,
     enabling reliable snapshot comparisons without affecting global state.
     """
+    # Use a local RNG with a fixed seed so the output is identical across runs,
+    # enabling reliable snapshot comparisons without affecting global state.
     rng = random.Random(_SEED)  # noqa: S311
     lines = []
     for _ in range(_LINES):
