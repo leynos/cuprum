@@ -136,7 +136,8 @@ spelling-helper-test: build ## Validate the shared spelling-policy integration
 		--with pytest-cov==7.0.0 \
 		python -m pytest scripts/tests/test_typos_rollout.py \
 		--cov=generate_typos_config --cov=typos_rollout \
-		--cov=typos_rollout_cache --cov-fail-under=90
+		--cov=typos_rollout_cache --cov=typos_rollout_dictionary \
+		--cov=typos_rollout_refresh --cov-fail-under=90
 
 nixie: ## Validate Mermaid diagrams
 	$(call ensure_tool,nixie)
