@@ -111,11 +111,6 @@ def _carried_payload_wins(
     values and a ``None`` configured timeout: a resolver that consulted it
     would either return the wrong field or raise.
     """
-    # ``carried_picks`` indexes the enumerated domains in field order —
-    # (timeout, stdout, stderr, exited_at) — keeping the four values that
-    # describe one payload together. The fallback deliberately carries
-    # different values and a None configured timeout: a resolver that consulted
-    # it would either return the wrong field or raise.
     timeout_pick, stdout_pick, stderr_pick, exited_pick = carried_picks
     carried = _SubprocessTimeoutDetails(
         timeout=_TIMES[timeout_pick],
@@ -184,9 +179,6 @@ def _done_flags(stage_count: int, mask: int) -> list[bool]:
     single bounded integer rather than a symbolic list of symbolic booleans,
     which is what lets CrossHair exhaust the space.
     """
-    # Enumerating the flags as an integer bitmask keeps the symbolic input a
-    # single bounded integer rather than a symbolic list of symbolic booleans,
-    # which is what lets CrossHair exhaust the space.
     return [bool((mask >> idx) & 1) for idx in range(stage_count)]
 
 
