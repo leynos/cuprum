@@ -93,6 +93,9 @@ def _writer_script(*, with_line_callbacks: bool) -> str:
         line-by-line readers process multiple lines rather than one
         giant blob.  When ``False``, emit raw binary bytes.
     """
+    # With line callbacks the payload is newline-terminated so downstream
+    # line-by-line readers process many lines rather than one giant blob;
+    # without them it is raw binary bytes.
     if with_line_callbacks:
         return "\n".join(
             [
@@ -139,8 +142,8 @@ def _passthrough_script() -> str:
 def _sink_script(*, with_line_callbacks: bool) -> str:
     """Return sink script for final pipeline stage."""
     if with_line_callbacks:
-        return "\n".join(["import sys", "for _ in sys.stdin:", "    pass"])
-    return "\n".join(["import sys", "sys.stdin.buffer.read()"])
+        return "import sys\nfor _ in sys.stdin:\n    pass"
+    return "import sys\nsys.stdin.buffer.read()"
 
 
 def _catalogue_for_worker() -> tuple[ProgramCatalogue, Program]:
