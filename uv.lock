@@ -123,7 +123,7 @@ dev = [
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "ruff" },
+    { name = "ruff", specifier = "==0.14.7" },
     { name = "syrupy" },
     { name = "ty" },
 ]
