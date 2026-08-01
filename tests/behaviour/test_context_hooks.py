@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import concurrent.futures
 import typing as typ
 
 import pytest
@@ -16,6 +14,12 @@ from cuprum.context import (
     before,
     current_context,
     scoped,
+)
+from tests.behaviour._context_hooks_support import (
+    build_after_hook_context,
+    build_before_hook_context,
+    run_async_allowlist_checks,
+    run_threaded_allowlist_checks,
 )
 
 if typ.TYPE_CHECKING:
@@ -154,26 +158,7 @@ def given_multi_before_hooks(
     """Create context with multiple before hooks for ordering test."""
     call_order: list[int] = []
     behaviour_state["call_order"] = call_order
-
-    def hook1(cmd: object) -> None:
-        _ = cmd  # Unused
-        call_order.append(1)
-
-    def hook2(cmd: object) -> None:
-        _ = cmd  # Unused
-        call_order.append(2)
-
-    def hook3(cmd: object) -> None:
-        _ = cmd  # Unused
-        call_order.append(3)
-
-    return CuprumContext(
-        before_hooks=(
-            typ.cast("BeforeHook", hook1),
-            typ.cast("BeforeHook", hook2),
-            typ.cast("BeforeHook", hook3),
-        ),
-    )
+    return build_before_hook_context(call_order)
 
 
 @when("I invoke the before hooks")
@@ -202,27 +187,7 @@ def given_multi_after_hooks(
     """Create context with multiple after hooks for ordering test."""
     call_order: list[int] = []
     behaviour_state["after_call_order"] = call_order
-
-    def hook1(cmd: object, result: object) -> None:
-        _, _ = cmd, result  # Unused
-        call_order.append(1)
-
-    def hook2(cmd: object, result: object) -> None:
-        _, _ = cmd, result  # Unused
-        call_order.append(2)
-
-    def hook3(cmd: object, result: object) -> None:
-        _, _ = cmd, result  # Unused
-        call_order.append(3)
-
-    # After hooks are stored in reverse order (inner-to-outer)
-    return CuprumContext(
-        after_hooks=(
-            typ.cast("typ.Any", hook3),
-            typ.cast("typ.Any", hook2),
-            typ.cast("typ.Any", hook1),
-        ),
-    )
+    return build_after_hook_context(call_order)
 
 
 @when("I invoke the after hooks")
@@ -300,20 +265,9 @@ def when_threads_check_allowlist(
     thread_setup: dict[str, frozenset[Program]],
 ) -> None:
     """Run threads that each set and check their context."""
-    results: dict[str, tuple[bool, bool]] = {}
-
-    def thread_worker(name: str, programs: frozenset[Program]) -> None:
-        with scoped(ScopeConfig(allowlist=programs)):
-            ctx = current_context()
-            results[name] = (ctx.is_allowed(ECHO), ctx.is_allowed(LS))
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        f1 = executor.submit(thread_worker, "thread1", thread_setup["thread1"])
-        f2 = executor.submit(thread_worker, "thread2", thread_setup["thread2"])
-        f1.result()
-        f2.result()
-
-    behaviour_state["thread_results"] = results
+    behaviour_state["thread_results"] = run_threaded_allowlist_checks(
+        thread_setup,
+    )
 
 
 @then("each thread sees its own allowlist")
@@ -347,22 +301,7 @@ def when_tasks_check_allowlist(
     async_setup: dict[str, frozenset[Program]],
 ) -> None:
     """Run async tasks that each set and check their context."""
-    results: dict[str, tuple[bool, bool]] = {}
-
-    async def task_worker(name: str, programs: frozenset[Program]) -> None:
-        with scoped(ScopeConfig(allowlist=programs)):
-            await asyncio.sleep(0.01)  # Allow interleaving
-            ctx = current_context()
-            results[name] = (ctx.is_allowed(ECHO), ctx.is_allowed(LS))
-
-    async def run_tasks() -> None:
-        await asyncio.gather(
-            task_worker("task1", async_setup["task1"]),
-            task_worker("task2", async_setup["task2"]),
-        )
-
-    asyncio.run(run_tasks())
-    behaviour_state["async_results"] = results
+    behaviour_state["async_results"] = run_async_allowlist_checks(async_setup)
 
 
 @then("each task sees its own allowlist")
