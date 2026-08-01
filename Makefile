@@ -52,7 +52,8 @@ DF12_PYTHON_LINTS_REF ?= 755b26f5792f71b37f3a9e656aef714ed98b2c3b
 DF12_PYTHON_LINTS = git+https://github.com/leynos/df12-python-lints.git@$(DF12_PYTHON_LINTS_REF)
 DF12_PYTHON ?= 3.14
 DF12_PYLINT_MESSAGES = R9101,C9102,R9103,R9104,C9105,C9106,C9107,R9108,R9109,R9110,R9111,C9112
-DF12_PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv run --python $(DF12_PYTHON) pylint \
+DF12_PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv run --isolated \
+  --python $(DF12_PYTHON) pylint \
   --disable=all --load-plugins=df12_python_lints \
   --enable=$(DF12_PYLINT_MESSAGES)
 AMBRLEAKS = $(UV_RUN_ENV) uv tool run --python $(DF12_PYTHON) \
