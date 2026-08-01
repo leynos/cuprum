@@ -716,6 +716,10 @@ Runtime (`cuprum/`):
 
 Benchmarks (`benchmarks/`):
 
+- `benchmarks/_github_http.py` — authenticated GitHub request construction,
+  bounded retries, and cross-origin redirect policy for benchmark baseline
+  discovery and downloads. Reuse it for benchmark GitHub transfers; keep
+  general-purpose HTTP concerns outside this private module.
 - `benchmarks/ratchet_ratio_extraction.py` — extracts within-run Rust/Python
   ratio maps and validates that baseline and candidate comparison groups
   match. `benchmarks/ratchet_rust_performance.py` owns report-value
