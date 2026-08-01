@@ -98,7 +98,11 @@ class TestPumpStreamDispatch:
             )
             configure_pump_stream_dispatch_for_testing(python_pump=fake_python_pump)
 
-            asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
+            asyncio.run(
+                _run_with_inline_executor(
+                    _pipeline_streams._pump_stream_dispatch(reader, writer)
+                )
+            )
             original_reader_blocking = _pipeline_streams.os.get_blocking(read_fd)
             original_writer_blocking = _pipeline_streams.os.get_blocking(write_fd)
             asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, None))
@@ -171,11 +175,13 @@ class TestPumpStreamDispatch:
 
         reader = typ.cast("asyncio.StreamReader", object())
         asyncio.run(
-            _pipeline_streams._run_rust_pump(
-                reader=reader,
-                writer=None,
-                reader_fd=1,
-                writer_fd=2,
+            _run_with_inline_executor(
+                _pipeline_streams._run_rust_pump(
+                    reader=reader,
+                    writer=None,
+                    reader_fd=1,
+                    writer_fd=2,
+                )
             )
         )
 
@@ -307,7 +313,11 @@ class TestPumpStreamDispatch:
                 "asyncio.StreamWriter",
                 _WriterWithoutPause(write_fd),
             )
-            asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
+            asyncio.run(
+                _run_with_inline_executor(
+                    _pipeline_streams._pump_stream_dispatch(reader, writer)
+                )
+            )
 
             assert calls["rust_pump"] == 1, (
                 "expected Rust path even when reader transport lacks pause hooks"
@@ -315,3 +325,21 @@ class TestPumpStreamDispatch:
             assert calls["python_pump"] == 0, (
                 "did not expect Python fallback when Rust pump succeeds"
             )
+
+async def _run_with_inline_executor(awaitable: cabc.Awaitable[object]) -> None:
+    """Run mocked native work without creating an unrelated thread pool."""
+    loop = asyncio.get_running_loop()
+
+    def run_inline(
+        executor: object,
+        function: cabc.Callable[..., object],
+        *args: object,
+    ) -> asyncio.Future[object]:
+        """Execute a submitted test double and publish its result immediately."""
+        del executor
+        future = loop.create_future()
+        future.set_result(function(*args))
+        return future
+
+    with mock.patch.object(loop, "run_in_executor", side_effect=run_inline):
+        await awaitable
