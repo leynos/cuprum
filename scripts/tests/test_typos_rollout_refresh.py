@@ -97,7 +97,13 @@ def test_http_refresh_uses_validators_and_preserves_newer_cache(
         }
 
         def read(self) -> bytes:
-            """Return a valid shared dictionary."""
+            """Return a valid shared dictionary.
+
+            Returns
+            -------
+            bytes
+                The encoded dictionary document.
+            """
             return dictionary_text().encode()
 
         def __enter__(self) -> Response:
@@ -105,10 +111,23 @@ def test_http_refresh_uses_validators_and_preserves_newer_cache(
             return self
 
         def __exit__(self, *_args: object) -> None:
-            """Leave the fake response context."""
+            """Leave the fake response context.
+
+            Returns
+            -------
+            None
+                This method returns ``None`` and does not suppress
+                exceptions raised within the ``with`` body.
+            """
 
     def open_response(request: urllib.request.Request, *, timeout: float) -> Response:
-        """Capture the request passed to the network boundary."""
+        """Capture the request passed to the network boundary.
+
+        Returns
+        -------
+        Response
+            A fake response for the captured request.
+        """
         assert timeout == 30.0, "the HTTPS fetch must use the configured 30s timeout"
         requests.append(request)
         return Response()
@@ -146,7 +165,13 @@ def test_remote_failure_reuses_only_a_valid_stale_cache(
     metadata = tmp_path / "cache.json"
 
     def fail(*_args: object, **_kwargs: object) -> None:
-        """Model an unavailable remote authority."""
+        """Model an unavailable remote authority.
+
+        Raises
+        ------
+        urllib.error.URLError
+            Always, to simulate an offline authority.
+        """
         message = "offline"
         raise urllib.error.URLError(message)
 
@@ -183,7 +208,13 @@ def test_remote_refresh_rejects_insecure_and_invalid_content(
         headers: typ.ClassVar[dict[str, str]] = {}
 
         def read(self) -> bytes:
-            """Return malformed bytes."""
+            """Return malformed bytes.
+
+            Returns
+            -------
+            bytes
+                Deliberately malformed TOML bytes.
+            """
             return b"not = [valid"
 
         def __enter__(self) -> InvalidResponse:

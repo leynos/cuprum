@@ -340,6 +340,12 @@ def main() -> int:
     int
         Process exit code; 0 on success, non-zero on worker or configuration
         failure.
+
+    Raises
+    ------
+    ValueError
+        If the parsed CLI command is not one of ``plan``, ``run-scenario``, or
+        ``run``.
     """
     args = _base_parser().parse_args()
     config = _config_from_args(args)

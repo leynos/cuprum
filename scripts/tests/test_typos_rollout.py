@@ -104,7 +104,13 @@ def test_https_failure_reuses_valid_tracked_config(
     tracked_config.write_text('[default]\nlocale = "en-gb"\n', encoding="utf-8")
 
     def unavailable(*_args: object, **_kwargs: object) -> None:
-        """Model an unavailable HTTPS authority."""
+        """Model an unavailable HTTPS authority.
+
+        Raises
+        ------
+        urllib.error.URLError
+            Always, to simulate an offline authority.
+        """
         message = "offline"
         raise urllib.error.URLError(message)
 

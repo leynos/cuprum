@@ -37,7 +37,13 @@ class BenchmarkComparisonRow:
     faster_backend: str
 
     def as_dict(self) -> dict[str, object]:
-        """Serialize the row for JSON output."""
+        """Serialize the row for JSON output.
+
+        Returns
+        -------
+        dict[str, object]
+            The row fields keyed by their JSON attribute names.
+        """
         return {
             "comparison_id": self.comparison_id,
             "python_scenario_name": self.python_scenario_name,
@@ -59,7 +65,13 @@ class BenchmarkComparisonSummary:
     ties: int
 
     def as_dict(self) -> dict[str, object]:
-        """Serialize the summary for JSON output."""
+        """Serialize the summary for JSON output.
+
+        Returns
+        -------
+        dict[str, object]
+            The aggregate counts keyed by their JSON attribute names.
+        """
         return {
             "row_count": self.row_count,
             "rust_wins": self.rust_wins,
@@ -76,7 +88,14 @@ class BenchmarkComparisonReport:
     summary: BenchmarkComparisonSummary
 
     def as_dict(self) -> dict[str, object]:
-        """Serialize the report for JSON output."""
+        """Serialize the report for JSON output.
+
+        Returns
+        -------
+        dict[str, object]
+            The serialized rows and summary keyed by their JSON attribute
+            names.
+        """
         return {
             "rows": [row.as_dict() for row in self.rows],
             "summary": self.summary.as_dict(),
@@ -91,7 +110,13 @@ class RatchetStatus:
     detail: str
 
     def as_dict(self) -> dict[str, str]:
-        """Serialize the ratchet status for JSON output."""
+        """Serialize the ratchet status for JSON output.
+
+        Returns
+        -------
+        dict[str, str]
+            The status and detail keyed by their JSON attribute names.
+        """
         return {
             "status": self.status,
             "detail": self.detail,
@@ -163,7 +188,7 @@ def _get_required_entries(
     comparison_id: str,
     entries: dict[str, _ScenarioEntry],
 ) -> tuple[_ScenarioEntry, _ScenarioEntry]:
-    """Return (python_entry, rust_entry) or raise ValueError if either is absent."""
+    """Return the paired Python and Rust entries for a comparison group."""
     python_entry = entries.get("python")
     if python_entry is None:
         msg = f"comparison group {comparison_id!r} is missing Python scenario"
@@ -209,7 +234,33 @@ def compare_candidate_backend_results(
     plan_payload: dict[str, object],
     throughput_payload: dict[str, object],
 ) -> BenchmarkComparisonReport:
-    """Compare matched Python and Rust candidate benchmark results."""
+    """Compare matched Python and Rust candidate benchmark results.
+
+    Parameters
+    ----------
+    plan_payload : dict[str, object]
+        The candidate dry-run plan payload describing the scenarios.
+    throughput_payload : dict[str, object]
+        The candidate throughput payload with the measured Python and
+        Rust means.
+
+    Returns
+    -------
+    BenchmarkComparisonReport
+        The per-scenario comparison rows and the aggregate summary.
+
+    Raises
+    ------
+    TypeError
+        If the plan or throughput payload is malformed — ``scenarios``,
+        ``results``, or their entries are not of the required structural
+        type.
+    ValueError
+        If the scenario and result counts differ; a scenario backend, name,
+        comparison identifier, or result mean fails validation; a comparison
+        group contains duplicate backend entries; or a group is incomplete
+        because it is missing its Python or its Rust entry.
+    """  # noqa: DOC502 - TypeError and the payload-validation ValueErrors propagate from the validators
     scenarios = _require_list(plan_payload.get("scenarios"), name="scenarios")
     results = _require_list(throughput_payload.get("results"), name="results")
     if len(scenarios) != len(results):

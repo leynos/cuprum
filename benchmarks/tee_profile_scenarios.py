@@ -55,7 +55,13 @@ class TeeProfileScenario:
     errors: str = "replace"
 
     def as_dict(self) -> dict[str, object]:
-        """Return a JSON-serialisable scenario mapping."""
+        """Return a JSON-serializable scenario mapping.
+
+        Returns
+        -------
+        dict[str, object]
+            The scenario fields as a JSON-serializable mapping.
+        """
         return {
             "name": self.name,
             "fixture_path": str(self.fixture_path),
@@ -72,7 +78,19 @@ class TeeProfileScenario:
     def worker_config(
         self, *, repeat_count: int | None = None
     ) -> TeeProfileWorkerConfig:
-        """Convert this scenario into a worker configuration."""
+        """Convert this scenario into a worker configuration.
+
+        Parameters
+        ----------
+        repeat_count : int | None
+            Optional repeat count; when supplied it overrides the
+            scenario's stored repeat count.
+
+        Returns
+        -------
+        TeeProfileWorkerConfig
+            The worker configuration derived from this scenario.
+        """
         return TeeProfileWorkerConfig(
             fixture_path=self.fixture_path,
             stages=self.stages,
@@ -203,7 +221,16 @@ def _multi_stage_backend_scenarios(
     *,
     repeat_count: int,
 ) -> tuple[TeeProfileScenario, ...]:
-    """Return multi-stage scenarios for Python/Rust backend comparison."""
+    """Return multi-stage scenarios for Python/Rust backend comparison.
+
+    Returns
+    -------
+    tuple[TeeProfileScenario, ...]
+        The multi-stage backend-comparison scenarios. The tuple always
+        includes the Python scenario; the Rust scenario is included only when
+        ``can_use_rust_backend()`` returns ``True``, so a Python-only tuple is
+        returned when Rust is unavailable.
+    """
     python_scenario = TeeProfileScenario(
         name="echo-devnull-nocb-s4-python",
         fixture_path=fixture_path,

@@ -48,7 +48,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Generate the benchmark comparison report and workflow summary markdown."""
+    """Generate the benchmark comparison report and workflow summary markdown.
+
+    Parameters
+    ----------
+    argv : list[str] | None
+        Optional CLI argument sequence; when ``None`` the process arguments
+        are parsed.
+
+    Returns
+    -------
+    int
+        Process exit code; 0 on success, or 2 when the inputs cannot be
+        evaluated. These integer returns cover every non-parse outcome;
+        argument-parsing failures are reported via ``SystemExit`` instead.
+
+    Raises
+    ------
+    SystemExit
+        If ``argv`` is invalid; ``argparse`` exits with status 2.
+    """  # noqa: DOC502 - SystemExit propagates from argparse
     args = _parse_args(argv)
     try:
         report = compare_candidate_backend_results(
