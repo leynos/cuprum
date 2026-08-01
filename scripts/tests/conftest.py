@@ -52,6 +52,48 @@ def refresh_module_fixture(
     return module
 
 
+@pytest.fixture(name="patch_https_opener")
+def patch_https_opener_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> cabc.Callable[[cabc.Callable[..., object]], None]:
+    """Return a helper routing HTTPS fetches through a supplied response factory.
+
+    Returns
+    -------
+    cabc.Callable[[cabc.Callable[..., object]], None]
+        Callable installing the stub opener for one response factory.
+    """
+
+    def patch(open_response: cabc.Callable[..., object]) -> None:
+        _patch_https_opener(monkeypatch, open_response)
+
+    return patch
+
+
+@pytest.fixture(name="dictionary_text")
+def dictionary_text_fixture() -> cabc.Callable[..., str]:
+    """Return the shared minimal-dictionary document builder.
+
+    Returns
+    -------
+    cabc.Callable[..., str]
+        Callable returning a valid shared-dictionary document.
+    """
+    return _dictionary_text
+
+
+@pytest.fixture(name="script_directory")
+def script_directory_fixture() -> Path:
+    """Return the directory holding the rollout scripts.
+
+    Returns
+    -------
+    Path
+        The ``scripts`` directory.
+    """
+    return SCRIPT_DIRECTORY
+
+
 def _patch_https_opener(
     monkeypatch: pytest.MonkeyPatch,
     open_response: cabc.Callable[..., object],
