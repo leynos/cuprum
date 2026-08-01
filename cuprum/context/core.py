@@ -12,9 +12,15 @@ from __future__ import annotations
 import collections.abc as cabc
 import dataclasses as dc
 import logging
-import math
 import typing as typ
 
+from cuprum.context._policy import (
+    _is_narrowed_allowlist_restricted,
+    _merge_hooks,
+    _narrow_allowlist,
+    _resolve_narrowed_timeout,
+    _validate_timeout,
+)
 from cuprum.context.env_overlay import _coerce_env_overlay, merge_env_overlays
 
 if typ.TYPE_CHECKING:
@@ -51,78 +57,6 @@ class ForbiddenProgramError(ContextError, PermissionError):
         self.restricted_state = restricted_state
         msg = f"Program '{program}' is not allowed in the current context"
         super().__init__(msg)
-
-
-def _validate_timeout(timeout: float | None, class_name: str) -> float | None:
-    """Validate a timeout is finite and non-negative, coercing it to float."""
-    if timeout is None:
-        return None
-    timeout_float = float(timeout)
-    if not math.isfinite(timeout_float):
-        msg = f"{class_name} timeout must be finite, got {timeout_float}"
-        raise ValueError(msg)
-    if timeout_float < 0:
-        msg = f"{class_name} timeout must be non-negative, got {timeout_float}"
-        raise ValueError(msg)
-    return timeout_float
-
-
-def _narrow_allowlist(
-    parent: frozenset[Program],
-    config: frozenset[Program] | None,
-    *,
-    parent_is_restricted: bool = False,
-) -> frozenset[Program]:
-    """Return the allowlist produced by narrowing a parent context."""
-    if config is None:
-        return parent
-    if parent_is_restricted and not parent:
-        return parent
-    if parent:
-        return parent & config
-    return config
-
-
-def _is_narrowed_allowlist_restricted(
-    config: frozenset[Program] | None,
-    *,
-    parent_is_restricted: bool,
-) -> bool:
-    """Return whether a narrowed context has an active allowlist restriction."""
-    return parent_is_restricted or config is not None
-
-
-def _merge_before_hooks(
-    parent: tuple[BeforeHook, ...],
-    config: tuple[BeforeHook, ...],
-) -> tuple[BeforeHook, ...]:
-    """Append scoped before hooks after parent hooks for FIFO execution."""
-    return parent + config
-
-
-def _merge_after_hooks(
-    parent: tuple[AfterHook, ...],
-    config: tuple[AfterHook, ...],
-) -> tuple[AfterHook, ...]:
-    """Prepend scoped after hooks before parent hooks for LIFO execution."""
-    return config + parent
-
-
-def _merge_observe_hooks(
-    parent: tuple[ExecHook, ...],
-    config: tuple[ExecHook, ...],
-) -> tuple[ExecHook, ...]:
-    """Append scoped observe hooks after parent hooks for FIFO execution."""
-    return parent + config
-
-
-def _resolve_narrowed_timeout(
-    parent: float | None, config: float | None
-) -> float | None:
-    """Return the timeout inherited or overridden by a narrowed context."""
-    if config is None:
-        return parent
-    return config
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -288,10 +222,14 @@ class CuprumContext:
                 config.allowlist,
                 parent_is_restricted=self._allowlist_is_restricted,
             ),
-            before_hooks=_merge_before_hooks(self.before_hooks, config.before_hooks),
-            after_hooks=_merge_after_hooks(self.after_hooks, config.after_hooks),
-            observe_hooks=_merge_observe_hooks(
-                self.observe_hooks, config.observe_hooks
+            before_hooks=_merge_hooks(
+                self.before_hooks, config.before_hooks, scoped_first=False
+            ),
+            after_hooks=_merge_hooks(
+                self.after_hooks, config.after_hooks, scoped_first=True
+            ),
+            observe_hooks=_merge_hooks(
+                self.observe_hooks, config.observe_hooks, scoped_first=False
             ),
             timeout=_resolve_narrowed_timeout(self.timeout, config.timeout),
             env_overlay=merge_env_overlays(self.env_overlay, config.env_overlay),
