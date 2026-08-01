@@ -2245,25 +2245,43 @@ outcome moves the running byte total and the latched writer state — in a pure,
 `io::Error`-free state machine in `rust/cuprum-rust/src/pump_machine.rs`,
 separate from the descriptor I/O that feeds it.
 
-`step` advances a `PumpState` given a `ReadEvent` (`Chunk`/`Eof`) and, when a
-write was performed, a `WriteEvent` (`Complete`/`Closed`). `drive_step` wraps it
-with the loop's write precondition — the write runs only for a chunk read while
-the writer is still open — so `pump_stream_files_readwrite` and the property
-tests drive the machine through one definition of that rule rather than a
-runtime copy and a test copy.
+`advance` is the whole public surface. It takes a `PumpState`, the length just
+read, and a closure that performs one write, and it returns a `Flow`
+(`Continue`/`Stop`):
+
+```rust,ignore
+pub(crate) fn advance<E>(
+    state: &mut PumpState,
+    read_len: usize,
+    write_once: impl FnOnce() -> Result<WriteEvent, E>,
+) -> Result<Flow, E>;
+```
+
+Taking the *raw read length* rather than a pre-built read event is what puts
+the loop's write precondition inside the machine: `advance` calls `write_once`
+only for a non-zero read while the writer is still open, and otherwise drains
+or stops without calling it at all. So `pump_stream_files_readwrite` and the
+property tests cannot disagree about that rule — neither one gets to decide it.
+
+The precondition is then encoded in the type system rather than re-checked. A
+private `Transition` (`Wrote`/`Drained`/`Eof`) is constructed only by
+`advance`, so "wrote a chunk after the writer latched closed" is not a
+representable state and the internal `step` needs no defensive `writer_open`
+check — a second check would only mask a caller that got it wrong.
 
 `io_utils::classify_write` is the adapter between the two halves. It collapses
 `WriteOutcome` and the non-fatal error partition into the machine's two-variant
-`WriteEvent`, so a broken pipe or connection reset latches the writer closed
-carrying the bytes accepted before the failure, while genuinely fatal failures
-propagate as `PumpError` and never reach the machine at all.
+`WriteEvent` (`Complete { bytes }` / `Closed { bytes }`), so a broken pipe or
+connection reset latches the writer closed carrying the bytes accepted before
+the failure, while genuinely fatal failures propagate as `PumpError` and never
+reach the machine at all.
 
 Keeping the decision `io::Error`-free is what makes it verifiable: proptests
-fold random event scripts through `drive_step`, and Kani proves the same
+fold random event scripts through `advance`, and Kani proves the same
 invariants — the total is monotonic, the writer never reopens once latched, a
-closed writer drains without accruing bytes, and the loop stops exactly on
-`Eof` — over unbounded byte counts and arbitrary starting states. That is
-deliberately unlike the splice path, whose `io::Error` values are not
+closed writer drains without accruing bytes, and the loop stops exactly on a
+zero-length read — over unbounded byte counts and arbitrary starting states.
+That is deliberately unlike the splice path, whose `io::Error` values are not
 Kani-tractable; the developers' guide records the commands and the bounds.
 
 ### 13.8 Build and Distribution

@@ -243,8 +243,9 @@ Notes:
   discarded input stays bounded. On the Rust backend that drain is reported —
   see [Rust stream observability](#rust-stream-observability-internal) for the
   `broken pipe; draining reader` event and the `bytes_transferred` count, which
-  distinguish a consumer that finished early by design from one that failed
-  partway through.
+  record *that* the downstream stage stopped reading and how much it received
+  first. Neither says why it stopped; read them alongside that stage's exit
+  status.
 
 ## Execution runtime
 
