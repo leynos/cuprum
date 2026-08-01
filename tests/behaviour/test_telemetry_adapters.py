@@ -127,6 +127,13 @@ def given_structured_logging_hook(
 ) -> dict[str, object]:
     """Set up a structured logging hook with a dedicated test logger.
 
+    Parameters
+    ----------
+    behaviour_state : dict[str, object]
+        The shared scenario-state mapping. This fixture stores the
+        record-capturing handler under ``"log_handler"`` so later steps can
+        inspect the emitted log records.
+
     Returns
     -------
     dict[str, object]
@@ -157,6 +164,13 @@ def given_structured_logging_hook(
 def given_metrics_collector(behaviour_state: dict[str, object]) -> dict[str, object]:
     """Set up an in-memory metrics collector.
 
+    Parameters
+    ----------
+    behaviour_state : dict[str, object]
+        The shared scenario-state mapping. This fixture stores the
+        ``InMemoryMetrics`` instance under ``"metrics"`` so later steps can
+        assert on the recorded measurements.
+
     Returns
     -------
     dict[str, object]
@@ -171,6 +185,13 @@ def given_metrics_collector(behaviour_state: dict[str, object]) -> dict[str, obj
 @given("an in-memory tracer", target_fixture="tracer_fixture")
 def given_tracer(behaviour_state: dict[str, object]) -> dict[str, object]:
     """Set up an in-memory tracer.
+
+    Parameters
+    ----------
+    behaviour_state : dict[str, object]
+        The shared scenario-state mapping. This fixture stores the
+        ``InMemoryTracer`` instance under ``"tracer"`` so later steps can
+        assert on the recorded spans.
 
     Returns
     -------
