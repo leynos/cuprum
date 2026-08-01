@@ -234,6 +234,75 @@ def test_compare_rust_regressions_fails_beyond_threshold() -> None:
     assert report.regressions[0].scenario_name == "small-single-nocb"
 
 
+def _multi_scenario_plan() -> dict[str, object]:
+    """Return a plan payload with three comparison groups in unsorted order."""
+    return {
+        "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+        "dry_run": True,
+        "rust_available": True,
+        "worker_iterations": 20,
+        "command": ["hyperfine", "placeholder"],
+        "scenarios": [
+            _scenario_payload(name="python-zeta", backend="python"),
+            _scenario_payload(name="rust-zeta", backend="rust"),
+            _scenario_payload(name="python-alpha", backend="python"),
+            _scenario_payload(name="rust-alpha", backend="rust"),
+            _scenario_payload(name="python-mid", backend="python"),
+            _scenario_payload(name="rust-mid", backend="rust"),
+        ],
+    }
+
+
+def _multi_scenario_throughput(
+    *, zeta: float, alpha: float, mid: float
+) -> dict[str, object]:
+    """Return throughput results whose Rust means are the desired ratios."""
+    return {
+        "results": [
+            {"command": "python-zeta", "mean": 1.0},
+            {"command": "rust-zeta", "mean": zeta},
+            {"command": "python-alpha", "mean": 1.0},
+            {"command": "rust-alpha", "mean": alpha},
+            {"command": "python-mid", "mean": 1.0},
+            {"command": "rust-mid", "mean": mid},
+        ],
+    }
+
+
+def test_compare_rust_regressions_sorts_scenarios_and_computes_ratios() -> None:
+    """The report sorts comparisons and carries exact ratios and the threshold."""
+    report = compare_rust_regressions(
+        baseline=BenchmarkRunPayload(
+            plan=_multi_scenario_plan(),
+            throughput=_multi_scenario_throughput(zeta=2.0, alpha=1.0, mid=4.0),
+            context_name="baseline",
+        ),
+        candidate=BenchmarkRunPayload(
+            plan=_multi_scenario_plan(),
+            throughput=_multi_scenario_throughput(zeta=3.0, alpha=1.5, mid=3.0),
+            context_name="candidate",
+        ),
+        max_regression=0.10,
+    )
+
+    assert isinstance(report.comparisons, tuple), (
+        "comparisons must be exposed as a tuple"
+    )
+    assert [entry.scenario_name for entry in report.comparisons] == [
+        "alpha",
+        "mid",
+        "zeta",
+    ], "comparisons must be ordered by sorted scenario name, not payload order"
+    assert [entry.regression_ratio for entry in report.comparisons] == pytest.approx([
+        0.5,
+        -0.25,
+        0.5,
+    ]), "regression ratio must be (candidate - baseline) / baseline"
+    assert all(entry.max_regression == 0.10 for entry in report.comparisons), (
+        "the configured threshold must be carried onto every comparison"
+    )
+
+
 def test_compare_rust_regressions_rejects_result_count_mismatch() -> None:
     """Plan/results length mismatches should fail fast."""
     candidate_throughput = {
