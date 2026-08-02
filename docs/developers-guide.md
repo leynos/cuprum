@@ -291,9 +291,11 @@ on the second leaves the first applied. The exception propagates out of the
 hook, where `_emit_exec_event` logs `observe_hook_failed` and lets the command
 continue. The labels are extracted once before the loop and are read-only
 within it. A collector must therefore treat each call as independent and never
-infer a duration observation from a failure increment; see the metrics-hook
-dispatch figure in [the design document](cuprum-design.md) for the full
-statement, and `test_metrics_adapter_stateful.py` for the case that pins it.
+infer a duration observation from a failure increment. No operation identifier
+is passed either, so a repeated call increments again — nothing here is
+idempotent, and the hook never retries. See the metrics-hook dispatch figure in
+[the design document](cuprum-design.md) for the full statement, and
+`test_metrics_adapter_stateful.py` for the case that pins it.
 
 ### Choosing a test shape per observe hook
 

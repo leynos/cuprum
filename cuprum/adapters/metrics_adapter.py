@@ -322,9 +322,13 @@ class MetricsHook:
         metrics backend must not fail the user's command.
 
         Collector implementations should therefore treat each call as
-        independent and idempotent-safe, and must not assume that seeing a
+        independent and ordered, and must not assume that seeing a
         ``cuprum_failures_total`` increment guarantees a matching
         ``cuprum_duration_seconds`` observation will follow.
+
+        No event or operation identifier is passed, so a collector has nothing
+        to deduplicate on and a repeated call increments again. Nothing here is
+        idempotent, and this hook never retries a failed call.
         """
         operations = _metric_operations(event)
         if not operations:

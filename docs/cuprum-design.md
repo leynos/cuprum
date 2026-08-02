@@ -1543,11 +1543,20 @@ Three consequences follow, and collector implementations depend on them:
   `observe_hook_failed`, and lets the command continue: a broken metrics
   backend must not fail a user's command.
 
-So a collector must treat each call as independent and idempotent-safe, and
-must never assume that seeing a `cuprum_failures_total` increment guarantees a
-matching `cuprum_duration_seconds` observation will follow. The label mapping
-is read-only for the duration of the loop — it is extracted once, before the
-first call, and the same mapping is passed to every operation.
+So a collector must treat each call as independent and ordered, and must
+never assume that seeing a `cuprum_failures_total` increment guarantees a
+matching `cuprum_duration_seconds` observation will follow.
+
+Note what the adapter does *not* offer. No event or operation identifier is
+passed to `inc_counter` or `observe_histogram`, so a collector has nothing to
+deduplicate on: a repeated call increments again. Nothing here is idempotent,
+and the adapter never retries a failed call — which is why a partial
+application stays partial rather than being replayed. A collector that wants
+exactly-once semantics has to obtain the identity from somewhere else.
+
+The label mapping is read-only for the duration of the loop — it is extracted
+once, before the first call, and the same mapping is passed to every
+operation.
 
 ______________________________________________________________________
 
