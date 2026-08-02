@@ -149,7 +149,11 @@ def test_manylinux_aarch64_container_pin_regex_rejects_missing_comment() -> None
         "4864c3e931d790def6dba05cbf133b236b242d0c732f77546c68663c7923116e"
     )
 
-    assert _AARCH64_CONTAINER_PIN_RE.search(yaml_line) is None
+    assert _AARCH64_CONTAINER_PIN_RE.search(yaml_line) is None, (
+        "the pin pattern must reject a digest carrying no trailing comment: "
+        "the comment records which tag the digest came from, without which a "
+        "reviewer cannot tell what a bump is bumping to"
+    )
 
 
 def test_manylinux_aarch64_container_usage_regex_rejects_literal_image() -> None:
@@ -160,4 +164,8 @@ def test_manylinux_aarch64_container_usage_regex_rejects_literal_image() -> None
         "4864c3e931d790def6dba05cbf133b236b242d0c732f77546c68663c7923116e"
     )
 
-    assert _AARCH64_CONTAINER_USAGE_RE.search(yaml_line) is None
+    assert _AARCH64_CONTAINER_USAGE_RE.search(yaml_line) is None, (
+        "the usage pattern must reject a literal image reference: the build "
+        "step has to read env.MANYLINUX_AARCH64_CONTAINER, or the pin the "
+        "other tests check would not be what the job actually pulls"
+    )
