@@ -187,7 +187,9 @@ Implementation completed successfully:
 - Updated `docs/users-guide.md` with dispatcher wiring note
 - Marked roadmap item 4.3.1 as complete
 
-All quality gates passed:
+Every quality gate then in force passed on that run. The gate set has grown
+since: the CI `benchmark-ratchet` job arrived in #48, after 4.3.1 landed. This
+records the gates of the day, not today's:
 
 - `make check-fmt`: 66 files formatted
 - `make typecheck`: All checks passed
