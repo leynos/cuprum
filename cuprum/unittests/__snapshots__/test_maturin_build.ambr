@@ -110,6 +110,7 @@
       'cuprum/unittests/test_observe_stdin_early_close.py',
       'cuprum/unittests/test_performance_guidance_docs.py',
       'cuprum/unittests/test_pipeline.py',
+      'cuprum/unittests/test_pipeline_fd_cleanup.py',
       'cuprum/unittests/test_pipeline_output_options.py',
       'cuprum/unittests/test_pipeline_pipe_tasks.py',
       'cuprum/unittests/test_pipeline_stream_backend_selection.py',
