@@ -1140,13 +1140,14 @@ sequenceDiagram
 ```
 
 For screen readers: The following sequence diagram shows how a subprocess
-timeout is turned into the public `TimeoutExpired`. `_handle_subprocess_timeout`
-first calls `_resolve_timeout_payload`, passing the timeout exception and a
-`_TimeoutFallback`, and receives a `_SubprocessTimeoutDetails` payload carrying
-the timeout, captured stdout and stderr, and the exit time. It then reads the
-process exit code through `_get_exit_code`, emits an exit event via
-`_emit_exit_event` using `_ExitEventDetails`, and finally calls
-`_raise_timeout_expired`, which raises `TimeoutExpired` back to the caller.
+timeout is turned into the public `TimeoutExpired`.
+`_handle_subprocess_timeout` first calls `_resolve_timeout_payload`, passing
+the timeout exception and a `_TimeoutFallback`, and receives a
+`_SubprocessTimeoutDetails` payload carrying the timeout, captured stdout and
+stderr, and the exit time. It then reads the process exit code through
+`_get_exit_code`, emits an exit event via `_emit_exit_event` using
+`_ExitEventDetails`, and finally calls `_raise_timeout_expired`, which raises
+`TimeoutExpired` back to the caller.
 
 Figure 4: Subprocess timeout handling, from payload resolution to
 `TimeoutExpired`
@@ -1272,8 +1273,7 @@ outcome per selected target, and the fail-fast caller counts only outcomes that
 verify process exit. When the reducer selects no stages — every other stage has
 already settled — no tasks are created and no gather occurs.
 
-Figure 5: Fail-fast termination selection via the `_stages_to_terminate`
-reducer
+Figure 5: Fail-fast termination selection via the `_stages_to_terminate` reducer
 
 ```mermaid
 sequenceDiagram
@@ -1879,6 +1879,10 @@ should treat it as a set of behavioural contracts and design constraints rather
 than a rigid class diagram, and should favour boring, explicit implementations
 over cleverness—especially in the type‑system and configuration layers.
 
+[ADR-008](adr-008-enforce-oxford-spelling-in-source.md) governs en-GB-oxendict
+spelling for identifiers and source prose; the repository spelling gate
+enforces that policy.
+
 ______________________________________________________________________
 
 ## 13. Performance-Optimized Stream Operations
@@ -2183,8 +2187,8 @@ The raw availability probe lives in `cuprum._rust_backend`. Its
 `False` when that native module is missing, and re-raises other import failures
 after logging a warning. The cached resolver in
 `cuprum._backend._check_rust_available()` wraps this probe and feeds both
-`cuprum.rust.is_rust_available()` and — through the `_probe_rust_availability()`
-seam — `get_stream_backend()`.
+`cuprum.rust.is_rust_available()` and — through the
+`_probe_rust_availability()` seam — `get_stream_backend()`.
 
 ### 13.4 Fallback Strategy
 
@@ -2487,10 +2491,10 @@ The splice implementation handles errors as follows:
 
 #### Stream instrumentation
 
-Both pathways emit bounded `tracing` diagnostics without installing a subscriber
-(the Python boundary owns subscriber configuration). The read/write seams log a
-`debug` event per successful transfer, a `warn` per `EINTR` retry, and an
-`error` on a fatal read/write failure, a zero-progress write, or a
+Both pathways emit bounded `tracing` diagnostics without installing a
+subscriber (the Python boundary owns subscriber configuration). The read/write
+seams log a `debug` event per successful transfer, a `warn` per `EINTR` retry,
+and an `error` on a fatal read/write failure, a zero-progress write, or a
 length-conversion overflow, so no fatal boundary stays silent.
 `pump_stream_readwrite` and `consume_stream` wrap the loop in an operation span
 created at `error` level — so `warn`/`error` events keep their context under a
@@ -2499,9 +2503,9 @@ The span carries `operation` and `buffer_size` and, on completion, records
 `total_bytes` plus the cumulative `EINTR` retry counts: `pump_stream_readwrite`
 records both `read_retries` and `write_retries`, while the read-only
 `consume_stream` records `read_retries` alone. Those retry counts accumulate in
-operation-scoped thread-local counters that the
-loops reset at operation start (keeping the seams parameter-free). See the
-developers' guide for the full contract.
+operation-scoped thread-local counters that the loops reset at operation start
+(keeping the seams parameter-free). See the developers' guide for the full
+contract.
 
 #### Read/write fallback state machine
 

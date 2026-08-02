@@ -2167,11 +2167,11 @@ Python, and Rust files, so the policy governs code identifiers, comments,
 docstrings, string fixtures, and prose. Only spellings required by external
 contracts or deliberate spelling-test fixtures are exempt.
 
-Before checking the repository, the generator refreshes the shared estate
-dictionary into an untracked local cache only when the authority is newer,
-then merges `typos.local.toml`. The generated `typos.toml` is reviewed and
-committed so a clean, network-restricted checkout can still enforce the last
-known-good policy.
+Before checking the repository, the generator refreshes the shared/base
+en-GB-oxendict dictionary into an untracked local cache only when the authority
+is newer, then merges `typos.local.toml`. The generated `typos.toml` is
+reviewed and committed so a clean, network-restricted checkout can still
+enforce the last known-good policy.
 
 Put an unavoidable external-contract spelling or a deliberate spelling-test
 fixture in `typos.local.toml` as a narrowly anchored `[patterns].ignore` entry.
@@ -2439,7 +2439,7 @@ the wheel test is gated on both.
 
 The **wheel build and toolchain detection** stay in `tests/helpers/maturin.py`,
 because they wrap `subprocess` and `sysconfig` probing that does not inline
-cleanly: build a wheel (`build_native_wheel_artifact`), report toolchain
+cleanly: build a wheel (`build_native_wheel_artefact`), report toolchain
 availability (`toolchain_available`), and report separately whether maturin's
 own script lookup can find its binary (`maturin_script_locatable`).
 

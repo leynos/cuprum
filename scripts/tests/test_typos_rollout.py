@@ -9,6 +9,7 @@ import os
 import re
 import shlex
 import subprocess  # noqa: S404 - integration tests run the pinned spelling tool.
+import sys
 import tomllib
 import typing as typ
 import urllib.error
@@ -119,6 +120,64 @@ def test_spelling_target_checks_documentation_and_source(
 
     assert {"'*.md'", "'*.py'", "'*.rs'"} <= set(spelling_recipe.split()), (
         "spelling target must include Markdown, Python, and Rust pathspecs"
+    )
+
+
+def test_spelling_target_generates_config_and_scans_all_source_types(
+    script_directory: Path,
+    tmp_path: Path,
+) -> None:
+    """The real spelling target generates config before scanning tracked source."""
+    event_log = tmp_path / "events.log"
+    generator = tmp_path / "generate.py"
+    scanner = tmp_path / "scan.py"
+    generator.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(event_log)!r}).write_text('generate\\n', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    scanner.write_text(
+        "import sys\n"
+        "from pathlib import Path\n"
+        f"log = Path({str(event_log)!r})\n"
+        "suffixes = {'.md', '.py', '.rs'}\n"
+        "paths = [arg for arg in sys.argv[1:] if Path(arg).suffix in suffixes]\n"
+        "with log.open('a', encoding='utf-8') as output:\n"
+        "    output.write('scan ' + ' '.join(paths) + '\\n')\n",
+        encoding="utf-8",
+    )
+    tracked_files = ("guide.md", "module.py", "crate.rs")
+    for filename in tracked_files:
+        (tmp_path / filename).write_text("organize\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)  # noqa: S607
+    subprocess.run(  # noqa: S603
+        ["git", "add", *tracked_files],  # noqa: S607
+        cwd=tmp_path,
+        check=True,
+    )
+
+    result = subprocess.run(  # noqa: S603
+        [  # noqa: S607
+            "make",
+            "-f",
+            str(script_directory.parent / "Makefile"),
+            "spelling",
+            "SPELLING_HELPER_TARGET=",
+            f"SPELLING_CONFIG_COMMAND={sys.executable} {generator}",
+            f"TYPOS={sys.executable} {scanner}",
+        ],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = event_log.read_text(encoding="utf-8").splitlines()
+    assert events[0] == "generate", f"configuration must precede scan: {events}"
+    assert events[1].startswith("scan "), f"scanner event is missing: {events}"
+    assert set(events[1].removeprefix("scan ").split()) == set(tracked_files), (
+        f"spelling target did not scan every tracked source type: {events}"
     )
 
 
