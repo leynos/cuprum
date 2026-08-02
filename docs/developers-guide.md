@@ -1581,8 +1581,10 @@ itself. Two separate mechanisms enforce alignment with the declared pin.
 `test_installed_maturin_matches_expected_pin` compares the `pyproject.toml` pin
 against the installed maturin distribution's version, read from the current
 interpreter's package metadata with `importlib.metadata.version("maturin")` —
-the same interpreter that runs the build — while only gating on a `maturin` CLI
-being present on `PATH`. The snapshot test asserts the built wheel's
+the same interpreter that runs the build — and gates on that interpreter being
+able to *import* `maturin`, not on a CLI being present on `PATH`. A launcher
+found on `PATH` can belong to a different environment from the one the build
+uses. The snapshot test asserts the built wheel's
 `Generator` matches that same pin, so a wheel built by an unexpected maturin
 fails the suite.
 
