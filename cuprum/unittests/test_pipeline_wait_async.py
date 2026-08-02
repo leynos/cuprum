@@ -117,6 +117,82 @@ class TestProcessCompletedTask:
         assert state.failure_index == 2, "the final stage must still latch"
         assert terminations == [], "a failing final stage must not request termination"
 
+    @staticmethod
+    def _run_completions(
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        stage_count: int,
+        completions: list[tuple[int, int]],
+    ) -> tuple[_PipelineWaitState, list[tuple[int, float]]]:
+        """Drive several completions in order, recording termination calls.
+
+        Each entry is a ``(stage_index, exit_code)`` pair applied in sequence,
+        so the call order *is* the completion order. The clock advances by ten
+        per completion, so each stage's ``ended_at`` is distinguishable rather
+        than a single pinned value every slot would match.
+        """
+        terminations = record_terminations(monkeypatch)
+
+        readings = iter([10.0 * (step + 1) for step in range(len(completions))])
+        monkeypatch.setattr(
+            _pipeline_wait.time,
+            "perf_counter",
+            lambda: next(readings),
+        )
+
+        state = make_wait_state(stage_count)
+
+        async def drive() -> None:
+            """Apply each completion through the real async boundary."""
+            for idx, exit_code in completions:
+                task = asyncio.create_task(immediate(exit_code))
+                await task
+                state.wait_tasks = [task]
+                state.task_to_index = {task: idx}
+                await _pipeline_wait._process_completed_task(task, state, [], 0.25)
+
+        asyncio.run(drive())
+        return state, terminations
+
+    def test_an_earlier_completion_outranks_a_lower_stage_index(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The first failure *to complete* latches, not the lowest-indexed one.
+
+        Stage 2 fails first, then stage 0 fails. Every other case in this class
+        drives a single completion, so none of them can tell completion order
+        from stage order — a boundary that latched the lowest index instead
+        would pass them all.
+
+        Stage order does decide, but only as a tie-break *within* one
+        ``asyncio.wait`` batch, where completion order is unobservable; see
+        `TestSimultaneousCompletions`. Across batches, as here, the earlier
+        completion wins.
+        """
+        state, terminations = self._run_completions(
+            monkeypatch,
+            stage_count=4,
+            completions=[(2, 5), (0, 3)],
+        )
+
+        assert state.failure_index == 2, (
+            "the stage that failed first must stay latched even though a "
+            f"lower-indexed stage failed later; found {state.failure_index!r}"
+        )
+        assert state.exit_codes[2] == 5, "the first completion's exit must be recorded"
+        assert state.exit_codes[0] == 3, "the later completion's exit must be recorded"
+        assert state.ended_at[2] == 10.0, (
+            f"stage 2 must carry the first clock reading, found {state.ended_at[2]!r}"
+        )
+        assert state.ended_at[0] == 20.0, (
+            f"stage 0 must carry the second clock reading, found {state.ended_at[0]!r}"
+        )
+        assert terminations == [(2, 0.25)], (
+            "only the latched first failure may terminate the others, exactly "
+            f"once; found {terminations!r}"
+        )
+
 
 class _SettledProcess:
     """A process stand-in whose ``wait`` returns immediately.
