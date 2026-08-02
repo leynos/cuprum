@@ -685,7 +685,6 @@ execution. The `crosshair` Hypothesis profile is registered in
 `cuprum/unittests/conftest.py`; using it requires the `hypothesis-crosshair`
 package from the dev dependency group.
 
-
 ### Extracted module boundaries
 
 Several implementation modules were split out of larger files to keep each
