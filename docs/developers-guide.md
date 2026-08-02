@@ -1288,15 +1288,30 @@ What actually executes is narrower than what is written, so do not read a
 green run as coverage of both arms:
 
 - **POSIX** — the cases run natively on Linux whenever the extension is built,
-  so a local `make test` preceded by `maturin develop` executes them. Without
-  that build the `rust_streams` fixture skips them rather than failing, which
-  is what CI does today. Making CI build the extension and fail loudly without
-  it is `#258`, in flight as pull request `#269`.
+  so a local `make develop` followed by `make test-extension` executes them.
+  `cuprum/unittests/test_rust_errno.py` is one of the `EXTENSION_TEST_TARGETS`,
+  so CI's `extension-tests` job runs them with
+  `CUPRUM_REQUIRE_RUST_EXTENSION=1`: a build that never produced the extension
+  fails rather than skipping quietly (`#258`).
 - **Windows** — the `#[cfg(windows)]` arm is compiled natively on
   `windows-2022` by the wheel build (`.github/workflows/build-wheels.yml`,
-  reached from `ci.yml`), which catches a Windows arm that does not build or
-  type-check. No job runs the Python suite on Windows, so nothing executes the
-  `winerror` assertions; that gap is tracked by `#277`.
+  reached unconditionally from `ci.yml`, so it runs on every pull request),
+  which catches a Windows arm that does not build or type-check. No job runs
+  the Python suite on Windows, so nothing executes the `winerror` assertions;
+  that gap is tracked by `#277`.
+
+Compiling that arm locally needs no Windows machine, which is worth knowing
+before changing it:
+
+```bash
+rustup target add x86_64-pc-windows-msvc
+PYO3_CROSS=1 PYO3_CROSS_PYTHON_VERSION=3.13 \
+  cargo check --manifest-path rust/Cargo.toml \
+  -p cuprum-rust --target x86_64-pc-windows-msvc
+```
+
+`PYO3_CROSS_PYTHON_VERSION` is required: PyO3 cannot probe an interpreter for
+the target platform, so the ABI version has to be stated explicitly.
 
 ## Rust FD-borrow ownership contract
 
