@@ -241,16 +241,12 @@ def test_fail_fast_submission_indices_map_to_original_positions() -> None:
     assert elapsed < 1.0, f"Expected < 1.0s with fail-fast, got {elapsed:.3f}s"
     assert result.ok is False, "the failing command makes the run unsuccessful"
 
-    # Invariants that hold regardless of scheduling. ``__post_init__`` always
-    # backfills the mapping, but the field stays declared ``| None`` (see
-    # ConcurrentResult), so the narrowing is required by the type checker.
-    indices = result.submission_indices
-    assert indices is not None, "submission indices are backfilled when omitted"
-    assert len(indices) == len(result.results), (
+    # Invariants that hold regardless of scheduling.
+    assert len(result.submission_indices) == len(result.results), (
         "the submission mapping stays parallel to results"
     )
     assert result.failure_submission_indices == tuple(
-        indices[position] for position in result.failures
+        result.submission_indices[position] for position in result.failures
     ), "the submission-stable view must follow the backfilled mapping"
 
     # The sleeper cannot have completed within the elapsed bound, so results is
