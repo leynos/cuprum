@@ -122,7 +122,15 @@ def test_consume_error_reports_a_branchable_errno(
     rust_streams: ModuleType,
     broken_pipe_fds: tuple[int, int],
 ) -> None:
-    """The consume entry point preserves `errno` on the same terms."""
+    """The consume entry point preserves `errno` on the same terms.
+
+    This pins the conversion contract: the exact POSIX number, which is why it
+    skips on Windows.
+    ``TestRustConsumeStream.test_propagates_io_errors`` in
+    `test_rust_streams.py` covers the consume entry point's own I/O-failure
+    behaviour beside the rest of that entry point's coverage, and accepts
+    either `EBADF` or `EINVAL` so it can run on every platform.
+    """
     closed_read_fd, _write_fd = broken_pipe_fds
 
     with pytest.raises(OSError, match=_ERRNO_PREFIX_RE) as excinfo:

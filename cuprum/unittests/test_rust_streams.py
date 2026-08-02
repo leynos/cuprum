@@ -286,3 +286,38 @@ class TestRustConsumeStream:
             _safe_close(write_fd)
             with pytest.raises(ValueError, match="buffer_size"):
                 rust_streams.rust_consume_stream(read_fd, buffer_size=0)
+
+    @staticmethod
+    def test_propagates_io_errors(
+        rust_streams: ModuleType,
+    ) -> None:
+        """Verify rust_consume_stream raises OSError on I/O failure.
+
+        The consume-side counterpart to
+        ``test_rust_pump_stream_propagates_io_errors``: a read that cannot be
+        performed surfaces as an ``OSError`` whose ``errno`` names an unusable
+        descriptor. Either ``EBADF`` or ``EINVAL`` is accepted, because Windows
+        reports an invalid handle rather than a bad POSIX descriptor, so the
+        assertion holds wherever the entry points build.
+
+        The Rust-side tests over ``consume_stream_files`` exercise the
+        read-and-decode loop below the PyO3 boundary and so cannot observe this
+        translation at all. ``test_rust_errno.py`` pins the stricter conversion
+        contract — the exact POSIX number, ``strerror``, and subclass selection
+        — and skips on Windows for that reason; this test stays platform
+        neutral and lives beside the other consume behaviour.
+        """
+        with contextlib.ExitStack() as stack:
+            read_fd, write_fd = os.pipe()
+            stack.callback(_safe_close, read_fd)
+            stack.callback(_safe_close, write_fd)
+            _safe_close(read_fd)
+            with pytest.raises(
+                OSError,
+                match=r"(?i)(Bad file descriptor|invalid handle|handle is invalid)",
+            ) as excinfo:
+                rust_streams.rust_consume_stream(read_fd)
+        assert excinfo.value.errno in {errno.EBADF, errno.EINVAL}, (
+            "expected errno to indicate an invalid file descriptor/handle, "
+            f"found {excinfo.value.errno!r}"
+        )
