@@ -51,6 +51,7 @@
       'cuprum/rust.py',
       'cuprum/sh.py',
       'cuprum/unittests/__snapshots__/test_adapter_projection.ambr',
+      'cuprum/unittests/__snapshots__/test_fetch_main_benchmark_baseline.ambr',
       'cuprum/unittests/__snapshots__/test_fixture_generation.ambr',
       'cuprum/unittests/__snapshots__/test_folded_summary.ambr',
       'cuprum/unittests/__snapshots__/test_maturin_build.ambr',

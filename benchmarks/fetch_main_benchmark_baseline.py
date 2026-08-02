@@ -40,7 +40,23 @@ _GITHUB_REDIRECT_HEADERS_TO_STRIP = (
 
 @dc.dataclass(frozen=True, slots=True)
 class ArtefactQuery:
-    """GitHub Actions workflow artefact lookup configuration."""
+    """GitHub Actions workflow artefact lookup configuration.
+
+    Attributes
+    ----------
+    repository
+        GitHub repository in ``owner/name`` form.
+    workflow
+        Workflow file name or workflow identifier to query.
+    branch
+        Branch whose successful workflow runs are considered.
+    event
+        Workflow event used to filter successful runs.
+    artefact_name
+        Name of the workflow artefact to locate.
+    api_base_url
+        Base URL for GitHub API requests.
+    """
 
     repository: str
     workflow: str
@@ -213,7 +229,30 @@ def select_latest_artefact_download_url(
     artefacts_payload_by_run: cabc.Mapping[int, cabc.Mapping[str, object]],
     artefact_name: str,
 ) -> str | None:
-    """Return the latest non-expired artefact download URL, if available."""
+    """Select the latest non-expired artefact download URL.
+
+    Parameters
+    ----------
+    workflow_runs_payload
+        GitHub workflow-runs response containing runs in newest-first order.
+    artefacts_payload_by_run
+        GitHub artefact responses keyed by workflow-run identifier.
+    artefact_name
+        Name of the artefact to select.
+
+    Returns
+    -------
+    str or None
+        Download URL for the first matching, non-expired artefact in workflow
+        run order, or ``None`` when no supplied run contains one.
+
+    Raises
+    ------
+    TypeError
+        If a response field has an unexpected type.
+    ValueError
+        If a required response string is empty.
+    """
     workflow_runs = _require_list(
         workflow_runs_payload.get("workflow_runs"),
         name="workflow_runs",
@@ -249,7 +288,30 @@ def extract_artefact_archive(
     archive_bytes: bytes,
     output_dir: pth.Path,
 ) -> tuple[pth.Path, ...]:
-    """Extract a downloaded artefact zip into *output_dir* safely."""
+    """Extract a downloaded artefact zip safely.
+
+    Parameters
+    ----------
+    archive_bytes
+        Bytes containing the downloaded zip archive.
+    output_dir
+        Directory that receives the extracted regular files.
+
+    Returns
+    -------
+    tuple[pathlib.Path, ...]
+        Extracted file paths in archive-member order. Directory entries are
+        omitted.
+
+    Raises
+    ------
+    OSError
+        If a destination directory or extracted file cannot be written.
+    ValueError
+        If an archive member would escape ``output_dir``.
+    zipfile.BadZipFile
+        If ``archive_bytes`` does not contain a valid zip archive.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     extracted_paths: list[pth.Path] = []
     with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
@@ -272,7 +334,32 @@ def find_latest_artefact_download_url(
     query: ArtefactQuery,
     token: str,
 ) -> str | None:
-    """Query GitHub Actions and return the latest matching artefact URL."""
+    """Query GitHub Actions for the latest matching artefact URL.
+
+    Parameters
+    ----------
+    query
+        Repository, workflow, run filters, artefact name, and API base URL.
+    token
+        GitHub token used to authenticate API requests.
+
+    Returns
+    -------
+    str or None
+        Download URL for the latest matching, non-expired artefact, or ``None``
+        when no successful run contains one.
+
+    Raises
+    ------
+    json.JSONDecodeError
+        If GitHub returns malformed JSON.
+    TypeError
+        If a GitHub response field has an unexpected type.
+    urllib.error.URLError
+        If a GitHub request fails after the bounded retries.
+    ValueError
+        If a required GitHub response string is empty.
+    """
     encoded_repository = urllib.parse.quote(query.repository, safe="/")
     encoded_workflow = urllib.parse.quote(query.workflow, safe="")
     params = urllib.parse.urlencode({
@@ -355,7 +442,27 @@ def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
 
 
 def main(argv: cabc.Sequence[str] | None = None) -> int:
-    """Run the baseline artefact fetch CLI."""
+    """Run the baseline artefact fetch CLI.
+
+    Parameters
+    ----------
+    argv
+        Command-line arguments without the executable name. ``None`` reads
+        arguments from :data:`sys.argv` through :mod:`argparse`.
+
+    Returns
+    -------
+    int
+        Zero after extracting an artefact, or
+        :data:`MAIN_BASELINE_NOT_FOUND_EXIT_CODE` when no matching artefact
+        exists.
+
+    Raises
+    ------
+    SystemExit
+        If arguments are invalid or the configured token environment variable
+        is empty.
+    """
     args = _parse_args(argv)
     token = os.environ.get(args.token_env, "").strip()
     if not token:

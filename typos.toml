@@ -31,15 +31,22 @@ extend-exclude = [
 locale = "en-gb"
 extend-ignore-re = [
     "\"artifacts\"",
-    "(?s)```.*?```",
-    "--artifact-name",
-    "/artifacts",
+    "--artifact-name(?:[=\\s\"`]|$)",
+    "/artifacts(?:[/?#]|$)",
     "\\(\"ises\", \"izes\"\\)",
     "\\(\"teh\", \"(?:the|ten)\"\\)",
     "\\brust-analyzer\\b",
-    "`[^`\\n]+`",
     "b\"ond\\\\n\"",
     "mappings\\[\"organise\"\\]",
+]
+
+[type.markdown]
+extend-glob = [
+    "*.md",
+]
+extend-ignore-re = [
+    "(?s)```.*?```",
+    "`[^`\\n]+`",
 ]
 
 [default.extend-words]

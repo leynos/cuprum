@@ -14,8 +14,8 @@ accepted = []
 ignore = [
   # GitHub's Actions API and the established CLI expose these literal names.
   '"artifacts"',
-  '/artifacts',
-  '--artifact-name',
+  '/artifacts(?:[/?#]|$)',
+  '--artifact-name(?:[=\s"`]|$)',
   # Spelling-policy tests must contain the deliberately invalid input tokens.
   'mappings\["organise"\]',
   '\("teh", "(?:the|ten)"\)',

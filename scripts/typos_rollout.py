@@ -35,6 +35,7 @@ SUFFIX_PAIRS = (
     ("isation", "ization"),
     ("isations", "izations"),
 )
+_MARKDOWN_IGNORE_PATTERNS = frozenset((r"`[^`\n]+`", r"(?s)```.*?```"))
 
 
 @dc.dataclass(frozen=True)
@@ -162,6 +163,16 @@ def _render_array(name: str, values: tuple[str, ...]) -> list[str]:
 
 def render_typos_config(dictionary: Dictionary) -> str:
     """Render a deterministic, parse-checked ``typos.toml`` document."""
+    global_patterns = tuple(
+        pattern
+        for pattern in dictionary.ignore_patterns
+        if pattern not in _MARKDOWN_IGNORE_PATTERNS
+    )
+    markdown_patterns = tuple(
+        pattern
+        for pattern in dictionary.ignore_patterns
+        if pattern in _MARKDOWN_IGNORE_PATTERNS
+    )
     lines = [
         "# Generated from the shared en-GB-oxendict dictionary.",
         "# Regenerate with scripts/generate_typos_config.py; do not edit by hand.",
@@ -171,7 +182,11 @@ def render_typos_config(dictionary: Dictionary) -> str:
         "",
         "[default]",
         'locale = "en-gb"',
-        *_render_array("extend-ignore-re", dictionary.ignore_patterns),
+        *_render_array("extend-ignore-re", global_patterns),
+        "",
+        "[type.markdown]",
+        *_render_array("extend-glob", ("*.md",)),
+        *_render_array("extend-ignore-re", markdown_patterns),
         "",
         "[default.extend-words]",
     ]

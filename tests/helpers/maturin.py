@@ -146,6 +146,18 @@ def build_native_wheel_artefact(root: Path, out_dir: Path) -> Path:
     ``test_installed_maturin_matches_expected_pin`` and by the snapshot test's
     generator check, not selected here.
 
+    Parameters
+    ----------
+    root
+        Repository root containing ``rust/cuprum-rust/Cargo.toml``.
+    out_dir
+        Directory that receives the built wheel.
+
+    Returns
+    -------
+    pathlib.Path
+        Path to the single wheel produced in ``out_dir``.
+
     Raises
     ------
     AssertionError
@@ -154,6 +166,15 @@ def build_native_wheel_artefact(root: Path, out_dir: Path) -> Path:
         If the output directory cannot be created or inspected.
     MaturinBuildError
         If the maturin build command exits non-zero.
+
+    Examples
+    --------
+    Build the native wheel into a repository-local distribution directory:
+
+    >>> root = Path.cwd()
+    >>> wheel = build_native_wheel_artefact(root, root / "dist")
+    >>> wheel.suffix
+    '.whl'
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     command = [

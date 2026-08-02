@@ -115,7 +115,7 @@ fn incomplete_trailing_sequence_is_replaced_at_eof() {
 }
 
 mod properties {
-    //! Randomised coverage complementing the four fixed cases above.
+    //! Randomized coverage complementing the four fixed cases above.
     //!
     //! The snapshots pin what the loop produces for four hand-picked payload
     //! categories; they cannot show that the categories are exhaustive. These

@@ -75,9 +75,12 @@ PYLINT_PYPY_SHIM = git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_P
 PYLINT_VERSION ?= 4.0.5
 PYLINT = $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) \
   --from '$(PYLINT_PYPY_SHIM)' --with 'pylint==$(PYLINT_VERSION)' pylint-pypy
+SPELLING_CONFIG_COMMAND ?= $(UV_RUN_ENV) uv run scripts/generate_typos_config.py
+SPELLING_HELPER_TARGET ?= spelling-helper-test
 
 .PHONY: help all clean build build-release lint lint-windows fmt check-fmt \
-        markdownlint spelling spelling-helper-test nixie test typecheck \
+        markdownlint spelling spelling-config spelling-helper-test \
+        _run_spelling_gate nixie test typecheck \
         test-extension develop \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
@@ -171,12 +174,16 @@ markdownlint: $(MDLINT) ## Lint Markdown files
 	$(LOCAL_TOOL_ENV) $(MDLINT) '**/*.md'
 	+$(MAKE) spelling
 
-spelling: spelling-helper-test ## Enforce en-GB-oxendict spelling in prose and source
-	@$(UV_RUN_ENV) uv run scripts/generate_typos_config.py
+spelling: $(SPELLING_HELPER_TARGET) _run_spelling_gate ## Enforce en-GB-oxendict spelling in prose and source
+
+spelling-config:
+	@$(SPELLING_CONFIG_COMMAND)
+
+_run_spelling_gate: spelling-config
 	@git ls-files -z '*.md' '*.py' '*.rs' | \
 		xargs -0 -r $(TYPOS) --config typos.toml --force-exclude
 
-spelling-helper-test: build ## Validate the shared spelling-policy integration
+spelling-helper-test: build spelling-config ## Validate the shared spelling-policy integration
 	@TYPOS_TEST_COMMAND=$(call shell_quote,$(TYPOS)) PYTHONPATH=scripts \
 		$(UV_RUN_ENV) uv run --python 3.13 \
 		--with pytest-cov==7.0.0 \
