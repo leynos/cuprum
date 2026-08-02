@@ -157,6 +157,13 @@ pub(crate) fn advance<E>(
 /// [`advance`] is its only constructor. The precondition is enforced once,
 /// where the decision is made, rather than re-checked defensively at the point
 /// of use — a second check would silently mask a caller that got it wrong.
+///
+/// "Only constructor" holds only while [`Transition`] and this function stay
+/// private to the module, so that claim is pinned by the compile-fail case
+/// `tests/ui/fail/pump_transition_unreachable.rs`: it includes this file as a
+/// child module and shows the compiler refusing an attempt to build a
+/// transition and apply it from the parent. Widening either item, even to
+/// `pub(crate)`, makes that case fail.
 fn step(state: &mut PumpState, transition: Transition) -> Flow {
     match transition {
         Transition::Eof => Flow::Stop,

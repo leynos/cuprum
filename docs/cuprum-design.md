@@ -2267,7 +2267,10 @@ The precondition is then encoded in the type system rather than re-checked. A
 private `Transition` (`Wrote`/`Drained`/`Eof`) is constructed only by
 `advance`, so "wrote a chunk after the writer latched closed" is not a
 representable state and the internal `step` needs no defensive `writer_open`
-check — a second check would only mask a caller that got it wrong.
+check — a second check would only mask a caller that got it wrong. Because that
+argument rests on `Transition` and `step` remaining module-private, a
+compile-fail case (`tests/ui/fail/pump_transition_unreachable.rs`) holds the
+boundary: it fails if either is widened, even to `pub(crate)`.
 
 `io_utils::classify_write` is the adapter between the two halves. It collapses
 `WriteOutcome` and the non-fatal error partition into the machine's two-variant

@@ -1298,6 +1298,16 @@ lived in a doc comment. Making those states unrepresentable also removed the
 defensive re-check inside `step`, which had been masking exactly the mistake it
 looked like it was guarding against.
 
+That encapsulation is what the proptests and Kani proofs assume rather than
+establish — neither can observe a transition it cannot spell — so it is pinned
+separately by the compile-fail case
+`rust/cuprum-rust/tests/ui/fail/pump_transition_unreachable.rs`. That case
+includes `src/pump_machine.rs` as a child module, reproducing the relationship
+`lib.rs` has with it, and asserts the compiler's refusal of an attempt to build
+a `Transition::Wrote` and pass it to `step` from the parent. Widening either
+item, even to `pub(crate)`, changes the diagnostic and fails the case, so the
+"`advance` is the only constructor" claim cannot quietly stop being true.
+
 Whether the write *ran* is what the tests assert, not merely its effect: a
 dropped precondition would leave the resulting state identical and differ only
 in having performed a spurious write, so the drivers report invocation.
@@ -1870,8 +1880,10 @@ as a test assertion on the SHA string.
 ## Compile-time UI tests (trybuild)
 
 The Rust crate at `rust/cuprum-rust/` uses
-[trybuild](https://github.com/dtolnay/trybuild) to validate PyO3 macro
-behaviour at compile time. Tests live under `rust/cuprum-rust/tests/ui/`:
+[trybuild](https://github.com/dtolnay/trybuild) to validate contracts that hold
+at compile time and so cannot be observed by a runtime test: PyO3 macro
+behaviour, and encapsulation boundaries such as the pump machine's private
+`Transition`. Tests live under `rust/cuprum-rust/tests/ui/`:
 
 - `tests/ui/pass/` — Rust files that **must compile** without error.
 - `tests/ui/fail/` — Rust files that **must fail** compilation with diagnostics
@@ -1893,6 +1905,15 @@ cd rust && TRYBUILD=overwrite cargo +1.85.0 test compile_time_ui
 
 Inspect the updated `.stderr` files before committing to confirm that each fail
 test still represents a genuine compile-time error.
+
+A fail case that pins an encapsulation boundary must include the real module
+under test with `#[path]` rather than restating its shape, because a
+hand-written copy would only prove the copy private. `#![allow]` at the top of
+such a fixture is legitimate for lints the throwaway crate trybuild builds
+cannot configure — it inherits no `[lints]` table, so the workspace's
+`check-cfg = ["cfg(kani)"]` does not apply — and keeps the expected diagnostic
+narrow. Before committing one, verify it is not vacuous: weaken the production
+item it guards, confirm the case then fails, and restore.
 
 ## Design decisions
 

@@ -11,6 +11,12 @@
 //! `Transition` type makes an invalid combination unrepresentable, so the
 //! guarantee is that `advance` never builds one — which is a property of
 //! `advance`.
+//!
+//! That premise is not itself provable here, since no proof can observe a
+//! transition it is unable to spell. It is pinned instead by the compile-fail
+//! case `tests/ui/fail/pump_transition_unreachable.rs`, which shows that code
+//! outside the module can neither construct a `Transition` nor apply one with
+//! `step`, and fails if either is widened.
 
 use super::{Flow, PumpState, WriteEvent, advance, drive};
 

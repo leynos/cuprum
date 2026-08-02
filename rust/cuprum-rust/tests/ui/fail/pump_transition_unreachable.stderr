@@ -1,0 +1,25 @@
+error[E0603]: enum `Transition` is private
+  --> tests/ui/fail/pump_transition_unreachable.rs:33:36
+   |
+33 |     let transition = pump_machine::Transition::Wrote(write);
+   |                                    ^^^^^^^^^^  ----- tuple variant `Wrote` is not publicly re-exported
+   |                                    |
+   |                                    private enum
+   |
+note: the enum `Transition` is defined here
+  --> tests/ui/fail/../../../src/pump_machine.rs
+   |
+   | enum Transition {
+   | ^^^^^^^^^^^^^^^
+
+error[E0603]: function `step` is private
+  --> tests/ui/fail/pump_transition_unreachable.rs:34:27
+   |
+34 |     let _ = pump_machine::step(&mut state, transition);
+   |                           ^^^^ private function
+   |
+note: the function `step` is defined here
+  --> tests/ui/fail/../../../src/pump_machine.rs
+   |
+   | fn step(state: &mut PumpState, transition: Transition) -> Flow {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
