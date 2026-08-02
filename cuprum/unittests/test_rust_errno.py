@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import os
+import re
 import sys
 import typing as typ
 
@@ -34,6 +35,11 @@ pytestmark = pytest.mark.skipif(
     sys.platform == "win32",
     reason="asserts POSIX errno values and the subclasses derived from them",
 )
+
+# `pytest.raises(OSError)` needs a `match` (ruff PT011), but `strerror` comes
+# from the C library and is translated under a non-English locale. Anchor on
+# the `[Errno N]` prefix CPython formats itself, which no locale changes.
+_ERRNO_PREFIX_RE = re.escape(f"[Errno {errno.EBADF}]")
 
 
 @pytest.fixture(name="broken_pipe_fds")
@@ -76,7 +82,7 @@ def test_pump_error_reports_a_branchable_errno(
     """
     closed_read_fd, write_fd = broken_pipe_fds
 
-    with pytest.raises(OSError, match="Bad file descriptor") as excinfo:
+    with pytest.raises(OSError, match=_ERRNO_PREFIX_RE) as excinfo:
         rust_streams.rust_pump_stream(closed_read_fd, write_fd)
 
     assert excinfo.value.errno == errno.EBADF, (
@@ -95,7 +101,7 @@ def test_consume_error_reports_a_branchable_errno(
     """The consume entry point preserves `errno` on the same terms."""
     closed_read_fd, _write_fd = broken_pipe_fds
 
-    with pytest.raises(OSError, match="Bad file descriptor") as excinfo:
+    with pytest.raises(OSError, match=_ERRNO_PREFIX_RE) as excinfo:
         rust_streams.rust_consume_stream(closed_read_fd)
 
     assert excinfo.value.errno == errno.EBADF, (
@@ -134,7 +140,7 @@ def test_the_message_states_the_error_number_once(
     """
     closed_read_fd, _write_fd = broken_pipe_fds
 
-    with pytest.raises(OSError, match="Bad file descriptor") as excinfo:
+    with pytest.raises(OSError, match=_ERRNO_PREFIX_RE) as excinfo:
         rust_streams.rust_consume_stream(closed_read_fd)
 
     assert "os error" not in str(excinfo.value), (

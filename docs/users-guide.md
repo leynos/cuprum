@@ -1247,8 +1247,11 @@ resolution has no effect.
 
 ### Rust stream error handling (internal)
 
-An I/O failure inside either helper raises an `OSError` that behaves like one
-raised by Python itself, so it can be handled the same way:
+Not every I/O failure reaches the caller: `rust_pump_stream` treats a broken
+pipe or connection reset as the expected result of a downstream stage exiting
+early, so it drains the reader and returns successfully. When either helper
+*does* propagate a failure, it raises an `OSError` that behaves like one raised
+by Python itself, so it can be handled the same way:
 
 - `errno` is populated, so failures are told apart by number rather than by
   matching message text — which is not a stable interface.
