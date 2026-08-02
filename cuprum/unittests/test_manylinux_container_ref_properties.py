@@ -18,7 +18,11 @@ def test_valid_sha256_ref_always_matches(digest: bytes) -> None:
     """Every 32-byte digest hex encoding produces a valid pinned ref."""
     container_ref = f"{_MANYLINUX_IMAGE}@sha256:{digest.hex()}"
 
-    assert MANYLINUX_CONTAINER_SHA256_RE.fullmatch(container_ref)
+    assert MANYLINUX_CONTAINER_SHA256_RE.fullmatch(container_ref), (
+        f"{container_ref!r} carries a full 64-character SHA-256 digest, so the "
+        "pattern must accept it; rejecting valid pins would block a legitimate "
+        "digest bump"
+    )
 
 
 @given(
@@ -32,7 +36,10 @@ def test_mutable_tag_never_matches(tag: str) -> None:
     """Mutable tag references never satisfy the pinned ref regex."""
     container_ref = f"{_MANYLINUX_IMAGE}:{tag}"
 
-    assert MANYLINUX_CONTAINER_SHA256_RE.fullmatch(container_ref) is None
+    assert MANYLINUX_CONTAINER_SHA256_RE.fullmatch(container_ref) is None, (
+        f"{container_ref!r} is a mutable tag: the image it names can be "
+        "republished, so accepting it would defeat the point of pinning"
+    )
 
 
 @given(digest_length=st.integers(min_value=0, max_value=63))
@@ -40,4 +47,7 @@ def test_truncated_digest_never_matches(digest_length: int) -> None:
     """Truncated SHA-256 digest references never satisfy the pinned ref regex."""
     container_ref = f"{_MANYLINUX_IMAGE}@sha256:{'a' * digest_length}"
 
-    assert MANYLINUX_CONTAINER_SHA256_RE.fullmatch(container_ref) is None
+    assert MANYLINUX_CONTAINER_SHA256_RE.fullmatch(container_ref) is None, (
+        f"{container_ref!r} carries {digest_length} digest characters, not 64: "
+        "a truncated digest identifies no single image, so it must be rejected"
+    )

@@ -134,7 +134,11 @@ def test_manylinux_aarch64_container_ref_rejects_mutable_tag(
     container_ref: str,
 ) -> None:
     """Aarch64 manylinux container refs reject mutable or invalid pins."""
-    assert MANYLINUX_CONTAINER_SHA256_RE.fullmatch(container_ref) is None
+    assert MANYLINUX_CONTAINER_SHA256_RE.fullmatch(container_ref) is None, (
+        f"{container_ref!r} is not an immutable digest pin, so accepting it "
+        "would let the aarch64 build pull a different image than the one "
+        "reviewed"
+    )
 
 
 def test_manylinux_aarch64_container_pin_regex_rejects_missing_comment() -> None:
