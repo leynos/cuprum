@@ -9,6 +9,9 @@ They isolate the conversion rather than reaching it through a pump: the pump
 treats a broken pipe as non-fatal and drains, so most interesting errnos never
 propagate through it. Calling the exported entry points with a deliberately
 unusable descriptor reaches the conversion directly.
+
+The conversion has a POSIX arm and a Windows arm, and they hand the number over
+differently, so each arm has its own platform-scoped cases below.
 """
 
 from __future__ import annotations
@@ -24,22 +27,35 @@ import pytest
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    import pathlib
     from types import ModuleType
 
-# These cases name POSIX errnos and the subclasses CPython derives from them.
-# Windows reaches the same conversion but carries a Win32 code through
-# `winerror`, from which CPython derives a different errno, so the expected
-# numbers here do not hold there. Skip rather than encode both taxonomies:
-# the Windows arm has no test job to run in.
-pytestmark = pytest.mark.skipif(
+# The two platform arms of the conversion carry different taxonomies, so each
+# set of assertions is scoped to the platform it describes rather than the
+# module being skipped wholesale. POSIX cases name an `errno` and the subclass
+# CPython derives from it; the Windows cases name a `winerror` and the `errno`
+# CPython derives from *that*, which is a different number for the same
+# failure. Only the POSIX arm has a job that executes it today (see
+# `docs/developers-guide.md`, "Preserving the operating-system error code");
+# the Windows assertions encode the contract until one exists.
+_posix_only = pytest.mark.skipif(
     sys.platform == "win32",
     reason="asserts POSIX errno values and the subclasses derived from them",
+)
+_windows_only = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="asserts Win32 winerror values and the errno derived from them",
 )
 
 # `pytest.raises(OSError)` needs a `match` (ruff PT011), but `strerror` comes
 # from the C library and is translated under a non-English locale. Anchor on
 # the `[Errno N]` prefix CPython formats itself, which no locale changes.
 _ERRNO_PREFIX_RE = re.escape(f"[Errno {errno.EBADF}]")
+
+# The Windows rendering is `[WinError N] strerror`. The code is left open
+# because the assertions derive their expectations from whichever code the
+# failure actually raises rather than fixing one.
+_WINERROR_PREFIX_RE = r"^\[WinError \d+\] "
 
 
 @pytest.fixture(name="broken_pipe_fds")
@@ -69,6 +85,7 @@ def fixture_directory_fd() -> cabc.Iterator[int]:
             os.close(fd)
 
 
+@_posix_only
 def test_pump_error_reports_a_branchable_errno(
     rust_streams: ModuleType,
     broken_pipe_fds: tuple[int, int],
@@ -94,6 +111,7 @@ def test_pump_error_reports_a_branchable_errno(
     )
 
 
+@_posix_only
 def test_consume_error_reports_a_branchable_errno(
     rust_streams: ModuleType,
     broken_pipe_fds: tuple[int, int],
@@ -109,6 +127,7 @@ def test_consume_error_reports_a_branchable_errno(
     )
 
 
+@_posix_only
 def test_the_exception_subclass_follows_the_errno(
     rust_streams: ModuleType,
     directory_fd: int,
@@ -128,6 +147,7 @@ def test_the_exception_subclass_follows_the_errno(
     )
 
 
+@_posix_only
 def test_the_message_states_the_error_number_once(
     rust_streams: ModuleType,
     broken_pipe_fds: tuple[int, int],
@@ -149,4 +169,72 @@ def test_the_message_states_the_error_number_once(
     )
     assert str(excinfo.value).startswith(f"[Errno {errno.EBADF}]"), (
         f"expected a normal OSError rendering, found {str(excinfo.value)!r}"
+    )
+
+
+def _winerror_of(exc: OSError) -> int | None:
+    """Read the Win32 code CPython attaches to a Windows ``OSError``.
+
+    ``OSError.winerror`` exists only on Windows, so a type check run on any
+    other platform does not know the attribute. The suppression is confined to
+    this one accessor rather than repeated at each use.
+    """
+    return exc.winerror  # ty: ignore[unresolved-attribute]
+
+
+@pytest.fixture(name="write_only_handle")
+def fixture_write_only_handle(tmp_path: pathlib.Path) -> cabc.Iterator[int]:
+    """Yield a native Windows handle open for writing, which cannot be read.
+
+    The Windows entry points take a native ``HANDLE`` rather than a C runtime
+    descriptor, so the descriptor is converted with ``msvcrt.get_osfhandle``.
+    ``ReadFile`` on a handle opened ``GENERIC_WRITE`` fails, which is what puts
+    a Win32 code on the ``io::Error`` the conversion then has to preserve.
+    """
+    msvcrt = pytest.importorskip("msvcrt", reason="Windows-only handle conversion")
+    fd = os.open(tmp_path / "write-only.bin", os.O_WRONLY | os.O_CREAT)
+    try:
+        yield msvcrt.get_osfhandle(fd)
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+
+@_windows_only
+def test_windows_failures_carry_the_native_code_as_winerror(
+    rust_streams: ModuleType,
+    write_only_handle: int,
+) -> None:
+    """A Win32 failure arrives as `winerror`, with the rest derived from it.
+
+    On Windows `raw_os_error` is a `GetLastError` code, not an `errno`. Handing
+    it over where Python expects an `errno` would assign an unrelated number,
+    leave `winerror` unset, and pick the subclass from the wrong value. The
+    five-argument form passes the native code as `winerror`; CPython then
+    derives `errno` from it and selects the subclass from the derived value.
+
+    The expected `errno` and subclass are not hard-coded. They are read back
+    from an `OSError` this test builds from the observed `winerror`, so the
+    assertions pin the *derivation* without depending on which Win32 code this
+    particular failure happens to raise.
+    """
+    with pytest.raises(OSError, match=_WINERROR_PREFIX_RE) as excinfo:
+        rust_streams.rust_consume_stream(write_only_handle)
+
+    raised = excinfo.value
+    winerror = _winerror_of(raised)
+    assert winerror, f"the Win32 code must survive in winerror, found {winerror!r}"
+
+    derived = OSError(0, raised.strerror, None, winerror, None)
+    assert type(raised) is type(derived), (
+        f"winerror {winerror} implies {type(derived).__name__}, "
+        f"found {type(raised).__name__}"
+    )
+    assert raised.errno == derived.errno, (
+        f"errno must be the one CPython derives from winerror {winerror}: "
+        f"expected {derived.errno!r}, found {raised.errno!r}"
+    )
+    assert "os error" not in str(raised), (
+        "the Rust-side suffix must be stripped, leaving Python's own "
+        f"[WinError N] prefix as the only mention; found {str(raised)!r}"
     )

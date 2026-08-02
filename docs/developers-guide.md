@@ -1208,11 +1208,27 @@ with no `raw_os_error` — one synthesized in Rust rather than returned by a
 syscall — has no number to preserve, so PyO3's `ErrorKind` mapping remains the
 best available and is used unchanged.
 
-`cuprum/unittests/test_rust_errno.py` covers the Unix arm end to end. The
-Windows arm is verified only by cross-compilation (`cargo check --target
-x86_64-pc-windows-msvc`): wheels are built for Windows but no job runs the
-Python suite there, so those tests carry a `sys.platform == "win32"` skip
-rather than encoding both errno taxonomies.
+`cuprum/unittests/test_rust_errno.py` covers both arms, with each set of
+assertions scoped to the platform whose taxonomy it names — the POSIX cases
+name an `errno` and the subclass CPython derives from it, the Windows case
+names a `winerror` and the `errno` CPython derives from *that*. The Windows
+case does not hard-code either expectation: it reads them back from an
+`OSError` it builds from the observed `winerror`, so it pins the derivation
+without depending on which Win32 code the failure happens to raise.
+
+What actually executes is narrower than what is written, so do not read a
+green run as coverage of both arms:
+
+- **POSIX** — the cases run natively on Linux whenever the extension is built,
+  so a local `make test` preceded by `maturin develop` executes them. Without
+  that build the `rust_streams` fixture skips them rather than failing, which
+  is what CI does today. Making CI build the extension and fail loudly without
+  it is `#258`, in flight as pull request `#269`.
+- **Windows** — the `#[cfg(windows)]` arm is compiled natively on
+  `windows-2022` by the wheel build (`.github/workflows/build-wheels.yml`,
+  reached from `ci.yml`), which catches a Windows arm that does not build or
+  type-check. No job runs the Python suite on Windows, so nothing executes the
+  `winerror` assertions; that gap is tracked by `#277`.
 
 ## Rust FD-borrow ownership contract
 
