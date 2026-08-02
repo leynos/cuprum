@@ -118,7 +118,7 @@ def _validate_index_sequence(
     ValueError
         If an index is negative, exceeds ``upper_bound``, or the sequence is
         not strictly ascending.
-    """
+    """  # noqa: DOC502 - TypeError propagates from _validate_index_type
     previous = -1
     for index in indices:
         _validate_index_type(index, type_error_message=type_error_message)
