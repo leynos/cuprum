@@ -288,7 +288,7 @@ mod tests {
                 let rendered = format!("{message} (os error {other})");
                 prop_assert_eq!(
                     super::super::strip_os_error_suffix(&rendered, code),
-                    rendered.clone(),
+                    rendered,
                     "only this error's own suffix may be removed",
                 );
             }
