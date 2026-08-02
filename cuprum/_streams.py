@@ -8,7 +8,9 @@ that pumps one pipeline stage's stdout into the next stage's stdin lives in
 ``_close_stream_writer``, ``_write_to_stream_writer``, ``_WriteOutcome``,
 ``_drain_stream_reader_bounded``) so importers of this module keep working
 unchanged. Used by the pipeline and single-command execution layers, it mirrors
-the optional Rust backend ``cuprum._streams_rs``. Callers own any writer.
+the optional Rust backend ``cuprum._streams_rs``. ``_pump_stream`` closes any
+supplied writer once relay completes or when no reader is supplied, so callers
+must not reuse the writer afterwards.
 """
 
 from __future__ import annotations

@@ -40,6 +40,12 @@ def pipeline_execution_strategy(
 ) -> tuple[str, PipelineExecuteFn]:
     """Provide Pipeline execution strategies for run() and run_sync().
 
+    Parameters
+    ----------
+    request : pytest.FixtureRequest
+        Fixture request whose ``param`` selects the asynchronous or
+        synchronous execution strategy.
+
     Returns
     -------
     tuple[str, PipelineExecuteFn]

@@ -41,7 +41,7 @@ def _get_stage_stream_fds(
     *,
     capture_or_echo: bool,
 ) -> _StageStreamConfig:
-    """Determine stream file descriptors for a pipeline stage."""
+    """Select PIPE/DEVNULL fds for stdin, stdout, and stderr by position and mode."""
     stdin = asyncio.subprocess.DEVNULL if idx == 0 else asyncio.subprocess.PIPE
     stdout = (
         asyncio.subprocess.PIPE

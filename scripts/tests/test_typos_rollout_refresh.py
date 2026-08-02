@@ -160,13 +160,7 @@ def test_remote_failure_reuses_only_a_valid_stale_cache(
     metadata = tmp_path / "cache.json"
 
     def fail(*_args: object, **_kwargs: object) -> None:
-        """Model an unavailable remote authority.
-
-        Raises
-        ------
-        urllib.error.URLError
-            Always, to simulate an offline authority.
-        """
+        """Model an unavailable remote authority that always raises ``URLError``."""
         message = "offline"
         raise urllib.error.URLError(message)
 

@@ -169,6 +169,12 @@ def given_multi_before_hooks(
 ) -> CuprumContext:
     """Create context with multiple before hooks for ordering test.
 
+    Parameters
+    ----------
+    behaviour_state : dict[str, object]
+        Shared scenario state; receives the ordered call list under
+        ``"call_order"``.
+
     Returns
     -------
     CuprumContext
@@ -204,6 +210,12 @@ def given_multi_after_hooks(
 ) -> CuprumContext:
     """Create context with multiple after hooks for ordering test.
 
+    Parameters
+    ----------
+    behaviour_state : dict[str, object]
+        Shared scenario state; receives the ordered call list under
+        ``"after_call_order"``.
+
     Returns
     -------
     CuprumContext
@@ -238,6 +250,12 @@ def given_context_with_hook(
     behaviour_state: dict[str, object],
 ) -> dict[str, object]:
     """Set up a context with a hook that can be detached.
+
+    Parameters
+    ----------
+    behaviour_state : dict[str, object]
+        Shared scenario state; receives the hook function under
+        ``"test_hook"``.
 
     Returns
     -------
@@ -300,7 +318,16 @@ def when_threads_check_allowlist(
     behaviour_state: dict[str, object],
     thread_setup: dict[str, frozenset[Program]],
 ) -> None:
-    """Run threads that each set and check their context."""
+    """Run threads that each set and check their context.
+
+    Parameters
+    ----------
+    behaviour_state : dict[str, object]
+        Shared scenario state; receives the per-thread results under
+        ``"thread_results"``.
+    thread_setup : dict[str, frozenset[Program]]
+        Per-thread allowlists keyed by thread name.
+    """
     behaviour_state["thread_results"] = run_threaded_allowlist_checks(
         thread_setup,
     )
@@ -342,7 +369,16 @@ def when_tasks_check_allowlist(
     behaviour_state: dict[str, object],
     async_setup: dict[str, frozenset[Program]],
 ) -> None:
-    """Run async tasks that each set and check their context."""
+    """Run async tasks that each set and check their context.
+
+    Parameters
+    ----------
+    behaviour_state : dict[str, object]
+        Shared scenario state; receives the per-task results under
+        ``"async_results"``.
+    async_setup : dict[str, frozenset[Program]]
+        Per-task allowlists keyed by task name.
+    """
     behaviour_state["async_results"] = run_async_allowlist_checks(async_setup)
 
 

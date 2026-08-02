@@ -156,6 +156,11 @@ class CuprumContext:
         two-mode empty-allowlist policy, permitting empty unrestricted
         contexts and denying empty restricted contexts.
 
+        Parameters
+        ----------
+        program : Program
+            The program to check against the current allowlist.
+
         Returns
         -------
         bool
@@ -247,6 +252,11 @@ class CuprumContext:
         Unlike narrow(), this sets the allowlist directly without intersection.
         Use with care; prefer narrow() for enforcing safety invariants.
 
+        Parameters
+        ----------
+        allowlist : frozenset[Program]
+            The allowlist to install in place of the current one.
+
         Returns
         -------
         CuprumContext
@@ -263,6 +273,11 @@ class CuprumContext:
     def with_before_hook(self, hook: BeforeHook) -> CuprumContext:
         """Return a context with an additional before hook.
 
+        Parameters
+        ----------
+        hook : BeforeHook
+            The before-execution hook to append.
+
         Returns
         -------
         CuprumContext
@@ -272,6 +287,11 @@ class CuprumContext:
 
     def without_before_hook(self, hook: BeforeHook) -> CuprumContext:
         """Return a context with the specified before hook removed.
+
+        Parameters
+        ----------
+        hook : BeforeHook
+            The before-execution hook to remove.
 
         Returns
         -------
@@ -284,6 +304,11 @@ class CuprumContext:
     def with_after_hook(self, hook: AfterHook) -> CuprumContext:
         """Return a context with an additional after hook (prepended for LIFO).
 
+        Parameters
+        ----------
+        hook : AfterHook
+            The after-execution hook to prepend.
+
         Returns
         -------
         CuprumContext
@@ -293,6 +318,11 @@ class CuprumContext:
 
     def without_after_hook(self, hook: AfterHook) -> CuprumContext:
         """Return a context with the specified after hook removed.
+
+        Parameters
+        ----------
+        hook : AfterHook
+            The after-execution hook to remove.
 
         Returns
         -------
@@ -305,6 +335,11 @@ class CuprumContext:
     def with_observe_hook(self, hook: ExecHook) -> CuprumContext:
         """Return a context with an additional observe hook.
 
+        Parameters
+        ----------
+        hook : ExecHook
+            The structured-event observe hook to append.
+
         Returns
         -------
         CuprumContext
@@ -314,6 +349,11 @@ class CuprumContext:
 
     def without_observe_hook(self, hook: ExecHook) -> CuprumContext:
         """Return a context with the specified observe hook removed.
+
+        Parameters
+        ----------
+        hook : ExecHook
+            The structured-event observe hook to remove.
 
         Returns
         -------
@@ -326,6 +366,11 @@ class CuprumContext:
     def with_program(self, program: Program) -> CuprumContext:
         """Return a context with the program added to the allowlist.
 
+        Parameters
+        ----------
+        program : Program
+            The program to add to the allowlist.
+
         Returns
         -------
         CuprumContext
@@ -335,6 +380,11 @@ class CuprumContext:
 
     def without_program(self, program: Program) -> CuprumContext:
         """Return a context with the program removed from the allowlist.
+
+        Parameters
+        ----------
+        program : Program
+            The program to remove from the allowlist.
 
         Returns
         -------
@@ -353,6 +403,12 @@ class CuprumContext:
         ever displaces the live :func:`os.environ`; the live process
         environment is read at subprocess spawn time. Passing ``None`` returns
         an unchanged copy.
+
+        Parameters
+        ----------
+        overlay : collections.abc.Mapping[str, str] | None
+            Environment variables to layer over the current overlay. ``None``
+            leaves the current overlay unchanged.
 
         Returns
         -------

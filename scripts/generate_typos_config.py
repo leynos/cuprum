@@ -41,7 +41,17 @@ def dictionary_from_cache(repository: Path = REPOSITORY_ROOT) -> rollout.Diction
     -------
     rollout.Dictionary
         The shared base dictionary overlaid with any local policy.
-    """
+
+    Raises
+    ------
+    OSError
+        If the cached dictionary or local overlay file cannot be read.
+    UnicodeDecodeError
+        If a dictionary file is not valid UTF-8.
+    ValueError, TypeError, tomllib.TOMLDecodeError
+        If a dictionary file fails validation, or the local overlay defines a
+        correction that conflicts with the shared base.
+    """  # noqa: DOC502 - load/merge errors propagate from the rollout callees
     dictionary = rollout.load_dictionary(repository / ".typos-oxendict-base.toml")
     local_overlay = repository / "typos.local.toml"
     if local_overlay.exists():
@@ -65,7 +75,18 @@ def render_config(repository: Path = REPOSITORY_ROOT) -> str:
     -------
     str
         The rendered ``typos.toml`` configuration text.
-    """
+
+    Raises
+    ------
+    OSError
+        If the cached dictionary or local overlay file cannot be read.
+    UnicodeDecodeError
+        If a dictionary file is not valid UTF-8.
+    ValueError, TypeError, tomllib.TOMLDecodeError
+        If a dictionary file fails validation, the local overlay conflicts
+        with the shared base, or the rendered document fails the TOML parse
+        check.
+    """  # noqa: DOC502 - load/merge/render errors propagate from the callees
     return rollout.render_typos_config(dictionary_from_cache(repository))
 
 

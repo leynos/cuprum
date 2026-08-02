@@ -43,6 +43,12 @@ def when_read_backend_selection_guidance(
 ) -> str:
     """Return the section text as the read guidance.
 
+    Parameters
+    ----------
+    performance_guidance_section : str
+        The performance-guidance section text loaded by the prior step;
+        passed through unchanged rather than mutated.
+
     Returns
     -------
     str
