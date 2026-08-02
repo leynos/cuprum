@@ -26,6 +26,7 @@ from cuprum._pipeline_streams import (
     _reconcile_pipe_tasks,
 )
 from cuprum._pipeline_types import (
+    _ExecutionInvariantError,
     _PipelineOutputs,
     _PipelineSpawnResult,
     _PipelineStageResultInputs,
@@ -34,18 +35,18 @@ from cuprum._pipeline_wait import _wait_for_pipeline
 from cuprum._process_lifecycle import _terminate_timed_out_stages
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import types
 
     from cuprum._pipeline_wait import _PipelineWaitResult
     from cuprum.sh import SafeCmd
 
 
-class _PipelineInvariantError(RuntimeError):
+class _PipelineInvariantError(_ExecutionInvariantError):
     """Raised when an internal pipeline-execution invariant is violated.
 
-    Subclasses :class:`RuntimeError` so it is still caught by broad runtime
-    handlers, while giving these impossible-state guards a distinct,
-    package-scoped type that callers can tell apart from unrelated runtime
+    Subclasses the shared package-level invariant error, which itself derives
+    from :class:`RuntimeError`, while retaining a distinct type for pipeline
     failures. Mirrors
     :class:`cuprum._subprocess_timeout._SubprocessInvariantError` for the
     single-command path.
@@ -67,6 +68,7 @@ async def _await_pipeline_wait_result(
     *,
     timeout_deadline: float | None,
     pipe_tasks: list[asyncio.Task[None]],
+    clock: cabc.Callable[[], float] = time.monotonic,
 ) -> _PipelineWaitResult:
     """Wait for the pipeline to finish, honouring any timeout deadline.
 
@@ -76,7 +78,7 @@ async def _await_pipeline_wait_result(
     """
     wait_timeout: float | None = None
     if timeout_deadline is not None:
-        wait_timeout = max(0.0, timeout_deadline - time.monotonic())
+        wait_timeout = max(0.0, timeout_deadline - clock())
     pipeline_wait = _wait_for_pipeline(
         spawn.processes,
         pipe_tasks=pipe_tasks,

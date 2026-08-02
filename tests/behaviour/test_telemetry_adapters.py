@@ -24,6 +24,8 @@ from cuprum.adapters.logging_adapter import structured_logging_hook
 from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
 from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
 from tests.behaviour._telemetry_adapter_support import (
+    HookFixture,
+    PythonCommandFixture,
     _run_command_with_hook,
 )
 from tests.helpers.catalogue import python_catalogue
@@ -154,8 +156,8 @@ def given_tracer(behaviour_state: dict[str, object]) -> dict[str, object]:
 @when("I run a command that writes to stdout and stderr")
 def when_run_stdout_stderr(
     behaviour_state: dict[str, object],
-    python_cmd_fixture: dict[str, object],
-    logging_hook_fixture: dict[str, object],
+    python_cmd_fixture: PythonCommandFixture,
+    logging_hook_fixture: HookFixture,
 ) -> None:
     """Run a command that writes to both streams."""
     _run_command_with_hook(
@@ -166,8 +168,8 @@ def when_run_stdout_stderr(
 @when("I run a command that succeeds")
 def when_run_success(
     behaviour_state: dict[str, object],
-    python_cmd_fixture: dict[str, object],
-    metrics_fixture: dict[str, object],
+    python_cmd_fixture: PythonCommandFixture,
+    metrics_fixture: HookFixture,
 ) -> None:
     """Run a command that exits with code 0."""
     _run_command_with_hook(
@@ -178,8 +180,8 @@ def when_run_success(
 @when("I run a command that fails with metrics tracking")
 def when_run_failure_with_metrics(
     behaviour_state: dict[str, object],
-    python_cmd_fixture: dict[str, object],
-    metrics_fixture: dict[str, object],
+    python_cmd_fixture: PythonCommandFixture,
+    metrics_fixture: HookFixture,
 ) -> None:
     """Run a failing command with metrics hook."""
     _run_command_with_hook(
@@ -190,8 +192,8 @@ def when_run_failure_with_metrics(
 @when("I run a command that fails with tracing")
 def when_run_failure_with_tracer(
     behaviour_state: dict[str, object],
-    python_cmd_fixture: dict[str, object],
-    tracer_fixture: dict[str, object],
+    python_cmd_fixture: PythonCommandFixture,
+    tracer_fixture: HookFixture,
 ) -> None:
     """Run a failing command with tracer hook."""
     _run_command_with_hook(
@@ -202,8 +204,8 @@ def when_run_failure_with_tracer(
 @when("I run a command that writes output")
 def when_run_with_output(
     behaviour_state: dict[str, object],
-    python_cmd_fixture: dict[str, object],
-    tracer_fixture: dict[str, object],
+    python_cmd_fixture: PythonCommandFixture,
+    tracer_fixture: HookFixture,
 ) -> None:
     """Run a command with output for tracing."""
     _run_command_with_hook(

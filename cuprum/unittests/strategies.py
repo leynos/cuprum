@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import typing as typ
 
+from hypothesis import settings
 from hypothesis import strategies as st
 
 from cuprum.program import Program
@@ -16,6 +17,8 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from hypothesis.strategies import SearchStrategy
+
+PROPERTY_SETTINGS = settings(derandomize=True, deadline=None, max_examples=50)
 
 
 def programs() -> SearchStrategy[Program]:

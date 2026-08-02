@@ -5,7 +5,7 @@ from __future__ import annotations
 import typing as typ
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 from cuprum.context import (
@@ -17,8 +17,6 @@ from cuprum.context._policy import (
     _validate_timeout,
 )
 from cuprum.unittests import strategies as cuprum_st
-
-_PROPERTY_SETTINGS = settings(derandomize=True, deadline=None, max_examples=50)
 
 # Run the symbolic backend for these tests with:
 #   uv run pytest cuprum/unittests/test_context_timeouts.py -m crosshair \
@@ -90,7 +88,7 @@ def test_cuprum_context_timeout_validation(
 
 
 @pytest.mark.crosshair
-@_PROPERTY_SETTINGS
+@cuprum_st.PROPERTY_SETTINGS
 @given(timeout=st.none())
 def test_validate_timeout_preserves_none(timeout: None) -> None:
     """Property: None timeout values are preserved."""
@@ -98,7 +96,7 @@ def test_validate_timeout_preserves_none(timeout: None) -> None:
 
 
 @pytest.mark.crosshair
-@_PROPERTY_SETTINGS
+@cuprum_st.PROPERTY_SETTINGS
 @given(timeout=st.floats(min_value=0.0, max_value=3600.0, allow_nan=False))
 def test_validate_timeout_preserves_non_negative_floats(timeout: float) -> None:
     """Property: non-negative float timeouts are accepted unchanged."""
@@ -110,7 +108,7 @@ def test_validate_timeout_preserves_non_negative_floats(timeout: float) -> None:
 
 
 @pytest.mark.crosshair
-@_PROPERTY_SETTINGS
+@cuprum_st.PROPERTY_SETTINGS
 @given(timeout=st.integers(min_value=0, max_value=10**18))
 def test_validate_timeout_coerces_non_negative_integers(timeout: int) -> None:
     """Property: non-negative integer timeouts are coerced to float."""
@@ -122,7 +120,7 @@ def test_validate_timeout_coerces_non_negative_integers(timeout: int) -> None:
 
 
 @pytest.mark.crosshair
-@_PROPERTY_SETTINGS
+@cuprum_st.PROPERTY_SETTINGS
 @given(
     timeout=st.floats(
         max_value=-0.000001,
@@ -144,7 +142,7 @@ def test_validate_timeout_rejects_non_finite_values(timeout: float) -> None:
 
 
 @pytest.mark.crosshair
-@_PROPERTY_SETTINGS
+@cuprum_st.PROPERTY_SETTINGS
 @given(timeout=st.integers(max_value=-1))
 def test_validate_timeout_rejects_negative_integers(timeout: int) -> None:
     """Property: negative integer timeouts are rejected."""
@@ -153,7 +151,7 @@ def test_validate_timeout_rejects_negative_integers(timeout: int) -> None:
 
 
 @pytest.mark.crosshair
-@_PROPERTY_SETTINGS
+@cuprum_st.PROPERTY_SETTINGS
 @given(parent=cuprum_st.timeouts())
 def test_resolve_narrowed_timeout_inherits_without_config(
     parent: float | None,
@@ -163,7 +161,7 @@ def test_resolve_narrowed_timeout_inherits_without_config(
 
 
 @pytest.mark.crosshair
-@_PROPERTY_SETTINGS
+@cuprum_st.PROPERTY_SETTINGS
 @given(
     parent=cuprum_st.timeouts(),
     config=st.floats(min_value=0.0, max_value=3600.0, allow_nan=False),

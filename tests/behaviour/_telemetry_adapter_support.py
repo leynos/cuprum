@@ -13,7 +13,25 @@ from cuprum import sh
 from cuprum.context import ScopeConfig, scoped
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    from cuprum.catalogue import ProgramCatalogue
     from cuprum.events import ExecHook
+    from cuprum.sh import SafeCmd
+
+
+class PythonCommandFixture(typ.TypedDict):
+    """Typed catalogue and command builder supplied by the BDD fixture."""
+
+    catalogue: ProgramCatalogue
+    builder: cabc.Callable[..., SafeCmd]
+
+
+class HookFixture(typ.TypedDict):
+    """Typed execution hook supplied by an adapter BDD fixture."""
+
+    hook: ExecHook
+
 
 _STDOUT_STDERR_SCRIPT = "\n".join(
     (
@@ -36,13 +54,13 @@ _OUTPUT_SCRIPT = "\n".join(
 
 def _execute_python_command(
     behaviour_state: dict[str, object],
-    python_cmd_fixture: dict[str, object],
+    python_cmd_fixture: PythonCommandFixture,
     hook: ExecHook,
     script: str,
 ) -> None:
     """Execute a Python command with the given hook and store the result."""
-    catalogue = typ.cast("typ.Any", python_cmd_fixture["catalogue"])
-    builder = typ.cast("typ.Any", python_cmd_fixture["builder"])
+    catalogue = python_cmd_fixture["catalogue"]
+    builder = python_cmd_fixture["builder"]
     cmd = builder("-c", script)
 
     with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
@@ -53,10 +71,10 @@ def _execute_python_command(
 
 def _run_command_with_hook(
     behaviour_state: dict[str, object],
-    python_cmd_fixture: dict[str, object],
-    hook_fixture: dict[str, object],
+    python_cmd_fixture: PythonCommandFixture,
+    hook_fixture: HookFixture,
     script: str,
 ) -> None:
     """Run a Python command with a hook extracted from a fixture."""
-    hook = typ.cast("ExecHook", hook_fixture["hook"])
+    hook = hook_fixture["hook"]
     _execute_python_command(behaviour_state, python_cmd_fixture, hook, script)
