@@ -216,8 +216,10 @@ def test_metrics_are_thread_local() -> None:
         worker_ready.set()
         # Stay alive until the main thread has sampled its own metrics, so the
         # isolation holds while both threads are live rather than only after
-        # this one has exited.
-        main_snapshot_taken.wait(timeout=5)
+        # this one has exited. The wait is unbounded on purpose: the main
+        # thread's finally block always sets the event, so a timeout here would
+        # only let the worker leave early and weaken the assertion.
+        main_snapshot_taken.wait()
 
     thread = threading.Thread(target=record_active_thread_metrics, daemon=True)
     thread.start()
