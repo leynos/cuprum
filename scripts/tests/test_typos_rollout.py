@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import logging
 import os
 import tomllib
 import typing as typ
@@ -16,9 +17,33 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
 
+def _invalid_schema(dictionary_text: cabc.Callable[..., str]) -> str:
+    """Return a dictionary with an unsupported schema version."""
+    return dictionary_text().replace("schema = 1", "schema = 2")
+
+
+def _invalid_oxford_table(dictionary_text: cabc.Callable[..., str]) -> str:
+    """Return a dictionary whose Oxford section is not a table."""
+    return dictionary_text().replace('[oxford]\nstems = ["organ"]', 'oxford = "bad"')
+
+
+def _invalid_stems(dictionary_text: cabc.Callable[..., str]) -> str:
+    """Return a dictionary containing a non-string stem."""
+    return dictionary_text().replace('stems = ["organ"]', "stems = [1]")
+
+
+def _invalid_corrections(dictionary_text: cabc.Callable[..., str]) -> str:
+    """Return a dictionary containing a non-string correction."""
+    return dictionary_text().replace(
+        "[words.corrections]", "[words.corrections]\nteh = 1"
+    )
+
+
 def test_rollout_scripts_support_python_313(script_directory: Path) -> None:
     """Every rollout script parses with the declared minimum Python version."""
-    for script in script_directory.glob("*.py"):
+    rollout_scripts = tuple(script_directory.glob("*.py"))
+    assert rollout_scripts, "the rollout script directory must contain Python files"
+    for script in rollout_scripts:
         ast.parse(
             script.read_text(encoding="utf-8"),
             filename=str(script),
@@ -71,6 +96,7 @@ def test_https_failure_reuses_valid_tracked_config(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A clean network-restricted checkout retains its reviewed policy."""
     _, rollout, generator = rollout_modules
@@ -84,7 +110,10 @@ def test_https_failure_reuses_valid_tracked_config(
 
     monkeypatch.setattr(rollout, "refresh_base", unavailable)
 
-    result = generator.main(repository=tmp_path, source="https://example.invalid/base")
+    with caplog.at_level(logging.WARNING):
+        result = generator.main(
+            repository=tmp_path, source="https://example.invalid/base"
+        )
 
     assert result.status == "tracked-config", (
         "an unreachable HTTPS authority must fall back to the tracked config"
@@ -92,29 +121,45 @@ def test_https_failure_reuses_valid_tracked_config(
     assert result.cache == tracked_config, (
         "the fallback must point at the tracked configuration file"
     )
+    fallback_record = next(
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "typos_rollout.tracked_config_fallback"
+    )
+    assert fallback_record.error_type == "URLError", (
+        "the fallback warning must classify the bounded refresh error type"
+    )
 
 
+@pytest.mark.parametrize(
+    ("document_builder", "error_type", "match"),
+    [
+        pytest.param(_invalid_schema, ValueError, "schema", id="schema"),
+        pytest.param(_invalid_oxford_table, TypeError, "oxford", id="oxford"),
+        pytest.param(_invalid_stems, TypeError, "stems", id="stems"),
+        pytest.param(
+            _invalid_corrections,
+            TypeError,
+            "corrections",
+            id="corrections",
+        ),
+    ],
+)
 def test_dictionary_validation_rejects_invalid_documents(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
     tmp_path: Path,
     dictionary_text: cabc.Callable[..., str],
+    document_builder: cabc.Callable[[cabc.Callable[..., str]], str],
+    error_type: type[Exception],
+    match: str,
 ) -> None:
     """Schema, table, string-list and correction types remain validated."""
     _, rollout, _ = rollout_modules
     source = tmp_path / "base.toml"
-    invalid_documents = (
-        dictionary_text().replace("schema = 1", "schema = 2"),
-        dictionary_text().replace('[oxford]\nstems = ["organ"]', 'oxford = "bad"'),
-        dictionary_text().replace('stems = ["organ"]', "stems = [1]"),
-        dictionary_text().replace(
-            "[words.corrections]", "[words.corrections]\nteh = 1"
-        ),
-    )
+    source.write_text(document_builder(dictionary_text), encoding="utf-8")
 
-    for document in invalid_documents:
-        source.write_text(document, encoding="utf-8")
-        with pytest.raises((TypeError, ValueError)):
-            rollout.load_dictionary(source)
+    with pytest.raises(error_type, match=match):
+        rollout.load_dictionary(source)
 
 
 def test_merge_rejects_conflicting_corrections(

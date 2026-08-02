@@ -6,7 +6,7 @@ import typing as typ
 from unittest import mock
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import given
 
 from cuprum.catalogue import ECHO, LS
 from cuprum.context import (
@@ -26,8 +26,6 @@ from cuprum.unittests import strategies as cuprum_st
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-_PROPERTY_SETTINGS = settings(derandomize=True, deadline=None, max_examples=50)
 
 # Run the symbolic backend for these tests with:
 #   uv run pytest cuprum/unittests/test_context_narrowing.py -m crosshair \
@@ -123,7 +121,7 @@ def test_with_program_and_without_program_preserve_restriction() -> None:
 
 
 @pytest.mark.crosshair
-@_PROPERTY_SETTINGS
+@cuprum_st.PROPERTY_SETTINGS
 @given(parent=cuprum_st.allowlists(), config=cuprum_st.optional_allowlists())
 def test_narrow_allowlist_can_only_shrink_non_empty_parent(
     parent: frozenset[Program],
@@ -137,7 +135,7 @@ def test_narrow_allowlist_can_only_shrink_non_empty_parent(
 
 
 @pytest.mark.crosshair
-@_PROPERTY_SETTINGS
+@cuprum_st.PROPERTY_SETTINGS
 @given(parent=cuprum_st.allowlists(), config=cuprum_st.allowlists())
 def test_narrow_allowlist_result_subset_of_config(
     parent: frozenset[Program],
@@ -148,7 +146,7 @@ def test_narrow_allowlist_result_subset_of_config(
 
 
 @pytest.mark.crosshair
-@_PROPERTY_SETTINGS
+@cuprum_st.PROPERTY_SETTINGS
 @given(parent=cuprum_st.allowlists())
 def test_narrow_allowlist_none_config_preserves_parent(
     parent: frozenset[Program],
@@ -158,7 +156,7 @@ def test_narrow_allowlist_none_config_preserves_parent(
 
 
 @pytest.mark.crosshair
-@_PROPERTY_SETTINGS
+@cuprum_st.PROPERTY_SETTINGS
 @given(
     parent=cuprum_st.allowlists().filter(bool),
     first=cuprum_st.allowlists(),
@@ -209,7 +207,7 @@ def test_is_narrowed_allowlist_restricted(
 
 @pytest.mark.crosshair
 @pytest.mark.parametrize("scoped_first", [False, True])
-@_PROPERTY_SETTINGS
+@cuprum_st.PROPERTY_SETTINGS
 @given(parent=cuprum_st.hook_tuples(), config=cuprum_st.hook_tuples())
 def test_merge_hooks_preserves_scope_ordering(
     parent: tuple[cabc.Callable[..., None], ...],

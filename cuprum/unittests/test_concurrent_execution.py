@@ -102,155 +102,167 @@ def _assert_concurrent_timing(
         )
 
 
-def test_run_concurrent_returns_concurrent_result() -> None:
-    """run_concurrent returns a ConcurrentResult with results tuple."""
-    echo = sh.make(ECHO)
-    cmd1 = echo("-n", "one")
-    cmd2 = echo("-n", "two")
+class TestConcurrentExecution:
+    """Verify concurrent execution results and argument handling."""
 
-    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
-        result = run_concurrent_sync(cmd1, cmd2)
+    @staticmethod
+    def test_run_concurrent_returns_concurrent_result() -> None:
+        """run_concurrent returns a ConcurrentResult with results tuple."""
+        echo = sh.make(ECHO)
+        cmd1 = echo("-n", "one")
+        cmd2 = echo("-n", "two")
 
-    assert isinstance(result, ConcurrentResult), (
-        "run_concurrent returns a ConcurrentResult"
-    )
-    assert len(result.results) == 2, "both submitted commands must be reported"
-    assert result.ok is True, "both echo commands should succeed"
-    assert result.failures == (), "no command failed, so failures must be empty"
-
-
-def test_run_concurrent_preserves_submission_order() -> None:
-    """Results are returned in the order commands were submitted."""
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-
-    # Commands with different outputs to verify order
-    cmd1 = python("-c", "print('first')")
-    cmd2 = python("-c", "print('second')")
-    cmd3 = python("-c", "print('third')")
-
-    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        result = run_concurrent_sync(cmd1, cmd2, cmd3)
-
-    assert len(result.results) == 3, "all three commands must be reported"
-    assert result.results[0].stdout is not None, "stdout is captured by default"
-    assert "first" in result.results[0].stdout, "result 0 must be the first command"
-    assert result.results[1].stdout is not None, "stdout is captured by default"
-    assert "second" in result.results[1].stdout, "result 1 must be the second command"
-    assert result.results[2].stdout is not None, "stdout is captured by default"
-    assert "third" in result.results[2].stdout, "result 2 must be the third command"
-
-
-def test_run_concurrent_sync_mirrors_async() -> None:
-    """run_concurrent_sync produces identical results to async version."""
-    echo = sh.make(ECHO)
-    cmd = echo("-n", "hello")
-
-    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
-        sync_result = run_concurrent_sync(cmd)
-        async_result = asyncio.run(run_concurrent(cmd))
-
-    assert sync_result.ok == async_result.ok, "sync and async must agree on success"
-    assert len(sync_result.results) == len(async_result.results), (
-        "sync and async must report the same number of results"
-    )
-    assert sync_result.results[0].stdout == async_result.results[0].stdout, (
-        "sync and async must capture identical output"
-    )
-
-
-@pytest.mark.parametrize(
-    ("num_commands", "sleep_seconds", "concurrency", "timing"),
-    [
-        # Longer sleeps and conservative thresholds avoid flakiness under CI load.
-        pytest.param(4, 0.2, 2, _TimingExpectation(min_elapsed=0.3), id="limited"),
-        # Four concurrent interpreters each pay their own startup cost, so the
-        # bound sits just under the 0.8s sequential runtime (4 * 0.2s) rather
-        # than close to the 0.2s ideal: enough margin for spawn and scheduler
-        # jitter under load, while still failing if execution serialises.
-        pytest.param(
-            4,
-            0.2,
-            None,
-            _TimingExpectation(min_elapsed=0.0, max_elapsed=0.78),
-            id="unlimited",
-        ),
-        # Longer sleeps give more reliable sequential timing detection.
-        pytest.param(3, 0.15, 1, _TimingExpectation(min_elapsed=0.35), id="sequential"),
-    ],
-)
-def test_concurrency_limit_governs_parallel_execution(
-    num_commands: int,
-    sleep_seconds: float,
-    concurrency: int | None,
-    timing: _TimingExpectation,
-) -> None:
-    """The concurrency limit governs how many commands run in parallel."""
-    _assert_concurrent_timing(
-        num_commands=num_commands,
-        sleep_seconds=sleep_seconds,
-        concurrency=concurrency,
-        timing=timing,
-    )
-
-
-def test_empty_commands_raises_value_error() -> None:
-    """Calling run_concurrent with no commands raises ValueError."""
-    with pytest.raises(ValueError, match="At least one command"):
-        run_concurrent_sync()
-
-
-def test_forbidden_program_raises_before_execution() -> None:
-    """ForbiddenProgramError is raised before any command executes."""
-    from cuprum import LS
-
-    echo = sh.make(ECHO)
-    cmd1 = echo("-n", "hello")
-    cmd2 = echo("-n", "world")
-
-    # Allowlist only LS, so ECHO is forbidden
-    forbidden_ctx = scoped(ScopeConfig(allowlist=frozenset([LS])))
-    with forbidden_ctx, pytest.raises(ForbiddenProgramError):
-        run_concurrent_sync(cmd1, cmd2)
-
-
-def test_single_command_works() -> None:
-    """run_concurrent works with a single command."""
-    echo = sh.make(ECHO)
-    cmd = echo("-n", "solo")
-
-    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
-        result = run_concurrent_sync(cmd)
-
-    assert result.ok is True, "the single command should succeed"
-    assert len(result.results) == 1, "a single submission yields a single result"
-    assert result.results[0].stdout == "solo", "the command output must be captured"
-
-
-def test_capture_false_returns_none_stdout() -> None:
-    """When capture=False, stdout is None in results."""
-    echo = sh.make(ECHO)
-    cmd = echo("-n", "hello")
-
-    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
-        result = run_concurrent_sync(cmd, config=ConcurrentConfig(capture=False))
-
-    assert result.ok is True, "the command should succeed even without capture"
-    assert result.results[0].stdout is None, "capture=False must leave stdout unset"
-
-
-def test_async_run_concurrent() -> None:
-    """run_concurrent works correctly as an async function."""
-    echo = sh.make(ECHO)
-    cmd1 = echo("-n", "async1")
-    cmd2 = echo("-n", "async2")
-
-    async def exercise() -> ConcurrentResult:
-        """Run the two echo commands concurrently within an allowlist scope."""
         with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
-            return await run_concurrent(cmd1, cmd2)
+            result = run_concurrent_sync(cmd1, cmd2)
 
-    result = asyncio.run(exercise())
+        assert isinstance(result, ConcurrentResult), (
+            "run_concurrent returns a ConcurrentResult"
+        )
+        assert len(result.results) == 2, "both submitted commands must be reported"
+        assert result.ok is True, "both echo commands should succeed"
+        assert result.failures == (), "no command failed, so failures must be empty"
 
-    assert result.ok is True, "both async commands should succeed"
-    assert len(result.results) == 2, "both submitted commands must be reported"
+    @staticmethod
+    def test_run_concurrent_preserves_submission_order() -> None:
+        """Results are returned in the order commands were submitted."""
+        catalogue, python_program = python_catalogue()
+        python = sh.make(python_program, catalogue=catalogue)
+
+        # Commands with different outputs to verify order
+        cmd1 = python("-c", "print('first')")
+        cmd2 = python("-c", "print('second')")
+        cmd3 = python("-c", "print('third')")
+
+        with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+            result = run_concurrent_sync(cmd1, cmd2, cmd3)
+
+        assert len(result.results) == 3, "all three commands must be reported"
+        assert result.results[0].stdout is not None, "stdout is captured by default"
+        assert "first" in result.results[0].stdout, "result 0 must be the first command"
+        assert result.results[1].stdout is not None, "stdout is captured by default"
+        assert "second" in result.results[1].stdout, (
+            "result 1 must be the second command"
+        )
+        assert result.results[2].stdout is not None, "stdout is captured by default"
+        assert "third" in result.results[2].stdout, "result 2 must be the third command"
+
+    @staticmethod
+    def test_run_concurrent_sync_mirrors_async() -> None:
+        """run_concurrent_sync produces identical results to async version."""
+        echo = sh.make(ECHO)
+        cmd = echo("-n", "hello")
+
+        with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
+            sync_result = run_concurrent_sync(cmd)
+            async_result = asyncio.run(run_concurrent(cmd))
+
+        assert sync_result.ok == async_result.ok, "sync and async must agree on success"
+        assert len(sync_result.results) == len(async_result.results), (
+            "sync and async must report the same number of results"
+        )
+        assert sync_result.results[0].stdout == async_result.results[0].stdout, (
+            "sync and async must capture identical output"
+        )
+
+    @staticmethod
+    def test_empty_commands_raises_value_error() -> None:
+        """Calling run_concurrent with no commands raises ValueError."""
+        with pytest.raises(ValueError, match="At least one command"):
+            run_concurrent_sync()
+
+    @staticmethod
+    def test_forbidden_program_raises_before_execution() -> None:
+        """ForbiddenProgramError is raised before any command executes."""
+        from cuprum import LS
+
+        echo = sh.make(ECHO)
+        cmd1 = echo("-n", "hello")
+        cmd2 = echo("-n", "world")
+
+        # Allowlist only LS, so ECHO is forbidden
+        forbidden_ctx = scoped(ScopeConfig(allowlist=frozenset([LS])))
+        with forbidden_ctx, pytest.raises(ForbiddenProgramError):
+            run_concurrent_sync(cmd1, cmd2)
+
+    @staticmethod
+    def test_single_command_works() -> None:
+        """run_concurrent works with a single command."""
+        echo = sh.make(ECHO)
+        cmd = echo("-n", "solo")
+
+        with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
+            result = run_concurrent_sync(cmd)
+
+        assert result.ok is True, "the single command should succeed"
+        assert len(result.results) == 1, "a single submission yields a single result"
+        assert result.results[0].stdout == "solo", "the command output must be captured"
+
+    @staticmethod
+    def test_capture_false_returns_none_stdout() -> None:
+        """When capture=False, stdout is None in results."""
+        echo = sh.make(ECHO)
+        cmd = echo("-n", "hello")
+
+        with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
+            result = run_concurrent_sync(cmd, config=ConcurrentConfig(capture=False))
+
+        assert result.ok is True, "the command should succeed even without capture"
+        assert result.results[0].stdout is None, "capture=False must leave stdout unset"
+
+    @staticmethod
+    def test_async_run_concurrent() -> None:
+        """run_concurrent works correctly as an async function."""
+        echo = sh.make(ECHO)
+        cmd1 = echo("-n", "async1")
+        cmd2 = echo("-n", "async2")
+
+        async def exercise() -> ConcurrentResult:
+            """Run the two echo commands concurrently within an allowlist scope."""
+            with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
+                return await run_concurrent(cmd1, cmd2)
+
+        result = asyncio.run(exercise())
+
+        assert result.ok is True, "both async commands should succeed"
+        assert len(result.results) == 2, "both submitted commands must be reported"
+
+
+class TestConcurrencyLimits:
+    """Verify concurrency limits govern parallel execution."""
+
+    @staticmethod
+    @pytest.mark.parametrize(
+        ("num_commands", "sleep_seconds", "concurrency", "timing"),
+        [
+            # Longer sleeps and conservative thresholds avoid flakiness under CI load.
+            pytest.param(4, 0.2, 2, _TimingExpectation(min_elapsed=0.3), id="limited"),
+            # Four concurrent interpreters each pay their own startup cost, so the
+            # bound sits just under the 0.8s sequential runtime (4 * 0.2s) rather
+            # than close to the 0.2s ideal: enough margin for spawn and scheduler
+            # jitter under load, while still failing if execution serialises.
+            pytest.param(
+                4,
+                0.2,
+                None,
+                _TimingExpectation(min_elapsed=0.0, max_elapsed=0.78),
+                id="unlimited",
+            ),
+            # Longer sleeps give more reliable sequential timing detection.
+            pytest.param(
+                3, 0.15, 1, _TimingExpectation(min_elapsed=0.35), id="sequential"
+            ),
+        ],
+    )
+    def test_concurrency_limit_governs_parallel_execution(
+        num_commands: int,
+        sleep_seconds: float,
+        concurrency: int | None,
+        timing: _TimingExpectation,
+    ) -> None:
+        """The concurrency limit governs how many commands run in parallel."""
+        _assert_concurrent_timing(
+            num_commands=num_commands,
+            sleep_seconds=sleep_seconds,
+            concurrency=concurrency,
+            timing=timing,
+        )

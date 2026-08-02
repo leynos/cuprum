@@ -48,6 +48,7 @@ def render_config(repository: Path = REPOSITORY_ROOT) -> str:
 def _tracked_remote_fallback(
     source: str | Path,
     destination: Path,
+    error: OSError | urllib.error.URLError,
 ) -> rollout.RefreshResult | None:
     """Return a valid tracked config only for an unavailable HTTPS authority."""
     if not isinstance(source, str) or urllib.parse.urlsplit(source).scheme != "https":
@@ -59,7 +60,10 @@ def _tracked_remote_fallback(
     _logger.warning(
         "Falling back to the tracked typos configuration; the shared "
         "dictionary authority was unreachable",
-        extra={"event": "typos_rollout.tracked_config_fallback"},
+        extra={
+            "event": "typos_rollout.tracked_config_fallback",
+            "error_type": type(error).__name__,
+        },
     )
     return rollout.RefreshResult("tracked-config", destination)
 
@@ -80,8 +84,8 @@ def main(
             metadata=repository / ".typos-oxendict-base.json",
             offline=offline,
         )
-    except (OSError, urllib.error.URLError):
-        fallback = _tracked_remote_fallback(source, destination)
+    except (OSError, urllib.error.URLError) as error:
+        fallback = _tracked_remote_fallback(source, destination, error)
         if fallback is not None:
             return fallback
         raise

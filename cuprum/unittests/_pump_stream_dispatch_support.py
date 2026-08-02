@@ -26,6 +26,13 @@ if typ.TYPE_CHECKING:
 _WRITER_TOGGLE_FAILURE = "writer toggle failed"
 
 
+class PumpCallCounts(typ.TypedDict, total=False):
+    """Count Rust and Python pump dispatches in test doubles."""
+
+    rust_pump: int
+    python_pump: int
+
+
 @contextlib.contextmanager
 def _nonblocking_pipe_pair() -> cabc.Iterator[tuple[int, int, int, int]]:
     """Yield two pipes with active ends configured for non-blocking I/O."""
@@ -96,7 +103,7 @@ def clear_backend_caches() -> cabc.Iterator[None]:
 
 
 def _make_blocking_fd_spy(
-    calls: dict[str, int],
+    calls: PumpCallCounts,
     expected_reader_fd: int,
     expected_writer_fd: int,
 ) -> cabc.Callable[[int, int], int]:
@@ -125,7 +132,7 @@ def _make_blocking_fd_spy(
 async def _fake_python_fallback(
     reader: asyncio.StreamReader | None,
     writer: asyncio.StreamWriter | None,
-    calls: dict[str, int],
+    calls: PumpCallCounts,
 ) -> None:
     """Stand in for the Python pump fallback and record that it ran."""
     del reader, writer

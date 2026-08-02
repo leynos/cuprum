@@ -106,6 +106,75 @@ def test_hyperfine_config_rejects_non_positive_runs() -> None:
 
 
 @pytest.mark.parametrize(
+    ("hyperfine_bin", "error_type"),
+    [
+        pytest.param(typ.cast("str", 7), TypeError, id="non-string"),
+        pytest.param("", ValueError, id="empty"),
+        pytest.param("   ", ValueError, id="whitespace"),
+    ],
+)
+def test_hyperfine_config_rejects_invalid_executable(
+    hyperfine_bin: str,
+    error_type: type[Exception],
+) -> None:
+    """Hyperfine executable names must be non-empty strings."""
+    with pytest.raises(error_type, match="hyperfine_bin must be a non-empty string"):
+        HyperfineConfig(warmup=0, runs=1, hyperfine_bin=hyperfine_bin)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error_type"),
+    [
+        pytest.param("hyperfine_bin", 7, TypeError, id="hyperfine-non-string"),
+        pytest.param("hyperfine_bin", " ", ValueError, id="hyperfine-blank"),
+        pytest.param("python_bin", 7, TypeError, id="python-non-string"),
+        pytest.param("python_bin", " ", ValueError, id="python-blank"),
+        pytest.param("uv_bin", 7, TypeError, id="uv-non-string"),
+        pytest.param("uv_bin", " ", ValueError, id="uv-blank"),
+    ],
+)
+def test_pipeline_benchmark_config_rejects_invalid_executables(
+    field: str,
+    value: object,
+    error_type: type[Exception],
+) -> None:
+    """Pipeline benchmark executable fields require non-empty strings."""
+    kwargs = {
+        "output_path": pth.Path("bench.json"),
+        "worker_path": pth.Path("worker.py"),
+        "scenarios": (),
+        "warmup": 0,
+        "runs": 1,
+        field: value,
+    }
+    with pytest.raises(error_type, match=f"{field} must be a non-empty string"):
+        PipelineBenchmarkConfig(**kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("name", "error_type"),
+    [
+        pytest.param(typ.cast("str", 7), TypeError, id="non-string"),
+        pytest.param("", ValueError, id="empty"),
+        pytest.param("   ", ValueError, id="whitespace"),
+    ],
+)
+def test_pipeline_benchmark_scenario_rejects_invalid_name(
+    name: str,
+    error_type: type[Exception],
+) -> None:
+    """Scenario names must be non-empty strings."""
+    with pytest.raises(error_type, match="name must be a non-empty string"):
+        PipelineBenchmarkScenario(
+            name=name,
+            backend="python",
+            payload_bytes=1024,
+            stages=2,
+            with_line_callbacks=False,
+        )
+
+
+@pytest.mark.parametrize(
     ("warmup", "runs", "fragment"),
     [
         pytest.param(1001, 1, "warmup must be <= 1000", id="warmup-too-large"),

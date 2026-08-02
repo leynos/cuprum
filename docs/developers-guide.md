@@ -701,7 +701,11 @@ Runtime (`cuprum/`):
   dataclasses and their validation; an implementation detail of
   `cuprum.concurrent`.
 - `cuprum/_pipeline_collect.py` — drives a spawned pipeline to completion and
-  collects its output; also hosts the `cuprum.sh` lazy-import shim.
+  collects its output; also hosts the `cuprum.sh` lazy-import shim. Its
+  `_PipelineInvariantError` reports a missing lazy import or a `TimeoutError`
+  reached without a configured timeout. It derives from the shared
+  `_ExecutionInvariantError` and `RuntimeError`, and the timeout path chains
+  the originating exception.
 - `cuprum/_pipeline_stream_results.py` — pipe-result triage for pipeline
   stages.
 - `cuprum/_streams_pump.py` — the stream pump loop with backpressure.

@@ -8,6 +8,7 @@ underscore so pytest does not collect it as a test module.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import time
 import typing as typ
@@ -22,6 +23,14 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from cuprum.sh import SafeCmd
+
+
+class WorkerCommand(typ.TypedDict):
+    """Safe command and PID-file path for one worker fixture."""
+
+    command: SafeCmd
+    pid_file: Path
+
 
 __all__ = [
     "_cancel_command_with_grace",
@@ -49,7 +58,7 @@ def _create_worker_command(
     *,
     script_name: str,
     cooperative: bool = True,
-) -> dict[str, object]:
+) -> WorkerCommand:
     """Create a SafeCmd-backed worker script."""
     script_path = tmp_path / script_name
     pid_file = tmp_path / f"{script_path.stem}.pid"
@@ -144,7 +153,13 @@ def _cancel_command_with_grace(
                 ),
             ),
         )
-        pid = await _wait_for_pid(pid_file)
+        try:
+            pid = await _wait_for_pid(pid_file)
+        except BaseException:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            raise
         await asyncio.sleep(0.1)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):

@@ -176,9 +176,11 @@ class HyperfineConfig:
     Raises
     ------
     TypeError
-        If ``warmup`` or ``runs`` are not integers.
+        If ``warmup`` or ``runs`` are not integers, or ``hyperfine_bin`` is
+        not a string.
     ValueError
-        If ``warmup`` is negative or ``runs`` is less than one.
+        If ``warmup`` is negative, ``runs`` is less than one, or
+        ``hyperfine_bin`` is empty or contains only whitespace.
 
     Examples
     --------

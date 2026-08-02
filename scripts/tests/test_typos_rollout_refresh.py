@@ -67,10 +67,12 @@ def test_local_refresh_switches_authority_and_records_metadata(
     assert result.status == "refreshed", (
         "a newer local authority must refresh the cache"
     )
-    assert rollout.load_dictionary(cache).stems == ("second",)
+    assert rollout.load_dictionary(cache).stems == ("second",), (
+        "switching authority must replace the cached dictionary contents"
+    )
     assert json.loads(metadata.read_text(encoding="utf-8"))["source"] == str(
         second.resolve()
-    )
+    ), "local refresh metadata must identify the active local authority"
 
 
 def test_http_refresh_uses_validators_and_preserves_newer_cache(
@@ -127,6 +129,9 @@ def test_http_refresh_uses_validators_and_preserves_newer_cache(
     assert requests[1].get_header("If-none-match") == '"estate-v1"', (
         "the conditional request must carry the saved ETag validator"
     )
+    assert "source" not in json.loads(metadata.read_text(encoding="utf-8")), (
+        "remote metadata must not persist a potentially sensitive source URL"
+    )
 
 
 def test_remote_failure_reuses_only_a_valid_stale_cache(
@@ -160,7 +165,6 @@ def test_remote_failure_reuses_only_a_valid_stale_cache(
 
 def test_remote_refresh_rejects_insecure_and_invalid_content(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     patch_https_opener: cabc.Callable[[cabc.Callable[..., object]], None],
 ) -> None:
@@ -229,8 +233,12 @@ def test_http_error_translation_handles_not_modified_and_stale_cache(
         "https://example.test/base", 503, "unavailable", headers, None
     )
 
-    assert refresh_module._http_error_result(cache, not_modified).status == "current"
-    assert refresh_module._http_error_result(cache, unavailable).status == "stale-cache"
+    assert refresh_module._http_error_result(cache, not_modified).status == "current", (
+        "HTTP 304 must preserve a valid current cache"
+    )
+    assert (
+        refresh_module._http_error_result(cache, unavailable).status == "stale-cache"
+    ), "an unavailable authority must reuse a valid stale cache"
     cache.unlink()
     with pytest.raises(urllib.error.HTTPError):
         refresh_module._http_error_result(cache, unavailable)
@@ -243,11 +251,13 @@ def test_remote_freshness_uses_dates_and_falls_back_on_invalid_values(
     assert refresh_module._remote_is_not_newer(
         {"last_modified": "Fri, 10 Jul 2026 08:00:00 GMT"},
         {"Last-Modified": "Fri, 10 Jul 2026 07:00:00 GMT"},
-    )
+    ), "an older remote date must preserve the newer cache"
     assert refresh_module._remote_is_not_newer(
         {"last_modified": "invalid"}, {"Last-Modified": "invalid"}
+    ), "matching malformed validators must preserve the existing cache"
+    assert not refresh_module._remote_is_not_newer({}, {"Last-Modified": "invalid"}), (
+        "invalid dates without saved metadata must not prove freshness"
     )
-    assert not refresh_module._remote_is_not_newer({}, {"Last-Modified": "invalid"})
 
 
 def test_https_redirect_to_http_is_rejected(
@@ -345,7 +355,9 @@ def test_degradation_reset_clears_every_counter(
 ) -> None:
     """The reset hook returns all counters to zero."""
     refresh_module._record_degradation("offline_cache")
-    assert refresh_module.degradation_snapshot()["offline_cache"] == 1
+    assert refresh_module.degradation_snapshot()["offline_cache"] == 1, (
+        "offline cache reuse must increment its degradation counter"
+    )
 
     refresh_module.reset_degradations()
 

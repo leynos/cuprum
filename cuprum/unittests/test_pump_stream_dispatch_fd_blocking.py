@@ -20,6 +20,7 @@ from cuprum._testing import (
 )
 from cuprum.unittests._pump_stream_dispatch_support import (
     _WRITER_TOGGLE_FAILURE,
+    PumpCallCounts,
     _fake_python_fallback,
     _make_blocking_fd_spy,
     _nonblocking_pipe_pair,
@@ -78,7 +79,7 @@ class TestPumpStreamDispatch:
                 ),
             )
 
-            calls = {"rust_pump": 0, "python_pump": 0}
+            calls: PumpCallCounts = {"rust_pump": 0, "python_pump": 0}
 
             async def fake_python_pump(
                 reader: asyncio.StreamReader | None,
@@ -205,7 +206,7 @@ class TestPumpStreamDispatch:
             )
 
             original_set_blocking = _pipeline_streams.os.set_blocking
-            calls = {"python_pump": 0}
+            calls: PumpCallCounts = {"python_pump": 0}
 
             def fake_set_blocking(fd: int, blocking: object) -> None:
                 """Toggle blocking but fail when the writer FD is set blocking.
@@ -263,7 +264,7 @@ class TestPumpStreamDispatch:
             write_fd,
         ):
             del read_write_fd, write_read_fd
-            calls = {"rust_pump": 0, "python_pump": 0}
+            calls: PumpCallCounts = {"rust_pump": 0, "python_pump": 0}
 
             def fake_rust_pump_stream(reader_fd: int, writer_fd: int) -> int:
                 """Stand in for the Rust pump and record that it ran.

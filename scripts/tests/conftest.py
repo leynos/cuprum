@@ -25,7 +25,13 @@ SCRIPT_DIRECTORY = Path(__file__).resolve().parents[1]
 def rollout_modules_fixture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[types.ModuleType, types.ModuleType, types.ModuleType]:
-    """Import the scripts through the same top-level module path used at runtime."""
+    """Import the scripts through the top-level module path used at runtime.
+
+    Returns
+    -------
+    tuple[types.ModuleType, types.ModuleType, types.ModuleType]
+        The ``cache``, ``rollout``, and ``generator`` modules, in that order.
+    """
     monkeypatch.syspath_prepend(str(SCRIPT_DIRECTORY))
     names = ("typos_rollout_cache", "typos_rollout", "generate_typos_config")
     importlib.invalidate_caches()

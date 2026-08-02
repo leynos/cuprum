@@ -165,10 +165,10 @@ def test_folded_summary_rejects_invalid_limits(
     folded.write_text("root;leaf 1\n")
 
     with pytest.raises(error_type, match=fragment):
-        summarize_folded_file(  # type: ignore[call-overload]
+        summarize_folded_file(  # pyright: ignore[reportCallIssue] - Exercise runtime validation with deliberately invalid keyword values.
             folded,
             output=tmp_path / "summary.json",
-            **kwargs,  # type: ignore[invalid-argument-type]
+            **kwargs,  # ty: ignore[invalid-argument-type] - Exercise runtime validation with deliberately invalid keyword values.
         )
 
 
