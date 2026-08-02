@@ -214,7 +214,13 @@ class _HttpsOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
         urllib.error.URLError
             If the redirect target does not use HTTPS.
         """
-        redirected = super().redirect_request(req, *args, **kwargs)  # type: ignore[arg-type]
+        # The override's ``*args: object`` is broader than urllib's declared
+        # ``HTTPRedirectHandler.redirect_request`` parameter types.
+        redirected = super().redirect_request(  # pyright: ignore[reportArgumentType]
+            req,
+            *args,  # ty: ignore[invalid-argument-type]
+            **kwargs,
+        )
         if redirected is None:
             return None
         scheme = urllib.parse.urlsplit(redirected.full_url).scheme

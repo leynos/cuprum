@@ -182,7 +182,7 @@ def _resolve_submission_indices(
     return submission_indices
 
 
-@dc.dataclass(frozen=True, slots=True)
+@dc.dataclass(frozen=True, slots=True, init=False)
 class ConcurrentResult:
     """Aggregated result from concurrent command execution.
 
@@ -215,14 +215,29 @@ class ConcurrentResult:
 
     results: tuple[CommandResult, ...]
     failures: tuple[int, ...] = ()
-    submission_indices: tuple[int, ...] | None = None
+    submission_indices: tuple[int, ...] = dc.field(init=False)
+    _submission_indices_input: dc.InitVar[tuple[int, ...] | None] = None
 
-    def __post_init__(self) -> None:
+    def __init__(
+        self,
+        results: tuple[CommandResult, ...],
+        failures: tuple[int, ...] = (),
+        submission_indices: tuple[int, ...] | None = None,
+    ) -> None:
+        """Initialize a concurrent result and resolve its submission mapping."""
+        object.__setattr__(self, "results", results)
+        object.__setattr__(self, "failures", failures)
+        self.__post_init__(submission_indices)
+
+    def __post_init__(
+        self,
+        submission_indices: tuple[int, ...] | None,
+    ) -> None:
         """Validate result indexes and the submission mapping."""
         result_count = len(self.results)
         _validate_failure_indices(self.failures, result_count=result_count)
         resolved_submission_indices = _resolve_submission_indices(
-            self.submission_indices, result_count=result_count
+            submission_indices, result_count=result_count
         )
         object.__setattr__(self, "submission_indices", resolved_submission_indices)
 
@@ -246,5 +261,4 @@ class ConcurrentResult:
         these are stable across both collect-all and fail-fast modes: each
         value is the position at which the failing command was submitted.
         """
-        # ``__post_init__`` backfills the mapping, so it is never None here.
-        return tuple((self.submission_indices or ())[index] for index in self.failures)
+        return tuple(self.submission_indices[index] for index in self.failures)

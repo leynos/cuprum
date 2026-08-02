@@ -1000,6 +1000,11 @@ Backend selection is process-local and environment-driven. `auto` unsets
 concurrent benchmark workers cannot race on `os.environ` or the backend
 availability and selection caches. The selector clears those caches before
 entering the context and again when restoring the previous environment value.
+It holds `_BACKEND_LOCK` across the complete `repeat_count` loop, serializing
+concurrent benchmark workers for the full worker workload, including every
+`run_sync` subprocess execution. Consequently, workers that require different
+or process-local stream backend selection cannot execute their repeat loops in
+parallel, which limits their aggregate throughput.
 It is intentionally not re-entrant: a thread-local guard detects nested entry
 on the same thread, logs the rejected backend and thread identifier, and
 raises `ReentrantBackendSelectorError` (a `RuntimeError` subclass, retained
