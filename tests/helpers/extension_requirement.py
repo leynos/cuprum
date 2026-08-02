@@ -13,7 +13,9 @@ one and cannot be imported by name from a test module.
 
 from __future__ import annotations
 
-REQUIRE_EXTENSION_ENV = "CUPRUM_REQUIRE_RUST_EXTENSION"
+import typing as typ
+
+REQUIRE_EXTENSION_ENV: typ.Final[str] = "CUPRUM_REQUIRE_RUST_EXTENSION"
 
 
 def missing_extension_message(*, required: bool, available: bool) -> str | None:

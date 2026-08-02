@@ -1618,12 +1618,24 @@ target, so a local run and a CI run build the extension identically.
 Without it these modules skip rather than fail, which is the right default
 locally — most changes do not need the native path rebuilt — and the wrong one
 in CI, where a job that never built the extension reports a green run
-indistinguishable from one that exercised the whole boundary. Set
-`CUPRUM_REQUIRE_RUST_EXTENSION=1` to make that silence fatal:
+indistinguishable from one that exercised the whole boundary. `make
+test-extension` sets `CUPRUM_REQUIRE_RUST_EXTENSION=1` to make that silence
+fatal:
 
 ```bash
-CUPRUM_REQUIRE_RUST_EXTENSION=1 make test
+make develop
+make test-extension
 ```
+
+Run that rather than `CUPRUM_REQUIRE_RUST_EXTENSION=1 make test`. Once the
+extension is installed the full suite aborts the interpreter — see the `#124`
+constraint below — so `make test-extension` runs only the gated modules. Their
+list lives in one place, the Makefile's `EXTENSION_TEST_TARGETS`, which the CI
+job consumes too, so the two cannot drift apart.
+
+Running `make test-extension` without having built the extension is safe: the
+guard fails the run with a message naming `make develop`, which is the whole
+point of it.
 
 The check runs once per session in `conftest.py`, so it covers every gated
 module regardless of how each one gates — fixture, module-level guard, or

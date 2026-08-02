@@ -75,7 +75,9 @@ def test_the_message_does_not_claim_the_import_failed() -> None:
     """
     message = missing_extension_message(required=True, available=False)
 
-    assert message is not None
+    assert message is not None, (
+        "a required, unavailable extension must produce a message to inspect"
+    )
     assert "could not be imported" not in message, (
         f"the message must not attribute the failure to an import: {message!r}"
     )
@@ -130,7 +132,7 @@ def test_the_hook_aborts_the_session_when_the_extension_is_required(
         root_conftest.pytest_configure(typ.cast("pytest.Config", None))
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class _SilentCase:
     """A variable/availability pair the guard must not act on.
 

@@ -26,6 +26,20 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
   tests/behaviour/test_[s-z]*.py
+# The modules gated on the compiled extension. Deliberately not the whole
+# suite: with the extension installed, test_pipeline.py trips the descriptor
+# close race in issue #124 and aborts the interpreter. One definition here,
+# consumed by both the extension-tests CI job and the documented local command.
+EXTENSION_TEST_TARGETS ?= cuprum/unittests/test_rust_streams.py \
+  cuprum/unittests/test_rust_streams_boundary_property.py \
+  cuprum/unittests/test_rust_extension.py \
+  cuprum/unittests/test_rust_splice.py \
+  cuprum/unittests/test_rust_errno.py \
+  cuprum/unittests/test_backend.py \
+  cuprum/unittests/test_extension_requirement_guard.py \
+  tests/behaviour/test_rust_streams_behaviour.py \
+  tests/behaviour/test_rust_extension_behaviour.py \
+  tests/behaviour/test_stream_backend_pipeline.py
 shell_quote = '$(subst ','"'"',$(1))'
 TYPOS_VERSION ?= 1.48.0
 TYPOS := uv tool run typos@$(TYPOS_VERSION)
@@ -49,6 +63,7 @@ PYLINT = $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) \
 
 .PHONY: help all clean build build-release lint fmt check-fmt \
         markdownlint spelling spelling-helper-test nixie test typecheck \
+        test-extension develop \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
 
@@ -162,6 +177,11 @@ test: build uv $(VENV_TOOLS) ## Run tests
 	  echo "cargo-nextest not found; falling back to cargo test." >&2; \
 	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(TEST_RUSTFLAGS)" $(CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
 	fi
+
+# Run `make develop` first. Without the extension the guard fails the run with
+# a message naming that command, which is the intended diagnostic.
+test-extension: build uv $(VENV_TOOLS) ## Run the extension-gated tests, requiring the extension
+	CUPRUM_REQUIRE_RUST_EXTENSION=1 $(PYTEST) -v $(EXTENSION_TEST_TARGETS)
 
 benchmark-micro: build uv ## Run pytest-benchmark microbenchmarks
 	mkdir -p dist/benchmarks

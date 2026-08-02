@@ -147,6 +147,10 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          # This job compiles and runs repository code, so the checkout token
+          # must not stay in .git/config where that code could reach it.
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -181,32 +185,20 @@ jobs:
       # Python/Rust boundary. `CUPRUM_REQUIRE_RUST_EXTENSION` turns a missing
       # extension into a failure, so the gate cannot close again unnoticed.
       #
-      # This runs the gated modules rather than the whole suite on purpose.
-      # With the extension present, `test_pipeline.py` trips the FD close race
-      # tracked by issue #124 (roadmap 8.1.1) and aborts the interpreter, so
-      # widening this job must wait for that fix.
-      #
-      # The behavioural modules are listed too: without an extension the
+      # The behavioural modules are covered too: without an extension the
       # `rust_streams` fixture skips their consumer-facing scenarios, the
       # dispatcher scenarios skip on `requires_rust_backend`, and
       # test_rust_extension_behaviour returns before comparing against the
       # installed native module — so they were never boundary coverage in the
       # ordinary test jobs either.
+      #
+      # The module list itself lives in the Makefile's EXTENSION_TEST_TARGETS,
+      # so this job and the documented local command cannot drift apart. It is
+      # deliberately not the whole suite: with the extension present,
+      # `test_pipeline.py` trips the FD close race tracked by issue #124
+      # (roadmap 8.1.1) and aborts the interpreter.
       - name: Run extension-gated tests
-        env:
-          CUPRUM_REQUIRE_RUST_EXTENSION: '1'
-        run: |
-          uv run pytest -v \
-            cuprum/unittests/test_rust_streams.py \
-            cuprum/unittests/test_rust_streams_boundary_property.py \
-            cuprum/unittests/test_rust_extension.py \
-            cuprum/unittests/test_rust_splice.py \
-            cuprum/unittests/test_rust_errno.py \
-            cuprum/unittests/test_backend.py \
-            cuprum/unittests/test_extension_requirement_guard.py \
-            tests/behaviour/test_rust_streams_behaviour.py \
-            tests/behaviour/test_rust_extension_behaviour.py \
-            tests/behaviour/test_stream_backend_pipeline.py
+        run: make test-extension
 
   coverage:
     # Pull requests only. Pushes to main are handled by coverage-main.yml,
