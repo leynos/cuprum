@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import os
+import re
 import typing as typ
 
 import pytest
@@ -22,6 +23,18 @@ from tests.helpers.stream_pipes import (
     _pump_rust_stream_payload,
     _safe_close,
     feed_source_pipe,
+)
+
+# An unusable descriptor reports `EBADF` on POSIX and `EINVAL` where Windows
+# rejects the handle instead.
+_INVALID_FD_ERRNOS = (errno.EBADF, errno.EINVAL)
+
+# `pytest.raises(OSError)` needs a `match` to satisfy ruff PT011, but
+# `strerror` comes from the C library and is translated under a non-English
+# locale. Anchor on the `[Errno N]` prefix CPython formats itself, which no
+# locale changes.
+_INVALID_FD_MESSAGE_RE = "|".join(
+    re.escape(f"[Errno {code}]") for code in _INVALID_FD_ERRNOS
 )
 
 if typ.TYPE_CHECKING:
@@ -142,11 +155,12 @@ def test_rust_pump_stream_propagates_io_errors(
         _safe_close(read_fd)
         with pytest.raises(
             OSError,
-            match=r"(?i)(Bad file descriptor|invalid handle|handle is invalid)",
+            match=_INVALID_FD_MESSAGE_RE,
         ) as excinfo:
             rust_streams.rust_pump_stream(read_fd, write_fd)
-    assert excinfo.value.errno in {errno.EBADF, errno.EINVAL}, (
-        "expected errno to indicate an invalid file descriptor/handle"
+    assert excinfo.value.errno in _INVALID_FD_ERRNOS, (
+        "expected errno to indicate an invalid file descriptor/handle, "
+        f"found {excinfo.value.errno!r}"
     )
 
 
@@ -314,10 +328,10 @@ class TestRustConsumeStream:
             _safe_close(read_fd)
             with pytest.raises(
                 OSError,
-                match=r"(?i)(Bad file descriptor|invalid handle|handle is invalid)",
+                match=_INVALID_FD_MESSAGE_RE,
             ) as excinfo:
                 rust_streams.rust_consume_stream(read_fd)
-        assert excinfo.value.errno in {errno.EBADF, errno.EINVAL}, (
+        assert excinfo.value.errno in _INVALID_FD_ERRNOS, (
             "expected errno to indicate an invalid file descriptor/handle, "
             f"found {excinfo.value.errno!r}"
         )
