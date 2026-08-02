@@ -16,6 +16,7 @@ import contextlib
 import os
 import sys
 import typing as typ
+from unittest import mock
 
 import pytest
 from hypothesis import given
@@ -120,12 +121,15 @@ def test_failed_engage_leaks_no_blocking_state(
                 raise OSError(msg)
             real_set_blocking(fd, blocking)
 
-        os.set_blocking = faulting_set_blocking  # type: ignore[assignment]
-        try:
-            with pytest.raises(OSError, match="injected toggle failure"):
-                _BlockingModeGuard.engage(reader_fd=reader_fd, writer_fd=writer_fd)
-        finally:
-            os.set_blocking = real_set_blocking  # type: ignore[assignment]
+        # `monkeypatch` is function-scoped and so unavailable inside a
+        # `@given` body; `patch.object` restores the global on every exit path
+        # without the manual try/finally, and without the type: ignore that
+        # rebinding an `os` attribute otherwise needs.
+        with (
+            mock.patch.object(os, "set_blocking", faulting_set_blocking),
+            pytest.raises(OSError, match="injected toggle failure"),
+        ):
+            _BlockingModeGuard.engage(reader_fd=reader_fd, writer_fd=writer_fd)
 
         # No descriptor may be left in the transient blocking mode.
         assert os.get_blocking(reader_fd) == reader_initial, (
