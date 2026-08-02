@@ -71,20 +71,27 @@ class ConcurrentConfig:
                 raise ValueError(msg)
 
 
-def _validate_non_negative_index(index: int, *, subject: str) -> None:
-    """Validate an index without an upper bound."""
-    if index < 0:
-        msg = f"{subject} must be non-negative, got {index}"
-        raise ValueError(msg)
+def _validate_index_type(index: int, *, type_error_message: str) -> None:
+    """Validate that an index is an exact integer."""
+    # ``type(...) is not int`` rejects ``bool`` (an ``int`` subclass) so
+    # ``True``/``False`` are not treated as valid indexes.
+    if type(index) is not int:
+        msg = f"{type_error_message}, got {type(index).__name__}"
+        raise TypeError(msg)
 
 
-def _validate_bounded_index(
+def _validate_index_bounds(
     index: int,
     *,
     subject: str,
-    upper_bound: int,
+    upper_bound: int | None,
 ) -> None:
-    """Validate an index against an exclusive upper bound."""
+    """Validate an index against its optional exclusive upper bound."""
+    if upper_bound is None:
+        if index < 0:
+            msg = f"{subject} must be non-negative, got {index}"
+            raise ValueError(msg)
+        return
     if not 0 <= index < upper_bound:
         msg = f"{subject} index {index} is out of range for {upper_bound} results"
         raise ValueError(msg)
@@ -106,15 +113,8 @@ def _validate_index_sequence(
     """
     previous = -1
     for index in indices:
-        # ``type(...) is not int`` rejects ``bool`` (an ``int`` subclass) so
-        # ``True``/``False`` are not treated as valid indexes.
-        if type(index) is not int:
-            msg = f"{type_error_message}, got {type(index).__name__}"
-            raise TypeError(msg)
-        if upper_bound is None:
-            _validate_non_negative_index(index, subject=subject)
-        else:
-            _validate_bounded_index(index, subject=subject, upper_bound=upper_bound)
+        _validate_index_type(index, type_error_message=type_error_message)
+        _validate_index_bounds(index, subject=subject, upper_bound=upper_bound)
         if index <= previous:
             msg = f"{subject} must be strictly ascending and unique, got {indices}"
             raise ValueError(msg)
