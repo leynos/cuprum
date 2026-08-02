@@ -229,6 +229,44 @@ def test_paused_reader_skips_resume_when_pause_unavailable() -> None:
         )
 
 
+class _PauseOnlyTransport:
+    """A transport offering ``pause_reading`` but no ``resume_reading``.
+
+    Pausing this transport could never be undone, so a correct implementation
+    leaves it alone entirely; the method records calls so an implementation
+    that pauses anyway is caught rather than merely suspected.
+    """
+
+    def __init__(self) -> None:
+        """Start with no calls recorded."""
+        self.pause_calls = 0
+
+    def pause_reading(self) -> None:
+        """Record a pause that could never be undone."""
+        self.pause_calls += 1
+
+
+def test_paused_reader_declines_an_unresumable_transport() -> None:
+    """A pausable transport with no resume hook declines the hand-off, unpaused.
+
+    The pause hook is evidence of read callbacks that would race the Rust pump,
+    so handing the descriptor over is unsafe. Pausing is no remedy either: the
+    Python fallback reads the same stream and would stall on a reader nothing
+    can restart. The only safe move is to leave the transport untouched.
+    """
+    transport = _PauseOnlyTransport()
+    reader = typ.cast("asyncio.StreamReader", _FakeReader(transport))
+
+    with _paused_reader(reader) as may_hand_off:
+        assert may_hand_off is False, (
+            "a transport that cannot be resumed must decline the hand-off"
+        )
+
+    assert transport.pause_calls == 0, (
+        "a pause that could never be undone must not be applied"
+    )
+
+
 def test_paused_reader_undoes_a_half_applied_pause() -> None:
     """A pause that raises is corrected once, at the failure site."""
     transport = _FakeTransport(pause_raises=True)

@@ -1084,9 +1084,9 @@ The `SafeCmd` executes the process and returns a `CommandResult` to the user,
 then invokes the `on_exit` hook with the command and that result. The exit hook
 asks again whether the exit level is enabled: if it is disabled it returns
 immediately, leaving nothing to clean up because nothing was stored; if it is
-enabled it takes the lock, pops the recorded start time — removing the entry, so
-the store cannot grow without bound — releases the lock, computes `duration_s`,
-and logs the `cuprum.exit` record.
+enabled it takes the lock, pops the recorded start time — removing the entry,
+so the store cannot grow without bound — releases the lock, computes
+`duration_s`, and logs the `cuprum.exit` record.
 
 Figure 3: Sequence of start/exit logging hook execution
 
@@ -1133,13 +1133,14 @@ sequenceDiagram
 ```
 
 For screen readers: The following sequence diagram shows how a subprocess
-timeout is turned into the public `TimeoutExpired`. `_handle_subprocess_timeout`
-first calls `_resolve_timeout_payload`, passing the timeout exception and a
-`_TimeoutFallback`, and receives a `_SubprocessTimeoutDetails` payload carrying
-the timeout, captured stdout and stderr, and the exit time. It then reads the
-process exit code through `_get_exit_code`, emits an exit event via
-`_emit_exit_event` using `_ExitEventDetails`, and finally calls
-`_raise_timeout_expired`, which raises `TimeoutExpired` back to the caller.
+timeout is turned into the public `TimeoutExpired`.
+`_handle_subprocess_timeout` first calls `_resolve_timeout_payload`, passing
+the timeout exception and a `_TimeoutFallback`, and receives a
+`_SubprocessTimeoutDetails` payload carrying the timeout, captured stdout and
+stderr, and the exit time. It then reads the process exit code through
+`_get_exit_code`, emits an exit event via `_emit_exit_event` using
+`_ExitEventDetails`, and finally calls `_raise_timeout_expired`, which raises
+`TimeoutExpired` back to the caller.
 
 Figure 4: Subprocess timeout handling, from payload resolution to
 `TimeoutExpired`
@@ -1238,8 +1239,7 @@ then awaits the scheduled tasks together using `asyncio.gather`. When the
 reducer selects no stages — every other stage has already settled — no tasks
 are created and no gather occurs.
 
-Figure 5: Fail-fast termination selection via the `_stages_to_terminate`
-reducer
+Figure 5: Fail-fast termination selection via the `_stages_to_terminate` reducer
 
 ```mermaid
 sequenceDiagram
@@ -2084,8 +2084,8 @@ The raw availability probe lives in `cuprum._rust_backend`. Its
 `False` when that native module is missing, and re-raises other import failures
 after logging a warning. The cached resolver in
 `cuprum._backend._check_rust_available()` wraps this probe and feeds both
-`cuprum.rust.is_rust_available()` and — through the `_probe_rust_availability()`
-seam — `get_stream_backend()`.
+`cuprum.rust.is_rust_available()` and — through the
+`_probe_rust_availability()` seam — `get_stream_backend()`.
 
 ### 13.4 Fallback Strategy
 
@@ -2350,17 +2350,20 @@ each path is testable without a live pump:
 - `_paused_reader` — a context manager that pauses the reader transport and
   resumes it on every exit path, including exceptions and cancellation, so a
   resume can never be skipped. Exactly one resume fires per pause attempt, but
-  not always at block exit. A transport exposing no pause/resume hooks needs
-  none. A `pause_reading()` that *raises* gets one corrective
-  `resume_reading()` immediately, at the failure site rather than at block
-  exit, because the transport may have set its paused flag before whatever
-  raised — leaving a reader nobody resumes while the Python fallback reads a
-  descriptor nothing is watching. Having already been corrected, it is not
-  resumed again on exit. It yields whether
-  the descriptor may be handed to the Rust pump — a failed pause answers
-  `False`, because asyncio may still be consuming the reader, and the caller
-  falls back to the Python pump rather than racing it. A transport with no
-  pause hooks answers `True`, since it has no callbacks to suspend.
+  not always at block exit. A transport exposing no `pause_reading` needs none.
+  A `pause_reading()` that *raises* gets one corrective `resume_reading()`
+  immediately, at the failure site rather than at block exit, because the
+  transport may have set its paused flag before whatever raised — leaving a
+  reader nobody resumes while the Python fallback reads a descriptor nothing is
+  watching. Having already been corrected, it is not resumed again on exit. It
+  yields whether the descriptor may be handed to the Rust pump — a failed pause
+  answers `False`, because asyncio may still be consuming the reader, and the
+  caller falls back to the Python pump rather than racing it. A transport with
+  no `pause_reading` answers `True`, since it has no callbacks to suspend. A
+  transport with `pause_reading` but no `resume_reading` answers `False` and is
+  never paused: the pause hook shows callbacks that would race the pump, yet
+  pausing it could never be undone, and the Python fallback reads the same
+  stream and would wait forever on a reader nothing can restart.
 
 Cancellation is handled explicitly rather than implicitly. `run_in_executor`
 cannot interrupt the worker thread running the Rust pump, and that thread still
@@ -2369,9 +2372,9 @@ to return before the blocking mode is restored and the transport resumed.
 Restoring or resuming earlier would hand the descriptors back to asyncio while
 native code was still mid-transfer.
 
-The module's scope is deliberately narrow: descriptor extraction plus the
-pause and blocking-mode lifecycle for the Rust pump hand-off. It is consumed
-only by `cuprum/_pipeline_streams.py`. Its reuse policy is that new descriptor
+The module's scope is deliberately narrow: descriptor extraction plus the pause
+and blocking-mode lifecycle for the Rust pump hand-off. It is consumed only by
+`cuprum/_pipeline_streams.py`. Its reuse policy is that new descriptor
 lifecycle concerns for that hand-off belong here rather than being inlined into
 the pump, but the seams are not a general-purpose descriptor utility — anything
 serving a different caller should be designed against that caller's real
@@ -2431,10 +2434,10 @@ The splice implementation handles errors as follows:
 
 #### Stream instrumentation
 
-Both pathways emit bounded `tracing` diagnostics without installing a subscriber
-(the Python boundary owns subscriber configuration). The read/write seams log a
-`debug` event per successful transfer, a `warn` per `EINTR` retry, and an
-`error` on a fatal read/write failure, a zero-progress write, or a
+Both pathways emit bounded `tracing` diagnostics without installing a
+subscriber (the Python boundary owns subscriber configuration). The read/write
+seams log a `debug` event per successful transfer, a `warn` per `EINTR` retry,
+and an `error` on a fatal read/write failure, a zero-progress write, or a
 length-conversion overflow, so no fatal boundary stays silent.
 `pump_stream_readwrite` and `consume_stream` wrap the loop in an operation span
 created at `error` level — so `warn`/`error` events keep their context under a
@@ -2443,9 +2446,9 @@ The span carries `operation` and `buffer_size` and, on completion, records
 `total_bytes` plus the cumulative `EINTR` retry counts: `pump_stream_readwrite`
 records both `read_retries` and `write_retries`, while the read-only
 `consume_stream` records `read_retries` alone. Those retry counts accumulate in
-operation-scoped thread-local counters that the
-loops reset at operation start (keeping the seams parameter-free). See the
-developers' guide for the full contract.
+operation-scoped thread-local counters that the loops reset at operation start
+(keeping the seams parameter-free). See the developers' guide for the full
+contract.
 
 #### Read/write fallback state machine
 

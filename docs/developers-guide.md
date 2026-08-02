@@ -87,8 +87,8 @@ reuse policy is:
   be reworded, so match on the member, not the string.
 - New validation rules must be added to the classifier (and a matching enum
   member) rather than inline in the validators, keeping the reason taxonomy
-  authoritative. Preserve the declared member order — the classifier returns the
-  first matching category.
+  authoritative. Preserve the declared member order — the classifier returns
+  the first matching category.
 
 ### Stream-backend resolution seam
 
@@ -428,11 +428,11 @@ to change:
 
 Table 1: modules owning each part of a pipeline's byte movement
 
-| Module | Owns |
-| --- | --- |
-| `_pipeline_streams.py` | *how* bytes cross one hop — backend choice, the Rust hand-off, the Python pump |
+| Module                    | Owns                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------- |
+| `_pipeline_streams.py`    | *how* bytes cross one hop — backend choice, the Rust hand-off, the Python pump        |
 | `_pipeline_pipe_tasks.py` | the *tasks* carrying them — creation per stage pair, cancellation, outcome collection |
-| `_pipeline_stream_fds.py` | the raw-descriptor lifecycle behind the Rust hand-off |
+| `_pipeline_stream_fds.py` | the raw-descriptor lifecycle behind the Rust hand-off                                 |
 
 `_pipeline_pipe_tasks` imports `_pump_stream_dispatch` from
 `_pipeline_streams`, never the reverse, so the dependency runs one way: task
@@ -450,8 +450,8 @@ early, and everything else is a genuine failure that must reach the caller.
 
 Routing an inter-stage hop through the Rust pump means taking the raw pipe
 descriptors back from asyncio for the duration of the transfer.
-`cuprum/_pipeline_stream_fds.py` owns that hand-off, keeping its partial-failure
-paths in one place rather than inlined in the pump:
+`cuprum/_pipeline_stream_fds.py` owns that hand-off, keeping its
+partial-failure paths in one place rather than inlined in the pump:
 
 - `_extract_stream_fd` pulls the raw descriptor out of an asyncio transport,
   returning `None` when the transport does not expose one.
@@ -464,8 +464,11 @@ paths in one place rather than inlined in the pump:
   pause that took effect is resumed. It yields whether the descriptor may be
   handed over: a *failed* pause answers `False`, because asyncio may still be
   consuming the reader, and the caller falls back to the Python pump rather
-  than racing it. A transport exposing no pause hooks answers `True`, since
-  there are no callbacks to suspend.
+  than racing it. A transport exposing no `pause_reading` answers `True`, since
+  there are no callbacks to suspend. A transport exposing `pause_reading` but no
+  `resume_reading` answers `False` without being paused: its pause hook is
+  evidence of callbacks that would race the pump, but a pause nothing could
+  undo would strand the Python fallback on the same stream.
 
 Cancellation is handled explicitly. `run_in_executor` cannot interrupt the
 worker thread running the Rust pump, and that thread still owns both
@@ -489,16 +492,16 @@ never had it, which is the question an operator actually asks.
 
 `_log_rust_pump_declined` in `cuprum/_pipeline_streams.py` records each decline
 against the `cuprum._pipeline_streams` logger, following the same convention as
-the pipeline fail-fast records: a `cuprum_action` of `rust_pump_declined` plus
-a `cuprum_reason` naming the seam that refused.
+the pipeline fail-fast records: a `cuprum_action` of `rust_pump_declined` plus a
+`cuprum_reason` naming the seam that refused.
 
 Table 2: `cuprum_reason` values and the seam each one reports
 
-| `cuprum_reason` | Seam that declined |
-| --- | --- |
-| `raw_fd_unavailable` | `_extract_stream_fd` found no descriptor on at least one transport |
-| `reader_pause_failed` | `pause_reading()` raised, so asyncio may still be consuming |
-| `blocking_mode_unavailable` | `_BlockingModeGuard.engage` could not switch both descriptors |
+| `cuprum_reason`             | Seam that declined                                                 |
+| --------------------------- | ------------------------------------------------------------------ |
+| `raw_fd_unavailable`        | `_extract_stream_fd` found no descriptor on at least one transport |
+| `reader_pause_failed`       | `pause_reading()` raised, so asyncio may still be consuming        |
+| `blocking_mode_unavailable` | `_BlockingModeGuard.engage` could not switch both descriptors      |
 
 These are logged at `DEBUG`, deliberately. A fall-back is a per-hop routing
 decision rather than a fault, so promoting it to a warning would make a
@@ -1517,18 +1520,18 @@ signal for regular files, broken-pipe draining, the drain's EOF termination,
 and the syscall-level `EINTR` retry.
 
 The read/write fallback's write half routes through `io_utils::write_all_unix`,
-whose partial-write loop is factored into `write_all_unix_with` — the injectable
-write seam mirroring `read_raw_fd_with`. Unit tests drive it over a scripted
-single-write operation so the write policy is exercised deterministically
-without real descriptors: interrupted writes (`EINTR`) retry, zero progress
-raises `WriteZero`, partial writes accumulate, over-long progress surfaces
-`BufferRangeExceeded`, non-fatal short writes (broken pipe / connection reset)
-report the bytes transferred so far, and other errors propagate. Proptests
-confirm `PumpError::is_nonfatal_write` and `map_short_write_error` suppress
-exactly `BrokenPipe`/`ConnectionReset` while preserving the accepted byte total.
-These raw-fd helpers live in the `io_utils` directory module (`io_utils/mod.rs`,
-with tests in `io_utils/tests.rs`), split from the former single file to stay
-within the per-module line cap.
+whose partial-write loop is factored into `write_all_unix_with` — the
+injectable write seam mirroring `read_raw_fd_with`. Unit tests drive it over a
+scripted single-write operation so the write policy is exercised
+deterministically without real descriptors: interrupted writes (`EINTR`) retry,
+zero progress raises `WriteZero`, partial writes accumulate, over-long progress
+surfaces `BufferRangeExceeded`, non-fatal short writes (broken pipe /
+connection reset) report the bytes transferred so far, and other errors
+propagate. Proptests confirm `PumpError::is_nonfatal_write` and
+`map_short_write_error` suppress exactly `BrokenPipe`/`ConnectionReset` while
+preserving the accepted byte total. These raw-fd helpers live in the `io_utils`
+directory module (`io_utils/mod.rs`, with tests in `io_utils/tests.rs`), split
+from the former single file to stay within the per-module line cap.
 
 The read/write fallback's control flow — how each read and write outcome moves
 the running byte total and the latched `writer_open` flag — is factored into a
@@ -1630,14 +1633,14 @@ platform), a `warn` event on every `EINTR` retry, and an `error` event on a
 fatal read/write failure, a zero-progress write, or a length-conversion
 overflow — so no fatal boundary stays silent. The `pump_stream_readwrite` and
 `consume_stream` loops wrap these seams in an operation span
-(`io_utils::operation_span`) that carries the `operation` and `buffer_size` and,
-on completion, records `total_bytes` and the cumulative `EINTR` retry counts as
-structured fields. `pump_stream_readwrite` reads and writes, so it records both
-`read_retries` and `write_retries`; `consume_stream` only reads, so it records
-`read_retries` alone (`write_retries` stays unset). The retry counts are
-accumulated in operation-scoped thread-local counters that
-`pump_stream_readwrite` and `consume_stream` explicitly reset at operation start
-(right after entering the span, via `io_utils::reset_retry_counters`;
+(`io_utils::operation_span`) that carries the `operation` and `buffer_size`
+and, on completion, records `total_bytes` and the cumulative `EINTR` retry
+counts as structured fields. `pump_stream_readwrite` reads and writes, so it
+records both `read_retries` and `write_retries`; `consume_stream` only reads,
+so it records `read_retries` alone (`write_retries` stays unset). The retry
+counts are accumulated in operation-scoped thread-local counters that
+`pump_stream_readwrite` and `consume_stream` explicitly reset at operation
+start (right after entering the span, via `io_utils::reset_retry_counters`;
 `operation_span` itself does not touch the counters), so the seams stay
 parameter-free while the span still reports them.
 
@@ -2229,8 +2232,8 @@ uv run pytest cuprum/unittests/test_maturin_build.py \
 ### `maturin_script_locatable()` — native-wheel skip boundary
 
 `maturin_script_locatable()` (in `tests/helpers/maturin.py`) is the shared
-probe that decides whether the native-wheel build contract can actually run.
-It mirrors `maturin.__main__.get_maturin_path`: maturin resolves its bundled
+probe that decides whether the native-wheel build contract can actually run. It
+mirrors `maturin.__main__.get_maturin_path`: maturin resolves its bundled
 binary by scanning each `sysconfig` scheme's `scripts` directory for a file
 named `maturin`, keyed off the running interpreter's `sys.prefix` — **not**
 `sys.path` or `PATH`.
@@ -2249,14 +2252,13 @@ different questions:
 The two disagree in layered or ephemeral interpreters — most importantly the
 `uv run --with mutmut==3.6.0` overlay used by the mutation-testing workflow.
 There, the project virtualenv is on `sys.path` (so the module imports and
-`toolchain_available()` returns `True`), but `sys.prefix` points at a
-temporary environment that never received maturin's script, so
-`python -m maturin build` fails with ``Unable to find `maturin` script``
-before it can invoke `cargo`. This previously aborted the whole mutmut
-baseline. In a
-normal virtualenv (CI, `build-wheels.yml`, local `uv run pytest`) `sys.prefix`
-matches the install location, the probe returns `True`, and the real build
-runs — so the skip never masks a genuine regression.
+`toolchain_available()` returns `True`), but `sys.prefix` points at a temporary
+environment that never received maturin's script, so `python -m maturin build`
+fails with ``Unable to find `maturin` script`` before it can invoke `cargo`.
+This previously aborted the whole mutmut baseline. In a normal virtualenv (CI,
+`build-wheels.yml`, local `uv run pytest`) `sys.prefix` matches the install
+location, the probe returns `True`, and the real build runs — so the skip never
+masks a genuine regression.
 
 **Reuse policy.** Any test that shells out to `python -m maturin build` (or
 otherwise depends on maturin locating its own binary) — for example a new
@@ -2282,23 +2284,23 @@ transfer buffer (the default is 64 KiB). `checked_buffer_size` is kept pure so
 its boundaries are property tested directly in
 `rust/cuprum-rust/src/buffer_size_tests.rs`; the Python-side error mapping is
 exercised in `cuprum/unittests/test_rust_streams_boundary_property.py`. Keep the
-`_streams_rs.py` wrapper docstrings, `docs/cuprum-design.md`, and the
-users' guide aligned with this contract when the cap changes.
+`_streams_rs.py` wrapper docstrings, `docs/cuprum-design.md`, and the users'
+guide aligned with this contract when the cap changes.
 
 ## Development dependency pins
 
 Test tooling occasionally needs a temporary upper bound while an upstream
 project catches up with a newer release. These pins live in `pyproject.toml`'s
 `[dependency-groups]` `dev` group — dev-only, never in the runtime
-`[project.optional-dependencies]` — each with an inline rationale and a tracking
-link, and are lifted once the upstream fix lands.
+`[project.optional-dependencies]` — each with an inline rationale and a
+tracking link, and are lifted once the upstream fix lands.
 
 - `pytest<9.1` — pytest 9.1 deprecates the nodeid/baseid path that `pytest-bdd`
   8.1.0 relies on for fixture registration, raising `PytestRemovedIn10Warning`
   under the behavioural suite. The constraint holds the dev environment on
   pytest 9.0.x until `pytest-bdd` migrates to the node-based fixture API. Track
-  [pytest-bdd#823](https://github.com/pytest-dev/pytest-bdd/issues/823); remove
-  the pin and this note once a released `pytest-bdd` supports pytest 9.1.
+  [pytest-bdd#823](https://github.com/pytest-dev/pytest-bdd/issues/823);
+  remove the pin and this note once a released `pytest-bdd` supports pytest 9.1.
 
 ## Workflow pins and Dependabot
 
@@ -2571,30 +2573,30 @@ executes:
 5. In the streaming path (`_run_subprocess_with_streams`), the stdin writer
    task runs concurrently with the stdout/stderr consumer tasks.  On
    `TimeoutError` or `asyncio.CancelledError`, `_run_subprocess_with_streams`
-   itself cancels and gathers the stdin writer via `_cancel_stdin_writer`,
-   then drains the stdout/stderr consumers exactly once via
-   `_drain_stream_consumers`.  `_wait_for_exit_code` has already terminated
-   the process, so the drain reaches EOF.  Only after that draining does it
-   call `_handle_stream_timeout`, which merely raises
-   `_SubprocessTimeoutError` carrying the pre-drained stdout/stderr; on the
-   cancellation path `CancelledError` is re-raised directly.
+   itself cancels and gathers the stdin writer via `_cancel_stdin_writer`, then
+   drains the stdout/stderr consumers exactly once via
+   `_drain_stream_consumers`.  `_wait_for_exit_code` has already terminated the
+   process, so the drain reaches EOF.  Only after that draining does it call
+   `_handle_stream_timeout`, which merely raises `_SubprocessTimeoutError`
+   carrying the pre-drained stdout/stderr; on the cancellation path
+   `CancelledError` is re-raised directly.
 6. In the non-streaming path (`_execute_subprocess`), the same writer task is
    created and awaited after `_wait_for_exit_code` completes.  On
    `TimeoutError` or `asyncio.CancelledError` from `_wait_for_exit_code`,
    `_execute_subprocess` itself cancels and drains the writer task via
-   `_cancel_stdin_writer` before the timeout is translated or the
-   cancellation propagates, so a stdin drain blocked on an unread pipe cannot
-   delay completion.
+   `_cancel_stdin_writer` before the timeout is translated or the cancellation
+   propagates, so a stdin drain blocked on an unread pipe cannot delay
+   completion.
 
 The `tests/helpers/stream_pipes.py` module provides
-`drain_blocking_payload_size()`, a shared helper returning a stdin payload
-size that reliably wedges the writer's `drain()`.  It probes the real OS
-pipe capacity (via `fcntl(F_GETPIPE_SZ)` on Linux) and adds a mebibyte of
-headroom, falling back to a conservative default on platforms that cannot
-probe it so callers need no platform guard.  It exists solely to make
-blocked-`drain()` regression tests deterministic and is shared by
-`test_safe_cmd_stdin.py` and `test_observe_stdin_early_close.py`; new
-blocked-writer tests should reuse it rather than hardcoding a payload size.
+`drain_blocking_payload_size()`, a shared helper returning a stdin payload size
+that reliably wedges the writer's `drain()`.  It probes the real OS pipe
+capacity (via `fcntl(F_GETPIPE_SZ)` on Linux) and adds a mebibyte of headroom,
+falling back to a conservative default on platforms that cannot probe it so
+callers need no platform guard.  It exists solely to make blocked-`drain()`
+regression tests deterministic and is shared by `test_safe_cmd_stdin.py` and
+`test_observe_stdin_early_close.py`; new blocked-writer tests should reuse it
+rather than hardcoding a payload size.
 
 `_execute_with_hooks(cmd, execution, tracking)` is the single site that runs
 `_execute_subprocess`, iterates after-hooks, and co-ordinates cancellation-safe
