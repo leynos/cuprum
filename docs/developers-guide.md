@@ -1627,8 +1627,10 @@ make develop
 
 That runs `maturin develop` against `rust/cuprum-rust/Cargo.toml` in the
 project virtual environment, preceded by `ensurepip` because maturin resolves
-its own script through the interpreter's `sysconfig` scheme. CI runs the same
-target, so a local run and a CI run build the extension identically.
+its own script through the interpreter's `sysconfig` scheme, which needs pip
+present in the environment. CI's `extension-tests` job runs the same target, so
+a local run and a CI run build the extension identically. The Makefile keeps
+only a pointer to this section rather than repeating the reasoning.
 
 Without it these modules skip rather than fail, which is the right default
 locally — most changes do not need the native path rebuilt — and the wrong one
