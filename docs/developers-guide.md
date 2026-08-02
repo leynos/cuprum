@@ -1328,6 +1328,61 @@ that expose pure behaviour. The UTF-8 decoder tests generate arbitrary byte
 vectors and chunk split points, then compare the decoded output with
 `String::from_utf8_lossy` as the oracle.
 
+When a property fails, proptest writes the shrunk case to a seed file under
+`rust/cuprum-rust/proptest-regressions/`. Commit that file: it re-runs the
+failing case ahead of the generated ones, so the same regression cannot return
+unnoticed.
+
+Seeds are only worth keeping when they came from a genuine failure. Running
+the Rust suite against deliberately-broken code — to prove a property is not
+vacuous — also writes a seed, and that one pins a case that never failed
+against correct code. Disable persistence for those runs so the file is never
+created:
+
+```bash
+PROPTEST_DISABLE_FAILURE_PERSISTENCE=1 make test
+```
+
+If a seed file does appear after a mutation run, delete it rather than
+committing it. Checking it in would imply a history the code does not have.
+
+Snapshot tests use [insta](https://docs.rs/insta/latest/insta/) as a
+development dependency, declared with `default-features = false` so the crate
+pulls in none of insta's optional format integrations. Prefer insta where the
+valuable assertion is the *exact* output text rather than a property of it —
+`consume_snapshot_tests.rs` pins the UTF-8 replacement output of the
+`consume_stream_files` read loop this way, so a regression in the loop, the
+bounds-checked slicing, or the `final_chunk` handling surfaces as a concrete
+text diff rather than a boolean failure.
+
+These Rust-side cases are not the only coverage of these categories, and it is
+worth knowing why they carry the load. `TestRustConsumeStream` in
+`cuprum/unittests/test_rust_streams.py` already defines Python/Rust boundary
+tests over the same four inputs — ASCII, multibyte UTF-8 split across a read
+boundary, invalid UTF-8, and an incomplete trailing sequence — and each one
+calls `rust_consume_stream` and compares the result against Python's own
+replacement decoding, `payload.decode("utf-8", errors="replace")`.
+
+Normal CI does not execute them. The test jobs reach the suite through
+`make build`, which is only `uv sync --group dev`; nothing builds
+`cuprum._rust_backend_native`, so those cases are skipped rather than run.
+Issue `#258` tracks building the extension in the test jobs and adding a
+fail-loud guard so the skip cannot pass unnoticed, and issue `#265` tracks a
+pre-existing PyO3 defect — `OSError` crossing the boundary loses its `errno` —
+that currently fails one extension-enabled test.
+
+So the `consume_stream_files` snapshots and properties are the coverage of the
+read-and-decode loop that actually executes on every commit. They do not
+replace executed Python/Rust boundary coverage, and are not a reason to leave
+`#258` unresolved: the two verify different things, one the loop and the other
+the exported surface.
+
+Those snapshots are written inline with `insta::assert_snapshot!(value, @"...")`
+rather than as separate `.snap` files, which keeps the expected text beside the
+case that produces it and leaves no snapshot files to review or prune. Accept a
+deliberate change by editing the inline literal; `cargo insta` is not required
+for the inline form.
+
 Kani harnesses are reserved for bounded verification of small, high-value state
 spaces. Gate Kani-only modules and helpers with `#[cfg(kani)]`, and share pure
 test helpers behind `#[cfg(any(test, kani))]` when both proptest and Kani need
