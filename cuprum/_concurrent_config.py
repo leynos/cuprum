@@ -71,6 +71,25 @@ class ConcurrentConfig:
                 raise ValueError(msg)
 
 
+def _validate_non_negative_index(index: int, *, subject: str) -> None:
+    """Validate an index without an upper bound."""
+    if index < 0:
+        msg = f"{subject} must be non-negative, got {index}"
+        raise ValueError(msg)
+
+
+def _validate_bounded_index(
+    index: int,
+    *,
+    subject: str,
+    upper_bound: int,
+) -> None:
+    """Validate an index against an exclusive upper bound."""
+    if not 0 <= index < upper_bound:
+        msg = f"{subject} index {index} is out of range for {upper_bound} results"
+        raise ValueError(msg)
+
+
 def _validate_index_sequence(
     indices: tuple[int, ...],
     *,
@@ -93,12 +112,9 @@ def _validate_index_sequence(
             msg = f"{type_error_message}, got {type(index).__name__}"
             raise TypeError(msg)
         if upper_bound is None:
-            if index < 0:
-                msg = f"{subject} must be non-negative, got {index}"
-                raise ValueError(msg)
-        elif not 0 <= index < upper_bound:
-            msg = f"{subject} index {index} is out of range for {upper_bound} results"
-            raise ValueError(msg)
+            _validate_non_negative_index(index, subject=subject)
+        else:
+            _validate_bounded_index(index, subject=subject, upper_bound=upper_bound)
         if index <= previous:
             msg = f"{subject} must be strictly ascending and unique, got {indices}"
             raise ValueError(msg)
