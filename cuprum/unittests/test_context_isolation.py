@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-import typing as typ
-
-from hypothesis import settings
+import typing  # noqa: ICN001 - This isolation test intentionally uses the direct module name.
 
 from cuprum.catalogue import ECHO, LS
 from cuprum.context import (
@@ -15,10 +13,8 @@ from cuprum.context import (
     scoped,
 )
 
-if typ.TYPE_CHECKING:
+if typing.TYPE_CHECKING:
     from cuprum.program import Program
-
-_PROPERTY_SETTINGS = settings(derandomize=True, deadline=None, max_examples=50)
 
 
 # =============================================================================
@@ -28,41 +24,47 @@ _PROPERTY_SETTINGS = settings(derandomize=True, deadline=None, max_examples=50)
 
 def test_context_is_isolated_per_thread() -> None:
     """Each thread has its own context."""
-    results: dict[str, bool] = {}
 
-    def thread_worker(name: str, programs: frozenset[Program]) -> None:
-        """Capture the allowlist decision observed inside the worker thread."""
+    def thread_worker(programs: frozenset[Program]) -> bool:
+        """Return the allowlist decision observed inside the worker thread."""
         with scoped(ScopeConfig(allowlist=programs)):
-            results[name] = current_context().is_allowed(ECHO)
+            return current_context().is_allowed(ECHO)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        f1 = executor.submit(thread_worker, "thread1", frozenset([ECHO]))
-        f2 = executor.submit(thread_worker, "thread2", frozenset([LS]))
-        f1.result()
-        f2.result()
+        f1 = executor.submit(thread_worker, frozenset([ECHO]))
+        f2 = executor.submit(thread_worker, frozenset([LS]))
+        results = {"thread1": f1.result(), "thread2": f2.result()}
 
-    assert results["thread1"] is True
-    assert results["thread2"] is False
+    assert results["thread1"] is True, (
+        "thread 1 must retain its ECHO allowlist in its isolated context"
+    )
+    assert results["thread2"] is False, (
+        "thread 2 must retain its LS-only allowlist in its isolated context"
+    )
 
 
 def test_context_is_isolated_per_async_task() -> None:
     """Each async task has its own context."""
-    results: dict[str, bool] = {}
 
-    async def task_worker(name: str, programs: frozenset[Program]) -> None:
-        """Capture the allowlist decision observed inside the async task."""
+    async def task_worker(programs: frozenset[Program]) -> bool:
+        """Return the allowlist decision observed inside the async task."""
         with scoped(ScopeConfig(allowlist=programs)):
             await asyncio.sleep(0.01)  # Yield to allow interleaving
-            results[name] = current_context().is_allowed(ECHO)
+            return current_context().is_allowed(ECHO)
 
-    async def run_tasks() -> None:
+    async def run_tasks() -> tuple[bool, bool]:
         """Run both task workers concurrently to interleave their scopes."""
-        await asyncio.gather(
-            task_worker("task1", frozenset([ECHO])),
-            task_worker("task2", frozenset([LS])),
+        return await asyncio.gather(
+            task_worker(frozenset([ECHO])),
+            task_worker(frozenset([LS])),
         )
 
-    asyncio.run(run_tasks())
+    task1_result, task2_result = asyncio.run(run_tasks())
+    results = {"task1": task1_result, "task2": task2_result}
 
-    assert results["task1"] is True
-    assert results["task2"] is False
+    assert results["task1"] is True, (
+        "task 1 must retain its ECHO allowlist in its isolated context"
+    )
+    assert results["task2"] is False, (
+        "task 2 must retain its LS-only allowlist in its isolated context"
+    )

@@ -50,15 +50,17 @@ _DEGRADATION_REASONS: typ.Final = (
 # lose an increment. The counter is process-wide, so it is guarded by a
 # process-wide lock rather than being made per-refresh.
 _DEGRADATIONS_LOCK: typ.Final = threading.Lock()
-REFRESH_DEGRADATIONS: typ.Final[dict[str, int]] = dict.fromkeys(_DEGRADATION_REASONS, 0)
+_REFRESH_DEGRADATIONS: typ.Final[dict[str, int]] = dict.fromkeys(
+    _DEGRADATION_REASONS, 0
+)
 
 
 def _record_degradation(reason: str) -> None:
     """Increment the bounded degradation counter for a known *reason*."""
-    if reason not in REFRESH_DEGRADATIONS:
+    if reason not in _REFRESH_DEGRADATIONS:
         return
     with _DEGRADATIONS_LOCK:
-        REFRESH_DEGRADATIONS[reason] += 1
+        _REFRESH_DEGRADATIONS[reason] += 1
 
 
 def reset_degradations() -> None:
@@ -68,13 +70,13 @@ def reset_degradations() -> None:
     asserting on deltas against whatever earlier tests left behind.
     """
     with _DEGRADATIONS_LOCK:
-        REFRESH_DEGRADATIONS.update(dict.fromkeys(_DEGRADATION_REASONS, 0))
+        _REFRESH_DEGRADATIONS.update(dict.fromkeys(_DEGRADATION_REASONS, 0))
 
 
 def degradation_snapshot() -> dict[str, int]:
     """Return a consistent copy of the degradation counters."""
     with _DEGRADATIONS_LOCK:
-        return dict(REFRESH_DEGRADATIONS)
+        return dict(_REFRESH_DEGRADATIONS)
 
 
 def _read_metadata(path: pathlib.Path) -> dict[str, object]:
@@ -256,7 +258,6 @@ def _https_request(
 
 
 def _write_remote_cache(
-    source: str,
     targets: _CacheTargets,
     content: bytes,
     headers: cabc.Mapping[str, str],
@@ -267,7 +268,6 @@ def _write_remote_cache(
     _write_metadata(
         targets.metadata,
         {
-            "source": source,
             "etag": headers.get("ETag"),
             "last_modified": headers.get("Last-Modified"),
         },
@@ -276,7 +276,6 @@ def _write_remote_cache(
 
 
 def _remote_response_result(
-    source: str,
     targets: _CacheTargets,
     saved: cabc.Mapping[str, object],
     response: _RemoteResponse,
@@ -286,7 +285,7 @@ def _remote_response_result(
         return RefreshResult("current", targets.cache)
     if _valid_cache(targets.cache) and _remote_is_not_newer(saved, response.headers):
         return RefreshResult("current", targets.cache)
-    return _write_remote_cache(source, targets, response.read(), response.headers)
+    return _write_remote_cache(targets, response.read(), response.headers)
 
 
 def _stale_cache_or_raise(
@@ -334,7 +333,7 @@ def _refresh_http(
             timeout=30.0,
         ) as response:
             return _remote_response_result(
-                source, _CacheTargets(cache, metadata), saved, response
+                _CacheTargets(cache, metadata), saved, response
             )
     except urllib.error.HTTPError as error:
         return _http_error_result(cache, error)

@@ -39,66 +39,72 @@ def _run_hook_test[T](
     return hook_calls
 
 
-def test_before_hooks_fire_per_command() -> None:
-    """Before hooks fire for each command in concurrent execution."""
-    from cuprum import SafeCmd, before
+class TestConcurrentHooks:
+    """Verify hook integration during concurrent execution."""
 
-    def make_tracker(calls: list[str]) -> cabc.Callable[[SafeCmd], None]:
-        """Build a before-hook that records each command's program."""
+    @staticmethod
+    def test_before_hooks_fire_per_command() -> None:
+        """Before hooks fire for each command in concurrent execution."""
+        from cuprum import SafeCmd, before
 
-        def track_before(cmd: SafeCmd) -> None:
-            """Append the command's program to the tracked before-hook calls."""
-            calls.append(str(cmd.program))
+        def make_tracker(calls: list[str]) -> cabc.Callable[[SafeCmd], None]:
+            """Build a before-hook that records each command's program."""
 
-        return track_before
+            def track_before(cmd: SafeCmd) -> None:
+                """Append the command's program to the tracked before-hook calls."""
+                calls.append(str(cmd.program))
 
-    hook_calls = _run_hook_test(lambda calls: before(make_tracker(calls)))
+            return track_before
 
-    assert len(hook_calls) == 3, "the before hook must fire once per command"
-    assert all(call == "echo" for call in hook_calls), (
-        "each before hook call must report the echo program"
-    )
+        hook_calls = _run_hook_test(lambda calls: before(make_tracker(calls)))
 
+        assert len(hook_calls) == 3, "the before hook must fire once per command"
+        assert all(call == "echo" for call in hook_calls), (
+            "each before hook call must report the echo program"
+        )
 
-def test_after_hooks_fire_per_command() -> None:
-    """After hooks fire for each command in concurrent execution."""
-    from cuprum import SafeCmd, after
+    @staticmethod
+    def test_after_hooks_fire_per_command() -> None:
+        """After hooks fire for each command in concurrent execution."""
+        from cuprum import SafeCmd, after
 
-    def make_tracker(calls: list[int]) -> cabc.Callable[[SafeCmd, CommandResult], None]:
-        """Build an after-hook that records each command's exit code."""
+        def make_tracker(
+            calls: list[int],
+        ) -> cabc.Callable[[SafeCmd, CommandResult], None]:
+            """Build an after-hook that records each command's exit code."""
 
-        def track_after(cmd: SafeCmd, result: CommandResult) -> None:
-            """Append the command's exit code to the tracked after-hook calls."""
-            _ = cmd  # Unused
-            calls.append(result.exit_code)
+            def track_after(cmd: SafeCmd, result: CommandResult) -> None:
+                """Append the command's exit code to the tracked after-hook calls."""
+                _ = cmd  # Unused
+                calls.append(result.exit_code)
 
-        return track_after
+            return track_after
 
-    hook_calls = _run_hook_test(lambda calls: after(make_tracker(calls)))
+        hook_calls = _run_hook_test(lambda calls: after(make_tracker(calls)))
 
-    assert len(hook_calls) == 3, "the after hook must fire once per command"
-    assert all(code == 0 for code in hook_calls), (
-        "each after hook call must report a successful exit code"
-    )
+        assert len(hook_calls) == 3, "the after hook must fire once per command"
+        assert all(code == 0 for code in hook_calls), (
+            "each after hook call must report a successful exit code"
+        )
 
+    @staticmethod
+    def test_observe_hooks_receive_events_per_command() -> None:
+        """Observe hooks receive events for each command."""
+        from cuprum import ExecEvent, observe
 
-def test_observe_hooks_receive_events_per_command() -> None:
-    """Observe hooks receive events for each command."""
-    from cuprum import ExecEvent, observe
+        echo = sh.make(ECHO)
+        commands = [echo("-n", f"cmd{i}") for i in range(2)]
+        events: list[ExecEvent] = []
 
-    echo = sh.make(ECHO)
-    commands = [echo("-n", f"cmd{i}") for i in range(2)]
-    events: list[ExecEvent] = []
+        def track_events(ev: ExecEvent) -> None:
+            """Append each received execution event to the tracked list."""
+            events.append(ev)
 
-    def track_events(ev: ExecEvent) -> None:
-        """Append each received execution event to the tracked list."""
-        events.append(ev)
+        with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), observe(track_events):
+            run_concurrent_sync(*commands)
 
-    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), observe(track_events):
-        run_concurrent_sync(*commands)
-
-    # Each command should emit plan, start, stdout (if any), exit events
-    phases = [ev.phase for ev in events]
-    assert phases.count("plan") == 2, "each command must emit one plan event"
-    assert phases.count("start") == 2, "each command must emit one start event"
-    assert phases.count("exit") == 2, "each command must emit one exit event"
+        # Each command should emit plan, start, stdout (if any), exit events
+        phases = [ev.phase for ev in events]
+        assert phases.count("plan") == 2, "each command must emit one plan event"
+        assert phases.count("start") == 2, "each command must emit one start event"
+        assert phases.count("exit") == 2, "each command must emit one exit event"

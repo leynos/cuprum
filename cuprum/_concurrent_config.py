@@ -216,7 +216,6 @@ class ConcurrentResult:
     results: tuple[CommandResult, ...]
     failures: tuple[int, ...] = ()
     submission_indices: tuple[int, ...] = dc.field(init=False)
-    _submission_indices_input: dc.InitVar[tuple[int, ...] | None] = None
 
     def __init__(
         self,

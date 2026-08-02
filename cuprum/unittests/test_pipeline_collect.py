@@ -22,6 +22,8 @@ from cuprum._pipeline_collect import (
     _sh_module,
 )
 from cuprum._pipeline_config import _PipelineRunConfig
+from cuprum._pipeline_types import _ExecutionInvariantError
+from cuprum._subprocess_timeout import _SubprocessInvariantError
 from cuprum.sh import ExecutionContext
 
 if typ.TYPE_CHECKING:
@@ -38,12 +40,22 @@ def test_sh_module_requires_cuprum_sh_to_be_imported(
     with pytest.raises(_PipelineInvariantError) as exc_info:
         _sh_module()
 
-    assert str(exc_info.value) == "cuprum.sh must be imported before running pipelines"
+    assert (
+        str(exc_info.value) == "cuprum.sh must be imported before running pipelines"
+    ), "the missing-import invariant must retain its diagnostic"
 
 
 def test_sh_module_error_is_a_runtime_error() -> None:
     """The guard stays catchable by broad runtime handlers."""
-    assert issubclass(_PipelineInvariantError, RuntimeError)
+    assert issubclass(_PipelineInvariantError, RuntimeError), (
+        "pipeline invariant errors must remain catchable as runtime errors"
+    )
+    assert issubclass(_PipelineInvariantError, _ExecutionInvariantError), (
+        "pipeline invariant errors must share the package invariant base"
+    )
+    assert issubclass(_SubprocessInvariantError, _ExecutionInvariantError), (
+        "subprocess invariant errors must share the package invariant base"
+    )
 
 
 def _timeout_free_config() -> _PipelineRunConfig:
@@ -95,7 +107,11 @@ def test_timeout_without_configured_timeout_raises_invariant_error(
     with pytest.raises(_PipelineInvariantError) as exc_info:
         asyncio.run(_collect_pipeline_inputs(parts, spawn, _timeout_free_config()))
 
-    assert str(exc_info.value) == "TimeoutError without a configured timeout"
+    assert str(exc_info.value) == "TimeoutError without a configured timeout", (
+        "the missing-timeout invariant must retain its diagnostic"
+    )
     # The originating TimeoutError is chained so the impossible state stays
     # diagnosable from the traceback.
-    assert exc_info.value.__cause__ is originating_error
+    assert exc_info.value.__cause__ is originating_error, (
+        "the pipeline invariant must preserve the originating timeout as its cause"
+    )

@@ -12,6 +12,7 @@ from pytest_bdd import given, scenario, then, when
 from cuprum import ECHO, TimeoutExpired, sh
 from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
 from tests.behaviour._execution_runtime_support import (
+    WorkerCommand,
     _cancel_command_with_grace,
     _create_worker_command,
     _wait_for_pid,
@@ -157,7 +158,7 @@ def then_command_result_has_stdin_text(run_result: CommandResult) -> None:
     "a long running safe command",
     target_fixture="long_running_command",
 )
-def given_long_running_command(tmp_path: Path) -> dict[str, object]:
+def given_long_running_command(tmp_path: Path) -> WorkerCommand:
     """Construct a SafeCmd that blocks until cancelled."""
     return _create_worker_command(
         tmp_path,
@@ -169,11 +170,11 @@ def given_long_running_command(tmp_path: Path) -> dict[str, object]:
 @when("I cancel the command after it starts")
 def when_cancel_command(
     behaviour_state: dict[str, object],
-    long_running_command: dict[str, object],
+    long_running_command: WorkerCommand,
 ) -> None:
     """Cancel the running command and record the child PID."""
-    command = typ.cast("SafeCmd", long_running_command["command"])
-    pid_file = typ.cast("Path", long_running_command["pid_file"])
+    command = long_running_command["command"]
+    pid_file = long_running_command["pid_file"]
 
     behaviour_state["pid"] = _cancel_command_with_grace(command, pid_file)
     behaviour_state["cleanup_context"] = "cancellation"
@@ -182,11 +183,11 @@ def when_cancel_command(
 @when("I run the command with a timeout")
 def when_run_command_with_timeout(
     behaviour_state: dict[str, object],
-    long_running_command: dict[str, object],
+    long_running_command: WorkerCommand,
 ) -> None:
     """Run a command with a timeout and record the error and PID."""
-    command = typ.cast("SafeCmd", long_running_command["command"])
-    pid_file = typ.cast("Path", long_running_command["pid_file"])
+    command = long_running_command["command"]
+    pid_file = long_running_command["pid_file"]
     timeout = 0.5
 
     ctx = ExecutionContext(env={"CUPRUM_PID_FILE": str(pid_file)})
@@ -268,7 +269,7 @@ def test_cancellation_escalates_non_cooperative() -> None:
     "a non-cooperative safe command",
     target_fixture="non_cooperative_command",
 )
-def given_non_cooperative_command(tmp_path: Path) -> dict[str, object]:
+def given_non_cooperative_command(tmp_path: Path) -> WorkerCommand:
     """Construct a SafeCmd that ignores termination signals."""
     return _create_worker_command(
         tmp_path,

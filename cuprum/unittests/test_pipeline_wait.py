@@ -151,7 +151,7 @@ class _FailFastScenario:
                 expected_exit_codes=(-15, 3, -15),
                 terminated_stages=frozenset([0, 2]),
             ),
-            id="middle-stage-failure-terminates-downstream",
+            id="middle-stage-failure-terminates-all-other-stages",
         ),
         pytest.param(
             _FailFastScenario(

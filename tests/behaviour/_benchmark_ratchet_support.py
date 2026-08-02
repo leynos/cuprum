@@ -27,7 +27,41 @@ class FixtureBundle(typ.TypedDict):
     report_path: pth.Path
 
 
-def _scenario_payload(*, name: str, backend: str) -> dict[str, object]:
+class ScenarioPayload(typ.TypedDict):
+    """Serialized benchmark scenario fixture."""
+
+    name: str
+    backend: str
+    payload_bytes: int
+    stages: int
+    with_line_callbacks: bool
+
+
+class PlanPayload(typ.TypedDict):
+    """Serialized benchmark plan fixture."""
+
+    benchmark_profile_version: str
+    dry_run: bool
+    rust_available: bool
+    worker_iterations: int
+    command: list[str]
+    scenarios: list[ScenarioPayload]
+
+
+class ThroughputResultPayload(typ.TypedDict):
+    """Serialized hyperfine result fixture."""
+
+    command: str
+    mean: float
+
+
+class ThroughputPayload(typ.TypedDict):
+    """Serialized hyperfine payload fixture."""
+
+    results: list[ThroughputResultPayload]
+
+
+def _scenario_payload(*, name: str, backend: str) -> ScenarioPayload:
     """Create scenario payload."""
     return {
         "name": name,
@@ -38,24 +72,25 @@ def _scenario_payload(*, name: str, backend: str) -> dict[str, object]:
     }
 
 
-def _plan_payload(scenarios: list[object] | None = None) -> dict[str, object]:
+def _plan_payload(scenarios: list[ScenarioPayload] | None = None) -> PlanPayload:
     """Create plan payload, optionally overriding the default scenarios."""
+    selected_scenarios = scenarios
+    if selected_scenarios is None:
+        selected_scenarios = [
+            _scenario_payload(name="python-small-single-nocb", backend="python"),
+            _scenario_payload(name="rust-small-single-nocb", backend="rust"),
+        ]
     return {
         "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
         "dry_run": True,
         "rust_available": True,
         "worker_iterations": 20,
         "command": ["hyperfine", "placeholder"],
-        "scenarios": scenarios
-        if scenarios is not None
-        else [
-            _scenario_payload(name="python-small-single-nocb", backend="python"),
-            _scenario_payload(name="rust-small-single-nocb", backend="rust"),
-        ],
+        "scenarios": selected_scenarios,
     }
 
 
-def _throughput_payload(*, python_mean: float, rust_mean: float) -> dict[str, object]:
+def _throughput_payload(*, python_mean: float, rust_mean: float) -> ThroughputPayload:
     """Create throughput payload."""
     return {
         "results": [
@@ -68,7 +103,7 @@ def _throughput_payload(*, python_mean: float, rust_mean: float) -> dict[str, ob
 def _write_json(
     *,
     path: pth.Path,
-    payload: dict[str, object],
+    payload: PlanPayload | ThroughputPayload,
 ) -> None:
     """Write JSON payload."""
     path.write_text(json.dumps(payload), encoding="utf-8")
