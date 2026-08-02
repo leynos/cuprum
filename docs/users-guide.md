@@ -1277,9 +1277,13 @@ broken pipe; draining reader    bytes_transferred=<count>
 before it hung up, so `0` means it closed before receiving anything.
 
 The event is not itself an error. It records that the pump classified the
-writer's closure as non-fatal and drained the rest of the input, which is what
-stops a producer blocking forever on a pipe nobody is reading — the pump
-returns success.
+writer's closure as non-fatal and *began* draining the rest of the input, which
+is what stops a producer blocking forever on a pipe nobody is reading.
+
+It is emitted the moment the writer latches closed, before the drain finishes,
+so it is not a report of success. The pump returns success only if the drain
+then reaches EOF; a read that fails fatally afterwards still propagates as an
+`OSError`, on a run where this event was already emitted.
 
 It does not, on its own, say *why* the downstream stage stopped reading. A
 consumer that finished by design, as `head` does, and one that crashed partway

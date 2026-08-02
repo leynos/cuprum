@@ -180,6 +180,31 @@ fn apply_write(state: &mut PumpState, write: WriteEvent) {
     }
 }
 
+/// Drive one iteration with a fixed write outcome, reporting whether the write
+/// actually ran.
+///
+/// Shared by the proptest harness and the Kani proofs so a change to
+/// [`advance`]'s signature cannot leave one of them driving the machine
+/// differently from the other — which is precisely how a harness stops testing
+/// what it claims to.
+///
+/// Whether the write was *invoked* is the observable that matters: `advance`
+/// promises not to call it at all when the transition forbids one, and the
+/// resulting state alone cannot distinguish "never called" from "called and
+/// its result discarded".
+#[cfg(any(test, kani))]
+pub(crate) fn drive(state: &mut PumpState, read_len: usize, write: WriteEvent) -> (Flow, bool) {
+    let mut invoked = false;
+    let outcome = advance(state, read_len, || {
+        invoked = true;
+        Ok::<WriteEvent, std::convert::Infallible>(write)
+    });
+    match outcome {
+        Ok(flow) => (flow, invoked),
+        Err(never) => match never {},
+    }
+}
+
 #[cfg(test)]
 #[path = "pump_machine_tests.rs"]
 mod tests;

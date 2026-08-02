@@ -12,9 +12,7 @@
 //! guarantee is that `advance` never builds one — which is a property of
 //! `advance`.
 
-use std::convert::Infallible;
-
-use super::{Flow, PumpState, WriteEvent, advance};
+use super::{Flow, PumpState, WriteEvent, advance, drive};
 
 fn any_write() -> WriteEvent {
     let bytes: u64 = kani::any();
@@ -22,19 +20,6 @@ fn any_write() -> WriteEvent {
         WriteEvent::Complete { bytes }
     } else {
         WriteEvent::Closed { bytes }
-    }
-}
-
-/// Drive one iteration with a symbolic write, reporting whether it ran.
-fn drive(state: &mut PumpState, read_len: usize, write: WriteEvent) -> (Flow, bool) {
-    let mut invoked = false;
-    let outcome = advance(state, read_len, || {
-        invoked = true;
-        Ok::<WriteEvent, Infallible>(write)
-    });
-    match outcome {
-        Ok(flow) => (flow, invoked),
-        Err(never) => match never {},
     }
 }
 

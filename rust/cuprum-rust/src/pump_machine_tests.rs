@@ -5,33 +5,13 @@
 //! are the ones the pump loop actually uses rather than a copy living only in
 //! test code.
 
-use std::convert::Infallible;
-
 use proptest::prelude::*;
 use rstest::rstest;
 
-use super::{Flow, PumpState, WriteEvent, advance};
+use super::{Flow, PumpState, WriteEvent, advance, drive};
 
 /// A read length standing in for "a chunk was read".
 const CHUNK_LEN: usize = 4;
-
-/// Drive one iteration, reporting the flow and whether the write ran.
-///
-/// Whether the write was *invoked* is the observable that matters: `advance`
-/// promises not to call it at all when the transition forbids one, and the
-/// resulting state alone cannot distinguish "never called" from "called and
-/// its result discarded".
-fn drive(state: &mut PumpState, read_len: usize, write: WriteEvent) -> (Flow, bool) {
-    let mut invoked = false;
-    let outcome = advance(state, read_len, || {
-        invoked = true;
-        Ok::<WriteEvent, Infallible>(write)
-    });
-    match outcome {
-        Ok(flow) => (flow, invoked),
-        Err(never) => match never {},
-    }
-}
 
 #[test]
 fn advance_skips_the_write_once_the_writer_is_closed() {
