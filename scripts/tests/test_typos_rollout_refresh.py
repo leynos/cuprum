@@ -75,7 +75,6 @@ def test_local_refresh_switches_authority_and_records_metadata(
 
 def test_http_refresh_uses_validators_and_preserves_newer_cache(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     dictionary_text: cabc.Callable[..., str],
     patch_https_opener: cabc.Callable[[cabc.Callable[..., object]], None],
@@ -132,7 +131,6 @@ def test_http_refresh_uses_validators_and_preserves_newer_cache(
 
 def test_remote_failure_reuses_only_a_valid_stale_cache(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     dictionary_text: cabc.Callable[..., str],
     patch_https_opener: cabc.Callable[[cabc.Callable[..., object]], None],
