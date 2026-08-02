@@ -313,7 +313,9 @@ def test_pump_stream_handles_downstream_close_without_hanging() -> None:
         )
         return reader, writer
 
-    reader, writer = asyncio.run(exercise())
+    reader, writer = asyncio.run(
+        asyncio.wait_for(exercise(), timeout=_POST_CLOSE_DRAIN_TIMEOUT_S * 4)
+    )
 
     assert reader.read_calls == 4, "the pump reads 3 chunks plus EOF"
     assert writer.write_calls == 2, (
