@@ -54,7 +54,12 @@ def _extract_stream_fd(
 
 @dc.dataclass(frozen=True, slots=True)
 class _ReaderPause:
-    """The outcome of attempting to pause a reader transport."""
+    """The outcome of trying to pause a reader transport.
+
+    A transport with no ``pause_reading`` hook has no callbacks to race. One
+    with a pause hook but no ``resume_reading`` hook is unsafe to hand off: it
+    cannot be paused and later returned to asyncio, so it must fall back.
+    """
 
     may_hand_off: bool
     resume: cabc.Callable[[], None] | None = None
@@ -69,8 +74,10 @@ def _pause_reader_transport(
         transport = getattr(reader, "_transport", None)
     pause_reading = getattr(transport, "pause_reading", None)
     resume_reading = getattr(transport, "resume_reading", None)
-    if not callable(pause_reading) or not callable(resume_reading):
+    if not callable(pause_reading):
         return _ReaderPause(may_hand_off=True)
+    if not callable(resume_reading):
+        return _ReaderPause(may_hand_off=False)
     try:
         pause_reading()
     except (RuntimeError, OSError):
@@ -156,7 +163,12 @@ class _BlockingModeGuard:
 
 @contextlib.contextmanager
 def _paused_reader(reader: asyncio.StreamReader) -> cabc.Iterator[bool]:
-    """Pause ``reader`` for the block and report whether hand-off is safe."""
+    """Pause ``reader`` for the block and report whether hand-off is safe.
+
+    An unsupported or unresumable transport is never paused, and a failed pause
+    is corrected at the failure site, so this scope resumes only a completed
+    pause.
+    """
     pause = _pause_reader_transport(reader)
     try:
         yield pause.may_hand_off

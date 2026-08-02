@@ -1107,9 +1107,9 @@ The `SafeCmd` executes the process and returns a `CommandResult` to the user,
 then invokes the `on_exit` hook with the command and that result. The exit hook
 asks again whether the exit level is enabled: if it is disabled it returns
 immediately, leaving nothing to clean up because nothing was stored; if it is
-enabled it takes the lock, pops the recorded start time — removing the entry, so
-the store cannot grow without bound — releases the lock, computes `duration_s`,
-and logs the `cuprum.exit` record.
+enabled it takes the lock, pops the recorded start time — removing the entry,
+so the store cannot grow without bound — releases the lock, computes
+`duration_s`, and logs the `cuprum.exit` record.
 
 Figure 3: Sequence of start/exit logging hook execution
 
@@ -2506,17 +2506,20 @@ each path is testable without a live pump:
 - `_paused_reader` — a context manager that pauses the reader transport and
   resumes it on every exit path, including exceptions and cancellation, so a
   resume can never be skipped. Exactly one resume fires per pause attempt, but
-  not always at block exit. A transport exposing no pause/resume hooks needs
-  none. A `pause_reading()` that *raises* gets one corrective
-  `resume_reading()` immediately, at the failure site rather than at block
-  exit, because the transport may have set its paused flag before whatever
-  raised — leaving a reader nobody resumes while the Python fallback reads a
-  descriptor nothing is watching. Having already been corrected, it is not
-  resumed again on exit. It yields whether
-  the descriptor may be handed to the Rust pump — a failed pause answers
-  `False`, because asyncio may still be consuming the reader, and the caller
-  falls back to the Python pump rather than racing it. A transport with no
-  pause hooks answers `True`, since it has no callbacks to suspend.
+  not always at block exit. A transport exposing no `pause_reading` needs none.
+  A `pause_reading()` that *raises* gets one corrective `resume_reading()`
+  immediately, at the failure site rather than at block exit, because the
+  transport may have set its paused flag before whatever raised — leaving a
+  reader nobody resumes while the Python fallback reads a descriptor nothing is
+  watching. Having already been corrected, it is not resumed again on exit. It
+  yields whether the descriptor may be handed to the Rust pump — a failed pause
+  answers `False`, because asyncio may still be consuming the reader, and the
+  caller falls back to the Python pump rather than racing it. A transport with
+  no `pause_reading` answers `True`, since it has no callbacks to suspend. A
+  transport with `pause_reading` but no `resume_reading` answers `False` and is
+  never paused: the pause hook shows callbacks that would race the pump, yet
+  pausing it could never be undone, and the Python fallback reads the same
+  stream and would wait forever on a reader nothing can restart.
 
 Cancellation is handled explicitly rather than implicitly. `run_in_executor`
 cannot interrupt the worker thread running the Rust pump, and that thread still
@@ -2525,9 +2528,9 @@ to return before the blocking mode is restored and the transport resumed.
 Restoring or resuming earlier would hand the descriptors back to asyncio while
 native code was still mid-transfer.
 
-The module's scope is deliberately narrow: descriptor extraction plus the
-pause and blocking-mode lifecycle for the Rust pump hand-off. It is consumed
-only by `cuprum/_pipeline_streams.py`. Its reuse policy is that new descriptor
+The module's scope is deliberately narrow: descriptor extraction plus the pause
+and blocking-mode lifecycle for the Rust pump hand-off. It is consumed only by
+`cuprum/_pipeline_streams.py`. Its reuse policy is that new descriptor
 lifecycle concerns for that hand-off belong here rather than being inlined into
 the pump, but the seams are not a general-purpose descriptor utility — anything
 serving a different caller should be designed against that caller's real

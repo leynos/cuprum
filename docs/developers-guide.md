@@ -429,6 +429,16 @@ interpreter whose opcode set the tracer cannot handle
 interpreters therefore confirm the contracts rather than skipping them.
 
 
+### Pipeline stream module boundaries
+
+Pipeline byte movement is split so each module has one reason to change:
+
+| Module | Owns |
+| --- | --- |
+| `_pipeline_streams.py` | Backend choice and the Python/Rust pump dispatch |
+| `_pipeline_stream_results.py` | Stream-task collection, cancellation, and outcomes |
+| `_pipeline_stream_fds.py` | Raw-descriptor hand-off for the Rust pump |
+
 ### Rust pump raw-descriptor lifecycle
 
 Routing an inter-stage hop through the Rust pump means taking the raw pipe
@@ -448,7 +458,8 @@ paths in one place rather than inlined in the pump:
   handed over: a *failed* pause answers `False`, because asyncio may still be
   consuming the reader, and the caller falls back to the Python pump rather
   than racing it. A transport exposing no pause hooks answers `True`, since
-  there are no callbacks to suspend.
+  there are no callbacks to suspend. A transport with `pause_reading()` but no
+  `resume_reading()` answers `False`: pausing it could not be undone.
 
 Cancellation is handled explicitly. `run_in_executor` cannot interrupt the
 worker thread running the Rust pump, and that thread still owns both
