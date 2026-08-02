@@ -480,7 +480,7 @@ Table 1: `cuprum_reason` values and the seam each one reports
 
 | `cuprum_reason` | Seam that declined |
 | --- | --- |
-| `raw_fd_unavailable` | `_extract_stream_fd` found no descriptor on either transport |
+| `raw_fd_unavailable` | `_extract_stream_fd` found no descriptor on at least one transport |
 | `reader_pause_failed` | `pause_reading()` raised, so asyncio may still be consuming |
 | `blocking_mode_unavailable` | `_BlockingModeGuard.engage` could not switch both descriptors |
 

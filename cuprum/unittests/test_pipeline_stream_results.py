@@ -32,7 +32,11 @@ _SUPPRESSED_PIPE_ERRORS = (BrokenPipeError, ConnectionResetError)
 
 
 class _ResultTag(enum.StrEnum):
-    """The outcomes a pipe task can deliver, as a closed set."""
+    """The outcomes a pipe task can deliver, as a closed set.
+
+    ``assert_never`` makes a new member without a matching branch a type error
+    under ``ty`` and an assertion failure if it reaches this test at runtime.
+    """
 
     OK = "ok"
     BROKEN_PIPE = "broken_pipe"
@@ -57,6 +61,13 @@ def _make_pipe_result(tag: _ResultTag) -> object:
             return RuntimeError("unexpected pipe failure")
         case _ResultTag.CANCELLED:
             return asyncio.CancelledError()
+        case _:  # pragma: no cover - unreachable while every member has an arm
+            # `match` falls through silently on a missed case, and the
+            # implicit `None` would be worse than a failure here:
+            # `_surface_unexpected_pipe_failures` treats a non-`BaseException`
+            # result as success, so a new tag would silently become a passing
+            # "ok" outcome, defeating the guard this module exists to verify.
+            typ.assert_never(tag)
 
 
 @given(tags=st.lists(st.sampled_from(list(_ResultTag)), max_size=8))

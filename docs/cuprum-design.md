@@ -1468,14 +1468,14 @@ concurrently with optional concurrency limits. The implementation uses
 For screen readers: The following sequence diagram shows how `run_concurrent`
 executes several commands at once. The caller invokes `run_concurrent` with the
 commands and a config. It first validates every program against the context
-allowlist in one step, and if any is forbidden a `ForbiddenProgramError` returns
-to the caller immediately, before anything runs. Otherwise each `SafeCmd` runs
-concurrently: it acquires the semaphore when one is configured, which gates how
-many run at once; fires its before hook; executes the process; fires its exit
-hook; records its result and status with the result aggregator; and releases the
-semaphore. Once all have finished, the aggregator returns the results in
-submission order and `run_concurrent` returns a `ConcurrentResult` carrying the
-results, the failures, and the `ok` flag.
+allowlist in one step, and if any is forbidden it raises a
+`ForbiddenProgramError` to the caller immediately, before anything runs.
+Otherwise each `SafeCmd` runs concurrently: it acquires the semaphore when one
+is configured, which gates how many run at once; fires its before hook;
+executes the process; fires its exit hook; records its result and status with
+the result aggregator; and releases the semaphore. Once all have finished, the
+aggregator returns the results in submission order and `run_concurrent` returns
+a `ConcurrentResult` carrying the results, the failures, and the `ok` flag.
 
 Figure 6: Concurrent execution flow with allowlist validation and semaphore
 gating
