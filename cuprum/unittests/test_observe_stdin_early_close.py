@@ -50,16 +50,7 @@ _STDIN_EARLY_CLOSE_CHILD = "\n".join((
 
 
 async def _wait_for_path(path: Path, *, timeout: float) -> None:
-    """Poll until ``path`` exists, bounding the wait with ``timeout``.
-
-    Awaiting a marker file that a child writes keeps the coordination
-    deterministic rather than guessing readiness with a fixed sleep.
-
-    Raises
-    ------
-    TimeoutError
-        If ``path`` does not appear before ``timeout`` elapses.
-    """
+    """Poll until ``path`` exists, raising ``TimeoutError`` on expiry."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while not path.exists():
@@ -70,18 +61,7 @@ async def _wait_for_path(path: Path, *, timeout: float) -> None:
 
 
 def _patch_writer_wedge_signal(monkeypatch: pytest.MonkeyPatch) -> asyncio.Event:
-    """Patch the stdin writer to flag when it engages; return that flag.
-
-    The event is set synchronously before delegating to the real writer, which
-    then buffers the oversized payload and suspends on ``drain()`` before
-    control returns to the awaiting orchestrator, so the writer is genuinely
-    wedged once the flag is observed.
-
-    Returns
-    -------
-    asyncio.Event
-        The flag set once the patched stdin writer engages.
-    """
+    """Patch the stdin writer to flag when it engages; return that flag."""
     writer_wedged = asyncio.Event()
 
     async def _coordinated_write_stdin(
