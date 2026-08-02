@@ -79,26 +79,32 @@ def _should_retry_request_failure(exc: Exception) -> bool:
     return isinstance(exc, urllib.error.URLError)
 
 
+def _retry_delay_or_raise(
+    exc: urllib.error.URLError,
+    delay: float | None,
+) -> float:
+    """Return the retry delay or re-raise the request failure."""
+    if not _should_retry_request_failure(exc):
+        raise exc
+    if delay is None:
+        raise exc
+    return delay
+
+
 def _with_retry[T](
     operation: cabc.Callable[[], T],
     *,
     description: str,
 ) -> T:
     """Run *operation* with bounded retry/backoff for transient HTTP failures."""
-    last_exc: Exception | None = None
-    for attempt in range(len(_RETRY_DELAYS_SECONDS) + 1):
+    del description  # Retain the keyword contract; failures preserve their exception.
+    retry_schedule = iter((*_RETRY_DELAYS_SECONDS, None))
+    while True:
+        delay = next(retry_schedule)
         try:
             return operation()
         except (urllib.error.HTTPError, urllib.error.URLError) as exc:
-            if not _should_retry_request_failure(exc):
-                raise
-            last_exc = exc
-            if attempt == len(_RETRY_DELAYS_SECONDS):
-                break
-            time.sleep(_RETRY_DELAYS_SECONDS[attempt])
-    if last_exc is None:
-        raise RuntimeError(description)
-    raise last_exc
+            time.sleep(_retry_delay_or_raise(exc, delay))
 
 
 class _ArtifactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
