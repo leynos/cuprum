@@ -1251,6 +1251,45 @@ The backend is resolved once on first use and the result is cached for the
 lifetime of the process. Changing the environment variable after the first
 resolution has no effect.
 
+### Rust stream error handling (internal)
+
+Not every I/O failure reaches the caller: `rust_pump_stream` treats a broken
+pipe or connection reset as the expected result of a downstream stage exiting
+early, so it drains the reader and returns successfully. When either helper
+*does* propagate a failure, it raises an `OSError` that behaves like one raised
+by Python itself, so it can be handled the same way:
+
+- `errno` is populated, so failures are told apart by number rather than by
+  matching message text — which is not a stable interface.
+- `strerror` carries the system's description on its own. Rust renders a raw OS
+  error as `"Bad file descriptor (os error 9)"`; that trailing `(os error N)` is
+  removed, so the number is stated once, by Python's own `[Errno N]` prefix.
+- The exception is the **subclass** the error implies, not a bare `OSError`, so
+  `except BrokenPipeError:` and `except IsADirectoryError:` work as expected.
+
+```python
+import errno
+
+from cuprum._streams_rs import rust_consume_stream
+
+try:
+    text = rust_consume_stream(fd)
+except IsADirectoryError:
+    text = ""  # the descriptor was a directory
+except OSError as exc:
+    if exc.errno != errno.EBADF:
+        raise
+    text = ""  # the descriptor was already closed
+```
+
+On Windows the native code is a Win32 error rather than an `errno`, so it is
+carried in `winerror`; `errno` and the subclass are derived from it. Branch on
+`winerror` for Windows-specific codes.
+
+Failures that never reached the operating system — an internal overflow or
+bounds condition — surface as a plain `OSError` with a descriptive message and
+no `errno`, because there is no system code to report.
+
 ### Rust stream observability (internal)
 
 Both internal helpers emit `tracing` diagnostics; the crate installs no

@@ -1230,14 +1230,73 @@ with `thiserror`:
 - `Io(io::Error)` — an operating-system I/O failure (transparent wrapper).
 
 Conversion to a Python exception happens in exactly one place
-(`From<PumpError> for PyErr`): `Io` preserves a raw operating-system error code
-as Python's machine-readable `OSError.errno`, while errors without a raw code
-use `pyo3`'s standard `io::Error` translation. The overflow variants surface as
+(`From<PumpError> for PyErr`). The overflow variants surface as plain
 `OSError`. The non-fatal write classification (broken pipe / connection reset)
 lives on the enum as `PumpError::is_nonfatal_write`, replacing the free
 function the splice and read/write paths previously shared. New failure
 conditions get a variant here rather than a stringly-typed
 `io::Error::other(...)`.
+
+### Preserving the operating-system error code
+
+The `Io` variant needs care, because PyO3's own `From<io::Error> for PyErr`
+loses the number. It selects the exception *type* from `io::ErrorKind` and then
+constructs it with a single argument, the error's `Display` string — and Python
+populates `OSError.errno` and `OSError.strerror` only when it receives **two or
+more** arguments. The number therefore survived in the message text and nowhere
+a caller could branch on, forcing callers to parse English to tell `EBADF` from
+`EPIPE`. This was issue `#265`; `io_error_to_py_err` now handles it.
+
+The construction is platform-specific, so it sits behind a `cfg`-selected
+`os_error_to_py_err`:
+
+- **Unix** — `raw_os_error` *is* an `errno`, so the two-argument form
+  `OSError(code, strerror)` is exactly right. It also fixes the exception type
+  for free: CPython maps the errno to the matching subclass itself, so
+  `OSError(32, ...)` *is* a `BrokenPipeError` and reading a directory raises
+  `IsADirectoryError`. That is the same subclass selection PyO3 reached for
+  through `ErrorKind`, taken from the authoritative source instead of a
+  parallel table.
+- **Windows** — `raw_os_error` carries a `GetLastError` code, not an `errno`.
+  Passing it as an `errno` would assign an unrelated number
+  (`ERROR_INVALID_HANDLE` is 6, which as an `errno` is `ENXIO`) and pick the
+  subclass from it. The five-argument form `OSError(errno, strerror, filename,
+  winerror, filename2)` is the one that carries a native code: given a
+  `winerror`, CPython ignores the `errno` argument, derives `errno` from the
+  Win32 code, and selects the subclass from the derived value, so all three
+  agree.
+
+Two details are worth knowing before changing this code. First, `io::Error`
+renders a raw OS error as `"{strerror} (os error {code})"`, so the suffix is
+stripped before it becomes `strerror` — otherwise the number appears twice, as
+`"[Errno 9] Bad file descriptor (os error 9)"`. `strip_os_error_suffix` is
+anchored to *this* error's own code so it can never truncate a message
+belonging to a different one; three proptests pin that. Second, an `io::Error`
+with no `raw_os_error` — one synthesized in Rust rather than returned by a
+syscall — has no number to preserve, so PyO3's `ErrorKind` mapping remains the
+best available and is used unchanged.
+
+`cuprum/unittests/test_rust_errno.py` covers both arms, with each set of
+assertions scoped to the platform whose taxonomy it names — the POSIX cases
+name an `errno` and the subclass CPython derives from it, the Windows case
+names a `winerror` and the `errno` CPython derives from *that*. The Windows
+case does not hard-code either expectation: it reads them back from an
+`OSError` it builds from the observed `winerror`, so it pins the derivation
+without depending on which Win32 code the failure happens to raise.
+
+What actually executes is narrower than what is written, so do not read a
+green run as coverage of both arms:
+
+- **POSIX** — the cases run natively on Linux whenever the extension is built,
+  so a local `make test` preceded by `maturin develop` executes them. Without
+  that build the `rust_streams` fixture skips them rather than failing, which
+  is what CI does today. Making CI build the extension and fail loudly without
+  it is `#258`, in flight as pull request `#269`.
+- **Windows** — the `#[cfg(windows)]` arm is compiled natively on
+  `windows-2022` by the wheel build (`.github/workflows/build-wheels.yml`,
+  reached from `ci.yml`), which catches a Windows arm that does not build or
+  type-check. No job runs the Python suite on Windows, so nothing executes the
+  `winerror` assertions; that gap is tracked by `#277`.
 
 ## Rust FD-borrow ownership contract
 
@@ -1526,9 +1585,10 @@ Normal CI does not execute them. The test jobs reach the suite through
 `make build`, which is only `uv sync --group dev`; nothing builds
 `cuprum._rust_backend_native`, so those cases are skipped rather than run.
 Issue `#258` tracks building the extension in the test jobs and adding a
-fail-loud guard so the skip cannot pass unnoticed, and issue `#265` tracks a
-pre-existing PyO3 defect — `OSError` crossing the boundary loses its `errno` —
-that currently fails one extension-enabled test.
+fail-loud guard so the skip cannot pass unnoticed. Issue `#265` — `OSError`
+crossing the boundary lost its `errno`, failing one extension-enabled test —
+is resolved; see [Preserving the operating-system error
+code](#preserving-the-operating-system-error-code).
 
 So the `consume_stream_files` snapshots and properties are the coverage of the
 read-and-decode loop that actually executes on every commit. They do not
