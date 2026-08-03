@@ -279,19 +279,29 @@ independent phase-count oracle.
 Two consequences are worth preserving when changing the mapping. Labels are
 projected only when the reducer yields at least one operation, so a `plan`
 event never touches `event.program` or the project tag. And the reducer is
-total over the documented phase contract: an unrecognized phase raises
-`_UnhandledMetricsPhaseError` rather than being silently dropped, so a new
-`ExecPhase` cannot reach metrics without a deliberate decision here.
+total over `ExecPhase` — all seven phases (`plan`, `start`, `stdout`,
+`stderr`, `stdin`, `stdin_error`, `exit`) have an arm — and fail-closed beyond
+it: any other phase raises `_UnhandledMetricsPhaseError` rather than being
+silently dropped. That is deliberate, and its cost is worth stating plainly. A
+hook exception is not swallowed, so adding a value to `ExecPhase` without
+adding an arm here would raise for every caller that has already registered
+`MetricsHook`. A new phase therefore cannot reach metrics without a decision in
+this reducer. The structured logging adapter is fail-open by contrast,
+formatting an unrecognized phase generically.
 
 Applying the operations is deliberately non-atomic, and that is a contract
 collectors rely on rather than an implementation detail. An `exit` event yields
 up to two operations — the failure counter, then the duration observation —
 applied as separate collector calls in that order, so a collector that raises
 on the second leaves the first applied. The exception propagates out of the
-hook, where `_emit_exec_event` logs `observe_hook_failed` and lets the command
-continue. The labels are extracted once before the loop and are read-only
-within it. A collector must therefore treat each call as independent and never
-infer a duration observation from a failure increment. No operation identifier
+hook and is not swallowed: `_emit_exec_event` logs `observe_hook_failed` and
+wraps the error in `_ExecEventEmissionError` so already-scheduled observe tasks
+survive cleanup, then `_StageObservation.emit` unwraps it and re-raises the
+collector's original exception — so a raising collector fails the user's
+command. A collector that must not do that has to swallow its own errors. The
+labels are extracted once before the loop and are read-only within it. A
+collector must therefore treat each call as independent and never infer a
+duration observation from a failure increment. No operation identifier
 is passed either, so a repeated call increments again — nothing here is
 idempotent, and the hook never retries. See the metrics-hook dispatch figure in
 [the design document](cuprum-design.md) for the full statement, and

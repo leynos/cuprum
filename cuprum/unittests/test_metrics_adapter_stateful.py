@@ -18,6 +18,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule
 
+from cuprum import sh
 from cuprum.adapters.metrics_adapter import (
     InMemoryMetrics,
     MetricsHook,
@@ -26,7 +27,9 @@ from cuprum.adapters.metrics_adapter import (
     _metric_operations,
     _UnhandledMetricsPhaseError,
 )
+from cuprum.context import ScopeConfig, scoped
 from cuprum.events import ExecEvent
+from cuprum.unittests._adapter_test_support import _python_builder
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -258,6 +261,10 @@ TestMetricsAccumulation.settings = settings(
 )
 
 
+class _MetricsBackendError(Exception):
+    """Test exception standing in for a backend rejecting a metric write."""
+
+
 class _FailingHistogramCollector(InMemoryMetrics):
     """A collector whose histogram writes always fail.
 
@@ -274,7 +281,7 @@ class _FailingHistogramCollector(InMemoryMetrics):
     ) -> None:
         """Fail as a backend rejecting the observation would."""
         msg = f"metrics backend rejected {name}"
-        raise RuntimeError(msg)
+        raise _MetricsBackendError(msg)
 
 
 def test_a_failing_second_operation_leaves_the_first_applied() -> None:
@@ -283,14 +290,14 @@ def test_a_failing_second_operation_leaves_the_first_applied() -> None:
     An exit event yields a failure counter then a duration observation, as two
     independent collector calls. There is no atomicity across them and none is
     attempted, so this pins what a caller actually observes rather than leaving
-    it to chance: the counter stays, the histogram is absent, and the error
-    reaches the hook's caller — which isolates it, so the command survives.
+    it to chance: the counter stays, the histogram is absent, and the backend's
+    own exception leaves the hook unwrapped rather than being absorbed.
     """
     collector = _FailingHistogramCollector()
     hook = MetricsHook(collector)
     event = _event("exit", exit_code=3, duration_s=1.5)
 
-    with pytest.raises(RuntimeError, match="rejected cuprum_duration_seconds"):
+    with pytest.raises(_MetricsBackendError, match="rejected cuprum_duration_seconds"):
         hook(event)
 
     assert collector.counters == {"cuprum_failures_total": 1.0}, (
@@ -301,3 +308,24 @@ def test_a_failing_second_operation_leaves_the_first_applied() -> None:
         "the observation that raised must not be recorded, found "
         f"{collector.histograms!r}"
     )
+
+
+def test_a_failing_collector_fails_the_command() -> None:
+    """A raising collector is not isolated; its exception fails the command.
+
+    Cuprum logs ``observe_hook_failed`` and then re-raises, so the backend's
+    own exception type reaches the caller of ``run_sync`` unchanged. This pins
+    the escalation path the adapter documents, and is why the reducer's
+    fail-closed phase match matters: an unhandled phase would take commands
+    down for every caller that has registered the hook.
+    """
+    builder, catalogue = _python_builder(project_name="metrics-failure")
+    cmd = builder("-c", "pass")
+    hook = MetricsHook(_FailingHistogramCollector())
+
+    with (
+        scoped(ScopeConfig(allowlist=catalogue.allowlist)),
+        sh.observe(hook),
+        pytest.raises(_MetricsBackendError, match="rejected cuprum_duration_seconds"),
+    ):
+        cmd.run_sync()

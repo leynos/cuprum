@@ -316,10 +316,11 @@ class MetricsHook:
 
         So if the collector raises on the second call, the first stays applied:
         a failure can be recorded without its duration. That is accepted rather
-        than hidden. The exception propagates out of this hook, where
-        :func:`cuprum._observability._emit_exec_event` catches it, logs
-        ``observe_hook_failed``, and lets the command continue — a broken
-        metrics backend must not fail the user's command.
+        than hidden. The exception then leaves this hook and is not swallowed:
+        :func:`cuprum._observability._emit_exec_event` logs
+        ``observe_hook_failed`` and re-raises, so a raising collector fails the
+        user's command. A collector that must not do that has to swallow its
+        own errors.
 
         Collector implementations should therefore treat each call as
         independent and ordered, and must not assume that seeing a

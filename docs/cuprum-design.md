@@ -772,7 +772,13 @@ Internally, command execution can be described in terms of events:
 - `plan` – intention to run a particular `Program` with argv/cwd/env;
 - `start` – process successfully spawned, with pid and timestamp;
 - `stdout` / `stderr` – output lines or chunks (optional);
+- `stdin` – bytes written to the child's standard input, with a byte count;
+- `stdin_error` – a standard-input write or close failed, with the failing
+  operation and the raised error's type;
 - `exit` – process finished, with exit code and duration.
+
+These seven phases are the whole of `ExecPhase`; there is no other value a
+hook can receive.
 
 These events are surfaced to user code via hooks. A typical hook signature
 might be:
@@ -780,7 +786,9 @@ might be:
 ```python
 @dataclass
 class ExecEvent:
-    phase: Literal["plan", "start", "stdout", "stderr", "exit"]
+    phase: Literal[
+        "plan", "start", "stdout", "stderr", "exit", "stdin", "stdin_error"
+    ]
     program: Program | None
     argv: tuple[str, ...]
     cwd: Path | None
@@ -978,9 +986,10 @@ The following design decisions were made during implementation:
 The structured event stream (`ExecEvent`) is exposed via `sh.observe()` and
 implemented with the following decisions:
 
-- **Event phases:** Cuprum emits `plan`, `start`, `stdout`, `stderr`, and `exit`
-  phases for both single commands and pipeline stages. Pipeline stage events
-  are tagged with a stage index and stage count.
+- **Event phases:** Cuprum emits `plan`, `start`, `stdout`, `stderr`, `stdin`,
+  `stdin_error`, and `exit` phases for both single commands and pipeline
+  stages — the full `ExecPhase` set. Pipeline stage events are tagged with a
+  stage index and stage count.
 - **Correlation:** every event for one execution carries the same
   `ExecEvent.exec_id`, a stable token minted once per execution (per pipeline
   stage for pipelines). Consumers that track per-execution state — such as the
@@ -1472,9 +1481,15 @@ design decisions guide these adapters:
   property-tested without a collector at all.
 - Labels are resolved only when the reducer yields at least one operation, so a
   `plan` event — which records nothing — never projects labels off the event.
-- The reducer is total over the documented phase contract: an unrecognized
-  phase raises `_UnhandledMetricsPhaseError` rather than being silently
-  ignored, so a new phase cannot be added without a deliberate decision here.
+- The reducer is total over `ExecPhase` — all seven phases (`plan`, `start`,
+  `stdout`, `stderr`, `stdin`, `stdin_error`, `exit`) have an arm — and
+  fail-closed beyond it: any other phase raises `_UnhandledMetricsPhaseError`
+  rather than being silently ignored. That is deliberate, and its cost is
+  worth stating plainly. A hook exception is not swallowed, so adding a value
+  to `ExecPhase` without adding an arm here would raise for every caller that
+  has already registered `MetricsHook`. A new phase therefore cannot reach
+  metrics without a decision in this reducer. The structured logging adapter
+  is fail-open by contrast, formatting an unrecognized phase generically.
 
 For screen readers: The following sequence diagram shows how one execution
 event becomes collector calls. The observe-hook dispatcher invokes
@@ -1538,10 +1553,13 @@ Three consequences follow, and collector implementations depend on them:
 - **The order is fixed.** The failure counter is applied before the duration
   observation, so a partial application is always the prefix, never the
   suffix.
-- **The exception propagates.** It leaves the hook, and
-  `cuprum._observability._emit_exec_event` catches it, logs
-  `observe_hook_failed`, and lets the command continue: a broken metrics
-  backend must not fail a user's command.
+- **The exception propagates, and the command fails with it.**
+  `cuprum._observability._emit_exec_event` logs `observe_hook_failed`, then
+  wraps the error in `_ExecEventEmissionError` so that observe-hook tasks
+  already scheduled survive cleanup; `_StageObservation.emit` unwraps that
+  wrapper and re-raises the collector's original exception. A broken metrics
+  backend therefore takes the user's command down rather than being absorbed,
+  so a collector that must not do that has to swallow its own errors.
 
 So a collector must treat each call as independent and ordered, and must
 never assume that seeing a `cuprum_failures_total` increment guarantees a
