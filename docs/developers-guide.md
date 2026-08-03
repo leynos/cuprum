@@ -1300,18 +1300,36 @@ green run as coverage of both arms:
   the Python suite on Windows, so nothing executes the `winerror` assertions;
   that gap is tracked by `#277`.
 
-Compiling that arm locally needs no Windows machine, which is worth knowing
-before changing it:
+That wheel build is a plain `maturin build`, so it compiles the Windows arm
+without `-D warnings`. It therefore catches a Windows arm that fails to
+compile, and only that. Warn-level regressions pass it — and the cheapest way
+to introduce one is to gate a helper on `#[cfg(unix)]` incorrectly, which makes
+it dead code on Windows rather than a compile error. `make lint-windows` closes
+that gap by running Clippy for the Windows target with the same `-D warnings`
+posture the host gate uses:
 
 ```bash
 rustup target add x86_64-pc-windows-msvc
-PYO3_CROSS=1 PYO3_CROSS_PYTHON_VERSION=3.13 \
-  cargo check --manifest-path rust/Cargo.toml \
-  -p cuprum-rust --target x86_64-pc-windows-msvc
+make lint-windows
 ```
 
-`PYO3_CROSS_PYTHON_VERSION` is required: PyO3 cannot probe an interpreter for
-the target platform, so the ABI version has to be stated explicitly.
+No Windows machine is needed: Clippy type-checks without linking, so the target
+standard library is sufficient. `PYO3_CROSS_PYTHON_VERSION` is required and the
+Makefile sets it, because PyO3 cannot probe an interpreter for the target
+platform and so the ABI version has to be stated explicitly; keep the
+`WINDOWS_PYTHON_VERSION` variable in step with the `python-version` the Windows
+wheel job builds against.
+
+`make lint-windows` is deliberately not part of `make lint`. It hard-fails when
+the target standard library is absent rather than skipping, and requiring every
+contributor to install a second standard library before any lint run is a poor
+trade for a check this narrow. CI's `lint-test` job installs the target and
+runs it on every pull request, which is where it has to hold.
+
+This is the only check in the repository that reads the `#[cfg(windows)]`
+branches with warnings denied. A trybuild case cannot substitute for it:
+trybuild compiles its fixtures for the host target, so on a Linux runner it
+sees the `#[cfg(unix)]` arm and never the Windows one.
 
 ## Rust FD-borrow ownership contract
 

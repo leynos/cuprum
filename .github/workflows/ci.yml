@@ -78,6 +78,16 @@ jobs:
       - name: Run lint
         run: make lint
 
+      # The Windows wheel build compiles this arm but without `-D warnings`,
+      # so it catches a Windows arm that fails to build and nothing else. This
+      # step is what holds the `#[cfg(windows)]` and `#[cfg(unix)]` branches to
+      # the same warnings posture as the host.
+      - name: Install the Windows target standard library
+        run: rustup target add x86_64-pc-windows-msvc
+
+      - name: Lint the Windows cfg branches
+        run: make lint-windows
+
   typecheck-test:
     name: Typecheck and test (Python ${{ matrix.python-label }})
     continue-on-error: ${{ matrix.experimental }}

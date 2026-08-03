@@ -16,6 +16,15 @@ TEST_FLAGS ?= $(CARGO_FLAGS) --jobs 1
 TEST_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
 WHITAKER_CARGO_FLAGS ?= $(CARGO_FLAGS) --jobs 1
 WHITAKER_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
+# The Windows arm of the extension's `cfg` branches. `make lint` only ever sees
+# the host's arm, and the Windows wheel build compiles without `-D warnings`,
+# so warn-level regressions behind `#[cfg(windows)]` — dead code left by a
+# `#[cfg(unix)]` gate, most of all — would reach main unremarked.
+WINDOWS_TARGET ?= x86_64-pc-windows-msvc
+# PyO3 cannot probe an interpreter for the target platform, so the ABI version
+# must be stated. Keep it in step with the `python-version` the Windows job in
+# .github/workflows/build-wheels.yml builds against.
+WINDOWS_PYTHON_VERSION ?= 3.13
 PYTEST_CARGO_BUILD_JOBS ?= 1
 PYTEST_RUSTFLAGS ?= -C codegen-units=1
 TEST_CARGO_BUILD_JOBS ?= 1
@@ -61,7 +70,7 @@ PYLINT_VERSION ?= 4.0.5
 PYLINT = $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) \
   --from '$(PYLINT_PYPY_SHIM)' --with 'pylint==$(PYLINT_VERSION)' pylint-pypy
 
-.PHONY: help all clean build build-release lint fmt check-fmt \
+.PHONY: help all clean build build-release lint lint-windows fmt check-fmt \
         markdownlint spelling spelling-helper-test nixie test typecheck \
         test-extension develop \
         benchmark-micro benchmark-e2e \
@@ -137,6 +146,15 @@ lint: ruff uv ## Run linters (Ruff, pylint, Clippy, Whitaker)
 	@if ! $(LOCAL_TOOL_ENV) command -v $(WHITAKER) >/dev/null 2>&1; then echo "whitaker is required for linting. Install it before running this target." >&2; exit 1; fi
 	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- $(WHITAKER_CARGO_FLAGS)
 	+$(MAKE) spelling
+
+lint-windows: ## Lint the Rust extension's Windows cfg branches (cross-target)
+	@if ! rustup target list --installed | grep -qx '$(WINDOWS_TARGET)'; then \
+	  echo "The $(WINDOWS_TARGET) standard library is required." >&2; \
+	  echo "Install it with: rustup target add $(WINDOWS_TARGET)" >&2; \
+	  exit 1; \
+	fi
+	cd $(RUST_DIR) && PYO3_CROSS_PYTHON_VERSION=$(WINDOWS_PYTHON_VERSION) \
+	  $(CARGO) clippy --target $(WINDOWS_TARGET) $(CLIPPY_FLAGS)
 
 typecheck: build ## Run typechecking
 	$(UV_RUN_ENV) uv sync --group dev
