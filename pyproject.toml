@@ -24,7 +24,7 @@ dev = [
     # fixture-registration API; 9.1 deprecates the nodeid/baseid path that
     # pytest-bdd 8.1.0 uses, raising PytestRemovedIn10Warning.
     # Track: https://github.com/pytest-dev/pytest-bdd/issues/823
-    "pytest<9.1",
+    "pytest<9.2",
     "pytest-benchmark",
     "pytest-bdd",
     "ruff",
