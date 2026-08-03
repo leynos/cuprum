@@ -1,9 +1,24 @@
-"""Shared helpers for maturin build and pin contract tests."""
+"""Helpers for building and introspecting the native maturin wheel.
+
+Maturin pin-synchronization checks are not here. They belong to
+``cuprum/unittests/test_maturin_pins.py``, which owns the readers and patterns
+that compare the pins across CI files. The subset with a second consumer — the
+pyproject reader and the container-reference pattern — sits in
+``cuprum/unittests/_maturin_pin_support.py``, from which
+``cuprum/unittests/test_maturin_build.py`` takes the expected version to assert
+against the built wheel's ``Generator``.
+
+This module retains the toolchain detectors and the wheel *build*, which wrap
+``subprocess`` and ``sysconfig`` probing that does not inline cleanly; wheel
+*inspection* lives in ``tests.helpers.maturin_wheel`` and is re-exported here
+so existing import sites keep working. Do not re-externalize further helpers
+here until a second concrete consumer exists and the shared interface can be
+designed against real requirements.
+"""
 
 from __future__ import annotations
 
-import importlib.util
-import re
+import importlib
 import shutil
 import subprocess  # noqa: S404 - tests invoke pinned maturin build commands.
 import sys
@@ -11,18 +26,6 @@ import sysconfig
 from pathlib import Path
 
 from tests.helpers import maturin_wheel as _maturin_wheel
-
-_MATURIN_PIN_RE = re.compile(r"maturin==(\d+\.\d+\.\d+)")
-_WORKFLOW_PIN_RE = re.compile(r'MATURIN_VERSION:\s*"(\d+\.\d+\.\d+)"')
-_ACTION_PIN_RE = re.compile(r'default:\s*"(\d+\.\d+\.\d+)"')
-_AARCH64_CONTAINER_PIN_RE = re.compile(
-    r"^\s*MANYLINUX_AARCH64_CONTAINER:\s*([^\s#]+)\s+#\s*\S.*$",
-    re.MULTILINE,
-)
-_AARCH64_CONTAINER_USAGE_RE = re.compile(
-    r"^\s*container:\s*\$\{\{\s*env\.MANYLINUX_AARCH64_CONTAINER\s*\}\}\s*$",
-    re.MULTILINE,
-)
 
 
 class MaturinBuildError(subprocess.CalledProcessError):
@@ -60,150 +63,30 @@ class MaturinBuildError(subprocess.CalledProcessError):
         )
 
 
-def read_expected_maturin_version(root: Path) -> str:
-    """Read the maturin version pinned in ``pyproject.toml``.
-
-    Raises
-    ------
-    AssertionError
-        If the maturin dependency pin is missing.
-    FileNotFoundError
-        If ``pyproject.toml`` is absent.
-    OSError
-        If ``pyproject.toml`` cannot be read.
-    UnicodeDecodeError
-        If ``pyproject.toml`` is not valid UTF-8.
-    """
-    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
-    match = _MATURIN_PIN_RE.search(pyproject)
-    if match is None:
-        msg = "Could not locate maturin dev dependency pin in pyproject.toml"
-        raise AssertionError(msg)
-    return match.group(1)
-
-
-def _require_pin_match(
-    match: re.Match[str] | None,
-    location: str,
-    *,
-    subject: str = "maturin version pin",
-) -> str:
-    """Extract a version from a regex match or raise AssertionError with location."""
-    if match is None:
-        msg = f"Could not locate {subject} in {location}"
-        raise AssertionError(msg)
-    return match.group(1)
-
-
-def read_maturin_pins(root: Path) -> dict[str, str]:
-    """Read maturin version pins from the synchronized locations.
-
-    Raises
-    ------
-    AssertionError
-        If any maturin version pin is missing.
-    FileNotFoundError
-        If any pin source file is absent.
-    OSError
-        If any pin source file cannot be read.
-    UnicodeDecodeError
-        If any pin source file is not valid UTF-8.
-    """
-    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
-    workflow = (root / ".github/workflows/build-wheels.yml").read_text(encoding="utf-8")
-    action = (root / ".github/actions/build-wheels/action.yml").read_text(
-        encoding="utf-8"
-    )
-
-    return {
-        "pyproject.toml": _require_pin_match(
-            _MATURIN_PIN_RE.search(pyproject),
-            "pyproject.toml",
-        ),
-        "build-wheels.yml": _require_pin_match(
-            _WORKFLOW_PIN_RE.search(workflow),
-            ".github/workflows/build-wheels.yml",
-        ),
-        "build-wheels/action.yml": _require_pin_match(
-            _ACTION_PIN_RE.search(action),
-            ".github/actions/build-wheels/action.yml",
-        ),
-    }
-
-
-def read_manylinux_aarch64_container_ref(root: Path) -> str:
-    """Read the pinned manylinux aarch64 container reference.
-
-    Parameters
-    ----------
-    root
-        Repository root containing ``.github/workflows/build-wheels.yml``.
-
-    Returns
-    -------
-    str
-        The pinned ``MANYLINUX_AARCH64_CONTAINER`` image reference.
-
-    Raises
-    ------
-    AssertionError
-        If the ``MANYLINUX_AARCH64_CONTAINER`` pin is missing.
-    FileNotFoundError
-        If ``.github/workflows/build-wheels.yml`` is absent.
-    OSError
-        If ``.github/workflows/build-wheels.yml`` cannot be read.
-    UnicodeDecodeError
-        If ``.github/workflows/build-wheels.yml`` is not valid UTF-8.
-    """
-    workflow = (root / ".github/workflows/build-wheels.yml").read_text(encoding="utf-8")
-    return _require_pin_match(
-        _AARCH64_CONTAINER_PIN_RE.search(workflow),
-        ".github/workflows/build-wheels.yml",
-        subject="MANYLINUX_AARCH64_CONTAINER pin",
-    )
-
-
-def workflow_uses_manylinux_aarch64_container_ref(root: Path) -> bool:
-    """Report whether the workflow references the pinned manylinux container.
-
-    Parameters
-    ----------
-    root
-        Repository root containing ``.github/workflows/build-wheels.yml``.
+def toolchain_available() -> bool:
+    """Report whether the Rust toolchain and the maturin module are available.
 
     Returns
     -------
     bool
-        ``True`` when the Linux aarch64 build step uses
-        ``env.MANYLINUX_AARCH64_CONTAINER``; otherwise ``False``.
+        ``True`` only when ``cargo`` and ``rustc`` are both on ``PATH`` and the
+        ``maturin`` module imports successfully in the current interpreter;
+        ``False`` if any of the three is missing.
 
-    Raises
-    ------
-    FileNotFoundError
-        If ``.github/workflows/build-wheels.yml`` is absent.
-    OSError
-        If ``.github/workflows/build-wheels.yml`` cannot be read.
-    UnicodeDecodeError
-        If ``.github/workflows/build-wheels.yml`` is not valid UTF-8.
+    The module is imported rather than located with ``find_spec``: the build
+    runs ``python -m maturin``, which needs the module to import, and a module
+    that is findable can still fail to import.
     """
-    workflow = (root / ".github/workflows/build-wheels.yml").read_text(encoding="utf-8")
-    return _AARCH64_CONTAINER_USAGE_RE.search(workflow) is not None
-
-
-def _maturin_module_available() -> bool:
-    """Return whether the maturin module can be resolved."""
     try:
-        return importlib.util.find_spec("maturin") is not None
+        importlib.import_module("maturin")
     except ImportError:
-        return False
-
-
-def toolchain_available() -> bool:
-    """Return whether the Rust toolchain and maturin are available."""
+        maturin_available = False
+    else:
+        maturin_available = True
     return (
         shutil.which("cargo") is not None
         and shutil.which("rustc") is not None
-        and _maturin_module_available()
+        and maturin_available
     )
 
 
@@ -222,8 +105,8 @@ def maturin_script_locatable() -> bool:
     scheme's ``scripts`` directory for a file named ``maturin``, keyed off
     ``sys.prefix``/``sys.exec_prefix`` of the *running* interpreter — not
     ``sys.path`` or ``PATH``. This diverges from :func:`toolchain_available`,
-    whose ``importlib.util.find_spec`` check only confirms the ``maturin``
-    module is importable.
+    whose ``importlib.import_module`` check only confirms the ``maturin``
+    module imports.
 
     The two checks disagree in layered/ephemeral interpreters such as a
     ``uv run --with ...`` overlay: the overlay's ``sys.path`` includes the
@@ -255,7 +138,13 @@ def maturin_script_locatable() -> bool:
 
 
 def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
-    """Build a native wheel with the pinned maturin version.
+    """Build a native wheel using the current interpreter's maturin.
+
+    Invokes ``python -m maturin`` with the running interpreter, so the maturin
+    that builds the wheel is whichever version is installed in that
+    environment. Alignment with the declared pin is asserted separately by
+    ``test_installed_maturin_matches_expected_pin`` and by the snapshot test's
+    generator check, not selected here.
 
     Raises
     ------

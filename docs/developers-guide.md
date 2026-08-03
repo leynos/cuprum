@@ -1600,13 +1600,59 @@ change alters the architecture of the lint gate, update
 
 ## Maturin pin synchronization and native wheel tests
 
-The `tests/helpers/maturin.py` module provides shared helpers for tests that
-validate the maturin version pin contract and native wheel build output. The
-wheel-artefact snapshot parsers (`wheel_build_snapshot` and its private
-helpers) live in the sibling module `tests/helpers/maturin_wheel.py` to keep
-each module below the Pylint module-length limit; `tests/helpers/maturin.py`
+These checks span three test modules, one per concern —
+`test_maturin_pins.py`, `test_maturin_toolchain.py`, and
+`test_maturin_build.py` — and the helpers behind them are split across three
+boundaries.
+
+The **pin-synchronization** checks live in
+`cuprum/unittests/test_maturin_pins.py`, with their readers and regexes local
+to that module: they read repository files, have a single consumer, and gain
+nothing from indirection. Two exceptions sit in
+`cuprum/unittests/_maturin_pin_support.py`, each because it genuinely has a
+second consumer — the threshold this policy asks for before sharing anything:
+
+- `read_expected_maturin_version` — the pin comparison here, and the wheel
+  snapshot's `Generator` assertion in `test_maturin_build.py`.
+- `MANYLINUX_CONTAINER_SHA256_RE` — the container-pin assertion here, and the
+  generated references in `test_manylinux_container_ref_properties.py`.
+  Sharing it through the support module keeps one test module from importing a
+  private name out of another.
+
+The **availability detectors** are tested together in
+`cuprum/unittests/test_maturin_toolchain.py`: `toolchain_available` and
+`maturin_script_locatable` answer adjacent questions about the same build, and
+the wheel test is gated on both.
+
+The **wheel build and toolchain detection** stay in `tests/helpers/maturin.py`,
+because they wrap `subprocess` and `sysconfig` probing that does not inline
+cleanly: build a wheel (`build_native_wheel_artifact`), report toolchain
+availability (`toolchain_available`), and report separately whether maturin's
+own script lookup can find its binary (`maturin_script_locatable`).
+
+The build runs `python -m maturin` under the current interpreter, so it uses
+whichever maturin that environment provides rather than selecting a version
+itself. Two separate mechanisms enforce alignment with the declared pin.
+`test_installed_maturin_matches_expected_pin` compares the `pyproject.toml` pin
+against the installed maturin distribution's version, read from the current
+interpreter's package metadata with `importlib.metadata.version("maturin")` —
+the same interpreter that runs the build — and gates on that interpreter being
+able to *import* `maturin`, not on a CLI being present on `PATH`. A launcher
+found on `PATH` can belong to a different environment from the one the build
+uses. The snapshot test asserts the built wheel's
+`Generator` matches that same pin, so a wheel built by an unexpected maturin
+fails the suite.
+
+The **wheel-artefact snapshot** parsers (`wheel_build_snapshot` and its private
+helpers) live in the sibling module `tests/helpers/maturin_wheel.py`, keeping
+each module below the Pylint module-length limit. `tests/helpers/maturin.py`
 re-exports `wheel_build_snapshot`, so import sites use
 `from tests.helpers.maturin import wheel_build_snapshot` unchanged.
+
+The re-use policy for all three is to stay that way — do not re-externalize
+further helpers until a second concrete consumer exists and the shared
+interface can be designed against real requirements rather than anticipated
+ones.
 
 **Pin synchronization** (`test_maturin_pins_are_synchronized`) Asserts that the
 maturin version declared in `pyproject.toml`,
@@ -1639,13 +1685,17 @@ To update the pinned digest, resolve the tag digest for
 `MANYLINUX_AARCH64_CONTAINER`, and rerun:
 
 ```bash
-uv run pytest cuprum/unittests/test_maturin_build.py \
+uv run pytest cuprum/unittests/test_maturin_pins.py \
     -k "manylinux_aarch64_container"
 ```
 
 **Installed version check** (`test_installed_maturin_matches_expected_pin`)
-Skipped automatically when `maturin` is not on `PATH`. When it is present,
-asserts that the installed version matches the pinned development dependency.
+Skipped automatically when the `maturin` *module* cannot be imported by the
+running interpreter. That is the right boundary rather than `PATH`, because the
+build runs `python -m maturin`: a `maturin` launcher earlier on `PATH` can
+belong to an entirely different environment from the one the build uses. When
+the module is importable, asserts that the installed version matches the
+pinned development dependency.
 
 **Wheel build snapshot** (`test_maturin_wheel_build_snapshot`) Requires the
 Rust toolchain (`cargo` and `rustc`). Builds a native wheel into a temporary
@@ -1673,8 +1723,10 @@ This is deliberately narrower than `toolchain_available()`, and the two answer
 different questions:
 
 - `toolchain_available()` — is the `maturin` module importable and are `cargo`
-  and `rustc` on `PATH`? It uses `importlib.util.find_spec`, which succeeds
-  whenever the module is reachable via `sys.path`.
+  and `rustc` on `PATH`? It uses `importlib.import_module` rather than
+  `importlib.util.find_spec`, because the build runs `python -m maturin`,
+  which needs the module to *import*: a module that is merely findable can
+  still fail to import.
 - `maturin_script_locatable()` — can maturin find its own compiled script the
   way `python -m maturin build` will at runtime?
 
