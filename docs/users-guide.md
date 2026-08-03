@@ -781,7 +781,8 @@ with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
 
 The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 
-- `cuprum_phase`: Event phase (plan, start, stdout, stderr, exit)
+- `cuprum_phase`: Event phase (plan, start, stdout, stderr, stdin,
+  stdin_error, exit)
 - `cuprum_program`: Program being executed
 - `cuprum_argv`: The command's argument vector, recorded verbatim (see the
   security note below)

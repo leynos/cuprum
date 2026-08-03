@@ -267,6 +267,74 @@ responsibility of observe-hook adapters such as `MetricsHook` and
 `TracingHook`, which consume `ExecEvent` values without coupling core execution
 to a telemetry vendor.
 
+`MetricsHook` keeps that consumption in two halves. The pure
+`_metric_operations` reducer maps an `ExecEvent` to a tuple of `_CounterOp` and
+`_HistogramOp` records, and `_apply` is the only step that reaches the
+`MetricsCollector`. The reducer is therefore the single source of truth for
+which counters and observations each phase yields, and it can be property
+tested without a collector at all — `test_metrics_adapter_stateful.py` drives
+random event streams through it and checks the accumulated totals against an
+independent phase-count oracle.
+
+Two consequences are worth preserving when changing the mapping. Labels are
+projected only when the reducer yields at least one operation, so a `plan`
+event never touches `event.program` or the project tag. And the reducer is
+total over `ExecPhase` — all seven phases (`plan`, `start`, `stdout`,
+`stderr`, `stdin`, `stdin_error`, `exit`) have an arm — and fail-closed beyond
+it: any other phase raises `_UnhandledMetricsPhaseError` rather than being
+silently dropped. That is deliberate, and its cost is worth stating plainly. A
+hook exception is not swallowed, so adding a value to `ExecPhase` without
+adding an arm here would raise for every caller that has already registered
+`MetricsHook`. A new phase therefore cannot reach metrics without a decision in
+this reducer. The structured logging adapter is fail-open by contrast,
+formatting an unrecognized phase generically.
+
+Applying the operations is deliberately non-atomic, and that is a contract
+collectors rely on rather than an implementation detail. An `exit` event yields
+up to two operations — the failure counter, then the duration observation —
+applied as separate collector calls in that order, so a collector that raises
+on the second leaves the first applied. The exception propagates out of the
+hook and is not swallowed: `_emit_exec_event` logs `observe_hook_failed` and
+wraps the error in `_ExecEventEmissionError` so already-scheduled observe tasks
+survive cleanup, then `_StageObservation.emit` unwraps it and re-raises the
+collector's original exception — so a raising collector fails the user's
+command. A collector that must not do that has to swallow its own errors. The
+labels are extracted once before the loop and are read-only within it. A
+collector must therefore treat each call as independent and never infer a
+duration observation from a failure increment. No operation identifier
+is passed either, so a repeated call increments again — nothing here is
+idempotent, and the hook never retries. See the metrics-hook dispatch figure in
+[the design document](cuprum-design.md) for the full statement, and
+`test_metrics_adapter_stateful.py` for the case that pins it.
+
+### Choosing a test shape per observe hook
+
+The three observe-hook adapters are verified differently, and the difference is
+driven by whether the hook accumulates state across events rather than by
+preference:
+
+Table 1: verification shape for each observe hook, and why
+
+| Hook | Shape | Why |
+| --- | --- | --- |
+| `TracingHook` | `RuleBasedStateMachine` (`test_tracing_span_stateful.py`) | holds `_active_spans` keyed by `ExecId`; the interesting bugs are correlation and drain failures across interleaved events |
+| `MetricsHook` | `RuleBasedStateMachine` (`test_metrics_adapter_stateful.py`) | accumulates counters and histograms, checked against an independent phase-count oracle |
+| `structured_logging_hook` | `@given` properties (`test_logging_adapter_properties.py`) | holds no state at all: one record per event, no map to drain |
+
+A state machine over the logging hook would generate interleavings that cannot
+distinguish any two implementations, because nothing carries between events.
+Its risks are per-event and shape-dependent instead: an `extra` key colliding
+with a reserved `LogRecord` attribute — which raises inside the caller's
+logging stack, not in cuprum — a phase falling through the level map, and a tag
+value that `JsonLoggingFormatter` cannot serialize. `ExecEvent.tags` is typed
+`Mapping[str, object]`, so arbitrary values are in contract, which is why
+`_json_serializable` and `json.dumps(..., default=str)` both exist and why the
+generator must produce values that are not JSON-native.
+
+Only `TracingHook` has an active map, so "the active map drains correctly" is a
+claim about that hook alone; `test_tracing_span_stateful.py` asserts it directly
+by cross-checking `hook._active_spans` against a model after every step.
+
 Stream pumping continues to drain the upstream reader after
 `_write_to_stream_writer` reports `_WriteOutcome.CLOSED`.  `_pump_stream`
 closes the writer in a `finally` block, so writer cleanup runs after success,

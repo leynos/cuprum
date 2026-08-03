@@ -60,6 +60,7 @@ Example with prometheus_client::
 from __future__ import annotations
 
 import dataclasses as dc
+import types
 import typing as typ
 
 from cuprum.adapters._support import (
@@ -181,6 +182,80 @@ class InMemoryMetrics(_LockedStore):
         self.histograms.clear()
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _CounterOp:
+    """A counter increment the metrics hook intends to apply."""
+
+    name: str
+    value: float
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _HistogramOp:
+    """A histogram observation the metrics hook intends to apply."""
+
+    name: str
+    value: float
+
+
+type _MetricOp = _CounterOp | _HistogramOp
+
+# Phases that map to a single unit-counter increment, keyed by event phase.
+# Read-only, so the single source of truth for these metric names cannot be
+# rewritten at runtime by an importing module.
+_PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
+    "start": "cuprum_executions_total",
+    "stdout": "cuprum_stdout_lines_total",
+    "stderr": "cuprum_stderr_lines_total",
+    "stdin_error": "cuprum_stdin_errors_total",
+})
+
+
+def _exit_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
+    """Return the failure counter and duration histogram ops for an exit event.
+
+    A failure counter is produced only for a known non-zero exit code, and a
+    duration observation only when a duration was measured; a clean exit with
+    no duration therefore produces nothing.
+    """
+    operations: list[_MetricOp] = []
+    if event.exit_code is not None and event.exit_code != 0:
+        operations.append(_CounterOp("cuprum_failures_total", 1.0))
+    if event.duration_s is not None:
+        operations.append(_HistogramOp("cuprum_duration_seconds", event.duration_s))
+    return tuple(operations)
+
+
+def _metric_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
+    """Map an execution event to the metric operations it should produce.
+
+    This is the pure event-to-operation reducer behind
+    [`MetricsHook.__call__`][cuprum.adapters.metrics_adapter.MetricsHook.__call__]
+    — the single source of truth for which counters and histogram observations
+    each phase yields, so the operations can be verified without a collector.
+    Labels are applied by the caller. ``plan`` yields nothing; a ``stdin`` event
+    without a byte count yields nothing; an unknown phase is a contract
+    violation and raises ``_UnhandledMetricsPhaseError``.
+    """
+    phase = event.phase
+    match phase:
+        case "plan":
+            return ()
+        case "stdin":
+            if event.byte_count is None:
+                return ()
+            return (_CounterOp("cuprum_stdin_bytes_total", float(event.byte_count)),)
+        case "exit":
+            return _exit_operations(event)
+        case _ if (counter_name := _PHASE_COUNTERS.get(phase)) is not None:
+            # The unit-counter phases stay keyed by `_PHASE_COUNTERS` rather
+            # than repeated as a literal alternation, so the metric names have
+            # exactly one definition.
+            return (_CounterOp(counter_name, 1.0),)
+        case _:
+            raise _UnhandledMetricsPhaseError(phase)
+
+
 class MetricsHook:
     """Observe hook that collects Prometheus-style metrics.
 
@@ -222,76 +297,58 @@ class MetricsHook:
         self._collector = collector
 
     def __call__(self, event: ExecEvent) -> None:
-        """Process an execution event and update metrics."""
-        match event.phase:
-            case "plan":
-                pass
-            case "start":
-                self._increment(
-                    "cuprum_executions_total",
-                    labels=self._extract_labels(event),
-                )
-            case "stdout":
-                self._increment(
-                    "cuprum_stdout_lines_total",
-                    labels=self._extract_labels(event),
-                )
-            case "stderr":
-                self._increment(
-                    "cuprum_stderr_lines_total",
-                    labels=self._extract_labels(event),
-                )
-            case "stdin_error":
-                self._increment(
-                    "cuprum_stdin_errors_total",
-                    labels=self._extract_labels(event),
-                )
-            case "stdin":
-                self._record_stdin_bytes(event, labels=self._extract_labels(event))
-            case "exit":
-                self._record_exit(event, labels=self._extract_labels(event))
-            case _:
-                raise _UnhandledMetricsPhaseError(event.phase)
+        """Process an execution event and update metrics.
 
-    def _increment(
-        self,
-        name: str,
-        *,
-        labels: cabc.Mapping[str, str],
-        value: float = 1.0,
-    ) -> None:
-        """Increment a counter with the current event labels."""
-        self._collector.inc_counter(name, value, labels)
+        The pure ``_metric_operations`` reducer decides which counters and
+        histograms this event yields; the labels are resolved and applied only
+        when there is at least one operation, so a ``plan`` (or a phaseless
+        no-op) event never computes labels.
 
-    def _record_stdin_bytes(
-        self,
-        event: ExecEvent,
-        *,
-        labels: cabc.Mapping[str, str],
-    ) -> None:
-        """Record stdin byte throughput when the event carries a byte count."""
-        if event.byte_count is not None:
-            self._increment(
-                "cuprum_stdin_bytes_total",
-                value=float(event.byte_count),
-                labels=labels,
-            )
+        Partial-failure semantics
+        -------------------------
+        An ``exit`` event can yield two operations — a failure counter and a
+        duration observation — applied as two independent collector calls, in
+        that order. There is no atomicity across them, and none is attempted:
+        the collector wraps an arbitrary backend (``prometheus_client``,
+        statsd, OpenTelemetry), and this adapter cannot make two writes to such
+        a backend transactional. Buffering them to apply together would only
+        move the problem, while delaying when metrics appear.
 
-    def _record_exit(
+        So if the collector raises on the second call, the first stays applied:
+        a failure can be recorded without its duration. That is accepted rather
+        than hidden. The exception then leaves this hook and is not swallowed:
+        :func:`cuprum._observability._emit_exec_event` logs
+        ``observe_hook_failed`` and re-raises, so a raising collector fails the
+        user's command. A collector that must not do that has to swallow its
+        own errors.
+
+        Collector implementations should therefore treat each call as
+        independent and ordered, and must not assume that seeing a
+        ``cuprum_failures_total`` increment guarantees a matching
+        ``cuprum_duration_seconds`` observation will follow.
+
+        No event or operation identifier is passed, so a collector has nothing
+        to deduplicate on and a repeated call increments again. Nothing here is
+        idempotent, and this hook never retries a failed call.
+        """
+        operations = _metric_operations(event)
+        if not operations:
+            return
+        labels = self._extract_labels(event)
+        for operation in operations:
+            self._apply(operation, labels)
+
+    def _apply(
         self,
-        event: ExecEvent,
-        *,
+        operation: _MetricOp,
         labels: cabc.Mapping[str, str],
     ) -> None:
-        """Record exit-code and duration metrics for an exit event."""
-        if event.exit_code is not None and event.exit_code != 0:
-            self._increment("cuprum_failures_total", labels=labels)
-        if event.duration_s is not None:
-            self._collector.observe_histogram(
-                "cuprum_duration_seconds",
-                event.duration_s,
-                labels,
-            )
+        """Apply one metric operation to the collector with the event labels."""
+        match operation:
+            case _CounterOp(name=name, value=value):
+                self._collector.inc_counter(name, value, labels)
+            case _HistogramOp(name=name, value=value):
+                self._collector.observe_histogram(name, value, labels)
 
     @staticmethod
     def _extract_labels(event: ExecEvent) -> dict[str, str]:
