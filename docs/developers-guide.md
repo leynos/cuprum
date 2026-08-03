@@ -445,6 +445,35 @@ processes or a clock.
   and I/O here — moving either into the command or the query would break the
   determinism the symbolic verification depends on.
 
+Completion order governs — except in the one case where there is no completion
+order left to observe. `asyncio.wait` hands back the settled tasks as an
+*unordered set*, so stages that land in the same batch are indistinguishable in
+time. `_wait_for_pipeline` therefore feeds each batch through
+`_process_completed_task` in ascending stage-index order:
+
+```python
+for wait_task in sorted(done, key=lambda task: state.task_to_index[task]):
+```
+
+That sort is a tie-break, not a priority. Across batches the stage that
+completed first still latches `failure_index`, exactly as
+`record_completion` describes; the sort only orders the stages *within* a
+single `asyncio.wait` batch, where the alternative is set iteration order and a
+`failure_index` that varies between runs of the same pipeline. Ascending stage
+index is the tie worth breaking towards because in a pipeline the upstream
+stage is the one whose failure causes the downstream failures it triggers, so
+the earliest stage names the cause rather than a symptom.
+
+Two consequences follow for anyone changing this seam. Removing the sort does
+not change which stage is *usually* reported, so a test that fails stages at
+distinct times will not catch its loss; only one that forces stages into a
+single batch will, which is what `TestSimultaneousCompletions` in
+`cuprum/unittests/test_pipeline_wait_async.py` exists to do. And the tie-break
+lives at the async boundary rather than in the pure transition, which is why
+`record_completion` is specified purely in terms of the order it is called in —
+the Hypothesis and CrossHair layers drive that transition directly and never
+see a batch.
+
 When that fail-fast path fires it is no longer silent. Two structured records
 are emitted through `logging.getLogger("cuprum._pipeline_wait")`, distinguished
 by a stable `cuprum_action` field and sharing `cuprum_stage_index`,
