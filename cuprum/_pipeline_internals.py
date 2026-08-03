@@ -331,6 +331,7 @@ async def _run_pipeline(
             stages=_StageWaitContext(
                 started_at=started_at,
                 exec_ids=tuple(str(obs.exec_id) for obs in observations),
+                observations=observations,
             ),
         )
     except BaseException as spawn_error:

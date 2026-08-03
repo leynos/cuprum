@@ -12,13 +12,17 @@ from __future__ import annotations
 import asyncio
 import dataclasses as dc
 import logging
+import types
 import typing as typ
 
-from cuprum import _pipeline_wait
+from cuprum import ECHO, _pipeline_wait, sh
+from cuprum._pipeline_types import _ExecutionHooks, _StageObservation
 from cuprum._pipeline_wait import _PipelineWaitState
 
 if typ.TYPE_CHECKING:
     import pytest
+
+    from cuprum.events import ExecHook
 
 
 async def immediate(exit_code: int) -> int:
@@ -37,7 +41,47 @@ def stage_exec_id(stage_index: int) -> str:
     return f"exec-{stage_index}"
 
 
-def make_wait_state(stage_count: int) -> _PipelineWaitState:
+def make_stage_observations(
+    stage_count: int,
+    hooks: tuple[ExecHook, ...],
+) -> tuple[_StageObservation, ...]:
+    """Build one observation per stage, each publishing to ``hooks``.
+
+    Mirrors what ``_build_pipeline_observations`` produces for a real
+    pipeline — a distinct command, its position in the tags, and a freshly
+    minted token per stage — without spawning anything, so a fail-fast event
+    can be driven one completion at a time.
+    """
+    builder = sh.make(ECHO)
+    execution_hooks = _ExecutionHooks(
+        before_hooks=(),
+        after_hooks=(),
+        observe_hooks=hooks,
+    )
+    return tuple(
+        _StageObservation(
+            cmd=builder("stage", str(idx)),
+            hooks=execution_hooks,
+            tags=types.MappingProxyType(
+                {
+                    "project": "pipeline-wait-tests",
+                    "pipeline_stage_index": idx,
+                    "pipeline_stages": stage_count,
+                },
+            ),
+            cwd=None,
+            env_overlay=None,
+            pending_tasks=[],
+        )
+        for idx in range(stage_count)
+    )
+
+
+def make_wait_state(
+    stage_count: int,
+    *,
+    observations: tuple[_StageObservation, ...] = (),
+) -> _PipelineWaitState:
     """Build a bare wait state for ``stage_count`` stages.
 
     The pure ``record_completion`` transition touches only the exit-code,
@@ -45,14 +89,25 @@ def make_wait_state(stage_count: int) -> _PipelineWaitState:
     no event loop or subprocess is required to exercise completion ordering.
     Correlation tokens are supplied because the records the runtime layer
     emits do read them.
+
+    When ``observations`` is given the tokens are derived from it exactly as
+    ``cuprum._pipeline_internals`` derives them, so a test can assert that the
+    token on the fail-fast event is the same one the log records carry rather
+    than two independently stubbed values that happen to agree.
     """
+    exec_ids = (
+        tuple(str(obs.exec_id) for obs in observations)
+        if observations
+        else tuple(stage_exec_id(idx) for idx in range(stage_count))
+    )
     return _PipelineWaitState(
         wait_tasks=[],
         task_to_index={},
         exit_codes=[None] * stage_count,
         started_at=[0.0] * stage_count,
         ended_at=[None] * stage_count,
-        exec_ids=tuple(stage_exec_id(idx) for idx in range(stage_count)),
+        exec_ids=exec_ids,
+        observations=observations,
     )
 
 
@@ -129,6 +184,33 @@ class CompletionPlan:
     completions: list[tuple[int, int]]
     # What the intercepted termination reports back as the stages it stopped.
     terminated_count: int = 0
+    # Supplied only by tests that assert on the fail-fast observe event; the
+    # log records need no observation context.
+    observations: tuple[_StageObservation, ...] = ()
+
+
+def apply_completions(
+    state: _PipelineWaitState,
+    completions: list[tuple[int, int]],
+) -> None:
+    """Apply each ``(stage_index, exit_code)`` through the async boundary.
+
+    Split out from `drive_completions` so a test that needs its own
+    termination stub, or that expects the boundary to raise, can drive the
+    same completions without `drive_completions` installing a second stub over
+    the top of it.
+    """
+
+    async def drive() -> None:
+        """Apply each completion through ``_process_completed_task``."""
+        for idx, exit_code in completions:
+            task = asyncio.create_task(immediate(exit_code))
+            await task
+            state.wait_tasks = [task]
+            state.task_to_index = {task: idx}
+            await _pipeline_wait._process_completed_task(task, state, [], 0.25)
+
+    asyncio.run(drive())
 
 
 def drive_completions(
@@ -148,19 +230,10 @@ def drive_completions(
     )
     pin_clock(monkeypatch, 12.5)
 
-    state = make_wait_state(plan.stage_count)
-
-    async def drive() -> None:
-        """Apply each completion through ``_process_completed_task``."""
-        for idx, exit_code in plan.completions:
-            task = asyncio.create_task(immediate(exit_code))
-            await task
-            state.wait_tasks = [task]
-            state.task_to_index = {task: idx}
-            await _pipeline_wait._process_completed_task(task, state, [], 0.25)
+    state = make_wait_state(plan.stage_count, observations=plan.observations)
 
     with caplog.at_level(logging.WARNING, logger=_pipeline_wait.__name__):
-        asyncio.run(drive())
+        apply_completions(state, plan.completions)
 
     # Termination bookkeeping must stay consistent with the records.
     expected = record_actions(caplog.records).count("pipeline_fail_fast_termination")

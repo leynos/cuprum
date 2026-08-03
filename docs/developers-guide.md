@@ -87,8 +87,8 @@ reuse policy is:
   be reworded, so match on the member, not the string.
 - New validation rules must be added to the classifier (and a matching enum
   member) rather than inline in the validators, keeping the reason taxonomy
-  authoritative. Preserve the declared member order — the classifier returns the
-  first matching category.
+  authoritative. Preserve the declared member order — the classifier returns
+  the first matching category.
 
 ### Stream-backend resolution seam
 
@@ -279,9 +279,10 @@ independent phase-count oracle.
 Two consequences are worth preserving when changing the mapping. Labels are
 projected only when the reducer yields at least one operation, so a `plan`
 event never touches `event.program` or the project tag. And the reducer is
-total over `ExecPhase` — all seven phases (`plan`, `start`, `stdout`,
-`stderr`, `stdin`, `stdin_error`, `exit`) have an arm — and fail-closed beyond
-it: any other phase raises `_UnhandledMetricsPhaseError` rather than being
+total over `ExecPhase` — all eight phases (`plan`, `start`, `stdout`,
+`stderr`, `stdin`, `stdin_error`, `exit`, `pipeline_fail_fast`) have an arm —
+and fail-closed beyond it: any other phase raises
+`_UnhandledMetricsPhaseError` rather than being
 silently dropped. That is deliberate, and its cost is worth stating plainly. A
 hook exception is not swallowed, so adding a value to `ExecPhase` without
 adding an arm here would raise for every caller that has already registered
@@ -423,9 +424,9 @@ interpreters therefore confirm the contracts rather than skipping them.
 
 ### `_pipeline_wait` completion command/query seam
 
-`cuprum/_pipeline_wait.py` splits completion handling on the same
-command-query line, so the fail-fast ordering rules can be verified without
-processes or a clock.
+`cuprum/_pipeline_wait.py` splits completion handling on the same command-query
+line, so the fail-fast ordering rules can be verified without processes or a
+clock.
 
 - `_PipelineWaitState.record_completion(completed_idx, exit_code, *, ended_at)`
   is a **command**. It writes the completed stage's exit code and the injected
@@ -456,13 +457,13 @@ for wait_task in sorted(done, key=lambda task: state.task_to_index[task]):
 ```
 
 That sort is a tie-break, not a priority. Across batches the stage that
-completed first still latches `failure_index`, exactly as
-`record_completion` describes; the sort only orders the stages *within* a
-single `asyncio.wait` batch, where the alternative is set iteration order and a
-`failure_index` that varies between runs of the same pipeline. Ascending stage
-index is the tie worth breaking towards because in a pipeline the upstream
-stage is the one whose failure causes the downstream failures it triggers, so
-the earliest stage names the cause rather than a symptom.
+completed first still latches `failure_index`, exactly as `record_completion`
+describes; the sort only orders the stages *within* a single `asyncio.wait`
+batch, where the alternative is set iteration order and a `failure_index` that
+varies between runs of the same pipeline. Ascending stage index is the tie
+worth breaking towards because in a pipeline the upstream stage is the one
+whose failure causes the downstream failures it triggers, so the earliest stage
+names the cause rather than a symptom.
 
 Two consequences follow for anyone changing this seam. Removing the sort does
 not change which stage is *usually* reported, so a test that fails stages at
@@ -515,29 +516,81 @@ descriptive:
   that does the terminating, rather than recomputing the selection at the call
   site, is what keeps the count honest when the selection changes.
 
-Cuprum emits **no metric and no trace event** for fail-fast. That is
-deliberate. The library emits no metrics of its own anywhere: `MetricsHook` is
-an opt-in adapter that translates `ExecEvent`s, and its phase match is
-fail-closed, so introducing a phase for fail-fast would make the hook raise for
-every user who has already registered it. A fail-fast counter therefore needs
-either a new library-side metrics surface or a change to the `ExecPhase`
-contract, and neither belongs in the module that decides completion order.
-`cuprum_action` is a stable, low-cardinality event name, so a log-based counter
-covers the same ground until that surface exists.
+The same decision also reaches the observe hooks, as a single
+`pipeline_fail_fast` `ExecEvent`. Log records serve an operator reading logs;
+the event serves the metrics and tracing integrations, which should not have to
+parse log text to see that a pipeline was torn down early. Both are published
+from `cuprum/_pipeline_wait_records.py` for the same reason the log payload
+lives there: they are one published contract with two renderings.
+
+The event is emitted only for the completion that *newly latches*
+`failure_index` **and** leaves stages to stop — so not for a success, not for a
+failure that follows the latch, and not for a final-stage or single-stage
+failure, none of which trigger a teardown. It is published *before* termination
+is requested, so a consumer sees the decision even when the teardown then
+blocks on a stage that will not die. Emission stays at the async boundary in
+`_process_completed_task`; `record_completion` and `should_terminate_others`
+remain a pure command and query so the symbolic model can still drive them.
+
+Publishing the event needs more than the token: an `ExecEvent` carries the
+stage's program, argv, and tags, so `_StageWaitContext` gained an
+`observations` field alongside `exec_ids`. Both are derived from the same
+observation tuple at the single construction site in
+`cuprum/_pipeline_internals.py`, which is what stops the token in a log record
+and the token on the matching event from disagreeing. `observations` defaults
+to empty for the same reason `exec_ids` does — the transition tests and the
+symbolic model build states without observation context, and with no
+observation there is simply no hook set to publish to.
+
+Adding a phase to `ExecPhase` is a contract change, so weigh it before
+repeating this. `MetricsHook`'s phase match is fail-closed (`case _` raises),
+and observe-hook failures are re-raised rather than swallowed, so a hook that
+exhaustively matches on phase and rejects the unknown will start raising. In
+the repository that exposure is exactly one adapter — `MetricsHook`, updated in
+the same change — because `TracingHook` and the structured logging hook are
+both fail-open. Outwith the repository it is a versioning consideration for
+third-party hooks written the same fail-closed way, which is why the phase set
+is documented as a contract rather than an implementation detail.
+
+The adapters render the event as follows.
+
+- **Metrics.** `MetricsHook` increments `cuprum_pipeline_fail_fast_total`,
+  labelled with `program` and `project` and nothing else. The event's `exec_id`,
+  `stage_index`, `stage_count`, and `exit_code` are deliberately not labels:
+  `exec_id` is unique per execution and would make the series unbounded, and
+  the others would multiply series for no aggregate a dashboard needs.
+  Per-incident detail belongs on the event and the trace, not on the counter.
+- **Tracing.** `TracingHook` adds a `cuprum.pipeline_fail_fast` span event —
+  carrying `stage_index`, `stage_count`, `exit_code`, and `duration_s` — to the
+  span the failing stage's `start` already opened, found by `exec_id`. It
+  starts no span and ends none; the stage's own `exit` event still owns the
+  span's lifecycle. An event with no `exec_id`, or one whose span has already
+  closed, is dropped rather than attached to an unrelated execution.
+- **Logging.** The structured logging adapter renders the decision at
+  `LogLevels.fail_fast_level` (WARNING by default) with an explicit message
+  naming the stage, the pipeline width, the exit code, and the elapsed time.
+  Without that arm it would fall through to the generic unhandled-phase
+  message, which reports only the program — the one field of a fail-fast event
+  that says nothing — at DEBUG, where a default configuration would not show it
+  at all.
 
 Three verification layers cover this seam; keep all three when changing it:
 
 ```bash
 # Hypothesis state machine over randomized completion orders, the pinned
-# boundary cases, the async boundary, the log records, and the correlation and
-# teardown-outcome fields. These are five modules by test concern, sharing
-# scaffolding via `cuprum/unittests/_pipeline_wait_support.py`.
+# boundary cases, the async boundary, the log records, the correlation and
+# teardown-outcome fields, the fail-fast observe event, and the end-to-end
+# wiring that supplies the observations it is published through. These are
+# seven modules by test concern, sharing scaffolding via
+# `cuprum/unittests/_pipeline_wait_support.py`.
 uv run pytest -q \
   cuprum/unittests/test_pipeline_wait_state_machine.py \
   cuprum/unittests/test_pipeline_wait_examples.py \
   cuprum/unittests/test_pipeline_wait_async.py \
   cuprum/unittests/test_pipeline_wait_observability.py \
-  cuprum/unittests/test_pipeline_wait_correlation.py
+  cuprum/unittests/test_pipeline_wait_correlation.py \
+  cuprum/unittests/test_pipeline_wait_fail_fast_event.py \
+  cuprum/unittests/test_pipeline_fail_fast_wiring.py
 
 # CrossHair PEP 316 contracts over the bounded symbolic model.
 uv run pytest -q cuprum/unittests/test_pipeline_wait_crosshair.py -m crosshair
@@ -556,10 +609,9 @@ and a later one does not replace it, that `should_terminate_others` is true
 exactly for a non-final first failure (covering the final-stage and
 single-stage cases), and that repeating the query changes nothing.
 
-That module probes CrossHair at import time through the same shared
-helpers described above, so it degrades to a skip only for a missing
-dependency or an unsupported tracer, and confirms its contracts on every
-supported interpreter.
+That module probes CrossHair at import time through the same shared helpers
+described above, so it degrades to a skip only for a missing dependency or an
+unsupported tracer, and confirms its contracts on every supported interpreter.
 
 ## Canonical stream-drain loop
 
@@ -658,11 +710,11 @@ synchronization of its own.
 **Phase dispatch.** `TracingHook.__call__` matches every `ExecEvent.phase` in a
 single `match`, and each phase falls into exactly one of four categories: span
 lifecycle (`start` opens a span, `exit` ends it), span event (`stdout`,
-`stderr`, and `stdin_error` record a `cuprum.<phase>` event on the already-open
-span), deliberately ignored (`plan` and `stdin` carry no tracing semantics), or
-unhandled (the `case _` logs via `_log_unhandled_phase` instead of failing
-silently or raising). A new phase should be slotted into this policy rather
-than given an ad-hoc side path.
+`stderr`, `stdin_error`, and `pipeline_fail_fast` record an event on the
+already-open span), deliberately ignored (`plan` and `stdin` carry no tracing
+semantics), or unhandled (the `case _` logs via `_log_unhandled_phase` instead
+of failing silently or raising). A new phase should be slotted into this policy
+rather than given an ad-hoc side path.
 
 **State model.** `TracingHook` keeps `_active_spans`, a dictionary keyed by
 `ExecEvent.exec_id` (the per-execution correlation token), guarded by an
@@ -688,6 +740,12 @@ internal `threading.Lock`:
   recording is gated by the hook's `record_output` flag; `stdin_error` is
   recorded unconditionally, so a stdin-write failure stays diagnosable even
   when line-by-line output recording is switched off.
+- **pipeline_fail_fast** shares that lock-guarded lookup (`_lookup_span`) but
+  carries its own attribute set, because the fields it reports — `stage_index`,
+  `stage_count`, `exit_code`, and `duration_s` — are not the diagnostic strings
+  the other span events carry. It neither opens nor closes a span: a span of
+  its own would have no duration to report and would need a second key to be
+  joined back to the stage.
 - **exit** removes (pops) the span for the event's `exec_id` under the lock,
   then sets the exit attributes and status and ends the span outside the lock.
 
@@ -699,9 +757,9 @@ observability.
 **Legacy or manual events.** An event whose `exec_id` is `None` (a legacy or
 hand-constructed event) cannot be correlated, so it is ignored rather than
 guessed from PID: a `start` without an `exec_id` creates no span, and `stdout`/
-`stderr`/`stdin_error`/`exit` without one are dropped. Every event Cuprum
-itself emits carries an `exec_id`, so this only affects hand-built event
-streams.
+`stderr`/`stdin_error`/`pipeline_fail_fast`/`exit` without one are dropped.
+Every event Cuprum itself emits carries an `exec_id`, so this only affects
+hand-built event streams.
 
 ## Canonical `_TokenRegistration` handle base
 
@@ -1563,18 +1621,18 @@ signal for regular files, broken-pipe draining, the drain's EOF termination,
 and the syscall-level `EINTR` retry.
 
 The read/write fallback's write half routes through `io_utils::write_all_unix`,
-whose partial-write loop is factored into `write_all_unix_with` — the injectable
-write seam mirroring `read_raw_fd_with`. Unit tests drive it over a scripted
-single-write operation so the write policy is exercised deterministically
-without real descriptors: interrupted writes (`EINTR`) retry, zero progress
-raises `WriteZero`, partial writes accumulate, over-long progress surfaces
-`BufferRangeExceeded`, non-fatal short writes (broken pipe / connection reset)
-report the bytes transferred so far, and other errors propagate. Proptests
-confirm `PumpError::is_nonfatal_write` and `map_short_write_error` suppress
-exactly `BrokenPipe`/`ConnectionReset` while preserving the accepted byte total.
-These raw-fd helpers live in the `io_utils` directory module (`io_utils/mod.rs`,
-with tests in `io_utils/tests.rs`), split from the former single file to stay
-within the per-module line cap.
+whose partial-write loop is factored into `write_all_unix_with` — the
+injectable write seam mirroring `read_raw_fd_with`. Unit tests drive it over a
+scripted single-write operation so the write policy is exercised
+deterministically without real descriptors: interrupted writes (`EINTR`) retry,
+zero progress raises `WriteZero`, partial writes accumulate, over-long progress
+surfaces `BufferRangeExceeded`, non-fatal short writes (broken pipe /
+connection reset) report the bytes transferred so far, and other errors
+propagate. Proptests confirm `PumpError::is_nonfatal_write` and
+`map_short_write_error` suppress exactly `BrokenPipe`/`ConnectionReset` while
+preserving the accepted byte total. These raw-fd helpers live in the `io_utils`
+directory module (`io_utils/mod.rs`, with tests in `io_utils/tests.rs`), split
+from the former single file to stay within the per-module line cap.
 
 The read/write fallback's control flow — how each read and write outcome moves
 the running byte total and the latched `writer_open` flag — is factored into a
@@ -1676,14 +1734,14 @@ platform), a `warn` event on every `EINTR` retry, and an `error` event on a
 fatal read/write failure, a zero-progress write, or a length-conversion
 overflow — so no fatal boundary stays silent. The `pump_stream_readwrite` and
 `consume_stream` loops wrap these seams in an operation span
-(`io_utils::operation_span`) that carries the `operation` and `buffer_size` and,
-on completion, records `total_bytes` and the cumulative `EINTR` retry counts as
-structured fields. `pump_stream_readwrite` reads and writes, so it records both
-`read_retries` and `write_retries`; `consume_stream` only reads, so it records
-`read_retries` alone (`write_retries` stays unset). The retry counts are
-accumulated in operation-scoped thread-local counters that
-`pump_stream_readwrite` and `consume_stream` explicitly reset at operation start
-(right after entering the span, via `io_utils::reset_retry_counters`;
+(`io_utils::operation_span`) that carries the `operation` and `buffer_size`
+and, on completion, records `total_bytes` and the cumulative `EINTR` retry
+counts as structured fields. `pump_stream_readwrite` reads and writes, so it
+records both `read_retries` and `write_retries`; `consume_stream` only reads,
+so it records `read_retries` alone (`write_retries` stays unset). The retry
+counts are accumulated in operation-scoped thread-local counters that
+`pump_stream_readwrite` and `consume_stream` explicitly reset at operation
+start (right after entering the span, via `io_utils::reset_retry_counters`;
 `operation_span` itself does not touch the counters), so the seams stay
 parameter-free while the span still reports them.
 
@@ -1724,8 +1782,8 @@ When a property fails, proptest writes the shrunk case to a seed file under
 failing case ahead of the generated ones, so the same regression cannot return
 unnoticed.
 
-Seeds are only worth keeping when they came from a genuine failure. Running
-the Rust suite against deliberately-broken code — to prove a property is not
+Seeds are only worth keeping when they came from a genuine failure. Running the
+Rust suite against deliberately-broken code — to prove a property is not
 vacuous — also writes a seed, and that one pins a case that never failed
 against correct code. Disable persistence for those runs so the file is never
 created:
@@ -1767,11 +1825,11 @@ snapshots and properties cover the `consume_stream_files` read-and-decode loop,
 while `TestRustConsumeStream` covers the exported surface a caller actually
 touches. Keep both when changing either.
 
-Those snapshots are written inline with `insta::assert_snapshot!(value, @"...")`
-rather than as separate `.snap` files, which keeps the expected text beside the
-case that produces it and leaves no snapshot files to review or prune. Accept a
-deliberate change by editing the inline literal; `cargo insta` is not required
-for the inline form.
+Those snapshots are written inline with
+`insta::assert_snapshot!(value, @"...")` rather than as separate `.snap` files,
+which keeps the expected text beside the case that produces it and leaves no
+snapshot files to review or prune. Accept a deliberate change by editing the
+inline literal; `cargo insta` is not required for the inline form.
 
 ### Building the extension for tests
 
@@ -2162,10 +2220,9 @@ section in step.
 
 ## Maturin pin synchronization and native wheel tests
 
-These checks span three test modules, one per concern —
-`test_maturin_pins.py`, `test_maturin_toolchain.py`, and
-`test_maturin_build.py` — and the helpers behind them are split across three
-boundaries.
+These checks span three test modules, one per concern — `test_maturin_pins.py`,
+`test_maturin_toolchain.py`, and `test_maturin_build.py` — and the helpers
+behind them are split across three boundaries.
 
 The **pin-synchronization** checks live in
 `cuprum/unittests/test_maturin_pins.py`, with their readers and regexes local
@@ -2177,9 +2234,9 @@ second consumer — the threshold this policy asks for before sharing anything:
 - `read_expected_maturin_version` — the pin comparison here, and the wheel
   snapshot's `Generator` assertion in `test_maturin_build.py`.
 - `MANYLINUX_CONTAINER_SHA256_RE` — the container-pin assertion here, and the
-  generated references in `test_manylinux_container_ref_properties.py`.
-  Sharing it through the support module keeps one test module from importing a
-  private name out of another.
+  generated references in `test_manylinux_container_ref_properties.py`. Sharing
+  it through the support module keeps one test module from importing a private
+  name out of another.
 
 The **availability detectors** are tested together in
 `cuprum/unittests/test_maturin_toolchain.py`: `toolchain_available` and
@@ -2201,9 +2258,8 @@ interpreter's package metadata with `importlib.metadata.version("maturin")` —
 the same interpreter that runs the build — and gates on that interpreter being
 able to *import* `maturin`, not on a CLI being present on `PATH`. A launcher
 found on `PATH` can belong to a different environment from the one the build
-uses. The snapshot test asserts the built wheel's
-`Generator` matches that same pin, so a wheel built by an unexpected maturin
-fails the suite.
+uses. The snapshot test asserts the built wheel's `Generator` matches that same
+pin, so a wheel built by an unexpected maturin fails the suite.
 
 The **wheel-artefact snapshot** parsers (`wheel_build_snapshot` and its private
 helpers) live in the sibling module `tests/helpers/maturin_wheel.py`, keeping
@@ -2256,8 +2312,8 @@ Skipped automatically when the `maturin` *module* cannot be imported by the
 running interpreter. That is the right boundary rather than `PATH`, because the
 build runs `python -m maturin`: a `maturin` launcher earlier on `PATH` can
 belong to an entirely different environment from the one the build uses. When
-the module is importable, asserts that the installed version matches the
-pinned development dependency.
+the module is importable, asserts that the installed version matches the pinned
+development dependency.
 
 **Wheel build snapshot** (`test_maturin_wheel_build_snapshot`) Requires the
 Rust toolchain (`cargo` and `rustc`). Builds a native wheel into a temporary
@@ -2275,8 +2331,8 @@ uv run pytest cuprum/unittests/test_maturin_build.py \
 ### `maturin_script_locatable()` — native-wheel skip boundary
 
 `maturin_script_locatable()` (in `tests/helpers/maturin.py`) is the shared
-probe that decides whether the native-wheel build contract can actually run.
-It mirrors `maturin.__main__.get_maturin_path`: maturin resolves its bundled
+probe that decides whether the native-wheel build contract can actually run. It
+mirrors `maturin.__main__.get_maturin_path`: maturin resolves its bundled
 binary by scanning each `sysconfig` scheme's `scripts` directory for a file
 named `maturin`, keyed off the running interpreter's `sys.prefix` — **not**
 `sys.path` or `PATH`.
@@ -2286,23 +2342,22 @@ different questions:
 
 - `toolchain_available()` — is the `maturin` module importable and are `cargo`
   and `rustc` on `PATH`? It uses `importlib.import_module` rather than
-  `importlib.util.find_spec`, because the build runs `python -m maturin`,
-  which needs the module to *import*: a module that is merely findable can
-  still fail to import.
+  `importlib.util.find_spec`, because the build runs `python -m maturin`, which
+  needs the module to *import*: a module that is merely findable can still fail
+  to import.
 - `maturin_script_locatable()` — can maturin find its own compiled script the
   way `python -m maturin build` will at runtime?
 
 The two disagree in layered or ephemeral interpreters — most importantly the
 `uv run --with mutmut==3.6.0` overlay used by the mutation-testing workflow.
 There, the project virtualenv is on `sys.path` (so the module imports and
-`toolchain_available()` returns `True`), but `sys.prefix` points at a
-temporary environment that never received maturin's script, so
-`python -m maturin build` fails with ``Unable to find `maturin` script``
-before it can invoke `cargo`. This previously aborted the whole mutmut
-baseline. In a
-normal virtualenv (CI, `build-wheels.yml`, local `uv run pytest`) `sys.prefix`
-matches the install location, the probe returns `True`, and the real build
-runs — so the skip never masks a genuine regression.
+`toolchain_available()` returns `True`), but `sys.prefix` points at a temporary
+environment that never received maturin's script, so `python -m maturin build`
+fails with ``Unable to find `maturin` script`` before it can invoke `cargo`.
+This previously aborted the whole mutmut baseline. In a normal virtualenv (CI,
+`build-wheels.yml`, local `uv run pytest`) `sys.prefix` matches the install
+location, the probe returns `True`, and the real build runs — so the skip never
+masks a genuine regression.
 
 **Reuse policy.** Any test that shells out to `python -m maturin build` (or
 otherwise depends on maturin locating its own binary) — for example a new
@@ -2328,23 +2383,23 @@ transfer buffer (the default is 64 KiB). `checked_buffer_size` is kept pure so
 its boundaries are property tested directly in
 `rust/cuprum-rust/src/buffer_size_tests.rs`; the Python-side error mapping is
 exercised in `cuprum/unittests/test_rust_streams_boundary_property.py`. Keep the
-`_streams_rs.py` wrapper docstrings, `docs/cuprum-design.md`, and the
-users' guide aligned with this contract when the cap changes.
+`_streams_rs.py` wrapper docstrings, `docs/cuprum-design.md`, and the users'
+guide aligned with this contract when the cap changes.
 
 ## Development dependency pins
 
 Test tooling occasionally needs a temporary upper bound while an upstream
 project catches up with a newer release. These pins live in `pyproject.toml`'s
 `[dependency-groups]` `dev` group — dev-only, never in the runtime
-`[project.optional-dependencies]` — each with an inline rationale and a tracking
-link, and are lifted once the upstream fix lands.
+`[project.optional-dependencies]` — each with an inline rationale and a
+tracking link, and are lifted once the upstream fix lands.
 
 - `pytest<9.1` — pytest 9.1 deprecates the nodeid/baseid path that `pytest-bdd`
   8.1.0 relies on for fixture registration, raising `PytestRemovedIn10Warning`
   under the behavioural suite. The constraint holds the dev environment on
   pytest 9.0.x until `pytest-bdd` migrates to the node-based fixture API. Track
-  [pytest-bdd#823](https://github.com/pytest-dev/pytest-bdd/issues/823); remove
-  the pin and this note once a released `pytest-bdd` supports pytest 9.1.
+  [pytest-bdd#823](https://github.com/pytest-dev/pytest-bdd/issues/823);
+  remove the pin and this note once a released `pytest-bdd` supports pytest 9.1.
 
 ## Workflow pins and Dependabot
 
@@ -2617,30 +2672,30 @@ executes:
 5. In the streaming path (`_run_subprocess_with_streams`), the stdin writer
    task runs concurrently with the stdout/stderr consumer tasks.  On
    `TimeoutError` or `asyncio.CancelledError`, `_run_subprocess_with_streams`
-   itself cancels and gathers the stdin writer via `_cancel_stdin_writer`,
-   then drains the stdout/stderr consumers exactly once via
-   `_drain_stream_consumers`.  `_wait_for_exit_code` has already terminated
-   the process, so the drain reaches EOF.  Only after that draining does it
-   call `_handle_stream_timeout`, which merely raises
-   `_SubprocessTimeoutError` carrying the pre-drained stdout/stderr; on the
-   cancellation path `CancelledError` is re-raised directly.
+   itself cancels and gathers the stdin writer via `_cancel_stdin_writer`, then
+   drains the stdout/stderr consumers exactly once via
+   `_drain_stream_consumers`.  `_wait_for_exit_code` has already terminated the
+   process, so the drain reaches EOF.  Only after that draining does it call
+   `_handle_stream_timeout`, which merely raises `_SubprocessTimeoutError`
+   carrying the pre-drained stdout/stderr; on the cancellation path
+   `CancelledError` is re-raised directly.
 6. In the non-streaming path (`_execute_subprocess`), the same writer task is
    created and awaited after `_wait_for_exit_code` completes.  On
    `TimeoutError` or `asyncio.CancelledError` from `_wait_for_exit_code`,
    `_execute_subprocess` itself cancels and drains the writer task via
-   `_cancel_stdin_writer` before the timeout is translated or the
-   cancellation propagates, so a stdin drain blocked on an unread pipe cannot
-   delay completion.
+   `_cancel_stdin_writer` before the timeout is translated or the cancellation
+   propagates, so a stdin drain blocked on an unread pipe cannot delay
+   completion.
 
 The `tests/helpers/stream_pipes.py` module provides
-`drain_blocking_payload_size()`, a shared helper returning a stdin payload
-size that reliably wedges the writer's `drain()`.  It probes the real OS
-pipe capacity (via `fcntl(F_GETPIPE_SZ)` on Linux) and adds a mebibyte of
-headroom, falling back to a conservative default on platforms that cannot
-probe it so callers need no platform guard.  It exists solely to make
-blocked-`drain()` regression tests deterministic and is shared by
-`test_safe_cmd_stdin.py` and `test_observe_stdin_early_close.py`; new
-blocked-writer tests should reuse it rather than hardcoding a payload size.
+`drain_blocking_payload_size()`, a shared helper returning a stdin payload size
+that reliably wedges the writer's `drain()`.  It probes the real OS pipe
+capacity (via `fcntl(F_GETPIPE_SZ)` on Linux) and adds a mebibyte of headroom,
+falling back to a conservative default on platforms that cannot probe it so
+callers need no platform guard.  It exists solely to make blocked-`drain()`
+regression tests deterministic and is shared by `test_safe_cmd_stdin.py` and
+`test_observe_stdin_early_close.py`; new blocked-writer tests should reuse it
+rather than hardcoding a payload size.
 
 `_execute_with_hooks(cmd, execution, tracking)` is the single site that runs
 `_execute_subprocess`, iterates after-hooks, and co-ordinates cancellation-safe

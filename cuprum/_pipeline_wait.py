@@ -16,18 +16,19 @@ command and a query, per the project's command/query segregation rule:
   completion should stop every other still-running stage.
 
 ``_process_completed_task`` is the only place the two are joined: it reads the
-clock, applies the command, emits the structured fail-fast records, and acts on
-the query. Keeping the I/O there leaves the ordering rules as a pure transition
-that Hypothesis and CrossHair drive directly.
+clock, applies the command, publishes the fail-fast report — the structured log
+records and the ``pipeline_fail_fast`` observe event — and acts on the query.
+Keeping the I/O there leaves the ordering rules as a pure transition that
+Hypothesis and CrossHair drive directly.
 
 Work that belongs to neighbouring modules rather than here: terminating and
 cleaning up processes lives in ``cuprum._process_lifecycle``
 (``_terminate_pipeline_remaining_stages``, ``_cleanup_pipeline_on_error``),
 collecting the inter-stage pipe task outcomes lives in
 ``cuprum._pipeline_streams`` (``_collect_pipe_results``,
-``_surface_unexpected_pipe_failures``), and the shape of the records the
-fail-fast path emits lives in ``cuprum._pipeline_wait_records``. This module
-owns only the waiting, the ordering decision, and when each record fires.
+``_surface_unexpected_pipe_failures``), and the shape of what the fail-fast
+path publishes lives in ``cuprum._pipeline_wait_records``. This module owns
+only the waiting, the ordering decision, and when each report fires.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ from cuprum._pipeline_streams import (
 )
 from cuprum._pipeline_wait_records import (
     completion_log_fields,
+    emit_fail_fast_event,
     log_completion_event,
 )
 from cuprum._process_lifecycle import (
@@ -51,7 +53,7 @@ from cuprum._process_lifecycle import (
 )
 
 if typ.TYPE_CHECKING:
-    from cuprum._pipeline_types import _StageWaitContext
+    from cuprum._pipeline_types import _StageObservation, _StageWaitContext
     from cuprum._pipeline_wait_records import _CompletionLogFields
 
 
@@ -75,9 +77,12 @@ class _PipelineWaitState:
     started_at: list[float]
     ended_at: list[float | None]
     failure_index: int | None = None
-    # Correlation only: the completion transition never reads this, which is
-    # why it defaults to empty and the symbolic model leaves it so.
+    # Reporting only: the completion transition never reads either of these,
+    # which is why both default to empty and the symbolic model leaves them so.
+    # ``exec_ids`` labels the log records; ``observations`` is what the
+    # fail-fast ``ExecEvent`` is published through.
     exec_ids: tuple[str, ...] = ()
+    observations: tuple[_StageObservation, ...] = ()
 
     @classmethod
     def from_processes(
@@ -95,6 +100,7 @@ class _PipelineWaitState:
             started_at=stages.started_at,
             ended_at=[None] * len(processes),
             exec_ids=stages.exec_ids,
+            observations=stages.observations,
         )
 
     def exec_id(self, stage_index: int) -> str | None:
@@ -106,6 +112,17 @@ class _PipelineWaitState:
         """
         if stage_index < len(self.exec_ids):
             return self.exec_ids[stage_index]
+        return None
+
+    def observation(self, stage_index: int) -> _StageObservation | None:
+        """Return a stage's observation, or ``None`` when there is none.
+
+        Absent under the same conditions as `exec_id`, and additionally
+        harmless: with no observation there is no hook set to publish the
+        fail-fast event to.
+        """
+        if stage_index < len(self.observations):
+            return self.observations[stage_index]
         return None
 
     def record_completion(
@@ -266,6 +283,14 @@ async def _process_completed_task(
             "pipeline stage %d exited %d, latching first failure",
             fields,
         )
+    # Published before termination is requested, so a consumer learns the
+    # decision even if the teardown then blocks on a stage that will not die.
+    # Both conditions are spelled out rather than relying on the query alone:
+    # the event reports a *newly latched* failure that leaves stages to stop,
+    # which excludes a later failure, a final-stage failure, and a
+    # single-stage pipeline.
+    if latched_first_failure and terminate_others:
+        emit_fail_fast_event(state.observation(idx), fields)
     if terminate_others:
         await _terminate_and_report(state, processes, cancel_grace, fields)
 

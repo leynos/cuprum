@@ -24,7 +24,7 @@ if typ.TYPE_CHECKING:
 
     from cuprum._pipeline_wait import _PipelineWaitResult
     from cuprum.context import AfterHook, BeforeHook
-    from cuprum.events import ExecHook, ExecId
+    from cuprum.events import ExecHook, ExecId, ExecPhase
     from cuprum.sh import SafeCmd
 
 
@@ -49,6 +49,10 @@ class _EventDetails:
     byte_count: int | None = None
     operation: str | None = None
     error_type: str | None = None
+    # Only the pipeline fail-fast decision sets these; a stage's own lifecycle
+    # events carry its position in ``tags`` instead.
+    stage_index: int | None = None
+    stage_count: int | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -66,19 +70,7 @@ class _StageObservation:
     # any other that happens to reuse the same PID.
     exec_id: ExecId = dc.field(default_factory=new_exec_id)
 
-    def emit(
-        self,
-        phase: typ.Literal[
-            "plan",
-            "start",
-            "stdout",
-            "stderr",
-            "exit",
-            "stdin",
-            "stdin_error",
-        ],
-        details: _EventDetails,
-    ) -> None:
+    def emit(self, phase: ExecPhase, details: _EventDetails) -> None:
         """Emit an observe event for ``phase`` when observe hooks are set."""
         if not self.hooks.observe_hooks:
             return
@@ -99,6 +91,8 @@ class _StageObservation:
             operation=details.operation,
             error_type=details.error_type,
             exec_id=self.exec_id,
+            stage_index=details.stage_index,
+            stage_count=details.stage_count,
         )
         try:
             scheduled_tasks = _emit_exec_event(self.hooks.observe_hooks, event)
@@ -123,12 +117,21 @@ class _StageWaitContext:
 
     ``started_at`` is what stage durations are measured from. ``exec_ids``
     renders each stage's ``_StageObservation.exec_id``, so the wait path can
-    label its records with the same correlation token the observe hooks
+    label its log records with the same correlation token the observe hooks
     publish without depending on the observations themselves.
+
+    ``observations`` is that dependency, and is separate on purpose. Only the
+    fail-fast *event* needs it — publishing an ``ExecEvent`` needs the stage's
+    program, argv, tags, and hooks, not just its token — so the transition
+    tests and the symbolic model can still build a context with tokens alone.
+    A pipeline run through ``cuprum._pipeline_internals`` supplies both from
+    the same observation tuple, so the token in a log record and the token on
+    the matching event cannot disagree.
     """
 
     started_at: list[float]
     exec_ids: tuple[str, ...]
+    observations: tuple[_StageObservation, ...] = ()
 
 
 @dc.dataclass(frozen=True, slots=True)

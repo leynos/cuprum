@@ -250,50 +250,59 @@ Notes:
 
 ### Diagnosing a fail-fast pipeline
 
-`result.failure_index` reports which stage triggered fail-fast, but not why
-the other stages ended when they did. Three records fill that gap. All are
-emitted at `WARNING` on the `cuprum._pipeline_wait` logger, so they appear in
-a default logging configuration without any opt-in.
+`result.failure_index` reports which stage triggered fail-fast, but not why the
+other stages ended when they did. Three records fill that gap. All are emitted
+at `WARNING` on the `cuprum._pipeline_wait` logger, so they appear in a default
+logging configuration without any opt-in.
 
 Table 1: fail-fast records emitted while a pipeline is being torn down
 
-| `cuprum_action` | Emitted when |
-| --- | --- |
-| `pipeline_stage_first_failure` | the first stage to exit non-zero is latched |
+| `cuprum_action`                  | Emitted when                                                       |
+| -------------------------------- | ------------------------------------------------------------------ |
+| `pipeline_stage_first_failure`   | the first stage to exit non-zero is latched                        |
 | `pipeline_fail_fast_termination` | that failure is about to terminate every other still-running stage |
-| `pipeline_fail_fast_terminated` | that termination has returned |
+| `pipeline_fail_fast_terminated`  | that termination has returned                                      |
 
 Every record carries the same core fields, so the failing stage can be
 identified without correlating against the result object.
 
 Table 2: fields carried by every fail-fast record
 
-| Field | Meaning |
-| --- | --- |
+| Field                | Meaning                                       |
+| -------------------- | --------------------------------------------- |
 | `cuprum_stage_index` | position of the failing stage in the pipeline |
-| `cuprum_stage_count` | how many stages the pipeline has |
-| `cuprum_exit_code` | the exit code that stage reported |
-| `cuprum_duration_s` | that stage's elapsed run time |
-| `cuprum_exec_id` | the stage's execution token |
+| `cuprum_stage_count` | how many stages the pipeline has              |
+| `cuprum_exit_code`   | the exit code that stage reported             |
+| `cuprum_duration_s`  | that stage's elapsed run time                 |
+| `cuprum_exec_id`     | the stage's execution token                   |
 
 `cuprum_exec_id` is the same per-execution token the `logging`, metrics, and
-tracing adapters publish for that stage, so a fail-fast record can be joined
-to that stage's span and its `start` and `exit` events. It is also what tells
-two pipelines apart when they run concurrently in one process: both report a
-stage 0, but never the same token.
+tracing adapters publish for that stage, so a fail-fast record can be joined to
+that stage's span and its `start` and `exit` events. It is also what tells two
+pipelines apart when they run concurrently in one process: both report a stage
+0, but never the same token.
+
+The same decision is also published to any registered observe hook as one
+`pipeline_fail_fast` `ExecEvent`, so a metrics or tracing integration need not
+parse log text to see it. The event is emitted at the same moment as the
+`pipeline_fail_fast_termination` record — after the failure is latched, before
+termination begins — and carries the same stage index, stage count, exit code,
+duration, and `exec_id`. It fires under exactly the conditions that produce a
+termination record, so a final-stage or single-stage failure emits none. See
+[Structured execution events](#structured-execution-events) for the event and
+the adapters that consume it.
 
 The closing `pipeline_fail_fast_terminated` record adds two fields of its own:
-`cuprum_terminated_stage_count`, how many stages were still running and so
-were terminated, and `cuprum_termination_duration_s`, how long that teardown
-took. Its absence after a `pipeline_fail_fast_termination` record means
-termination has not returned — a pipeline still waiting on a stage that has
-not yet stopped.
+`cuprum_terminated_stage_count`, how many stages were still running and so were
+terminated, and `cuprum_termination_duration_s`, how long that teardown took.
+Its absence after a `pipeline_fail_fast_termination` record means termination
+has not returned — a pipeline still waiting on a stage that has not yet stopped.
 
-Only the *first* failure is reported. Fail-fast terminates the other stages,
-so those stages then exit non-zero too; reporting each would bury the cause
-under its own consequences. A pipeline therefore emits at most one
-`pipeline_stage_first_failure` record, and a second one indicates a real
-defect rather than a second failure.
+Only the *first* failure is reported. Fail-fast terminates the other stages, so
+those stages then exit non-zero too; reporting each would bury the cause under
+its own consequences. A pipeline therefore emits at most one
+`pipeline_stage_first_failure` record, and a second one indicates a real defect
+rather than a second failure.
 
 A stage that fails last emits `pipeline_stage_first_failure` alone, with
 neither termination record: it latched the failure, but there was nothing left
@@ -446,8 +455,8 @@ enforced. When a timeout expires, Cuprum terminates the subprocess, waits for
 
 Any output already captured before the timeout fired is preserved on the
 exception: `exc.output` / `exc.stderr` hold the partial stdout/stderr (or
-`None` when `capture=False`), so callers can inspect what the command
-produced before it was killed.
+`None` when `capture=False`), so callers can inspect what the command produced
+before it was killed.
 
 **Non-positive timeout behaviour:** a `timeout` of `0` or a negative value is
 treated as an already-elapsed deadline, so the command expires immediately:
@@ -731,6 +740,12 @@ hooks receive `ExecEvent` values describing:
 - `start` — subprocess spawned (pid available).
 - `stdout` / `stderr` — decoded output emitted as lines.
 - `exit` — subprocess finished (exit code and duration).
+- `pipeline_fail_fast` — a pipeline is being torn down early because a
+  non-final stage was the first to fail. Emitted at most once per pipeline,
+  before the surviving stages are terminated, and carrying `stage_index`,
+  `stage_count`, `exit_code`, and `duration_s` for the failing stage. It is a
+  decision rather than a lifecycle phase: the failing stage's own `exit` event
+  still follows, and no stage's events are skipped or reordered because of it.
 
 Hooks can be used for structured logging, metrics, or tracing without coupling
 Cuprum to a specific telemetry library.
@@ -873,9 +888,16 @@ The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 - `cuprum_argv`: The command's argument vector, recorded verbatim (see the
   security note below)
 - `cuprum_pid`: Process ID (when available)
-- `cuprum_exit_code`: Exit code (for exit events)
-- `cuprum_duration_s`: Duration in seconds (for exit events)
+- `cuprum_exit_code`: Exit code (for exit and `pipeline_fail_fast` events)
+- `cuprum_duration_s`: Duration in seconds (for exit and `pipeline_fail_fast`
+  events)
+- `cuprum_stage_index` / `cuprum_stage_count`: Failing stage position and
+  pipeline width (for `pipeline_fail_fast` events)
 - `cuprum_tags`: Event tags as a dictionary
+
+`pipeline_fail_fast` records are emitted at `LogLevels.fail_fast_level`, which
+defaults to `logging.WARNING` so they are visible in a default configuration;
+set the field to change it.
 
 > **Security note — argument logging.** `cuprum_argv` is emitted verbatim and
 > is **not** redacted. Any secret passed on the command line — a
@@ -928,9 +950,19 @@ The hook collects:
 - `cuprum_duration_seconds`: Histogram of execution durations
 - `cuprum_stdout_lines_total`: Counter of stdout lines emitted
 - `cuprum_stderr_lines_total`: Counter of stderr lines emitted
+- `cuprum_pipeline_fail_fast_total`: Counter incremented once per pipeline torn
+  down early because a non-final stage was the first to fail
 
-All metrics include `program` and `project` labels. Missing, empty, or explicit
-`None` project tags fall back to `unknown`.
+All metrics include `program` and `project` labels, and only those. Missing,
+empty, or explicit `None` project tags fall back to `unknown`.
+
+`cuprum_pipeline_fail_fast_total` in particular does **not** use `exec_id`,
+stage index, exit code, command arguments, or paths as labels. `exec_id` is
+unique per execution and would give the series unbounded cardinality; the
+others would multiply series for no aggregate a dashboard needs. Those fields
+remain on the `pipeline_fail_fast` event itself and on the trace span, which is
+where per-incident detail belongs — use `cuprum_exec_id` to join a spike in the
+counter to the individual stage spans behind it.
 
 To integrate with a real metrics library like `prometheus_client`, implement the
 `MetricsCollector` protocol:
@@ -1010,7 +1042,16 @@ as the `cuprum.pid` attribute for observability. Events emitted by Cuprum
 always carry an `exec_id`, so ordinary usage is unaffected. Only hand-built or
 legacy events that omit `exec_id` are affected: the hook cannot correlate them,
 so it ignores them — a `start` without an `exec_id` creates no span, and
-`stdout`/`stderr`/`exit` without one are dropped.
+`stdout`/`stderr`/`pipeline_fail_fast`/`exit` without one are dropped.
+
+A pipeline's `pipeline_fail_fast` event is recorded as a
+`cuprum.pipeline_fail_fast` span event on the failing stage's already-open
+span, carrying `stage_index`, `stage_count`, `exit_code`, and `duration_s`. It
+is `cuprum_exec_id` that joins the record, the event, and that span: the
+decision reuses the failing stage's existing execution token rather than
+minting one of its own, so the teardown appears in the trace of the stage that
+caused it. No separate span is started, and the stage's own `exit` event still
+closes and marks the span.
 
 To integrate with OpenTelemetry, implement the `Tracer` and `Span` protocols:
 

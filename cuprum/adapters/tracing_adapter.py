@@ -74,99 +74,10 @@ from cuprum.adapters._support import (
     _project_tag,
 )
 from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
+from cuprum.adapters.tracing_protocols import Span, Tracer
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
     from cuprum.events import ExecEvent, ExecHook, ExecId
-
-
-class Span(typ.Protocol):
-    """Protocol for a tracing span.
-
-    Spans represent a unit of work (in this case, command execution) and
-    can be enriched with attributes and events.
-    """
-
-    def set_attribute(self, key: str, value: object) -> None:
-        """Set a span attribute.
-
-        Parameters
-        ----------
-        key:
-            Attribute name (e.g., ``cuprum.program``).
-        value:
-            Attribute value (string, int, float, bool, or list thereof).
-
-        """
-        # PEP 544 protocol stub.
-        ...  # pylint: disable=unnecessary-ellipsis
-
-    def add_event(
-        self,
-        name: str,
-        attributes: cabc.Mapping[str, object] | None = None,
-    ) -> None:
-        """Add an event to the span.
-
-        Parameters
-        ----------
-        name:
-            Event name (e.g., ``cuprum.stdout``).
-        attributes:
-            Optional attributes for the event.
-
-        """
-        # PEP 544 protocol stub.
-        ...  # pylint: disable=unnecessary-ellipsis
-
-    def set_status(self, *, ok: bool) -> None:
-        """Set the span status.
-
-        Parameters
-        ----------
-        ok:
-            True if the operation succeeded, False otherwise.
-
-        """
-        # PEP 544 protocol stub.
-        ...  # pylint: disable=unnecessary-ellipsis
-
-    def end(self) -> None:
-        """End the span, recording its duration."""
-        # PEP 544 protocol stub.
-        ...  # pylint: disable=unnecessary-ellipsis
-
-
-class Tracer(typ.Protocol):
-    """Protocol for a tracing backend.
-
-    Implementations must be thread-safe; hooks may be invoked from multiple
-    threads or async tasks concurrently.
-    """
-
-    def start_span(
-        self,
-        name: str,
-        attributes: cabc.Mapping[str, object] | None = None,
-    ) -> Span:
-        """Start a new span.
-
-        Parameters
-        ----------
-        name:
-            Span name (e.g., ``cuprum.exec echo``).
-        attributes:
-            Initial span attributes.
-
-        Returns
-        -------
-        Span
-            A span that must be ended by calling :meth:`Span.end`.
-
-        """
-        # PEP 544 protocol stub.
-        ...  # pylint: disable=unnecessary-ellipsis
 
 
 class TracingHook:
@@ -174,7 +85,11 @@ class TracingHook:
 
     The hook creates a span for each command execution, starting at the
     ``start`` event and ending at the ``exit`` event. Output lines are
-    recorded as span events.
+    recorded as span events, as is a pipeline's fail-fast decision: a
+    ``pipeline_fail_fast`` event adds a ``cuprum.pipeline_fail_fast`` span
+    event — carrying ``stage_index``, ``stage_count``, ``exit_code``, and
+    ``duration_s`` — to the failing stage's already-open span. No span is
+    started or ended for it.
 
     Span attributes include:
 
@@ -203,7 +118,7 @@ class TracingHook:
     cannot be correlated safely, so the hook deliberately ignores them rather
     than risk attaching output or exit to an unrelated execution's span. A
     ``start`` without an ``exec_id`` creates no span; a ``stdout``/``stderr``/
-    ``exit`` without one is dropped.
+    ``pipeline_fail_fast``/``exit`` without one is dropped.
 
     Parameters
     ----------
@@ -250,6 +165,8 @@ class TracingHook:
                 self._record_span_event(event)
             case "exit":
                 self._handle_exit(event)
+            case "pipeline_fail_fast":
+                self._record_fail_fast(event)
             case _:
                 _log_unhandled_phase("tracing", event.phase)
 
@@ -307,13 +224,7 @@ class TracingHook:
 
     def _record_span_event(self, event: ExecEvent) -> None:
         """Record ``event``'s diagnostic fields as a span event, keyed by exec_id."""
-        exec_id = event.exec_id
-        if exec_id is None:
-            return
-
-        with self._lock:
-            span = self._active_spans.get(exec_id)
-
+        span = self._lookup_span(event)
         if span is None:
             return
 
@@ -325,6 +236,40 @@ class TracingHook:
             if value is not None:
                 event_attrs[field] = value
         span.add_event(f"cuprum.{event.phase}", event_attrs)
+
+    def _record_fail_fast(self, event: ExecEvent) -> None:
+        """Note the pipeline's fail-fast decision on the failing stage's span.
+
+        The decision belongs to a stage that is already being traced, so it is
+        recorded as an event on that stage's open span rather than as a span of
+        its own: a separate span would have no duration to report and would
+        need a second correlation key to be joined back to the stage. The span
+        is left open and unmarked — the stage's own ``exit`` event is what
+        closes it and sets its status.
+
+        Correlation and its failure mode are exactly the shared ones: the span
+        is found by ``exec_id``, and an event with no token, or one whose span
+        has already been closed, is dropped rather than attached to some other
+        execution's span.
+        """
+        span = self._lookup_span(event)
+        if span is None:
+            return
+
+        attrs: dict[str, object] = {}
+        for field in ("stage_index", "stage_count", "exit_code", "duration_s"):
+            value = getattr(event, field)
+            if value is not None:
+                attrs[field] = value
+        span.add_event("cuprum.pipeline_fail_fast", attrs)
+
+    def _lookup_span(self, event: ExecEvent) -> Span | None:
+        """Return the open span for ``event``'s execution, if it can be found."""
+        exec_id = event.exec_id
+        if exec_id is None:
+            return None
+        with self._lock:
+            return self._active_spans.get(exec_id)
 
     def _handle_exit(self, event: ExecEvent) -> None:
         """End the span for command execution, correlated by ``exec_id``."""
