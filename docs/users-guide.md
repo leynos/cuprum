@@ -372,8 +372,8 @@ enforced. When a timeout expires, Cuprum terminates the subprocess, waits for
 
 Any output already captured before the timeout fired is preserved on the
 exception: `exc.output` / `exc.stderr` hold the partial stdout/stderr (or
-`None` when `capture=False`), so callers can inspect what the command
-produced before it was killed.
+`None` when `capture=False`), so callers can inspect what the command produced
+before it was killed.
 
 **Non-positive timeout behaviour:** a `timeout` of `0` or a negative value is
 treated as an already-elapsed deadline, so the command expires immediately:
@@ -1356,11 +1356,11 @@ Each fall-back is recorded on the `cuprum._pipeline_streams` logger with a
 
 Table 1: reasons an inter-stage hop declines the Rust pump
 
-| `cuprum_reason` | Meaning |
-| --- | --- |
-| `raw_fd_unavailable` | the asyncio transport exposed no raw descriptor, so there was nothing to hand over |
-| `reader_pause_failed` | the reader transport could not be paused, so asyncio might still consume the descriptor |
-| `blocking_mode_unavailable` | the descriptors could not be switched to the blocking mode the pump requires |
+| `cuprum_reason`             | Meaning                                                                                 |
+| --------------------------- | --------------------------------------------------------------------------------------- |
+| `raw_fd_unavailable`        | the asyncio transport exposed no raw descriptor, so there was nothing to hand over      |
+| `reader_pause_failed`       | the reader transport could not be paused, so asyncio might still consume the descriptor |
+| `blocking_mode_unavailable` | the descriptors could not be switched to the blocking mode the pump requires            |
 
 These sit at `DEBUG`, not `WARNING`: a fall-back is a routing decision rather
 than a fault, and on platforms where the fast path does not apply every hop
@@ -1376,6 +1376,15 @@ logging.getLogger("cuprum._pipeline_streams").setLevel(logging.DEBUG)
 `raw_fd_unavailable` on every hop usually means the streams are not real OS
 pipes. The other two indicate the descriptors were found but could not be
 borrowed safely, which is worth investigating rather than accepting.
+
+### A pump failure hidden by cancellation
+
+Cancelling a pipeline while the Rust pump is mid-transfer tells the caller
+about the cancellation, not about anything that went wrong inside the pump.
+Such a failure is recorded on the same logger under a `cuprum_action` of
+`rust_pump_failed_after_cancel`, with the original traceback attached, so it
+stays diagnosable instead of vanishing behind the cancellation. It sits at
+`DEBUG` too, so the logger adjustment above reveals it.
 
 ### Choosing a stream backend
 
