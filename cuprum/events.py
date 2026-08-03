@@ -17,6 +17,10 @@ if typ.TYPE_CHECKING:
 
     from cuprum.program import Program
 
+# ``plan`` … ``stdin_error`` describe one command's own lifecycle.
+# ``pipeline_fail_fast`` is different in kind: it reports a decision the
+# pipeline coordinator took about the first failed stage, before termination
+# of the remaining stages begins. The stage's own ``exit`` event still follows.
 type ExecPhase = typ.Literal[
     "plan",
     "start",
@@ -27,6 +31,7 @@ type ExecPhase = typ.Literal[
     "stdin_error",
     "timeout",
     "teardown_error",
+    "pipeline_fail_fast",
 ]
 
 # A stable, per-execution correlation token. It is minted once when an
@@ -66,7 +71,8 @@ class ExecEvent:
     phase:
         Event phase. See :data:`~cuprum.events.ExecPhase`. Both ``timeout`` and
         ``teardown_error`` are ancillary diagnostics that never displace a
-        lifecycle phase, but they differ in what is guaranteed to follow them.
+        lifecycle phase. ``pipeline_fail_fast`` reports the pipeline
+        coordinator's decision before the failing stage's own ``exit`` event.
 
         ``timeout`` marks a run that exceeded its deadline, and is emitted
         before the existing ``exit`` event and the public ``TimeoutExpired``,
@@ -97,10 +103,13 @@ class ExecEvent:
         Output line for ``stdout`` / ``stderr`` phases. Line terminators are
         omitted.
     exit_code:
-        Exit code for the ``exit`` phase.
+        Exit code for the ``exit`` phase, and the failing stage's exit code for
+        the ``pipeline_fail_fast`` phase.
     duration_s:
         Elapsed duration in seconds from ``start`` to subprocess exit (not
-        including output drain after process termination).
+        including output drain after process termination). For
+        ``pipeline_fail_fast`` this is how long the failing stage ran before
+        its completion was observed.
     tags:
         Arbitrary, JSON-like metadata associated with this execution.
     note:
@@ -134,6 +143,12 @@ class ExecEvent:
         ``"non_positive_immediate"`` when a non-positive (``timeout <= 0``)
         deadline expired immediately without awaiting the process. ``None`` for
         other phases.
+    stage_index:
+        Zero-based pipeline position of the failing stage for
+        ``pipeline_fail_fast``. This typed field is not derived from tags, which
+        callers may shadow.
+    stage_count:
+        Pipeline width for ``pipeline_fail_fast``.
 
     New optional fields are appended after ``exec_id`` rather than inserted
     beside the field they relate to. Inserting one ahead of ``exec_id`` would
@@ -163,6 +178,8 @@ class ExecEvent:
     # in the class docstring.
     timeout_s: float | None = None
     timeout_mode: TimeoutMode | None = None
+    stage_index: int | None = None
+    stage_count: int | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]

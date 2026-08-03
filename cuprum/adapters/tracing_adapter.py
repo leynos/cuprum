@@ -101,8 +101,8 @@ class TracingHook:
     """Observe hook that creates OpenTelemetry-style traces.
 
     The hook creates a span for each command execution, starting at the
-    ``start`` event and ending at the ``exit`` event. Output lines are
-    recorded as span events.
+    ``start`` event and ending at the ``exit`` event. Output lines and a
+    pipeline's fail-fast decision are recorded as span events.
 
     Span attributes include:
 
@@ -131,7 +131,7 @@ class TracingHook:
     cannot be correlated safely, so the hook deliberately ignores them rather
     than risk attaching output or exit to an unrelated execution's span. A
     ``start`` without an ``exec_id`` creates no span; a ``stdout``/``stderr``/
-    ``exit`` without one is dropped.
+    ``pipeline_fail_fast``/``exit`` without one is dropped.
 
     Parameters
     ----------
@@ -178,6 +178,8 @@ class TracingHook:
                     self._record_span_event(event)
             case "stdin_error" | "timeout" | "teardown_error":
                 self._record_span_event(event)
+            case "pipeline_fail_fast":
+                self._record_fail_fast(event)
             case "exit":
                 self._handle_exit(event)
             case _:
@@ -330,6 +332,27 @@ class TracingHook:
         ok = event.exit_code == 0 if event.exit_code is not None else True
         span.set_status(ok=ok)
         span.end()
+
+    def _record_fail_fast(self, event: ExecEvent) -> None:
+        """Note a pipeline fail-fast decision on the failing stage's span."""
+        span = self._lookup_span(event)
+        if span is None:
+            return
+
+        attrs: dict[str, object] = {}
+        for field in ("stage_index", "stage_count", "exit_code", "duration_s"):
+            value = getattr(event, field)
+            if value is not None:
+                attrs[field] = value
+        span.add_event("cuprum.pipeline_fail_fast", attrs)
+
+    def _lookup_span(self, event: ExecEvent) -> Span | None:
+        """Return the open span for ``event``, when its token can be found."""
+        exec_id = event.exec_id
+        if exec_id is None:
+            return None
+        with self._lock:
+            return self._active_spans.get(exec_id)
 
     @staticmethod
     def _build_attributes(event: ExecEvent) -> dict[str, object]:

@@ -56,6 +56,10 @@ class _EventDetails:
     error_type: str | None = None
     timeout_s: float | None = None
     timeout_mode: TimeoutMode | None = None
+    # Only the pipeline fail-fast decision sets these; a stage's own lifecycle
+    # events carry its position in ``tags`` instead.
+    stage_index: int | None = None
+    stage_count: int | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -100,6 +104,8 @@ class _StageObservation:
             timeout_s=details.timeout_s,
             timeout_mode=details.timeout_mode,
             exec_id=self.exec_id,
+            stage_index=details.stage_index,
+            stage_count=details.stage_count,
         )
         try:
             scheduled_tasks = _emit_exec_event(self.hooks.observe_hooks, event)

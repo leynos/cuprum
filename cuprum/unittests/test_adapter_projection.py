@@ -33,7 +33,15 @@ from cuprum.program import Program
 if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
-_OPTIONAL_FIELDS = ("pid", "cwd", "exit_code", "duration_s", "line")
+_OPTIONAL_FIELDS = (
+    "pid",
+    "cwd",
+    "exit_code",
+    "duration_s",
+    "stage_index",
+    "stage_count",
+    "line",
+)
 _PHASES = typ.get_args(ExecPhase.__value__)
 _REDACTED_FIELDS = frozenset({"pid", "duration_s", "cwd"})
 # Ancillary diagnostic phases and the ``operation`` each reports. These are the
@@ -71,6 +79,8 @@ def _events(draw: st.DrawFn) -> ExecEvent:
                 max_size=3,
             ),
         ),
+        stage_index=draw(st.none() | st.integers(min_value=0, max_value=7)),
+        stage_count=draw(st.none() | st.integers(min_value=1, max_value=8)),
     )
 
 
@@ -196,6 +206,7 @@ class TestAdapterProjection:
         is_exit = phase == "exit"
         is_output = phase in {"stdout", "stderr"}
         is_timeout = phase == "timeout"
+        is_fail_fast = phase == "pipeline_fail_fast"
         ancillary = phase in _ANCILLARY_PHASES
         return ExecEvent(
             phase=typ.cast("ExecPhase", phase),
@@ -203,11 +214,11 @@ class TestAdapterProjection:
             argv=("echo", "hello"),
             cwd=Path("/srv/work"),
             env=None,
-            pid=None if phase == "plan" else 4321,
+            pid=None if phase in {"plan", "pipeline_fail_fast"} else 4321,
             timestamp=0.0,
             line="a line" if is_output else None,
-            exit_code=0 if is_exit else None,
-            duration_s=0.125 if is_exit else None,
+            exit_code=0 if is_exit else 3 if is_fail_fast else None,
+            duration_s=0.125 if is_exit or is_fail_fast else None,
             tags={
                 "project": "proj",
                 "pipeline_stage_index": 0,
@@ -222,6 +233,8 @@ class TestAdapterProjection:
             else None,
             timeout_s=1.5 if is_timeout else None,
             timeout_mode="elapsed_deadline" if is_timeout else None,
+            stage_index=0 if is_fail_fast else None,
+            stage_count=2 if is_fail_fast else None,
         )
 
     @staticmethod
