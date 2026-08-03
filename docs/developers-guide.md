@@ -2479,6 +2479,22 @@ Two observe events are added to `ExecPhase`:
   classes). The failure is absorbed to preserve the primary timeout or
   cancellation, but stays observable through this event.
 
+Both expiry routes report through `_report_timeout_expiry` in
+`cuprum._timeout_reporting`, which pairs the log record with the observe event
+from one set of values so the two channels cannot drift. The single-command
+path calls it from `_wait_for_exit_code_within_timeout`; the pipeline path
+calls it from `_report_pipeline_timeout_expiry`, once per stage, because a
+pipeline enforces its deadline for the whole run and so never passes through
+the single-command wait helper.
+
+`_timeout_reporting` is a module of its own rather than part of
+`_subprocess_timeout` because this surface is shared by both paths: the
+pipeline caller cannot import the timeout-translation module without closing
+an import cycle. It imports `_EventDetails` from `_pipeline_types`, the module
+that defines it, rather than from `_pipeline_internals`, which merely
+re-exports it and would reintroduce that cycle. Splitting it out also brought
+`_subprocess_timeout` back under the 400-line module ceiling.
+
 Emission is best-effort and cannot alter control flow: an observe-hook failure
 (which `_StageObservation.emit` otherwise re-raises) is swallowed so telemetry
 can never mask `TimeoutExpired` or `CancelledError`, and scheduled async-hook

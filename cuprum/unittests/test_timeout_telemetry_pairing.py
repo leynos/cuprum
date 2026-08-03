@@ -19,8 +19,10 @@ import typing as typ
 from hypothesis import given
 from hypothesis import strategies as st
 
-from cuprum._subprocess_execution import _report_timeout_expiry
-from cuprum._subprocess_timeout import _report_teardown_drain_failure
+from cuprum._timeout_reporting import (
+    _report_teardown_drain_failure,
+    _report_timeout_expiry,
+)
 from cuprum.unittests._timeout_test_helpers import _RecordingObservation
 
 if typ.TYPE_CHECKING:

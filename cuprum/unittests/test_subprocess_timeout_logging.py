@@ -14,7 +14,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import _subprocess_timeout
+from cuprum import _timeout_reporting
 from cuprum._subprocess_execution import (
     _drain_stream_consumers,
     _wait_for_exit_code_within_timeout,
@@ -195,7 +195,7 @@ def test_timeout_logging_failure_does_not_mask_timeout(
         msg = "handler exploded"
         raise RuntimeError(msg)
 
-    monkeypatch.setattr(_subprocess_timeout._LOGGER, "log", boom)
+    monkeypatch.setattr(_timeout_reporting._LOGGER, "log", boom)
 
     async def run_case() -> None:
         """Expire immediately while the logger is sabotaged to raise."""

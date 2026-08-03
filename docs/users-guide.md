@@ -429,6 +429,12 @@ with scoped(ScopeConfig(timeout=3.0)):
         print(f"timed out after {exc.timeout}s")
 ```
 
+A pipeline enforces its deadline once for the whole run rather than per stage,
+but reports it per stage like every other pipeline phase: one `timeout` observe
+event and one `cuprum.timeout` log record for each stage, each carrying that
+stage's `pid`, and one `cuprum_timeouts_total` increment per stage. The fields
+and `timeout_mode` values are identical to the single-command case.
+
 Pipeline timeouts apply to the entire pipeline run; partial output is surfaced
 using the same capture rules as successful runs.
 

@@ -21,21 +21,21 @@ from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
-    _emit_timeout_event,
     _ExitEventDetails,
     _handle_stream_timeout,
     _handle_subprocess_timeout,
-    _log_timeout_expiry,
-    _report_teardown_drain_failure,
     _require_timeout,
     _SubprocessTimeoutContext,
     _SubprocessTimeoutError,
+)
+from cuprum._timeout_reporting import (
+    _report_teardown_drain_failure,
+    _report_timeout_expiry,
 )
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum._subprocess_timeout import _TimeoutMode
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
 
 
@@ -119,29 +119,6 @@ async def _drain_stream_consumers(
     stdout_text = None if isinstance(stdout_result, BaseException) else stdout_result
     stderr_text = None if isinstance(stderr_result, BaseException) else stderr_result
     return stdout_text, stderr_text
-
-
-def _report_timeout_expiry(
-    observation: _StageObservation,
-    *,
-    pid: int | None,
-    configured_timeout: float,
-    mode: _TimeoutMode,
-) -> None:
-    """Report an expiry through both timeout telemetry channels.
-
-    The structured ``cuprum.timeout`` log record and the ``timeout`` observe
-    event always travel together and carry the same fields, so both expiry
-    routes report through here rather than repeating the pair. Both emissions
-    are best-effort and cannot mask the timeout they describe.
-    """
-    _log_timeout_expiry(pid=pid, configured_timeout=configured_timeout, mode=mode)
-    _emit_timeout_event(
-        observation,
-        pid=pid,
-        configured_timeout=configured_timeout,
-        mode=mode,
-    )
 
 
 async def _wait_for_exit_code_within_timeout(
@@ -448,7 +425,6 @@ __all__ = [
     "_create_stream_callback",
     "_drain_stream_consumers",
     "_execute_subprocess",
-    "_report_timeout_expiry",
     "_run_subprocess_with_streams",
     "_run_subprocess_without_streams",
     "_spawn_stream_consumers",
