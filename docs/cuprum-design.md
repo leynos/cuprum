@@ -1324,12 +1324,29 @@ drives randomized completion orders, and CrossHair confirms the same invariants
 symbolically over a bounded model of at most three stages.
 
 Fail-fast is also observable rather than silent. `_process_completed_task`
-emits two structured records, distinguished by a stable `cuprum_action` field:
-`pipeline_stage_first_failure` when a completion newly latches `failure_index`,
-and `pipeline_fail_fast_termination` immediately before termination is awaited.
-Both carry the stage index, exit code, and elapsed duration. The logging lives
-with the runtime concerns for the same reason the clock read does: the command
-and query must stay free of side effects to remain symbolically verifiable. The
+emits three structured records, distinguished by a stable `cuprum_action`
+field: `pipeline_stage_first_failure` when a completion newly latches
+`failure_index`, `pipeline_fail_fast_termination` immediately before
+termination is awaited, and `pipeline_fail_fast_terminated` once it returns.
+All carry the stage index, the pipeline width, the exit code, the elapsed
+duration, and the stage's execution token; the closing record adds how many
+stages were terminated and how long that took. Emitting the outcome separately
+is what distinguishes a teardown that finished from one still blocked on a
+stage that will not stop.
+
+The token is the existing per-stage `ExecId` the observe hooks already publish,
+so a fail-fast record joins to that stage's span and lifecycle events without a
+new identifier. Cuprum has no pipeline-level correlation id, and fail-fast is
+not the place to mint one: that would change the `ExecEvent` contract every
+adapter reads. Nor does fail-fast emit a metric or a trace event, because the
+library emits neither on its own — both would require a new observability
+surface rather than a use of an existing one.
+
+The record payload lives in `cuprum/_pipeline_wait_records.py`, apart from the
+decision that fires it, so the published field contract and the verified
+ordering transition are not edited by accident together. The logging lives with
+the runtime concerns for the same reason the clock read does: the command and
+query must stay free of side effects to remain symbolically verifiable. The
 developers' guide documents the fields and the verification commands.
 
 ### 8.3 Parallel Execution (non‑pipeline)

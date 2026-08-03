@@ -481,37 +481,70 @@ lives at the async boundary rather than in the pure transition, which is why
 the Hypothesis and CrossHair layers drive that transition directly and never
 see a batch.
 
-When that fail-fast path fires it is no longer silent. Two structured records
+When that fail-fast path fires it is no longer silent. Three structured records
 are emitted through `logging.getLogger("cuprum._pipeline_wait")`, distinguished
 by a stable `cuprum_action` field and sharing `cuprum_stage_index`,
-`cuprum_exit_code`, and `cuprum_duration_s` (elapsed from the stage's recorded
-start to the injected completion time):
+`cuprum_stage_count`, `cuprum_exit_code`, `cuprum_duration_s` (elapsed from the
+stage's recorded start to the injected completion time), and `cuprum_exec_id`:
 
 - `pipeline_stage_first_failure` — emitted once, when a completion newly
   latches `failure_index`.
 - `pipeline_fail_fast_termination` — emitted immediately before termination is
   awaited.
+- `pipeline_fail_fast_terminated` — emitted once termination returns, adding
+  `cuprum_terminated_stage_count` and `cuprum_termination_duration_s`.
 
-Neither record is emitted for a successful exit, for a later failure once
-`failure_index` is latched, or — in the termination case — for a final-stage or
-single-stage failure, which have no other stage to stop.
+No record is emitted for a successful exit, for a later failure once
+`failure_index` is latched, or — for the two termination records — for a
+final-stage or single-stage failure, which have no other stage to stop.
+
+Their shape lives in `cuprum/_pipeline_wait_records.py`, separately from the
+decision that fires them, because the payload is a published contract that the
+users' guide documents while the ordering decision is a verified transition.
+That module hard-codes the logger name rather than using `__name__` for the
+same reason: operators are told to attach handlers to `cuprum._pipeline_wait`,
+so the name is part of the contract and must not follow the module the code
+happens to live in.
+
+Two of those fields exist to make a record joinable rather than merely
+descriptive:
+
+- `cuprum_exec_id` is the stage's `_StageObservation.exec_id`, the same
+  per-execution token the observe hooks publish on that stage's span and its
+  `start` and `exit` events. It reaches the wait path as
+  `_PipelineSpawnResult.exec_ids`, threaded through `_wait_for_pipeline`
+  alongside `started_at` — the established way per-stage data the wait needs is
+  supplied. It defaults to empty, and `_PipelineWaitState.exec_id` then reports
+  `None`, because the pure transition never reads it and the symbolic model
+  must not carry it.
+- `cuprum_terminated_stage_count` is what
+  `_terminate_pipeline_remaining_stages` returns. Reporting it from the helper
+  that does the terminating, rather than recomputing the selection at the call
+  site, is what keeps the count honest when the selection changes.
+
+Cuprum emits **no metric and no trace event** for fail-fast. That is
+deliberate. The library emits no metrics of its own anywhere: `MetricsHook` is
+an opt-in adapter that translates `ExecEvent`s, and its phase match is
+fail-closed, so introducing a phase for fail-fast would make the hook raise for
+every user who has already registered it. A fail-fast counter therefore needs
+either a new library-side metrics surface or a change to the `ExecPhase`
+contract, and neither belongs in the module that decides completion order.
+`cuprum_action` is a stable, low-cardinality event name, so a log-based counter
+covers the same ground until that surface exists.
 
 Three verification layers cover this seam; keep all three when changing it:
 
 ```bash
 # Hypothesis state machine over randomized completion orders, the pinned
-# boundary cases, the async boundary, and the log records. These are four
-# modules by test concern, sharing scaffolding via
-
-# `cuprum/unittests/_pipeline_wait_support.py`.
+# boundary cases, the async boundary, the log records, and the correlation and
+# teardown-outcome fields. These are five modules by test concern, sharing
+# scaffolding via `cuprum/unittests/_pipeline_wait_support.py`.
 uv run pytest -q \
   cuprum/unittests/test_pipeline_wait_state_machine.py \
   cuprum/unittests/test_pipeline_wait_examples.py \
   cuprum/unittests/test_pipeline_wait_async.py \
-  cuprum/unittests/test_pipeline_wait_observability.py
-
-
-# Hypothesis state machine over randomized completion orders, the pinned
+  cuprum/unittests/test_pipeline_wait_observability.py \
+  cuprum/unittests/test_pipeline_wait_correlation.py
 # CrossHair PEP 316 contracts over the bounded symbolic model.
 uv run pytest -q cuprum/unittests/test_pipeline_wait_crosshair.py -m crosshair
 uv run crosshair check \

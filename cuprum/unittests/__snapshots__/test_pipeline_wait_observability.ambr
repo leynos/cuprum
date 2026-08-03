@@ -4,7 +4,9 @@
     dict({
       'cuprum_action': 'pipeline_stage_first_failure',
       'cuprum_duration_s': 12.5,
+      'cuprum_exec_id': 'exec-0',
       'cuprum_exit_code': 4,
+      'cuprum_stage_count': 3,
       'cuprum_stage_index': 0,
       'level': 'WARNING',
       'logger': 'cuprum._pipeline_wait',
@@ -13,11 +15,26 @@
     dict({
       'cuprum_action': 'pipeline_fail_fast_termination',
       'cuprum_duration_s': 12.5,
+      'cuprum_exec_id': 'exec-0',
       'cuprum_exit_code': 4,
+      'cuprum_stage_count': 3,
       'cuprum_stage_index': 0,
       'level': 'WARNING',
       'logger': 'cuprum._pipeline_wait',
       'message': 'terminating other pipeline stages after stage 0 exited 4',
+    }),
+    dict({
+      'cuprum_action': 'pipeline_fail_fast_terminated',
+      'cuprum_duration_s': 12.5,
+      'cuprum_exec_id': 'exec-0',
+      'cuprum_exit_code': 4,
+      'cuprum_stage_count': 3,
+      'cuprum_stage_index': 0,
+      'cuprum_terminated_stage_count': 2,
+      'cuprum_termination_duration_s': 0.0,
+      'level': 'WARNING',
+      'logger': 'cuprum._pipeline_wait',
+      'message': 'terminated other pipeline stages after stage 0 exited 4',
     }),
   ])
 # ---

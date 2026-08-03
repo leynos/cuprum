@@ -22,18 +22,18 @@ that Hypothesis and CrossHair drive directly.
 
 Work that belongs to neighbouring modules rather than here: terminating and
 cleaning up processes lives in ``cuprum._process_lifecycle``
-(``_terminate_pipeline_remaining_stages``, ``_cleanup_pipeline_on_error``), and
+(``_terminate_pipeline_remaining_stages``, ``_cleanup_pipeline_on_error``),
 collecting the inter-stage pipe task outcomes lives in
 ``cuprum._pipeline_streams`` (``_collect_pipe_results``,
-``_surface_unexpected_pipe_failures``). This module owns only the waiting and
-the ordering decision.
+``_surface_unexpected_pipe_failures``), and the shape of the records the
+fail-fast path emits lives in ``cuprum._pipeline_wait_records``. This module
+owns only the waiting, the ordering decision, and when each record fires.
 """
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import logging
 import time
 import typing as typ
 
@@ -41,13 +41,18 @@ from cuprum._pipeline_streams import (
     _collect_pipe_results,
     _surface_unexpected_pipe_failures,
 )
-from cuprum._process_exit import _await_process_exit
+from cuprum._pipeline_wait_records import (
+    completion_log_fields,
+    log_completion_event,
+)
 from cuprum._process_lifecycle import (
     _cleanup_pipeline_on_error,
     _terminate_pipeline_remaining_stages,
 )
 
-_LOGGER = logging.getLogger(__name__)
+if typ.TYPE_CHECKING:
+    from cuprum._pipeline_types import _StageWaitContext
+    from cuprum._pipeline_wait_records import _CompletionLogFields
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -70,25 +75,38 @@ class _PipelineWaitState:
     started_at: list[float]
     ended_at: list[float | None]
     failure_index: int | None = None
+    # Correlation only: the completion transition never reads this, which is
+    # why it defaults to empty and the symbolic model leaves it so.
+    exec_ids: tuple[str, ...] = ()
 
     @classmethod
     def from_processes(
         cls,
         processes: list[asyncio.subprocess.Process],
         *,
-        started_at: list[float],
+        stages: _StageWaitContext,
     ) -> _PipelineWaitState:
         """Create wait state with one wait task per pipeline process."""
-        wait_tasks = [
-            asyncio.create_task(_await_process_exit(process)) for process in processes
-        ]
+        wait_tasks = [asyncio.create_task(process.wait()) for process in processes]
         return cls(
             wait_tasks=wait_tasks,
             task_to_index={task: idx for idx, task in enumerate(wait_tasks)},
             exit_codes=[None] * len(processes),
-            started_at=started_at,
+            started_at=stages.started_at,
             ended_at=[None] * len(processes),
+            exec_ids=stages.exec_ids,
         )
+
+    def exec_id(self, stage_index: int) -> str | None:
+        """Return a stage's correlation token, or ``None`` when unknown.
+
+        Absent only when the state was built without observation context, as
+        the symbolic model and the transition-level tests do; a pipeline run
+        through `_wait_for_pipeline` always supplies one token per stage.
+        """
+        if stage_index < len(self.exec_ids):
+            return self.exec_ids[stage_index]
+        return None
 
     def record_completion(
         self,
@@ -176,55 +194,37 @@ class _PipelineWaitState:
         )
 
 
-@dc.dataclass(frozen=True, slots=True)
-class _CompletionLogFields:
-    """Structured fields shared by the pipeline-wait completion records."""
-
-    stage_index: int
-    exit_code: int
-    duration_s: float
-
-
-def _completion_log_fields(
+async def _terminate_and_report(
     state: _PipelineWaitState,
-    completed_idx: int,
-    exit_code: int,
-    ended_at: float,
-) -> _CompletionLogFields:
-    """Derive the log fields for a completion, including elapsed time.
-
-    The duration comes from the injected completion time and the stage's
-    recorded start, clamped at zero so a non-monotonic clock reading cannot
-    report a negative elapsed time.
-    """
-    return _CompletionLogFields(
-        stage_index=completed_idx,
-        exit_code=exit_code,
-        duration_s=max(0.0, ended_at - state.started_at[completed_idx]),
-    )
-
-
-def _log_completion_event(
-    action: str,
-    message: str,
+    processes: list[asyncio.subprocess.Process],
+    cancel_grace: float,
     fields: _CompletionLogFields,
 ) -> None:
-    """Emit one structured pipeline-wait record with stable ``cuprum_`` keys.
+    """Terminate the other stages, reporting the teardown either side of it.
 
-    ``action`` is the stable event name operators filter on, so the two
-    completion records — latching the first failure and starting fail-fast
-    termination — stay distinguishable even though they share their fields.
+    The starting record alone cannot distinguish a teardown that finished from
+    one still waiting on a stage that will not die, so the outcome — how many
+    stages were actually stopped, and how long the teardown took — is reported
+    once termination returns.
     """
-    _LOGGER.warning(
-        message,
+    log_completion_event(
+        "pipeline_fail_fast_termination",
+        "terminating other pipeline stages after stage %d exited %d",
+        fields,
+    )
+    started = time.perf_counter()
+    terminated = await _terminate_pipeline_remaining_stages(
+        processes,
+        state.wait_tasks,
         fields.stage_index,
-        fields.exit_code,
-        extra={
-            "cuprum_action": action,
-            "cuprum_stage_index": fields.stage_index,
-            "cuprum_exit_code": fields.exit_code,
-            "cuprum_duration_s": fields.duration_s,
-        },
+        cancel_grace=cancel_grace,
+    )
+    log_completion_event(
+        "pipeline_fail_fast_terminated",
+        "terminated other pipeline stages after stage %d exited %d",
+        fields,
+        cuprum_terminated_stage_count=terminated,
+        cuprum_termination_duration_s=max(0.0, time.perf_counter() - started),
     )
 
 
@@ -255,29 +255,19 @@ async def _process_completed_task(
     terminate_others = state.should_terminate_others(idx)
 
     # Every stage passes through here, and most emit nothing: a success logs
-    # neither record. Derive the fields once it is known one will carry them.
-    if latched_first_failure or terminate_others:
-        fields = _completion_log_fields(state, idx, exit_code, ended_at)
-        if latched_first_failure:
-            _log_completion_event(
-                "pipeline_stage_first_failure",
-                "pipeline stage %d exited %d, latching first failure",
-                fields,
-            )
-        if terminate_others:
-            _log_completion_event(
-                "pipeline_fail_fast_termination",
-                "terminating other pipeline stages after stage %d exited %d",
-                fields,
-            )
+    # no record at all. Derive the fields once it is known one will carry them.
+    if not (latched_first_failure or terminate_others):
+        return
 
-    if terminate_others:
-        await _terminate_pipeline_remaining_stages(
-            processes,
-            state.wait_tasks,
-            idx,
-            cancel_grace=cancel_grace,
+    fields = completion_log_fields(state, idx, exit_code, ended_at)
+    if latched_first_failure:
+        log_completion_event(
+            "pipeline_stage_first_failure",
+            "pipeline stage %d exited %d, latching first failure",
+            fields,
         )
+    if terminate_others:
+        await _terminate_and_report(state, processes, cancel_grace, fields)
 
 
 async def _finalize_pipeline_wait(
@@ -298,10 +288,10 @@ async def _wait_for_pipeline(
     *,
     pipe_tasks: list[asyncio.Task[None]],
     cancel_grace: float,
-    started_at: list[float],
+    stages: _StageWaitContext,
 ) -> _PipelineWaitResult:
     """Wait for pipeline completion, ensuring subprocess cleanup on cancellation."""
-    state = _PipelineWaitState.from_processes(processes, started_at=started_at)
+    state = _PipelineWaitState.from_processes(processes, stages=stages)
 
     caught: BaseException | None = None
     pipe_results: list[object] | None = None

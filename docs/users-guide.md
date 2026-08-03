@@ -251,7 +251,7 @@ Notes:
 ### Diagnosing a fail-fast pipeline
 
 `result.failure_index` reports which stage triggered fail-fast, but not why
-the other stages ended when they did. Two records fill that gap. Both are
+the other stages ended when they did. Three records fill that gap. All are
 emitted at `WARNING` on the `cuprum._pipeline_wait` logger, so they appear in
 a default logging configuration without any opt-in.
 
@@ -260,11 +260,34 @@ Table 1: fail-fast records emitted while a pipeline is being torn down
 | `cuprum_action` | Emitted when |
 | --- | --- |
 | `pipeline_stage_first_failure` | the first stage to exit non-zero is latched |
-| `pipeline_fail_fast_termination` | that failure causes every other still-running stage to be terminated |
+| `pipeline_fail_fast_termination` | that failure is about to terminate every other still-running stage |
+| `pipeline_fail_fast_terminated` | that termination has returned |
 
-Each record carries `cuprum_stage_index`, `cuprum_exit_code`, and
-`cuprum_duration_s` — the stage's elapsed run time — so the failing stage can
-be identified without correlating against the result object.
+Every record carries the same core fields, so the failing stage can be
+identified without correlating against the result object.
+
+Table 2: fields carried by every fail-fast record
+
+| Field | Meaning |
+| --- | --- |
+| `cuprum_stage_index` | position of the failing stage in the pipeline |
+| `cuprum_stage_count` | how many stages the pipeline has |
+| `cuprum_exit_code` | the exit code that stage reported |
+| `cuprum_duration_s` | that stage's elapsed run time |
+| `cuprum_exec_id` | the stage's execution token |
+
+`cuprum_exec_id` is the same per-execution token the `logging`, metrics, and
+tracing adapters publish for that stage, so a fail-fast record can be joined
+to that stage's span and its `start` and `exit` events. It is also what tells
+two pipelines apart when they run concurrently in one process: both report a
+stage 0, but never the same token.
+
+The closing `pipeline_fail_fast_terminated` record adds two fields of its own:
+`cuprum_terminated_stage_count`, how many stages were still running and so
+were terminated, and `cuprum_termination_duration_s`, how long that teardown
+took. Its absence after a `pipeline_fail_fast_termination` record means
+termination has not returned — a pipeline still waiting on a stage that has
+not yet stopped.
 
 Only the *first* failure is reported. Fail-fast terminates the other stages,
 so those stages then exit non-zero too; reporting each would bury the cause
@@ -272,10 +295,9 @@ under its own consequences. A pipeline therefore emits at most one
 `pipeline_stage_first_failure` record, and a second one indicates a real
 defect rather than a second failure.
 
-A stage that fails last emits `pipeline_stage_first_failure` without a
-matching `pipeline_fail_fast_termination`: it latched the failure, but there
-was nothing left running to terminate. The same is true of a single-stage
-pipeline.
+A stage that fails last emits `pipeline_stage_first_failure` alone, with
+neither termination record: it latched the failure, but there was nothing left
+running to terminate. The same is true of a single-stage pipeline.
 
 Which stage is reported follows the order the stages actually finished in. When
 two stages finish too close together for that order to be observed, the earlier

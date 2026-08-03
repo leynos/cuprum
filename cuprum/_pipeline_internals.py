@@ -49,6 +49,7 @@ from cuprum._pipeline_types import (
     _PipelineObservers,
     _PipelineSpawnResult,
     _StageObservation,
+    _StageWaitContext,
 )
 from cuprum._process_lifecycle import _shielded_cleanup, _spawn_pipeline_processes
 from cuprum._timeout_reporting import _report_pipeline_timeout_expiry
@@ -68,6 +69,48 @@ __all__ = [
     "_sh_module",
 ]
 
+_MIN_PIPELINE_STAGES = 2
+_PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
+
+
+"""Internal pipeline execution coordination and fail-fast semantics.
+This module is the private machinery behind ``cuprum.sh``'s
+``Pipeline.run``/``run_sync``. It ties together allowlist enforcement
+completion waiting with optional timeouts, and per-stage
+``CommandResult`` assembly. It exists chiefly to centralise
+finalization: when a stage fails or an after-hook raises, pending
+observe-hook tasks must still be drained and every independent
+failure preserved, grouping after-hook and task failures into a
+``cuprum._observability``, and
+``cuprum.context``, and is invoked by ``cuprum.sh`` and
+``cuprum._subprocess_execution``/``_process_lifecycle``.
+"""
+if typ.TYPE_CHECKING:
+    import asyncio
+    from cuprum.context import CuprumContext
+    from cuprum.sh import CommandResult, PipelineResult, SafeCmd
+__all__ = [
+]
+_MIN_PIPELINE_STAGES = 2
+_PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
+"""Internal pipeline execution coordination and fail-fast semantics.
+This module is the private machinery behind ``cuprum.sh``'s
+``Pipeline.run``/``run_sync``. It ties together allowlist enforcement
+completion waiting with optional timeouts, and per-stage
+``CommandResult`` assembly. It exists chiefly to centralise
+finalization: when a stage fails or an after-hook raises, pending
+observe-hook tasks must still be drained and every independent
+failure preserved, grouping after-hook and task failures into a
+``cuprum._observability``, and
+``cuprum.context``, and is invoked by ``cuprum.sh`` and
+``cuprum._subprocess_execution``/``_process_lifecycle``.
+"""
+if typ.TYPE_CHECKING:
+    import asyncio
+    from cuprum.context import CuprumContext
+    from cuprum.sh import CommandResult, PipelineResult, SafeCmd
+__all__ = [
+]
 _MIN_PIPELINE_STAGES = 2
 _PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
 
@@ -270,7 +313,10 @@ async def _run_pipeline(
             processes=processes,
             stderr_tasks=stderr_tasks,
             stdout_task=stdout_task,
-            started_at=started_at,
+            stages=_StageWaitContext(
+                started_at=started_at,
+                exec_ids=tuple(str(obs.exec_id) for obs in observations),
+            ),
         )
     except BaseException as spawn_error:
         await _shielded_cleanup(
