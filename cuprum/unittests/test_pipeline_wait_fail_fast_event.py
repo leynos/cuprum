@@ -45,6 +45,15 @@ class _Driven:
     records: list[logging.LogRecord]
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _SilentCase:
+    """One completion sequence that must announce nothing, and why."""
+
+    stage_count: int
+    completions: list[tuple[int, int]]
+    reason: str
+
+
 def _drive(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -165,45 +174,49 @@ class TestFailFastEventEmission:
         )
 
     @pytest.mark.parametrize(
-        ("stage_count", "completions", "reason"),
+        "case",
         [
             pytest.param(
-                3,
-                [(1, 0)],
-                "a stage that succeeded triggers no teardown to report",
+                _SilentCase(
+                    stage_count=3,
+                    completions=[(1, 0)],
+                    reason="a stage that succeeded triggers no teardown to report",
+                ),
                 id="successful_completion",
             ),
             pytest.param(
-                3,
-                [(2, 1)],
-                "a failing final stage has nothing left to terminate",
+                _SilentCase(
+                    stage_count=3,
+                    completions=[(2, 1)],
+                    reason="a failing final stage has nothing left to terminate",
+                ),
                 id="final_stage_failure",
             ),
             pytest.param(
-                1,
-                [(0, 9)],
-                "a single-stage pipeline has no other stage to terminate",
+                _SilentCase(
+                    stage_count=1,
+                    completions=[(0, 9)],
+                    reason="a single-stage pipeline has no other stage to terminate",
+                ),
                 id="single_stage_failure",
             ),
         ],
     )
     def test_completions_that_publish_nothing(
         self,
+        case: _SilentCase,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
-        stage_count: int,
-        completions: list[tuple[int, int]],
-        reason: str,
     ) -> None:
         """No event where there is no fail-fast teardown to announce."""
         driven = _drive(
             monkeypatch,
             caplog,
-            stage_count=stage_count,
-            completions=completions,
+            stage_count=case.stage_count,
+            completions=case.completions,
         )
 
-        assert driven.events == [], f"{reason}, found {driven.events!r}"
+        assert driven.events == [], f"{case.reason}, found {driven.events!r}"
 
     def test_a_later_failure_does_not_publish_a_second_event(
         self,
