@@ -1305,6 +1305,17 @@ command/query segregation rule:
   completion is the latched first failure *and* is not the final stage — a
   failing final stage has nothing left to stop.
 
+Completion order governs, but it cannot separate stages that settle together.
+`asyncio.wait` returns the settled tasks as an unordered set, so
+`_wait_for_pipeline` feeds each batch through in ascending stage-index order.
+That is a tie-break rather than a priority: across batches the stage that
+completed first still latches `failure_index`, and the sort only decides the
+order *within* one `asyncio.wait` batch, where set iteration would otherwise
+let `failure_index` vary between runs of the same pipeline. The tie is broken
+towards the earliest stage because an upstream failure is what causes the
+downstream failures it triggers, so the lowest index names the cause rather
+than a symptom.
+
 `_process_completed_task` is the only caller that joins the two: it reads the
 clock, invokes the command, then acts on the query by awaiting
 `_terminate_pipeline_remaining_stages`. Keeping the I/O there leaves the

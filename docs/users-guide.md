@@ -277,6 +277,12 @@ matching `pipeline_fail_fast_termination`: it latched the failure, but there
 was nothing left running to terminate. The same is true of a single-stage
 pipeline.
 
+Which stage is reported follows the order the stages actually finished in. When
+two stages finish too close together for that order to be observed, the earlier
+stage in the pipeline is reported — so the same pipeline failing the same way
+reports the same stage every time, and the reported stage is the upstream cause
+rather than a downstream stage it took down with it.
+
 The fields are prefixed so they cannot collide with `LogRecord`'s own
 attributes. To surface them, read them off the record:
 
