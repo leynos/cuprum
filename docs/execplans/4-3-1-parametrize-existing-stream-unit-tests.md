@@ -199,9 +199,14 @@ records the gates of the day, not today's:
 - `make markdownlint`: 0 errors
 
 > **Since superseded.** The file inventory below records where the code landed
-> when 4.3.1 completed, not where it lives now. The descriptor extractors and
-> the pause/blocking-mode lifecycle (`_fd_from_transport`,
-> `_extract_stream_fd`, `_paused_reader`, `_BlockingModeGuard`) have since moved
+> when 4.3.1 completed, not where it lives now. Two of the extractors named
+> above are gone: `_extract_reader_fd` and `_extract_writer_fd` were one-line
+> pass-throughs to `_extract_stream_fd` — a fourth helper 4.3.1 added
+> alongside them but the summary above does not name — and #136 deleted the
+> two aliases as dead code, inlining their call sites onto
+> `_extract_stream_fd`. The surviving extractors and the pause/blocking-mode
+> lifecycle (`_fd_from_transport`, `_extract_stream_fd`, `_paused_reader`,
+> `_BlockingModeGuard`) have since moved
 > out of `cuprum/_pipeline_streams.py` into `cuprum/_pipeline_stream_fds.py`,
 > and the pipe-task bookkeeping into `cuprum/_pipeline_pipe_tasks.py`, to keep
 > each module within the per-module line cap. `_pipeline_streams.py` still owns

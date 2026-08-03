@@ -2373,12 +2373,14 @@ Restoring or resuming earlier would hand the descriptors back to asyncio while
 native code was still mid-transfer.
 
 The module's scope is deliberately narrow: descriptor extraction plus the pause
-and blocking-mode lifecycle for the Rust pump hand-off. It is consumed only by
-`cuprum/_pipeline_streams.py`. Its reuse policy is that new descriptor
-lifecycle concerns for that hand-off belong here rather than being inlined into
-the pump, but the seams are not a general-purpose descriptor utility — anything
-serving a different caller should be designed against that caller's real
-requirements instead of widening these.
+and blocking-mode lifecycle for the Rust pump hand-off. Production code
+consumes it only from `cuprum/_pipeline_streams.py`; the
+`cuprum/unittests/test_pipeline_stream*` modules also import the seams
+directly, to inject the partial failures the public entry point cannot provoke.
+Its reuse policy is that new descriptor lifecycle concerns for that hand-off
+belong here rather than being inlined into the pump, but the seams are not a
+general-purpose descriptor utility — anything serving a different caller should
+be designed against that caller's real requirements instead of widening these.
 
 ### 13.7 Linux splice() Optimization
 
