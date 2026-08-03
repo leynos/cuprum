@@ -46,6 +46,7 @@ from cuprum._pipeline_types import (
     _StageObservation,
 )
 from cuprum._process_lifecycle import _spawn_pipeline_processes
+from cuprum._timeout_reporting import _report_pipeline_timeout_expiry
 from cuprum.context import current_context
 
 if typ.TYPE_CHECKING:
@@ -244,6 +245,11 @@ async def _run_pipeline(
             config,
         )
     except _sh_module().TimeoutExpired as timeout_error:
+        _report_pipeline_timeout_expiry(
+            observations,
+            spawn.processes,
+            configured_timeout=config.timeout,
+        )
         await _drain_tasks_during_cleanup(
             pending_tasks, timeout_error, message=_PIPELINE_FINALIZATION_ERROR
         )
