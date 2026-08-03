@@ -6,9 +6,10 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use proptest::prelude::*;
 
 use super::{
-    PumpError, WriteOutcome, handle_write, handle_write_result, map_short_write_error, read_raw_fd,
-    read_raw_fd_with, read_stream, write_all_unix_with,
+    PumpError, WriteOutcome, classify_write_outcome, classify_write_with, handle_write,
+    map_short_write_error, read_raw_fd, read_raw_fd_with, read_stream, write_all_unix_with,
 };
+use crate::pump_machine::WriteEvent;
 use crate::test_support::{make_pipe, unwrap_err, unwrap_ok, write_all_to};
 use rstest::{fixture, rstest};
 
@@ -111,39 +112,6 @@ fn handle_write_reports_unwritable_descriptor(pipe: (OwnedFd, OwnedFd)) {
     let err = unwrap_err(handle_write(&mut read_end, b"chunk"));
 
     assert!(matches!(err, PumpError::Io(_)));
-}
-
-/// Call [`handle_write_result`] with `b"chunk"` starting from
-/// `initial_total` and return both the call's result and the
-/// (possibly updated) total.
-fn run_handle_write_result(
-    writer: &mut OwnedFd,
-    initial_total: u64,
-) -> (Result<bool, PumpError>, u64) {
-    let mut total_written = initial_total;
-    let result = handle_write_result(writer, b"chunk", &mut total_written);
-    (result, total_written)
-}
-
-#[rstest]
-fn handle_write_result_updates_total_on_success(pipe: (OwnedFd, OwnedFd)) {
-    let (read_end, mut write_end) = pipe;
-
-    let (result, total_written) = run_handle_write_result(&mut write_end, 7);
-
-    assert!(unwrap_ok(result));
-    assert_eq!(total_written, 12);
-    drop(read_end);
-}
-
-#[rstest]
-fn handle_write_result_preserves_total_on_fatal_error(pipe: (OwnedFd, OwnedFd)) {
-    let (mut read_end, _write_end) = pipe;
-
-    let (result, total_written) = run_handle_write_result(&mut read_end, 7);
-
-    assert!(matches!(unwrap_err(result), PumpError::Io(_)));
-    assert_eq!(total_written, 7);
 }
 
 #[test]
@@ -263,4 +231,108 @@ proptest! {
             Err(_) => prop_assert!(!is_nonfatal_kind(kind)),
         }
     }
+}
+
+#[rstest]
+#[case::zero_bytes(0)]
+#[case::positive_bytes(7)]
+fn classify_write_outcome_maps_nonfatal_short_write_to_closed(#[case] accepted: u64) {
+    // A non-fatal short write latches the writer closed while preserving the
+    // bytes accepted before the pipe broke — including none at all.
+    let event = unwrap_ok(classify_write_outcome(Ok(
+        WriteOutcome::NonFatalShortWrite(accepted),
+    )));
+
+    assert_eq!(event, WriteEvent::Closed { bytes: accepted });
+}
+
+#[test]
+fn classify_write_outcome_maps_complete_write_to_complete() {
+    let event = unwrap_ok(classify_write_outcome(Ok(WriteOutcome::Complete(5))));
+
+    assert_eq!(event, WriteEvent::Complete { bytes: 5 });
+}
+
+#[test]
+fn classify_write_outcome_propagates_fatal_errors() {
+    // map_short_write_error has already absorbed the non-fatal partition, so
+    // every error arriving here is fatal and must not latch the writer closed.
+    let err = unwrap_err(classify_write_outcome(Err(PumpError::from(
+        io::Error::from(io::ErrorKind::PermissionDenied),
+    ))));
+
+    assert!(matches!(err, PumpError::Io(_)));
+}
+
+/// Both non-fatal mappings, driven through `classify_write`'s own pipeline.
+///
+/// These go through [`classify_write_with`], which is what `classify_write`
+/// itself calls with the real `write(2)`; only the syscall differs. So the
+/// partial-write loop, the non-fatal error partitioning in
+/// `map_short_write_error`, and the outcome mapping all run exactly as they do
+/// in production — unlike a test that hands `classify_write_outcome` a
+/// pre-built `WriteOutcome` and therefore skips the two steps that produce it.
+///
+/// The short-write case cannot be forced through a real descriptor: it needs
+/// the peer to close *after* the kernel has accepted some bytes but before the
+/// rest, which no test can schedule deterministically.
+#[rstest]
+#[case::non_fatal_after_partial_progress(io::ErrorKind::BrokenPipe, 3, 3)]
+#[case::non_fatal_before_any_progress(io::ErrorKind::BrokenPipe, 0, 0)]
+#[case::reset_after_partial_progress(io::ErrorKind::ConnectionReset, 2, 2)]
+#[case::reset_before_any_progress(io::ErrorKind::ConnectionReset, 0, 0)]
+fn classify_write_latches_closed_carrying_accepted_bytes(
+    #[case] kind: io::ErrorKind,
+    #[case] accepted: usize,
+    #[case] expected_bytes: u64,
+) {
+    let chunk = b"chunk-of-bytes";
+    assert!(
+        accepted < chunk.len(),
+        "the injected write must stop short of the whole chunk",
+    );
+
+    // Accept `accepted` bytes on the first call, then fail non-fatally. With
+    // `accepted == 0` the failure precedes any progress.
+    let mut calls = 0_u32;
+    let event = unwrap_ok(classify_write_with(chunk, |_buffer| {
+        calls += 1;
+        if calls == 1 && accepted > 0 {
+            Ok(libc::ssize_t::try_from(accepted).unwrap_or(0))
+        } else {
+            Err(io::Error::from(kind))
+        }
+    }));
+
+    assert_eq!(
+        event,
+        WriteEvent::Closed {
+            bytes: expected_bytes
+        },
+        "a non-fatal write must latch the writer closed carrying the bytes it accepted",
+    );
+}
+
+/// A completed write through the same seam reports the full byte count and
+/// does not latch the writer closed.
+#[rstest]
+fn classify_write_with_reports_a_completed_write() {
+    let chunk = b"chunk";
+
+    let event = unwrap_ok(classify_write_with(chunk, |buffer| {
+        Ok(libc::ssize_t::try_from(buffer.len()).unwrap_or(0))
+    }));
+
+    assert_eq!(event, WriteEvent::Complete { bytes: 5 });
+}
+
+/// A fatal error is not swallowed by the non-fatal partition: it propagates
+/// out of `classify_write` rather than latching the writer closed.
+#[rstest]
+fn classify_write_with_propagates_a_fatal_error() {
+    let err = unwrap_err(classify_write_with(b"chunk", |_buffer| {
+        Err(io::Error::from(io::ErrorKind::PermissionDenied))
+    }));
+
+    assert!(matches!(err, PumpError::Io(_)));
 }

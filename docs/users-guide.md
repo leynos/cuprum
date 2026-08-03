@@ -240,7 +240,12 @@ Notes:
   `result.failure_index`.
 - When a downstream writer closes early, Cuprum drains the upstream reader
   until EOF or a short timeout elapses, even on a stalled upstream, so
-  discarded input stays bounded.
+  discarded input stays bounded. On the Rust backend that drain is reported —
+  see [Rust stream observability](#rust-stream-observability-internal) for the
+  `broken pipe; draining reader` event and the `bytes_transferred` count, which
+  record *that* the downstream stage stopped reading and how much it received
+  first. Neither says why it stopped; read them alongside that stage's exit
+  status.
 
 ## Execution runtime
 
@@ -1258,6 +1263,39 @@ and consume loops run inside an operation span that carries the `operation` and
 cumulative `EINTR` `read_retries`/`write_retries` counts. The span sits at
 `error` level so the `warn`/`error` events retain their operation context even
 when the subscriber is filtered to `warn`/`error`; it emits no log line itself.
+
+One further `debug` event reports the pump's own state rather than an
+individual read or write. When a downstream stage hangs up early — the
+`head`-style exit, where a consumer stops reading before the producer has
+finished — the pump latches its writer closed and keeps draining the upstream
+reader to EOF. That transition logs:
+
+```text
+broken pipe; draining reader    bytes_transferred=<count>
+```
+
+`bytes_transferred` is the number of bytes that reached the downstream stage
+before it hung up, so `0` means it closed before receiving anything.
+
+The event is not itself an error. It records that the pump classified the
+writer's closure as non-fatal and *began* draining the rest of the input, which
+is what stops a producer blocking forever on a pipe nobody is reading.
+
+It is emitted the moment the writer latches closed, before the drain finishes,
+so it is not a report of success. The pump returns success only if the drain
+then reaches EOF; a read that fails fatally afterwards still propagates as an
+`OSError`, on a run where this event was already emitted.
+
+It does not, on its own, say *why* the downstream stage stopped reading. A
+consumer that finished by design, as `head` does, and one that crashed partway
+through can both close the pipe after the same number of bytes. Read the event
+alongside that stage's exit status: a zero exit means the early stop was
+deliberate, and a non-zero exit means the stage failed — in which case the
+pipeline still fails through the usual fail-fast path, even though the pump
+itself succeeded.
+
+Both the `splice` fast path and the read/write fallback emit the event
+identically, so the message does not depend on which path handled the transfer.
 
 ### Choosing a stream backend
 

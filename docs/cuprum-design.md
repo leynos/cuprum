@@ -2352,6 +2352,55 @@ operation-scoped thread-local counters that the
 loops reset at operation start (keeping the seams parameter-free). See the
 developers' guide for the full contract.
 
+#### Read/write fallback state machine
+
+The non-splice read/write loop keeps its control flow — how each read and write
+outcome moves the running byte total and the latched writer state — in a pure,
+`io::Error`-free state machine in `rust/cuprum-rust/src/pump_machine.rs`,
+separate from the descriptor I/O that feeds it.
+
+`advance` is the whole public surface. It takes a `PumpState`, the length just
+read, and a closure that performs one write, and it returns a `Flow`
+(`Continue`/`Stop`):
+
+```rust,ignore
+pub(crate) fn advance<E>(
+    state: &mut PumpState,
+    read_len: usize,
+    write_once: impl FnOnce() -> Result<WriteEvent, E>,
+) -> Result<Flow, E>;
+```
+
+Taking the *raw read length* rather than a pre-built read event is what puts
+the loop's write precondition inside the machine: `advance` calls `write_once`
+only for a non-zero read while the writer is still open, and otherwise drains
+or stops without calling it at all. So `pump_stream_files_readwrite` and the
+property tests cannot disagree about that rule — neither one gets to decide it.
+
+The precondition is then encoded in the type system rather than re-checked. A
+private `Transition` (`Wrote`/`Drained`/`Eof`) is constructed only by
+`advance`, so "wrote a chunk after the writer latched closed" is not a
+representable state and the internal `step` needs no defensive `writer_open`
+check — a second check would only mask a caller that got it wrong. Because that
+argument rests on `Transition` and `step` remaining module-private, a
+compile-fail case (`tests/ui/fail/pump_transition_unreachable.rs`) holds the
+boundary: it fails if either is widened, even to `pub(crate)`.
+
+`io_utils::classify_write` is the adapter between the two halves. It collapses
+`WriteOutcome` and the non-fatal error partition into the machine's two-variant
+`WriteEvent` (`Complete { bytes }` / `Closed { bytes }`), so a broken pipe or
+connection reset latches the writer closed carrying the bytes accepted before
+the failure, while genuinely fatal failures propagate as `PumpError` and never
+reach the machine at all.
+
+Keeping the decision `io::Error`-free is what makes it verifiable: proptests
+fold random event scripts through `advance`, and Kani proves the same
+invariants — the total is monotonic, the writer never reopens once latched, a
+closed writer drains without accruing bytes, and the loop stops exactly on a
+zero-length read — over unbounded byte counts and arbitrary starting states.
+That is deliberately unlike the splice path, whose `io::Error` values are not
+Kani-tractable; the developers' guide records the commands and the bounds.
+
 ### 13.8 Build and Distribution
 
 The Rust extension is built using maturin and distributed as platform-specific

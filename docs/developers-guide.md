@@ -1344,6 +1344,87 @@ These raw-fd helpers live in the `io_utils` directory module (`io_utils/mod.rs`,
 with tests in `io_utils/tests.rs`), split from the former single file to stay
 within the per-module line cap.
 
+The read/write fallback's control flow — how each read and write outcome moves
+the running byte total and the latched `writer_open` flag — is factored into a
+pure, `io::Error`-free state machine in `src/pump_machine.rs`.
+
+[Cuprum design](cuprum-design.md) §13.7, "Read/write fallback state machine",
+is the normative reference for this API: it carries `advance`'s full signature
+and the reasoning behind its shape. The notes below record the conventions that
+govern using it, and name the types so a reader arriving from the `io_utils`
+sections above knows what to look for.
+
+`advance` is the machine's only production entry point. It takes a `PumpState`
+by mutable reference, the raw read length, and a closure that performs one
+write, and it returns a `Flow` — `Continue` to keep reading, or `Stop` on end
+of input. `PumpState` holds exactly the two values the loop must not get wrong,
+the running `total_written` total and the latched `writer_open` flag, exposed
+through `total_written()` and `writer_open()` accessors rather than as public
+fields, so only the machine may move them.
+
+`advance` owns both decisions the loop would otherwise have to make for itself:
+a zero-length read is end of input, anything else is a chunk; and the write
+runs **only** for a chunk read while the writer is still open.
+`pump_stream_files_readwrite`, the property tests, and the bounded proofs all
+go through it, so there is one definition of that policy rather than three
+copies that could drift.
+
+The write closure yields a `WriteEvent`, the machine's `io::Error`-free view of
+one write: `Complete { bytes }` accepted the whole chunk and leaves the writer
+open, while `Closed { bytes }` carries the bytes accepted before a broken pipe
+or connection reset and latches the writer shut for good. The sole production
+adapter that builds one is `io_utils::classify_write`, which collapses a
+`WriteOutcome` and the non-fatal error partition into those two variants; the
+test-only `classify_write_with` shares its mapping through a `write(2)` seam.
+Genuinely fatal failures never reach the machine at all — they propagate as
+`PumpError` — which is what keeps `pump_machine` free of `io::Error` and so
+tractable for Kani. Re-use policy: a new caller of the machine must classify
+its writes through `classify_write` rather than constructing a `WriteEvent`
+inline, otherwise "non-fatal" stops having one definition.
+
+The precondition is enforced by the type rather than by a check. Internally
+`advance` builds a private `Transition` — `Wrote(WriteEvent)`, `Drained`, or
+`Eof` — and `Wrote` is constructible only on the branch that has already
+established the writer is open. An earlier API took a read event and an
+`Option<WriteEvent>` independently, which let a caller pass a write for an EOF
+read or for a closed writer; both were silently ignored, so the precondition
+lived in a doc comment. Making those states unrepresentable also removed the
+defensive re-check inside `step`, which had been masking exactly the mistake it
+looked like it was guarding against.
+
+That encapsulation is what the proptests and Kani proofs assume rather than
+establish — neither can observe a transition it cannot spell — so it is pinned
+separately by the compile-fail case
+`rust/cuprum-rust/tests/ui/fail/pump_transition_unreachable.rs`. That case
+includes `src/pump_machine.rs` as a child module, reproducing the relationship
+`lib.rs` has with it, and asserts the compiler's refusal of an attempt to build
+a `Transition::Wrote` and pass it to `step` from the parent. Widening either
+item, even to `pub(crate)`, changes the diagnostic and fails the case, so the
+"`advance` is the only constructor" claim cannot quietly stop being true.
+
+Whether the write *ran* is what the tests assert, not merely its effect: a
+dropped precondition would leave the resulting state identical and differ only
+in having performed a spurious write, so the drivers report invocation.
+
+Extracting the decision this way lets it be checked without descriptors:
+proptests fold random scripts of `(read_len, WriteEvent)` through `advance` to
+assert the total is monotonic, the writer never reopens once a broken pipe
+latches it closed, a closed writer drains without accruing bytes, the loop
+stops exactly on a zero-length read, and the write runs exactly when the
+transition permits it. Kani proves the same invariants over unbounded byte
+counts and arbitrary starting states in `src/pump_machine_kani_proofs.rs`
+(`#[cfg(kani)]`, so outside the commit gate), closing the model-checking
+follow-up from issue `#84`. Those proofs target `advance` rather than the
+private `step`, because `advance` is where the precondition lives — proving
+`step` in isolation would establish nothing about a closed writer.
+
+Neither the proptests nor the proofs call `advance` directly. Both go through
+`drive`, a `#[cfg(any(test, kani))]` helper beside it that supplies the write
+closure and returns the `Flow` alongside whether the closure was invoked. That
+is deliberate: it keeps the two harnesses driving the machine identically, and
+it is where the "was the write attempted?" observable comes from. Add new
+harnesses through `drive` rather than reconstructing the closure in each one.
+
 The path emits bounded `tracing` diagnostics at the three boundaries operators
 need visibility into: support detection logs a `debug` event when the
 descriptors cannot splice and the read/write fallback takes over; the
@@ -1373,6 +1454,16 @@ accumulated in operation-scoped thread-local counters that
 (right after entering the span, via `io_utils::reset_retry_counters`;
 `operation_span` itself does not touch the counters), so the seams stay
 parameter-free while the span still reports them.
+
+One event in that loop comes from the pump's own state rather than a seam.
+When the writer-close latch first closes — the downstream stage hung up and the
+remaining reads only drain the upstream, the `head`-style early exit — the loop
+emits a `debug` event carrying `bytes_transferred`, using the same field and
+message as the splice path's broken-pipe report so a hang-up looks identical
+whichever path handled it. It is observed in the loop rather than in
+`pump_machine`, which stays free of I/O and logging so its bounded proofs stay
+tractable.
+
 The span is created at `error` level so the `warn`/`error` events keep their
 operation context even under a `warn`/`error`-only production filter, where an
 `info` span would be disabled; it emits no log line of its own.
@@ -1890,8 +1981,10 @@ as a test assertion on the SHA string.
 ## Compile-time UI tests (trybuild)
 
 The Rust crate at `rust/cuprum-rust/` uses
-[trybuild](https://github.com/dtolnay/trybuild) to validate PyO3 macro
-behaviour at compile time. Tests live under `rust/cuprum-rust/tests/ui/`:
+[trybuild](https://github.com/dtolnay/trybuild) to validate contracts that hold
+at compile time and so cannot be observed by a runtime test: PyO3 macro
+behaviour, and encapsulation boundaries such as the pump machine's private
+`Transition`. Tests live under `rust/cuprum-rust/tests/ui/`:
 
 - `tests/ui/pass/` — Rust files that **must compile** without error.
 - `tests/ui/fail/` — Rust files that **must fail** compilation with diagnostics
@@ -1913,6 +2006,37 @@ cd rust && TRYBUILD=overwrite cargo +1.85.0 test compile_time_ui
 
 Inspect the updated `.stderr` files before committing to confirm that each fail
 test still represents a genuine compile-time error.
+
+A fail case that pins an encapsulation boundary must include the real module
+under test with `#[path]` rather than restating its shape, because a
+hand-written copy would only prove the copy private.
+
+Such a fixture may legitimately need to silence a lint the throwaway crate
+trybuild builds cannot configure — that crate inherits no `[lints]` table, so
+the workspace's `check-cfg = ["cfg(kani)"]` does not apply and the included
+module's `#[cfg(kani)]` gates would otherwise bury the expected diagnostic in
+`unexpected_cfgs` noise. Scope that suppression to the item that needs it:
+
+- Do not use a crate-level inner attribute (`#![allow(...)]` or
+  `#![expect(...)]`). It suppresses the lint for the probe code as well as the
+  included module, so a diagnostic the case ought to report can vanish
+  unnoticed. There are no crate-level `allow` or `expect` attributes anywhere in
+  `rust/`, and no fixture needs the first one.
+- Put an outer `#[expect(<lint>, reason = "...")]` on the `#[path]` module
+  declaration instead, next to the `#[path]` attribute itself. Prefer `expect`
+  over `allow`: if the production module later drops the gates that provoke the
+  lint, an unfulfilled expectation fails the build rather than leaving a stale
+  suppression behind.
+- Every suppression carries a `reason` string naming the constraint, per the
+  repository-wide rule that lint suppressions are tightly scoped and explained.
+
+`tests/ui/fail/pump_transition_unreachable.rs` is the worked example.
+
+Before committing one, verify it is not vacuous: weaken the production item it
+guards, confirm the case then fails, and restore. Re-run that check after any
+change to the fixture's attributes or structure, not only after a change to the
+item under test — narrowing a suppression can alter which diagnostics reach the
+`.stderr` fixture.
 
 ## Design decisions
 

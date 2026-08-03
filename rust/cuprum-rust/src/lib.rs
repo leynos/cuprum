@@ -31,6 +31,7 @@ mod fd_tests;
 mod io_utils;
 #[cfg(all(test, unix))]
 mod lib_tests;
+mod pump_machine;
 #[cfg(target_os = "linux")]
 mod splice;
 #[cfg(all(test, unix))]
@@ -40,7 +41,8 @@ mod tracing_capture;
 mod utf8;
 
 use errors::PumpError;
-use io_utils::{StreamHandle, handle_write_result, operation_span, read_stream};
+use io_utils::{StreamHandle, classify_write, operation_span, read_stream};
+use pump_machine::{Flow, PumpState, advance};
 use utf8::{FinalChunk, decode_utf8_replace};
 
 /// Report whether the Rust extension is available.
@@ -297,25 +299,40 @@ fn pump_stream_files_readwrite(
     io_utils::reset_retry_counters();
 
     let mut buffer = vec![0_u8; buffer_size.value()];
-    let mut total_written = 0_u64;
-    let mut writer_open = true;
+    let mut state = PumpState::start();
 
     loop {
         let read_len = read_stream(reader, &mut buffer)?;
-        if read_len == 0 {
+        let writer_was_open = state.writer_open();
+
+        // `advance` owns both the zero-length-is-EOF translation and the write
+        // precondition — a chunk read while the writer is still open — so this
+        // loop, the property tests, and the bounded proofs share one
+        // definition of them. Fatal writes propagate the real error and never
+        // reach the pure state machine.
+        let flow = advance(&mut state, read_len, || {
+            let chunk = buffer
+                .get(..read_len)
+                .ok_or(PumpError::BufferRangeExceeded)?;
+            classify_write(writer, chunk)
+        })?;
+
+        // The latch closing is the `head`-style early exit. Mirror splice's
+        // field and message so the event is not visible on one path only, and
+        // observe it here rather than in the deliberately pure `pump_machine`.
+        if writer_was_open && !state.writer_open() {
+            tracing::debug!(
+                bytes_transferred = state.total_written(),
+                "broken pipe; draining reader"
+            );
+        }
+
+        if flow == Flow::Stop {
             break;
         }
-        if !writer_open {
-            continue;
-        }
-
-        let chunk = buffer
-            .get(..read_len)
-            .ok_or(PumpError::BufferRangeExceeded)?;
-
-        writer_open = handle_write_result(writer, chunk, &mut total_written)?;
     }
 
+    let total_written = state.total_written();
     span.record("total_bytes", total_written);
     span.record("read_retries", io_utils::read_retry_count());
     span.record("write_retries", io_utils::write_retry_count());

@@ -4,7 +4,9 @@ use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use crate::io_utils::read_stream;
+use crate::errors::PumpError;
+use crate::io_utils::{classify_write, read_stream};
+use crate::pump_machine::WriteEvent;
 use crate::test_support::{fd_is_open, make_pipe, read_all_from, write_all_to};
 use crate::tracing_capture::capture;
 use crate::{
@@ -182,6 +184,32 @@ fn assert_panicking_reader_keeps_fd_open(raw_fd: i32) {
     assert!(outcome.is_err(), "the panic must propagate to the caller");
 }
 
+#[rstest]
+fn classify_write_reports_a_completed_write() {
+    let (read_end, mut write_end) = make_pipe();
+
+    let event = match classify_write(&mut write_end, b"chunk") {
+        Ok(event) => event,
+        Err(err) => panic!("write to an open pipe failed: {err:?}"),
+    };
+
+    assert_eq!(event, WriteEvent::Complete { bytes: 5 });
+    // Keep the read end open until after the write so the pipe never breaks.
+    drop(read_end);
+}
+
+#[rstest]
+fn classify_write_propagates_a_fatal_error() {
+    // Writing to the read end of a pipe is a fatal `EBADF`, which must
+    // propagate rather than latch the writer closed.
+    let (mut read_end, _write_end) = make_pipe();
+
+    match classify_write(&mut read_end, b"chunk") {
+        Ok(event) => panic!("expected a fatal write error, got {event:?}"),
+        Err(err) => assert!(matches!(err, PumpError::Io(_))),
+    }
+}
+
 fn assert_successful_reader_keeps_fd_usable(raw_fd: i32, write_end: OwnedFd) {
     write_all_to(&write_end, b"ping");
     drop(write_end);
@@ -199,4 +227,62 @@ fn assert_successful_reader_keeps_fd_usable(raw_fd: i32, write_end: OwnedFd) {
     });
 
     assert_eq!(collected, b"ping");
+}
+
+#[rstest]
+fn pump_drains_the_reader_after_the_writer_breaks() {
+    // The downstream stage hangs up before the pump writes anything, which is
+    // the real-world `head`-style early exit. The loop must latch the writer
+    // closed, keep draining the upstream reader to EOF, and report success
+    // with the bytes that actually reached the sink — none, here.
+    let (source_read, source_write) = make_pipe();
+    let (sink_read, sink_write) = make_pipe();
+    let payload = b"payload-written-after-the-downstream-hangs-up";
+    write_all_to(&source_write, payload);
+    // Close the source's write end so the read loop can reach EOF.
+    drop(source_write);
+    // Close the sink's read end so every write fails with a broken pipe.
+    drop(sink_read);
+
+    let mut reader = source_read;
+    let mut writer = sink_write;
+    // A small buffer forces several read iterations, so the drain path runs
+    // repeatedly after the writer has latched closed rather than just once.
+    let mut total = 0_u64;
+    let captured = capture(Level::DEBUG, || {
+        total = match pump_stream_files_readwrite(&mut reader, &mut writer, BufferSize(8)) {
+            Ok(delivered) => delivered,
+            Err(err) => panic!("a broken downstream pipe must not fail the pump: {err:?}"),
+        };
+    });
+
+    assert_eq!(
+        total, 0,
+        "no bytes reach a downstream that hung up before the first write",
+    );
+
+    // The latch closing is an operational event, not just internal state: the
+    // splice path reports it, so the read/write fallback must too, or the same
+    // hang-up is diagnosable on one path and silent on the other.
+    assert!(
+        captured.event_matches(
+            Level::DEBUG,
+            "broken pipe; draining reader",
+            &[("bytes_transferred", "0")],
+        ),
+        "the writer-close latch must report the hang-up by name, with the zero \
+         byte total that reached the hung-up downstream",
+    );
+
+    // The reader must have been drained to EOF: a further read returns zero
+    // rather than the bytes the pump skipped.
+    let mut buffer = [0_u8; 8];
+    let remaining = match read_stream(&mut reader, &mut buffer) {
+        Ok(remaining) => remaining,
+        Err(err) => panic!("reading the drained source failed: {err:?}"),
+    };
+    assert_eq!(
+        remaining, 0,
+        "the pump must drain the upstream reader to EOF after the writer breaks",
+    );
 }

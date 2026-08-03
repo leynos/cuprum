@@ -9,6 +9,7 @@ use std::cell::Cell;
 use std::io;
 
 use crate::errors::PumpError;
+use crate::pump_machine::WriteEvent;
 
 thread_local! {
     /// EINTR retries observed on the read path of the current operation.
@@ -128,32 +129,75 @@ pub(crate) fn handle_write(
     Ok(outcome)
 }
 
-/// Attempt to write a chunk and update the total written count.
+/// Attempt one write and classify it into a non-fatal [`WriteEvent`].
 ///
-/// Returns `Ok(true)` if the write succeeded and more writes are possible.
-/// Returns `Ok(false)` if the pipe is broken (caller should drain reader).
-/// Returns `Err` for fatal I/O errors.
-pub(crate) fn handle_write_result(
+/// This is the adapter between real descriptor I/O and the pure pump state
+/// machine in [`crate::pump_machine`]: it collapses [`WriteOutcome`] and the
+/// non-fatal error partition into the machine's two-variant `WriteEvent`, so
+/// only genuinely fatal failures escape as [`PumpError`]. A broken pipe or
+/// connection reset latches the writer closed, carrying the bytes accepted
+/// before the failure (zero when it preceded any progress).
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // A pipe whose read end is still open accepts the whole chunk.
+/// let event = classify_write(&mut writer, b"chunk")?;
+/// assert_eq!(event, WriteEvent::Complete { bytes: 5 });
+///
+/// // Once the reader hangs up, the same call latches the writer closed
+/// // instead of failing, reporting the bytes that were accepted.
+/// drop(reader);
+/// let event = classify_write(&mut writer, b"chunk")?;
+/// assert_eq!(event, WriteEvent::Closed { bytes: 0 });
+/// ```
+pub(crate) fn classify_write(
     writer: &mut StreamHandle,
     chunk: &[u8],
-    total_written: &mut u64,
-) -> Result<bool, PumpError> {
-    match handle_write(writer, chunk) {
-        Ok(WriteOutcome::Complete(bytes)) => {
-            *total_written = total_written.saturating_add(bytes);
-            Ok(true)
-        }
-        Ok(WriteOutcome::NonFatalShortWrite(bytes)) => {
-            *total_written = total_written.saturating_add(bytes);
-            Ok(false)
-        }
-        Err(err) => {
-            if err.is_nonfatal_write() {
-                Ok(false)
-            } else {
-                Err(err)
-            }
-        }
+) -> Result<WriteEvent, PumpError> {
+    classify_write_outcome(handle_write(writer, chunk))
+}
+
+/// Classify a write driven by an injectable single-write operation.
+///
+/// Substitutes only the `write(2)` syscall. Everything downstream of it — the
+/// partial-write loop in [`write_all_unix_with`], the non-fatal partitioning
+/// in [`map_short_write_error`], and the mapping in [`classify_write_outcome`]
+/// — is the same code [`classify_write`] reaches through [`handle_write`], in
+/// the same order. What this does *not* cover is the `write(2)` call inside
+/// [`write_all_unix`]; the descriptor-backed tests above exercise that.
+///
+/// The seam exists because the two non-fatal mappings cannot both be forced
+/// through a real descriptor. A broken pipe *before* any progress is easy —
+/// drop the read end and write — but a partial write *followed by* a broken
+/// pipe depends on when the peer closes relative to the kernel accepting
+/// bytes, which no test can schedule deterministically. Test-only, so
+/// production keeps exactly one write path.
+#[cfg(all(unix, test))]
+pub(crate) fn classify_write_with(
+    chunk: &[u8],
+    write_once: impl FnMut(&[u8]) -> Result<libc::ssize_t, io::Error>,
+) -> Result<WriteEvent, PumpError> {
+    classify_write_outcome(write_all_unix_with(chunk, write_once))
+}
+
+/// Map a completed write attempt onto the pure machine's `WriteEvent`.
+///
+/// Split from [`classify_write`] so the mapping can be exercised for every
+/// outcome — including a non-fatal short write carrying a positive byte count —
+/// without contriving a partial write against a real descriptor.
+///
+/// There is deliberately no non-fatal `Err` arm: [`map_short_write_error`] has
+/// already turned broken-pipe and connection-reset failures into
+/// [`WriteOutcome::NonFatalShortWrite`], so every `Err` reaching here is fatal
+/// and propagates.
+fn classify_write_outcome(
+    outcome: Result<WriteOutcome, PumpError>,
+) -> Result<WriteEvent, PumpError> {
+    match outcome {
+        Ok(WriteOutcome::Complete(bytes)) => Ok(WriteEvent::Complete { bytes }),
+        Ok(WriteOutcome::NonFatalShortWrite(bytes)) => Ok(WriteEvent::Closed { bytes }),
+        Err(err) => Err(err),
     }
 }
 
