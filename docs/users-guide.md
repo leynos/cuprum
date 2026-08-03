@@ -1264,6 +1264,8 @@ by Python itself, so it can be handled the same way:
 ```python
 import errno
 
+from cuprum._streams_rs import rust_consume_stream
+
 try:
     text = rust_consume_stream(fd)
 except IsADirectoryError:
