@@ -129,10 +129,27 @@ fn os_error_to_py_err(code: i32, strerror: String) -> PyErr {
 /// returned by a syscall — has no number to preserve, so `PyO3`'s `ErrorKind`
 /// mapping remains the best available and is used unchanged.
 fn io_error_to_py_err(err: io::Error) -> PyErr {
-    match err.raw_os_error() {
-        Some(code) => os_error_to_py_err(code, strip_os_error_suffix(&err.to_string(), code)),
+    match raw_os_error_parts(&err) {
+        Some((code, strerror)) => os_error_to_py_err(code, strerror),
         None => err.into(),
     }
+}
+
+/// Split a syscall failure into the code and message handed to Python.
+///
+/// `None` means the error carries no operating-system number and the caller
+/// must fall back to `PyO3`'s `ErrorKind` mapping. Every `io::Error` built in
+/// Rust rather than returned by a syscall lands here, including the
+/// `ErrorKind::WriteZero` the write paths raise when a write makes no progress.
+///
+/// The decision is split out from [`io_error_to_py_err`] so it can be tested
+/// directly. Inspecting the built `PyErr` instead would need a live
+/// interpreter, and this crate is compiled with `pyo3/extension-module`, which
+/// deliberately leaves the Python symbols to be resolved by the host process —
+/// so no `cargo test` binary can link one.
+fn raw_os_error_parts(err: &io::Error) -> Option<(i32, String)> {
+    let code = err.raw_os_error()?;
+    Some((code, strip_os_error_suffix(&err.to_string(), code)))
 }
 
 #[cfg(test)]
@@ -225,6 +242,54 @@ mod tests {
             super::strip_os_error_suffix(message, code),
             expected,
             "stripping must be anchored to this error's own code",
+        );
+    }
+
+    /// A syscall failure surrenders its code and its message without the
+    /// suffix `io::Error` appends.
+    ///
+    /// The expected `strerror` is not spelled out, so the case holds whatever
+    /// the platform calls this code: it asserts that putting the suffix back
+    /// reproduces `Display` exactly, which pins that the helper removes the
+    /// suffix and nothing else and returns the code unaltered.
+    #[test]
+    fn a_raw_os_error_yields_its_code_and_bare_strerror() {
+        let code = 9;
+        let err = io::Error::from_raw_os_error(code);
+        let rendered = err.to_string();
+
+        let Some((reported, strerror)) = super::raw_os_error_parts(&err) else {
+            panic!("a raw OS error must report its code, found none for {err:?}")
+        };
+
+        assert_eq!(reported, code, "the code must survive unaltered");
+        assert_eq!(
+            rendered,
+            format!("{strerror} (os error {code})"),
+            "the message must lose exactly the suffix Rust appended",
+        );
+    }
+
+    /// An error built in Rust has no number, so the conversion falls back.
+    ///
+    /// This is the arm that hands the error to `PyO3` unchanged. It is not
+    /// hypothetical: the write paths in `io_utils` raise
+    /// `ErrorKind::WriteZero` in exactly this way when a write makes no
+    /// progress, so a regression that fabricated a code for an error that has
+    /// none would reach production. Both `io::Error` representations are
+    /// covered — one carrying a custom payload, one built from a bare kind.
+    #[rstest]
+    #[case::write_zero_from_the_write_paths(io::Error::new(
+        io::ErrorKind::WriteZero,
+        "failed to write whole buffer",
+    ))]
+    #[case::other_with_a_message(io::Error::other("boom"))]
+    #[case::bare_kind(io::Error::from(io::ErrorKind::BrokenPipe))]
+    fn a_synthesized_error_has_no_code_to_preserve(#[case] err: io::Error) {
+        assert!(
+            super::raw_os_error_parts(&err).is_none(),
+            "an error with no raw_os_error must select PyO3's ErrorKind mapping \
+             rather than a fabricated code: {err:?}",
         );
     }
 
