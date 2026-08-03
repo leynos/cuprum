@@ -1280,13 +1280,39 @@ The read/write fallback's control flow — how each read and write outcome moves
 the running byte total and the latched `writer_open` flag — is factored into a
 pure, `io::Error`-free state machine in `src/pump_machine.rs`.
 
-`advance` is the machine's only production entry point. It takes the raw read
-length and a write operation, and owns both decisions the loop would otherwise
-have to make for itself: a zero-length read is end of input, anything else is a
-chunk; and the write runs **only** for a chunk read while the writer is still
-open. `pump_stream_files_readwrite`, the property tests, and the bounded proofs
-all go through it, so there is one definition of that policy rather than three
+[Cuprum design](cuprum-design.md) §13.7, "Read/write fallback state machine",
+is the normative reference for this API: it carries `advance`'s full signature
+and the reasoning behind its shape. The notes below record the conventions that
+govern using it, and name the types so a reader arriving from the `io_utils`
+sections above knows what to look for.
+
+`advance` is the machine's only production entry point. It takes a `PumpState`
+by mutable reference, the raw read length, and a closure that performs one
+write, and it returns a `Flow` — `Continue` to keep reading, or `Stop` on end
+of input. `PumpState` holds exactly the two values the loop must not get wrong,
+the running `total_written` total and the latched `writer_open` flag, exposed
+through `total_written()` and `writer_open()` accessors rather than as public
+fields, so only the machine may move them.
+
+`advance` owns both decisions the loop would otherwise have to make for itself:
+a zero-length read is end of input, anything else is a chunk; and the write
+runs **only** for a chunk read while the writer is still open.
+`pump_stream_files_readwrite`, the property tests, and the bounded proofs all
+go through it, so there is one definition of that policy rather than three
 copies that could drift.
+
+The write closure yields a `WriteEvent`, the machine's `io::Error`-free view of
+one write: `Complete { bytes }` accepted the whole chunk and leaves the writer
+open, while `Closed { bytes }` carries the bytes accepted before a broken pipe
+or connection reset and latches the writer shut for good. The sole production
+adapter that builds one is `io_utils::classify_write`, which collapses a
+`WriteOutcome` and the non-fatal error partition into those two variants; the
+test-only `classify_write_with` shares its mapping through a `write(2)` seam.
+Genuinely fatal failures never reach the machine at all — they propagate as
+`PumpError` — which is what keeps `pump_machine` free of `io::Error` and so
+tractable for Kani. Re-use policy: a new caller of the machine must classify
+its writes through `classify_write` rather than constructing a `WriteEvent`
+inline, otherwise "non-fatal" stops having one definition.
 
 The precondition is enforced by the type rather than by a check. Internally
 `advance` builds a private `Transition` — `Wrote(WriteEvent)`, `Drained`, or
@@ -1323,6 +1349,13 @@ counts and arbitrary starting states in `src/pump_machine_kani_proofs.rs`
 follow-up from issue `#84`. Those proofs target `advance` rather than the
 private `step`, because `advance` is where the precondition lives — proving
 `step` in isolation would establish nothing about a closed writer.
+
+Neither the proptests nor the proofs call `advance` directly. Both go through
+`drive`, a `#[cfg(any(test, kani))]` helper beside it that supplies the write
+closure and returns the `Flow` alongside whether the closure was invoked. That
+is deliberate: it keeps the two harnesses driving the machine identically, and
+it is where the "was the write attempted?" observable comes from. Add new
+harnesses through `drive` rather than reconstructing the closure in each one.
 
 The path emits bounded `tracing` diagnostics at the three boundaries operators
 need visibility into: support detection logs a `debug` event when the
@@ -1908,12 +1941,34 @@ test still represents a genuine compile-time error.
 
 A fail case that pins an encapsulation boundary must include the real module
 under test with `#[path]` rather than restating its shape, because a
-hand-written copy would only prove the copy private. `#![allow]` at the top of
-such a fixture is legitimate for lints the throwaway crate trybuild builds
-cannot configure — it inherits no `[lints]` table, so the workspace's
-`check-cfg = ["cfg(kani)"]` does not apply — and keeps the expected diagnostic
-narrow. Before committing one, verify it is not vacuous: weaken the production
-item it guards, confirm the case then fails, and restore.
+hand-written copy would only prove the copy private.
+
+Such a fixture may legitimately need to silence a lint the throwaway crate
+trybuild builds cannot configure — that crate inherits no `[lints]` table, so
+the workspace's `check-cfg = ["cfg(kani)"]` does not apply and the included
+module's `#[cfg(kani)]` gates would otherwise bury the expected diagnostic in
+`unexpected_cfgs` noise. Scope that suppression to the item that needs it:
+
+- Do not use a crate-level inner attribute (`#![allow(...)]` or
+  `#![expect(...)]`). It suppresses the lint for the probe code as well as the
+  included module, so a diagnostic the case ought to report can vanish
+  unnoticed. There are no crate-level `allow` or `expect` attributes anywhere in
+  `rust/`, and no fixture needs the first one.
+- Put an outer `#[expect(<lint>, reason = "...")]` on the `#[path]` module
+  declaration instead, next to the `#[path]` attribute itself. Prefer `expect`
+  over `allow`: if the production module later drops the gates that provoke the
+  lint, an unfulfilled expectation fails the build rather than leaving a stale
+  suppression behind.
+- Every suppression carries a `reason` string naming the constraint, per the
+  repository-wide rule that lint suppressions are tightly scoped and explained.
+
+`tests/ui/fail/pump_transition_unreachable.rs` is the worked example.
+
+Before committing one, verify it is not vacuous: weaken the production item it
+guards, confirm the case then fails, and restore. Re-run that check after any
+change to the fixture's attributes or structure, not only after a change to the
+item under test — narrowing a suppression can alter which diagnostics reach the
+`.stderr` fixture.
 
 ## Design decisions
 

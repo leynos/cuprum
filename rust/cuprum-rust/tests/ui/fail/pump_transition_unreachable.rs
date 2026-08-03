@@ -19,9 +19,10 @@
 // The workspace declares `cfg(kani)` via `[workspace.lints.rust]`, but the
 // throwaway crate trybuild builds around this file inherits no lint table, so
 // the module's `#[cfg(kani)]` gates would otherwise fill the expected stderr
-// with noise unrelated to the boundary under test.
-#![allow(unexpected_cfgs, reason = "trybuild's crate inherits no check-cfg")]
-
+// with noise unrelated to the boundary under test. Scope the expectation to the
+// included module: nothing outside it needs the suppression, and `expect`
+// rather than `allow` means the suppression fails loudly if the gates go away.
+#[expect(unexpected_cfgs, reason = "trybuild's crate inherits no check-cfg")]
 #[path = "../../../src/pump_machine.rs"]
 mod pump_machine;
 

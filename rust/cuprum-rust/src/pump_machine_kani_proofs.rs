@@ -5,12 +5,20 @@
 //! writer latch is sticky, a closed writer drains without accruing bytes, and
 //! the loop stops exactly on EOF.
 //!
-//! They drive [`advance`](super::advance) rather than the private `step`,
+//! They exercise [`advance`](super::advance) rather than the private `step`,
 //! because `advance` is where the write precondition lives. Proving `step`
 //! alone would establish nothing about a closed writer: the narrowed
 //! `Transition` type makes an invalid combination unrepresentable, so the
 //! guarantee is that `advance` never builds one — which is a property of
 //! `advance`.
+//!
+//! Every proof reaches `advance` through [`drive`](super::drive), the helper it
+//! shares with the proptest harness: `drive` supplies the write closure and
+//! reports whether `advance` actually called it. Calling `advance` directly
+//! here would let the proofs and the proptests drift into driving the machine
+//! differently, and the "was the write invoked?" observable — the one a dropped
+//! precondition would change without changing the resulting state — would have
+//! to be rebuilt in each proof.
 //!
 //! That premise is not itself provable here, since no proof can observe a
 //! transition it is unable to spell. It is pinned instead by the compile-fail
@@ -18,7 +26,7 @@
 //! outside the module can neither construct a `Transition` nor apply one with
 //! `step`, and fails if either is widened.
 
-use super::{Flow, PumpState, WriteEvent, advance, drive};
+use super::{Flow, PumpState, WriteEvent, drive};
 
 fn any_write() -> WriteEvent {
     let bytes: u64 = kani::any();
