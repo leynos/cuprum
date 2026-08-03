@@ -11,11 +11,13 @@ import asyncio
 import typing as typ
 
 from cuprum import _pipeline_wait
+from cuprum._pipeline_types import _StageWaitContext
 from cuprum.unittests._pipeline_wait_support import (
     immediate,
     make_wait_state,
     pin_clock,
     record_terminations,
+    stage_exec_id,
 )
 
 if typ.TYPE_CHECKING:
@@ -129,22 +131,26 @@ class TestProcessCompletedTask:
         Each entry is a ``(stage_index, exit_code)`` pair applied in sequence,
         so the call order *is* the completion order. The clock advances by ten
         per completion, so each stage's ``ended_at`` is distinguishable rather
-        than a single pinned value every slot would match.
+        than a single pinned value every slot would match. It advances per
+        completion rather than per reading because a fail-fast completion also
+        times its own teardown, and those reads must not shift the next
+        stage's recorded end time.
         """
         terminations = record_terminations(monkeypatch)
 
-        readings = iter([10.0 * (step + 1) for step in range(len(completions))])
+        reading = [0.0]
         monkeypatch.setattr(
             _pipeline_wait.time,
             "perf_counter",
-            lambda: next(readings),
+            lambda: reading[0],
         )
 
         state = make_wait_state(stage_count)
 
         async def drive() -> None:
             """Apply each completion through the real async boundary."""
-            for idx, exit_code in completions:
+            for step, (idx, exit_code) in enumerate(completions):
+                reading[0] = 10.0 * (step + 1)
                 task = asyncio.create_task(immediate(exit_code))
                 await task
                 state.wait_tasks = [task]
@@ -258,7 +264,12 @@ class TestSimultaneousCompletions:
                 processes,
                 pipe_tasks=[],
                 cancel_grace=0.25,
-                started_at=[0.0] * len(exit_codes),
+                stages=_StageWaitContext(
+                    started_at=[0.0] * len(exit_codes),
+                    exec_ids=tuple(
+                        stage_exec_id(idx) for idx in range(len(exit_codes))
+                    ),
+                ),
             )
 
         return processed, asyncio.run(drive())

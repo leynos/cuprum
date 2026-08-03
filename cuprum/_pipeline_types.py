@@ -118,13 +118,27 @@ class _PipelineStageResultInputs:
 
 
 @dc.dataclass(frozen=True, slots=True)
+class _StageWaitContext:
+    """Per-stage data the wait path reads, all indexed by stage.
+
+    ``started_at`` is what stage durations are measured from. ``exec_ids``
+    renders each stage's ``_StageObservation.exec_id``, so the wait path can
+    label its records with the same correlation token the observe hooks
+    publish without depending on the observations themselves.
+    """
+
+    started_at: list[float]
+    exec_ids: tuple[str, ...]
+
+
+@dc.dataclass(frozen=True, slots=True)
 class _PipelineSpawnResult:
     """Processes and output tasks produced when spawning a pipeline."""
 
     processes: list[asyncio.subprocess.Process]
     stderr_tasks: list[asyncio.Task[str | None] | None]
     stdout_task: asyncio.Task[str | None] | None
-    started_at: list[float]
+    stages: _StageWaitContext
 
 
 @dc.dataclass(frozen=True, slots=True)

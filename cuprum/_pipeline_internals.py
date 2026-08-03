@@ -43,6 +43,7 @@ from cuprum._pipeline_types import (
     _PipelineSpawnResult,
     _PipelineStageResultInputs,
     _StageObservation,
+    _StageWaitContext,
 )
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
 from cuprum._process_lifecycle import (
@@ -105,14 +106,14 @@ async def _await_pipeline_wait_result(
             spawn.processes,
             pipe_tasks=pipe_tasks,
             cancel_grace=config.ctx.cancel_grace,
-            started_at=spawn.started_at,
+            stages=spawn.stages,
         )
     return await asyncio.wait_for(
         _wait_for_pipeline(
             spawn.processes,
             pipe_tasks=pipe_tasks,
             cancel_grace=config.ctx.cancel_grace,
-            started_at=spawn.started_at,
+            stages=spawn.stages,
         ),
         wait_timeout,
     )
@@ -327,7 +328,10 @@ async def _run_pipeline(
             processes=processes,
             stderr_tasks=stderr_tasks,
             stdout_task=stdout_task,
-            started_at=started_at,
+            stages=_StageWaitContext(
+                started_at=started_at,
+                exec_ids=tuple(str(obs.exec_id) for obs in observations),
+            ),
         )
     except BaseException as spawn_error:
         await _drain_tasks_during_cleanup(pending_tasks, spawn_error)

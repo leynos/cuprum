@@ -23,6 +23,7 @@ from cuprum._testing import (
     _prepare_pipeline_config,
     _pump_stream,
     _spawn_pipeline_processes,
+    _StageWaitContext,
     _wait_for_pipeline,
 )
 from cuprum.sh import (
@@ -557,7 +558,10 @@ async def _exercise_wait_for_pipeline(
         typ.cast("list[asyncio.subprocess.Process]", processes),
         pipe_tasks=[],
         cancel_grace=0.01,
-        started_at=[0.0, 0.0, 0.0],
+        stages=_StageWaitContext(
+            started_at=[0.0, 0.0, 0.0],
+            exec_ids=("exec-0", "exec-1", "exec-2"),
+        ),
     )
 
     return processes[0], processes[1], processes[2], result

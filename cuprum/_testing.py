@@ -25,6 +25,7 @@ from cuprum._pipeline_streams import (
     configure_pump_stream_dispatch_for_testing,
     reset_pump_stream_dispatch_for_testing,
 )
+from cuprum._pipeline_types import _StageWaitContext
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
 from cuprum._process_lifecycle import (
     _merge_env,
@@ -92,6 +93,7 @@ _EXPORTS = {
     "_MIN_PIPELINE_STAGES": _MIN_PIPELINE_STAGES,
     "_merge_env": _merge_env,
     "_PipelineWaitResult": _PipelineWaitResult,
+    "_StageWaitContext": _StageWaitContext,
     "_prepare_pipeline_config": _prepare_pipeline_config,
     "_pump_stream_dispatch": _pump_stream_dispatch,
     "_collect_hooks": _collect_hooks,

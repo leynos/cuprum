@@ -341,7 +341,7 @@ async def _terminate_pipeline_remaining_stages(
     failure_index: int,
     *,
     cancel_grace: float,
-) -> None:
+) -> int:
     """Terminate all still-running stages after a stage fails.
 
     Once a stage exits non-zero, Cuprum applies fail-fast semantics by
@@ -352,6 +352,11 @@ async def _terminate_pipeline_remaining_stages(
     Teardown is shielded for the same reason as the timeout path: a caller
     cancelling mid-grace must not strand a stage before its ``SIGKILL``
     escalation runs.
+
+    Returns the number of stages that were still running and so were
+    terminated. The caller reports that count, which is how an operator tells
+    a teardown that stopped stages from one that found them all already
+    settled and had nothing to do.
     """
     targets = set(
         _stages_to_terminate(
@@ -370,3 +375,4 @@ async def _terminate_pipeline_remaining_stages(
     ]
     if termination_tasks:
         await _await_teardown_shielded(termination_tasks)
+    return len(termination_tasks)
