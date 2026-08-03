@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
+
 import cuprum as c
 from cuprum import context
-from cuprum.events import ExecHook
+from cuprum.events import ExecHook, new_exec_id
 
 
 def test_public_exports_are_available() -> None:
@@ -44,4 +46,48 @@ def test_public_catalogue_behaviour_via_reexports() -> None:
     assert c.DEFAULT_CATALOGUE.is_allowed("ls"), "Curated program ls must be allowed"
     assert not c.DEFAULT_CATALOGUE.is_allowed("definitely-not-allowed"), (
         "Unknown program should not be allowlisted"
+    )
+
+
+def test_exec_id_keeps_its_positional_slot() -> None:
+    """``exec_id`` must stay the first optional field after ``error_type``.
+
+    ``ExecEvent`` is a public, non-``kw_only`` dataclass, so callers may build
+    one positionally. Inserting a new optional field ahead of ``exec_id``
+    silently rebinds such a call: the correlation token lands on the new field
+    and ``exec_id`` falls back to ``None``, at which point consumers like
+    ``TracingHook`` treat the event as uncorrelatable and drop it. New optional
+    fields therefore go after ``exec_id``, and this pins that ordering.
+    """
+    fields = [f.name for f in dc.fields(c.ExecEvent)]
+    assert fields.index("exec_id") == fields.index("error_type") + 1, (
+        "exec_id must directly follow error_type so existing positional callers "
+        f"keep binding it, got {fields}"
+    )
+
+    exec_id = new_exec_id()
+    event = c.ExecEvent(
+        "start",  # phase
+        c.ECHO,  # program
+        ("echo",),  # argv
+        None,  # cwd
+        None,  # env
+        4321,  # pid
+        0.0,  # timestamp
+        None,  # line
+        None,  # exit_code
+        None,  # duration_s
+        {},  # tags
+        None,  # note
+        None,  # byte_count
+        None,  # operation
+        None,  # error_type
+        exec_id,  # exec_id
+    )
+    assert event.exec_id == exec_id, (
+        f"positional construction must still bind exec_id, got {event.exec_id!r} "
+        f"with timeout_s={event.timeout_s!r}"
+    )
+    assert event.timeout_s is None, (
+        f"the correlation token must not land on timeout_s, got {event.timeout_s!r}"
     )
