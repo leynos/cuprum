@@ -510,6 +510,31 @@ logging.getLogger("cuprum._pipeline_streams").setLevel(logging.DEBUG)
 the real code path that emits it, so a decline that stops being recorded fails
 the suite rather than going unnoticed.
 
+A pump failure can also be masked by cancellation. `asyncio.wait` never
+retrieves a future's outcome, so when a hop is cancelled
+`_report_pump_outcome_after_cancel` consumes the worker's future and records
+any error it carried under a `cuprum_action` of
+`rust_pump_failed_after_cancel`, with the traceback attached via `exc_info`.
+The caller is told about the cancellation it asked for; without this record the
+pump's own error would resurface at collection time as an unretrieved-exception
+warning, detached from the hop that caused it.
+`cuprum/unittests/test_pipeline_streams_cancellation.py` pins the field.
+
+Neither record has a counter beside it, and that is a deliberate limit rather
+than an oversight. `MetricsHook` is the only seam in the library that reaches a
+metrics collector, and it dispatches on `ExecEvent.phase`, whose `case _` arm
+raises `_UnhandledMetricsPhaseError` (`cuprum/adapters/metrics_adapter.py`).
+Introducing a phase for these events would therefore raise inside every
+`MetricsHook` a caller has already registered rather than being ignored by it,
+so the counter cannot be added without first changing that contract.
+Cardinality is not the obstacle: `_RustPumpDeclineReason` is a closed
+three-member `StrEnum`, so a `reason` label is bounded by construction. This
+matches Proposal 3 of [ADR-002](adr-002-additional-rust-components.md), which
+holds Rust pump counters out of the public runtime API until their stability
+and cardinality are proven. Until a metrics path exists that does not run
+through `ExecPhase`, `cuprum_action` and `cuprum_reason` are the supported way
+to count these events, aggregated by the log pipeline.
+
 ### `_pipeline_wait` completion command/query seam
 
 `cuprum/_pipeline_wait.py` splits completion handling on the same
