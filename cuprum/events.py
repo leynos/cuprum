@@ -102,6 +102,13 @@ class ExecEvent:
         ``teardown_error``, the class name of the raised exception (for example
         ``OSError``, ``TimeoutError``). For ``teardown_error`` this is the
         comma-joined class names of the consumer drain failures.
+    exec_id:
+        Stable per-execution correlation token, minted once per execution and
+        shared by every lifecycle event for that execution. It is the reliable
+        way to correlate an execution's events, because a process identifier
+        (``pid``) can be recycled by the operating system across executions.
+        ``None`` for legacy or manually constructed events that predate the
+        token; such events cannot be safely correlated by consumers.
     timeout_s:
         For the ``timeout`` phase, the configured wall-clock timeout in seconds
         that was exceeded. ``None`` for other phases.
@@ -111,13 +118,12 @@ class ExecEvent:
         ``"non_positive_immediate"`` when a non-positive (``timeout <= 0``)
         deadline expired immediately without awaiting the process. ``None`` for
         other phases.
-    exec_id:
-        Stable per-execution correlation token, minted once per execution and
-        shared by every lifecycle event for that execution. It is the reliable
-        way to correlate an execution's events, because a process identifier
-        (``pid``) can be recycled by the operating system across executions.
-        ``None`` for legacy or manually constructed events that predate the
-        token; such events cannot be safely correlated by consumers.
+
+    New optional fields are appended after ``exec_id`` rather than inserted
+    beside the field they relate to. Inserting one ahead of ``exec_id`` would
+    silently rebind a positional argument in existing caller code, handing the
+    correlation token to the new field and leaving ``exec_id=None`` — which
+    consumers such as ``TracingHook`` treat as uncorrelatable and drop.
 
     """
 
@@ -136,9 +142,11 @@ class ExecEvent:
     byte_count: int | None = None
     operation: str | None = None
     error_type: str | None = None
+    exec_id: ExecId | None = None
+    # Appended after exec_id to keep its positional slot stable; see the note
+    # in the class docstring.
     timeout_s: float | None = None
     timeout_mode: str | None = None
-    exec_id: ExecId | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]
