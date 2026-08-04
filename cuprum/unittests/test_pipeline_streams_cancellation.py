@@ -12,17 +12,13 @@ from __future__ import annotations
 import asyncio
 import gc
 import logging
-import sys
 import threading
-import types
 import typing as typ
 
 import pytest
 
 from cuprum import _pipeline_stream_fds, _pipeline_streams
-
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
+from cuprum.unittests._rust_pump_test_helpers import install_fake_pump, owned_fds
 
 
 class _RecordingGuard:
@@ -35,16 +31,6 @@ class _RecordingGuard:
     def restore(self) -> None:
         """Record the restore so its ordering can be asserted."""
         self.events.append("restored")
-
-
-def _install_fake_pump(
-    monkeypatch: pytest.MonkeyPatch,
-    pump: cabc.Callable[[int, int], int],
-) -> None:
-    """Replace the Rust pump entry point with ``pump``."""
-    fake_streams_rs = types.ModuleType("cuprum._streams_rs")
-    fake_streams_rs.rust_pump_stream = pump  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "cuprum._streams_rs", fake_streams_rs)
 
 
 async def _cancel_mid_transfer(
@@ -61,14 +47,35 @@ async def _cancel_mid_transfer(
     interruption: each extra cancellation lands while the pump is still
     waiting for the worker thread.
     """
+    with owned_fds() as (reader_fd, writer_fd):
+        await _cancel_pump_over_fds(
+            events,
+            worker_started,
+            release,
+            cancellations=cancellations,
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+        )
+
+
+async def _cancel_pump_over_fds(
+    events: list[str],
+    worker_started: threading.Event,
+    release: threading.Event,
+    *,
+    cancellations: int,
+    reader_fd: int,
+    writer_fd: int,
+) -> None:
+    """Cancel the pump ``cancellations`` times, then release its worker."""
     task = asyncio.create_task(
         _pipeline_streams._await_rust_pump(
             typ.cast(
                 "_pipeline_stream_fds._BlockingModeGuard",
                 _RecordingGuard(events),
             ),
-            reader_fd=1,
-            writer_fd=2,
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
         )
     )
     # `Event.wait` reports timeout by returning False rather than raising, so
@@ -123,7 +130,7 @@ def test_cancellation_restores_descriptors_only_after_worker_returns(
         events.append("worker_returned")
         return 0
 
-    _install_fake_pump(monkeypatch, blocking_pump)
+    install_fake_pump(monkeypatch, blocking_pump)
     asyncio.run(
         _cancel_mid_transfer(
             events,
@@ -164,7 +171,7 @@ def test_a_failing_pump_on_a_cancelled_hop_reports_the_cancellation(
         msg = "the pump failed while the hop was being cancelled"
         raise OSError(msg)
 
-    _install_fake_pump(monkeypatch, failing_pump)
+    install_fake_pump(monkeypatch, failing_pump)
 
     with (
         caplog.at_level(logging.ERROR, logger="asyncio"),
