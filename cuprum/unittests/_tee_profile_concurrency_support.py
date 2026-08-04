@@ -320,7 +320,7 @@ class _BackendEnvironmentRace:
         self,
         backend: tee_profile_worker.BackendName,
     ) -> threading.Thread:
-        """Create a worker thread for the requested backend."""
+        """Create an unstarted daemon thread that runs the worker."""
         return threading.Thread(
             target=_run_worker_with_selector,
             args=(self, backend),
@@ -328,16 +328,16 @@ class _BackendEnvironmentRace:
         )
 
     def errors_snapshot(self) -> list[BaseException]:
-        """Return captured thread errors while holding the result lock."""
+        """Return a snapshot of captured thread errors, holding the result lock."""
         with self.result_lock:
             return list(self.errors)
 
     def results_snapshot(self) -> list[tee_profile_worker.TeeProfileWorkerResult]:
-        """Return captured worker results while holding the result lock."""
+        """Return a snapshot of captured worker results, holding the result lock."""
         with self.result_lock:
             return list(self.results)
 
     def observations_snapshot(self) -> list[str | None]:
-        """Return recorded environment observations under their lock."""
+        """Return a snapshot of environment observations, holding their lock."""
         with self.observation_lock:
             return list(self.observations)

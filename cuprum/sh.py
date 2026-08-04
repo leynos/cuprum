@@ -60,12 +60,7 @@ _DEFAULT_ERROR_HANDLING = "replace"
 
 
 def _stringify_arg(value: _ArgValue) -> str:
-    """Convert values into argv-safe strings.
-
-    ``None`` is disallowed because it is almost always a mistake in CLI argv
-    construction. Callers should decide how to represent missing values (for
-    example, omit the flag) before invoking ``sh.make``.
-    """
+    """Convert values into argv-safe strings."""
     if value is None:
         # None is disallowed because it is almost always a mistake in CLI argv
         # construction; callers must represent missing values themselves (for
@@ -285,13 +280,24 @@ class StdinInput:
     def resolve(self, ctx: ExecutionContext) -> bytes | None:
         """Return the bytes payload, encoding *text* with *ctx* when needed.
 
+        Parameters
+        ----------
+        ctx : ExecutionContext
+            The execution context whose ``encoding`` and ``errors`` encode
+            ``text`` when no raw ``data`` is set.
+
+        Returns
+        -------
+        bytes | None
+            The raw *data* payload, or *text* encoded with ``ctx.encoding``
+            and ``ctx.errors``; ``None`` when neither field is set.
+
         Raises
         ------
         UnicodeEncodeError
-            When *text* cannot be encoded using ``ctx.encoding`` and
-            ``ctx.errors`` is ``"strict"`` (or another non-suppressing
-            error handler).
-        """
+            If ``text`` cannot be encoded with ``ctx.encoding`` under
+            ``ctx.errors`` (for example, ``errors="strict"``).
+        """  # noqa: DOC502 - UnicodeEncodeError propagates from str.encode
         if self.text is not None:
             return self.text.encode(ctx.encoding, ctx.errors)
         return self.data
@@ -337,21 +343,7 @@ def _resolve_pipeline_output(
     output: RunOutputOptions | None,
     flags: cabc.Mapping[str, bool],
 ) -> RunOutputOptions:
-    """Resolve pipeline output options, deprecating flat ``capture``/``echo``.
-
-    ``flags`` is typed loosely as a mapping because the type checker cannot
-    yet propagate ``Unpack[_DeprecatedOutputFlags]`` kwargs; the callers keep
-    the precise ``TypedDict`` surface. Mirrors the ``IOOptions`` deprecation
-    pattern: the flat flags keep working but emit a ``DeprecationWarning``,
-    and combining them with ``output`` is rejected because the caller's intent
-    would be ambiguous. Unknown keys are rejected with ``TypeError`` to
-    preserve the strict keyword surface.
-
-    Example
-    -------
-    >>> _resolve_pipeline_output(None, {})
-    RunOutputOptions(capture=True, echo=False)
-    """
+    """Resolve pipeline output options, deprecating flat ``capture``/``echo``."""
     # ``flags`` is typed loosely as a mapping because the type checker cannot
     # yet propagate ``Unpack[_DeprecatedOutputFlags]`` kwargs; callers keep the
     # precise ``TypedDict`` surface. Unknown keys are rejected here to preserve
@@ -479,14 +471,12 @@ class SafeCmd:
         Raises
         ------
         ForbiddenProgramError
-            If the program is not in the current context's allowlist.
+            If the program is not permitted by the active context allowlist.
         TimeoutExpired
-            If the command exceeds the configured timeout.
+            If *timeout* elapses before the command completes.
         UnicodeEncodeError
-            If ``stdin.text`` cannot be encoded with the active
-            ``ExecutionContext`` encoding and errors settings.
-
-        """
+            If ``stdin`` text cannot be encoded with the context's encoding.
+        """  # noqa: DOC502 - all propagate from allowlist, timeout, and stdin encode
         out = output or RunOutputOptions()
         ctx = context or ExecutionContext()
         _enforce_allowlist(self)
@@ -533,16 +523,20 @@ class SafeCmd:
 
         Mirrors :meth:`run`; all parameters and return semantics are identical.
 
+        Returns
+        -------
+        CommandResult
+            Structured information about the completed process.
+
         Raises
         ------
         ForbiddenProgramError
-            If the program is not in the current context's allowlist.
+            If the program is not permitted by the active context allowlist.
         TimeoutExpired
-            If the command exceeds the configured timeout.
+            If *timeout* elapses before the command completes.
         UnicodeEncodeError
-            If ``stdin.text`` cannot be encoded with the active
-            ``ExecutionContext`` encoding and errors settings.
-        """
+            If ``stdin`` text cannot be encoded with the context's encoding.
+        """  # noqa: DOC502 - all propagate from allowlist, timeout, and stdin encode
         return asyncio.run(
             self.run(output=output, timeout=timeout, context=context, stdin=stdin),
         )
@@ -566,7 +560,20 @@ class Pipeline:
 
     @classmethod
     def concat(cls, left: SafeCmd | Pipeline, right: SafeCmd | Pipeline) -> Pipeline:
-        """Compose a pipeline from two pipeline operands."""
+        """Compose a pipeline from two stage operands.
+
+        Parameters
+        ----------
+        left : SafeCmd | Pipeline
+            A command or pipeline whose stages come first.
+        right : SafeCmd | Pipeline
+            A command or pipeline whose stages follow ``left``'s.
+
+        Returns
+        -------
+        Pipeline
+            A pipeline whose stages are *left*'s followed by *right*'s.
+        """
         left_parts = left.parts if isinstance(left, Pipeline) else (left,)
         right_parts = right.parts if isinstance(right, Pipeline) else (right,)
         return cls((*left_parts, *right_parts))
@@ -604,10 +611,17 @@ class Pipeline:
 
         Raises
         ------
+        ForbiddenProgramError
+            If any stage's program is not permitted by the active context
+            allowlist.
+        TimeoutExpired
+            If *timeout* elapses before the pipeline completes.
+        TypeError
+            If an unexpected deprecated output keyword argument is supplied.
         ValueError
-            If both ``output`` and the deprecated ``capture``/``echo`` flags
-            are supplied.
-        """
+            If ``output`` is combined with the deprecated ``capture``/``echo``
+            flags.
+        """  # noqa: DOC502 - all propagate from allowlist, timeout, and output resolver
         out = _resolve_pipeline_output(output, deprecated_flags)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         config = _prepare_pipeline_config(
@@ -630,7 +644,25 @@ class Pipeline:
 
         Mirrors :meth:`run`; all parameters and return semantics are identical,
         including the deprecation of the flat ``capture``/``echo`` flags.
-        """
+
+        Returns
+        -------
+        PipelineResult
+            Structured per-stage results for the completed pipeline.
+
+        Raises
+        ------
+        ForbiddenProgramError
+            If any stage's program is not permitted by the active context
+            allowlist.
+        TimeoutExpired
+            If *timeout* elapses before the pipeline completes.
+        TypeError
+            If an unexpected deprecated output keyword argument is supplied.
+        ValueError
+            If ``output`` is combined with the deprecated ``capture``/``echo``
+            flags.
+        """  # noqa: DOC502 - all propagate from allowlist, timeout, and output resolver
         # Resolve here so the DeprecationWarning points at the caller rather
         # than at the internal ``self.run`` delegation.
         out = _resolve_pipeline_output(output, deprecated_flags)
@@ -650,9 +682,24 @@ def make(
 ) -> SafeCmdBuilder:
     """Build a callable that produces ``SafeCmd`` instances for ``program``.
 
-    The supplied ``program`` must exist in the provided catalogue; otherwise an
-    ``UnknownProgramError`` is raised to keep the allowlist the default gate.
-    """
+    Parameters
+    ----------
+    program : Program
+        The program the built ``SafeCmd`` instances invoke; it must exist in
+        ``catalogue``.
+    catalogue : ProgramCatalogue
+        The catalogue used to validate ``program`` and resolve its entry.
+
+    Returns
+    -------
+    SafeCmdBuilder
+        A callable that builds ``SafeCmd`` instances for ``program``.
+
+    Raises
+    ------
+    UnknownProgramError
+        If ``program`` does not exist in ``catalogue``.
+    """  # noqa: DOC502 - UnknownProgramError propagates from catalogue.lookup
     entry = catalogue.lookup(program)
 
     def builder(*args: _ArgValue, **kwargs: _ArgValue) -> SafeCmd:

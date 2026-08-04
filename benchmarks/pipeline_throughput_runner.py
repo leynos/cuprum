@@ -40,7 +40,21 @@ def render_prefixed_command(
     command: cabc.Sequence[str],
     env: cabc.Mapping[str, str],
 ) -> str:
-    """Render a shell command with deterministic environment prefixes."""
+    """Render a shell command with deterministic environment prefixes.
+
+    Parameters
+    ----------
+    command : cabc.Sequence[str]
+        The command tokens to render into a single shell command string.
+    env : cabc.Mapping[str, str]
+        Environment variables prefixed onto the rendered command.
+
+    Returns
+    -------
+    str
+        The command rendered for cmd.exe on Windows, otherwise for a POSIX
+        shell.
+    """
     if _is_windows_command_shell():
         return _render_windows_command(command=command, env=env)
     return _render_posix_command(command=command, env=env)
@@ -133,7 +147,25 @@ def _resolve_executable(name: str) -> str:
 
 
 def build_hyperfine_command(*, config: PipelineBenchmarkConfig) -> list[str]:
-    """Construct a hyperfine command vector for configured scenarios."""
+    """Construct a hyperfine command vector for configured scenarios.
+
+    Parameters
+    ----------
+    config : PipelineBenchmarkConfig
+        The pipeline benchmark configuration whose scenarios and settings
+        drive the constructed command.
+
+    Returns
+    -------
+    list[str]
+        The hyperfine command vector, with one rendered worker command per
+        configured scenario.
+
+    Raises
+    ------
+    ValueError
+        If the configuration contains no benchmark scenarios.
+    """
     hyperfine_config = HyperfineConfig(
         warmup=config.warmup,
         runs=config.runs,
@@ -223,7 +255,20 @@ def _prepare_benchmark_command_config(
 def run_pipeline_benchmarks(
     *, config: PipelineBenchmarkConfig
 ) -> PipelineBenchmarkRunResult:
-    """Execute pipeline benchmarks or write a dry-run benchmark plan."""
+    """Execute pipeline benchmarks or write a dry-run benchmark plan.
+
+    Parameters
+    ----------
+    config : PipelineBenchmarkConfig
+        The pipeline benchmark configuration selecting the scenarios to run
+        and whether to execute or emit a dry-run plan.
+
+    Returns
+    -------
+    PipelineBenchmarkRunResult
+        The run result recording the dry-run flag, the generated benchmark
+        command, the output path, Rust availability, and the scenarios.
+    """
     command_config = _prepare_benchmark_command_config(config=config)
     command = build_hyperfine_command(config=command_config)
 

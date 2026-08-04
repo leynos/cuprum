@@ -40,7 +40,13 @@ def test_env_live_os_environ_visible() -> None:
 
 @pytest.fixture
 def behaviour_state() -> dict[str, object]:
-    """Shared mutable state for scenarios."""
+    """Shared mutable state for scenarios.
+
+    Returns
+    -------
+    dict[str, object]
+        An empty mapping that steps populate as the scenario runs.
+    """
     return {}
 
 
@@ -49,7 +55,13 @@ def behaviour_state() -> dict[str, object]:
     target_fixture="builder",
 )
 def given_python_builder() -> cabc.Callable[..., SafeCmd]:
-    """Provide a SafeCmd builder for the current Python interpreter."""
+    """Provide a SafeCmd builder for the current Python interpreter.
+
+    Returns
+    -------
+    cabc.Callable[..., SafeCmd]
+        A callable that builds a SafeCmd for the current interpreter.
+    """
     return build_python_builder()
 
 

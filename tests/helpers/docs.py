@@ -18,6 +18,11 @@ def repo_root() -> Path:
     """Return the repository root for documentation lookups.
 
     This centralizes the path calculation logic used across all doc tests.
+
+    Returns
+    -------
+    Path
+        The absolute path to the repository root.
     """
     # tests/helpers/docs.py -> tests/helpers -> tests -> repo root
     return Path(__file__).resolve().parents[2]

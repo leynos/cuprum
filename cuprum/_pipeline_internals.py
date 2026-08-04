@@ -9,8 +9,9 @@ finalization: when a stage fails or an after-hook raises, pending
 observe-hook tasks must still be drained and every independent
 failure preserved, grouping after-hook and task failures into a
 ``BaseExceptionGroup``. It collaborates with ``cuprum._process_lifecycle``,
-``cuprum._pipeline_streams``, ``cuprum._pipeline_types``,
-``cuprum._pipeline_wait``, ``cuprum._observability``, and
+``cuprum._pipeline_collect``, ``cuprum._pipeline_streams``,
+``cuprum._pipeline_types``, ``cuprum._pipeline_wait``,
+``cuprum._observability``, and
 ``cuprum.context``, and is invoked by ``cuprum.sh`` and
 ``cuprum._subprocess_execution``/``_process_lifecycle``.
 """

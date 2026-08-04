@@ -146,15 +146,28 @@ def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
     ``test_installed_maturin_matches_expected_pin`` and by the snapshot test's
     generator check, not selected here.
 
+    Parameters
+    ----------
+    root : Path
+        The repository root the wheel is built from.
+    out_dir : Path
+        The directory the built wheel is written to.
+
+    Returns
+    -------
+    Path
+        The path to the single built wheel.
+
     Raises
     ------
     AssertionError
         If the build does not produce exactly one wheel.
-    OSError
-        If the output directory cannot be created or inspected.
     MaturinBuildError
         If the maturin build command exits non-zero.
-    """
+    OSError
+        If the output directory cannot be created or inspected, or if the
+        maturin subprocess cannot be started.
+    """  # noqa: DOC502 - OSError propagates from Path.mkdir and subprocess.run
     out_dir.mkdir(parents=True, exist_ok=True)
     command = [
         sys.executable,

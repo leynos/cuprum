@@ -75,7 +75,14 @@ def test_is_available_returns_true_when_module_present(
 
 
 def test_native_module_reports_availability_when_installed() -> None:
-    """Native extension reports availability when installed."""
+    """Native extension reports availability when installed.
+
+    Raises
+    ------
+    ImportError
+        If importing the native module fails for a reason other than the
+        module being absent.
+    """
     try:
         native = importlib.import_module("cuprum._rust_backend_native")
     except ImportError as exc:

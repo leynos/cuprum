@@ -32,12 +32,7 @@ class _SubprocessInvariantError(_ExecutionInvariantError):
 
 
 def _require_timeout(timeout: float | None, exc: BaseException) -> float:
-    """Return ``timeout`` or fail loudly when none was configured.
-
-    A ``TimeoutError`` reaching the timeout handlers without a configured
-    timeout indicates an internal inconsistency; this is the single home for
-    that guard.
-    """
+    """Return ``timeout`` or fail loudly when none was configured."""
     if timeout is None:
         msg = "TimeoutError without a configured timeout"
         raise _SubprocessInvariantError(msg) from exc
@@ -150,17 +145,14 @@ def _resolve_timeout_payload(
     exc: TimeoutError | _SubprocessTimeoutError,
     fallback: _TimeoutFallback,
 ) -> _SubprocessTimeoutDetails:
-    """Resolve the timeout payload from either timeout variant.
-
-    This is the pure timeout-payload seam behind
-    [`_handle_subprocess_timeout`][cuprum._subprocess_timeout._handle_subprocess_timeout].
-    A [`_SubprocessTimeoutError`][cuprum._subprocess_timeout._SubprocessTimeoutError]
-    already carries a captured payload from the stream-timeout path, so it is
-    used verbatim. A bare ``TimeoutError`` is resolved from ``fallback`` — whose
-    configured timeout must be present (a missing one is an internal invariant
-    violation). Either branch yields a concrete ``timeout``, so the resulting
-    ``TimeoutExpired`` report is consistent regardless of which path timed out.
-    """
+    """Resolve the timeout payload from either timeout variant."""
+    # This is the pure timeout-payload seam behind _handle_subprocess_timeout.
+    # A _SubprocessTimeoutError already carries a captured payload from the
+    # stream-timeout path, so it is used verbatim. A bare TimeoutError is
+    # resolved from ``fallback`` — whose configured timeout must be present (a
+    # missing one is an internal invariant violation). Either branch yields a
+    # concrete ``timeout``, so the resulting TimeoutExpired report is
+    # consistent regardless of which path timed out.
     match exc:
         case _SubprocessTimeoutError(
             timeout=timeout,
@@ -231,7 +223,14 @@ def _handle_stream_timeout(
     The caller drains the stream consumers exactly once and passes the decoded
     stdout/stderr here, so a timeout preserves whatever output was captured
     before it fired.
-    """
+
+    Raises
+    ------
+    _SubprocessInvariantError
+        If no timeout was configured, signalling an internal inconsistency.
+    _SubprocessTimeoutError
+        Wrapping the captured stdout/stderr once the timeout is resolved.
+    """  # noqa: DOC502 - _SubprocessInvariantError propagates from _require_timeout
     raise _SubprocessTimeoutError(
         _SubprocessTimeoutDetails(
             timeout=_require_timeout(timeout, exc),

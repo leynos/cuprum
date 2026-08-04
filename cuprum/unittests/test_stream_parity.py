@@ -32,20 +32,7 @@ def _build_pipeline(
     *,
     stages: int = 2,
 ) -> tuple[Pipeline, frozenset[Program]]:
-    """Build a Python-to-cat pipeline for parity testing.
-
-    Parameters
-    ----------
-    script : str
-        Python script for the first stage.
-    stages : int
-        Total pipeline stages (2 or 3). Defaults to ``2``.
-
-    Returns
-    -------
-    tuple[Pipeline, frozenset[Program]]
-        The pipeline and the allowlist of programmes required.
-    """
+    """Build a Python-to-cat parity-test pipeline with two or three stages."""
     if stages not in {2, 3}:
         msg = f"stages must be 2 or 3, got {stages}"
         raise ValueError(msg)

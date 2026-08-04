@@ -47,7 +47,20 @@ def default_pipeline_scenarios(
     smoke: bool,
     include_rust: bool,
 ) -> tuple[PipelineBenchmarkScenario, ...]:
-    """Build the default benchmark scenario matrix."""
+    """Build the default benchmark scenario matrix.
+
+    Parameters
+    ----------
+    smoke : bool
+        Whether to select the reduced smoke-workload payload sizes.
+    include_rust : bool
+        Whether to include Rust-backend scenarios in the matrix.
+
+    Returns
+    -------
+    tuple[PipelineBenchmarkScenario, ...]
+        The full scenario matrix for the selected backends.
+    """
     payloads: tuple[tuple[str, int], ...] = (
         ("small", _SMOKE_SMALL_PAYLOAD_BYTES if smoke else _SMALL_PAYLOAD_BYTES),
         ("medium", _SMOKE_MEDIUM_PAYLOAD_BYTES if smoke else _MEDIUM_PAYLOAD_BYTES),

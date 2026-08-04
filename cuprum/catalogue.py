@@ -84,7 +84,18 @@ class ProjectSettings:
     noise_rules: tuple[str, ...]
 
     def owns(self, program: Program) -> bool:
-        """Return True when the program belongs to this project."""
+        """Return True when the program belongs to this project.
+
+        Parameters
+        ----------
+        program : Program
+            The program to test for membership in this project.
+
+        Returns
+        -------
+        bool
+            True if the program is one of this project's programs.
+        """
         return program in self.programs
 
 
@@ -117,12 +128,39 @@ class ProgramCatalogue:
         return self._allowlist
 
     def is_allowed(self, program: Program | str) -> bool:
-        """Return True when the program is part of the default allowlist."""
+        """Return True when the program is part of the default allowlist.
+
+        Parameters
+        ----------
+        program : Program | str
+            The program to test against the curated default allowlist.
+
+        Returns
+        -------
+        bool
+            True if the program is present in the curated allowlist.
+        """
         program_value = _coerce_program(program)
         return program_value in self._allowlist
 
     def lookup(self, program: Program | str) -> ProgramEntry:
-        """Resolve a program into its entry, blocking unknown executables."""
+        """Resolve a program into its entry, blocking unknown executables.
+
+        Parameters
+        ----------
+        program : Program | str
+            The program to resolve into its catalogue entry.
+
+        Returns
+        -------
+        ProgramEntry
+            The resolved entry with its owning project metadata.
+
+        Raises
+        ------
+        UnknownProgramError
+            If the program is not present in the catalogue allowlist.
+        """
         program_value = _coerce_program(program)
         project = self._program_to_project.get(program_value)
         if project is None:
@@ -131,11 +169,33 @@ class ProgramCatalogue:
         return ProgramEntry(program=program_value, project=project)
 
     def project_for(self, program: Program | str) -> ProjectSettings:
-        """Return the owning project for the given program."""
+        """Return the owning project for the given program.
+
+        Parameters
+        ----------
+        program : Program | str
+            The program whose owning project is returned.
+
+        Returns
+        -------
+        ProjectSettings
+            The project that owns the given program.
+
+        Raises
+        ------
+        UnknownProgramError
+            If the program is not present in this catalogue.
+        """  # noqa: DOC502 - UnknownProgramError propagates from lookup
         return self.lookup(program).project
 
     def visible_settings(self) -> cabc.Mapping[str, ProjectSettings]:
-        """Expose project metadata to downstream services."""
+        """Expose project metadata to downstream services.
+
+        Returns
+        -------
+        Mapping[str, ProjectSettings]
+            A read-only mapping of project name to its settings.
+        """
         return self._visible_settings_cache
 
     @staticmethod

@@ -5,10 +5,11 @@ and ``_relay_chunks`` copy chunks between stages with ``writer.drain()``
 backpressure, draining to EOF without a writer and best-effort under a bounded
 timeout after an early downstream close so upstream stages never block.
 ``_write_to_stream_writer`` reports broken-pipe state as a ``_WriteOutcome``
-value, and ``_close_stream_writer`` tears a caller-owned writer down while
-swallowing already-closed-pipe errors. Consumed by ``cuprum._streams`` (which
-re-exports this surface) and the pipeline execution layer; callers own any
-writer.
+value, and ``_close_stream_writer`` tears the writer down while swallowing
+already-closed-pipe errors. Consumed by ``cuprum._streams`` (which re-exports
+this surface) and the pipeline execution layer. ``_pump_stream`` closes any
+supplied writer once relay completes or when no reader is supplied, so callers
+must not reuse the writer afterwards.
 """
 
 from __future__ import annotations

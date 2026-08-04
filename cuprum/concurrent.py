@@ -204,12 +204,12 @@ async def run_concurrent(
 
     Raises
     ------
-    ForbiddenProgramError
-        If any command's program is not in the current allowlist.
     ValueError
         If config.concurrency < 1 or no commands provided.
-
-    """
+    ForbiddenProgramError
+        If ``current_context().check_allowed()`` rejects a command before
+        task creation.
+    """  # noqa: DOC502 - ForbiddenProgramError propagates from check_allowed
     cfg = config or ConcurrentConfig()
 
     if not commands:

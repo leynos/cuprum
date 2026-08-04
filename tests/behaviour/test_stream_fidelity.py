@@ -28,11 +28,7 @@ _BYTES_PER_LINE = 48  # Results in 64 chars of base64 per line
 
 
 def _generate_test_data() -> str:
-    """Generate deterministic random base64 data for testing.
-
-    Uses a local RNG with fixed seed so the output is identical across runs,
-    enabling reliable snapshot comparisons without affecting global state.
-    """
+    """Generate deterministic random base64 data for testing."""
     # Use a local RNG with a fixed seed so the output is identical across runs,
     # enabling reliable snapshot comparisons without affecting global state.
     rng = random.Random(_SEED)  # noqa: S311
@@ -99,7 +95,20 @@ def given_random_data() -> tuple[Pipeline, frozenset[Program]]:
 def when_pipe_through_cat(
     test_pipeline: tuple[Pipeline, frozenset[Program]],
 ) -> PipelineResult:
-    """Execute the pipeline synchronously."""
+    """Execute the pipeline synchronously.
+
+    Parameters
+    ----------
+    test_pipeline : tuple[Pipeline, frozenset[Program]]
+        A tuple containing the composed python->cat pipeline and the
+        allowlist of programs it requires for execution under
+        ``scoped(ScopeConfig())``.
+
+    Returns
+    -------
+    PipelineResult
+        The result of running the pipeline.
+    """
     pipeline, allowlist = test_pipeline
     with scoped(ScopeConfig(allowlist=allowlist)):
         return pipeline.run_sync()

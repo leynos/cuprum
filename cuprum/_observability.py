@@ -66,8 +66,13 @@ def _emit_exec_event(
 
     Synchronous hooks run inline. Hooks that return an awaitable are scheduled
     as background tasks; those tasks are returned so the caller can extend its
-    own pending-task collection. Returns an empty list when no hook scheduled
-    work.
+    own pending-task collection.
+
+    Returns
+    -------
+    list[asyncio.Task[None]]
+        The async-hook tasks scheduled while emitting ``event``; an empty list
+        when no hook scheduled work.
 
     Raises
     ------

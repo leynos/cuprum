@@ -56,7 +56,28 @@ def _load_json(path: pth.Path) -> dict[str, object]:
 
 
 def load_plan(path: pth.Path) -> dict[str, object]:
-    """Load and minimally validate dry-run plan JSON payload."""
+    """Load and minimally validate dry-run plan JSON payload.
+
+    Parameters
+    ----------
+    path : pth.Path
+        The dry-run plan JSON file to load and validate.
+
+    Returns
+    -------
+    dict[str, object]
+        The validated plan payload.
+
+    Raises
+    ------
+    IncompatibleBenchmarkProfileError
+        If the plan's ``worker_iterations`` field is invalid.
+    TypeError
+        If the plan's ``scenarios`` field or an entry within it has the
+        wrong type.
+    ValueError
+        If a scenario's ``name`` or ``backend`` field is missing or empty.
+    """  # noqa: DOC502 - TypeError/ValueError propagate from the validators
     _logger.debug("loading benchmark plan: path=%s", path)
     payload = _load_json(path)
     validate_profile_version(payload)
@@ -85,7 +106,26 @@ def load_plan(path: pth.Path) -> dict[str, object]:
 
 
 def load_throughput(path: pth.Path) -> dict[str, object]:
-    """Load and minimally validate hyperfine throughput JSON payload."""
+    """Load and minimally validate hyperfine throughput JSON payload.
+
+    Parameters
+    ----------
+    path : pth.Path
+        The hyperfine throughput JSON file to load and validate.
+
+    Returns
+    -------
+    dict[str, object]
+        The validated throughput payload.
+
+    Raises
+    ------
+    TypeError
+        If the payload's ``results`` field or an entry within it has the
+        wrong type.
+    ValueError
+        If a result's ``mean`` field is missing or not a positive float.
+    """  # noqa: DOC502 - TypeError/ValueError propagate from the validators
     payload = _load_json(path)
     results = _require_list(payload.get("results"), name="results")
 
@@ -126,7 +166,37 @@ def compare_rust_regressions(
     candidate: BenchmarkRunPayload,
     max_regression: float,
 ) -> ComparisonReport:
-    """Compare within-run Rust/Python ratios and evaluate the threshold."""
+    """Compare within-run Rust/Python ratios and evaluate the threshold.
+
+    Parameters
+    ----------
+    baseline : BenchmarkRunPayload
+        The baseline benchmark run payload defining the reference ratios.
+    candidate : BenchmarkRunPayload
+        The candidate benchmark run payload compared against the baseline.
+    max_regression : float
+        The maximum tolerated Rust/Python ratio regression; must be
+        non-negative.
+
+    Returns
+    -------
+    ComparisonReport
+        The per-scenario comparison and overall pass/fail verdict.
+
+    Raises
+    ------
+    TypeError
+        If ``max_regression`` is not a number, as rejected by
+        ``_require_non_negative_float``, or if a malformed ``scenarios`` or
+        ``results`` payload propagates from ``_extract_rust_python_ratios``.
+    ValueError
+        If validation fails in ``_extract_rust_python_ratios``,
+        ``_validate_matching_comparison_groups``, or
+        ``_require_non_negative_float``.
+    IncompatibleBenchmarkProfileError
+        If ``validate_matching_profiles`` finds incompatible profile
+        metadata between the baseline and candidate plans.
+    """  # noqa: DOC502 - all raised exceptions propagate from validator calls
     validated_max_regression = _require_non_negative_float(
         max_regression,
         name="max_regression",
@@ -193,7 +263,14 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    """Execute benchmark ratchet comparison and return process exit code."""
+    """Execute benchmark ratchet comparison and return process exit code.
+
+    Returns
+    -------
+    int
+        The process exit code: ``0`` on pass or skip, ``1`` on regression,
+        ``2`` on invalid inputs.
+    """
     logging.basicConfig(
         level=logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",

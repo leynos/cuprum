@@ -69,6 +69,11 @@ def fixture_broken_pipe_fds() -> cabc.Iterator[tuple[int, int]]:
 
     The read end is closed before the test runs, so any attempt to read it
     fails with ``EBADF`` while the write end stays valid.
+
+    Yields
+    ------
+    tuple[int, int]
+        The closed read descriptor and open write descriptor.
     """
     read_fd, write_fd = os.pipe()
     os.close(read_fd)
@@ -184,6 +189,11 @@ def _winerror_of(exc: OSError) -> int | None:
     ``OSError.winerror`` exists only on Windows, so a type check run on any
     other platform does not know the attribute. The suppression is confined to
     this one accessor rather than repeated at each use.
+
+    Returns
+    -------
+    int | None
+        The native Win32 error code, when CPython attached one.
     """
     return exc.winerror  # ty: ignore[unresolved-attribute]
 
@@ -280,6 +290,11 @@ def fixture_write_only_handle(tmp_path: pathlib.Path) -> cabc.Iterator[int]:
     descriptor, so the descriptor is converted with ``msvcrt.get_osfhandle``.
     ``ReadFile`` on a handle opened ``GENERIC_WRITE`` fails, which is what puts
     a Win32 code on the ``io::Error`` the conversion then has to preserve.
+
+    Yields
+    ------
+    int
+        The native handle for the write-only temporary file.
     """
     msvcrt = pytest.importorskip("msvcrt", reason="Windows-only handle conversion")
     fd = os.open(tmp_path / "write-only.bin", os.O_WRONLY | os.O_CREAT)

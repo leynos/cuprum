@@ -96,6 +96,11 @@ def _run_test_pipeline(
     PipelineResult
         PipelineResult from synchronous execution.
 
+    Raises
+    ------
+    ValueError
+        If fewer than two stages are supplied.
+
     """
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
