@@ -1676,6 +1676,36 @@ constraint below — so `make test-extension` runs only the gated modules. Their
 list lives in one place, the Makefile's `EXTENSION_TEST_TARGETS`, which the CI
 job consumes too, so the two cannot drift apart.
 
+None of that wiring is exercised by ordinary tests — drop the guard variable
+and the suite still passes — so `test_extension_build_contract.py` reads it
+back and asserts the contract: that the recipe sets the guard variable, that
+the `extension-tests` job runs `make develop` before `make test-extension`,
+and that `benchmark-ratchet` builds through the same target. It reads the
+Makefile with `make --dry-run` rather than by parsing the file, because the
+expanded recipe is the command line CI actually runs.
+
+`EXTENSION_TEST_TARGETS` gets two separate checks, because neither implies the
+other:
+
+- A scan derives the extension-gated modules from the suite itself — those
+  requesting the root `rust_streams` fixture, skipping with the shared "Rust
+  extension is not installed" reason, or naming `cuprum._rust_backend_native`
+  — and requires each one to be a declared target. This is the check that
+  notices a *new* gated module being forgotten, which a hard-coded copy of
+  today's list never would. The scan is textual and deliberately narrow, so it
+  is a lower bound: a module gating through some other idiom goes unnoticed. A
+  companion check fails when a signal stops matching anything, so a renamed
+  fixture cannot quietly empty the scan instead of failing it.
+- Modules that do not gate at all, but belong in the job anyway, are named
+  explicitly alongside the reason. `test_extension_requirement_guard.py` is
+  one: running it inside the guarded job is what proves the guard stays silent
+  when the extension is present, rather than only that it fires when the
+  extension is absent.
+
+So add a newly gated module to `EXTENSION_TEST_TARGETS`. If it is boundary
+coverage that never skips, add it to the companion list with its reason
+instead.
+
 Running `make test-extension` without having built the extension is safe: the
 guard fails the run with a message naming `make develop`, which is the whole
 point of it.
