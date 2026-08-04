@@ -16,7 +16,7 @@ jobs:
   build-pure-wheel:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - uses: ./.github/actions/pure-python-wheel
         with:
           python-version: ${{ inputs['python-version'] }}
@@ -47,7 +47,7 @@ jobs:
             arch: x86_64
             target: x86_64-pc-windows-msvc
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - name: Compute Python tag for manylinux interpreter path
         if: startsWith(matrix.os, 'ubuntu')
         id: pytag
@@ -63,7 +63,7 @@ jobs:
       - name: Build manylinux wheels (Linux x86_64)
         # Maturin action builds inside a manylinux container for PyPI tags.
         if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'x86_64'
-        uses: messense/maturin-action@47fbb7acd3db01f7830330b50689bd15135c12b9
+        uses: messense/maturin-action@6369ccd0d9ef2015c31b696e435d202672574696
         with:
           maturin-version: ${{ env.MATURIN_VERSION }}
           target: ${{ matrix.target }}
@@ -74,14 +74,14 @@ jobs:
             -i ${{ steps.pytag.outputs.interpreter }}
       - name: Set up QEMU (Linux aarch64)
         if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'aarch64'
-        uses: docker/setup-qemu-action@45136fd328ae20ed788d00d3bada68ab496c214c
+        uses: docker/setup-qemu-action@288220e341e5c445ddb6d73e19a57a9012ceca88
         with:
           platforms: arm64
       - name: Build manylinux wheels (Linux aarch64)
         # aarch64 wheels are cross-compiled; use version-only interpreter spec
         # since the container's Python binaries are aarch64 and cannot execute.
         if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'aarch64'
-        uses: messense/maturin-action@47fbb7acd3db01f7830330b50689bd15135c12b9
+        uses: messense/maturin-action@6369ccd0d9ef2015c31b696e435d202672574696
         with:
           maturin-version: ${{ env.MATURIN_VERSION }}
           target: ${{ matrix.target }}
@@ -102,7 +102,7 @@ jobs:
           maturin-version: ${{ env.MATURIN_VERSION }}
       - name: Upload wheel artifact (Linux)
         if: startsWith(matrix.os, 'ubuntu')
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheels-native-${{ matrix.os }}-${{ matrix.arch }}
           path: wheelhouse/*.whl
@@ -113,9 +113,9 @@ jobs:
       - build-pure-wheel
       - build-native-wheels
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ inputs['python-version'] }}
       - name: Download wheel artifacts
