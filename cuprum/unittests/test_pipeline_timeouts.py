@@ -14,11 +14,14 @@ from __future__ import annotations
 import asyncio
 import collections.abc as cabc
 import contextlib
+import os
+import signal
 import typing as typ
+from unittest import mock
 
 import pytest
 
-from cuprum import ScopeConfig, TimeoutExpired, scoped, sh
+from cuprum import ScopeConfig, TimeoutExpired, _pipeline_internals, scoped, sh
 from cuprum._process_lifecycle import (
     _terminate_pipeline_remaining_stages,
     _terminate_timed_out_stages,
@@ -35,6 +38,7 @@ from tests.helpers.timeouts import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from pathlib import Path
 
     from cuprum.events import ExecEvent
@@ -322,3 +326,73 @@ async def _settled(code: int) -> int:
     """Yield once, then return ``code``, standing in for an exited stage."""
     await asyncio.sleep(0)
     return code
+
+
+# -- Inter-stage pump ownership on the immediate path -------------------------
+
+
+def test_zero_timeout_reconciles_pipe_tasks() -> None:
+    """A zero deadline must settle the inter-stage pumps the caller owns.
+
+    The pumps exist before ``asyncio.wait_for`` is entered, and a zero timeout
+    cancels ``_wait_for_pipeline`` before its ``finally`` can reconcile them.
+    Terminating the stages settles them as a side effect, masking whether
+    anything owns them, so termination is stubbed out here: the first stage
+    writes more than a pipe buffer holds and the second never reads, leaving
+    the pump genuinely blocked when the deadline fires.
+    """
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    created: list[asyncio.Task[None]] = []
+    events: list[ExecEvent] = []
+    real_create = _pipeline_internals._create_pipe_tasks
+
+    def spy(processes: list[asyncio.subprocess.Process]) -> list[asyncio.Task[None]]:
+        """Record the pumps the pipeline creates so they can be inspected."""
+        tasks = real_create(processes)
+        created.extend(tasks)
+        return tasks
+
+    async def no_termination(
+        processes: cabc.Iterable[asyncio.subprocess.Process],
+        cancel_grace: float,
+    ) -> None:
+        """Stand in for stage termination without settling anything."""
+        _ = (processes, cancel_grace)
+        await asyncio.sleep(0)
+
+    pipeline = python(
+        "-c", "import sys, time; sys.stdout.write('x' * 10_000_000); time.sleep(30)"
+    ) | python("-c", "import time; time.sleep(30)")
+
+    async def run_case() -> None:
+        """Time out immediately, then inspect the pumps before the loop closes.
+
+        ``asyncio.run`` cancels everything still pending during shutdown, so a
+        stranded pump looks settled from outside. The assertion has to happen
+        while the loop is still live.
+        """
+        with pytest.raises(TimeoutExpired):
+            await pipeline.run(timeout=0, output=RunOutputOptions(capture=False))
+
+        assert created, "the pipeline must create an inter-stage pump to reconcile"
+        for index, task in enumerate(created):
+            assert task.done(), (
+                f"pump {index} was left unsettled after the immediate timeout: "
+                "nothing reconciled the pumps the caller owns"
+            )
+
+    try:
+        with (
+            mock.patch.object(_pipeline_internals, "_create_pipe_tasks", spy),
+            mock.patch.object(
+                _pipeline_internals, "_terminate_timed_out_stages", no_termination
+            ),
+            scoped(ScopeConfig(allowlist=frozenset([python_program]))),
+            sh.observe(events.append),
+        ):
+            asyncio.run(run_case())
+    finally:
+        for pid in started_pids(events):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)

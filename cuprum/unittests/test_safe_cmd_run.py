@@ -7,7 +7,6 @@ import collections.abc as cabc
 import io
 import os
 import sys
-import time
 import typing as typ
 from pathlib import Path
 
@@ -28,6 +27,7 @@ from tests.helpers.timeouts import (
     pending_tasks,
     python_interpreter,
     started_pids,
+    wait_for_process_death,
 )
 
 if typ.TYPE_CHECKING:
@@ -358,19 +358,7 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
         return int(pid_file.read_text())
 
     pid = asyncio.run(orchestrate())
-    _poll_process_death(pid)
-
-
-def _poll_process_death(pid: int, *, timeout: float = 1.0) -> None:
-    """Poll for process exit within a timeout, failing if still alive."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.02)
-    pytest.fail(f"Process {pid} still alive after {timeout}s of polling")
+    wait_for_process_death(pid, seconds=1.0, context="cancellation")
 
 
 # -- Public-boundary timeout contract -----------------------------------------
@@ -460,7 +448,7 @@ def test_non_positive_timeout_at_public_boundary(
 
     pids = started_pids(events)
     assert len(pids) == 1, f"expected exactly one spawned child, got {pids!r}"
-    _poll_process_death(pids[0])
+    wait_for_process_death(pids[0], seconds=1.0, context="the timeout")
 
     detail = f"output={expired.output!r} stderr={expired.stderr!r}"
     if capture:
