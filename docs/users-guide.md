@@ -235,10 +235,14 @@ Notes:
   deprecated and emit a `DeprecationWarning`.
 - `RunOutputOptions(echo=True)` echoes the final stage stdout and all stage
   stderr streams to their configured sinks.
-- Pipelines fail fast: when a stage exits non-zero, Cuprum terminates every
-  other still-running stage — upstream producers as well as downstream
-  consumers, not only the stages after the failure. The failing stage is
-  available via `result.failure` / `result.failure_index`.
+- Pipelines fail fast on the *first* non-final stage to exit non-zero: that
+  stage terminates every other still-running stage — upstream producers as well
+  as downstream consumers, not only the stages after the failure. Not every
+  non-zero exit terminates anything. A failing **final** stage, and any
+  single-stage pipeline, terminate nothing, because nothing is left to stop;
+  and only the first failure counts, since the later ones are usually its
+  consequences. The failing stage is available via `result.failure` /
+  `result.failure_index`.
 - When a downstream writer closes early, Cuprum drains the upstream reader
   until EOF or a short timeout elapses, even on a stalled upstream, so
   discarded input stays bounded. On the Rust backend that drain is reported —
@@ -764,6 +768,27 @@ Events with `exec_id=None` cannot be correlated, so correlation-consuming hooks
 
 Awaitable hook results are scheduled as `asyncio.Task` instances and awaited
 before the run completes.
+
+#### When an observe hook raises
+
+A failing observe hook fails the run. Cuprum logs the failure and then re-raises
+the hook's *own* exception type out of `run()` / `run_sync()`; it is never
+swallowed. The two hook kinds differ only in when that happens:
+
+- A **synchronous** hook raises inline, at the moment the event is emitted.
+  Emission of that event stops there, so hooks registered after it do not
+  receive that event, and the exception surfaces immediately — before the
+  subprocess is spawned, if the hook failed on `plan`. The raised exception is
+  the hook's own; Cuprum's internal wrapper appears only as its `__cause__`.
+- An **awaitable** hook raises inside its scheduled task. Every hook still
+  receives the event, and the exception surfaces when Cuprum awaits the pending
+  tasks before the run returns. When several awaitable hooks fail, only the
+  first is raised.
+
+This matters most for hooks that match exhaustively on `ExecEvent.phase` and
+reject unknown values. `pipeline_fail_fast` is a new phase, so such a hook
+raises on it — and so fails the pipeline — until it grows an arm for it. A hook
+that must never influence the run should catch its own exceptions.
 
 ```python
 from cuprum import ECHO, ExecEvent, ExecHook, ScopeConfig, scoped, sh
