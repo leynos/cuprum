@@ -36,7 +36,16 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecPhase
     from cuprum.program import Program
 
-_KNOWN_PHASES = ["plan", "start", "stdout", "stderr", "stdin", "stdin_error", "exit"]
+_KNOWN_PHASES = [
+    "plan",
+    "start",
+    "stdout",
+    "stderr",
+    "stdin",
+    "stdin_error",
+    "exit",
+    "pipeline_fail_fast",
+]
 
 # Reserved names live directly on every LogRecord. Passing any of them through
 # `extra=` makes `Logger.makeRecord` raise, so the `cuprum_` prefix is what
@@ -208,6 +217,7 @@ def test_message_formatting_is_total(event: ExecEvent) -> None:
         start_level=st.sampled_from([logging.INFO, logging.WARNING]),
         output_level=st.sampled_from([logging.DEBUG, logging.INFO]),
         exit_level=st.sampled_from([logging.INFO, logging.ERROR]),
+        fail_fast_level=st.sampled_from([logging.WARNING, logging.ERROR]),
     ),
 )
 @settings(max_examples=200)
@@ -234,6 +244,7 @@ def test_each_phase_logs_at_its_configured_level(
         "stdout": levels.output_level,
         "stderr": levels.output_level,
         "exit": levels.exit_level,
+        "pipeline_fail_fast": levels.fail_fast_level,
     }.get(event.phase, logging.DEBUG)
 
     assert handler.records[0].levelno == expected, (

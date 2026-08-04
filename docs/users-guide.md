@@ -883,7 +883,7 @@ with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
 The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 
 - `cuprum_phase`: Event phase (plan, start, stdout, stderr, stdin,
-  stdin_error, exit)
+  stdin_error, exit, pipeline_fail_fast)
 - `cuprum_program`: Program being executed
 - `cuprum_argv`: The command's argument vector, recorded verbatim (see the
   security note below)
@@ -950,6 +950,8 @@ The hook collects:
 - `cuprum_duration_seconds`: Histogram of execution durations
 - `cuprum_stdout_lines_total`: Counter of stdout lines emitted
 - `cuprum_stderr_lines_total`: Counter of stderr lines emitted
+- `cuprum_stdin_bytes_total`: Counter of successful stdin bytes written
+- `cuprum_stdin_errors_total`: Counter of stdin writer failures
 - `cuprum_pipeline_fail_fast_total`: Counter incremented once per pipeline torn
   down early because a non-final stage was the first to fail
 

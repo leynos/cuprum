@@ -1523,8 +1523,10 @@ design decisions guide these adapters:
 **Metrics adapter specifics:**
 
 - Counter metrics (`cuprum_executions_total`, `cuprum_failures_total`,
-  `cuprum_stdout_lines_total`, `cuprum_stderr_lines_total`) are incremented on
-  the corresponding event phases.
+  `cuprum_stdout_lines_total`, `cuprum_stderr_lines_total`,
+  `cuprum_stdin_bytes_total`, `cuprum_stdin_errors_total`,
+  `cuprum_pipeline_fail_fast_total`) are incremented on the corresponding event
+  phases.
 - Histogram metrics (`cuprum_duration_seconds`) are observed on `exit` events.
 - All metrics include `program` and `project` labels for multi‑dimensional
   analysis. The `project` label uses `_project_tag` and falls back to
@@ -1541,7 +1543,8 @@ design decisions guide these adapters:
   (8.1.3).
 - Events without an `exec_id` (legacy or manually constructed) are ambiguous
   and are ignored: no span is created for such a `start`, and their `stdout`/
-  `stderr`/`exit` events are dropped rather than guessed from PID.
+  `stderr`/`stdin_error`/`pipeline_fail_fast`/`exit` events are dropped rather
+  than guessed from PID.
 - Output lines can optionally be recorded as span events (controlled by
   `record_output` parameter).
 - Span status is set based on exit code (OK for 0, ERROR otherwise).
@@ -1551,7 +1554,8 @@ design decisions guide these adapters:
 
 - Builds on observe hooks rather than before/after hooks for richer event data.
 - Attaches structured `extra` fields with `cuprum_` prefix to log records.
-- Provides configurable log levels per phase (plan, start, output, exit).
+- Provides configurable log levels per phase (plan, start, output, exit,
+  fail-fast), the last defaulting to `WARNING`.
 - Includes a `JsonLoggingFormatter` for log aggregation systems.
 
 **Event-to-operation reduction:**

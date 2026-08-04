@@ -45,6 +45,7 @@ _KNOWN_PHASES: list[str] = [
     "stdin",
     "stdin_error",
     "exit",
+    "pipeline_fail_fast",
 ]
 
 _UNIT_COUNTER_PHASES = [
@@ -52,6 +53,7 @@ _UNIT_COUNTER_PHASES = [
     ("stdout", "cuprum_stdout_lines_total"),
     ("stderr", "cuprum_stderr_lines_total"),
     ("stdin_error", "cuprum_stdin_errors_total"),
+    ("pipeline_fail_fast", "cuprum_pipeline_fail_fast_total"),
 ]
 
 # The same pairs keyed for lookup, so the stateful oracle and the parametrized
