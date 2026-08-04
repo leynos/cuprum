@@ -90,7 +90,7 @@ def test_installed_maturin_matches_expected_pin() -> None:
     """The active maturin matches the pinned development dependency.
 
     Skip on the *module* rather than on a launcher found via `PATH`.
-    `build_native_wheel_artifact` runs `python -m maturin` in the current
+    `build_native_wheel_artefact` runs `python -m maturin` in the current
     interpreter, so an unrelated `maturin` earlier on `PATH` would let this
     test compare a version the build never uses.
     """

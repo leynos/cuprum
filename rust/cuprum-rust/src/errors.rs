@@ -308,7 +308,7 @@ mod tests {
         ///
         /// An unconstrained `".*"` almost never produces a string ending in
         /// `)`, so it cannot tell a correct implementation from one that trims
-        /// trailing punctuation off messages it does not recognise. The arms
+        /// trailing punctuation off messages it does not recognize. The arms
         /// are: a plain `strerror`, one already carrying a rendered suffix, and
         /// one that merely ends the way a suffix does.
         fn os_error_message() -> impl Strategy<Value = String> {
@@ -362,7 +362,7 @@ mod tests {
             /// by the exact suffix.
             ///
             /// Nothing above rules out the helper *rewriting* a message it does
-            /// not recognise; this pins that it either returns the input
+            /// not recognize; this pins that it either returns the input
             /// verbatim or removes precisely one known suffix.
             #[test]
             fn the_message_is_returned_verbatim_or_minus_its_own_suffix(
@@ -374,7 +374,7 @@ mod tests {
                 prop_assert!(
                     stripped == message
                         || format!("{stripped}{removed}") == message,
-                    "unrecognised messages must pass through unchanged",
+                    "unrecognized messages must pass through unchanged",
                 );
             }
         }
