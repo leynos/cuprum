@@ -48,53 +48,33 @@ async def _cancel_mid_transfer(
     waiting for the worker thread.
     """
     with owned_fds() as (reader_fd, writer_fd):
-        await _cancel_pump_over_fds(
-            events,
-            worker_started,
-            release,
-            cancellations=cancellations,
-            reader_fd=reader_fd,
-            writer_fd=writer_fd,
+        task = asyncio.create_task(
+            _pipeline_streams._await_rust_pump(
+                typ.cast(
+                    "_pipeline_stream_fds._BlockingModeGuard",
+                    _RecordingGuard(events),
+                ),
+                reader_fd=reader_fd,
+                writer_fd=writer_fd,
+            )
         )
-
-
-async def _cancel_pump_over_fds(
-    events: list[str],
-    worker_started: threading.Event,
-    release: threading.Event,
-    *,
-    cancellations: int,
-    reader_fd: int,
-    writer_fd: int,
-) -> None:
-    """Cancel the pump ``cancellations`` times, then release its worker."""
-    task = asyncio.create_task(
-        _pipeline_streams._await_rust_pump(
-            typ.cast(
-                "_pipeline_stream_fds._BlockingModeGuard",
-                _RecordingGuard(events),
-            ),
-            reader_fd=reader_fd,
-            writer_fd=writer_fd,
+        # `Event.wait` reports timeout by returning False rather than raising,
+        # so discarding it would let the test cancel a task that never reached
+        # the pause point — passing without exercising mid-transfer
+        # cancellation at all, which is the whole scenario.
+        started = await asyncio.to_thread(worker_started.wait, 5.0)
+        assert started, (
+            "the pump worker did not start within 5s, so the cancellation below "
+            "would not be mid-transfer"
         )
-    )
-    # `Event.wait` reports timeout by returning False rather than raising, so
-    # discarding it would let the test cancel a task that never reached the
-    # pause point — passing without exercising mid-transfer cancellation at
-    # all, which is the whole scenario.
-    started = await asyncio.to_thread(worker_started.wait, 5.0)
-    assert started, (
-        "the pump worker did not start within 5s, so the cancellation below "
-        "would not be mid-transfer"
-    )
-    for _ in range(cancellations):
-        task.cancel()
-        # Give the cancellation a chance to be delivered while the worker runs.
-        await asyncio.sleep(0.05)
-    events.append("released")
-    release.set()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+        for _ in range(cancellations):
+            task.cancel()
+            # Give the cancellation a chance to land while the worker runs.
+            await asyncio.sleep(0.05)
+        events.append("released")
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
 
 @pytest.mark.parametrize(
