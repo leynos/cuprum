@@ -70,6 +70,20 @@ class _ExitedProcess:
         """No-op: the process has already exited."""
 
 
+class _Observation(typ.Protocol):
+    """Structural contract these doubles satisfy: an ``emit`` and nothing else.
+
+    The production ``_StageObservation.emit`` narrows ``phase`` to a
+    ``Literal``; the doubles accept any ``str``, which is the wider and
+    therefore structurally compatible shape. Typing against this protocol lets
+    a helper accept either double without casting one to the other — a cast
+    that would be a lie, since the objects are unrelated.
+    """
+
+    def emit(self, phase: str, details: _EventDetails) -> None:
+        """Handle an emitted observe event."""
+
+
 @dc.dataclass(slots=True)
 class _RecordingObservation:
     """Observation double recording emitted ``(phase, _EventDetails)`` pairs."""
@@ -98,7 +112,7 @@ class _DeadlineExecution:
 
     ctx: ExecutionContext
     timeout: float | None
-    observation: _RecordingObservation = dc.field(default_factory=_RecordingObservation)
+    observation: _Observation = dc.field(default_factory=_RecordingObservation)
 
 
 __all__ = [

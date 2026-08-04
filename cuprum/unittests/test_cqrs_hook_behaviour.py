@@ -243,6 +243,10 @@ def test_pipeline_cleanup_drain_failure_preserves_active_error() -> None:
                 message=_PIPELINE_FINALIZATION_ERROR,
             )
 
+        assert exc_info.value.message == _PIPELINE_FINALIZATION_ERROR, (
+            "cleanup should label the group with the finalization message it was "
+            f"given, got {exc_info.value.message!r}"
+        )
         assert exc_info.value.exceptions[0] is timeout_error, (
             "cleanup should preserve the active error, not replace it with the drain "
             "failure"

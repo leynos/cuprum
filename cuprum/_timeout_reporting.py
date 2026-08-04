@@ -52,8 +52,14 @@ def _emit_timeout_log(
     ``TimeoutExpired`` the caller is about to raise, nor abort teardown, so any
     exception raised while logging is swallowed. Preserving cleanup and
     exception precedence outranks emitting the diagnostic.
+
+    ``CancelledError`` is suppressed alongside ``Exception`` for the same
+    reason it is in :func:`_safe_emit`: it derives from ``BaseException``, so a
+    handler raising it would otherwise escape and replace the very timeout this
+    record describes. This body has no ``await``, so task cancellation cannot
+    land here on its own — the reachable case is a handler that raises it.
     """
-    with contextlib.suppress(Exception):
+    with contextlib.suppress(Exception, asyncio.CancelledError):
         _LOGGER.log(level, msg, *args, extra=extra)
 
 

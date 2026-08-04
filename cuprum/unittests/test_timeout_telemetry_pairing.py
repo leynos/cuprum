@@ -28,6 +28,9 @@ from cuprum.unittests._timeout_test_helpers import _RecordingObservation
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._pipeline_types import _StageObservation
+    from cuprum._timeout_reporting import _TimeoutMode
+
 _TIMEOUT_LOGGER = "cuprum.timeout"
 
 _PIDS = st.none() | st.integers(min_value=1, max_value=99_999)
@@ -102,10 +105,10 @@ def test_timeout_expiry_reports_agree_across_channels(
 
     with _capture_timeout_records(logging.WARNING) as records:
         _report_timeout_expiry(
-            typ.cast("typ.Any", observation),
+            typ.cast("_StageObservation", observation),
             pid=pid,
             configured_timeout=configured_timeout,
-            mode=typ.cast("typ.Any", mode),
+            mode=typ.cast("_TimeoutMode", mode),
         )
 
     fields = vars(_sole_record(records))
@@ -144,7 +147,7 @@ def test_teardown_drain_reports_agree_across_channels(
 
     with _capture_timeout_records(logging.ERROR) as records:
         _report_teardown_drain_failure(
-            typ.cast("typ.Any", observation),
+            typ.cast("_StageObservation", observation),
             pid=pid,
             error_types=tuple(error_types),
         )
