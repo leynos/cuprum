@@ -270,7 +270,7 @@ class MetricsHook:
     - ``cuprum_stderr_lines_total``: Counter of stderr lines emitted
     - ``cuprum_stdin_bytes_total``: Counter of successful stdin bytes written
     - ``cuprum_stdin_errors_total``: Counter of stdin writer failures
-    - ``cuprum_timeouts_total``: Counter of subprocess timeout expiries
+    - ``cuprum_timeouts_total``: Counter of subprocess and pipeline expiries
     - ``cuprum_teardown_errors_total``: Counter of consumer drain failures
 
     All metrics include ``program`` and ``project`` labels.

@@ -57,12 +57,21 @@ class ExecEvent:
     Attributes
     ----------
     phase:
-        Event phase. See :data:`~cuprum.events.ExecPhase`. The ``timeout``
-        phase marks a run that exceeded its deadline and the
-        ``teardown_error`` phase marks a stream consumer that drained with an
-        unexpected error during cleanup; both are ancillary diagnostics
-        emitted before the existing ``exit`` event and the public
-        ``TimeoutExpired``, which are preserved.
+        Event phase. See :data:`~cuprum.events.ExecPhase`. Both ``timeout`` and
+        ``teardown_error`` are ancillary diagnostics that never displace a
+        lifecycle phase, but they differ in what is guaranteed to follow them.
+
+        ``timeout`` marks a run that exceeded its deadline, and is emitted
+        before the existing ``exit`` event and the public ``TimeoutExpired``,
+        both of which are preserved.
+
+        ``teardown_error`` marks a stream consumer that drained with an
+        unexpected error during cleanup, and carries no such ordering
+        guarantee. Cleanup also runs on external cancellation and on an
+        unexpected stdin-writer failure, and on those paths the original
+        exception propagates unchanged: no ``exit`` event follows and no
+        ``TimeoutExpired`` is raised, so a ``teardown_error`` may be the last
+        event a consumer sees for that execution.
     program:
         The allowlisted program that is executing.
     argv:

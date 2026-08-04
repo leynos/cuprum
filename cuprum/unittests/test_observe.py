@@ -448,6 +448,14 @@ def test_observe_emits_timeout_event_on_immediate_expiry() -> None:
     )
 
 
+class _ObserveHookError(Exception):
+    """Raised by a deliberately failing observe hook in these tests.
+
+    Named rather than a bare ``RuntimeError`` so the assertion cannot pass on
+    an unrelated runtime failure from the machinery under test.
+    """
+
+
 def test_observe_hook_failure_on_timeout_does_not_mask_timeout_expired() -> None:
     """An observe hook raising on the timeout event cannot replace TimeoutExpired.
 
@@ -459,8 +467,7 @@ def test_observe_hook_failure_on_timeout_does_not_mask_timeout_expired() -> None
     def hook(ev: ExecEvent) -> None:
         """Fail only on the timeout event, mimicking a broken telemetry hook."""
         if ev.phase == "timeout":
-            msg = "observe hook exploded"
-            raise RuntimeError(msg)
+            raise _ObserveHookError
 
     with (
         scoped(ScopeConfig(allowlist=catalogue.allowlist)),

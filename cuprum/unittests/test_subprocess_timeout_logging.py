@@ -77,8 +77,8 @@ def test_ordinary_timeout_expiry_logs_elapsed_diagnostic(
     """An elapsed wall-clock deadline emits a structured ``cuprum.timeout`` warning.
 
     The diagnostic must carry stable ``cuprum_*`` fields keyed for observability
-    integrations, including ``mode="elapsed"`` to distinguish an elapsed deadline
-    from an immediate non-positive expiry.
+    integrations, including ``mode="elapsed_deadline"`` to distinguish an
+    elapsed deadline from an immediate non-positive expiry.
     """
 
     async def run_case() -> None:
@@ -106,7 +106,7 @@ def test_ordinary_timeout_expiry_logs_elapsed_diagnostic(
 def test_non_positive_timeout_logs_immediate_diagnostic(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The non-positive fast path emits a diagnostic tagged ``mode="immediate"``."""
+    """The non-positive fast path is tagged ``mode="non_positive_immediate"``."""
 
     async def run_case() -> None:
         """Trigger the immediate fast path against an already-exited process."""
@@ -209,3 +209,42 @@ def test_timeout_logging_failure_does_not_mask_timeout(
             )
 
     asyncio.run(run_case())
+
+
+class _CancellingHandler(logging.Handler):
+    """Logging handler that raises ``CancelledError`` from ``emit``."""
+
+    @typ.override
+    def emit(self, record: logging.LogRecord) -> typ.NoReturn:
+        """Raise as a misbehaving handler would, on the timeout record."""
+        _ = record
+        raise asyncio.CancelledError
+
+
+def test_cancelled_logger_cannot_replace_the_timeout() -> None:
+    """A handler raising ``CancelledError`` must not escape the diagnostic.
+
+    ``CancelledError`` derives from ``BaseException``, so suppressing only
+    ``Exception`` would let it past and replace the ``TimeoutError`` the record
+    describes — the very outcome the best-effort contract exists to prevent.
+    The waiter's fast path is driven here so the escape would land on a real
+    timeout rather than on the logging call alone.
+    """
+    logger = logging.getLogger(_TIMEOUT_LOGGER)
+    handler = _CancellingHandler()
+    logger.addHandler(handler)
+    try:
+
+        async def run_case() -> None:
+            """Expire immediately while the logger's handler misbehaves."""
+            process = _ExitedProcess()
+            execution = _DeadlineExecution(ctx=ExecutionContext(), timeout=0)
+            with pytest.raises(TimeoutError):
+                await _wait_for_exit_code_within_timeout(
+                    typ.cast("asyncio.subprocess.Process", process),
+                    typ.cast("_SubprocessExecution", execution),
+                )
+
+        asyncio.run(run_case())
+    finally:
+        logger.removeHandler(handler)

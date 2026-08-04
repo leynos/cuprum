@@ -279,10 +279,12 @@ independent phase-count oracle.
 Two consequences are worth preserving when changing the mapping. Labels are
 projected only when the reducer yields at least one operation, so a `plan`
 event never touches `event.program` or the project tag. And the reducer is
-total over `ExecPhase` — all seven phases (`plan`, `start`, `stdout`,
-`stderr`, `stdin`, `stdin_error`, `exit`) have an arm — and fail-closed beyond
-it: any other phase raises `_UnhandledMetricsPhaseError` rather than being
-silently dropped. That is deliberate, and its cost is worth stating plainly. A
+total over `ExecPhase` — all nine phases (`plan`, `start`, `stdout`,
+`stderr`, `exit`, `stdin`, `stdin_error`, `timeout`, `teardown_error`) have
+an arm, with `plan`, `stdin` and `exit` handled directly and the remaining
+six routed through `_PHASE_COUNTERS` — and fail-closed beyond it: any other
+phase raises `_UnhandledMetricsPhaseError` rather than being silently
+dropped. That is deliberate, and its cost is worth stating plainly. A
 hook exception is not swallowed, so adding a value to `ExecPhase` without
 adding an arm here would raise for every caller that has already registered
 `MetricsHook`. A new phase therefore cannot reach metrics without a decision in

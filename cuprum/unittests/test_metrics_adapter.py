@@ -201,6 +201,10 @@ print('err1', file=sys.stderr)""",
         assert metrics.counters == {metric_name: 1.0}, (
             f"{phase} events should update only {metric_name}"
         )
+        assert metrics.histograms == {}, (
+            f"{phase} is a counter-only ancillary phase and must not observe a "
+            f"histogram, got {metrics.histograms!r}"
+        )
 
     def test_factory_function_returns_hook(self) -> None:
         """metrics_hook() factory returns a valid ExecHook."""
