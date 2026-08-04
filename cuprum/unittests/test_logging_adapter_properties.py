@@ -67,6 +67,11 @@ def _capturing_logger(name: str) -> tuple[logging.Logger, _CollectingHandler]:
     debug and info records — a real behaviour of the hook (it checks
     ``isEnabledFor`` before building anything), but not the one under test
     here.
+
+    Returns
+    -------
+    tuple[logging.Logger, _CollectingHandler]
+        The configured logger and its attached collecting handler.
     """
     logger = logging.getLogger(name)
     logger.handlers.clear()
