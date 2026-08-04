@@ -65,6 +65,16 @@ def _extract_scenario_entry(
         backend=backend,
     )
 
+    result_command = _require_non_empty_string(
+        result.get("command"), name=f"results[{index}].command"
+    )
+    if result_command != scenario_name:
+        msg = (
+            f"results[{index}].command {result_command!r} must match "
+            f"scenarios[{index}].name {scenario_name!r}"
+        )
+        raise ValueError(msg)
+
     mean = _require_positive_float(result.get("mean"), name=f"results[{index}].mean")
     return comparison_id, backend, mean
 

@@ -11,6 +11,7 @@ from benchmarks.benchmark_profile import (
     BENCHMARK_PROFILE_VERSION,
     IncompatibleBenchmarkProfileError,
 )
+from benchmarks.ratchet_ratio_extraction import _extract_scenario_entry
 from benchmarks.ratchet_rust_performance import (
     BenchmarkRunPayload,
     ComparisonReport,
@@ -53,8 +54,8 @@ def _throughput_payload(*, python_mean: float, rust_mean: float) -> dict[str, ob
     """Return a throughput payload."""
     return {
         "results": [
-            {"command": "python-run", "mean": python_mean},
-            {"command": "rust-run", "mean": rust_mean},
+            {"command": "python-small-single-nocb", "mean": python_mean},
+            {"command": "rust-small-single-nocb", "mean": rust_mean},
         ],
     }
 
@@ -210,6 +211,59 @@ def test_compare_rust_regressions_passes_within_threshold() -> None:
     assert report.comparisons[0].regression_ratio == pytest.approx(0.10)
 
 
+def test_extract_scenario_entry_accepts_matching_command() -> None:
+    """A result command may match its positionally paired scenario name."""
+    entry = _extract_scenario_entry(
+        index=0,
+        scenario_value={"name": "rust-small", "backend": "rust"},
+        result_value={"command": "rust-small", "mean": 1.5},
+    )
+
+    assert entry == ("small", "rust", 1.5), (
+        "matching positional entries must preserve comparison extraction"
+    )
+
+
+def test_extract_scenario_entry_rejects_mismatched_command() -> None:
+    """A result command must identify its positionally paired scenario."""
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"results\[0\]\.command 'python-small' must match "
+            r"scenarios\[0\]\.name 'rust-small'"
+        ),
+    ):
+        _extract_scenario_entry(
+            index=0,
+            scenario_value={"name": "rust-small", "backend": "rust"},
+            result_value={"command": "python-small", "mean": 1.5},
+        )
+
+
+@pytest.mark.parametrize(
+    ("result_value", "expected_exception"),
+    [
+        pytest.param({"mean": 1.5}, TypeError, id="missing"),
+        pytest.param({"command": 7, "mean": 1.5}, TypeError, id="non-string"),
+        pytest.param({"command": "", "mean": 1.5}, ValueError, id="empty"),
+    ],
+)
+def test_extract_scenario_entry_rejects_invalid_command(
+    result_value: dict[str, object],
+    expected_exception: type[Exception],
+) -> None:
+    """Result commands must be present, string typed, and non-empty."""
+    with pytest.raises(
+        expected_exception,
+        match=r"results\[0\]\.command must be a non-empty string",
+    ):
+        _extract_scenario_entry(
+            index=0,
+            scenario_value={"name": "rust-small", "backend": "rust"},
+            result_value=result_value,
+        )
+
+
 def test_compare_rust_regressions_ignores_runner_speed_differences() -> None:
     """Uniform runner slowdowns cancel out of the within-run ratio."""
     report = _run_comparison(
@@ -341,7 +395,7 @@ def test_compare_rust_regressions_rejects_missing_python_scenarios() -> None:
     }
     rust_only_throughput = {
         "results": [
-            {"command": "rust-run", "mean": 1.0},
+            {"command": "rust-small-single-nocb", "mean": 1.0},
         ],
     }
 
@@ -375,7 +429,7 @@ def test_compare_rust_regressions_rejects_missing_rust_scenarios() -> None:
     }
     python_only_throughput = {
         "results": [
-            {"command": "python-run", "mean": 1.0},
+            {"command": "python-small-single-nocb", "mean": 1.0},
         ],
     }
 
@@ -441,9 +495,9 @@ def test_compare_rust_regressions_rejects_duplicate_rust_scenario_names() -> Non
     }
     duplicate_throughput = {
         "results": [
-            {"command": "python-run", "mean": 1.0},
-            {"command": "rust-run", "mean": 1.0},
-            {"command": "rust-run-duplicate", "mean": 1.1},
+            {"command": "python-small-single-nocb", "mean": 1.0},
+            {"command": "rust-small-single-nocb", "mean": 1.0},
+            {"command": "rust-small-single-nocb", "mean": 1.1},
         ],
     }
 

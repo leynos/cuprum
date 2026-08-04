@@ -138,8 +138,8 @@ def _throughput_payload(*, python_mean: float, rust_mean: float) -> ThroughputPa
     """Create throughput payload."""
     return {
         "results": [
-            {"command": "python-run", "mean": python_mean},
-            {"command": "rust-run", "mean": rust_mean},
+            {"command": "python-small-single-nocb", "mean": python_mean},
+            {"command": "rust-small-single-nocb", "mean": rust_mean},
         ],
     }
 
