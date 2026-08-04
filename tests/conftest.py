@@ -21,7 +21,7 @@ class FeatureFile(pytest.File):
     """Collect a ``.feature`` file as a lightweight validation test."""
 
     def collect(self) -> list[pytest.Item]:
-        """Return a single item that checks the feature file is readable.
+        """Return a single item whose ``runtest`` validates the feature file.
 
         Returns
         -------

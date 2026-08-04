@@ -213,7 +213,8 @@ def test_rust_pump_stream_ignores_broken_pipe(
     Raises
     ------
     OSError
-        If the pump fails for a reason other than a broken pipe.
+        If the pump fails for a reason other than a broken pipe or a
+        connection reset.
     """
     payload = b"x" * (64 * 1024)
     with _pipe_pair() as (in_read, in_write, out_read, out_write):

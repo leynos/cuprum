@@ -190,11 +190,13 @@ def compare_rust_regressions(
         ``_require_non_negative_float``, or if a malformed ``scenarios`` or
         ``results`` payload propagates from ``_extract_rust_python_ratios``.
     ValueError
-        If validation fails in ``validate_matching_profiles``,
-        ``_extract_rust_python_ratios``,
+        If validation fails in ``_extract_rust_python_ratios``,
         ``_validate_matching_comparison_groups``, or
         ``_require_non_negative_float``.
-    """  # noqa: DOC502 - TypeError and ValueError propagate from the validators
+    IncompatibleBenchmarkProfileError
+        If ``validate_matching_profiles`` finds incompatible profile
+        metadata between the baseline and candidate plans.
+    """  # noqa: DOC502 - all raised exceptions propagate from validator calls
     validated_max_regression = _require_non_negative_float(
         max_regression,
         name="max_regression",

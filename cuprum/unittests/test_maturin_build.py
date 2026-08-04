@@ -47,13 +47,7 @@ def test_build_native_wheel_artifact_uses_locked_cargo_deps(
         command: list[str],
         **_kwargs: object,
     ) -> subprocess.CompletedProcess[str]:
-        """Record the command and create the expected wheel artifact.
-
-        Returns
-        -------
-        subprocess.CompletedProcess[str]
-            A successful completed process for the recorded command.
-        """
+        """Record the command and create the expected wheel artifact."""
         captured_command.extend(command)
         (tmp_path / "wheelhouse" / "cuprum-test.whl").touch()
         return subprocess.CompletedProcess(command, 0, "", "")
@@ -78,13 +72,7 @@ def test_build_native_wheel_artifact_reports_maturin_stderr(
         command: list[str],
         **_kwargs: object,
     ) -> subprocess.CompletedProcess[str]:
-        """Raise a deterministic maturin command failure.
-
-        Raises
-        ------
-        CalledProcessError
-            Always, to simulate a failed maturin invocation.
-        """
+        """Raise a deterministic maturin command failure."""
         assert _kwargs.get("capture_output") is True, (
             "native wheel builds should capture maturin output"
         )

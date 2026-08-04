@@ -560,14 +560,14 @@ class Pipeline:
 
     @classmethod
     def concat(cls, left: SafeCmd | Pipeline, right: SafeCmd | Pipeline) -> Pipeline:
-        """Compose a pipeline from two pipeline operands.
+        """Compose a pipeline from two stage operands.
 
         Parameters
         ----------
         left : SafeCmd | Pipeline
-            The pipeline operand whose stages come first.
+            A command or pipeline whose stages come first.
         right : SafeCmd | Pipeline
-            The pipeline operand whose stages follow ``left``'s.
+            A command or pipeline whose stages follow ``left``'s.
 
         Returns
         -------
@@ -682,9 +682,6 @@ def make(
 ) -> SafeCmdBuilder:
     """Build a callable that produces ``SafeCmd`` instances for ``program``.
 
-    The supplied ``program`` must exist in the provided catalogue; otherwise an
-    ``UnknownProgramError`` is raised to keep the allowlist the default gate.
-
     Parameters
     ----------
     program : Program
@@ -697,7 +694,12 @@ def make(
     -------
     SafeCmdBuilder
         A callable that builds ``SafeCmd`` instances for ``program``.
-    """
+
+    Raises
+    ------
+    UnknownProgramError
+        If ``program`` does not exist in ``catalogue``.
+    """  # noqa: DOC502 - UnknownProgramError propagates from catalogue.lookup
     entry = catalogue.lookup(program)
 
     def builder(*args: _ArgValue, **kwargs: _ArgValue) -> SafeCmd:

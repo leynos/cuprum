@@ -41,7 +41,7 @@ def _ratchet_passed_status(report: cabc.Mapping[str, object]) -> RatchetStatus:
 
 
 def load_ratchet_report(path: pth.Path) -> RatchetStatus:
-    """Load the Rust regression ratchet report and summarise its status.
+    """Load the Rust regression ratchet report and summarize its status.
 
     Parameters
     ----------

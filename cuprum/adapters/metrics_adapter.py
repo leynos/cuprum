@@ -212,18 +212,11 @@ _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
 
 
 def _exit_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
-    """Return the failure counter and duration histogram ops for an exit event.
-
-    A failure counter is produced only for a known non-zero exit code, and a
-    duration observation only when a duration was measured; a clean exit with
-    no duration therefore produces nothing.
-
-    Returns
-    -------
-    tuple[_MetricOp, ...]
-        The counter and histogram operations implied by the exit event.
-    """
+    """Return the failure counter and duration histogram ops for an exit event."""
     operations: list[_MetricOp] = []
+    # A failure counter is produced only for a known non-zero exit code, and
+    # a duration observation only when a duration was measured; a clean exit
+    # with no duration therefore produces nothing.
     if event.exit_code is not None and event.exit_code != 0:
         operations.append(_CounterOp("cuprum_failures_total", 1.0))
     if event.duration_s is not None:
@@ -232,27 +225,15 @@ def _exit_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
 
 
 def _metric_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
-    """Map an execution event to the metric operations it should produce.
-
-    This is the pure event-to-operation reducer behind
-    [`MetricsHook.__call__`][cuprum.adapters.metrics_adapter.MetricsHook.__call__]
-    — the single source of truth for which counters and histogram observations
-    each phase yields, so the operations can be verified without a collector.
-    Labels are applied by the caller. ``plan`` yields nothing; a ``stdin`` event
-    without a byte count yields nothing; an unknown phase is a contract
-    violation and raises ``_UnhandledMetricsPhaseError``.
-
-    Returns
-    -------
-    tuple[_MetricOp, ...]
-        The metric operations implied by the event phase and payload.
-
-    Raises
-    ------
-    _UnhandledMetricsPhaseError
-        If the event phase has no defined metrics mapping.
-    """
+    """Map an execution event to the metric operations it should produce."""
+    # The pure event-to-operation reducer behind ``MetricsHook.__call__``: the
+    # single source of truth for which counters and histogram observations each
+    # phase yields, so the operations can be verified without a collector.
+    # Labels are applied by the caller.
     phase = event.phase
+    # ``plan`` yields nothing; a ``stdin`` event without a byte count yields
+    # nothing; an unknown phase is a contract violation and raises
+    # ``_UnhandledMetricsPhaseError``.
     match phase:
         case "plan":
             return ()
@@ -319,8 +300,14 @@ class MetricsHook:
         when there is at least one operation, so a ``plan`` (or a phaseless
         no-op) event never computes labels.
 
-        Partial-failure semantics
-        -------------------------
+        Parameters
+        ----------
+        event : ExecEvent
+            The execution event processed to derive and apply metric
+            operations.
+
+        Notes
+        -----
         An ``exit`` event can yield two operations — a failure counter and a
         duration observation — applied as two independent collector calls, in
         that order. There is no atomicity across them, and none is attempted:

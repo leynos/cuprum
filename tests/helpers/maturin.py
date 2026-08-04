@@ -162,13 +162,11 @@ def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
     ------
     AssertionError
         If the build does not produce exactly one wheel.
-    OSError
-        If the output directory cannot be created or inspected.
     MaturinBuildError
         If the maturin build command exits non-zero.
     OSError
-        If ``out_dir`` cannot be created or the maturin subprocess cannot be
-        started.
+        If the output directory cannot be created or inspected, or if the
+        maturin subprocess cannot be started.
     """  # noqa: DOC502 - OSError propagates from Path.mkdir and subprocess.run
     out_dir.mkdir(parents=True, exist_ok=True)
     command = [

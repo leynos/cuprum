@@ -226,28 +226,14 @@ def _resolve_backend(
 
 
 def _probe_rust_availability(requested: StreamBackend) -> bool | None:
-    """Probe Rust availability for ``requested``, honouring its failure policy.
-
-    ``PYTHON`` never probes (returns ``None``). ``AUTO`` tolerates a probe
-    ``ImportError`` and falls back to ``None``. ``RUST`` lets a probe
-    ``ImportError`` propagate, matching the forced-backend contract.
-
-    Returns
-    -------
-    bool | None
-        The probe result, or ``None`` when probing is skipped (``PYTHON``) or
-        an ``AUTO`` probe failed.
-
-    Raises
-    ------
-    ImportError
-        If a non-``AUTO`` requested backend's availability probe fails.
-    """
+    """Probe Rust availability for ``requested``, honouring its failure policy."""
     if requested is StreamBackend.PYTHON:
         return None
     try:
         return _check_rust_available()
     except ImportError:
+        # AUTO tolerates a probe ImportError and falls back to None; RUST
+        # lets it propagate, matching the forced-backend contract.
         if requested is not StreamBackend.AUTO:
             raise
         _LOGGER.debug(
