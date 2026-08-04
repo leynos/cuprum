@@ -25,11 +25,22 @@ import pytest
 
 
 class _ModuleReferenceScanError(Exception):
-    """Raised when a module cannot be inspected for production references."""
+    """Raised when a module cannot be inspected for production references.
+
+    Attributes
+    ----------
+    path : pathlib.Path
+        The module the scan could not read or parse.
+    symbol : str
+        The symbol the scan was looking for when it gave up.
+    """
 
     def __init__(self, path: pathlib.Path, symbol: str) -> None:
         """Describe the module reference scan failure."""
-        super().__init__(f"cannot inspect {path} for {symbol!r} production references")
+        message = f"cannot inspect {path} for {symbol!r} production references"
+        super().__init__(message)
+        self.path = path
+        self.symbol = symbol
 
 
 def _module_references_symbol(path: pathlib.Path, symbol: str) -> bool:
@@ -69,13 +80,39 @@ def test_module_references_symbol_ignores_non_code_text(
     source: str,
     expected_reference: typ.Literal["ignored", "referenced", "invalid"],
 ) -> None:
-    """The production-reference guard detects symbols, not raw text."""
+    """The production-reference guard detects symbols, not raw text.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest's per-test temporary directory, holding the candidate module.
+    source : str
+        The module source the guard is pointed at.
+    expected_reference : typ.Literal["ignored", "referenced", "invalid"]
+        Whether *source* should be ignored, reported as a reference, or refuse
+        to parse.
+
+    Returns
+    -------
+    None
+    """
     module_path = tmp_path / "candidate.py"
     module_path.write_text(source, encoding="utf-8")
 
     if expected_reference == "invalid":
-        with pytest.raises(_ModuleReferenceScanError, match="cannot inspect"):
+        with pytest.raises(_ModuleReferenceScanError) as excinfo:
             _module_references_symbol(module_path, "rust_consume_stream")
+        # Assert on the structured attributes rather than the rendered message:
+        # they are what a caller can branch on, and the message is not an
+        # interface.
+        assert excinfo.value.path == module_path, (
+            f"the failure must name the module it could not inspect, found "
+            f"{excinfo.value.path}"
+        )
+        assert excinfo.value.symbol == "rust_consume_stream", (
+            f"the failure must name the symbol it was scanning for, found "
+            f"{excinfo.value.symbol!r}"
+        )
         return
 
     has_reference = expected_reference == "referenced"
@@ -85,7 +122,12 @@ def test_module_references_symbol_ignores_non_code_text(
 
 
 def test_rust_consume_stream_docstring_not_integrated() -> None:
-    """``rust_consume_stream`` documents its deferred integration status."""
+    """``rust_consume_stream`` documents its deferred integration status.
+
+    Returns
+    -------
+    None
+    """
     from cuprum import _streams_rs
 
     docstring = _streams_rs.rust_consume_stream.__doc__ or ""
@@ -95,7 +137,12 @@ def test_rust_consume_stream_docstring_not_integrated() -> None:
 
 
 def test_rust_consume_stream_not_referenced_in_production() -> None:
-    """Production code does not route consumes through ``rust_consume_stream``."""
+    """Production code does not route consumes through ``rust_consume_stream``.
+
+    Returns
+    -------
+    None
+    """
     from cuprum import _streams_rs
 
     module_file = _streams_rs.__file__
@@ -112,11 +159,12 @@ def test_rust_consume_stream_not_referenced_in_production() -> None:
         except _ModuleReferenceScanError as exc:
             cause = exc.__cause__
             cause_context = (
-                f"; caused by {type(cause).__name__}: {cause}"
-                if cause is not None
-                else ""
+                f"{type(cause).__name__}: {cause}" if cause is not None else "no cause"
             )
-            scan_errors.append(f"{exc}{cause_context}")
+            scan_errors.append(
+                f"{exc.path.relative_to(package_root)} "
+                f"(scanning for {exc.symbol!r}; {cause_context})"
+            )
 
     assert scan_errors == [], (
         "could not inspect one or more production modules; "
