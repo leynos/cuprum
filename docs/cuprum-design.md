@@ -1080,8 +1080,11 @@ reason to take a timestamp now is to compute a duration for the exit record
 later; when it is enabled, the hook takes the store's lock, records
 `time.perf_counter()` against the command, and releases the lock. It then asks
 whether the start level is enabled and, if so, logs the `cuprum.start` record.
-The `SafeCmd` executes the process and returns a `CommandResult` to the user,
-then invokes the `on_exit` hook with the command and that result. The exit hook
+The `SafeCmd` executes the process, then invokes the `on_exit` hook with the
+command and the resulting `CommandResult`, and only then returns that result to
+the user — `_execute_with_hooks` dispatches the after-hooks before its own
+return, so a hook cannot observe a command the caller has already been told
+about. The exit hook
 asks again whether the exit level is enabled: if it is disabled it returns
 immediately, leaving nothing to clean up because nothing was stored; if it is
 enabled it takes the lock, pops the recorded start time — removing the entry,
@@ -1115,7 +1118,6 @@ sequenceDiagram
     end
 
     SafeCmd->>SafeCmd: execute process
-    SafeCmd-->>User: CommandResult
 
     SafeCmd->>AfterHooks: on_exit(cmd, result)
 
@@ -1130,6 +1132,8 @@ sequenceDiagram
         AfterHooks->>AfterHooks: compute duration_s
         AfterHooks->>Logger: log(exit_level, cuprum.exit ...)
     end
+
+    SafeCmd-->>User: CommandResult
 ```
 
 For screen readers: The following sequence diagram shows how a subprocess
@@ -1424,8 +1428,8 @@ sequenceDiagram
         end
     end
 
-    TaskGroup-->>run_concurrent: Partial results<br/>(completed + cancelled)
-    run_concurrent-->>Caller: ConcurrentResult<br/>(partial results,<br/>failure indices)
+    TaskGroup-->>run_concurrent: Completed results only<br/>(cancelled produced none)
+    run_concurrent-->>Caller: ConcurrentResult<br/>(compacted results,<br/>submission indices,<br/>failure indices)
 ```
 
 ### 8.4 Telemetry Adapter Design Decisions

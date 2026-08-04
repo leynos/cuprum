@@ -1388,12 +1388,20 @@ stays diagnosable instead of vanishing behind the cancellation. It sits at
 
 ### Counting pump routing decisions
 
-Aggregating debug logs answers "why did this hop fall back?" but not "what
-fraction of hops still takes the fast path?". For that, register a pump
-observer. It is a separate channel from `sh.observe`: pump events describe an
-internal routing decision rather than a command's lifecycle, so they are not
-`ExecEvent` values and never reach an observe hook. An `ExecEvent` consumer
-registered elsewhere in the process is unaffected.
+Aggregating debug logs answers "why did this hop fall back?" one record at a
+time. To count the same decisions instead, register a pump observer. It is a
+separate channel from `sh.observe`: pump events describe an internal routing
+decision rather than a command's lifecycle, so they are not `ExecEvent` values
+and never reach an observe hook. An `ExecEvent` consumer registered elsewhere in
+the process is unaffected.
+
+The channel counts declines and post-cancellation failures, and nothing else. A
+successful hand-off emits no event, deliberately: there is no per-hop counter
+and no total-hop counter to divide by. So these counters give the *number* of
+hops that left the fast path, not the *fraction* that stayed on it. To report
+that fraction, pair the decline counter with a hop total measured
+independently — for example, a counter of your own incremented once per
+inter-stage hop you submit.
 
 ```python
 from cuprum.adapters.metrics_adapter import InMemoryMetrics
@@ -1428,14 +1436,22 @@ Table 2: counters emitted by `PumpMetricsHook`
 
 The `reason` label takes exactly the three values in Table 1 —
 `raw_fd_unavailable`, `reader_pause_failed`, and `blocking_mode_unavailable` —
-and nothing else. They are published as the `RustPumpDeclineReason` enum, so a
-dashboard can enumerate the series it will see:
+plus `unknown`, and nothing else. The three are published as the
+`RustPumpDeclineReason` enum and `unknown` as
+`cuprum.adapters.pump_metrics.UNKNOWN_DECLINE_REASON`, so a dashboard can
+enumerate the series it will see:
 
 ```python
 from cuprum import RustPumpDeclineReason
+from cuprum.adapters.pump_metrics import UNKNOWN_DECLINE_REASON
 
-print([reason.value for reason in RustPumpDeclineReason])
+print([reason.value for reason in RustPumpDeclineReason] + [UNKNOWN_DECLINE_REASON])
 ```
+
+`unknown` is a guard rather than an outcome: it is what a decline that named no
+seam would be labelled, and no call site produces one. It is listed because a
+dashboard filtering on the enum alone would drop such a decline silently rather
+than showing it.
 
 Nothing derived from a descriptor, an argument vector, or an exception reaches
 a label, so the series count is fixed. A successful hand-off increments
@@ -1449,8 +1465,12 @@ unchanged — the counters supplement them rather than replacing them.
 > difference is deliberate: a decline is recorded on the path that falls back
 > to the Python pump and completes the hop, so a misconfigured metrics backend
 > must not be able to abort a pipe hop that would otherwise have succeeded.
-> `SystemExit` and `KeyboardInterrupt` still propagate. Hooks must be
-> synchronous; one that returns an awaitable is reported and discarded.
+> Only `Exception` instances are reported and suppressed. Everything else
+> propagates unchanged: `SystemExit`, `KeyboardInterrupt`, and
+> `asyncio.CancelledError`. The last matters because one of the two emission
+> sites is cancellation unwinding, so a hook running there must not be able to
+> absorb the cancellation the caller asked for. Hooks must be synchronous; one
+> that returns an awaitable is reported and discarded.
 
 ### Choosing a stream backend
 

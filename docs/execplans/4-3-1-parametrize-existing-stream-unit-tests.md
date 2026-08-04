@@ -202,7 +202,7 @@ records the gates of the day, not today's:
 > when 4.3.1 completed, not where it lives now. Two of the extractors named
 > above are gone: `_extract_reader_fd` and `_extract_writer_fd` were one-line
 > pass-throughs to `_extract_stream_fd` — a fourth helper 4.3.1 added
-> alongside them but the summary above does not name — and #136 deleted the
+> alongside them, but the summary above does not name — and #136 deleted the
 > two aliases as dead code, inlining their call sites onto
 > `_extract_stream_fd`. The surviving extractors and the pause/blocking-mode
 > lifecycle (`_fd_from_transport`, `_extract_stream_fd`, `_paused_reader`,
