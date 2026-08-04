@@ -26,7 +26,15 @@ if typ.TYPE_CHECKING:
 
 
 class WorkerCommand(typ.TypedDict):
-    """Safe command and PID-file path for one worker fixture."""
+    """Safe command and PID-file path for one worker fixture.
+
+    Attributes
+    ----------
+    command : SafeCmd
+        Allowlisted command that starts the worker subprocess.
+    pid_file : Path
+        Path where the worker records its process identifier.
+    """
 
     command: SafeCmd
     pid_file: Path

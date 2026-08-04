@@ -198,22 +198,32 @@ class TestConcurrentResult:
 
     @staticmethod
     @pytest.mark.parametrize(
-        "failures",
+        ("field", "indices"),
         [
-            pytest.param((0, 0), id="duplicate"),
-            pytest.param((1, 0), id="descending"),
+            pytest.param("failures", (0, 0), id="failure-duplicate"),
+            pytest.param("failures", (1, 0), id="failure-descending"),
+            pytest.param("submission_indices", (0, 0), id="submission-duplicate"),
+            pytest.param("submission_indices", (1, 0), id="submission-descending"),
         ],
     )
-    def test_non_ascending_failure_indices_are_rejected(
-        failures: tuple[int, ...],
+    def test_non_ascending_indices_are_rejected(
+        field: str,
+        indices: tuple[int, ...],
     ) -> None:
-        """Duplicate or descending failure indices break strict ascending order."""
+        """Failure and submission indices must be ascending and unique."""
         results = (
             CommandResult(Program("echo"), (), 0, 1, "out", ""),
             CommandResult(Program("echo"), (), 1, 2, "out", ""),
         )
+
+        def construct_result() -> ConcurrentResult:
+            """Construct a result with the selected index field."""
+            if field == "failures":
+                return ConcurrentResult(results=results, failures=indices)
+            return ConcurrentResult(results=results, submission_indices=indices)
+
         with pytest.raises(ValueError, match="strictly ascending and unique"):
-            ConcurrentResult(results=results, failures=failures)
+            construct_result()
 
     @staticmethod
     def test_submission_index_beyond_results_length_is_allowed() -> None:
@@ -252,13 +262,3 @@ class TestConcurrentResult:
         results = (CommandResult(Program("echo"), (), 0, 1, "out", ""),)
         with pytest.raises(expected, match=match):
             ConcurrentResult(results=results, submission_indices=submission_indices)
-
-    @staticmethod
-    def test_non_ascending_submission_indices_are_rejected() -> None:
-        """Submission indices must be strictly ascending and unique."""
-        results = (
-            CommandResult(Program("echo"), (), 0, 1, "out", ""),
-            CommandResult(Program("echo"), (), 1, 2, "out", ""),
-        )
-        with pytest.raises(ValueError, match="strictly ascending and unique"):
-            ConcurrentResult(results=results, submission_indices=(3, 1))
