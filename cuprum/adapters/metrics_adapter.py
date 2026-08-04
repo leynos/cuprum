@@ -217,6 +217,11 @@ def _exit_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
     A failure counter is produced only for a known non-zero exit code, and a
     duration observation only when a duration was measured; a clean exit with
     no duration therefore produces nothing.
+
+    Returns
+    -------
+    tuple[_MetricOp, ...]
+        The counter and histogram operations implied by the exit event.
     """
     operations: list[_MetricOp] = []
     if event.exit_code is not None and event.exit_code != 0:
@@ -236,6 +241,16 @@ def _metric_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
     Labels are applied by the caller. ``plan`` yields nothing; a ``stdin`` event
     without a byte count yields nothing; an unknown phase is a contract
     violation and raises ``_UnhandledMetricsPhaseError``.
+
+    Returns
+    -------
+    tuple[_MetricOp, ...]
+        The metric operations implied by the event phase and payload.
+
+    Raises
+    ------
+    _UnhandledMetricsPhaseError
+        If the event phase has no defined metrics mapping.
     """
     phase = event.phase
     match phase:
