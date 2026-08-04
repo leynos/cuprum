@@ -1899,7 +1899,6 @@ When changing lint policy, update both `pyproject.toml` and this guide. If the
 change alters the architecture of the lint gate, update
 [ADR-003](adr-003-two-tier-python-linting.md) as well.
 
-
 ### Docstring consistency gate
 
 Ruff's `DOC` rule family, configured under `[tool.ruff.lint.pydocstyle]` (NumPy
