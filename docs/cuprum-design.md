@@ -606,7 +606,10 @@ processes concurrently, and streams data between them.
   streamed into the next stage and represented as `None` on its stage result.
 - `echo=True` tees the final stage stdout and all stage stderr streams.
 - Pipelines apply fail-fast semantics: the first stage to exit non-zero
-  terminates the remaining stages. The failing stage is surfaced via
+  terminates every other still-running stage — upstream producers and
+  downstream consumers alike — unless it is the final stage, in which case
+  nothing is left running to terminate. A single-stage pipeline terminates
+  nothing for the same reason. The failing stage is surfaced via
   `result.failure` / `result.failure_index`.
 
 #### 6.2.4 Context manipulation and allowlists
