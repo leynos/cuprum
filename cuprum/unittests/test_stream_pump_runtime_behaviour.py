@@ -14,6 +14,7 @@ from hypothesis import strategies as st
 from cuprum import ScopeConfig, scoped, sh
 from cuprum._streams import (
     _POST_CLOSE_DRAIN_TIMEOUT_S,
+    _READ_SIZE,
     _drain_stream_reader_bounded,
     _pump_stream,
 )
@@ -23,15 +24,16 @@ from tests.helpers.catalogue import python_catalogue
 class _StubPumpReader:
     """Stub stream reader yielding queued chunks then EOF."""
 
-    def __init__(self, chunks: list[bytes]) -> None:
+    def __init__(self, chunks: list[bytes], *, delay_s: float = 0.0) -> None:
         """Initialize the stub with queued chunks."""
         self._chunks = list(chunks)
+        self._delay_s = delay_s
         self.read_calls = 0
 
     async def read(self, _: int) -> bytes:
         """Return the next queued chunk, or empty bytes at EOF."""
         self.read_calls += 1
-        await asyncio.sleep(0)
+        await asyncio.sleep(self._delay_s)
         if not self._chunks:
             return b""
         return self._chunks.pop(0)
@@ -54,36 +56,23 @@ class _StallingPumpReader:
         return b"more"
 
 
-class _DelayedPumpReader:
-    """Stub stream reader that emits queued chunks with a per-read delay then EOF."""
-
-    def __init__(self, chunks: list[bytes], *, delay_s: float) -> None:
-        """Initialize with queued chunks and the delay applied before each read."""
-        self._chunks = list(chunks)
-        self._delay_s = delay_s
-        self.read_calls = 0
-
-    async def read(self, _: int) -> bytes:
-        """Return the next queued chunk after a delay, or empty bytes at EOF."""
-        self.read_calls += 1
-        await asyncio.sleep(self._delay_s)
-        if not self._chunks:
-            return b""
-        return self._chunks.pop(0)
-
-
 class _StubPumpWriter:
     """Stub stream writer recording writes, drains, and closure."""
 
     def __init__(self, *, fail_on_drain_call: int | None = None) -> None:
         """Initialize the stub with an optional drain failure point."""
+        self.data = bytearray()
         self.drain_calls = 0
+        self.write_calls = 0
         self.closed = False
+        self.write_eof_calls = 0
         self.wait_closed_calls = 0
         self._fail_on_drain_call = fail_on_drain_call
 
-    def write(self, _chunk: bytes) -> None:
+    def write(self, chunk: bytes) -> None:
         """Accept a chunk like ``asyncio.StreamWriter.write``."""
+        self.write_calls += 1
+        self.data.extend(chunk)
 
     async def drain(self) -> None:
         """Record drain and optionally simulate downstream closure."""
@@ -94,6 +83,7 @@ class _StubPumpWriter:
 
     def write_eof(self) -> None:
         """Accept EOF signalling like ``asyncio.StreamWriter.write_eof``."""
+        self.write_eof_calls += 1
 
     def close(self) -> None:
         """Mark the writer as closed."""
@@ -190,9 +180,9 @@ def test_pump_stream_omits_downstream_close_log_without_writer(
 def test_pump_stream_drains_slow_reader_until_eof_without_writer() -> None:
     """A writerless pump drains a slow reader to EOF, not just a bounded window."""
 
-    async def exercise() -> _DelayedPumpReader:
+    async def exercise() -> _StubPumpReader:
         """Pump with no writer from a reader slower than the bounded-drain window."""
-        reader = _DelayedPumpReader(
+        reader = _StubPumpReader(
             [b"a" * 8, b"b" * 8, b"c" * 8],
             delay_s=_POST_CLOSE_DRAIN_TIMEOUT_S * 0.6,
         )
@@ -276,3 +266,62 @@ def test_pump_stream_drains_generated_chunks_after_downstream_close(
     )
     assert writer.closed is True, "pump should close the writer after draining"
     assert writer.wait_closed_calls == 1, "pump should await writer closure once"
+
+
+def test_pump_stream_drains_per_chunk() -> None:
+    """Streaming between stages awaits drain for backpressure."""
+
+    async def exercise() -> _StubPumpWriter:
+        """Drive the pump under test and capture the resulting writer."""
+        reader = asyncio.StreamReader()
+        writer = _StubPumpWriter()
+        task = asyncio.create_task(
+            _pump_stream(reader, typ.cast("asyncio.StreamWriter", writer)),
+        )
+        payload = b"x" * (_READ_SIZE * 2 + 1)
+        reader.feed_data(payload)
+        reader.feed_eof()
+        await task
+        return writer
+
+    writer = asyncio.run(exercise())
+
+    assert bytes(writer.data) == b"x" * (_READ_SIZE * 2 + 1), (
+        "the writer must receive the whole payload intact"
+    )
+    assert writer.write_calls == writer.drain_calls, (
+        "every write must be followed by a drain for backpressure"
+    )
+    assert writer.drain_calls >= 2, (
+        "a payload spanning multiple reads must drain more than once"
+    )
+    assert writer.write_eof_calls == 1, "EOF must be signalled exactly once"
+    assert writer.closed is True, "the pump must close the writer when done"
+    assert writer.wait_closed_calls == 1, "closure must be awaited exactly once"
+
+
+def test_pump_stream_handles_downstream_close_without_hanging() -> None:
+    """_pump_stream drains stdout even if downstream closes mid-stream."""
+
+    async def exercise() -> tuple[_StubPumpReader, _StubPumpWriter]:
+        """Pump through a writer that fails mid-stream and return both ends."""
+        reader = _StubPumpReader([b"a" * _READ_SIZE, b"b" * _READ_SIZE, b"c"])
+        writer = _StubPumpWriter(fail_on_drain_call=2)
+        await _pump_stream(
+            typ.cast("asyncio.StreamReader", reader),
+            typ.cast("asyncio.StreamWriter", writer),
+        )
+        return reader, writer
+
+    reader, writer = asyncio.run(
+        asyncio.wait_for(exercise(), timeout=_POST_CLOSE_DRAIN_TIMEOUT_S * 4)
+    )
+
+    assert reader.read_calls == 4, "the pump reads 3 chunks plus EOF"
+    assert writer.write_calls == 2, (
+        "drain fails on the second write, so the third chunk is never written"
+    )
+    assert writer.closed is True, (
+        "the pump must close the writer even after a mid-stream failure"
+    )
+    assert writer.wait_closed_calls == 1, "closure must be awaited exactly once"

@@ -27,8 +27,10 @@ def _require_list(value: object, *, name: str) -> list[object]:
 
 def _require_non_empty_string(value: object, *, name: str) -> str:
     """Validate and return a non-empty string."""
-    if not isinstance(value, str) or not value.strip():
-        msg = f"{name} must be a non-empty string"
+    msg = f"{name} must be a non-empty string"
+    if not isinstance(value, str):
+        raise TypeError(msg)
+    if not value.strip():
         raise ValueError(msg)
     return value
 

@@ -30,6 +30,21 @@ from cuprum._pipeline_config import (
 from cuprum._pipeline_stage_streams import (
     _create_stage_capture_tasks as _create_stage_capture_tasks,
 )
+from cuprum._pipeline_stream_results import (
+    _cancel_stream_tasks as _cancel_stream_tasks,
+)
+from cuprum._pipeline_stream_results import (
+    _collect_pipe_results as _collect_pipe_results,
+)
+from cuprum._pipeline_stream_results import (
+    _flatten_stream_tasks as _flatten_stream_tasks,
+)
+from cuprum._pipeline_stream_results import (
+    _gather_optional_text_tasks as _gather_optional_text_tasks,
+)
+from cuprum._pipeline_stream_results import (
+    _surface_unexpected_pipe_failures as _surface_unexpected_pipe_failures,
+)
 from cuprum._streams import _close_stream_writer, _pump_stream
 
 if typ.TYPE_CHECKING:
@@ -312,65 +327,3 @@ def _create_pipe_tasks(
         )
         for idx in range(len(processes) - 1)
     ]
-
-
-def _flatten_stream_tasks(
-    stderr_tasks: list[asyncio.Task[str | None] | None],
-    stdout_task: asyncio.Task[str | None] | None,
-) -> list[asyncio.Task[str | None]]:
-    """Collect all running stream consumer tasks for cancellation cleanup."""
-    tasks = [task for task in stderr_tasks if task is not None]
-    if stdout_task is not None:
-        tasks.append(stdout_task)
-    return tasks
-
-
-async def _cancel_stream_tasks(
-    stderr_tasks: list[asyncio.Task[str | None] | None],
-    stdout_task: asyncio.Task[str | None] | None,
-) -> None:
-    """Cancel stream consumer tasks and await their completion."""
-    tasks = _flatten_stream_tasks(stderr_tasks, stdout_task)
-    for task in tasks:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
-
-
-async def _gather_optional_text_tasks(
-    tasks: list[asyncio.Task[str | None] | None],
-) -> tuple[str | None, ...]:
-    """Await optional capture tasks, returning a tuple aligned with inputs."""
-    return tuple(
-        await asyncio.gather(
-            *(
-                task if task is not None else asyncio.sleep(0, result=None)
-                for task in tasks
-            ),
-        ),
-    )
-
-
-async def _collect_pipe_results(
-    pipe_tasks: list[asyncio.Task[None]],
-) -> list[object]:
-    """Collect pipe task results, capturing exceptions rather than raising them.
-
-    Uses return_exceptions=True to gather all results including any exceptions
-    that occurred during pipe streaming between pipeline stages.
-    """
-    return list(await asyncio.gather(*pipe_tasks, return_exceptions=True))
-
-
-def _surface_unexpected_pipe_failures(pipe_results: list[object]) -> None:
-    """Raise non-BrokenPipe exceptions from pipe results.
-
-    BrokenPipeError and ConnectionResetError are expected when downstream
-    processes terminate early (e.g., head) and should not fail the pipeline.
-    Other exceptions indicate genuine failures and must be surfaced.
-    """
-    for result in pipe_results:
-        if isinstance(result, Exception) and not isinstance(
-            result,
-            (BrokenPipeError, ConnectionResetError),
-        ):
-            raise result

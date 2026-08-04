@@ -55,14 +55,6 @@ def _validate_bool(value: object, *, name: str) -> bool:
     return value
 
 
-def _validate_non_empty_string(value: object, *, name: str) -> str:
-    """Validate non-empty string values."""
-    if not isinstance(value, str) or not value.strip():
-        msg = f"{name} must be a non-empty string"
-        raise ValueError(msg)
-    return value
-
-
 def _validate_path(value: object, *, name: str) -> pth.Path:
     """Validate path-like values and normalise them as ``pathlib.Path``."""
     if isinstance(value, pth.Path):
@@ -109,14 +101,6 @@ def _validate_hyperfine_iterations(*, warmup: object, runs: object) -> None:
     _validate_iteration_count(runs, name="runs", min_value=1)
 
 
-def _validate_scenario_name(value: object) -> str:
-    """Validate that a scenario name is a non-empty string."""
-    if not isinstance(value, str) or not value.strip():
-        msg = "name must be a non-empty string"
-        raise ValueError(msg)
-    return value
-
-
 def _validate_payload_bytes(value: object) -> int:
     """Validate that scenario payload size is a positive integer."""
     payload_bytes = _validate_int(value, name="payload_bytes")
@@ -157,9 +141,7 @@ __all__ = [
     "_validate_int",
     "_validate_iteration_count",
     "_validate_minimum_int",
-    "_validate_non_empty_string",
     "_validate_path",
     "_validate_payload_bytes",
-    "_validate_scenario_name",
     "_validate_stages",
 ]

@@ -12,8 +12,12 @@ import sys
 
 def _validate_positive_int(name: str, value: int) -> None:
     """Validate a positive integer public argument."""
-    if type(value) is not int or value <= 0:
-        msg = f"{name} must be a positive integer, got {value!r}"
+    msg = f"{name} must be a positive integer, got {value!r}"
+    # ``type(value) is not int`` deliberately excludes ``bool`` (a subclass of
+    # ``int``) so ``True``/``False`` are rejected as non-integers.
+    if type(value) is not int:
+        raise TypeError(msg)
+    if value <= 0:
         raise ValueError(msg)
 
 

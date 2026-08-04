@@ -53,6 +53,9 @@ class _CounterStream:
 
     def read(self, size: int) -> bytes:
         """Return exactly ``size`` bytes unless ``size`` is zero."""
+        if size < 0:
+            msg = f"size must be non-negative, got {size}"
+            raise ValueError(msg)
         output = bytearray()
         while len(output) < size:
             if not self.pending:

@@ -67,6 +67,9 @@ def _stringify_arg(value: _ArgValue) -> str:
     example, omit the flag) before invoking ``sh.make``.
     """
     if value is None:
+        # None is disallowed because it is almost always a mistake in CLI argv
+        # construction; callers must represent missing values themselves (for
+        # example, by omitting the flag) before invoking sh.make.
         msg = "None is not a valid argv element for sh.make"
         raise TypeError(msg)
     return str(value)
@@ -349,6 +352,10 @@ def _resolve_pipeline_output(
     >>> _resolve_pipeline_output(None, {})
     RunOutputOptions(capture=True, echo=False)
     """
+    # ``flags`` is typed loosely as a mapping because the type checker cannot
+    # yet propagate ``Unpack[_DeprecatedOutputFlags]`` kwargs; callers keep the
+    # precise ``TypedDict`` surface. Unknown keys are rejected here to preserve
+    # that strict keyword surface.
     unknown = set(flags) - {"capture", "echo"}
     if unknown:
         joined = ", ".join(sorted(unknown))
@@ -357,6 +364,8 @@ def _resolve_pipeline_output(
     if not flags:
         return output or RunOutputOptions()
     if output is not None:
+        # Reject combining the deprecated flat flags with ``output``: the
+        # caller's intent would otherwise be ambiguous.
         msg = "Pass either 'output' or the deprecated 'capture'/'echo' flags, not both"
         raise ValueError(msg)
     warnings.warn(

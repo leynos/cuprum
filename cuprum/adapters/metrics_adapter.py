@@ -357,6 +357,8 @@ class MetricsHook:
         Labels deliberately use only the program and project tag;
         high-cardinality fields (pid, argv, lines) are excluded by design.
         """
+        # Labels deliberately use only the program and project tag;
+        # high-cardinality fields (pid, argv, lines) are excluded by design.
         return {
             "program": str(event.program) or "unknown",
             "project": _project_tag(event) or "unknown",

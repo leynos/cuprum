@@ -7,22 +7,18 @@ import subprocess  # noqa: S404  # behavioural test intentionally invokes CLI pr
 import sys
 import typing as typ
 
-from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+from tests.behaviour._benchmark_ratchet_support import (
+    FixtureBundle,
+    _plan_payload,
+    _prepare_fixture_bundle,
+    _scenario_payload,
+    _write_json,
+)
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
 
 from pytest_bdd import given, scenario, then, when
-
-
-class FixtureBundle(typ.TypedDict):
-    """Typed fixture paths for one ratchet CLI invocation."""
-
-    baseline_plan_path: pth.Path
-    baseline_throughput_path: pth.Path
-    candidate_plan_path: pth.Path
-    candidate_throughput_path: pth.Path
-    report_path: pth.Path
 
 
 class CliResult(typ.TypedDict):
@@ -56,85 +52,6 @@ def test_ratchet_reports_malformed_inputs() -> None:
     """CLI should return the malformed-input exit code for invalid fixtures."""
 
 
-def _scenario_payload(*, name: str, backend: str) -> dict[str, object]:
-    """Create scenario payload."""
-    return {
-        "name": name,
-        "backend": backend,
-        "payload_bytes": 1024,
-        "stages": 2,
-        "with_line_callbacks": False,
-    }
-
-
-def _plan_payload() -> dict[str, object]:
-    """Create plan payload."""
-    return {
-        "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
-        "dry_run": True,
-        "rust_available": True,
-        "worker_iterations": 20,
-        "command": ["hyperfine", "placeholder"],
-        "scenarios": [
-            _scenario_payload(name="python-small-single-nocb", backend="python"),
-            _scenario_payload(name="rust-small-single-nocb", backend="rust"),
-        ],
-    }
-
-
-def _throughput_payload(*, python_mean: float, rust_mean: float) -> dict[str, object]:
-    """Create throughput payload."""
-    return {
-        "results": [
-            {"command": "python-run", "mean": python_mean},
-            {"command": "rust-run", "mean": rust_mean},
-        ],
-    }
-
-
-def _write_json(
-    *,
-    path: pth.Path,
-    payload: dict[str, object],
-) -> None:
-    """Write JSON payload."""
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-
-def _prepare_fixture_bundle(
-    *,
-    tmp_path: pth.Path,
-    candidate_rust_mean: float,
-) -> FixtureBundle:
-    """Create ratchet fixture bundle."""
-    baseline_plan_path = tmp_path / "baseline-plan.json"
-    baseline_throughput_path = tmp_path / "baseline-throughput.json"
-    candidate_plan_path = tmp_path / "candidate-plan.json"
-    candidate_throughput_path = tmp_path / "candidate-throughput.json"
-    report_path = tmp_path / "ratchet-report.json"
-
-    # The candidate run doubles the Python mean (a uniformly slower runner);
-    # only the Rust/Python ratio relative to the baseline's 1.0 should count.
-    _write_json(path=baseline_plan_path, payload=_plan_payload())
-    _write_json(
-        path=baseline_throughput_path,
-        payload=_throughput_payload(python_mean=1.0, rust_mean=1.0),
-    )
-    _write_json(path=candidate_plan_path, payload=_plan_payload())
-    _write_json(
-        path=candidate_throughput_path,
-        payload=_throughput_payload(python_mean=2.0, rust_mean=candidate_rust_mean),
-    )
-
-    return {
-        "baseline_plan_path": baseline_plan_path,
-        "baseline_throughput_path": baseline_throughput_path,
-        "candidate_plan_path": candidate_plan_path,
-        "candidate_throughput_path": candidate_throughput_path,
-        "report_path": report_path,
-    }
-
-
 @given(
     "benchmark comparison fixtures where candidate stays within threshold",
     target_fixture="ratchet_fixture_bundle",
@@ -165,17 +82,14 @@ def given_malformed_fixtures(tmp_path: pth.Path) -> FixtureBundle:
     )
     _write_json(
         path=fixture_bundle["candidate_plan_path"],
-        payload={
-            "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
-            "dry_run": True,
-            "rust_available": True,
-            "worker_iterations": 20,
-            "command": ["hyperfine", "placeholder"],
-            "scenarios": [
+        payload=_plan_payload(
+            scenarios=[
                 _scenario_payload(name="python-small-single-nocb", backend="python"),
+                # ``native`` is not a valid backend: this is the malformation
+                # that drives the CLI's malformed-input exit path.
                 _scenario_payload(name="rust-small-single-nocb", backend="native"),
             ],
-        },
+        ),
     )
     return fixture_bundle
 

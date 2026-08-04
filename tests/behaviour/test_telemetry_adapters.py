@@ -23,11 +23,12 @@ from cuprum import sh
 from cuprum.adapters.logging_adapter import structured_logging_hook
 from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
 from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
-from cuprum.context import ScopeConfig, scoped
+from tests.behaviour._telemetry_adapter_support import (
+    HookFixture,
+    PythonCommandFixture,
+    _run_command_with_hook,
+)
 from tests.helpers.catalogue import python_catalogue
-
-if typ.TYPE_CHECKING:
-    from cuprum.events import ExecHook
 
 _STDOUT_STDERR_SCRIPT = "\n".join(
     (
@@ -152,57 +153,11 @@ def given_tracer(behaviour_state: dict[str, object]) -> dict[str, object]:
     return {"tracer": tracer, "hook": hook}
 
 
-def _execute_python_command(
-    behaviour_state: dict[str, object],
-    python_cmd_fixture: dict[str, object],
-    hook: ExecHook,
-    script: str,
-) -> None:
-    """Execute a Python command with the given hook and store the result.
-
-    This helper extracts catalogue and builder from python_cmd_fixture, builds
-    a command with the given script, runs it inside scoped/observe contexts,
-    and stores the result in behaviour_state.
-    """
-    catalogue = typ.cast("typ.Any", python_cmd_fixture["catalogue"])
-    builder = typ.cast("typ.Any", python_cmd_fixture["builder"])
-    cmd = builder("-c", script)
-
-    with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
-        result = cmd.run_sync()
-
-    behaviour_state["result"] = result
-
-
-def _run_command_with_hook(
-    behaviour_state: dict[str, object],
-    python_cmd_fixture: dict[str, object],
-    hook_fixture: dict[str, object],
-    script: str,
-) -> None:
-    """Run a Python command with a hook extracted from a fixture.
-
-    Parameters
-    ----------
-    behaviour_state:
-        Shared mutable state dictionary.
-    python_cmd_fixture:
-        Python command builder fixture.
-    hook_fixture:
-        Fixture containing a hook under the "hook" key.
-    script:
-        Python script to execute with -c flag.
-
-    """
-    hook = typ.cast("ExecHook", hook_fixture["hook"])
-    _execute_python_command(behaviour_state, python_cmd_fixture, hook, script)
-
-
 @when("I run a command that writes to stdout and stderr")
 def when_run_stdout_stderr(
     behaviour_state: dict[str, object],
-    python_cmd_fixture: dict[str, object],
-    logging_hook_fixture: dict[str, object],
+    python_cmd_fixture: PythonCommandFixture,
+    logging_hook_fixture: HookFixture,
 ) -> None:
     """Run a command that writes to both streams."""
     _run_command_with_hook(
@@ -213,8 +168,8 @@ def when_run_stdout_stderr(
 @when("I run a command that succeeds")
 def when_run_success(
     behaviour_state: dict[str, object],
-    python_cmd_fixture: dict[str, object],
-    metrics_fixture: dict[str, object],
+    python_cmd_fixture: PythonCommandFixture,
+    metrics_fixture: HookFixture,
 ) -> None:
     """Run a command that exits with code 0."""
     _run_command_with_hook(
@@ -225,8 +180,8 @@ def when_run_success(
 @when("I run a command that fails with metrics tracking")
 def when_run_failure_with_metrics(
     behaviour_state: dict[str, object],
-    python_cmd_fixture: dict[str, object],
-    metrics_fixture: dict[str, object],
+    python_cmd_fixture: PythonCommandFixture,
+    metrics_fixture: HookFixture,
 ) -> None:
     """Run a failing command with metrics hook."""
     _run_command_with_hook(
@@ -237,8 +192,8 @@ def when_run_failure_with_metrics(
 @when("I run a command that fails with tracing")
 def when_run_failure_with_tracer(
     behaviour_state: dict[str, object],
-    python_cmd_fixture: dict[str, object],
-    tracer_fixture: dict[str, object],
+    python_cmd_fixture: PythonCommandFixture,
+    tracer_fixture: HookFixture,
 ) -> None:
     """Run a failing command with tracer hook."""
     _run_command_with_hook(
@@ -249,8 +204,8 @@ def when_run_failure_with_tracer(
 @when("I run a command that writes output")
 def when_run_with_output(
     behaviour_state: dict[str, object],
-    python_cmd_fixture: dict[str, object],
-    tracer_fixture: dict[str, object],
+    python_cmd_fixture: PythonCommandFixture,
+    tracer_fixture: HookFixture,
 ) -> None:
     """Run a command with output for tracing."""
     _run_command_with_hook(
