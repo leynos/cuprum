@@ -1288,15 +1288,48 @@ What actually executes is narrower than what is written, so do not read a
 green run as coverage of both arms:
 
 - **POSIX** — the cases run natively on Linux whenever the extension is built,
-  so a local `make test` preceded by `maturin develop` executes them. Without
-  that build the `rust_streams` fixture skips them rather than failing, which
-  is what CI does today. Making CI build the extension and fail loudly without
-  it is `#258`, in flight as pull request `#269`.
+  so a local `make develop` followed by `make test-extension` executes them.
+  `cuprum/unittests/test_rust_errno.py` is one of the `EXTENSION_TEST_TARGETS`,
+  so CI's `extension-tests` job runs them with
+  `CUPRUM_REQUIRE_RUST_EXTENSION=1`: a build that never produced the extension
+  fails rather than skipping quietly (`#258`).
 - **Windows** — the `#[cfg(windows)]` arm is compiled natively on
   `windows-2022` by the wheel build (`.github/workflows/build-wheels.yml`,
-  reached from `ci.yml`), which catches a Windows arm that does not build or
-  type-check. No job runs the Python suite on Windows, so nothing executes the
-  `winerror` assertions; that gap is tracked by `#277`.
+  reached unconditionally from `ci.yml`, so it runs on every pull request),
+  which catches a Windows arm that does not build or type-check. No job runs
+  the Python suite on Windows, so nothing executes the `winerror` assertions;
+  that gap is tracked by `#277`.
+
+That wheel build is a plain `maturin build`, so it compiles the Windows arm
+without `-D warnings`. It therefore catches a Windows arm that fails to
+compile, and only that. Warn-level regressions pass it — and the cheapest way
+to introduce one is to gate a helper on `#[cfg(unix)]` incorrectly, which makes
+it dead code on Windows rather than a compile error. `make lint-windows` closes
+that gap by running Clippy for the Windows target with the same `-D warnings`
+posture the host gate uses:
+
+```bash
+rustup target add x86_64-pc-windows-msvc
+make lint-windows
+```
+
+No Windows machine is needed: Clippy type-checks without linking, so the target
+standard library is sufficient. `PYO3_CROSS_PYTHON_VERSION` is required and the
+Makefile sets it, because PyO3 cannot probe an interpreter for the target
+platform and so the ABI version has to be stated explicitly; keep the
+`WINDOWS_PYTHON_VERSION` variable in step with the `python-version` the Windows
+wheel job builds against.
+
+`make lint-windows` is deliberately not part of `make lint`. It hard-fails when
+the target standard library is absent rather than skipping, and requiring every
+contributor to install a second standard library before any lint run is a poor
+trade for a check this narrow. CI's `lint-test` job installs the target and
+runs it on every pull request, which is where it has to hold.
+
+This is the only check in the repository that reads the `#[cfg(windows)]`
+branches with warnings denied. A trybuild case cannot substitute for it:
+trybuild compiles its fixtures for the host target, so on a Linux runner it
+sees the `#[cfg(unix)]` arm and never the Windows one.
 
 ## Rust FD-borrow ownership contract
 
@@ -1581,26 +1614,161 @@ boundary, invalid UTF-8, and an incomplete trailing sequence — and each one
 calls `rust_consume_stream` and compares the result against Python's own
 replacement decoding, `payload.decode("utf-8", errors="replace")`.
 
-Normal CI does not execute them. The test jobs reach the suite through
-`make build`, which is only `uv sync --group dev`; nothing builds
-`cuprum._rust_backend_native`, so those cases are skipped rather than run.
-Issue `#258` tracks building the extension in the test jobs and adding a
-fail-loud guard so the skip cannot pass unnoticed. Issue `#265` — `OSError`
-crossing the boundary lost its `errno`, failing one extension-enabled test —
-is resolved; see [Preserving the operating-system error
+Those cases do now execute in CI — see [Building the extension for
+tests](#building-the-extension-for-tests) — but they did not until `#258` was
+resolved, because `make build` only runs `uv sync --group dev` and never
+compiled `cuprum._rust_backend_native`. Running them also surfaced `#265`,
+where an `OSError` crossing the boundary lost its `errno`; that is fixed too,
+under [Preserving the operating-system error
 code](#preserving-the-operating-system-error-code).
 
-So the `consume_stream_files` snapshots and properties are the coverage of the
-read-and-decode loop that actually executes on every commit. They do not
-replace executed Python/Rust boundary coverage, and are not a reason to leave
-`#258` unresolved: the two verify different things, one the loop and the other
-the exported surface.
+The two layers verify different things and neither replaces the other: the
+snapshots and properties cover the `consume_stream_files` read-and-decode loop,
+while `TestRustConsumeStream` covers the exported surface a caller actually
+touches. Keep both when changing either.
 
 Those snapshots are written inline with `insta::assert_snapshot!(value, @"...")`
 rather than as separate `.snap` files, which keeps the expected text beside the
 case that produces it and leaves no snapshot files to review or prune. Accept a
 deliberate change by editing the inline literal; `cargo insta` is not required
 for the inline form.
+
+### Building the extension for tests
+
+Several test modules exercise the compiled PyO3 extension and are gated on it
+being importable. `make build` does not build it — that target only syncs
+dependencies — so build it explicitly:
+
+```bash
+make develop
+```
+
+That runs `maturin develop` against `rust/cuprum-rust/Cargo.toml` in the
+project virtual environment, preceded by `ensurepip` because maturin resolves
+its own script through the interpreter's `sysconfig` scheme, which needs pip
+present in the environment. CI's `extension-tests` job runs the same target, so
+a local run and a CI run build the extension identically. The Makefile keeps
+only a pointer to this section rather than repeating the reasoning.
+
+Every CI job that installs the extension and then runs against it goes through
+this target — `extension-tests` and `benchmark-ratchet`, and no others. The
+wheel build is not one of them: `.github/workflows/build-wheels.yml` runs
+`maturin build` to produce a distributable artefact rather than installing it
+into a virtual environment, so it neither uses nor needs this target.
+
+The `benchmark-ratchet` job needs an optimized build, and that is the only
+thing it needs differently, so it passes
+`make develop MATURIN_DEVELOP_FLAGS=--release` rather than restating the
+three-step sequence. Keep it that way: a second copy of the sequence is how
+the two drift, and the ratchet then measures a build nobody maintains.
+`MATURIN_DEVELOP_FLAGS` is empty by default, because a debug build is what
+contributors and the `extension-tests` job want.
+
+Without it these modules skip rather than fail, which is the right default
+locally — most changes do not need the native path rebuilt — and the wrong one
+in CI, where a job that never built the extension reports a green run
+indistinguishable from one that exercised the whole boundary. `make
+test-extension` sets `CUPRUM_REQUIRE_RUST_EXTENSION=1` to make that silence
+fatal:
+
+```bash
+make develop
+make test-extension
+```
+
+Run that rather than `CUPRUM_REQUIRE_RUST_EXTENSION=1 make test`. Once the
+extension is installed the full suite aborts the interpreter — see the `#124`
+constraint below — so `make test-extension` runs only the gated modules. Their
+list lives in one place, the Makefile's `EXTENSION_TEST_TARGETS`, which the CI
+job consumes too, so the two cannot drift apart.
+
+None of that wiring is exercised by ordinary tests — drop the guard variable
+and the suite still passes — so two contract modules read it back, split by
+what they read rather than by what they assert.
+
+`test_extension_build_contract.py` covers the Makefile: that the recipe sets
+the guard variable, and what `EXTENSION_TEST_TARGETS` must contain. It reads
+the Makefile with `make --dry-run` rather than by parsing the file, because
+the expanded recipe is the command line CI actually runs. It scrubs the
+Makefile's `?=` variables from that nested `make`'s environment first. `make`
+exports each of its command-line overrides under its own name, and a `?=`
+assignment yields to a name already in the environment, so without the scrub
+a run of `make test EXTENSION_TEST_TARGETS=…` would have the contract report
+on whoever invoked it rather than on the repository — passing or failing
+according to the command line rather than the wiring. Stripping `MAKEFLAGS`
+alone does not prevent that, because the override travels under its own name
+as well.
+
+`test_extension_ci_contract.py` covers `ci.yml`: that the `extension-tests`
+job runs `make develop` before `make test-extension`, that `benchmark-ratchet`
+builds through the same target with `--release`, and that no job reintroduces
+a second copy of the build sequence. It declares the workflow shapes it reads
+— jobs, steps, and a step's `run:` — so that a misspelled key is a type error
+rather than a `None` that quietly satisfies the assertion above it.
+
+`EXTENSION_TEST_TARGETS` gets two separate checks, because neither implies the
+other:
+
+- A scan derives the extension-gated modules from the suite itself — those
+  requesting the root `rust_streams` fixture, skipping with the shared "Rust
+  extension is not installed" reason, or naming `cuprum._rust_backend_native`
+  — and requires each one to be a declared target. This is the check that
+  notices a *new* gated module being forgotten, which a hard-coded copy of
+  today's list never would. The scan is textual and deliberately narrow, so it
+  is a lower bound: a module gating through some other idiom goes unnoticed. A
+  companion check fails when a signal stops matching anything, so a renamed
+  fixture cannot quietly empty the scan instead of failing it.
+- Modules that do not gate at all, but belong in the job anyway, are named
+  explicitly alongside the reason. `test_extension_requirement_guard.py` is
+  one: running it inside the guarded job is what proves the guard stays silent
+  when the extension is present, rather than only that it fires when the
+  extension is absent.
+
+So add a newly gated module to `EXTENSION_TEST_TARGETS`. If it is boundary
+coverage that never skips, add it to the companion list with its reason
+instead.
+
+Running `make test-extension` without having built the extension is safe: the
+guard fails the run with a message naming `make develop`, which is the whole
+point of it.
+
+The check runs once per session in `conftest.py`, so it covers every gated
+module regardless of how each one gates — fixture, module-level guard, or
+availability probe — and a new module cannot opt out by skipping differently.
+The decision itself lives in `tests/helpers/extension_requirement.py` rather
+than in the root `conftest.py`, because a root conftest is shadowed by the
+per-package one and so cannot be imported by name from a test module;
+`test_extension_requirement_guard.py` covers it, and reaches the hook through
+the plugin manager to check that it actually raises.
+
+CI runs these in a dedicated `extension-tests` job rather than folding the
+extension into `typecheck-test`. That is a deliberate constraint, not tidiness:
+with the extension present, `test_pipeline.py` trips the file-descriptor close
+race tracked by issue `#124` (roadmap 8.1.1) and aborts the interpreter part
+way through the suite, reproducibly. Until that is fixed, the extension must
+not be installed for the general test run. Widening the job is the natural
+follow-up once `#124` lands.
+
+Table 1: modules gated on the compiled extension
+
+| Module | Covers |
+| --- | --- |
+| `test_rust_streams.py` | pump and consume entry points, including the four `TestRustConsumeStream` replacement scenarios that are the end-to-end regression coverage for `#105` |
+| `test_rust_streams_boundary_property.py` | randomized payloads across the boundary |
+| `test_rust_extension.py` | extension availability and module surface |
+| `test_rust_splice.py` | the Linux `splice` fast path |
+| `test_rust_errno.py` | `OSError.errno` and subclass selection across the boundary |
+| `test_backend.py` | the extension-dependent backend-selection cases |
+| `test_extension_requirement_guard.py` | the fail-loud guard itself |
+| `tests/behaviour/test_rust_streams_behaviour.py` | the consumer-facing pump and consume scenarios |
+| `tests/behaviour/test_rust_extension_behaviour.py` | availability agreeing with the installed native module |
+| `tests/behaviour/test_stream_backend_pipeline.py` | pipelines dispatched through the Rust backend |
+
+The behavioural modules are listed for the same reason as the unit ones: their
+extension-dependent scenarios skip in the ordinary test jobs, so they were
+never boundary coverage there either. Confirm with `pytest -rs` against a
+virtual environment that has no extension — four scenarios report `Rust
+extension is not installed`.
 
 Kani harnesses are reserved for bounded verification of small, high-value state
 spaces. Gate Kani-only modules and helpers with `#[cfg(kani)]`, and share pure

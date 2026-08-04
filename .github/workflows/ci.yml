@@ -78,6 +78,16 @@ jobs:
       - name: Run lint
         run: make lint
 
+      # The Windows wheel build compiles this arm but without `-D warnings`,
+      # so it catches a Windows arm that fails to build and nothing else. This
+      # step is what holds the `#[cfg(windows)]` and `#[cfg(unix)]` branches to
+      # the same warnings posture as the host.
+      - name: Install the Windows target standard library
+        run: rustup target add x86_64-pc-windows-msvc
+
+      - name: Lint the Windows cfg branches
+        run: make lint-windows
+
   typecheck-test:
     name: Typecheck and test (Python ${{ matrix.python-label }})
     continue-on-error: ${{ matrix.experimental }}
@@ -140,6 +150,65 @@ jobs:
 
       - name: Run tests
         run: make test
+
+  extension-tests:
+    name: Extension-gated tests (Python/Rust boundary)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          # This job compiles and runs repository code, so the checkout token
+          # must not stay in .git/config where that code could reach it.
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+        with:
+          enable-cache: true
+
+      # `make develop` compiles the extension, so this job needs the same
+      # pinned toolchain the other Rust-touching jobs use rather than whatever
+      # the runner image happens to ship.
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal
+          rustup default 1.85.0
+
+      - name: Prepare Cargo dependencies
+        run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml
+
+      # `make build` only syncs dependencies; `make develop` compiles the PyO3
+      # extension into the same virtual environment. It is the target
+      # contributors run locally, so this job cannot drift from local setup.
+      - name: Build the native extension
+        run: make develop
+
+      # These modules are gated on `cuprum._rust_backend_native` being
+      # importable and skip silently without it, so before this job existed a
+      # green run was indistinguishable from one that never exercised the
+      # Python/Rust boundary. `CUPRUM_REQUIRE_RUST_EXTENSION` turns a missing
+      # extension into a failure, so the gate cannot close again unnoticed.
+      #
+      # The behavioural modules are covered too: without an extension the
+      # `rust_streams` fixture skips their consumer-facing scenarios, the
+      # dispatcher scenarios skip on `requires_rust_backend`, and
+      # test_rust_extension_behaviour returns before comparing against the
+      # installed native module — so they were never boundary coverage in the
+      # ordinary test jobs either.
+      #
+      # The module list itself lives in the Makefile's EXTENSION_TEST_TARGETS,
+      # so this job and the documented local command cannot drift apart. It is
+      # deliberately not the whole suite: with the extension present,
+      # `test_pipeline.py` trips the FD close race tracked by issue #124
+      # (roadmap 8.1.1) and aborts the interpreter.
+      - name: Run extension-gated tests
+        run: make test-extension
 
   coverage:
     # Pull requests only. Pushes to main are handled by coverage-main.yml,
@@ -287,12 +356,15 @@ jobs:
             local prefix="$2"
             pushd "${workspace}" >/dev/null
 
-            make build
-            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
-              -m ensurepip --upgrade
-            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run maturin develop \
-              --release \
-              --manifest-path rust/cuprum-rust/Cargo.toml
+            # `make develop` is the one definition of the extension build:
+            # `make build`, then `ensurepip --upgrade`, then `maturin
+            # develop`. The ratchet must measure an optimized build, and that
+            # is the only thing it needs differently, so it passes the flag
+            # instead of restating the sequence. This runs after `pushd
+            # "${workspace}"`, so the target's relative UV_CACHE_DIR and
+            # UV_TOOL_DIR resolve against the same directory the inline
+            # commands used.
+            make develop MATURIN_DEVELOP_FLAGS=--release
 
             UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
               benchmarks/pipeline_throughput.py \

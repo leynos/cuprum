@@ -16,6 +16,21 @@ TEST_FLAGS ?= $(CARGO_FLAGS) --jobs 1
 TEST_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
 WHITAKER_CARGO_FLAGS ?= $(CARGO_FLAGS) --jobs 1
 WHITAKER_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
+# Extra flags for the `maturin develop` invocation in the `develop` target.
+# Empty by default: a debug build is what contributors and the extension-tests
+# job want. The benchmark ratchet needs an optimized build, and an optimized
+# build is the *only* thing it needs differently, so it passes `--release`
+# here rather than restating the three-step build sequence inline.
+MATURIN_DEVELOP_FLAGS ?=
+# The Windows arm of the extension's `cfg` branches. `make lint` only ever sees
+# the host's arm, and the Windows wheel build compiles without `-D warnings`,
+# so warn-level regressions behind `#[cfg(windows)]` — dead code left by a
+# `#[cfg(unix)]` gate, most of all — would reach main unremarked.
+WINDOWS_TARGET ?= x86_64-pc-windows-msvc
+# PyO3 cannot probe an interpreter for the target platform, so the ABI version
+# must be stated. Keep it in step with the `python-version` the Windows job in
+# .github/workflows/build-wheels.yml builds against.
+WINDOWS_PYTHON_VERSION ?= 3.13
 PYTEST_CARGO_BUILD_JOBS ?= 1
 PYTEST_RUSTFLAGS ?= -C codegen-units=1
 TEST_CARGO_BUILD_JOBS ?= 1
@@ -26,6 +41,20 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
   tests/behaviour/test_[s-z]*.py
+# The modules gated on the compiled extension. Deliberately not the whole
+# suite: with the extension installed, test_pipeline.py trips the descriptor
+# close race in issue #124 and aborts the interpreter. One definition here,
+# consumed by both the extension-tests CI job and the documented local command.
+EXTENSION_TEST_TARGETS ?= cuprum/unittests/test_rust_streams.py \
+  cuprum/unittests/test_rust_streams_boundary_property.py \
+  cuprum/unittests/test_rust_extension.py \
+  cuprum/unittests/test_rust_splice.py \
+  cuprum/unittests/test_rust_errno.py \
+  cuprum/unittests/test_backend.py \
+  cuprum/unittests/test_extension_requirement_guard.py \
+  tests/behaviour/test_rust_streams_behaviour.py \
+  tests/behaviour/test_rust_extension_behaviour.py \
+  tests/behaviour/test_stream_backend_pipeline.py
 shell_quote = '$(subst ','"'"',$(1))'
 TYPOS_VERSION ?= 1.48.0
 TYPOS := uv tool run typos@$(TYPOS_VERSION)
@@ -47,8 +76,9 @@ PYLINT_VERSION ?= 4.0.5
 PYLINT = $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) \
   --from '$(PYLINT_PYPY_SHIM)' --with 'pylint==$(PYLINT_VERSION)' pylint-pypy
 
-.PHONY: help all clean build build-release lint fmt check-fmt \
+.PHONY: help all clean build build-release lint lint-windows fmt check-fmt \
         markdownlint spelling spelling-helper-test nixie test typecheck \
+        test-extension develop \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
 
@@ -61,6 +91,12 @@ all: build check-fmt lint typecheck test
 
 build: uv .venv ## Build virtual-env and install deps
 	$(UV_RUN_ENV) uv sync --group dev
+
+# Why this exists and why `ensurepip` comes first: see "Building the
+# extension for tests" in docs/developers-guide.md.
+develop: build ## Build the native extension into the dev virtual-env
+	$(UV_RUN_ENV) uv run python -m ensurepip --upgrade
+	$(UV_RUN_ENV) uv run maturin develop $(MATURIN_DEVELOP_FLAGS) --manifest-path $(RUST_DIR)/cuprum-rust/Cargo.toml
 
 build-release: ## Build artefacts (sdist & wheel)
 	python -m build --sdist --wheel
@@ -117,6 +153,15 @@ lint: ruff uv ## Run linters (Ruff, pylint, Clippy, Whitaker)
 	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- $(WHITAKER_CARGO_FLAGS)
 	+$(MAKE) spelling
 
+lint-windows: ## Lint the Rust extension's Windows cfg branches (cross-target)
+	@if ! rustup target list --installed | grep -qx '$(WINDOWS_TARGET)'; then \
+	  echo "The $(WINDOWS_TARGET) standard library is required." >&2; \
+	  echo "Install it with: rustup target add $(WINDOWS_TARGET)" >&2; \
+	  exit 1; \
+	fi
+	cd $(RUST_DIR) && PYO3_CROSS_PYTHON_VERSION=$(WINDOWS_PYTHON_VERSION) \
+	  $(CARGO) clippy --target $(WINDOWS_TARGET) $(CLIPPY_FLAGS)
+
 typecheck: build ## Run typechecking
 	$(UV_RUN_ENV) uv sync --group dev
 	$(UV_RUN_ENV) uv run ty --version
@@ -153,6 +198,11 @@ test: build uv $(VENV_TOOLS) ## Run tests
 	  echo "cargo-nextest not found; falling back to cargo test." >&2; \
 	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(TEST_RUSTFLAGS)" $(CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
 	fi
+
+# Run `make develop` first. Without the extension the guard fails the run with
+# a message naming that command, which is the intended diagnostic.
+test-extension: build uv $(VENV_TOOLS) ## Run the extension-gated tests, requiring the extension
+	CUPRUM_REQUIRE_RUST_EXTENSION=1 $(PYTEST) -v $(EXTENSION_TEST_TARGETS)
 
 benchmark-micro: build uv ## Run pytest-benchmark microbenchmarks
 	mkdir -p dist/benchmarks
