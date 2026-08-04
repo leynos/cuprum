@@ -66,9 +66,8 @@ def fail_engage(**_kwargs: object) -> object:
     msg = "blocking mode is unavailable for this descriptor pair"
     raise OSError(msg)
 
-
 @contextlib.contextmanager
-def _owned_fds() -> cabc.Iterator[tuple[int, int]]:
+def owned_fds() -> cabc.Iterator[tuple[int, int]]:
     """Yield a private pipe's descriptors, closing both on exit.
 
     The pump seams are doubled out in every path below, but only by
@@ -88,8 +87,6 @@ def _owned_fds() -> cabc.Iterator[tuple[int, int]]:
             # already have taken one of these.
             with contextlib.suppress(OSError):
                 os.close(fd)
-
-
 def allow_pause(monkeypatch: pytest.MonkeyPatch, *, may_hand_off: bool) -> None:
     """Force the reader-pause seam to the given hand-off verdict."""
     monkeypatch.setattr(
@@ -121,7 +118,7 @@ def decline_on_blocking_failure(monkeypatch: pytest.MonkeyPatch) -> None:
 def run_raw_fd_pump() -> bool:
     """Drive ``_pump_over_raw_fds`` over a pipe this helper owns."""
     reader = typ.cast("asyncio.StreamReader", object())
-    with _owned_fds() as (reader_fd, writer_fd):
+    with owned_fds() as (reader_fd, writer_fd):
         return asyncio.run(
             _pipeline_streams._pump_over_raw_fds(
                 reader=reader,
@@ -171,7 +168,7 @@ async def cancel_mid_transfer(
     release: threading.Event,
 ) -> None:
     """Start the pump, cancel it mid-transfer, then release the worker."""
-    with _owned_fds() as (reader_fd, writer_fd):
+    with owned_fds() as (reader_fd, writer_fd):
         await _drive_cancelled_pump(
             worker_started,
             release,

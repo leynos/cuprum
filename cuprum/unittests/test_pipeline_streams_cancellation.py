@@ -10,6 +10,7 @@ consumed rather than left to resurface later.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gc
 import logging
 import os
@@ -86,8 +87,10 @@ async def _cancel_mid_transfer(
         await asyncio.to_thread(worker_finished.wait, 5.0)
         await asyncio.sleep(0)
     finally:
-        os.close(reader_fd)
-        os.close(writer_fd)
+        with contextlib.suppress(OSError):
+            os.close(reader_fd)
+        with contextlib.suppress(OSError):
+            os.close(writer_fd)
 
 
 @pytest.mark.parametrize(
