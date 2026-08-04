@@ -21,14 +21,28 @@ if typ.TYPE_CHECKING:
 
 
 class PythonCommandFixture(typ.TypedDict):
-    """Typed catalogue and command builder supplied by the BDD fixture."""
+    """Typed catalogue and command builder supplied by the BDD fixture.
+
+    Attributes
+    ----------
+    catalogue : ProgramCatalogue
+        Catalogue whose allowlist authorizes the Python command.
+    builder : cabc.Callable[..., SafeCmd]
+        Callable that constructs the allowlisted Python command.
+    """
 
     catalogue: ProgramCatalogue
     builder: cabc.Callable[..., SafeCmd]
 
 
 class HookFixture(typ.TypedDict):
-    """Typed execution hook supplied by an adapter BDD fixture."""
+    """Typed execution hook supplied by an adapter BDD fixture.
+
+    Attributes
+    ----------
+    hook : ExecHook
+        Execution hook installed while the fixture command runs.
+    """
 
     hook: ExecHook
 

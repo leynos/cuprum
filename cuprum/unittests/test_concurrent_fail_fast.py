@@ -25,6 +25,7 @@ from cuprum.concurrent import (
     ConcurrentResult,
     run_concurrent_sync,
 )
+from cuprum.unittests import strategies as cuprum_st
 from tests.helpers.catalogue import python_catalogue
 
 
@@ -171,6 +172,7 @@ class TestFailFastExecution:
         )
 
     @staticmethod
+    @cuprum_st.PROPERTY_SETTINGS
     @given(
         items=st.lists(
             st.one_of(st.none(), st.integers(min_value=0, max_value=5)),

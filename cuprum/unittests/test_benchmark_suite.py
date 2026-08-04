@@ -147,8 +147,12 @@ def test_pipeline_benchmark_config_rejects_invalid_executables(
         "runs": 1,
         field: value,
     }
+    # The kwargs intentionally mix per-field overrides so one table exercises
+    # both the TypeError and ValueError validation branches.
     with pytest.raises(error_type, match=f"{field} must be a non-empty string"):
-        PipelineBenchmarkConfig(**kwargs)  # type: ignore[arg-type]
+        PipelineBenchmarkConfig(  # pyright: ignore[reportArgumentType] - deliberate invalid input
+            **kwargs,  # ty: ignore[invalid-argument-type] - exercise runtime validation
+        )
 
 
 @pytest.mark.parametrize(
