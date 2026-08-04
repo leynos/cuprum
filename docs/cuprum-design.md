@@ -777,10 +777,11 @@ Internally, command execution can be described in terms of events:
   operation and the raised error's type;
 - `exit` – process finished, with exit code and duration;
 - `pipeline_fail_fast` – a pipeline coordinator decision, not a lifecycle
-  phase: the stage named by `stage_index` was the first to fail and the
-  surviving stages are about to be terminated. Emitted at most once per
-  pipeline, before termination begins, on the failing stage's `exec_id`; the
-  stage's own `exit` event still follows.
+  phase: the stage named by `stage_index` was the first to fail and every other
+  still-running stage — upstream producers and downstream consumers alike — is
+  about to be terminated. Emitted at most once per pipeline, before termination
+  begins, on the failing stage's `exec_id`; the stage's own `exit` event still
+  follows.
 
 These eight phases are the whole of `ExecPhase`; there is no other value a
 hook can receive.
@@ -1000,7 +1001,8 @@ implemented with the following decisions:
   tagged with a stage index and stage count.
 - **Fail-fast decision:** a pipeline additionally emits one
   `pipeline_fail_fast` event when a non-final stage is the first to fail,
-  published before the surviving stages are terminated and carrying that stage's
+  published before every other still-running stage — upstream producers and
+  downstream consumers alike — is terminated, and carrying that stage's
   `exec_id`, so it joins the same span and lifecycle events. Its `stage_index`
   and `stage_count` are typed fields rather than tags, because caller-supplied
   tags are merged last and may legitimately shadow the `pipeline_stage_index`
@@ -1326,9 +1328,12 @@ The token is the existing per-stage `ExecId` the observe hooks already publish,
 so a fail-fast record joins to that stage's span and lifecycle events without a
 new identifier. Cuprum has no pipeline-level correlation id, and fail-fast is
 not the place to mint one: that would change the `ExecEvent` contract every
-adapter reads. Nor does fail-fast emit a metric or a trace event, because the
-library emits neither on its own — both would require a new observability
-surface rather than a use of an existing one.
+adapter reads. The core wait path itself emits no metric and no span: it
+publishes the structured records and one `pipeline_fail_fast` `ExecEvent`, and
+the adapters project that event onto their own surfaces. `MetricsHook`
+increments `cuprum_pipeline_fail_fast_total`, and `TracingHook` records a
+`cuprum.pipeline_fail_fast` span event on the failing stage's already-open span.
+Both projections are described in section 8.4.
 
 The record payload lives in `cuprum/_pipeline_wait_records.py`, apart from the
 decision that fires it, so the published field contract and the verified

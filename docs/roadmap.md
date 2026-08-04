@@ -68,7 +68,7 @@ Focus: Provide pipeline execution, richer events, and concurrency helpers.
 - [x] 2.1.2. Define and implement failure policy (fail fast, terminate every
   other still-running stage, surface the stage that failed first in completion
   order — ties within one `asyncio.wait` batch broken by ascending stage index)
-  and cover with tests for early, middle, and late stage errors.
+  and cover with tests for early-, middle-, and late-stage errors.
 
 ### 2.2. Structured events and telemetry
 

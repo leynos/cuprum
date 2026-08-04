@@ -276,11 +276,15 @@ Table 2: fields carried by every fail-fast record
 | `cuprum_duration_s`  | that stage's elapsed run time                 |
 | `cuprum_exec_id`     | the stage's execution token                   |
 
-`cuprum_exec_id` is the same per-execution token the `logging`, metrics, and
-tracing adapters publish for that stage, so a fail-fast record can be joined to
-that stage's span and its `start` and `exit` events. It is also what tells two
-pipelines apart when they run concurrently in one process: both report a stage
-0, but never the same token.
+`cuprum_exec_id` is the same per-execution token that stage's log records and
+`ExecEvent`s already carry, so a fail-fast record can be joined to that stage's
+span and its `start` and `exit` events. Correlation by token reaches the log
+and event channels only: the metrics adapter labels
+`cuprum_pipeline_fail_fast_total` with `program` and `project` alone, so a
+counter spike is joined to an individual stage through the matching log record
+or `pipeline_fail_fast` event rather than through a metric label. The token is
+also what tells two pipelines apart when they run concurrently in one process:
+both report a stage 0, but never the same token.
 
 The same decision is also published to any registered observe hook as one
 `pipeline_fail_fast` `ExecEvent`, so a metrics or tracing integration need not
@@ -742,7 +746,8 @@ hooks receive `ExecEvent` values describing:
 - `exit` — subprocess finished (exit code and duration).
 - `pipeline_fail_fast` — a pipeline is being torn down early because a
   non-final stage was the first to fail. Emitted at most once per pipeline,
-  before the surviving stages are terminated, and carrying `stage_index`,
+  before every other still-running stage — upstream producers and downstream
+  consumers alike — is terminated, and carrying `stage_index`,
   `stage_count`, `exit_code`, and `duration_s` for the failing stage. It is a
   decision rather than a lifecycle phase: the failing stage's own `exit` event
   still follows, and no stage's events are skipped or reordered because of it.
@@ -963,8 +968,10 @@ stage index, exit code, command arguments, or paths as labels. `exec_id` is
 unique per execution and would give the series unbounded cardinality; the
 others would multiply series for no aggregate a dashboard needs. Those fields
 remain on the `pipeline_fail_fast` event itself and on the trace span, which is
-where per-incident detail belongs — use `cuprum_exec_id` to join a spike in the
-counter to the individual stage spans behind it.
+where per-incident detail belongs. A counter spike therefore cannot be joined
+to a span through the metric: read the `cuprum_exec_id` off the matching log
+record or `pipeline_fail_fast` event, then use that token to find the
+individual stage spans behind the spike.
 
 To integrate with a real metrics library like `prometheus_client`, implement the
 `MetricsCollector` protocol:
@@ -1044,7 +1051,8 @@ as the `cuprum.pid` attribute for observability. Events emitted by Cuprum
 always carry an `exec_id`, so ordinary usage is unaffected. Only hand-built or
 legacy events that omit `exec_id` are affected: the hook cannot correlate them,
 so it ignores them — a `start` without an `exec_id` creates no span, and
-`stdout`/`stderr`/`pipeline_fail_fast`/`exit` without one are dropped.
+`stdout`/`stderr`/`stdin_error`/`pipeline_fail_fast`/`exit` without one are
+dropped.
 
 A pipeline's `pipeline_fail_fast` event is recorded as a
 `cuprum.pipeline_fail_fast` span event on the failing stage's already-open

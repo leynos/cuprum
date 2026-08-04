@@ -6,9 +6,10 @@
 
 - **Pipeline fail-fast telemetry:** A pipeline now emits one
   `pipeline_fail_fast` `ExecEvent` when a non-final stage is the first to fail,
-  published before the surviving stages are terminated and carrying that
-  stage's existing `exec_id` alongside `stage_index`, `stage_count`,
-  `exit_code`, and `duration_s`. `MetricsHook` counts it as
+  published before every other still-running stage — upstream producers and
+  downstream consumers alike — is terminated, and carrying that stage's
+  existing `exec_id` alongside `stage_index`, `stage_count`, `exit_code`, and
+  `duration_s`. `MetricsHook` counts it as
   `cuprum_pipeline_fail_fast_total`, labelled only by `program` and `project`;
   `TracingHook` records it as a `cuprum.pipeline_fail_fast` span event on the
   failing stage's open span; the structured logging adapter renders it at

@@ -20,7 +20,8 @@ if typ.TYPE_CHECKING:
 # ``plan`` … ``stdin_error`` describe one command's own lifecycle.
 # ``pipeline_fail_fast`` is different in kind: it reports a *decision* the
 # pipeline coordinator took about a stage — that the stage's non-zero exit was
-# the first failure and that the surviving stages are about to be torn down. It
+# the first failure and that every other still-running stage — upstream
+# producers and downstream consumers alike — is about to be torn down. It
 # is emitted once per pipeline at most, on the failing stage's ``exec_id``, and
 # always before termination begins, so a consumer sees the intent even if the
 # teardown then hangs. It is not a lifecycle phase: the stage's ``exit`` event

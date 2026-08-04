@@ -124,9 +124,9 @@ def emit_fail_fast_event(
     alone.
 
     A hook that raises propagates out of the pipeline's wait, which fails the
-    run before termination is requested. The surviving stages are still torn
-    down, by ``_cleanup_pipeline_on_error`` on the way out, so a broken hook
-    costs the fail-fast *report* rather than leaking processes.
+    run before termination is requested. Every still-running stage is torn down
+    regardless, by ``_cleanup_pipeline_on_error`` on the way out, so a broken
+    hook costs the fail-fast *report* rather than leaking processes.
     """
     if observation is None:
         return
