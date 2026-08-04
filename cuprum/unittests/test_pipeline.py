@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import collections.abc as cabc
 import dataclasses as dc
+import time
 import typing as typ
 
 import pytest
@@ -27,6 +29,15 @@ from cuprum._testing import (
 )
 from cuprum.sh import Pipeline, PipelineResult, RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
+from tests.helpers.timeouts import (
+    child_argv,
+    pending_tasks,
+    process_is_running,
+    started_pids,
+)
+
+if typ.TYPE_CHECKING:
+    from pathlib import Path
 
 
 class _StubPumpReader:
@@ -712,3 +723,124 @@ def test_pipeline_stdio_policy_streams_intermediate_stdout_end_to_end(
     assert result.stages[1].exit_code == 0, (
         f"capture={capture}: stage 1 exit_code mismatch"
     )
+
+
+_PIPELINE_STAGES = 2
+
+
+# -- Public-boundary timeout contract -----------------------------------------
+#
+# The single-command counterparts live in ``test_safe_cmd_run``. A pipeline
+# enforces one deadline for the whole run rather than one per stage, so these
+# additionally pin that every stage is reaped, not just the one that timed out.
+
+type PipelineTimeoutRunFn = cabc.Callable[
+    [Pipeline, dict[str, typ.Any]],
+    tuple[TimeoutExpired, set[asyncio.Task[typ.Any]]],
+]
+
+
+def _pipeline_timeout_async(
+    pipeline: Pipeline, kwargs: dict[str, typ.Any]
+) -> tuple[TimeoutExpired, set[asyncio.Task[typ.Any]]]:
+    """Run via ``run()``, returning the timeout and any tasks left pending."""
+
+    async def run_case() -> tuple[TimeoutExpired, set[asyncio.Task[typ.Any]]]:
+        """Await the run inside a loop that is still open for inspection."""
+        with pytest.raises(TimeoutExpired) as exc_info:
+            await pipeline.run(**kwargs)
+        return exc_info.value, pending_tasks()
+
+    return asyncio.run(run_case())
+
+
+def _pipeline_timeout_sync(
+    pipeline: Pipeline, kwargs: dict[str, typ.Any]
+) -> tuple[TimeoutExpired, set[asyncio.Task[typ.Any]]]:
+    """Run via ``run_sync()``; its loop is closed before control returns."""
+    with pytest.raises(TimeoutExpired) as exc_info:
+        pipeline.run_sync(**kwargs)
+    return exc_info.value, set()
+
+
+@pytest.fixture(params=["async", "sync"], ids=["run()", "run_sync()"])
+def pipeline_timeout_strategy(
+    request: pytest.FixtureRequest,
+) -> PipelineTimeoutRunFn:
+    """Provide Pipeline run()/run_sync() strategies that expect a timeout."""
+    if request.param == "async":
+        return _pipeline_timeout_async
+    return _pipeline_timeout_sync
+
+
+@pytest.mark.parametrize("configured_timeout", [0, -1.0])
+@pytest.mark.parametrize("capture", [True, False])
+def test_pipeline_non_positive_timeout_at_public_boundary(
+    configured_timeout: float,
+    pipeline_timeout_strategy: PipelineTimeoutRunFn,
+    tmp_path: Path,
+    *,
+    capture: bool,
+) -> None:
+    """A non-positive pipeline timeout expires immediately and reaps every stage.
+
+    The deadline is already elapsed, so nothing here waits on wall-clock time:
+    the first stage blocks forever and only the timeout can end the run. Both
+    stages must be gone afterwards, and no consumer or pipe task may survive.
+    """
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    pipeline = python(*child_argv(tmp_path / "ready")) | python(
+        "-c", "import sys; sys.stdin.read()"
+    )
+    events: list[typ.Any] = []
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([python_program]))),
+        sh.observe(events.append),
+    ):
+        expired, leaked = pipeline_timeout_strategy(
+            pipeline,
+            {
+                "timeout": configured_timeout,
+                "output": RunOutputOptions(capture=capture),
+            },
+        )
+
+    assert expired.timeout == configured_timeout, (
+        f"TimeoutExpired must preserve the configured timeout "
+        f"{configured_timeout!r}, got {expired.timeout!r}"
+    )
+    assert not leaked, f"the run left pending tasks behind: {leaked!r}"
+
+    pids = started_pids(events)
+    assert len(pids) == _PIPELINE_STAGES, (
+        f"expected {_PIPELINE_STAGES} spawned stages, got {pids!r}"
+    )
+    for pid in pids:
+        _poll_pipeline_stage_death(pid)
+
+    detail = f"output={expired.output!r} stderr={expired.stderr!r}"
+    if capture:
+        assert isinstance(expired.output, str), (
+            f"a capturing pipeline must surface partial stdout as a string, {detail}"
+        )
+        assert isinstance(expired.stderr, str), (
+            f"a capturing pipeline must surface partial stderr as a string, {detail}"
+        )
+    else:
+        assert expired.output is None, (
+            f"a non-capturing pipeline must leave stdout unset, got {detail}"
+        )
+        assert expired.stderr is None, (
+            f"a non-capturing pipeline must leave stderr unset, got {detail}"
+        )
+
+
+def _poll_pipeline_stage_death(pid: int, *, seconds: float = 2.0) -> None:
+    """Fail unless ``pid`` has gone within ``seconds``."""
+    deadline = time.monotonic() + seconds
+    while process_is_running(pid):
+        if time.monotonic() >= deadline:
+            pytest.fail(f"pipeline stage {pid} still running after the timeout")
+        time.sleep(0.02)
