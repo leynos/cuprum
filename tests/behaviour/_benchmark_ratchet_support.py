@@ -28,7 +28,21 @@ class FixtureBundle(typ.TypedDict):
 
 
 class ScenarioPayload(typ.TypedDict):
-    """Serialized benchmark scenario fixture."""
+    """Serialized benchmark scenario fixture.
+
+    Attributes
+    ----------
+    name : str
+        Scenario name used to pair plan and throughput entries.
+    backend : str
+        Stream backend selected for the scenario.
+    payload_bytes : int
+        Number of bytes processed by each pipeline stage.
+    stages : int
+        Number of pipeline stages in the scenario.
+    with_line_callbacks : bool
+        Whether the scenario enables line callbacks.
+    """
 
     name: str
     backend: str
@@ -38,7 +52,23 @@ class ScenarioPayload(typ.TypedDict):
 
 
 class PlanPayload(typ.TypedDict):
-    """Serialized benchmark plan fixture."""
+    """Serialized benchmark plan fixture.
+
+    Attributes
+    ----------
+    benchmark_profile_version : str
+        Version of the benchmark profile schema.
+    dry_run : bool
+        Whether the benchmark plan represents a dry run.
+    rust_available : bool
+        Whether the Rust stream backend is available.
+    worker_iterations : int
+        Number of iterations performed by each benchmark worker.
+    command : list[str]
+        Command arguments used to invoke the benchmark runner.
+    scenarios : list[ScenarioPayload]
+        Ordered benchmark scenarios in the plan.
+    """
 
     benchmark_profile_version: str
     dry_run: bool
@@ -49,14 +79,28 @@ class PlanPayload(typ.TypedDict):
 
 
 class ThroughputResultPayload(typ.TypedDict):
-    """Serialized hyperfine result fixture."""
+    """Serialized hyperfine result fixture.
+
+    Attributes
+    ----------
+    command : str
+        Command associated with the throughput measurement.
+    mean : float
+        Mean execution time reported by hyperfine.
+    """
 
     command: str
     mean: float
 
 
 class ThroughputPayload(typ.TypedDict):
-    """Serialized hyperfine payload fixture."""
+    """Serialized hyperfine payload fixture.
+
+    Attributes
+    ----------
+    results : list[ThroughputResultPayload]
+        Ordered throughput results emitted by hyperfine.
+    """
 
     results: list[ThroughputResultPayload]
 

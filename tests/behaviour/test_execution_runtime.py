@@ -281,15 +281,12 @@ def given_non_cooperative_command(tmp_path: Path) -> WorkerCommand:
 @when("I cancel the command with a short grace period")
 def when_cancel_non_cooperative(
     behaviour_state: dict[str, object],
-    non_cooperative_command: dict[str, object],
+    non_cooperative_command: WorkerCommand,
 ) -> None:
     """Cancel a non-cooperative command and record its PID."""
-    command = typ.cast("SafeCmd", non_cooperative_command["command"])
-    pid_file = typ.cast("Path", non_cooperative_command["pid_file"])
-
     behaviour_state["pid"] = _cancel_command_with_grace(
-        command,
-        pid_file,
+        non_cooperative_command["command"],
+        non_cooperative_command["pid_file"],
         cancel_grace=0.1,
     )
 
