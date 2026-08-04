@@ -12,12 +12,12 @@ reported, and it does not travel.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import typing as typ
 
 import pytest
 
-from cuprum import _pipeline_stream_fds
 from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
 from cuprum.pump_observation import (
     _emit_pump_event,
@@ -25,9 +25,13 @@ from cuprum.pump_observation import (
     observe_pump,
 )
 from cuprum.unittests._rust_pump_test_helpers import (
+    allow_pause,
     decline_on_pause_failure,
     run_raw_fd_pump,
 )
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 _LOGGER_NAME = "cuprum.pump_observation"
 _DECLINE = PumpEvent(
@@ -145,11 +149,7 @@ def test_a_raising_collector_leaves_the_fall_back_signal_intact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The hop still reports that it fell back, so the Python pump runs."""
-    monkeypatch.setattr(
-        _pipeline_stream_fds,
-        "_pause_reader_transport",
-        lambda _reader: _pipeline_stream_fds._ReaderPause(may_hand_off=False),
-    )
+    allow_pause(monkeypatch, may_hand_off=False)
     with observe_pump(_raise_boom):
         handled = run_raw_fd_pump()
 
@@ -183,21 +183,26 @@ def test_a_cancellation_from_a_hook_still_travels() -> None:
 
 def test_an_awaitable_returning_hook_is_reported_and_closed(
     caplog: pytest.LogCaptureFixture,
-    recwarn: pytest.WarningsRecorder,
 ) -> None:
-    """A coroutine-returning hook is reported, and leaves no dangling warning.
+    """A coroutine-returning hook is reported, and its coroutine is closed.
 
     Pump hooks are synchronous by contract. An unclosed coroutine would
     resurface later as an unrelated ``never awaited`` warning attached to no
-    useful context.
+    useful context. That warning is emitted when the coroutine is *finalized*,
+    which CPython reference counting happens to do promptly here — so watching
+    for it would pin the interpreter's collection timing rather than the
+    property. The coroutine's own state answers the question directly.
     """
+    created: list[cabc.Coroutine[object, object, None]] = []
 
     async def async_hook_body() -> None:
         """Do nothing; only its coroutine object matters here."""
 
     def async_hook(_event: PumpEvent) -> None:
         """Return a coroutine, which the contract does not allow."""
-        return typ.cast("None", async_hook_body())
+        coro = async_hook_body()
+        created.append(coro)
+        return typ.cast("None", coro)
 
     with (
         caplog.at_level(logging.WARNING, logger=_LOGGER_NAME),
@@ -213,11 +218,13 @@ def test_an_awaitable_returning_hook_is_reported_and_closed(
     assert len(reported) == 1, (
         f"an awaitable return must be reported once, found {len(reported)}"
     )
-    never_awaited = [
-        warning for warning in recwarn.list if "never awaited" in str(warning.message)
-    ]
-    assert not never_awaited, (
-        f"the coroutine must be closed, but asyncio complained: {never_awaited}"
+    assert len(created) == 1, (
+        f"the hook must have been invoked exactly once, found {len(created)}"
+    )
+    state = inspect.getcoroutinestate(created[0])
+    assert state == inspect.CORO_CLOSED, (
+        "the coroutine must be closed, or it resurfaces later as a 'never "
+        f"awaited' warning detached from the event that produced it; found {state}"
     )
 
 

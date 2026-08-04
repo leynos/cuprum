@@ -11,6 +11,8 @@ deleting the call site fails every test that uses them.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import sys
 import threading
 import types
@@ -65,7 +67,30 @@ def fail_engage(**_kwargs: object) -> object:
     raise OSError(msg)
 
 
-def _allow_pause(monkeypatch: pytest.MonkeyPatch, *, may_hand_off: bool) -> None:
+@contextlib.contextmanager
+def _owned_fds() -> cabc.Iterator[tuple[int, int]]:
+    """Yield a private pipe's descriptors, closing both on exit.
+
+    The pump seams are doubled out in every path below, but only by
+    convention: ``_pause_reader_transport`` reports ``may_hand_off=True`` for a
+    reader with no transport, so a caller that forgets one patch reaches
+    ``_BlockingModeGuard.engage`` for real. Against descriptors 1 and 2 that is
+    an ``fcntl`` on the test runner's own stdout and stderr, and the damage
+    surfaces far from here. Descriptors this helper owns make the same mistake
+    harmless.
+    """
+    reader_fd, writer_fd = os.pipe()
+    try:
+        yield reader_fd, writer_fd
+    finally:
+        for fd in (reader_fd, writer_fd):
+            # The Rust pump closes the writer on return, so a real hand-off may
+            # already have taken one of these.
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
+def allow_pause(monkeypatch: pytest.MonkeyPatch, *, may_hand_off: bool) -> None:
     """Force the reader-pause seam to the given hand-off verdict."""
     monkeypatch.setattr(
         _pipeline_stream_fds,
@@ -82,28 +107,29 @@ def decline_on_missing_fds(_monkeypatch: pytest.MonkeyPatch) -> None:
 
 def decline_on_pause_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """Route a hop whose reader transport cannot be paused."""
-    _allow_pause(monkeypatch, may_hand_off=False)
+    allow_pause(monkeypatch, may_hand_off=False)
     run_raw_fd_pump()
 
 
 def decline_on_blocking_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """Route a hop whose descriptors cannot be made blocking."""
-    _allow_pause(monkeypatch, may_hand_off=True)
+    allow_pause(monkeypatch, may_hand_off=True)
     monkeypatch.setattr(_pipeline_stream_fds._BlockingModeGuard, "engage", fail_engage)
     run_raw_fd_pump()
 
 
 def run_raw_fd_pump() -> bool:
-    """Drive ``_pump_over_raw_fds`` over placeholder descriptors."""
+    """Drive ``_pump_over_raw_fds`` over a pipe this helper owns."""
     reader = typ.cast("asyncio.StreamReader", object())
-    return asyncio.run(
-        _pipeline_streams._pump_over_raw_fds(
-            reader=reader,
-            writer=None,
-            reader_fd=1,
-            writer_fd=2,
+    with _owned_fds() as (reader_fd, writer_fd):
+        return asyncio.run(
+            _pipeline_streams._pump_over_raw_fds(
+                reader=reader,
+                writer=None,
+                reader_fd=reader_fd,
+                writer_fd=writer_fd,
+            )
         )
-    )
 
 
 class _NoopGuard:
@@ -120,7 +146,7 @@ def hand_off_successfully(monkeypatch: pytest.MonkeyPatch) -> bool:
     reaches the pump and returns without a decline. This is the negative
     control: whatever a declined hop records, this must not.
     """
-    _allow_pause(monkeypatch, may_hand_off=True)
+    allow_pause(monkeypatch, may_hand_off=True)
     monkeypatch.setattr(
         _pipeline_stream_fds._BlockingModeGuard,
         "engage",
@@ -145,11 +171,28 @@ async def cancel_mid_transfer(
     release: threading.Event,
 ) -> None:
     """Start the pump, cancel it mid-transfer, then release the worker."""
+    with _owned_fds() as (reader_fd, writer_fd):
+        await _drive_cancelled_pump(
+            worker_started,
+            release,
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+        )
+
+
+async def _drive_cancelled_pump(
+    worker_started: threading.Event,
+    release: threading.Event,
+    *,
+    reader_fd: int,
+    writer_fd: int,
+) -> None:
+    """Cancel an in-flight pump over ``reader_fd``/``writer_fd``."""
     task = asyncio.create_task(
         _pipeline_streams._await_rust_pump(
             typ.cast("_pipeline_stream_fds._BlockingModeGuard", _NoopGuard()),
-            reader_fd=1,
-            writer_fd=2,
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
         )
     )
     # `Event.wait` reports timeout by returning False rather than raising, so a
