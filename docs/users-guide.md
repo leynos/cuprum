@@ -1165,7 +1165,6 @@ The `ConcurrentResult` dataclass provides:
   possibly compacted `results`), these are stable across collect-all and
   fail-fast modes.
 
-
 ### Validation and error handling
 
 `ConcurrentConfig` and `ConcurrentResult` validate their arguments eagerly, so
