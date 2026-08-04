@@ -22,6 +22,7 @@ from cuprum.sh import (
 )
 from tests.helpers.catalogue import python_builder as build_python_builder
 from tests.helpers.catalogue import python_catalogue
+from tests.helpers.execution import ExecuteFn, _RunKwargs
 from tests.helpers.timeouts import (
     child_argv,
     pending_tasks,
@@ -33,15 +34,13 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent
     from cuprum.sh import SafeCmd
 
-type ExecuteFn = cabc.Callable[[SafeCmd, dict[str, typ.Any]], CommandResult]
 
-
-def _execute_async(cmd: SafeCmd, kwargs: dict[str, typ.Any]) -> CommandResult:
+def _execute_async(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
     """Execute a SafeCmd using the async run() method."""
     return asyncio.run(cmd.run(**kwargs))
 
 
-def _execute_sync(cmd: SafeCmd, kwargs: dict[str, typ.Any]) -> CommandResult:
+def _execute_sync(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
     """Execute a SafeCmd using the sync run_sync() method."""
     return cmd.run_sync(**kwargs)
 
@@ -383,20 +382,13 @@ def _poll_process_death(pid: int, *, timeout: float = 1.0) -> None:
 # child or stranded task.
 
 
-class _TimeoutRunKwargs(typ.TypedDict):
-    """The keyword arguments a timeout-expecting run is invoked with."""
-
-    timeout: float
-    output: RunOutputOptions
-
-
 type TimeoutRunFn = cabc.Callable[
-    [SafeCmd, _TimeoutRunKwargs], tuple[TimeoutExpired, set[asyncio.Task[object]]]
+    [SafeCmd, _RunKwargs], tuple[TimeoutExpired, set[asyncio.Task[object]]]
 ]
 
 
 def _timeout_async(
-    cmd: SafeCmd, kwargs: _TimeoutRunKwargs
+    cmd: SafeCmd, kwargs: _RunKwargs
 ) -> tuple[TimeoutExpired, set[asyncio.Task[object]]]:
     """Run via ``run()``, returning the timeout and any tasks left pending."""
 
@@ -410,7 +402,7 @@ def _timeout_async(
 
 
 def _timeout_sync(
-    cmd: SafeCmd, kwargs: _TimeoutRunKwargs
+    cmd: SafeCmd, kwargs: _RunKwargs
 ) -> tuple[TimeoutExpired, set[asyncio.Task[object]]]:
     """Run via ``run_sync()``; its loop is closed before control returns.
 

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import collections.abc as cabc
-import contextlib
 import dataclasses as dc
 import typing as typ
 
@@ -19,7 +17,6 @@ from cuprum import (
     scoped,
     sh,
 )
-from cuprum._process_lifecycle import _terminate_timed_out_stages
 from cuprum._testing import (
     _READ_SIZE,
     _PipelineWaitResult,
@@ -29,24 +26,11 @@ from cuprum._testing import (
     _wait_for_pipeline,
 )
 from cuprum.sh import (
-    ExecutionContext,
     Pipeline,
     PipelineResult,
     RunOutputOptions,
 )
 from tests.helpers.catalogue import python_catalogue
-from tests.helpers.timeouts import (
-    child_argv,
-    pending_tasks,
-    started_pids,
-    stubborn_child_argv,
-    wait_for_process_death,
-)
-
-if typ.TYPE_CHECKING:
-    from pathlib import Path
-
-    from cuprum.events import ExecEvent
 
 
 class _StubPumpReader:
@@ -732,237 +716,3 @@ def test_pipeline_stdio_policy_streams_intermediate_stdout_end_to_end(
     assert result.stages[1].exit_code == 0, (
         f"capture={capture}: stage 1 exit_code mismatch"
     )
-
-
-_PIPELINE_STAGES = 2
-
-
-# -- Public-boundary timeout contract -----------------------------------------
-#
-# The single-command counterparts live in ``test_safe_cmd_run``. A pipeline
-# enforces one deadline for the whole run rather than one per stage, so these
-# additionally pin that every stage is reaped, not just the one that timed out.
-
-
-class _TimeoutRunKwargs(typ.TypedDict):
-    """The keyword arguments a timeout-expecting run is invoked with."""
-
-    timeout: float
-    output: RunOutputOptions
-
-
-type PipelineTimeoutRunFn = cabc.Callable[
-    [Pipeline, _TimeoutRunKwargs],
-    tuple[TimeoutExpired, set[asyncio.Task[object]]],
-]
-
-
-def _pipeline_timeout_async(
-    pipeline: Pipeline, kwargs: _TimeoutRunKwargs
-) -> tuple[TimeoutExpired, set[asyncio.Task[object]]]:
-    """Run via ``run()``, returning the timeout and any tasks left pending."""
-
-    async def run_case() -> tuple[TimeoutExpired, set[asyncio.Task[object]]]:
-        """Await the run inside a loop that is still open for inspection."""
-        with pytest.raises(TimeoutExpired) as exc_info:
-            await pipeline.run(**kwargs)
-        return exc_info.value, pending_tasks()
-
-    return asyncio.run(run_case())
-
-
-def _pipeline_timeout_sync(
-    pipeline: Pipeline, kwargs: _TimeoutRunKwargs
-) -> tuple[TimeoutExpired, set[asyncio.Task[object]]]:
-    """Run via ``run_sync()``; its loop is closed before control returns."""
-    with pytest.raises(TimeoutExpired) as exc_info:
-        pipeline.run_sync(**kwargs)
-    return exc_info.value, set()
-
-
-@pytest.fixture(params=["async", "sync"], ids=["run()", "run_sync()"])
-def pipeline_timeout_strategy(
-    request: pytest.FixtureRequest,
-) -> PipelineTimeoutRunFn:
-    """Provide Pipeline run()/run_sync() strategies that expect a timeout."""
-    if request.param == "async":
-        return _pipeline_timeout_async
-    return _pipeline_timeout_sync
-
-
-@pytest.mark.parametrize("configured_timeout", [0, -1.0])
-@pytest.mark.parametrize("capture", [True, False])
-def test_pipeline_non_positive_timeout_at_public_boundary(
-    configured_timeout: float,
-    pipeline_timeout_strategy: PipelineTimeoutRunFn,
-    tmp_path: Path,
-    *,
-    capture: bool,
-) -> None:
-    """A non-positive pipeline timeout expires immediately and reaps every stage.
-
-    The deadline is already elapsed, so nothing here waits on wall-clock time:
-    the first stage blocks forever and only the timeout can end the run. Both
-    stages must be gone afterwards, and no consumer or pipe task may survive.
-    """
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-    pipeline = python(*child_argv(tmp_path / "ready")) | python(
-        "-c", "import sys; sys.stdin.read()"
-    )
-    events: list[ExecEvent] = []
-
-    with (
-        scoped(ScopeConfig(allowlist=frozenset([python_program]))),
-        sh.observe(events.append),
-    ):
-        expired, leaked = pipeline_timeout_strategy(
-            pipeline,
-            {
-                "timeout": configured_timeout,
-                "output": RunOutputOptions(capture=capture),
-            },
-        )
-
-    assert expired.timeout == configured_timeout, (
-        f"TimeoutExpired must preserve the configured timeout "
-        f"{configured_timeout!r}, got {expired.timeout!r}"
-    )
-    assert not leaked, f"the run left pending tasks behind: {leaked!r}"
-
-    pids = started_pids(events)
-    assert len(pids) == _PIPELINE_STAGES, (
-        f"expected {_PIPELINE_STAGES} spawned stages, got {pids!r}"
-    )
-    for pid in pids:
-        wait_for_process_death(pid, context="the pipeline timeout")
-
-    detail = f"output={expired.output!r} stderr={expired.stderr!r}"
-    if capture:
-        assert isinstance(expired.output, str), (
-            f"a capturing pipeline must surface partial stdout as a string, {detail}"
-        )
-        assert isinstance(expired.stderr, str), (
-            f"a capturing pipeline must surface partial stderr as a string, {detail}"
-        )
-    else:
-        assert expired.output is None, (
-            f"a non-capturing pipeline must leave stdout unset, got {detail}"
-        )
-        assert expired.stderr is None, (
-            f"a non-capturing pipeline must leave stderr unset, got {detail}"
-        )
-
-
-# -- Cancellation during post-timeout teardown --------------------------------
-
-
-class _SigtermImmuneProcess:
-    """Process double that ignores ``terminate()``; only ``kill()`` ends it."""
-
-    def __init__(self) -> None:
-        """Start unexited, recording which signals were delivered."""
-        self.returncode: int | None = None
-        self.pid = 9101
-        self.terminated = False
-        self.killed = False
-        self._exited = asyncio.Event()
-
-    async def wait(self) -> int:
-        """Block until ``kill()`` records an exit code."""
-        await self._exited.wait()
-        return self.returncode if self.returncode is not None else 0
-
-    def terminate(self) -> None:
-        """Record the signal without exiting, as a SIGTERM-immune child would."""
-        self.terminated = True
-
-    def kill(self) -> None:
-        """Record the escalation and exit."""
-        self.killed = True
-        self.returncode = -9
-        self._exited.set()
-
-
-def test_timeout_teardown_completes_despite_caller_cancellation() -> None:
-    """Cancelling mid-grace must not strand a stage before the SIGKILL escalation.
-
-    ``terminate()`` is synchronous and always lands, but the escalation waits
-    out ``cancel_grace`` first. If the caller's cancellation interrupted that
-    wait, a stage ignoring ``SIGTERM`` would survive the run that spawned it.
-    Teardown is therefore shielded and finishes before the cancellation
-    propagates.
-    """
-
-    async def run_case() -> None:
-        """Cancel the teardown inside its grace window and inspect the stage."""
-        process = _SigtermImmuneProcess()
-        task = asyncio.create_task(
-            _terminate_timed_out_stages(
-                [typ.cast("asyncio.subprocess.Process", process)], 0.2
-            )
-        )
-        await asyncio.sleep(0.02)
-        task.cancel()
-
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        assert process.terminated, "teardown must still deliver the initial signal"
-        assert process.killed, (
-            "the SIGKILL escalation must complete before the cancellation "
-            "propagates, otherwise a SIGTERM-immune stage outlives the run"
-        )
-        assert process.returncode == -9, (
-            f"the stage must be reaped, got returncode={process.returncode!r}"
-        )
-
-    asyncio.run(run_case())
-
-
-def test_pipeline_run_cancelled_during_grace_still_reaps_stages(
-    tmp_path: Path,
-) -> None:
-    """Cancelling ``Pipeline.run()`` mid-teardown still leaves no stage running.
-
-    The end-to-end counterpart of the helper test above: a real first stage
-    ignores ``SIGTERM``, so only the escalation can reap it. Cancellation is
-    issued once the child has confirmed its handler is installed, so the test
-    does not race interpreter start-up.
-    """
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-    marker = tmp_path / "immune"
-    pipeline = python(*stubborn_child_argv(marker)) | python(
-        "-c", "import sys; sys.stdin.read()"
-    )
-    events: list[ExecEvent] = []
-
-    async def run_case() -> None:
-        """Time out, then cancel while the grace period is still running."""
-        ctx = ExecutionContext(cancel_grace=1.0)
-        task = asyncio.create_task(
-            pipeline.run(
-                timeout=0.05, output=RunOutputOptions(capture=False), context=ctx
-            )
-        )
-        # ASYNC110: the readiness signal is a file written by another process,
-        # which no asyncio.Event can observe. Polling it is the coordination,
-        # and it is bounded by the child writing the marker at start-up.
-        while not marker.exists():  # noqa: ASYNC110
-            await asyncio.sleep(0.01)
-        await asyncio.sleep(0.15)
-        task.cancel()
-        with contextlib.suppress(BaseException):
-            await task
-
-    with (
-        scoped(ScopeConfig(allowlist=frozenset([python_program]))),
-        sh.observe(events.append),
-    ):
-        asyncio.run(run_case())
-
-    pids = started_pids(events)
-    assert pids, "the pipeline must report at least the first stage's pid"
-    for pid in pids:
-        wait_for_process_death(pid, context="cancellation during timeout teardown")

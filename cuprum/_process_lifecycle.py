@@ -58,6 +58,37 @@ async def _terminate_process_with_wait(
         await wait_for_exit()
 
 
+async def _await_teardown_shielded(
+    teardowns: cabc.Iterable[cabc.Awaitable[object]],
+) -> None:
+    """Run ``teardowns`` to completion, holding off caller cancellation.
+
+    Teardown runs in an owned, shielded task. Awaiting it directly would let a
+    caller cancelling the run interrupt it part-way: ``process.terminate()`` is
+    synchronous and would still have fired, but the cancellation lands on the
+    grace-period wait, so the ``SIGKILL`` escalation and the final reap never
+    run and a process ignoring ``SIGTERM`` survives the run that spawned it.
+
+    The cancellation is held until teardown finishes and then re-raised,
+    mirroring the ``asyncio.shield`` cleanup in
+    ``cuprum.sh._execute_with_hooks``. A second cancellation arriving during
+    that wait is suppressed rather than allowed to strand a process: the
+    teardown task is independent and completes regardless.
+
+    Failures are absorbed — every caller runs this while another exception is
+    already propagating, and teardown must not replace it.
+    """
+    termination = asyncio.ensure_future(
+        asyncio.gather(*teardowns, return_exceptions=True)
+    )
+    try:
+        await asyncio.shield(termination)
+    except asyncio.CancelledError:
+        with contextlib.suppress(asyncio.CancelledError):
+            await termination
+        raise
+
+
 async def _terminate_all_shielded(
     processes: cabc.Iterable[asyncio.subprocess.Process],
     cancel_grace: float,
@@ -80,18 +111,9 @@ async def _terminate_all_shielded(
     Failures are absorbed — every caller runs this while another exception is
     already propagating, and teardown must not replace it.
     """
-    termination = asyncio.ensure_future(
-        asyncio.gather(
-            *(_terminate_process(process, cancel_grace) for process in processes),
-            return_exceptions=True,
-        )
+    await _await_teardown_shielded(
+        _terminate_process(process, cancel_grace) for process in processes
     )
-    try:
-        await asyncio.shield(termination)
-    except asyncio.CancelledError:
-        with contextlib.suppress(asyncio.CancelledError):
-            await termination
-        raise
 
 
 async def _cleanup_spawned_processes(
@@ -326,6 +348,10 @@ async def _terminate_pipeline_remaining_stages(
     terminating the remaining pipeline stages. This prevents pipelines from
     hanging on long-running producers/consumers when downstream work is no
     longer meaningful.
+
+    Teardown is shielded for the same reason as the timeout path: a caller
+    cancelling mid-grace must not strand a stage before its ``SIGKILL``
+    escalation runs.
     """
     targets = set(
         _stages_to_terminate(
@@ -343,4 +369,4 @@ async def _terminate_pipeline_remaining_stages(
         if idx in targets
     ]
     if termination_tasks:
-        await asyncio.gather(*termination_tasks, return_exceptions=True)
+        await _await_teardown_shielded(termination_tasks)
