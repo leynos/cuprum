@@ -187,11 +187,17 @@ def test_folded_summary_accepts_valid_limits(
 ) -> None:
     """Positive integer limits are accepted and bound the generated summary."""
     folded = tmp_path / "stacks.folded"
-    folded.write_text("root;alpha 3\nroot;beta 2\nroot;gamma 1\n")
+    # Three distinct call paths share the ``alpha`` leaf, so that frame has more
+    # candidate examples than the smaller ``example_limit`` values allow.
+    folded.write_text(
+        "root;one;alpha 3\nroot;two;alpha 2\nroot;three;alpha 1\n"
+        "root;beta 2\nroot;gamma 1\n"
+    )
+    output = tmp_path / "summary.json"
 
     summary = summarize_folded_file(
         folded,
-        output=tmp_path / "summary.json",
+        output=output,
         limit=limit,
         example_limit=example_limit,
     )
@@ -201,6 +207,13 @@ def test_folded_summary_accepts_valid_limits(
     assert len(top_leaf) <= limit, (
         "the ranked list must never exceed the requested limit"
     )
+    for entry in top_leaf:
+        examples = typ.cast("list[str]", entry["example_stacks"])
+        assert len(examples) <= example_limit, (
+            f"{entry['frame']!r} kept {len(examples)} examples, "
+            f"exceeding the requested example_limit of {example_limit}"
+        )
+    assert output.exists(), "the summary must be written to the requested path"
 
 
 def _run_folded_summary_cli(
