@@ -11,6 +11,7 @@ Example:
 from __future__ import annotations
 
 import dataclasses as dc
+import threading
 import typing as typ
 from types import MappingProxyType
 
@@ -121,6 +122,7 @@ class ProgramCatalogue:
         self._program_to_project = self._index_programs(self._projects)
         self._allowlist = frozenset(self._program_to_project)
         self._visible_settings_cache: cabc.Mapping[str, ProjectSettings] | None = None
+        self._visible_settings_lock = threading.Lock()
 
     @property
     def allowlist(self) -> frozenset[Program]:
@@ -198,8 +200,11 @@ class ProgramCatalogue:
         """
         settings = self._visible_settings_cache
         if settings is None:
-            settings = MappingProxyType(self._projects)
-            self._visible_settings_cache = settings
+            with self._visible_settings_lock:
+                settings = self._visible_settings_cache
+                if settings is None:
+                    settings = MappingProxyType(self._projects)
+                    self._visible_settings_cache = settings
         return settings
 
     @staticmethod

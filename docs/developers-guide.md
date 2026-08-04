@@ -1996,6 +1996,8 @@ The root `Makefile` exposes the following lint-related variables:
 
 <!-- markdownlint-disable MD013 -->
 
+Table: Lint-related Makefile variables and their defaults.
+
 | Variable                | Default                                                                      | Purpose                                                                    |
 | ----------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | `VENV_TOOLS`            | `pytest ruff`                                                                | Tools that must resolve through `uv run` from the locked virtualenv.       |
@@ -2004,14 +2006,14 @@ The root `Makefile` exposes the following lint-related variables:
 | `PYLINT_TARGETS`        | `benchmarks conftest.py cuprum tests`                                        | Directories and files passed to `pylint-pypy`.                             |
 | `PYLINT_PYPY_SHIM_REF`  | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                              |
 | `PYLINT_PYPY_SHIM`      | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                      |
-| `PYLINT_VERSION`        | `4.0.5`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.         |
+| `PYLINT_VERSION`        | `4.0.6`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.         |
 | `PYLINT_CACHE`          | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                         |
 | `PYLINT`                | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                       |
-| `DF12_PYTHON_LINTS_REF` | `755b26f5792f71b37f3a9e656aef714ed98b2c3b`                                   | Immutable v0.1.0 revision used for the standalone `ambrleaks` tool.        |
+| `DF12_PYTHON_LINTS_REF` | `755b26f5792f71b37f3a9e656aef714ed98b2c3b`                                   | Immutable v0.1.0 revision locked for DF12 lint tooling.                    |
 | `DF12_PYTHON`           | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                      |
 | `DF12_PYLINT_MESSAGES`  | All v0.1.0 message IDs                                                       | Explicit allowlist for the df12 Pylint pass.                               |
 | `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                   |
-| `AMBRLEAKS`             | Derived command                                                              | Pinned snapshot-scanner command used by `make lint`.                       |
+| `AMBRLEAKS`             | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                  |
 | `LOCAL_TOOL_ENV`        | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools. |
 | `UV_ENV`                | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                  |
 | `UV_RUN_ENV`            | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment for locked `uv run` commands such as `$(RUFF)`.         |

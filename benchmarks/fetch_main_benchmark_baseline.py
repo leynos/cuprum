@@ -117,7 +117,7 @@ def select_latest_artifact_download_url(
 
 
 def _artifact_member_path(*, output_dir: pth.Path, archive_name: str) -> pth.Path:
-    """Return the normalised extraction path for an archive member."""
+    """Return the normalized extraction path for an archive member."""
     destination = (output_dir / archive_name).resolve()
     output_root = output_dir.resolve()
     if destination != output_root and output_root not in destination.parents:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import concurrent.futures
+
 import pytest
 
 from cuprum.catalogue import (
@@ -60,6 +62,20 @@ def test_visible_settings_surface_project_metadata() -> None:
     assert ECHO in project.programs, "Project should enumerate its programs"
     with pytest.raises(TypeError):
         settings[CORE_OPS_PROJECT] = project  # type: ignore[index]
+
+
+def test_visible_settings_concurrent_first_access_reuses_view() -> None:
+    """Concurrent first access should publish one read-only view instance."""
+    catalogue = ProgramCatalogue(projects=DEFAULT_CATALOGUE.visible_settings().values())
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        settings = tuple(
+            executor.map(lambda _: catalogue.visible_settings(), range(32))
+        )
+
+    assert all(view is settings[0] for view in settings), (
+        "concurrent first access should return one shared mapping proxy"
+    )
 
 
 def test_catalogue_can_be_extended_safely() -> None:

@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import http.client
 import io
+import typing as typ
 import urllib.request
+from unittest import mock
 
 import pytest
 
 from benchmarks._github_http import (
     _ArtifactArchiveRedirectHandler,
+    _download_bytes,
+    _load_json_response,
     _redirect_request_arguments,
 )
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 
 def _make_github_artifact_request() -> urllib.request.Request:
@@ -25,6 +32,51 @@ def _make_github_artifact_request() -> urllib.request.Request:
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
+
+
+@pytest.mark.parametrize("loader", [_load_json_response, _download_bytes])
+def test_authenticated_requests_require_https(
+    loader: cabc.Callable[..., object],
+) -> None:
+    """Authenticated requests should reject plaintext HTTP targets."""
+    with pytest.raises(ValueError, match="must use HTTPS"):
+        loader(url="http://example.invalid/resource", token="".join(("sec", "ret")))
+
+
+def test_archive_download_rejects_response_over_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Archive downloads should stop once the configured limit is exceeded."""
+
+    class _Response:
+        """Return full chunks so the archive limit is exceeded."""
+
+        def __enter__(self) -> _Response:
+            """Return this response context."""
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            """Leave the response context without suppressing errors."""
+
+        @staticmethod
+        def read(size: int) -> bytes:
+            """Return one full requested chunk."""
+            return b"x" * size
+
+    opener = mock.Mock()
+    opener.open.return_value = _Response()
+    monkeypatch.setattr(
+        "benchmarks._github_http.urllib.request.build_opener",
+        lambda *_: opener,
+    )
+    monkeypatch.setattr("benchmarks._github_http._MAX_ARCHIVE_BYTES", 1)
+    monkeypatch.setattr("benchmarks._github_http._ARCHIVE_READ_CHUNK_BYTES", 2)
+
+    with pytest.raises(ValueError, match="exceeds 1 bytes"):
+        _download_bytes(
+            url="https://example.invalid/archive",
+            token="".join(("sec", "ret")),
+        )
 
 
 @pytest.mark.parametrize("positional_argument_count", [0, 1, 2, 3, 4, 5])
@@ -182,7 +234,7 @@ def test_artifact_redirect_handler_header_policy(
         newurl=newurl,
     )
 
-    assert redirected_request is not None
+    assert redirected_request is not None, "redirect policy should create a request"
     for header, expected_value in expected_headers.items():
         assert redirected_request.get_header(header) == expected_value, (
             f"Header {header!r}: expected {expected_value!r}"

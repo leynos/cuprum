@@ -76,13 +76,12 @@ async def _process_completed_task(
     state.ended_at[idx] = time.perf_counter()
     if state.failure_index is None and exit_code != 0:
         state.failure_index = idx
-        if idx != len(processes) - 1:
-            await _terminate_pipeline_remaining_stages(
-                processes,
-                state.wait_tasks,
-                idx,
-                cancel_grace=cancel_grace,
-            )
+        await _terminate_pipeline_remaining_stages(
+            processes,
+            state.wait_tasks,
+            idx,
+            cancel_grace=cancel_grace,
+        )
 
 
 async def _finalize_pipeline_wait(

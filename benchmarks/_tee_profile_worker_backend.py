@@ -85,11 +85,28 @@ class BackendSelector(typ.Protocol):
 
     @property
     def metrics_state(self) -> _MetricsState:
-        """Return the metrics accumulator owned by this selector."""
+        """Return the metrics accumulator owned by this selector.
+
+        Returns
+        -------
+        _MetricsState
+            Metrics accumulated during selector activation.
+        """
         ...
 
     def __call__(self, backend: BackendName) -> contextlib.AbstractContextManager[None]:
-        """Return a context manager that activates *backend*."""
+        """Return a context manager that activates *backend*.
+
+        Parameters
+        ----------
+        backend : BackendName
+            Backend to activate: ``"auto"``, ``"python"``, or ``"rust"``.
+
+        Returns
+        -------
+        contextlib.AbstractContextManager[None]
+            Context manager that activates the selected backend.
+        """
         ...
 
 
@@ -101,7 +118,13 @@ class Clock(typ.Protocol):
     """
 
     def __call__(self) -> float:
-        """Return the current time in seconds."""
+        """Return the current time in seconds.
+
+        Returns
+        -------
+        float
+            Monotonically increasing time in seconds.
+        """
         ...
 
 

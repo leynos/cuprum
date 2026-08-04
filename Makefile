@@ -72,7 +72,7 @@ PYLINT_PYPY_SHIM = git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_P
 # Pin pylint itself: the shim ref is pinned but pylint is a floating
 # dependency of it, so new pylint releases would otherwise change lint
 # behaviour without any repository change (same skew class as ruff above).
-PYLINT_VERSION ?= 4.0.5
+PYLINT_VERSION ?= 4.0.6
 PYLINT_CACHE ?= .cache/pylint
 PYLINT_ENV = PYLINTHOME=$(PYLINT_CACHE)
 PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) \
@@ -85,8 +85,7 @@ DF12_PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv run --isolated \
   --python $(DF12_PYTHON) pylint \
   --disable=all --load-plugins=df12_python_lints \
   --enable=$(DF12_PYLINT_MESSAGES)
-AMBRLEAKS = $(UV_RUN_ENV) uv tool run --python $(DF12_PYTHON) \
-  --from '$(DF12_PYTHON_LINTS)' ambrleaks
+AMBRLEAKS = $(UV_RUN_ENV) uv run ambrleaks
 
 .PHONY: help all clean build build-release lint lint-windows fmt check-fmt \
         markdownlint spelling spelling-helper-test nixie test typecheck \
@@ -158,7 +157,7 @@ check-fmt: ruff ## Verify formatting
 	cd $(RUST_DIR) && $(CARGO) fmt --all -- --check
 	# mdformat-all doesn't currently do checking
 
-lint: ruff uv ## Run linters (Ruff, pylint, Clippy, Whitaker)
+lint: ruff uv ## Run Ruff, pylint, df12-python-lints, ambrleaks, Clippy, and Whitaker
 	$(RUFF) check && $(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum && $(PYLINT) $(PYLINT_TARGETS)
 	$(DF12_PYLINT) $(PYLINT_TARGETS)
 	$(AMBRLEAKS) cuprum/unittests tests

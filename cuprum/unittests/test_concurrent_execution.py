@@ -22,6 +22,7 @@ from cuprum import (
     observe,
     scoped,
     sh,
+    ExecutionContext,
 )
 from cuprum.concurrent import (
     ConcurrentConfig,
@@ -30,6 +31,20 @@ from cuprum.concurrent import (
     run_concurrent_sync,
 )
 from tests.helpers.catalogue import python_catalogue
+
+
+from cuprum.sh import CommandResult, RunOutputOptions, SafeCmd
+
+"""Unit tests for normal concurrent execution and concurrency limits.
+These cover the happy path of ``run_concurrent``/``run_concurrent_sync``:
+result shape and ordering, sync/async parity, the timing behaviour of the
+concurrency limit, and argument and allowlist rejection before execution.
+"""
+"""Unit tests for normal concurrent execution and concurrency limits.
+These cover the happy path of ``run_concurrent``/``run_concurrent_sync``:
+result shape and ordering, sync/async parity, the timing behaviour of the
+concurrency limit, and argument and allowlist rejection before execution.
+"""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -41,14 +56,9 @@ class _TimingExpectation:
     min_elapsed : float
         Minimum expected elapsed time in seconds. The test will
         fail if execution completes faster than this threshold.
-    max_elapsed : float | None
-        Maximum expected elapsed time in seconds (optional). If
-        provided, the test will fail if execution takes longer than this.
-
     """
 
     min_elapsed: float
-    max_elapsed: float | None = None
 
 
 def _assert_concurrent_timing(
@@ -98,11 +108,6 @@ def _assert_concurrent_timing(
         f"Expected >= {timing.min_elapsed}s with concurrency={concurrency}, "
         f"got {elapsed:.3f}s"
     )
-    if timing.max_elapsed is not None:
-        assert elapsed < timing.max_elapsed, (
-            f"Expected < {timing.max_elapsed}s with concurrency={concurrency}, "
-            f"got {elapsed:.3f}s"
-        )
 
 
 def test_repeated_short_lived_captured_commands_complete() -> None:
@@ -264,17 +269,6 @@ class TestConcurrencyLimits:
         [
             # Longer sleeps and conservative thresholds avoid flakiness under CI load.
             pytest.param(4, 0.2, 2, _TimingExpectation(min_elapsed=0.3), id="limited"),
-            # Four concurrent interpreters each pay their own startup cost, so the
-            # bound sits just under the 0.8s sequential runtime (4 * 0.2s) rather
-            # than close to the 0.2s ideal: enough margin for spawn and scheduler
-            # jitter under load, while still failing if execution serialises.
-            pytest.param(
-                4,
-                0.2,
-                None,
-                _TimingExpectation(min_elapsed=0.0, max_elapsed=0.78),
-                id="unlimited",
-            ),
             # Longer sleeps give more reliable sequential timing detection.
             pytest.param(
                 3, 0.15, 1, _TimingExpectation(min_elapsed=0.35), id="sequential"
@@ -294,3 +288,47 @@ class TestConcurrencyLimits:
             concurrency=concurrency,
             timing=timing,
         )
+
+    @staticmethod
+    def test_unlimited_execution_overlaps_commands(
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Unlimited execution starts more than one command concurrently."""
+        original_run = SafeCmd.run
+        active = 0
+        maximum_active = 0
+        release = asyncio.Event()
+
+        async def observed_run(
+            command: SafeCmd,
+            *,
+            output: RunOutputOptions | None = None,
+            context: ExecutionContext | None = None,
+        ) -> CommandResult:
+            """Hold the first command until another command overlaps it."""
+            nonlocal active, maximum_active
+            active += 1
+            maximum_active = max(maximum_active, active)
+            if maximum_active > 1:
+                release.set()
+            await asyncio.wait_for(release.wait(), timeout=5.0)
+            try:
+                return await original_run(command, output=output, context=context)
+            finally:
+                active -= 1
+
+        monkeypatch.setattr(SafeCmd, "run", observed_run)
+
+        async def exercise() -> ConcurrentResult:
+            """Run two commands with a generous deadlock safeguard."""
+            echo = sh.make(ECHO)
+            with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
+                return await asyncio.wait_for(
+                    run_concurrent(echo("one"), echo("two")),
+                    timeout=5.0,
+                )
+
+        result = asyncio.run(exercise())
+
+        assert result.ok, "both overlapping commands should complete successfully"
+        assert maximum_active > 1, "unlimited execution should overlap commands"

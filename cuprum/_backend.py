@@ -87,24 +87,7 @@ def _read_backend_env() -> StreamBackend:
 
 @functools.lru_cache(maxsize=1)
 def _check_rust_available() -> bool:
-    """Report whether the optional Rust extension is available, with caching.
-
-    Returns
-    -------
-    bool
-        True when the native Rust extension can be imported and reports
-        availability.
-
-    Notes
-    -----
-    This resolver is the canonical availability query used by both the public
-    :func:`cuprum.is_rust_available` alias and stream-backend dispatch. Testing
-    overrides short-circuit the raw import probe and clear both backend caches.
-    Backend selection can still differ from this availability answer: forced
-    Python mode selects ``StreamBackend.PYTHON`` even when this function
-    returns ``True``. The result is cached for the lifetime of the process;
-    call ``_check_rust_available.cache_clear()`` to force a re-check in tests.
-    """
+    """Report cached Rust availability, honouring testing overrides for dispatch."""
     if _RUST_AVAILABILITY_FOR_TESTING is not None:
         _LOGGER.debug(
             "resolved Rust availability from testing override",
@@ -230,7 +213,7 @@ def _resolve_backend(
 
 
 def _probe_rust_availability(requested: StreamBackend) -> bool | None:
-    """Probe Rust availability for ``requested``, honouring its failure policy."""
+    """Probe Rust availability according to the requested backend failure policy."""
     if requested is StreamBackend.PYTHON:
         return None
     try:
@@ -285,8 +268,11 @@ def get_stream_backend() -> StreamBackend:
     ``get_stream_backend.cache_clear()`` (and
     ``_check_rust_available.cache_clear()``) to force re-resolution (useful
     in tests).
-    """  # noqa: DOC502 - ValueError propagates from _read_backend_env
-    requested = _read_backend_env()
+    """
+    try:
+        requested = _read_backend_env()
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
     # Probe and resolution share one boundary handler so a forced-RUST failure
     # emits the structured warning whether the extension probes as unavailable
     # or the probe itself raises ImportError. ``rust_available`` stays ``None``
