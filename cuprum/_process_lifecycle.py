@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 import typing as typ
 
@@ -57,6 +58,42 @@ async def _terminate_process_with_wait(
         await wait_for_exit()
 
 
+async def _terminate_all_shielded(
+    processes: cabc.Iterable[asyncio.subprocess.Process],
+    cancel_grace: float,
+) -> None:
+    """Terminate every process, holding off caller cancellation until done.
+
+    Termination owns its own task and is shielded. Awaiting it directly would
+    let a caller cancelling the run interrupt teardown: ``process.terminate()``
+    is synchronous and would still have fired, but the cancellation lands on
+    the grace-period wait, so the ``SIGKILL`` escalation and the final reap
+    never run and a process ignoring ``SIGTERM`` survives the run that spawned
+    it.
+
+    The cancellation is held until termination finishes and then re-raised,
+    mirroring the ``asyncio.shield`` cleanup in
+    ``cuprum.sh._execute_with_hooks``. A second cancellation arriving during
+    that wait is suppressed rather than allowed to strand a process: the
+    termination task is independent and completes regardless.
+
+    Failures are absorbed — every caller runs this while another exception is
+    already propagating, and teardown must not replace it.
+    """
+    termination = asyncio.ensure_future(
+        asyncio.gather(
+            *(_terminate_process(process, cancel_grace) for process in processes),
+            return_exceptions=True,
+        )
+    )
+    try:
+        await asyncio.shield(termination)
+    except asyncio.CancelledError:
+        with contextlib.suppress(asyncio.CancelledError):
+            await termination
+        raise
+
+
 async def _cleanup_spawned_processes(
     processes: list[asyncio.subprocess.Process],
     stderr_tasks: list[asyncio.Task[str | None] | None],
@@ -68,10 +105,7 @@ async def _cleanup_spawned_processes(
     Terminates all started processes and cancels any capture tasks to prevent
     resource leaks when a pipeline stage fails to spawn.
     """
-    await asyncio.gather(
-        *(_terminate_process(p, cancel_grace) for p in processes),
-        return_exceptions=True,
-    )
+    await _terminate_all_shielded(processes, cancel_grace)
 
     tasks: list[asyncio.Task[str | None]] = [
         task for task in stderr_tasks if task is not None
@@ -96,10 +130,7 @@ async def _cleanup_pipeline_on_error(
 
     Returns the collected pipe results for use in the finally block.
     """
-    await asyncio.gather(
-        *(_terminate_process(p, cancel_grace) for p in processes),
-        return_exceptions=True,
-    )
+    await _terminate_all_shielded(processes, cancel_grace)
     return await _collect_pipe_results(pipe_tasks)
 
 
@@ -269,11 +300,17 @@ async def _terminate_timed_out_stages(
 
     Failures are absorbed — this runs while a timeout is already propagating,
     and must not replace the ``TimeoutExpired`` the caller is waiting for.
+
+    Teardown owns its own task and is shielded from the caller. Awaiting the
+    terminations directly would let a caller cancelling ``Pipeline.run()``
+    interrupt them: ``process.terminate()`` is synchronous and would still have
+    fired, but the cancellation lands on the grace-period wait, so the
+    ``SIGKILL`` escalation and the final reap never run and a stage ignoring
+    ``SIGTERM`` survives. The cancellation is therefore held until termination
+    has finished, mirroring the ``asyncio.shield`` cleanup in
+    ``cuprum.sh._execute_with_hooks``.
     """
-    await asyncio.gather(
-        *(_terminate_process(process, cancel_grace) for process in processes),
-        return_exceptions=True,
-    )
+    await _terminate_all_shielded(processes, cancel_grace)
 
 
 async def _terminate_pipeline_remaining_stages(

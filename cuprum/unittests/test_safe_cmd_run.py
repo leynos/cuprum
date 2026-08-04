@@ -30,6 +30,7 @@ from tests.helpers.timeouts import (
 )
 
 if typ.TYPE_CHECKING:
+    from cuprum.events import ExecEvent
     from cuprum.sh import SafeCmd
 
 type ExecuteFn = cabc.Callable[[SafeCmd, dict[str, typ.Any]], CommandResult]
@@ -381,17 +382,25 @@ def _poll_process_death(pid: int, *, timeout: float = 1.0) -> None:
 # the public ``TimeoutExpired``, its payload, and the absence of any surviving
 # child or stranded task.
 
+
+class _TimeoutRunKwargs(typ.TypedDict):
+    """The keyword arguments a timeout-expecting run is invoked with."""
+
+    timeout: float
+    output: RunOutputOptions
+
+
 type TimeoutRunFn = cabc.Callable[
-    [SafeCmd, dict[str, typ.Any]], tuple[TimeoutExpired, set[asyncio.Task[typ.Any]]]
+    [SafeCmd, _TimeoutRunKwargs], tuple[TimeoutExpired, set[asyncio.Task[object]]]
 ]
 
 
 def _timeout_async(
-    cmd: SafeCmd, kwargs: dict[str, typ.Any]
-) -> tuple[TimeoutExpired, set[asyncio.Task[typ.Any]]]:
+    cmd: SafeCmd, kwargs: _TimeoutRunKwargs
+) -> tuple[TimeoutExpired, set[asyncio.Task[object]]]:
     """Run via ``run()``, returning the timeout and any tasks left pending."""
 
-    async def run_case() -> tuple[TimeoutExpired, set[asyncio.Task[typ.Any]]]:
+    async def run_case() -> tuple[TimeoutExpired, set[asyncio.Task[object]]]:
         """Await the run inside a loop that is still open for inspection."""
         with pytest.raises(TimeoutExpired) as exc_info:
             await cmd.run(**kwargs)
@@ -401,8 +410,8 @@ def _timeout_async(
 
 
 def _timeout_sync(
-    cmd: SafeCmd, kwargs: dict[str, typ.Any]
-) -> tuple[TimeoutExpired, set[asyncio.Task[typ.Any]]]:
+    cmd: SafeCmd, kwargs: _TimeoutRunKwargs
+) -> tuple[TimeoutExpired, set[asyncio.Task[object]]]:
     """Run via ``run_sync()``; its loop is closed before control returns.
 
     ``run_sync`` owns and closes its event loop, so no task can outlive the
@@ -440,7 +449,7 @@ def test_non_positive_timeout_at_public_boundary(
     command = sh.make(Program(python_interpreter()), catalogue=python_catalogue()[0])(
         *child_argv(tmp_path / "ready")
     )
-    events: list[typ.Any] = []
+    events: list[ExecEvent] = []
 
     with sh.observe(events.append):
         expired, leaked = timeout_execution_strategy(

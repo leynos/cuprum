@@ -109,8 +109,10 @@ async def _wait_for_exit_code_within_timeout(
     fast, already-exited process whose ``wait()`` never suspends would race past
     it and return successfully. To keep ``run(timeout=0)`` deterministic — and to
     preserve the behaviour of the ``asyncio.wait_for`` implementation this
-    replaced — a non-positive deadline expires immediately: the process is
-    terminated and :class:`TimeoutError` is raised without awaiting ``wait()``.
+    replaced — a non-positive deadline expires immediately: the deadline wait
+    is skipped, so the process is never given the chance to exit on its own,
+    but terminating it still awaits its actual exit before
+    :class:`TimeoutError` is raised.
 
     Stream consumers belong to the caller, which drains them exactly once via
     :func:`_drain_stream_consumers`; terminating the process here lets those

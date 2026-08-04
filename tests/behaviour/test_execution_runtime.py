@@ -22,6 +22,7 @@ from tests.helpers.timeouts import (
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
+    from cuprum.events import ExecEvent
     from cuprum.sh import CommandResult, SafeCmd
 
 pytestmark = pytest.mark.skipif(
@@ -213,7 +214,7 @@ def when_run_command_with_non_positive_timeout(
     command = typ.cast("SafeCmd", long_running_command["command"])
     pid_file = typ.cast("Path", long_running_command["pid_file"])
     configured = 0.0
-    events: list[object] = []
+    events: list[ExecEvent] = []
     ctx = ExecutionContext(env={"CUPRUM_PID_FILE": str(pid_file)})
     with (
         sh.observe(events.append),
