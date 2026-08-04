@@ -326,6 +326,7 @@ class TestPumpStreamDispatch:
                 "did not expect Python fallback when Rust pump succeeds"
             )
 
+
 async def _run_with_inline_executor(awaitable: cabc.Awaitable[object]) -> None:
     """Run mocked native work without creating an unrelated thread pool."""
     loop = asyncio.get_running_loop()

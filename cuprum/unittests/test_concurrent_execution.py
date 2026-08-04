@@ -101,6 +101,7 @@ def _assert_concurrent_timing(
             f"got {elapsed:.3f}s"
         )
 
+
 def test_repeated_short_lived_captured_commands_complete() -> None:
     """Repeated short-lived captured commands complete without stalling."""
     echo = sh.make(ECHO)

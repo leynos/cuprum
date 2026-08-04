@@ -69,6 +69,8 @@ class _PublishedExitPipelineProcess(_StubPipelineWaitProcess):
         self.returncode = self._exit_code
         await asyncio.Event().wait()
         return self.returncode
+
+
 async def _exercise_wait_for_pipeline(
     exit_codes: tuple[int, int, int],
     ready_stages: frozenset[int],
@@ -112,6 +114,8 @@ def test_wait_for_pipeline_accepts_published_returncode() -> None:
     )
 
     assert result.exit_codes == (0,), "pipeline should observe the published exit code"
+
+
 def _assert_stage_terminated(
     process: _StubPipelineWaitProcess,
     *,

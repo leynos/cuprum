@@ -346,14 +346,8 @@ def then_threads_see_own_allowlist(behaviour_state: dict[str, object]) -> None:
         "dict[str, tuple[bool, bool]]",
         behaviour_state["thread_results"],
     )
-    # thread1 allows ECHO only
-    assert results["thread1"] == (True, False), (
-        'Expected results["thread1"] == (True, False)'
-    )
-    # thread2 allows LS only
-    assert results["thread2"] == (False, True), (
-        'Expected results["thread2"] == (False, True)'
-    )
+    assert results["thread1"] == (True, False), "thread1 isolation boundary failed"
+    assert results["thread2"] == (False, True), "thread2 isolation boundary failed"
 
 
 @given(
@@ -399,11 +393,5 @@ def then_tasks_see_own_allowlist(behaviour_state: dict[str, object]) -> None:
         "dict[str, tuple[bool, bool]]",
         behaviour_state["async_results"],
     )
-    # task1 allows ECHO only
-    assert results["task1"] == (True, False), (
-        'Expected results["task1"] == (True, False)'
-    )
-    # task2 allows LS only
-    assert results["task2"] == (False, True), (
-        'Expected results["task2"] == (False, True)'
-    )
+    assert results["task1"] == (True, False), "task1 isolation boundary failed"
+    assert results["task2"] == (False, True), "task2 isolation boundary failed"
