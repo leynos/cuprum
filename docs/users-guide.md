@@ -936,14 +936,20 @@ with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
 The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 
 - `cuprum_phase`: Event phase (plan, start, stdout, stderr, exit, stdin,
-  stdin_error, timeout, teardown_error)
+  stdin_error, timeout, teardown_error, pipeline_fail_fast)
 - `cuprum_program`: Program being executed
 - `cuprum_argv`: The command's argument vector, recorded verbatim (see the
   security note below)
 - `cuprum_pid`: Process ID (when available)
-- `cuprum_exit_code`: Exit code (for exit events)
-- `cuprum_duration_s`: Duration in seconds (for exit events)
+- `cuprum_exit_code`: Exit code (for exit and `pipeline_fail_fast` events)
+- `cuprum_duration_s`: Duration in seconds (for exit and `pipeline_fail_fast`
+  events)
+- `cuprum_stage_index` / `cuprum_stage_count`: Failing stage position and
+  pipeline width (for `pipeline_fail_fast` events)
 - `cuprum_tags`: Event tags as a dictionary
+
+`pipeline_fail_fast` records are emitted at `LogLevels.fail_fast_level`, which
+defaults to `logging.WARNING` so they are visible in a default configuration.
 
 > **Security note — argument logging.** `cuprum_argv` is emitted verbatim and
 > is **not** redacted. Any secret passed on the command line — a
@@ -1001,6 +1007,8 @@ The hook collects:
 - `cuprum_timeouts_total`: Counter of subprocess timeout expiries
 - `cuprum_teardown_errors_total`: Counter of stream-consumer drain failures
   during cleanup
+- `cuprum_pipeline_fail_fast_total`: Counter incremented once per pipeline torn
+  down early because a non-final stage was the first to fail
 
 `cuprum_timeouts_total` counts both expiry modes; use the `timeout` observe
 event's `timeout_mode` field, or the `cuprum.timeout` log record, to tell an
@@ -1010,8 +1018,12 @@ Unlike the tracing and logging adapters, the metrics hook rejects an unknown
 phase rather than ignoring it: an `ExecPhase` added without a corresponding
 metric raises, so a new phase cannot silently go uncounted.
 
-All metrics include `program` and `project` labels. Missing, empty, or explicit
-`None` project tags fall back to `unknown`.
+All metrics include `program` and `project` labels, and only those. Missing,
+empty, or explicit `None` project tags fall back to `unknown`.
+
+`cuprum_pipeline_fail_fast_total` does not use `exec_id`, stage index, exit
+code, command arguments, or paths as labels. These high-cardinality fields
+remain on the event and trace span for per-incident detail.
 
 To integrate with a real metrics library like `prometheus_client`, implement the
 `MetricsCollector` protocol:
