@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
-import time
 import typing as typ
 
 import pytest
@@ -14,6 +12,12 @@ from pytest_bdd import given, scenario, then, when
 from cuprum import ECHO, TimeoutExpired, sh
 from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
 from tests.helpers.catalogue import python_catalogue
+from tests.helpers.timeouts import (
+    started_pids,
+)
+from tests.helpers.timeouts import (
+    wait_for_process_death as _wait_for_process_death,
+)
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -51,6 +55,14 @@ def test_cancellation_terminates_subprocess() -> None:
 )
 def test_timeout_terminates_subprocess() -> None:
     """Behavioural coverage for timeout cleanup."""
+
+
+@scenario(
+    "../features/execution_runtime.feature",
+    "Non-positive timeout terminates running subprocess immediately",
+)
+def test_non_positive_timeout_terminates_subprocess() -> None:
+    """Behavioural coverage for the already-elapsed deadline contract."""
 
 
 @scenario(
@@ -185,12 +197,48 @@ def when_run_command_with_timeout(
     behaviour_state["cleanup_context"] = "timeout"
 
 
+@when("I run the command with an already-elapsed timeout")
+def when_run_command_with_non_positive_timeout(
+    behaviour_state: dict[str, object],
+    long_running_command: dict[str, object],
+) -> None:
+    """Run with an already-elapsed deadline and record the error and PID.
+
+    The PID comes from the observe stream rather than the worker's PID file:
+    a non-positive deadline is already elapsed, so the child is terminated
+    before it can run far enough to write that file. Cuprum emits ``start``
+    at spawn, so the PID is available either way, and the run needs no
+    coordination with the child at all.
+    """
+    command = typ.cast("SafeCmd", long_running_command["command"])
+    pid_file = typ.cast("Path", long_running_command["pid_file"])
+    configured = 0.0
+    events: list[object] = []
+    ctx = ExecutionContext(env={"CUPRUM_PID_FILE": str(pid_file)})
+    with (
+        sh.observe(events.append),
+        pytest.raises(TimeoutExpired, match=r"timed out") as exc_info,
+    ):
+        command.run_sync(
+            output=RunOutputOptions(capture=False),
+            timeout=configured,
+            context=ctx,
+        )
+
+    pids = started_pids(events)
+    assert pids, "cuprum must emit a start event carrying the spawned PID"
+    behaviour_state["timeout_error"] = exc_info.value
+    behaviour_state["timeout_value"] = configured
+    behaviour_state["pid"] = pids[0]
+    behaviour_state["cleanup_context"] = "timeout"
+
+
 @then("the subprocess stops cleanly")
 def then_subprocess_stops_cleanly(behaviour_state: dict[str, object]) -> None:
     """Assert the subprocess has been terminated after cleanup."""
     pid = typ.cast("int", behaviour_state["pid"])
     context = typ.cast("str", behaviour_state.get("cleanup_context", "cancellation"))
-    _wait_for_process_death(pid, timeout=5.0, context=context)
+    _wait_for_process_death(pid, seconds=5.0, context=context)
 
 
 @then("a timeout error is raised")
@@ -200,15 +248,6 @@ def then_timeout_error_is_raised(behaviour_state: dict[str, object]) -> None:
     timeout_value = typ.cast("float", behaviour_state["timeout_value"])
     assert isinstance(error, TimeoutExpired)
     assert error.timeout == timeout_value
-
-
-def _is_process_alive(pid: int) -> bool:
-    """Return True when the pid exists on the host."""
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
 
 
 def _create_worker_command(
@@ -259,23 +298,6 @@ def _create_worker_command(
     catalogue, python_program = python_catalogue()
     command = sh.make(python_program, catalogue=catalogue)(str(script_path))
     return {"command": command, "pid_file": pid_file}
-
-
-def _wait_for_process_death(
-    pid: int,
-    *,
-    timeout: float = 5.0,
-    context: str = "subprocess termination",
-) -> None:
-    """Poll for process death until timeout, failing if still alive."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if not _is_process_alive(pid):
-            return
-        time.sleep(0.05)
-    pytest.fail(  # pragma: no cover - defensive failure
-        f"Process {pid} still alive after {context}",
-    )
 
 
 async def _wait_for_pid(pid_file: Path, timeout: float = 5.0) -> int:
@@ -368,6 +390,6 @@ def then_subprocess_killed_after_escalation(
     pid = typ.cast("int", behaviour_state["pid"])
     _wait_for_process_death(
         pid,
-        timeout=5.0,
+        seconds=5.0,
         context="escalation after SIGTERM ignored",
     )

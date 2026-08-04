@@ -16,7 +16,10 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
 import typing as typ
+
+import pytest
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -85,3 +88,24 @@ def pending_tasks() -> set[asyncio.Task[typ.Any]]:
     return {
         task for task in asyncio.all_tasks() if task is not current and not task.done()
     }
+
+
+def wait_for_process_death(
+    pid: int,
+    *,
+    seconds: float = 5.0,
+    context: str = "subprocess termination",
+) -> None:
+    """Fail unless ``pid`` has gone within ``seconds``.
+
+    Shared by the behavioural runtime tests and the public-boundary timeout
+    tests, both of which assert that a terminated child is actually reaped.
+    """
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if not process_is_running(pid):
+            return
+        time.sleep(0.05)
+    pytest.fail(  # pragma: no cover - defensive failure
+        f"Process {pid} still alive after {context}",
+    )

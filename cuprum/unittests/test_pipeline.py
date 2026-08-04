@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import collections.abc as cabc
 import dataclasses as dc
-import time
 import typing as typ
 
 import pytest
@@ -32,8 +31,8 @@ from tests.helpers.catalogue import python_catalogue
 from tests.helpers.timeouts import (
     child_argv,
     pending_tasks,
-    process_is_running,
     started_pids,
+    wait_for_process_death,
 )
 
 if typ.TYPE_CHECKING:
@@ -818,7 +817,7 @@ def test_pipeline_non_positive_timeout_at_public_boundary(
         f"expected {_PIPELINE_STAGES} spawned stages, got {pids!r}"
     )
     for pid in pids:
-        _poll_pipeline_stage_death(pid)
+        wait_for_process_death(pid, context="the pipeline timeout")
 
     detail = f"output={expired.output!r} stderr={expired.stderr!r}"
     if capture:
@@ -835,12 +834,3 @@ def test_pipeline_non_positive_timeout_at_public_boundary(
         assert expired.stderr is None, (
             f"a non-capturing pipeline must leave stderr unset, got {detail}"
         )
-
-
-def _poll_pipeline_stage_death(pid: int, *, seconds: float = 2.0) -> None:
-    """Fail unless ``pid`` has gone within ``seconds``."""
-    deadline = time.monotonic() + seconds
-    while process_is_running(pid):
-        if time.monotonic() >= deadline:
-            pytest.fail(f"pipeline stage {pid} still running after the timeout")
-        time.sleep(0.02)
