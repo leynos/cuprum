@@ -16,6 +16,12 @@ TEST_FLAGS ?= $(CARGO_FLAGS) --jobs 1
 TEST_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
 WHITAKER_CARGO_FLAGS ?= $(CARGO_FLAGS) --jobs 1
 WHITAKER_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
+# Extra flags for the `maturin develop` invocation in the `develop` target.
+# Empty by default: a debug build is what contributors and the extension-tests
+# job want. The benchmark ratchet needs an optimized build, and an optimized
+# build is the *only* thing it needs differently, so it passes `--release`
+# here rather than restating the three-step build sequence inline.
+MATURIN_DEVELOP_FLAGS ?=
 # The Windows arm of the extension's `cfg` branches. `make lint` only ever sees
 # the host's arm, and the Windows wheel build compiles without `-D warnings`,
 # so warn-level regressions behind `#[cfg(windows)]` — dead code left by a
@@ -90,7 +96,7 @@ build: uv .venv ## Build virtual-env and install deps
 # extension for tests" in docs/developers-guide.md.
 develop: build ## Build the native extension into the dev virtual-env
 	$(UV_RUN_ENV) uv run python -m ensurepip --upgrade
-	$(UV_RUN_ENV) uv run maturin develop --manifest-path $(RUST_DIR)/cuprum-rust/Cargo.toml
+	$(UV_RUN_ENV) uv run maturin develop $(MATURIN_DEVELOP_FLAGS) --manifest-path $(RUST_DIR)/cuprum-rust/Cargo.toml
 
 build-release: ## Build artefacts (sdist & wheel)
 	python -m build --sdist --wheel

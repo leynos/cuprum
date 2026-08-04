@@ -1650,6 +1650,14 @@ present in the environment. CI's `extension-tests` job runs the same target, so
 a local run and a CI run build the extension identically. The Makefile keeps
 only a pointer to this section rather than repeating the reasoning.
 
+Every extension build in CI goes through this target. The `benchmark-ratchet`
+job needs an optimized build, and that is the only thing it needs differently,
+so it passes `make develop MATURIN_DEVELOP_FLAGS=--release` rather than
+restating the three-step sequence. Keep it that way: a second copy of the
+sequence is how the two drift, and the ratchet then measures a build nobody
+maintains. `MATURIN_DEVELOP_FLAGS` is empty by default, because a debug build
+is what contributors and the `extension-tests` job want.
+
 Without it these modules skip rather than fail, which is the right default
 locally — most changes do not need the native path rebuilt — and the wrong one
 in CI, where a job that never built the extension reports a green run

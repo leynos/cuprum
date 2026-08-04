@@ -356,12 +356,15 @@ jobs:
             local prefix="$2"
             pushd "${workspace}" >/dev/null
 
-            make build
-            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
-              -m ensurepip --upgrade
-            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run maturin develop \
-              --release \
-              --manifest-path rust/cuprum-rust/Cargo.toml
+            # `make develop` is the one definition of the extension build:
+            # `make build`, then `ensurepip --upgrade`, then `maturin
+            # develop`. The ratchet must measure an optimized build, and that
+            # is the only thing it needs differently, so it passes the flag
+            # instead of restating the sequence. This runs after `pushd
+            # "${workspace}"`, so the target's relative UV_CACHE_DIR and
+            # UV_TOOL_DIR resolve against the same directory the inline
+            # commands used.
+            make develop MATURIN_DEVELOP_FLAGS=--release
 
             UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
               benchmarks/pipeline_throughput.py \
