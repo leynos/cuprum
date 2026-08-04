@@ -19,8 +19,10 @@ if typ.TYPE_CHECKING:
 
 # ``plan`` … ``stdin_error`` describe one command's own lifecycle.
 # ``pipeline_fail_fast`` is different in kind: it reports a decision the
-# pipeline coordinator took about the first failed stage, before termination
-# of the remaining stages begins. The stage's own ``exit`` event still follows.
+# pipeline coordinator took about a stage: its non-zero exit was the first
+# failure and every other still-running stage — upstream producer and downstream
+# consumer alike — is about to be torn down. The stage's own ``exit`` event
+# still follows.
 type ExecPhase = typ.Literal[
     "plan",
     "start",
