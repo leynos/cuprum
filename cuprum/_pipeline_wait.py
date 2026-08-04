@@ -29,23 +29,29 @@ collecting the inter-stage pipe task outcomes lives in
 ``_surface_unexpected_pipe_failures``), and the shape of what the fail-fast
 path publishes lives in ``cuprum._pipeline_wait_records``. This module owns
 only the waiting, the ordering decision, and when each report fires.
+
+The monotonic clock is bound here as a module-level ``perf_counter`` rather
+than reached through the ``time`` module. That gives the tests a seam of their
+own: pinning the clock replaces this module's attribute, where reaching through
+``time`` would have left them monkeypatching ``time.perf_counter`` itself and
+so changing the clock every other module in the process reads.
 """
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import time
 import typing as typ
+from time import perf_counter
 
 from cuprum._pipeline_streams import (
     _collect_pipe_results,
     _surface_unexpected_pipe_failures,
 )
 from cuprum._pipeline_wait_records import (
-    completion_log_fields,
-    emit_fail_fast_event,
-    log_completion_event,
+    _completion_log_fields,
+    _emit_fail_fast_event,
+    _log_completion_event,
 )
 from cuprum._process_lifecycle import (
     _cleanup_pipeline_on_error,
@@ -224,24 +230,24 @@ async def _terminate_and_report(
     stages were actually stopped, and how long the teardown took — is reported
     once termination returns.
     """
-    log_completion_event(
+    _log_completion_event(
         "pipeline_fail_fast_termination",
         "terminating other pipeline stages after stage %d exited %d",
         fields,
     )
-    started = time.perf_counter()
+    started = perf_counter()
     terminated = await _terminate_pipeline_remaining_stages(
         processes,
         state.wait_tasks,
         fields.stage_index,
         cancel_grace=cancel_grace,
     )
-    log_completion_event(
+    _log_completion_event(
         "pipeline_fail_fast_terminated",
         "terminated other pipeline stages after stage %d exited %d",
         fields,
         cuprum_terminated_stage_count=terminated,
-        cuprum_termination_duration_s=max(0.0, time.perf_counter() - started),
+        cuprum_termination_duration_s=max(0.0, perf_counter() - started),
     )
 
 
@@ -261,7 +267,7 @@ async def _process_completed_task(
     """
     idx = state.task_to_index[task]
     exit_code = task.result()
-    ended_at = time.perf_counter()
+    ended_at = perf_counter()
 
     # Captured before the command so this completion can be distinguished from
     # one that merely follows an already-latched failure.
@@ -276,9 +282,9 @@ async def _process_completed_task(
     if not (latched_first_failure or terminate_others):
         return
 
-    fields = completion_log_fields(state, idx, exit_code, ended_at)
+    fields = _completion_log_fields(state, idx, exit_code, ended_at)
     if latched_first_failure:
-        log_completion_event(
+        _log_completion_event(
             "pipeline_stage_first_failure",
             "pipeline stage %d exited %d, latching first failure",
             fields,
@@ -290,7 +296,7 @@ async def _process_completed_task(
     # which excludes a later failure, a final-stage failure, and a
     # single-stage pipeline.
     if latched_first_failure and terminate_others:
-        emit_fail_fast_event(state.observation(idx), fields)
+        _emit_fail_fast_event(state.observation(idx), fields)
     if terminate_others:
         await _terminate_and_report(state, processes, cancel_grace, fields)
 

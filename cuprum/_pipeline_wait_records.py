@@ -50,7 +50,7 @@ class _CompletionLogFields:
     exec_id: str | None
 
 
-def completion_log_fields(
+def _completion_log_fields(
     state: _PipelineWaitState,
     completed_idx: int,
     exit_code: int,
@@ -76,7 +76,7 @@ def completion_log_fields(
     )
 
 
-def log_completion_event(
+def _log_completion_event(
     action: str,
     message: str,
     fields: _CompletionLogFields,
@@ -105,7 +105,7 @@ def log_completion_event(
     )
 
 
-def emit_fail_fast_event(
+def _emit_fail_fast_event(
     observation: _StageObservation | None,
     fields: _CompletionLogFields,
 ) -> None:
