@@ -31,23 +31,30 @@ class TestRecordCompletionExamples:
         return state.should_terminate_others(idx)
 
     def test_first_nonzero_exit_latches_failure_index(self) -> None:
-        """The earliest-completed non-zero exit fixes ``failure_index``."""
+        """The earliest-completed non-zero exit fixes ``failure_index``.
+
+        The failure order is deliberately reversed against the stage order:
+        stage 2 fails first and stage 0 second, so the latched index (2) is
+        higher than an index-minimizing rule would choose. Had the higher-index
+        stage merely *succeeded* first, a rule that kept the lowest failing
+        index would agree with completion order throughout and this example
+        would prove nothing. Stage 2 is non-final in a four-stage pipeline, so
+        it also has stages left to terminate.
+        """
         state = make_wait_state(4)
 
-        # Stage 2 succeeds, then stage 0 fails, then stage 3 fails: the first
-        # *completed* failure (stage 0) must win, not the lowest index.
-        assert self._complete(state, 2, 0, 1.0) is False, (
-            "a successful stage must not request termination"
-        )
-        assert self._complete(state, 0, 1, 2.0) is True, (
+        assert self._complete(state, 2, 5, 1.0) is True, (
             "the first completed failure must request termination"
+        )
+        assert self._complete(state, 0, 1, 2.0) is False, (
+            "a lower-indexed later failure must not displace the latched one"
         )
         assert self._complete(state, 3, 7, 3.0) is False, (
             "a later failure must not re-request termination"
         )
 
-        assert state.failure_index == 0, "the first completed failure must latch"
-        assert state.exit_codes == [1, None, 0, 7], "exit codes land per stage index"
+        assert state.failure_index == 2, "the first completed failure must latch"
+        assert state.exit_codes == [1, None, 5, 7], "exit codes land per stage index"
         assert state.ended_at == [2.0, None, 1.0, 3.0], "end times land per index"
 
     def test_final_stage_failure_requests_no_termination(self) -> None:

@@ -16,14 +16,12 @@ import typing as typ
 import pytest
 
 from cuprum import _pipeline_wait
-from cuprum._process_lifecycle import (
-    _stages_to_terminate,
-    _terminate_pipeline_remaining_stages,
-)
+from cuprum._process_lifecycle import _terminate_pipeline_remaining_stages
 from cuprum.unittests._pipeline_wait_support import (
     CompletionPlan,
+    apply_completions,
     drive_completions,
-    immediate,
+    field_values,
     make_wait_state,
     pin_clock,
     record_terminations,
@@ -33,15 +31,6 @@ from cuprum.unittests._pipeline_wait_support import (
 
 _TERMINATION_ACTION = "pipeline_fail_fast_termination"
 _TERMINATED_ACTION = "pipeline_fail_fast_terminated"
-
-
-def _field_values(records: list[logging.LogRecord], key: str) -> list[object]:
-    """Return ``key`` from each record that carries it."""
-    return [
-        fields[key]
-        for fields in (structured_fields(record) for record in records)
-        if key in fields
-    ]
 
 
 class TestCompletionCorrelation:
@@ -67,7 +56,7 @@ class TestCompletionCorrelation:
             ),
         )
 
-        tokens = set(_field_values(records, "cuprum_exec_id"))
+        tokens = set(field_values(records, "cuprum_exec_id"))
 
         assert tokens == {stage_exec_id(1)}, (
             f"records must carry stage 1's own token, found {tokens!r}"
@@ -93,7 +82,7 @@ class TestCompletionCorrelation:
             ),
         )
 
-        counts = set(_field_values(records, "cuprum_stage_count"))
+        counts = set(field_values(records, "cuprum_stage_count"))
 
         assert counts == {4}, (
             f"every record must report the four-stage pipeline, found {counts!r}"
@@ -116,18 +105,10 @@ class TestCompletionCorrelation:
         state = make_wait_state(3)
         state.exec_ids = ()
 
-        async def drive() -> None:
-            """Fail stage 0 with no correlation context available."""
-            task = asyncio.create_task(immediate(4))
-            await task
-            state.wait_tasks = [task]
-            state.task_to_index = {task: 0}
-            await _pipeline_wait._process_completed_task(task, state, [], 0.25)
-
         with caplog.at_level(logging.WARNING, logger=_pipeline_wait.__name__):
-            asyncio.run(drive())
+            apply_completions(state, [(0, 4)])
 
-        tokens = _field_values(caplog.records, "cuprum_exec_id")
+        tokens = field_values(caplog.records, "cuprum_exec_id")
 
         assert tokens, "records must still be emitted without correlation context"
         assert all(token is None for token in tokens), (
@@ -188,21 +169,45 @@ class TestTerminationCount:
         )
 
     @pytest.mark.parametrize(
-        ("failure_index", "done"),
+        ("failure_index", "done", "expected"),
         [
-            pytest.param(0, [True, False, False, False], id="three_still_running"),
-            pytest.param(1, [False, True, False], id="failure_in_the_middle"),
-            pytest.param(0, [True, True, True], id="all_already_settled"),
+            pytest.param(
+                0,
+                [True, False, False, False],
+                3,
+                id="stages_1_2_and_3_still_running",
+            ),
+            pytest.param(1, [False, True, False], 2, id="stages_0_and_2_either_side"),
+            pytest.param(0, [True, True, True], 0, id="nothing_left_to_stop"),
+            pytest.param(2, [True, True, True, False], 1, id="only_the_last_running"),
+            # The failed stage's own wait task is normally already done by the
+            # time this runs. Leaving it running here is what separates the
+            # "not the failed stage" rule from the "not already settled" one:
+            # stage 1 must be left alone on its own account, not because it
+            # happens to have settled.
+            pytest.param(
+                1,
+                [False, False, False],
+                2,
+                id="the_failed_stage_is_spared_even_while_running",
+            ),
         ],
     )
     def test_the_helper_counts_the_stages_it_stopped(
         self,
         failure_index: int,
         done: list[bool],
+        expected: int,
     ) -> None:
-        """The count matches the pure selection of stages needing termination."""
-        expected = len(_stages_to_terminate(failure_index, done))
+        """The helper stops every still-running stage but the failed one.
 
+        ``expected`` is stated per case rather than derived, because the
+        selection under test is what would otherwise compute it: a count taken
+        from `_stages_to_terminate` would agree with the helper however both
+        were changed. Counting by hand from ``done`` is also what documents
+        each case — the failed stage is excluded because it owns its own exit,
+        and an already-settled stage because it needs no signal.
+        """
         terminated = asyncio.run(
             self._terminate(failure_index=failure_index, done=done)
         )

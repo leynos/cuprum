@@ -9,7 +9,6 @@ separately in `test_pipeline_wait_correlation.py`.
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses as dc
 import logging
 import typing as typ
@@ -19,8 +18,9 @@ import pytest
 from cuprum import _pipeline_wait
 from cuprum.unittests._pipeline_wait_support import (
     CompletionPlan,
+    apply_completions,
     drive_completions,
-    immediate,
+    field_values,
     make_wait_state,
     pin_clock,
     record_actions,
@@ -184,22 +184,10 @@ class TestCompletionObservability:
         # Recorded after the pinned completion reading, so elapsed is -87.5.
         state.started_at[0] = 100.0
 
-        async def drive() -> None:
-            """Fail stage 0 through the real async completion boundary."""
-            task = asyncio.create_task(immediate(4))
-            await task
-            state.wait_tasks = [task]
-            state.task_to_index = {task: 0}
-            await _pipeline_wait._process_completed_task(task, state, [], 0.25)
-
         with caplog.at_level(logging.WARNING, logger=_pipeline_wait.__name__):
-            asyncio.run(drive())
+            apply_completions(state, [(0, 4)])
 
-        durations = [
-            fields["cuprum_duration_s"]
-            for fields in (structured_fields(record) for record in caplog.records)
-            if "cuprum_duration_s" in fields
-        ]
+        durations = field_values(caplog.records, "cuprum_duration_s")
 
         assert durations, "a failing stage must emit records carrying a duration"
         assert all(duration == 0.0 for duration in durations), (
