@@ -17,7 +17,8 @@ if typ.TYPE_CHECKING:
     import pathlib as pth
 
 
-def _main_cli_args(output_dir: pth.Path) -> list[str]:
+@pytest.fixture
+def main_cli_args(tmp_path: pth.Path) -> list[str]:
     """Return CLI arguments for invoking the baseline fetch command."""
     return [
         "--repository",
@@ -27,13 +28,13 @@ def _main_cli_args(output_dir: pth.Path) -> list[str]:
         "--artifact-name",
         "benchmark-ratchet-main-baseline",
         "--output-dir",
-        str(output_dir),
+        str(tmp_path),
     ]
 
 
 def test_main_returns_not_found_when_no_baseline_available(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: pth.Path,
+    main_cli_args: list[str],
 ) -> None:
     """CLI should return the bootstrap exit code when no baseline is found."""
     monkeypatch.setenv("GITHUB_TOKEN", "token")
@@ -42,25 +43,28 @@ def test_main_returns_not_found_when_no_baseline_available(
         lambda **_: None,
     )
 
-    exit_code = main(_main_cli_args(tmp_path))
+    exit_code = main(main_cli_args)
 
-    assert exit_code == MAIN_BASELINE_NOT_FOUND_EXIT_CODE
+    assert exit_code == MAIN_BASELINE_NOT_FOUND_EXIT_CODE, (
+        "missing baseline should return the not-found exit code"
+    )
 
 
 def test_main_requires_github_token(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: pth.Path,
+    main_cli_args: list[str],
 ) -> None:
     """CLI should fail fast when the configured token env var is unset."""
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
     with pytest.raises(SystemExit, match="missing GitHub token"):
-        main(_main_cli_args(tmp_path))
+        main(main_cli_args)
 
 
 def test_main_downloads_and_extracts_latest_baseline(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pth.Path,
+    main_cli_args: list[str],
 ) -> None:
     """CLI should download the selected archive and extract it into output_dir."""
     monkeypatch.setenv("GITHUB_TOKEN", "token")
@@ -79,12 +83,12 @@ def test_main_downloads_and_extracts_latest_baseline(
         lambda **_: archive_buffer.getvalue(),
     )
 
-    exit_code = main(_main_cli_args(tmp_path))
+    exit_code = main(main_cli_args)
 
-    assert exit_code == 0
+    assert exit_code == 0, "successful extraction should return exit code zero"
     assert (tmp_path / "main-plan.json").read_text(encoding="utf-8") == (
         '{"dry_run": true}'
-    )
+    ), "the extracted plan should preserve its archive content"
     assert (tmp_path / "main-throughput.json").read_text(encoding="utf-8") == (
         '{"results": []}'
-    )
+    ), "the extracted throughput file should preserve its archive content"

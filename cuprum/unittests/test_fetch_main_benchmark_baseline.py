@@ -171,7 +171,7 @@ def test_load_json_response_retries_transient_urlopen_failures(
     attempts = 0
     timeouts: list[float] = []
 
-    def fake_urlopen(request: object, *, timeout: float) -> _Response:
+    def fake_open(request: object, *, timeout: float) -> _Response:
         """Fail twice then return the stub response, recording timeouts.
 
         Raises
@@ -187,9 +187,11 @@ def test_load_json_response_retries_transient_urlopen_failures(
             raise urllib.error.URLError(temporary_outage)
         return _Response()
 
+    opener = mock.Mock()
+    opener.open.side_effect = fake_open
     monkeypatch.setattr(
-        "benchmarks._github_http.urllib.request.urlopen",
-        fake_urlopen,
+        "benchmarks._github_http.urllib.request.build_opener",
+        lambda *_: opener,
     )
     monkeypatch.setattr("benchmarks._github_http.time.sleep", lambda _: None)
 
@@ -219,9 +221,9 @@ def test_with_retry_returns_after_transient_failures(
 
     result = _with_retry(operation, description="test")
 
-    assert result == "done"
-    assert operation.call_count == 3
-    assert delays == [0.5, 1.0]
+    assert result == "done", "retry should return the successful operation result"
+    assert operation.call_count == 3, "retry should make exactly three operation calls"
+    assert delays == [0.5, 1.0], "retry should use both configured delays in order"
 
 
 def test_with_retry_raises_non_transient_http_error(
@@ -242,9 +244,9 @@ def test_with_retry_raises_non_transient_http_error(
     with pytest.raises(urllib.error.HTTPError) as raised:
         _with_retry(operation, description="test")
 
-    assert raised.value is error
-    assert operation.call_count == 1
-    assert delays == []
+    assert raised.value is error, "retry should propagate the non-transient error"
+    assert operation.call_count == 1, "non-transient errors should stop after one call"
+    assert delays == [], "non-transient errors should not schedule a retry delay"
 
 
 def test_with_retry_raises_final_transient_failure(
@@ -259,9 +261,9 @@ def test_with_retry_raises_final_transient_failure(
     with pytest.raises(urllib.error.URLError) as raised:
         _with_retry(operation, description="test")
 
-    assert raised.value is errors[-1]
-    assert operation.call_count == 3
-    assert delays == [0.5, 1.0]
+    assert raised.value is errors[-1], "retry should propagate the final caught error"
+    assert operation.call_count == 3, "schedule exhaustion should make three calls"
+    assert delays == [0.5, 1.0], "schedule exhaustion should sleep only before retries"
 
 
 def test_download_bytes_uses_artifact_redirect_handler(
@@ -271,6 +273,10 @@ def test_download_bytes_uses_artifact_redirect_handler(
 
     class _Response:
         """Minimal stub of an HTTP response context manager."""
+
+        def __init__(self) -> None:
+            """Track whether the canned archive bytes were returned."""
+            self._has_returned = False
 
         def __enter__(self) -> _Response:
             """Return the stub response for use as a context manager."""
@@ -284,9 +290,12 @@ def test_download_bytes_uses_artifact_redirect_handler(
         ) -> None:
             """Exit the context manager without suppressing exceptions."""
 
-        @staticmethod
-        def read() -> bytes:
-            """Return canned archive bytes for the download response."""
+        def read(self, size: int) -> bytes:
+            """Return canned archive bytes once, then signal EOF."""
+            assert size > 0, "archive reads should request a bounded chunk"
+            if self._has_returned:
+                return b""
+            self._has_returned = True
             return b"archive-bytes"
 
     class _Opener:

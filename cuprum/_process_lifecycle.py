@@ -12,7 +12,8 @@ from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._subprocess_context import _cwd_arg
 from cuprum.context import current_context, resolve_env
 
-_PROCESS_EXIT_POLL_INTERVAL = 0.01
+_PROCESS_EXIT_POLL_INITIAL_DELAY = 0.001
+_PROCESS_EXIT_POLL_MAX_DELAY = 0.05
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -259,8 +260,10 @@ async def _await_process_exit(process: asyncio.subprocess.Process) -> int:
 
     async def _published_returncode() -> int:
         """Poll the authoritative return code at a low frequency."""
+        delay = _PROCESS_EXIT_POLL_INITIAL_DELAY
         while process.returncode is None:
-            await asyncio.sleep(_PROCESS_EXIT_POLL_INTERVAL)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, _PROCESS_EXIT_POLL_MAX_DELAY)
         return process.returncode
 
     wait_task = asyncio.create_task(process.wait())

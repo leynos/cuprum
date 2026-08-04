@@ -184,12 +184,12 @@ class _FailFastScenario:
         pytest.param(
             _FailFastScenario(
                 exit_codes=(0, 0, 5),
-                ready_stages=frozenset([0, 1, 2]),
+                ready_stages=frozenset([2]),
                 expected_failure_index=2,
-                expected_exit_codes=(0, 0, 5),
-                terminated_stages=frozenset(),
+                expected_exit_codes=(-15, -15, 5),
+                terminated_stages=frozenset([0, 1]),
             ),
-            id="last-stage-failure-no-termination",
+            id="last-stage-failure-terminates-upstream",
         ),
     ],
 )
@@ -199,8 +199,7 @@ def test_wait_for_pipeline_fail_fast_scenarios(
     """Validate fail-fast termination behaviour across different failure scenarios.
 
     Tests that:
-    - Early and middle stage failures terminate all other stages
-    - Final stage failures record failure index without terminating others
+    - Any failed stage terminates every other still-running stage
     """
     p0, p1, p2, result = asyncio.run(
         _exercise_wait_for_pipeline(
