@@ -44,7 +44,10 @@ from cuprum._pipeline_types import (
     _StageObservation,
 )
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
-from cuprum._process_lifecycle import _spawn_pipeline_processes, _terminate_process
+from cuprum._process_lifecycle import (
+    _spawn_pipeline_processes,
+    _terminate_timed_out_stages,
+)
 from cuprum.context import current_context
 
 if typ.TYPE_CHECKING:
@@ -135,32 +138,6 @@ def _build_timeout_expired_error(
     )
 
 
-async def _terminate_timed_out_stages(
-    spawn: _PipelineSpawnResult,
-    cancel_grace: float,
-) -> None:
-    """Terminate every still-running stage after a pipeline deadline expires.
-
-    ``_wait_for_pipeline`` normally performs this teardown itself when the
-    deadline cancels it. A non-positive deadline gives ``asyncio.wait_for`` a
-    zero timeout, and it then cancels that coroutine before it ever runs, so
-    nothing terminates the stages and they are left orphaned for the rest of
-    their natural life. Terminating here covers that route.
-
-    Running on both routes is safe and deliberate: ``_terminate_process``
-    returns immediately for a stage that has already exited. Doing it before
-    the output gather also lets the stage pipes reach EOF, so a captured
-    pipeline cannot block waiting on a producer that is still running.
-
-    Failures are absorbed — this runs while a timeout is already propagating,
-    and must not replace the ``TimeoutExpired`` the caller is waiting for.
-    """
-    await asyncio.gather(
-        *(_terminate_process(process, cancel_grace) for process in spawn.processes),
-        return_exceptions=True,
-    )
-
-
 async def _collect_pipeline_inputs(
     parts: tuple[SafeCmd, ...],
     spawn: _PipelineSpawnResult,
@@ -185,7 +162,7 @@ async def _collect_pipeline_inputs(
             final_stdout=final_stdout,
         )
     except TimeoutError as exc:
-        await _terminate_timed_out_stages(spawn, config.ctx.cancel_grace)
+        await _terminate_timed_out_stages(spawn.processes, config.ctx.cancel_grace)
         stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)
         if timeout is None:
             msg = "TimeoutError without a configured timeout"
