@@ -777,8 +777,8 @@ Internally, command execution can be described in terms of events:
   operation and the raised error's type;
 - `exit` – process finished, with exit code and duration.
 
-These seven phases are the whole of `ExecPhase`; there is no other value a
-hook can receive.
+These seven phases are the whole of `ExecPhase`; there is no other value a hook
+can receive.
 
 These events are surfaced to user code via hooks. A typical hook signature
 might be:
@@ -987,9 +987,9 @@ The structured event stream (`ExecEvent`) is exposed via `sh.observe()` and
 implemented with the following decisions:
 
 - **Event phases:** Cuprum emits `plan`, `start`, `stdout`, `stderr`, `stdin`,
-  `stdin_error`, and `exit` phases for both single commands and pipeline
-  stages — the full `ExecPhase` set. Pipeline stage events are tagged with a
-  stage index and stage count.
+  `stdin_error`, and `exit` phases for both single commands and pipeline stages
+  — the full `ExecPhase` set. Pipeline stage events are tagged with a stage
+  index and stage count.
 - **Correlation:** every event for one execution carries the same
   `ExecEvent.exec_id`, a stable token minted once per execution (per pipeline
   stage for pipelines). Consumers that track per-execution state — such as the
@@ -1524,12 +1524,22 @@ design decisions guide these adapters:
 - The reducer is total over `ExecPhase` — all seven phases (`plan`, `start`,
   `stdout`, `stderr`, `stdin`, `stdin_error`, `exit`) have an arm — and
   fail-closed beyond it: any other phase raises `_UnhandledMetricsPhaseError`
-  rather than being silently ignored. That is deliberate, and its cost is
-  worth stating plainly. A hook exception is not swallowed, so adding a value
-  to `ExecPhase` without adding an arm here would raise for every caller that
-  has already registered `MetricsHook`. A new phase therefore cannot reach
-  metrics without a decision in this reducer. The structured logging adapter
-  is fail-open by contrast, formatting an unrecognized phase generically.
+  rather than being silently ignored. That is deliberate, and its cost is worth
+  stating plainly. A hook exception is not swallowed, so adding a value to
+  `ExecPhase` without adding an arm here would raise for every caller that has
+  already registered `MetricsHook`. A new phase therefore cannot reach metrics
+  without a decision in this reducer. The structured logging adapter is
+  fail-open by contrast, formatting an unrecognized phase generically.
+- That fail-closed arm is why Rust-pump routing telemetry is *not* an
+  `ExecPhase`. Pump declines and cancellation-masked pump failures travel on a
+  separate channel — `PumpEvent`, registered through
+  `cuprum.pump_observation.observe_pump` and counted by
+  `cuprum.adapters.pump_metrics.PumpMetricsHook` — which shares the
+  `MetricsCollector` protocol but not the event contract. None of it reaches an
+  `ExecEvent` consumer, so no already-registered hook can be affected by it.
+  Its emitter reports rather than re-raises a failing hook, because both
+  emission sites lie on paths contracted to complete. See
+  [ADR-008](adr-008-rust-pump-observation-channel.md).
 
 For screen readers: The following sequence diagram shows how one execution
 event becomes collector calls. The observe-hook dispatcher invokes
@@ -1537,9 +1547,9 @@ event becomes collector calls. The observe-hook dispatcher invokes
 operations that event yields and receives a tuple of `_MetricOp` records. When
 the tuple is empty the hook returns immediately without computing labels.
 Otherwise it extracts the `program` and `project` labels once, then applies
-each operation in turn: a `_CounterOp` becomes `inc_counter(name, value,
-labels)` on the collector, and a `_HistogramOp` becomes `observe_histogram(name,
-value, labels)`.
+each operation in turn: a `_CounterOp` becomes
+`inc_counter(name, value, labels)` on the collector, and a `_HistogramOp`
+becomes `observe_histogram(name, value, labels)`.
 
 Figure 8: Metrics hook dispatch, from `ExecEvent` to collector calls
 
@@ -1573,8 +1583,8 @@ For screen readers: an `ExecEvent` calls the `MetricsHook`, which asks
 `_metric_operations` for that event's operations and receives a tuple of
 `_MetricOp` records. If the tuple is empty the hook returns immediately,
 without computing labels. Otherwise it extracts the labels once and then loops
-over the operations, applying each: a `_CounterOp` calls `inc_counter(name,
-value, labels)` on the collector, and a `_HistogramOp` calls
+over the operations, applying each: a `_CounterOp` calls
+`inc_counter(name, value, labels)` on the collector, and a `_HistogramOp` calls
 `observe_histogram(name, value, labels)`.
 
 The loop is the contract, and it is deliberately **not** atomic. An `exit`
@@ -1591,8 +1601,7 @@ Three consequences follow, and collector implementations depend on them:
   call, the first stays applied — a failure can be recorded without its
   duration.
 - **The order is fixed.** The failure counter is applied before the duration
-  observation, so a partial application is always the prefix, never the
-  suffix.
+  observation, so a partial application is always the prefix, never the suffix.
 - **The exception propagates, and the command fails with it.**
   `cuprum._observability._emit_exec_event` logs `observe_hook_failed`, then
   wraps the error in `_ExecEventEmissionError` so that observe-hook tasks
@@ -1601,9 +1610,9 @@ Three consequences follow, and collector implementations depend on them:
   backend therefore takes the user's command down rather than being absorbed,
   so a collector that must not do that has to swallow its own errors.
 
-So a collector must treat each call as independent and ordered, and must
-never assume that seeing a `cuprum_failures_total` increment guarantees a
-matching `cuprum_duration_seconds` observation will follow.
+So a collector must treat each call as independent and ordered, and must never
+assume that seeing a `cuprum_failures_total` increment guarantees a matching
+`cuprum_duration_seconds` observation will follow.
 
 Note what the adapter does *not* offer. No event or operation identifier is
 passed to `inc_counter` or `observe_histogram`, so a collector has nothing to
@@ -1613,8 +1622,7 @@ application stays partial rather than being replayed. A collector that wants
 exactly-once semantics has to obtain the identity from somewhere else.
 
 The label mapping is read-only for the duration of the loop — it is extracted
-once, before the first call, and the same mapping is passed to every
-operation.
+once, before the first call, and the same mapping is passed to every operation.
 
 ______________________________________________________________________
 
@@ -2460,8 +2468,8 @@ outcome moves the running byte total and the latched writer state — in a pure,
 separate from the descriptor I/O that feeds it.
 
 `advance` is the whole public surface. It takes a `PumpState`, the length just
-read, and a closure that performs one write, and it returns a `Flow`
-(`Continue`/`Stop`):
+read, and a closure that performs one write, and it returns a `Flow` (`Continue`
+/`Stop`):
 
 ```rust,ignore
 pub(crate) fn advance<E>(

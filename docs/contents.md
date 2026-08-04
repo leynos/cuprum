@@ -39,6 +39,8 @@ open each document.
   `cuprum/context.py` into a `cuprum/context/` package.
 - [ADR-007: Subprocess execution module boundaries][adr-007] - accepted
   decision to split private subprocess execution by lifecycle concern.
+- [ADR-008: Rust-pump observation channel][adr-008] - accepted decision to
+  report Rust-pump routing decisions on a channel separate from `ExecEvent`.
 
 ## Planning and validation references
 
@@ -56,5 +58,6 @@ open each document.
 [adr-005]: adr-005-unified-rust-availability-probe.md
 [adr-006]: adr-006-context-package-split.md
 [adr-007]: adr-007-subprocess-execution-module-boundaries.md
+[adr-008]: adr-008-rust-pump-observation-channel.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md

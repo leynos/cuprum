@@ -279,12 +279,12 @@ independent phase-count oracle.
 Two consequences are worth preserving when changing the mapping. Labels are
 projected only when the reducer yields at least one operation, so a `plan`
 event never touches `event.program` or the project tag. And the reducer is
-total over `ExecPhase` — all seven phases (`plan`, `start`, `stdout`,
-`stderr`, `stdin`, `stdin_error`, `exit`) have an arm — and fail-closed beyond
-it: any other phase raises `_UnhandledMetricsPhaseError` rather than being
-silently dropped. That is deliberate, and its cost is worth stating plainly. A
-hook exception is not swallowed, so adding a value to `ExecPhase` without
-adding an arm here would raise for every caller that has already registered
+total over `ExecPhase` — all seven phases (`plan`, `start`, `stdout`, `stderr`,
+`stdin`, `stdin_error`, `exit`) have an arm — and fail-closed beyond it: any
+other phase raises `_UnhandledMetricsPhaseError` rather than being silently
+dropped. That is deliberate, and its cost is worth stating plainly. A hook
+exception is not swallowed, so adding a value to `ExecPhase` without adding an
+arm here would raise for every caller that has already registered
 `MetricsHook`. A new phase therefore cannot reach metrics without a decision in
 this reducer. The structured logging adapter is fail-open by contrast,
 formatting an unrecognized phase generically.
@@ -301,11 +301,12 @@ collector's original exception — so a raising collector fails the user's
 command. A collector that must not do that has to swallow its own errors. The
 labels are extracted once before the loop and are read-only within it. A
 collector must therefore treat each call as independent and never infer a
-duration observation from a failure increment. No operation identifier
-is passed either, so a repeated call increments again — nothing here is
+duration observation from a failure increment. No operation identifier is
+passed either, so a repeated call increments again — nothing here is
 idempotent, and the hook never retries. See the metrics-hook dispatch figure in
-[the design document](cuprum-design.md) for the full statement, and
-`test_metrics_adapter_stateful.py` for the case that pins it.
+[the design document](cuprum-design.md)
+for the full statement, and `test_metrics_adapter_stateful.py` for the case
+that pins it.
 
 ### Choosing a test shape per observe hook
 
@@ -315,11 +316,11 @@ preference:
 
 Table 1: verification shape for each observe hook, and why
 
-| Hook | Shape | Why |
-| --- | --- | --- |
-| `TracingHook` | `RuleBasedStateMachine` (`test_tracing_span_stateful.py`) | holds `_active_spans` keyed by `ExecId`; the interesting bugs are correlation and drain failures across interleaved events |
-| `MetricsHook` | `RuleBasedStateMachine` (`test_metrics_adapter_stateful.py`) | accumulates counters and histograms, checked against an independent phase-count oracle |
-| `structured_logging_hook` | `@given` properties (`test_logging_adapter_properties.py`) | holds no state at all: one record per event, no map to drain |
+| Hook                      | Shape                                                        | Why                                                                                                                        |
+| ------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `TracingHook`             | `RuleBasedStateMachine` (`test_tracing_span_stateful.py`)    | holds `_active_spans` keyed by `ExecId`; the interesting bugs are correlation and drain failures across interleaved events |
+| `MetricsHook`             | `RuleBasedStateMachine` (`test_metrics_adapter_stateful.py`) | accumulates counters and histograms, checked against an independent phase-count oracle                                     |
+| `structured_logging_hook` | `@given` properties (`test_logging_adapter_properties.py`)   | holds no state at all: one record per event, no map to drain                                                               |
 
 A state machine over the logging hook would generate interleavings that cannot
 distinguish any two implementations, because nothing carries between events.
@@ -332,8 +333,9 @@ value that `JsonLoggingFormatter` cannot serialize. `ExecEvent.tags` is typed
 generator must produce values that are not JSON-native.
 
 Only `TracingHook` has an active map, so "the active map drains correctly" is a
-claim about that hook alone; `test_tracing_span_stateful.py` asserts it directly
-by cross-checking `hook._active_spans` against a model after every step.
+claim about that hook alone; `test_tracing_span_stateful.py` asserts it
+directly by cross-checking `hook._active_spans` against a model after every
+step.
 
 Stream pumping continues to drain the upstream reader after
 `_write_to_stream_writer` reports `_WriteOutcome.CLOSED`.  `_pump_stream`
@@ -528,20 +530,61 @@ pump's own error would resurface at collection time as an unretrieved-exception
 warning, detached from the hop that caused it.
 `cuprum/unittests/test_pipeline_streams_cancellation.py` pins the field.
 
-Neither record has a counter beside it, and that is a deliberate limit rather
-than an oversight. `MetricsHook` is the only seam in the library that reaches a
-metrics collector, and it dispatches on `ExecEvent.phase`, whose `case _` arm
-raises `_UnhandledMetricsPhaseError` (`cuprum/adapters/metrics_adapter.py`).
-Introducing a phase for these events would therefore raise inside every
-`MetricsHook` a caller has already registered rather than being ignored by it,
-so the counter cannot be added without first changing that contract.
-Cardinality is not the obstacle: `_RustPumpDeclineReason` is a closed
-three-member `StrEnum`, so a `reason` label is bounded by construction. This
-matches Proposal 3 of [ADR-002](adr-002-additional-rust-components.md), which
-holds Rust pump counters out of the public runtime API until their stability
-and cardinality are proven. Until a metrics path exists that does not run
-through `ExecPhase`, `cuprum_action` and `cuprum_reason` are the supported way
-to count these events, aggregated by the log pipeline.
+#### Counting those records
+
+Both records now have a counter beside them, reached through a channel that
+never touches `ExecEvent`. That separation is the design, not an implementation
+detail. `MetricsHook` dispatches on `ExecEvent.phase`, whose `case _` arm raises
+`_UnhandledMetricsPhaseError` (`cuprum/adapters/metrics_adapter.py`), and hook
+exceptions are not swallowed — `_emit_exec_event` re-raises and
+`_StageObservation.emit` unwraps and re-raises again. A new `ExecPhase` member
+would therefore raise inside every `MetricsHook` a caller had already
+registered, turning a library-side addition into a failure in code that was
+correct when it was written. Cardinality was never the obstacle:
+`RustPumpDeclineReason` is a closed three-member `StrEnum`, so a `reason` label
+is bounded by construction.
+
+The channel lives in three small modules:
+
+- `cuprum/pump_events.py` — `PumpEvent`, the closed `PumpPhase` literal, and
+  `RustPumpDeclineReason`, which bounds the `reason` label.
+- `cuprum/pump_observation.py` — the `ContextVar` holding registered hooks, the
+  `observe_pump` registration handle, and `_emit_pump_event`.
+- `cuprum/adapters/pump_metrics.py` — `PumpMetricsHook`, which maps events onto
+  the existing `MetricsCollector` protocol.
+
+Table 3: counters emitted by `PumpMetricsHook`
+
+| Counter                                      | Labels   | Emitted from                        |
+| -------------------------------------------- | -------- | ----------------------------------- |
+| `cuprum_rust_pump_declined_total`            | `reason` | `_log_rust_pump_declined`           |
+| `cuprum_rust_pump_failed_after_cancel_total` | none     | `_report_pump_outcome_after_cancel` |
+
+Each emission sits at the same choke point as the log record it accompanies,
+and after it, so an observer can neither suppress the record nor precede it.
+
+The hook-failure policy differs from the exec channel, and the difference is
+load-bearing. `_emit_pump_event` reports a raising hook at `WARNING` with its
+traceback under `cuprum_action="pump_observer_failed"` and runs the remaining
+hooks; it does not re-raise. Both emission sites sit on paths contracted to
+complete — the fall-back that keeps the hop working, and cancellation
+unwinding, where a raise would displace the `CancelledError` the caller is
+owed. Propagating would let a misconfigured metrics backend abort a pipe hop
+that would otherwise have succeeded, which is a change in execution behaviour
+caused by observing it. Anything that is not an `Exception` still propagates,
+on the same reasoning as `_await_rust_pump`: a shutdown signal must travel.
+
+Re-use policy: this channel carries Rust-pump routing decisions and nothing
+else. A new event describing a command's lifecycle belongs on `ExecEvent`; a
+new pump routing decision belongs here, as a `PumpPhase` member with a counter
+in `_PHASE_COUNTERS`. `PumpMetricsHook` ignores an unrecognized phase rather
+than raising, so adding one cannot break an already-registered consumer.
+
+[ADR-008](adr-008-rust-pump-observation-channel.md) records the decision and
+supersedes Proposal 3 of [ADR-002](adr-002-additional-rust-components.md) for
+these two events. `cuprum/unittests/test_pump_metrics_adapter.py` drives each
+counter from the real decline paths, and
+`cuprum/unittests/test_pump_observation.py` pins the failure policy.
 
 ## Canonical stream-drain loop
 
@@ -1382,11 +1425,11 @@ The construction is platform-specific, so it sits behind a `cfg`-selected
 - **Windows** — `raw_os_error` carries a `GetLastError` code, not an `errno`.
   Passing it as an `errno` would assign an unrelated number
   (`ERROR_INVALID_HANDLE` is 6, which as an `errno` is `ENXIO`) and pick the
-  subclass from it. The five-argument form `OSError(errno, strerror, filename,
-  winerror, filename2)` is the one that carries a native code: given a
-  `winerror`, CPython ignores the `errno` argument, derives `errno` from the
-  Win32 code, and selects the subclass from the derived value, so all three
-  agree.
+  subclass from it. The five-argument form
+  `OSError(errno, strerror, filename, winerror, filename2)` is the one that
+  carries a native code: given a `winerror`, CPython ignores the `errno`
+  argument, derives `errno` from the Win32 code, and selects the subclass from
+  the derived value, so all three agree.
 
 Two details are worth knowing before changing this code. First, `io::Error`
 renders a raw OS error as `"{strerror} (os error {code})"`, so the suffix is
@@ -1406,8 +1449,8 @@ case does not hard-code either expectation: it reads them back from an
 `OSError` it builds from the observed `winerror`, so it pins the derivation
 without depending on which Win32 code the failure happens to raise.
 
-What actually executes is narrower than what is written, so do not read a
-green run as coverage of both arms:
+What actually executes is narrower than what is written, so do not read a green
+run as coverage of both arms:
 
 - **POSIX** — the cases run natively on Linux whenever the extension is built,
   so a local `make develop` followed by `make test-extension` executes them.
@@ -1669,8 +1712,8 @@ start (right after entering the span, via `io_utils::reset_retry_counters`;
 `operation_span` itself does not touch the counters), so the seams stay
 parameter-free while the span still reports them.
 
-One event in that loop comes from the pump's own state rather than a seam.
-When the writer-close latch first closes — the downstream stage hung up and the
+One event in that loop comes from the pump's own state rather than a seam. When
+the writer-close latch first closes — the downstream stage hung up and the
 remaining reads only drain the upstream, the `head`-style early exit — the loop
 emits a `debug` event carrying `bytes_transferred`, using the same field and
 message as the splice path's broken-pipe report so a hang-up looks identical
@@ -1706,8 +1749,8 @@ When a property fails, proptest writes the shrunk case to a seed file under
 failing case ahead of the generated ones, so the same regression cannot return
 unnoticed.
 
-Seeds are only worth keeping when they came from a genuine failure. Running
-the Rust suite against deliberately-broken code — to prove a property is not
+Seeds are only worth keeping when they came from a genuine failure. Running the
+Rust suite against deliberately-broken code — to prove a property is not
 vacuous — also writes a seed, and that one pins a case that never failed
 against correct code. Disable persistence for those runs so the file is never
 created:
@@ -1749,11 +1792,11 @@ snapshots and properties cover the `consume_stream_files` read-and-decode loop,
 while `TestRustConsumeStream` covers the exported surface a caller actually
 touches. Keep both when changing either.
 
-Those snapshots are written inline with `insta::assert_snapshot!(value, @"...")`
-rather than as separate `.snap` files, which keeps the expected text beside the
-case that produces it and leaves no snapshot files to review or prune. Accept a
-deliberate change by editing the inline literal; `cargo insta` is not required
-for the inline form.
+Those snapshots are written inline with
+`insta::assert_snapshot!(value, @"...")` rather than as separate `.snap` files,
+which keeps the expected text beside the case that produces it and leaves no
+snapshot files to review or prune. Accept a deliberate change by editing the
+inline literal; `cargo insta` is not required for the inline form.
 
 ### Building the extension for tests
 
@@ -2144,10 +2187,9 @@ section in step.
 
 ## Maturin pin synchronization and native wheel tests
 
-These checks span three test modules, one per concern —
-`test_maturin_pins.py`, `test_maturin_toolchain.py`, and
-`test_maturin_build.py` — and the helpers behind them are split across three
-boundaries.
+These checks span three test modules, one per concern — `test_maturin_pins.py`,
+`test_maturin_toolchain.py`, and `test_maturin_build.py` — and the helpers
+behind them are split across three boundaries.
 
 The **pin-synchronization** checks live in
 `cuprum/unittests/test_maturin_pins.py`, with their readers and regexes local
@@ -2159,9 +2201,9 @@ second consumer — the threshold this policy asks for before sharing anything:
 - `read_expected_maturin_version` — the pin comparison here, and the wheel
   snapshot's `Generator` assertion in `test_maturin_build.py`.
 - `MANYLINUX_CONTAINER_SHA256_RE` — the container-pin assertion here, and the
-  generated references in `test_manylinux_container_ref_properties.py`.
-  Sharing it through the support module keeps one test module from importing a
-  private name out of another.
+  generated references in `test_manylinux_container_ref_properties.py`. Sharing
+  it through the support module keeps one test module from importing a private
+  name out of another.
 
 The **availability detectors** are tested together in
 `cuprum/unittests/test_maturin_toolchain.py`: `toolchain_available` and
@@ -2183,9 +2225,8 @@ interpreter's package metadata with `importlib.metadata.version("maturin")` —
 the same interpreter that runs the build — and gates on that interpreter being
 able to *import* `maturin`, not on a CLI being present on `PATH`. A launcher
 found on `PATH` can belong to a different environment from the one the build
-uses. The snapshot test asserts the built wheel's
-`Generator` matches that same pin, so a wheel built by an unexpected maturin
-fails the suite.
+uses. The snapshot test asserts the built wheel's `Generator` matches that same
+pin, so a wheel built by an unexpected maturin fails the suite.
 
 The **wheel-artefact snapshot** parsers (`wheel_build_snapshot` and its private
 helpers) live in the sibling module `tests/helpers/maturin_wheel.py`, keeping
@@ -2238,8 +2279,8 @@ Skipped automatically when the `maturin` *module* cannot be imported by the
 running interpreter. That is the right boundary rather than `PATH`, because the
 build runs `python -m maturin`: a `maturin` launcher earlier on `PATH` can
 belong to an entirely different environment from the one the build uses. When
-the module is importable, asserts that the installed version matches the
-pinned development dependency.
+the module is importable, asserts that the installed version matches the pinned
+development dependency.
 
 **Wheel build snapshot** (`test_maturin_wheel_build_snapshot`) Requires the
 Rust toolchain (`cargo` and `rustc`). Builds a native wheel into a temporary
@@ -2268,9 +2309,9 @@ different questions:
 
 - `toolchain_available()` — is the `maturin` module importable and are `cargo`
   and `rustc` on `PATH`? It uses `importlib.import_module` rather than
-  `importlib.util.find_spec`, because the build runs `python -m maturin`,
-  which needs the module to *import*: a module that is merely findable can
-  still fail to import.
+  `importlib.util.find_spec`, because the build runs `python -m maturin`, which
+  needs the module to *import*: a module that is merely findable can still fail
+  to import.
 - `maturin_script_locatable()` — can maturin find its own compiled script the
   way `python -m maturin build` will at runtime?
 

@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses as dc
-import enum
 import logging
 import typing as typ
 
@@ -37,28 +36,21 @@ from cuprum._pipeline_stream_fds import (
     _paused_reader,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
+from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
+from cuprum.pump_observation import _emit_pump_event
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 _LOGGER = logging.getLogger(__name__)
 
-
-class _RustPumpDeclineReason(enum.StrEnum):
-    """Why an inter-stage hop fell back from the Rust pump to the Python one.
-
-    A closed set rather than free text. Operators filter on ``cuprum_reason``,
-    so a typo at a new call site would produce a value their filters silently
-    miss; as an enum it is a type error instead. Members are `str`, so the
-    logged field stays a plain string.
-    """
-
-    RAW_FD_UNAVAILABLE = "raw_fd_unavailable"
-    READER_PAUSE_FAILED = "reader_pause_failed"
-    BLOCKING_MODE_UNAVAILABLE = "blocking_mode_unavailable"
+# Retained under its historical private name so existing internal call sites and
+# tests keep working now that the closed set is published beside the event type
+# that carries it.
+_RustPumpDeclineReason = RustPumpDeclineReason
 
 
-def _log_rust_pump_declined(reason: _RustPumpDeclineReason) -> None:
+def _log_rust_pump_declined(reason: RustPumpDeclineReason) -> None:
     """Record why an inter-stage hop fell back from the Rust pump to Python.
 
     Each decline is a silent performance decision: the hop still completes
@@ -68,13 +60,17 @@ def _log_rust_pump_declined(reason: _RustPumpDeclineReason) -> None:
     operator actually asks. Logged at debug level because this is a per-hop
     internal routing decision, not a fault.
 
+    The log record is written first and the pump event second, so a registered
+    observer can neither suppress nor precede the record operators already
+    filter on; the counter supplements that record rather than replacing it.
+
     Examples
     --------
     Capture the reason a hop declined the fast path::
 
         with caplog.at_level(logging.DEBUG, logger="cuprum._pipeline_streams"):
             _log_rust_pump_declined(
-                _RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE,
+                RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE,
             )
         assert caplog.records[0].__dict__["cuprum_reason"] == (
             "blocking_mode_unavailable"
@@ -86,6 +82,7 @@ def _log_rust_pump_declined(reason: _RustPumpDeclineReason) -> None:
         reason.value,
         extra={"cuprum_action": "rust_pump_declined", "cuprum_reason": reason.value},
     )
+    _emit_pump_event(PumpEvent(phase="declined", reason=reason))
 
 
 @dc.dataclass(slots=True)
@@ -201,7 +198,7 @@ async def _pump_over_raw_fds(
         if not may_hand_off:
             # Pausing failed, so asyncio may still be consuming the reader.
             # Fall back rather than race it for the descriptor.
-            _log_rust_pump_declined(_RustPumpDeclineReason.READER_PAUSE_FAILED)
+            _log_rust_pump_declined(RustPumpDeclineReason.READER_PAUSE_FAILED)
             return False
 
         # Flush any bytes asyncio already buffered in the StreamReader before
@@ -211,7 +208,7 @@ async def _pump_over_raw_fds(
         try:
             guard = _BlockingModeGuard.engage(reader_fd=reader_fd, writer_fd=writer_fd)
         except OSError:
-            _log_rust_pump_declined(_RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
+            _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
             return False
 
         await _await_rust_pump(guard, reader_fd=reader_fd, writer_fd=writer_fd)
@@ -294,6 +291,12 @@ def _report_pump_outcome_after_cancel(future: asyncio.Future[int]) -> None:
         exc_info=error,
         extra={"cuprum_action": "rust_pump_failed_after_cancel"},
     )
+    # The event carries no error detail. The traceback above is the diagnostic;
+    # an exception type on a metric label is a series per failure mode the
+    # library does not control. Emission cannot raise past here — this runs
+    # inside cancellation unwinding, and a raise would displace the
+    # `CancelledError` the caller is owed. See `_emit_pump_event`.
+    _emit_pump_event(PumpEvent(phase="failed_after_cancel"))
 
 
 async def _drain_reader_buffer(
@@ -351,7 +354,7 @@ async def _try_rust_pump(
     writer_fd = _extract_stream_fd(writer)
 
     if reader_fd is None or writer_fd is None:
-        _log_rust_pump_declined(_RustPumpDeclineReason.RAW_FD_UNAVAILABLE)
+        _log_rust_pump_declined(RustPumpDeclineReason.RAW_FD_UNAVAILABLE)
         return False
 
     return await _run_rust_pump(
