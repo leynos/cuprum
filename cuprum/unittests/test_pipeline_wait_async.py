@@ -13,6 +13,7 @@ import typing as typ
 from cuprum import _pipeline_wait
 from cuprum._pipeline_types import _StageWaitContext
 from cuprum.unittests._pipeline_wait_support import (
+    advancing_clock,
     immediate,
     make_wait_state,
     pin_clock,
@@ -29,11 +30,12 @@ if typ.TYPE_CHECKING:
 class TestProcessCompletedTask:
     """Async integration tests for the ``_process_completed_task`` boundary.
 
-    The pure transition is covered above; these cover the wiring around it —
-    that the completed task's index and result reach ``record_completion``, that
-    the clock is read from ``time.perf_counter``, and that termination is
-    invoked exactly when ``should_terminate_others`` says so, with the failing
-    stage's index forwarded.
+    The pure transition is covered elsewhere, as the module docstring says;
+    these cover the wiring around it — that the completed task's index and
+    result reach ``record_completion``, that the end time comes from the wait
+    module's ``perf_counter``, and that termination is invoked exactly when
+    ``should_terminate_others`` says so, with the failing stage's index
+    forwarded.
     """
 
     @staticmethod
@@ -131,26 +133,17 @@ class TestProcessCompletedTask:
         Each entry is a ``(stage_index, exit_code)`` pair applied in sequence,
         so the call order *is* the completion order. The clock advances by ten
         per completion, so each stage's ``ended_at`` is distinguishable rather
-        than a single pinned value every slot would match. It advances per
-        completion rather than per reading because a fail-fast completion also
-        times its own teardown, and those reads must not shift the next
-        stage's recorded end time.
+        than a single pinned value every slot would match.
         """
         terminations = record_terminations(monkeypatch)
-
-        reading = [0.0]
-        monkeypatch.setattr(
-            _pipeline_wait.time,
-            "perf_counter",
-            lambda: reading[0],
-        )
+        clock = advancing_clock(monkeypatch)
 
         state = make_wait_state(stage_count)
 
         async def drive() -> None:
             """Apply each completion through the real async boundary."""
             for step, (idx, exit_code) in enumerate(completions):
-                reading[0] = 10.0 * (step + 1)
+                clock.reading = 10.0 * (step + 1)
                 task = asyncio.create_task(immediate(exit_code))
                 await task
                 state.wait_tasks = [task]

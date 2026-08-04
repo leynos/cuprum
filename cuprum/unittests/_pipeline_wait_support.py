@@ -151,8 +151,41 @@ def record_terminations(
 
 
 def pin_clock(monkeypatch: pytest.MonkeyPatch, value: float) -> None:
-    """Freeze ``time.perf_counter`` so emitted durations are deterministic."""
-    monkeypatch.setattr(_pipeline_wait.time, "perf_counter", lambda: value)
+    """Freeze the wait module's clock so emitted durations are deterministic.
+
+    ``_pipeline_wait`` binds ``perf_counter`` as a module attribute of its own,
+    so this replaces that binding rather than ``time.perf_counter``. The
+    difference matters: patching the stdlib attribute would pin the clock for
+    every module in the process for the duration of the test.
+    """
+    monkeypatch.setattr(_pipeline_wait, "perf_counter", lambda: value)
+
+
+@dc.dataclass(slots=True)
+class AdvancingClock:
+    """A settable stand-in for the wait module's monotonic clock."""
+
+    reading: float = 0.0
+
+    def __call__(self) -> float:
+        """Return the current reading, as ``perf_counter`` would."""
+        return self.reading
+
+
+def advancing_clock(monkeypatch: pytest.MonkeyPatch) -> AdvancingClock:
+    """Replace the wait module's clock with one the test moves by hand.
+
+    Assigning ``reading`` before each completion is what makes the stages'
+    recorded end times distinguishable, where `pin_clock` would give them all
+    one value. It advances per completion rather than per reading because a
+    fail-fast completion also times its own teardown, and those reads must not
+    shift the next stage's recorded end time.
+
+    Patches the same narrow seam as `pin_clock`, for the same reason.
+    """
+    clock = AdvancingClock()
+    monkeypatch.setattr(_pipeline_wait, "perf_counter", clock)
+    return clock
 
 
 def structured_fields(record: logging.LogRecord) -> dict[str, object]:
