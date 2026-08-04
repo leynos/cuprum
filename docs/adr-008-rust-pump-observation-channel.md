@@ -146,9 +146,12 @@ ruled Option A out.
 
 - A caller who wants both channels must register two hooks. They can share one
   collector, so the backend wiring is not duplicated.
-- Counters are per-process and per-context, like every other Cuprum hook. A
+- Hook *registration* is context-local, like every other Cuprum hook: a
   registration made outside the `contextvars.Context` that runs the pipeline
-  will not see its events.
+  will not see its events. Metric *scope* is not registration scope. The counts
+  live in the caller-supplied `MetricsCollector`, so they are as wide as that
+  collector is — a collector shared between contexts, or backed by an exporter
+  shared across processes, aggregates across them.
 - The two counters carry the `cuprum_` namespace prefix used by every other
   metric this library emits, so dashboards that expected bare
   `rust_pump_declined_total` names must qualify them.
