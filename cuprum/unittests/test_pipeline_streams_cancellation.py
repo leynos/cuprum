@@ -90,8 +90,20 @@ async def _cancel_mid_transfer(
         await task
 
 
+@pytest.mark.parametrize(
+    "cancellations",
+    [
+        pytest.param(1, id="single-cancellation"),
+        # A cancellation delivered *during* the drain interrupts the wait
+        # itself. If that ended the drain, the descriptors would be restored
+        # while the worker thread still owned them — the same race the single
+        # cancellation guards, reachable by any caller that cancels twice.
+        pytest.param(3, id="repeated-cancellation-cannot-cut-the-drain-short"),
+    ],
+)
 def test_cancellation_restores_descriptors_only_after_worker_returns(
     monkeypatch: pytest.MonkeyPatch,
+    cancellations: int,
 ) -> None:
     """Cancelling mid-transfer waits for the worker before restoring FDs.
 
@@ -112,12 +124,19 @@ def test_cancellation_restores_descriptors_only_after_worker_returns(
         return 0
 
     _install_fake_pump(monkeypatch, blocking_pump)
-    asyncio.run(_cancel_mid_transfer(events, worker_started, release))
+    asyncio.run(
+        _cancel_mid_transfer(
+            events,
+            worker_started,
+            release,
+            cancellations=cancellations,
+        )
+    )
 
     assert "restored" in events, "the descriptors must still be restored"
     assert events.index("worker_returned") < events.index("restored"), (
-        "restore must happen only after the worker thread returns; observed "
-        f"order {events}"
+        f"restore must happen only after the worker thread returns, even "
+        f"after {cancellations} cancellation(s); observed order {events}"
     )
 
 
@@ -190,36 +209,4 @@ def test_a_failing_pump_on_a_cancelled_hop_reports_the_cancellation(
     )
     assert str(exc_info[1]) == "the pump failed while the hop was being cancelled", (
         f"the attached exception must carry the pump's message, found {exc_info[1]!r}"
-    )
-
-
-def test_repeated_cancellation_still_waits_for_the_worker(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Extra cancellations cannot cut the drain short.
-
-    A cancellation delivered *during* the drain interrupts the wait itself. If
-    that ended the drain, the descriptors would be restored while the worker
-    thread still owned them — the same race the single-cancellation path exists
-    to prevent, reachable by any caller that cancels twice.
-    """
-    events: list[str] = []
-    release = threading.Event()
-    worker_started = threading.Event()
-
-    def blocking_pump(reader_fd: int, writer_fd: int) -> int:
-        """Block until released, standing in for an in-flight Rust transfer."""
-        del reader_fd, writer_fd
-        worker_started.set()
-        release.wait(timeout=5.0)
-        events.append("worker_returned")
-        return 0
-
-    _install_fake_pump(monkeypatch, blocking_pump)
-    asyncio.run(_cancel_mid_transfer(events, worker_started, release, cancellations=3))
-
-    assert "restored" in events, "the descriptors must still be restored"
-    assert events.index("worker_returned") < events.index("restored"), (
-        "repeated cancellation must not restore the descriptors before the "
-        f"worker returns; observed order {events}"
     )

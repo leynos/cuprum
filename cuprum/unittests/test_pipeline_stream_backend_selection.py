@@ -391,7 +391,10 @@ class TestPumpStreamDispatch:
             )
         )
 
-        assert call_order == ["pause", "drain", "restore", "resume"]
+        expected_order = ["pause", "drain", "restore", "resume"]
+        assert call_order == expected_order, (
+            f"expected the hand-off order {expected_order}, found {call_order}"
+        )
 
     def test_dispatch_restores_reader_blocking_when_writer_toggle_fails(
         self,

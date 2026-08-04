@@ -5,9 +5,16 @@ duration of a transfer, then restores their blocking mode, resumes the reader
 transport, and closes the writer. The fault-injection suites drive those
 partial-failure paths behind private seams; this module checks the property
 they exist to protect, through the public API and real subprocesses. Repeated
-runs of the same pipeline must transfer their payload intact and leave the
-process holding no more descriptors than it started with, whichever backend
-pumps the hops.
+runs of the same pipeline must transfer their payload intact and hold the
+descriptor count flat across them, whichever backend pumps the hops.
+
+The invariant is cumulative rather than absolute: the count is taken after a
+warm-up run and compared across the runs that follow. The first run opens
+event-loop and subprocess machinery that legitimately outlives it, so a
+comparison against the pre-warm-up count would report that as a leak. What this
+catches is a hop that returns one descriptor too few, which drifts the count
+upwards run after run; a genuine one-off leak inside the warm-up run itself is
+outwith its reach.
 """
 
 from __future__ import annotations
@@ -25,7 +32,7 @@ if typ.TYPE_CHECKING:
     from cuprum import Program
     from cuprum.sh import Pipeline
 
-_linux_only = pytest.mark.skipif(
+_LINUX_ONLY = pytest.mark.skipif(
     not sys.platform.startswith("linux"),
     reason="counting open descriptors requires /proc/self/fd",
 )
@@ -56,7 +63,7 @@ def _upper_pipeline() -> tuple[Pipeline, frozenset[Program]]:
     return pipeline, frozenset([ECHO, python_program])
 
 
-@_linux_only
+@_LINUX_ONLY
 @pytest.mark.usefixtures("stream_backend")
 def test_repeated_run_sync_transfers_payload_and_leaks_no_descriptors() -> None:
     """Repeated public runs transfer intact and return every descriptor.
