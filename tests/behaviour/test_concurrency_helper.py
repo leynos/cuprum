@@ -177,6 +177,12 @@ def when_run_concurrently(
 ) -> _ConcurrentExecution:
     """Execute commands concurrently with default settings.
 
+    Parameters
+    ----------
+    commands_under_test : _ScenarioCommands
+        The scenario commands containing the commands to execute and the
+        allowlist to scope the execution context.
+
     Returns
     -------
     _ConcurrentExecution
@@ -194,6 +200,12 @@ def when_run_with_concurrency_limit(
     commands_under_test: _ScenarioCommands,
 ) -> _ConcurrentExecution:
     """Execute commands with concurrency limit of 2.
+
+    Parameters
+    ----------
+    commands_under_test : _ScenarioCommands
+        The scenario commands containing the commands to execute and the
+        allowlist to scope the execution context.
 
     Returns
     -------
@@ -215,6 +227,12 @@ def when_run_collect_all(
 ) -> _ConcurrentExecution:
     """Execute commands in collect-all mode (fail_fast=False).
 
+    Parameters
+    ----------
+    commands_under_test : _ScenarioCommands
+        The scenario commands containing the commands to execute and the
+        allowlist to scope the execution context.
+
     Returns
     -------
     _ConcurrentExecution
@@ -231,6 +249,12 @@ def when_run_fail_fast(
     commands_under_test: _ScenarioCommands,
 ) -> _ConcurrentExecution:
     """Execute commands with fail-fast enabled.
+
+    Parameters
+    ----------
+    commands_under_test : _ScenarioCommands
+        The scenario commands containing the commands to execute and the
+        allowlist to scope the execution context.
 
     Returns
     -------

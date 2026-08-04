@@ -64,13 +64,7 @@ def test_is_available_returns_true_when_module_present(
 
         @staticmethod
         def is_available() -> bool:
-            """Report that the native backend is available.
-
-            Returns
-            -------
-            bool
-                Always ``True``.
-            """
+            """Report that the native backend is available."""
             return True
 
     monkeypatch.setattr(importlib, "import_module", lambda _: _Native())

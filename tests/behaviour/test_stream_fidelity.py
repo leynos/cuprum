@@ -97,6 +97,13 @@ def when_pipe_through_cat(
 ) -> PipelineResult:
     """Execute the pipeline synchronously.
 
+    Parameters
+    ----------
+    test_pipeline : tuple[Pipeline, frozenset[Program]]
+        A tuple containing the composed python->cat pipeline and the
+        allowlist of programs it requires for execution under
+        ``scoped(ScopeConfig())``.
+
     Returns
     -------
     PipelineResult

@@ -266,8 +266,8 @@ def run_pipeline_benchmarks(
     Returns
     -------
     PipelineBenchmarkRunResult
-        The run result recording the dry-run flag, the executed command, the
-        output path, Rust availability, and the scenarios.
+        The run result recording the dry-run flag, the generated benchmark
+        command, the output path, Rust availability, and the scenarios.
     """
     command_config = _prepare_benchmark_command_config(config=config)
     command = build_hyperfine_command(config=command_config)
