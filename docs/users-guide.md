@@ -1640,6 +1640,73 @@ Such a failure is recorded on the same logger under a `cuprum_action` of
 stays diagnosable instead of vanishing behind the cancellation. It sits at
 `DEBUG` too, so the logger adjustment above reveals it.
 
+
+### Counting pump routing decisions
+
+Aggregating debug logs answers "why did this hop fall back?" but not "what
+fraction of hops still takes the fast path?". For that, register a pump
+observer. It is a separate channel from `sh.observe`: pump events describe an
+internal routing decision rather than a command's lifecycle, so they are not
+`ExecEvent` values and never reach an observe hook. An `ExecEvent` consumer
+registered elsewhere in the process is unaffected.
+
+```python
+from cuprum.adapters.metrics_adapter import InMemoryMetrics
+from cuprum.adapters.pump_metrics import PumpMetricsHook
+from cuprum.pump_observation import observe_pump
+
+metrics = InMemoryMetrics()
+
+with observe_pump(PumpMetricsHook(metrics)):
+    pipeline.run_sync()
+
+print(metrics.counters)  # {'cuprum_rust_pump_declined_total': 2.0}
+```
+
+`PumpMetricsHook` takes the same `MetricsCollector` protocol as `MetricsHook`,
+so one collector can back both channels:
+
+```python
+from cuprum import sh
+from cuprum.adapters.metrics_adapter import MetricsHook
+
+with sh.observe(MetricsHook(metrics)), observe_pump(PumpMetricsHook(metrics)):
+    pipeline.run_sync()
+```
+
+Table 2: counters emitted by `PumpMetricsHook`
+
+| Counter                                      | Labels   | Incremented when                                                |
+| -------------------------------------------- | -------- | --------------------------------------------------------------- |
+| `cuprum_rust_pump_declined_total`            | `reason` | a hop fell back from the Rust pump to the Python pump           |
+| `cuprum_rust_pump_failed_after_cancel_total` | none     | a cancelled hop's Rust worker failure was consumed and recorded |
+
+The `reason` label takes exactly the three values in Table 1 —
+`raw_fd_unavailable`, `reader_pause_failed`, and `blocking_mode_unavailable` —
+and nothing else. They are published as the `RustPumpDeclineReason` enum, so a
+dashboard can enumerate the series it will see:
+
+```python
+from cuprum import RustPumpDeclineReason
+
+print([reason.value for reason in RustPumpDeclineReason])
+```
+
+Nothing derived from a descriptor, an argument vector, or an exception reaches
+a label, so the series count is fixed. A successful hand-off increments
+nothing; success is the absence of a decline. The `DEBUG` records above are
+unchanged — the counters supplement them rather than replacing them.
+
+> **Note**
+> A pump hook that raises is reported on the `cuprum.pump_observation` logger
+> at `WARNING` with its traceback, and the hop continues. This differs from
+> `sh.observe` hooks, whose exceptions fail the command being observed. The
+> difference is deliberate: a decline is recorded on the path that falls back
+> to the Python pump and completes the hop, so a misconfigured metrics backend
+> must not be able to abort a pipe hop that would otherwise have succeeded.
+> `SystemExit` and `KeyboardInterrupt` still propagate. Hooks must be
+> synchronous; one that returns an awaitable is reported and discarded.
+
 ### Choosing a stream backend
 
 Most users should leave backend selection on `auto`. This uses the Rust pathway

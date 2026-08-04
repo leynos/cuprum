@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses as dc
-import enum
 import functools
 import logging
 import os
@@ -59,6 +58,8 @@ from cuprum._pipeline_stream_results import (
     _surface_unexpected_pipe_failures as _surface_unexpected_pipe_failures,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
+from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
+from cuprum.pump_observation import _emit_pump_event
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -67,21 +68,17 @@ if typ.TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-class _RustPumpDeclineReason(enum.StrEnum):
-    """Why an inter-stage hop falls back from the Rust pump to the Python one."""
-
-    RAW_FD_UNAVAILABLE = "raw_fd_unavailable"
-    READER_PAUSE_FAILED = "reader_pause_failed"
-    BLOCKING_MODE_UNAVAILABLE = "blocking_mode_unavailable"
+_RustPumpDeclineReason = RustPumpDeclineReason
 
 
-def _log_rust_pump_declined(reason: _RustPumpDeclineReason) -> None:
+def _log_rust_pump_declined(reason: RustPumpDeclineReason) -> None:
     """Record the reason an inter-stage hop falls back to Python pumping."""
     _LOGGER.debug(
         "Inter-stage hop declined the Rust pump (%s); using the Python pump",
         reason.value,
         extra={"cuprum_action": "rust_pump_declined", "cuprum_reason": reason.value},
     )
+    _emit_pump_event(PumpEvent(phase="declined", reason=reason))
 
 
 @dc.dataclass(slots=True)
@@ -214,6 +211,7 @@ def _log_rust_pump_failed_after_cancel(error: BaseException) -> None:
         exc_info=error,
         extra={"cuprum_action": "rust_pump_failed_after_cancel"},
     )
+    _emit_pump_event(PumpEvent(phase="failed_after_cancel"))
 
 
 async def _run_rust_pump(

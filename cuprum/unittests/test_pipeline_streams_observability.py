@@ -10,13 +10,18 @@ here.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import typing as typ
 
 import pytest
 
-from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum.adapters.pump_metrics import PumpMetricsHook
+from cuprum.pump_observation import observe_pump
+from cuprum.unittests._rust_pump_test_helpers import (
+    DECLINE_PATHS,
+    RecordingCollector,
+    decline_on_pause_failure,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -33,60 +38,10 @@ def _decline_records(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]
     ]
 
 
-def _fail_engage(**_kwargs: object) -> object:
-    """Refuse to switch the descriptors to blocking mode."""
-    msg = "blocking mode is unavailable for this descriptor pair"
-    raise OSError(msg)
-
-
-def _decline_on_missing_fds() -> None:
-    """Route a hop whose streams expose no raw descriptors."""
-    reader = typ.cast("asyncio.StreamReader", object())
-    asyncio.run(_pipeline_streams._try_rust_pump(reader, None))
-
-
-def _decline_on_pause_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Route a hop whose reader transport cannot be paused."""
-    monkeypatch.setattr(
-        _pipeline_streams,
-        "_pause_reader_transport",
-        lambda _reader: _pipeline_stream_fds._ReaderPause(may_hand_off=False),
-    )
-    _run_raw_fd_pump()
-
-
-def _decline_on_blocking_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Route a hop whose descriptors cannot be made blocking."""
-    monkeypatch.setattr(
-        _pipeline_streams,
-        "_pause_reader_transport",
-        lambda _reader: _pipeline_stream_fds._ReaderPause(may_hand_off=True),
-    )
-    monkeypatch.setattr(_pipeline_stream_fds._BlockingModeGuard, "engage", _fail_engage)
-    _run_raw_fd_pump()
-
-
-def _run_raw_fd_pump() -> None:
-    """Drive ``_pump_over_raw_fds`` over placeholder descriptors."""
-    reader = typ.cast("asyncio.StreamReader", object())
-    asyncio.run(
-        _pipeline_streams._pump_over_raw_fds(
-            reader=reader,
-            writer=None,
-            reader_fd=1,
-            writer_fd=2,
-        )
-    )
-
-
 @pytest.mark.parametrize(
     ("trigger", "expected_reason"),
-    [
-        (lambda _monkeypatch: _decline_on_missing_fds(), "raw_fd_unavailable"),
-        (_decline_on_pause_failure, "reader_pause_failed"),
-        (_decline_on_blocking_failure, "blocking_mode_unavailable"),
-    ],
-    ids=["missing_fds", "pause_failure", "blocking_failure"],
+    [(trigger, reason) for _id, trigger, reason in DECLINE_PATHS],
+    ids=[path_id for path_id, _trigger, _reason in DECLINE_PATHS],
 )
 def test_declining_the_rust_pump_records_its_reason(
     trigger: cabc.Callable[[pytest.MonkeyPatch], None],
@@ -107,9 +62,36 @@ def test_declining_the_rust_pump_records_its_reason(
         f"expected the decline to be attributed to {expected_reason!r}, "
         f"found {records[0]['cuprum_reason']!r}"
     )
-    # Asserted per reason so a regression that promotes a single fall-back
-    # path above DEBUG does not hide behind the other two cases.
+    # Asserted per reason rather than once: falling back is a routing decision
+    # rather than a fault, and a single-path check would miss a regression that
+    # promoted only one of the three above DEBUG, making a working pipeline
+    # noisy on every platform where the fast path does not apply.
     assert records[0]["levelno"] == logging.DEBUG, (
         f"{expected_reason!r} must be recorded at DEBUG, found "
         f"{records[0]['levelname']}"
+    )
+
+
+def test_a_registered_observer_does_not_displace_the_log_record(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The DEBUG record survives the arrival of the metrics channel.
+
+    The counters supplement these records; an operator whose alerting reads the
+    log pipeline must not lose it because someone registered a pump hook.
+    """
+    collector = RecordingCollector()
+    with (
+        caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME),
+        observe_pump(PumpMetricsHook(collector)),
+    ):
+        decline_on_pause_failure(monkeypatch)
+
+    records = _decline_records(caplog)
+    assert len(records) == 1, (
+        f"the DEBUG record must survive alongside the counter, found {len(records)}"
+    )
+    assert collector.counter_names() == ["cuprum_rust_pump_declined_total"], (
+        f"the counter must be recorded too, found {collector.counter_names()}"
     )

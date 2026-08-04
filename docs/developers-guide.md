@@ -520,20 +520,24 @@ pump's own error would resurface at collection time as an unretrieved-exception
 warning, detached from the hop that caused it.
 `cuprum/unittests/test_pipeline_streams_cancellation.py` pins the field.
 
-Neither record has a counter beside it, and that is a deliberate limit rather
-than an oversight. `MetricsHook` is the only seam in the library that reaches a
-metrics collector, and it dispatches on `ExecEvent.phase`, whose `case _` arm
-raises `_UnhandledMetricsPhaseError` (`cuprum/adapters/metrics_adapter.py`).
-Introducing a phase for these events would therefore raise inside every
-`MetricsHook` a caller has already registered rather than being ignored by it,
-so the counter cannot be added without first changing that contract.
-Cardinality is not the obstacle: `_RustPumpDeclineReason` is a closed
-three-member `StrEnum`, so a `reason` label is bounded by construction. This
-matches Proposal 3 of [ADR-002](adr-002-additional-rust-components.md), which
-holds Rust pump counters out of the public runtime API until their stability
-and cardinality are proven. Until a metrics path exists that does not run
-through `ExecPhase`, `cuprum_action` and `cuprum_reason` are the supported way
-to count these events, aggregated by the log pipeline.
+
+#### Counting those records
+
+`PumpEvent` carries these routing decisions on a dedicated observation channel,
+separate from `ExecEvent`. This avoids adding a new `ExecPhase`, which would
+break already-registered `MetricsHook` instances that match that closed set.
+`observe_pump` registers synchronous hooks in a `ContextVar`, and
+`PumpMetricsHook` maps the events to two bounded counters:
+
+| Counter | Labels |
+| --- | --- |
+| `cuprum_rust_pump_declined_total` | `reason` |
+| `cuprum_rust_pump_failed_after_cancel_total` | none |
+
+`RustPumpDeclineReason` bounds the decline label to its three declared values.
+Observer failures are logged and do not alter the successful fallback or the
+caller's cancellation. [ADR-008](adr-008-rust-pump-observation-channel.md)
+records the decision.
 
 ### `_pipeline_wait` completion command/query seam
 

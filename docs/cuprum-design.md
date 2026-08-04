@@ -826,6 +826,15 @@ The concrete shape is an implementation detail, but the design assumes:
 - Events can be consumed synchronously or asynchronously.
 - Hooks may choose to ignore most phases and only act on `start`/`exit`.
 
+
+#### Rust-pump routing events
+
+Rust-pump declines and failures recovered after cancellation are routing facts,
+not command lifecycle phases. They are therefore represented by `PumpEvent` on
+the separate `observe_pump` channel. `RustPumpDeclineReason` bounds the only
+metric label, and `PumpMetricsHook` emits counters without extending the closed
+`ExecPhase` contract. See [ADR-008](adr-008-rust-pump-observation-channel.md).
+
 ### 7.2 Logging via `logging`
 
 A common usage pattern is to register a hook that logs events using the standard
