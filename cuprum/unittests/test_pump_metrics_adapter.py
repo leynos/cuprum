@@ -21,13 +21,14 @@ from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
 from cuprum.adapters.pump_metrics import (
     RUST_PUMP_DECLINED_TOTAL,
     RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL,
+    UNKNOWN_DECLINE_REASON,
     PumpMetricsHook,
     pump_metrics_hook,
 )
 from cuprum.context import current_context
 from cuprum.events import ExecPhase
 from cuprum.pump_events import PumpEvent, PumpPhase, RustPumpDeclineReason
-from cuprum.pump_observation import observe_pump
+from cuprum.pump_observation import current_pump_hooks, observe_pump
 from cuprum.unittests._rust_pump_test_helpers import (
     DECLINE_PATHS,
     RecordingCollector,
@@ -40,7 +41,12 @@ from cuprum.unittests._rust_pump_test_helpers import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-_BOUNDED_REASONS = frozenset(reason.value for reason in RustPumpDeclineReason)
+# Every value the ``reason`` label can take, derived from the two places that
+# define them rather than restated here: a second copy would drift, and the
+# drift would name the adapter rather than the call site that caused it.
+_BOUNDED_REASONS = frozenset(
+    {reason.value for reason in RustPumpDeclineReason} | {UNKNOWN_DECLINE_REASON},
+)
 
 
 @pytest.mark.parametrize(
@@ -93,6 +99,10 @@ def test_decline_labels_stay_inside_the_closed_reason_set(
     with observe_pump(pump_metrics_hook(collector)):
         trigger(monkeypatch)
 
+    assert collector.counters, (
+        "the decline must reach the collector, or the label assertions below "
+        "inspect nothing and pass for it"
+    )
     for name, _value, labels in collector.counters:
         assert set(labels) == {"reason"}, (
             f"{name!r} must carry the reason label alone, found {sorted(labels)}"
@@ -177,17 +187,31 @@ def test_a_cancelled_hop_whose_pump_succeeded_counts_nothing(
 def test_declines_reach_no_collector_when_nobody_registers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A caller who never registers a pump hook sees the channel do nothing."""
-    collector = RecordingCollector()
-    # Constructed but never registered: the hop must not find it.
-    hook = PumpMetricsHook(collector)
+    """A caller who never registers a pump hook sees the channel do nothing.
+
+    A witness hook is registered alongside, because "nothing was recorded" is
+    the same observation whether the channel skipped the unregistered hook or
+    the hop never declined at all. The witness separates the two.
+    """
+    unregistered = RecordingCollector()
+    witness = RecordingCollector()
+    # The hook exists and wraps `unregistered`; it is simply never registered.
+    unregistered_hook = PumpMetricsHook(unregistered)
     _id, trigger, _reason = DECLINE_PATHS[0]
-    trigger(monkeypatch)
 
-    assert callable(hook), "the hook exists; it simply was never registered"
+    with observe_pump(PumpMetricsHook(witness)):
+        assert unregistered_hook not in current_pump_hooks(), (
+            "the unregistered hook must stay off the channel, or this test "
+            f"proves nothing; found {current_pump_hooks()}"
+        )
+        trigger(monkeypatch)
 
-    assert collector.counters == [], (
-        f"an unregistered collector must stay untouched, found {collector.counters}"
+    assert witness.counters, (
+        "the hop must actually decline, or the emptiness assertion below holds "
+        "even when the channel emits nothing at all"
+    )
+    assert unregistered.counters == [], (
+        f"an unregistered collector must stay untouched, found {unregistered.counters}"
     )
 
 
