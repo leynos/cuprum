@@ -97,8 +97,10 @@ Table 1: counters emitted by `PumpMetricsHook`
 | `cuprum_rust_pump_declined_total`            | `reason` | a hop falls back from the Rust pump to the Python pump         |
 | `cuprum_rust_pump_failed_after_cancel_total` | none     | a cancelled hop's Rust worker failure is consumed and recorded |
 
-`reason` takes exactly the three `RustPumpDeclineReason` values, so the series
-count is fixed by construction.
+`reason` takes exactly the three `RustPumpDeclineReason` values, plus
+`UNKNOWN_DECLINE_REASON` for a decline that named no seam — a guard no call site
+reaches, kept so a malformed event degrades to a fixed label rather than an
+unbounded one. The series count is therefore four, fixed by construction.
 
 Pump hooks live on their own `ContextVar` rather than on `CuprumContext`. That
 keeps `ScopeConfig`, `CuprumContext.narrow`, and every consumer that reads the
