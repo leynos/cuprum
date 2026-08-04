@@ -51,7 +51,15 @@ _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
     "failed_after_cancel": RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL,
 })
 
-_UNKNOWN_REASON = "unknown"
+UNKNOWN_DECLINE_REASON = "unknown"
+"""The ``reason`` label a decline carrying no reason degrades to.
+
+Public because it is operator-visible: it is the fourth and last value the
+``reason`` label can take, so a dashboard filtering on
+:class:`~cuprum.pump_events.RustPumpDeclineReason` alone would silently miss
+these. Declared here rather than as an enum member because no seam reports it —
+it exists only so a malformed event cannot introduce an unbounded label.
+"""
 
 
 def _phase_labels(event: PumpEvent) -> dict[str, str]:
@@ -59,13 +67,13 @@ def _phase_labels(event: PumpEvent) -> dict[str, str]:
 
     Only a decline is labelled, and only by its closed-set reason. Nothing
     derived from a descriptor, an argument vector, or an exception reaches a
-    label, so the series count stays fixed at the size of that enum.
+    label, so the series count stays fixed at the size of that enum plus
+    :data:`UNKNOWN_DECLINE_REASON`.
     """
     if event.phase != "declined":
         return {}
-    return {
-        "reason": str(event.reason) if event.reason is not None else _UNKNOWN_REASON
-    }
+    reason = event.reason
+    return {"reason": str(reason) if reason is not None else UNKNOWN_DECLINE_REASON}
 
 
 class PumpMetricsHook:
@@ -76,7 +84,8 @@ class PumpMetricsHook:
     - ``cuprum_rust_pump_declined_total``: incremented once per hop that fell
       back to the Python pump, labelled ``reason`` with one of
       ``raw_fd_unavailable``, ``reader_pause_failed``, or
-      ``blocking_mode_unavailable``.
+      ``blocking_mode_unavailable`` — or :data:`UNKNOWN_DECLINE_REASON` for a
+      decline that named no seam, which no current call site produces.
     - ``cuprum_rust_pump_failed_after_cancel_total``: incremented once,
       unlabelled, per Rust-pump worker failure recovered after its hop was
       cancelled.
@@ -161,6 +170,7 @@ def pump_metrics_hook(collector: MetricsCollector) -> PumpHook:
 __all__ = [
     "RUST_PUMP_DECLINED_TOTAL",
     "RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL",
+    "UNKNOWN_DECLINE_REASON",
     "PumpMetricsHook",
     "pump_metrics_hook",
 ]
