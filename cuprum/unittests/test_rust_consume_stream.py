@@ -67,20 +67,33 @@ class TestRustConsumeStream:
         """Consume payload via the Rust helper."""
         return _consume_payload(rust_streams, payload, **kwargs)
 
+    # Every case here asserts the same property — the extension's output equals
+    # Python's own replacement decoding — so they are one parameterised test
+    # rather than four near-identical bodies. A `buffer_size` of ``None`` omits
+    # the argument, exercising the extension's default.
     @pytest.mark.parametrize(
         ("test_id", "payload", "buffer_size"),
         [
             ("ascii_explicit_default", b"rust-consume-stream", 65536),
             ("multibyte_split", b"snowman \xe2\x98\x83", 2),
+            ("implicit_default_buffer", b"rust-consume-default", None),
+            ("invalid_bytes", b"valid-\xff\xfe-end", 3),
+            ("incomplete_sequence", b"trail-\xe2\x98", 2),
         ],
-        ids=["ascii_explicit_default", "multibyte_split"],
+        ids=[
+            "ascii_explicit_default",
+            "multibyte_split",
+            "implicit_default_buffer",
+            "invalid_bytes",
+            "incomplete_sequence",
+        ],
     )
     def test_decodes_payload(
         self,
         rust_streams: ModuleType,
         test_id: str,
         payload: bytes,
-        buffer_size: int,
+        buffer_size: int | None,
     ) -> None:
         """Validate rust_consume_stream decodes UTF-8 payloads.
 
@@ -92,8 +105,9 @@ class TestRustConsumeStream:
             Test case identifier for parameterisation.
         payload : bytes
             The payload to consume.
-        buffer_size : int
-            The buffer size to consume with.
+        buffer_size : int | None
+            The buffer size to consume with; ``None`` omits the argument so the
+            extension applies its own default.
 
         Returns
         -------
@@ -104,66 +118,6 @@ class TestRustConsumeStream:
         assert output == expected, (
             f"expected decoded output to match Python replace semantics ({test_id})"
         )
-
-    def test_uses_default_buffer_size(
-        self,
-        rust_streams: ModuleType,
-    ) -> None:
-        """Validate rust_consume_stream uses the default buffer size.
-
-        Parameters
-        ----------
-        rust_streams : ModuleType
-            The Rust streams module fixture.
-
-        Returns
-        -------
-        None
-        """
-        payload = b"rust-consume-default"
-        output = self._consume(rust_streams, payload)
-        expected = payload.decode("utf-8", errors="replace")
-        assert output == expected, "expected default buffer size to decode payload"
-
-    def test_replaces_invalid_bytes(
-        self,
-        rust_streams: ModuleType,
-    ) -> None:
-        """Ensure rust_consume_stream replaces invalid UTF-8 bytes.
-
-        Parameters
-        ----------
-        rust_streams : ModuleType
-            The Rust streams module fixture.
-
-        Returns
-        -------
-        None
-        """
-        payload = b"valid-\xff\xfe-end"
-        output = self._consume(rust_streams, payload, buffer_size=3)
-        expected = payload.decode("utf-8", errors="replace")
-        assert output == expected, "expected invalid bytes to be replaced"
-
-    def test_replaces_incomplete_sequence(
-        self,
-        rust_streams: ModuleType,
-    ) -> None:
-        """Ensure rust_consume_stream replaces incomplete UTF-8 sequences.
-
-        Parameters
-        ----------
-        rust_streams : ModuleType
-            The Rust streams module fixture.
-
-        Returns
-        -------
-        None
-        """
-        payload = b"trail-\xe2\x98"
-        output = self._consume(rust_streams, payload, buffer_size=2)
-        expected = payload.decode("utf-8", errors="replace")
-        assert output == expected, "expected incomplete sequence to be replaced"
 
     @staticmethod
     def test_does_not_close_fd(
