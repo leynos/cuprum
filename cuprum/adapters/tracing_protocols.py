@@ -9,6 +9,12 @@ and so the hook module stays within the project's file-size ceiling.
 :mod:`cuprum.adapters.tracing_adapter` re-exports both, so
 ``from cuprum.adapters.tracing_adapter import Span, Tracer`` — the import the
 users' guide documents — keeps working.
+
+Each method body raises :class:`NotImplementedError` rather than using an
+ellipsis, matching :class:`~cuprum.adapters.metrics_adapter.MetricsCollector`,
+the sibling adapter protocol. A docstring followed by ``...`` is what Pylint's
+enabled ``unnecessary-ellipsis`` rule reports, and the project permits no
+blanket suppression for it.
 """
 
 from __future__ import annotations
@@ -37,8 +43,7 @@ class Span(typ.Protocol):
             Attribute value (string, int, float, bool, or list thereof).
 
         """
-        # PEP 544 protocol stub.
-        ...  # pylint: disable=unnecessary-ellipsis
+        raise NotImplementedError
 
     def add_event(
         self,
@@ -55,8 +60,7 @@ class Span(typ.Protocol):
             Optional attributes for the event.
 
         """
-        # PEP 544 protocol stub.
-        ...  # pylint: disable=unnecessary-ellipsis
+        raise NotImplementedError
 
     def set_status(self, *, ok: bool) -> None:
         """Set the span status.
@@ -67,13 +71,11 @@ class Span(typ.Protocol):
             True if the operation succeeded, False otherwise.
 
         """
-        # PEP 544 protocol stub.
-        ...  # pylint: disable=unnecessary-ellipsis
+        raise NotImplementedError
 
     def end(self) -> None:
         """End the span, recording its duration."""
-        # PEP 544 protocol stub.
-        ...  # pylint: disable=unnecessary-ellipsis
+        raise NotImplementedError
 
 
 class Tracer(typ.Protocol):
@@ -103,8 +105,7 @@ class Tracer(typ.Protocol):
             A span that must be ended by calling :meth:`Span.end`.
 
         """
-        # PEP 544 protocol stub.
-        ...  # pylint: disable=unnecessary-ellipsis
+        raise NotImplementedError
 
 
 __all__ = ["Span", "Tracer"]
