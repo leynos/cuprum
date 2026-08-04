@@ -40,7 +40,9 @@ def test_narrow_reduces_allowlist() -> None:
     """narrow() intersects with parent allowlist."""
     parent = CuprumContext(allowlist=frozenset([ECHO, LS]))
     narrowed = parent.narrow(ScopeConfig(allowlist=frozenset([ECHO])))
-    assert narrowed.allowlist == frozenset([ECHO])
+    assert narrowed.allowlist == frozenset([ECHO]), (
+        "narrowing should intersect the child and parent allowlists"
+    )
 
 
 def test_narrow_cannot_widen_allowlist() -> None:
@@ -48,14 +50,18 @@ def test_narrow_cannot_widen_allowlist() -> None:
     new_program = Program("cat")
     parent = CuprumContext(allowlist=frozenset([ECHO]))
     narrowed = parent.narrow(ScopeConfig(allowlist=frozenset([ECHO, new_program])))
-    assert narrowed.allowlist == frozenset([ECHO])
+    assert narrowed.allowlist == frozenset([ECHO]), (
+        "narrowing should not add programs absent from the parent"
+    )
 
 
 def test_narrow_establishes_base_when_parent_empty() -> None:
     """narrow() uses provided allowlist when parent is empty."""
     parent = CuprumContext()  # Empty allowlist
     narrowed = parent.narrow(ScopeConfig(allowlist=frozenset([ECHO, LS])))
-    assert narrowed.allowlist == frozenset([ECHO, LS])
+    assert narrowed.allowlist == frozenset([ECHO, LS]), (
+        "an empty parent should adopt the configured allowlist"
+    )
 
 
 def test_narrow_appends_before_hooks() -> None:
@@ -64,7 +70,9 @@ def test_narrow_appends_before_hooks() -> None:
     child_hook: BeforeHook = mock.Mock()
     parent = CuprumContext(before_hooks=(parent_hook,))
     narrowed = parent.narrow(ScopeConfig(before_hooks=(child_hook,)))
-    assert narrowed.before_hooks == (parent_hook, child_hook)
+    assert narrowed.before_hooks == (parent_hook, child_hook), (
+        "before hooks should retain parent-then-child order"
+    )
 
 
 def test_narrow_prepends_after_hooks() -> None:
@@ -74,7 +82,9 @@ def test_narrow_prepends_after_hooks() -> None:
     parent = CuprumContext(after_hooks=(parent_hook,))
     narrowed = parent.narrow(ScopeConfig(after_hooks=(child_hook,)))
     # After hooks run inner-to-outer: child first, then parent
-    assert narrowed.after_hooks == (child_hook, parent_hook)
+    assert narrowed.after_hooks == (child_hook, parent_hook), (
+        "after hooks should retain child-then-parent order"
+    )
 
 
 def test_narrowed_empty_allowlist_remains_restricted() -> None:
@@ -83,7 +93,9 @@ def test_narrowed_empty_allowlist_remains_restricted() -> None:
     empty = parent.narrow(ScopeConfig(allowlist=frozenset()))
     narrowed = empty.narrow(ScopeConfig(allowlist=frozenset([ECHO])))
 
-    assert narrowed.allowlist == frozenset()
+    assert narrowed.allowlist == frozenset(), (
+        "nested narrowing should preserve an empty restricted allowlist"
+    )
     with pytest.raises(ForbiddenProgramError):
         narrowed.check_allowed(ECHO)
 
@@ -94,7 +106,9 @@ def test_with_allowlist_preserves_empty_restricted_allowlist() -> None:
     empty = parent.narrow(ScopeConfig(allowlist=frozenset()))
     replaced = empty.with_allowlist(frozenset())
 
-    assert replaced.allowlist == frozenset()
+    assert replaced.allowlist == frozenset(), (
+        "replacement should preserve an empty restricted allowlist"
+    )
     with pytest.raises(ForbiddenProgramError):
         replaced.check_allowed(ECHO)
 
@@ -104,7 +118,9 @@ def test_with_allowlist_empty_preserves_existing_non_empty_restriction() -> None
     parent = CuprumContext(allowlist=frozenset([ECHO]))
     replaced = parent.with_allowlist(frozenset())
 
-    assert replaced.allowlist == frozenset()
+    assert replaced.allowlist == frozenset(), (
+        "empty replacement should preserve the existing restriction"
+    )
     with pytest.raises(ForbiddenProgramError):
         replaced.check_allowed(ECHO)
 
@@ -114,8 +130,10 @@ def test_with_program_and_without_program_preserve_restriction() -> None:
     ctx = CuprumContext().with_program(ECHO)
     emptied = ctx.without_program(ECHO)
 
-    assert ctx.is_allowed(ECHO) is True
-    assert emptied.allowlist == frozenset()
+    assert ctx.is_allowed(ECHO) is True, "with_program should allow the added program"
+    assert emptied.allowlist == frozenset(), (
+        "without_program should retain an explicit empty restriction"
+    )
     with pytest.raises(ForbiddenProgramError):
         emptied.check_allowed(ECHO)
 
@@ -131,7 +149,7 @@ def test_narrow_allowlist_can_only_shrink_non_empty_parent(
     result = _narrow_allowlist(parent, config)
 
     if parent:
-        assert result <= parent
+        assert result <= parent, "narrowing should only remove parent programs"
 
 
 @pytest.mark.crosshair
@@ -142,7 +160,9 @@ def test_narrow_allowlist_result_subset_of_config(
     config: frozenset[Program],
 ) -> None:
     """Property: explicit config allowlists constrain the result."""
-    assert _narrow_allowlist(parent, config) <= config
+    assert _narrow_allowlist(parent, config) <= config, (
+        "the narrowed allowlist should be a subset of the configured allowlist"
+    )
 
 
 @pytest.mark.crosshair
@@ -152,7 +172,9 @@ def test_narrow_allowlist_none_config_preserves_parent(
     parent: frozenset[Program],
 ) -> None:
     """Property: absent config allowlist inherits the parent exactly."""
-    assert _narrow_allowlist(parent, None) == parent
+    assert _narrow_allowlist(parent, None) == parent, (
+        "absent configuration should preserve the parent allowlist"
+    )
 
 
 @pytest.mark.crosshair
@@ -172,7 +194,9 @@ def test_narrow_allowlist_two_steps_match_single_intersection(
     two_step = _narrow_allowlist(first_step, second, parent_is_restricted=True)
     single_step = _narrow_allowlist(parent, first & second)
 
-    assert two_step == single_step
+    assert two_step == single_step, (
+        "two narrowing steps should equal the combined intersection"
+    )
 
 
 @pytest.mark.parametrize(
@@ -220,8 +244,8 @@ def test_merge_hooks_preserves_scope_ordering(
     ``scoped_first=False`` keeps ``parent + config`` (FIFO order used for
     before and observe hooks); ``scoped_first=True`` keeps ``config + parent``
     (LIFO order used for after hooks). Length and membership are preserved in
-    both modes. The before-, after-, and observe-hook casts are all exercised
-    so their tuple compatibility with the generic helper stays type-checked.
+    both modes. The before- and after-hook casts are exercised, while observe
+    hooks verify direct tuple compatibility with the generic helper.
     """
     before_result = _merge_hooks(
         typ.cast("tuple[BeforeHook, ...]", parent),
@@ -234,8 +258,8 @@ def test_merge_hooks_preserves_scope_ordering(
         scoped_first=scoped_first,
     )
     observe_result = _merge_hooks(
-        typ.cast("tuple[cabc.Callable[..., None], ...]", parent),
-        typ.cast("tuple[cabc.Callable[..., None], ...]", config),
+        parent,
+        config,
         scoped_first=scoped_first,
     )
 

@@ -271,17 +271,27 @@ def when_run_fail_fast(
 def then_results_in_submission_order(execution_result: _ConcurrentExecution) -> None:
     """Verify results are returned in the order commands were submitted."""
     result = execution_result.result
-    assert len(result.results) == 3
-    assert result.results[0].stdout == "first"
-    assert result.results[1].stdout == "second"
-    assert result.results[2].stdout == "third"
+    assert len(result.results) == 3, "Expected len(result.results) == 3"
+    assert result.results[0].stdout == "first", (
+        'Expected result.results[0].stdout == "first"'
+    )
+    assert result.results[1].stdout == "second", (
+        'Expected result.results[1].stdout == "second"'
+    )
+    assert result.results[2].stdout == "third", (
+        'Expected result.results[2].stdout == "third"'
+    )
 
 
 @then("all commands succeeded")
 def then_all_commands_succeeded(execution_result: _ConcurrentExecution) -> None:
     """Verify all commands completed successfully."""
-    assert execution_result.result.ok is True
-    assert execution_result.result.failures == ()
+    assert execution_result.result.ok is True, (
+        "Expected execution_result.result.ok is True"
+    )
+    assert execution_result.result.failures == (), (
+        "Expected execution_result.result.failures == ()"
+    )
 
 
 @then("all commands complete successfully")
@@ -289,8 +299,12 @@ def then_all_commands_complete_successfully(
     execution_result: _ConcurrentExecution,
 ) -> None:
     """Verify all commands completed successfully."""
-    assert execution_result.result.ok is True
-    assert len(execution_result.result.results) == 4
+    assert execution_result.result.ok is True, (
+        "Expected execution_result.result.ok is True"
+    )
+    assert len(execution_result.result.results) == 4, (
+        "Expected len(execution_result.result.results) == 4"
+    )
 
 
 @then("execution respects the concurrency limit")
@@ -308,17 +322,21 @@ def then_execution_respects_limit(execution_result: _ConcurrentExecution) -> Non
 @then("all three results are returned")
 def then_all_three_results_returned(execution_result: _ConcurrentExecution) -> None:
     """Verify all three results are returned despite failure."""
-    assert len(execution_result.result.results) == 3
+    assert len(execution_result.result.results) == 3, (
+        "Expected len(execution_result.result.results) == 3"
+    )
 
 
 @then("the failure index is reported")
 def then_failure_index_reported(execution_result: _ConcurrentExecution) -> None:
     """Verify failure index is correctly reported."""
     result = execution_result.result
-    assert result.ok is False
-    assert result.failures == (1,)
-    assert result.first_failure is not None
-    assert result.first_failure.exit_code == 42
+    assert result.ok is False, "Expected result.ok is False"
+    assert result.failures == (1,), "Expected result.failures == (1,)"
+    assert result.first_failure is not None, "Expected result.first_failure is not None"
+    assert result.first_failure.exit_code == 42, (
+        "Expected result.first_failure.exit_code == 42"
+    )
 
 
 @then("partial results are returned quickly")
@@ -336,6 +354,8 @@ def then_partial_results_returned_quickly(
 def then_first_failure_accessible(execution_result: _ConcurrentExecution) -> None:
     """Verify the first failure is accessible in the result."""
     result = execution_result.result
-    assert result.ok is False
-    assert result.first_failure is not None
-    assert result.first_failure.exit_code == 1
+    assert result.ok is False, "Expected result.ok is False"
+    assert result.first_failure is not None, "Expected result.first_failure is not None"
+    assert result.first_failure.exit_code == 1, (
+        "Expected result.first_failure.exit_code == 1"
+    )

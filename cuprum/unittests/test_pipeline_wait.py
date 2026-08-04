@@ -59,6 +59,18 @@ class _StubPipelineWaitProcess:
         return self.returncode
 
 
+class _PublishedExitPipelineProcess(_StubPipelineWaitProcess):
+    """Stub that publishes an exit code while leaving ``wait`` pending."""
+
+    async def wait(self) -> int:
+        """Publish the exit code, then model a stranded asyncio wait future."""
+        for _ in range(3):
+            await asyncio.sleep(0)
+        self.returncode = self._exit_code
+        await asyncio.Event().wait()
+        return self.returncode
+
+
 async def _exercise_wait_for_pipeline(
     exit_codes: tuple[int, int, int],
     ready_stages: frozenset[int],
@@ -86,6 +98,22 @@ async def _exercise_wait_for_pipeline(
     )
 
     return processes[0], processes[1], processes[2], result
+
+
+def test_wait_for_pipeline_accepts_published_returncode() -> None:
+    """Complete when a process publishes its code but strands ``wait``."""
+    process = _PublishedExitPipelineProcess(pid=1, exit_code=0)
+
+    result = asyncio.run(
+        _wait_for_pipeline(
+            typ.cast("list[asyncio.subprocess.Process]", [process]),
+            pipe_tasks=[],
+            cancel_grace=0.01,
+            started_at=[0.0],
+        ),
+    )
+
+    assert result.exit_codes == (0,), "pipeline should observe the published exit code"
 
 
 def _assert_stage_terminated(
@@ -156,12 +184,12 @@ class _FailFastScenario:
         pytest.param(
             _FailFastScenario(
                 exit_codes=(0, 0, 5),
-                ready_stages=frozenset([0, 1, 2]),
+                ready_stages=frozenset([2]),
                 expected_failure_index=2,
-                expected_exit_codes=(0, 0, 5),
-                terminated_stages=frozenset(),
+                expected_exit_codes=(-15, -15, 5),
+                terminated_stages=frozenset([0, 1]),
             ),
-            id="last-stage-failure-no-termination",
+            id="last-stage-failure-terminates-upstream",
         ),
     ],
 )
@@ -171,8 +199,7 @@ def test_wait_for_pipeline_fail_fast_scenarios(
     """Validate fail-fast termination behaviour across different failure scenarios.
 
     Tests that:
-    - Early and middle stage failures terminate all other stages
-    - Final stage failures record failure index without terminating others
+    - Any failed stage terminates every other still-running stage
     """
     p0, p1, p2, result = asyncio.run(
         _exercise_wait_for_pipeline(

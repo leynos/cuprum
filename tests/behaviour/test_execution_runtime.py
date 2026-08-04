@@ -163,17 +163,19 @@ def when_run_command_with_direct_stdin(stdin_reader_command: SafeCmd) -> Command
 @then("the command result contains captured output")
 def then_command_result_has_output(run_result: CommandResult) -> None:
     """Validate captured stdout/stderr and exit code."""
-    assert run_result.exit_code == 0
-    assert run_result.stdout == "behaviour"
-    assert not run_result.stderr
+    assert run_result.exit_code == 0, "Expected run_result.exit_code == 0"
+    assert run_result.stdout == "behaviour", 'Expected run_result.stdout == "behaviour"'
+    assert not run_result.stderr, "Expected not run_result.stderr"
 
 
 @then("the command result contains the stdin text")
 def then_command_result_has_stdin_text(run_result: CommandResult) -> None:
     """Validate captured stdout from direct stdin input."""
-    assert run_result.exit_code == 0
-    assert run_result.stdout == "behaviour stdin\n"
-    assert not run_result.stderr
+    assert run_result.exit_code == 0, "Expected run_result.exit_code == 0"
+    assert run_result.stdout == "behaviour stdin\n", (
+        'Expected run_result.stdout == "behaviour stdin\\n"'
+    )
+    assert not run_result.stderr, "Expected not run_result.stderr"
 
 
 @given(
@@ -245,8 +247,10 @@ def then_timeout_error_is_raised(behaviour_state: dict[str, object]) -> None:
     """Assert that a TimeoutExpired error is raised with expected settings."""
     error = typ.cast("TimeoutExpired", behaviour_state["timeout_error"])
     timeout_value = typ.cast("float", behaviour_state["timeout_value"])
-    assert isinstance(error, TimeoutExpired)
-    assert error.timeout == timeout_value
+    assert isinstance(error, TimeoutExpired), (
+        "Expected isinstance(error, TimeoutExpired)"
+    )
+    assert error.timeout == timeout_value, "Expected error.timeout == timeout_value"
 
 
 @scenario(

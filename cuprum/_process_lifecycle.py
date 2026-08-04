@@ -12,6 +12,9 @@ from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._subprocess_context import _cwd_arg
 from cuprum.context import current_context, resolve_env
 
+_PROCESS_EXIT_POLL_INITIAL_DELAY = 0.001
+_PROCESS_EXIT_POLL_MAX_DELAY = 0.05
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
@@ -28,7 +31,7 @@ async def _terminate_process(
         process,
         grace_period=grace_period,
         is_done=lambda: process.returncode is not None,
-        wait_for_exit=process.wait,
+        wait_for_exit=lambda: _await_process_exit(process),
     )
 
 
@@ -248,3 +251,33 @@ async def _terminate_pipeline_remaining_stages(
     ]
     if termination_tasks:
         await asyncio.gather(*termination_tasks, return_exceptions=True)
+
+
+async def _await_process_exit(process: asyncio.subprocess.Process) -> int:
+    """Return the process exit code without trusting a stranded wait future."""
+    if process.returncode is not None:
+        return process.returncode
+
+    async def _published_returncode() -> int:
+        """Poll the authoritative return code at a low frequency."""
+        delay = _PROCESS_EXIT_POLL_INITIAL_DELAY
+        while process.returncode is None:
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, _PROCESS_EXIT_POLL_MAX_DELAY)
+        return process.returncode
+
+    wait_task = asyncio.create_task(process.wait())
+    published_task = asyncio.create_task(_published_returncode())
+    try:
+        completed, _ = await asyncio.wait(
+            (wait_task, published_task),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if wait_task in completed:
+            return wait_task.result()
+        return published_task.result()
+    finally:
+        for task in (wait_task, published_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(wait_task, published_task, return_exceptions=True)

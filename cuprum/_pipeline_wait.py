@@ -12,6 +12,7 @@ from cuprum._pipeline_streams import (
     _surface_unexpected_pipe_failures,
 )
 from cuprum._process_lifecycle import (
+    _await_process_exit,
     _cleanup_pipeline_on_error,
     _terminate_pipeline_remaining_stages,
 )
@@ -46,7 +47,9 @@ class _PipelineWaitState:
         started_at: list[float],
     ) -> _PipelineWaitState:
         """Create wait state with one wait task per pipeline process."""
-        wait_tasks = [asyncio.create_task(process.wait()) for process in processes]
+        wait_tasks = [
+            asyncio.create_task(_await_process_exit(process)) for process in processes
+        ]
         return cls(
             wait_tasks=wait_tasks,
             task_to_index={task: idx for idx, task in enumerate(wait_tasks)},
@@ -69,13 +72,12 @@ async def _process_completed_task(
     state.ended_at[idx] = time.perf_counter()
     if state.failure_index is None and exit_code != 0:
         state.failure_index = idx
-        if idx != len(processes) - 1:
-            await _terminate_pipeline_remaining_stages(
-                processes,
-                state.wait_tasks,
-                idx,
-                cancel_grace=cancel_grace,
-            )
+        await _terminate_pipeline_remaining_stages(
+            processes,
+            state.wait_tasks,
+            idx,
+            cancel_grace=cancel_grace,
+        )
 
 
 async def _finalize_pipeline_wait(

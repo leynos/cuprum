@@ -626,7 +626,7 @@ def _split_no_text_loss_contract(text: str) -> None:
     r"""CrossHair contract for split text preservation.
 
     pre: len(text) <= 3
-    pre: all(character not in "\v\f\x1c\x1d\x1e\x85\u2028\u2029" for character in text)
+    pre: all(character in "a\r\n" for character in text)
     post: _split_preserves_normalised_text(text)
     """
 
@@ -651,14 +651,10 @@ def _strip_line_ending_contract(line: str) -> None:
 def test_crosshair_contracts(contract: cabc.Callable[..., None]) -> None:
     """Property: CrossHair symbolically verifies line-splitting contracts.
 
-    ``per_condition_timeout`` is a wall-clock budget. Confirming these
-    contracts exhausts the bounded symbolic state space in a few CPU-seconds,
-    but under the parallel ``-n auto`` test run the CrossHair worker competes
-    for CPU and needs more wall-clock time, so an over-tight budget yields a
-    flaky ``CANNOT_CONFIRM``. Use CrossHair's recommended confirmation budget
-    (it returns as soon as the space is exhausted, so unloaded runs stay fast)
-    and a per-test timeout above the global default to accommodate the slower
-    worst case under load.
+    The split contract bounds symbolic text to one ordinary character and the
+    two recognized line-ending characters. Those are the only character
+    classes that change this operation's control flow; Hypothesis exercises
+    arbitrary Unicode text and Python's additional line boundaries above.
     """
     if check_states is None:
         pytest.skip(_CROSSHAIR_UNAVAILABLE_REASON)

@@ -5,9 +5,11 @@ from __future__ import annotations
 import importlib
 import typing as typ
 
+import pytest
 from pytest_bdd import given, scenario, then, when
 
 import cuprum as c
+from cuprum import rust as rust_api
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -19,6 +21,32 @@ if typ.TYPE_CHECKING:
 )
 def test_rust_extension_availability() -> None:
     """Behavioural coverage for the Rust availability probe."""
+
+
+@pytest.mark.parametrize(
+    "invalid_availability",
+    [
+        pytest.param(None, id="none"),
+        pytest.param(1, id="integer"),
+    ],
+)
+def test_rust_extension_availability_rejects_non_bool(
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_availability: object,
+) -> None:
+    """The public probe rejects falsey and truthy non-boolean results."""
+
+    def _invalid_resolver() -> object:
+        """Return the configured invalid resolver result."""
+        return invalid_availability
+
+    monkeypatch.setattr(rust_api, "_check_rust_available", _invalid_resolver)
+
+    with pytest.raises(
+        TypeError,
+        match="Rust availability resolver must return bool",
+    ):
+        rust_api.is_rust_available()
 
 
 @given("the Cuprum Rust availability probe", target_fixture="probe")
@@ -56,7 +84,7 @@ def when_check_availability(probe: cabc.Callable[[], bool]) -> bool:
 @then("the probe returns a boolean")
 def then_probe_returns_boolean(availability: object) -> None:
     """Assert the availability probe returns a boolean value."""
-    assert isinstance(availability, bool)
+    assert isinstance(availability, bool), "Expected isinstance(availability, bool)"
 
 
 @then("the probe agrees with the native module when it is installed")
@@ -82,4 +110,6 @@ def then_probe_matches_native(availability: object) -> None:
         ):
             return
         raise
-    assert availability is native.is_available()
+    assert availability is native.is_available(), (
+        "Expected availability is native.is_available()"
+    )

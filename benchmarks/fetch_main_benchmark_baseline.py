@@ -5,18 +5,16 @@ from __future__ import annotations
 import argparse
 import dataclasses as dc
 import io
-import json
 import os
 import pathlib as pth
-import time
 import typing as typ
-import urllib.error
 import urllib.parse
-import urllib.request
 import zipfile
 
+from benchmarks._github_http import _download_bytes, _load_json_response
 from benchmarks._validation import (
     _require_bool,
+    _require_int,
     _require_list,
     _require_mapping,
     _require_non_empty_string,
@@ -28,15 +26,6 @@ if typ.TYPE_CHECKING:
 GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_TOKEN_ENV_VAR = "GITHUB_TOKEN"  # noqa: S105 - env var name, not a credential
 MAIN_BASELINE_NOT_FOUND_EXIT_CODE = 3
-_REQUEST_TIMEOUT_SECONDS = 10.0
-_RETRY_DELAYS_SECONDS = (0.5, 1.0)
-_HTTP_TOO_MANY_REQUESTS = 429
-_HTTP_SERVER_ERROR_MIN = 500
-_HTTP_SERVER_ERROR_MAX = 600
-_GITHUB_REDIRECT_HEADERS_TO_STRIP = (
-    "Authorization",
-    "X-github-api-version",
-)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -49,122 +38,6 @@ class ArtifactQuery:
     event: str
     artifact_name: str
     api_base_url: str = GITHUB_API_BASE_URL
-
-
-def _require_int(value: object, *, name: str) -> int:
-    """Validate that *value* is an integer."""
-    if isinstance(value, bool) or not isinstance(value, int):
-        msg = f"{name} must be an integer"
-        raise TypeError(msg)
-    return value
-
-
-def _should_retry_request_failure(exc: Exception) -> bool:
-    """Return ``True`` when a GitHub API failure is transient."""
-    if isinstance(exc, urllib.error.HTTPError):
-        return exc.code == _HTTP_TOO_MANY_REQUESTS or (
-            _HTTP_SERVER_ERROR_MIN <= exc.code < _HTTP_SERVER_ERROR_MAX
-        )
-    return isinstance(exc, urllib.error.URLError)
-
-
-def _with_retry[T](
-    operation: cabc.Callable[[], T],
-    *,
-    description: str,
-) -> T:
-    """Run *operation* with bounded retry/backoff for transient HTTP failures."""
-    last_exc: Exception | None = None
-    for attempt in range(len(_RETRY_DELAYS_SECONDS) + 1):
-        try:
-            return operation()
-        except (urllib.error.HTTPError, urllib.error.URLError) as exc:
-            if not _should_retry_request_failure(exc):
-                raise
-            last_exc = exc
-            if attempt == len(_RETRY_DELAYS_SECONDS):
-                break
-            time.sleep(_RETRY_DELAYS_SECONDS[attempt])
-    if last_exc is None:
-        raise RuntimeError(description)
-    raise last_exc
-
-
-class _ArtifactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Strip GitHub-only headers when following cross-origin archive redirects."""
-
-    def _strip_cross_origin_headers(  # noqa: PLR6301
-        self,
-        req: urllib.request.Request,
-        redirected_request: urllib.request.Request,
-    ) -> None:
-        """Strip sensitive headers when a redirect crosses host boundaries."""
-        source_parts = urllib.parse.urlsplit(req.full_url)
-        destination_parts = urllib.parse.urlsplit(redirected_request.full_url)
-        source_origin = (source_parts.scheme, source_parts.netloc)
-        destination_origin = (destination_parts.scheme, destination_parts.netloc)
-        if source_origin == destination_origin:
-            return
-        for header in _GITHUB_REDIRECT_HEADERS_TO_STRIP:
-            redirected_request.remove_header(header)
-
-    def redirect_request(
-        self,
-        req: urllib.request.Request,
-        *args: object,
-        **kwargs: object,
-    ) -> urllib.request.Request | None:
-        redirected_request = super().redirect_request(req, *args, **kwargs)  # type: ignore[arg-type]
-        if redirected_request is None:
-            return None
-        self._strip_cross_origin_headers(req, redirected_request)
-        return redirected_request
-
-
-def _load_json_response(*, url: str, token: str) -> cabc.Mapping[str, object]:
-    """Load a GitHub API JSON response."""
-    request = urllib.request.Request(  # noqa: S310 - URL is selected by trusted caller
-        url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "User-Agent": "cuprum-benchmark-ratchet",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
-
-    def _open_json_response() -> cabc.Mapping[str, object]:
-        with urllib.request.urlopen(  # noqa: S310 - authenticated GitHub API call
-            request,
-            timeout=_REQUEST_TIMEOUT_SECONDS,
-        ) as response:
-            payload = json.load(response)
-        return _require_mapping(payload, name=f"response from {url}")
-
-    return _with_retry(_open_json_response, description=f"load JSON from {url}")
-
-
-def _download_bytes(*, url: str, token: str) -> bytes:
-    """Download raw bytes from an authenticated URL."""
-    request = urllib.request.Request(  # noqa: S310 - URL is returned by the GitHub API
-        url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "User-Agent": "cuprum-benchmark-ratchet",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
-    opener = urllib.request.build_opener(_ArtifactArchiveRedirectHandler())
-
-    def _open_archive() -> bytes:
-        with opener.open(
-            request,
-            timeout=_REQUEST_TIMEOUT_SECONDS,
-        ) as response:
-            return response.read()
-
-    return _with_retry(_open_archive, description=f"download archive from {url}")
 
 
 def _find_artifact_url_in_run(
@@ -244,7 +117,7 @@ def select_latest_artifact_download_url(
 
 
 def _artifact_member_path(*, output_dir: pth.Path, archive_name: str) -> pth.Path:
-    """Return the normalised extraction path for an archive member."""
+    """Return the normalized extraction path for an archive member."""
     destination = (output_dir / archive_name).resolve()
     output_root = output_dir.resolve()
     if destination != output_root and output_root not in destination.parents:

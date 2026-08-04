@@ -249,7 +249,9 @@ def then_comparison_report_command_exits_with_malformed_input_failure(
     """Malformed comparison-report CLI runs should exit two."""
     _assert_returncode(comparison_cli_result, expected=2)
     completed = comparison_cli_result["completed"]
-    assert "benchmark comparison report failed to evaluate inputs" in completed.stderr
+    assert (
+        "benchmark comparison report failed to evaluate inputs" in completed.stderr
+    ), "Expected malformed-input failure diagnostic"
 
 
 @then("the comparison report JSON contains paired backend rows")
@@ -262,10 +264,16 @@ def then_comparison_report_json_contains_paired_backend_rows(
     )
     assert payload["summary"]["row_count"] == 1, "expected exactly one comparison row"
     row = payload["rows"][0]
-    assert row["comparison_id"] == "small-single-nocb"
-    assert row["python_mean"] == pytest.approx(0.42)
-    assert row["rust_mean"] == pytest.approx(0.21)
-    assert row["faster_backend"] == "rust"
+    assert row["comparison_id"] == "small-single-nocb", (
+        'Expected row["comparison_id"] == "small-single-nocb"'
+    )
+    assert row["python_mean"] == pytest.approx(0.42), (
+        'Expected row["python_mean"] == pytest.approx(0.42)'
+    )
+    assert row["rust_mean"] == pytest.approx(0.21), (
+        'Expected row["rust_mean"] == pytest.approx(0.21)'
+    )
+    assert row["faster_backend"] == "rust", 'Expected row["faster_backend"] == "rust"'
 
 
 @then("the comparison summary markdown contains a workflow table")
@@ -274,10 +282,16 @@ def then_comparison_summary_markdown_contains_a_workflow_table(
 ) -> None:
     """Markdown output should be ready for `$GITHUB_STEP_SUMMARY`."""
     markdown = comparison_cli_result["output_markdown_path"].read_text(encoding="utf-8")
-    assert "## Python vs Rust benchmark comparison" in markdown
-    assert "Rust regression ratchet skipped" in markdown
+    assert "## Python vs Rust benchmark comparison" in markdown, (
+        'Expected "## Python vs Rust benchmark comparison" in markdown'
+    )
+    assert "Rust regression ratchet skipped" in markdown, (
+        'Expected "Rust regression ratchet skipped" in markdown'
+    )
     assert (
         "| Scenario | Python mean (s) | Rust mean (s) | Speedup | Faster backend |"
         in markdown
+    ), "Expected comparison workflow table header"
+    assert "| `small-single-nocb` | 0.420000 | 0.210000 | 2.00x | rust |" in markdown, (
+        "Expected comparison workflow table row"
     )
-    assert "| `small-single-nocb` | 0.420000 | 0.210000 | 2.00x | rust |" in markdown

@@ -79,16 +79,6 @@ def _serialize_kwargs(kwargs: dict[str, _ArgValue]) -> tuple[str, ...]:
     return tuple(flags)
 
 
-def _coerce_argv(
-    args: tuple[_ArgValue, ...],
-    kwargs: dict[str, _ArgValue],
-) -> tuple[str, ...]:
-    """Convert positional and keyword arguments into a single argv tuple."""
-    positional = tuple(_stringify_arg(arg) for arg in args)
-    flags = _serialize_kwargs(kwargs)
-    return positional + flags
-
-
 def build_argv(*args: _ArgValue, **kwargs: _ArgValue) -> tuple[str, ...]:
     """Build an argv tuple using the same rules as ``sh.make`` builders.
 
@@ -112,7 +102,9 @@ def build_argv(*args: _ArgValue, **kwargs: _ArgValue) -> tuple[str, ...]:
     >>> build_argv("status", porcelain=True, branch="main")
     ('status', '--porcelain=True', '--branch=main')
     """
-    return _coerce_argv(args, kwargs)
+    positional = tuple(_stringify_arg(arg) for arg in args)
+    flags = _serialize_kwargs(kwargs)
+    return positional + flags
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -704,7 +696,7 @@ def make(
 
     def builder(*args: _ArgValue, **kwargs: _ArgValue) -> SafeCmd:
         """Coerce ``args``/``kwargs`` into a ``SafeCmd`` for the program."""
-        argv = _coerce_argv(args, kwargs)
+        argv = build_argv(*args, **kwargs)
         return SafeCmd(program=entry.program, argv=argv, project=entry.project)
 
     return builder

@@ -91,7 +91,9 @@ def configure_pump_stream_dispatch_for_testing(
 
 def reset_pump_stream_dispatch_for_testing() -> None:
     """Reset ``_pump_stream_dispatch`` test hooks to defaults."""
-    configure_pump_stream_dispatch_for_testing()
+    _PUMP_STREAM_DISPATCH_TEST_HOOKS.force_fd_extraction_failure = False
+    _PUMP_STREAM_DISPATCH_TEST_HOOKS.on_rust_fd_path_attempt = None
+    _PUMP_STREAM_DISPATCH_TEST_HOOKS.python_pump = None
 
 
 def _fd_from_transport(transport: object | None) -> int | None:
