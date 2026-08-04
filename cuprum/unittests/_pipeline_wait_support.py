@@ -200,13 +200,25 @@ def structured_fields(record: logging.LogRecord) -> dict[str, object]:
     }
 
 
+def field_values(records: list[logging.LogRecord], key: str) -> list[object]:
+    """Return ``key`` from each record that carries it, in record order.
+
+    Selecting one structured field across a run of records is what nearly
+    every assertion in these modules does, whichever field it is about. This
+    is the one selector for all of them: records that do not carry ``key`` are
+    skipped rather than reported as ``None``, so an assertion on the values can
+    tell "no record carried it" from "a record carried a null".
+    """
+    return [
+        fields[key]
+        for fields in (structured_fields(record) for record in records)
+        if key in fields
+    ]
+
+
 def record_actions(records: list[logging.LogRecord]) -> list[str]:
     """Return the ``cuprum_action`` field of each pipeline-wait record."""
-    return [
-        str(fields["cuprum_action"])
-        for fields in (structured_fields(record) for record in records)
-        if "cuprum_action" in fields
-    ]
+    return [str(value) for value in field_values(records, "cuprum_action")]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -251,11 +263,14 @@ def drive_completions(
     caplog: pytest.LogCaptureFixture,
     plan: CompletionPlan,
 ) -> list[logging.LogRecord]:
-    """Drive ``completions`` through the real async boundary, capturing logs.
+    """Drive ``plan`` through the real async boundary, capturing logs.
 
-    Each entry is a ``(stage_index, exit_code)`` pair applied in order.
-    ``started_at`` is zero for every stage and the clock is pinned to 12.5, so
-    an emitted stage duration is always exactly 12.5.
+    ``plan.completions`` is applied in order, one ``(stage_index, exit_code)``
+    pair at a time, to a state built for ``plan.stage_count`` stages;
+    ``plan.terminated_count`` is what the intercepted termination reports back
+    as the number of stages it stopped. ``started_at`` is zero for every stage
+    and the clock is pinned to 12.5, so an emitted stage duration is always
+    exactly 12.5.
     """
     terminations = record_terminations(
         monkeypatch,

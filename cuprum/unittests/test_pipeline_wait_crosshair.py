@@ -3,10 +3,10 @@
 `cuprum._pipeline_wait._PipelineWaitState` splits completion handling into a
 command, `record_completion`, and a side-effect-free query,
 `should_terminate_others`. The Hypothesis state machine in
-`test_pipeline_wait.py` drives randomized completion orders; the contracts here
-verify the same invariants symbolically over a bounded state space, so a
-confirmed result means the invariant held for every state CrossHair explored
-rather than for the orders Hypothesis happened to sample.
+`test_pipeline_wait_state_machine.py` drives randomized completion orders; the
+contracts here verify the same invariants symbolically over a bounded state
+space, so a confirmed result means the invariant held for every state CrossHair
+explored rather than for the orders Hypothesis happened to sample.
 
 The symbolic model is deliberately small. It touches no asyncio task,
 subprocess, or clock: the state is constructed directly with only the fields
