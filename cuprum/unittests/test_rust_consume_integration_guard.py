@@ -7,8 +7,8 @@ and no production module calls it. These tests fail if either drifts, so the
 Phase 2 decision is revisited rather than silently overtaken.
 
 They are pure source inspection and never touch the compiled extension, which
-is why they sit apart from the behavioural coverage in ``test_rust_streams.py``
-and outwith the extension-gated target list.
+is why they sit apart from the behavioural coverage in
+``test_rust_consume_stream.py`` and outwith the extension-gated target list.
 
 Example
 -------

@@ -1653,7 +1653,8 @@ with no `raw_os_error` — one synthesized in Rust rather than returned by a
 syscall — has no number to preserve, so PyO3's `ErrorKind` mapping remains the
 best available and is used unchanged.
 
-`cuprum/unittests/test_rust_errno.py` covers both arms, with each set of
+`cuprum/unittests/test_rust_errno.py` covers the POSIX arm and
+`cuprum/unittests/test_rust_errno_windows.py` the Windows one, with each set of
 assertions scoped to the platform whose taxonomy it names — the POSIX cases
 name an `errno` and the subclass CPython derives from it, the Windows case
 names a `winerror` and the `errno` CPython derives from *that*. The Windows
@@ -1996,7 +1997,7 @@ text diff rather than a boolean failure.
 
 These Rust-side cases are not the only coverage of these categories, and it is
 worth knowing why they carry the load. `TestRustConsumeStream` in
-`cuprum/unittests/test_rust_streams.py` already defines Python/Rust boundary
+`cuprum/unittests/test_rust_consume_stream.py` already defines Python/Rust boundary
 tests over the same four inputs — ASCII, multibyte UTF-8 split across a read
 boundary, invalid UTF-8, and an incomplete trailing sequence — and each one
 calls `rust_consume_stream` and compares the result against Python's own
