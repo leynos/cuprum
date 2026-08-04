@@ -90,8 +90,16 @@ async def _cancel_mid_transfer(
         os.close(writer_fd)
 
 
+@pytest.mark.parametrize(
+    "cancellations",
+    [
+        pytest.param(1, id="single-cancellation"),
+        pytest.param(3, id="repeated-cancellation-keeps-cleanup-worker-owned"),
+    ],
+)
 def test_cancellation_restores_descriptors_only_after_worker_returns(
     monkeypatch: pytest.MonkeyPatch,
+    cancellations: int,
 ) -> None:
     """Cancelling mid-transfer waits for the worker before restoring FDs.
 
@@ -115,13 +123,19 @@ def test_cancellation_restores_descriptors_only_after_worker_returns(
 
     _install_fake_pump(monkeypatch, blocking_pump)
     asyncio.run(
-        _cancel_mid_transfer(events, worker_started, worker_finished, release)
+        _cancel_mid_transfer(
+            events,
+            worker_started,
+            worker_finished,
+            release,
+            cancellations=cancellations,
+        )
     )
 
     assert "restored" in events, "the descriptors must still be restored"
     assert events.index("worker_returned") < events.index("restored"), (
-        "restore must happen only after the worker thread returns; observed "
-        f"order {events}"
+        f"restore must happen only after the worker thread returns, even after "
+        f"{cancellations} cancellation(s); observed order {events}"
     )
 
 
@@ -195,39 +209,4 @@ def test_a_failing_pump_on_a_cancelled_hop_reports_the_cancellation(
     )
     assert str(exc_info[1]) == "the pump failed while the hop was being cancelled", (
         f"the attached exception must carry the pump's message, found {exc_info[1]!r}"
-    )
-
-
-def test_repeated_cancellation_keeps_cleanup_worker_owned(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Extra cancellation requests cannot restore descriptors before the worker."""
-    events: list[str] = []
-    release = threading.Event()
-    worker_started = threading.Event()
-    worker_finished = threading.Event()
-
-    def blocking_pump(reader_fd: int, writer_fd: int) -> int:
-        """Block until released, standing in for an in-flight Rust transfer."""
-        del reader_fd, writer_fd
-        worker_started.set()
-        release.wait(timeout=5.0)
-        events.append("worker_returned")
-        worker_finished.set()
-        return 0
-
-    _install_fake_pump(monkeypatch, blocking_pump)
-    asyncio.run(
-        _cancel_mid_transfer(
-            events,
-            worker_started,
-            worker_finished,
-            release,
-            cancellations=3,
-        )
-    )
-
-    assert events.index("worker_returned") < events.index("restored"), (
-        "repeated cancellation must not restore descriptors before the worker; "
-        f"observed order {events}"
     )
