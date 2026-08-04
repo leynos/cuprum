@@ -1,17 +1,19 @@
-"""Contract tests for the extension build wiring in the Makefile and CI.
+"""Contract tests for the extension build wiring in the Makefile.
 
-`make test-extension` and the `extension-tests` job are the only things that
-turn a silently-skipped extension into a failure, and both are configuration
-rather than code. Nothing else in the suite notices when the guard variable
-leaves the recipe, a module falls out of ``EXTENSION_TEST_TARGETS``, or the CI
-job stops building the extension before running the gated tests: every one of
-those changes leaves a green run behind. These tests read the wiring back and
-assert the contract it must uphold.
+`make test-extension` is the only thing that turns a silently-skipped
+extension into a failure, and it is configuration rather than code. Nothing
+else in the suite notices when the guard variable leaves the recipe or a
+module falls out of ``EXTENSION_TEST_TARGETS``: either change leaves a green
+run behind. These tests read the wiring back and assert the contract it must
+uphold. The CI half of the same contract — that a job builds the extension
+before running against it — lives in `test_extension_ci_contract.py`.
 
-The Makefile side is read through ``make --dry-run`` rather than by parsing
-the file: that is the command line the target actually runs, with every
-variable expanded, so an assertion about the guard variable is an assertion
-about what CI executes rather than about text sitting near it.
+The Makefile is read through ``make --dry-run`` rather than by parsing the
+file: that is the command line the target actually runs, with every variable
+expanded, so an assertion about the guard variable is an assertion about what
+CI executes rather than about text sitting near it. That nested ``make`` runs
+against a scrubbed environment, because otherwise it would report the caller's
+configuration as though it were the repository's — see ``_caller_owned_names``.
 
 ``EXTENSION_TEST_TARGETS`` is pinned by two independent properties, neither
 implying the other — ``_SKIP_SIGNALS`` derives the gated modules from the
@@ -32,15 +34,9 @@ import subprocess  # noqa: S404 - reads the repository's own Makefile recipes.
 import typing as typ
 
 import pytest
-import yaml
 
 from tests.helpers.docs import repo_root
 from tests.helpers.extension_requirement import REQUIRE_EXTENSION_ENV
-
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
-CI_WORKFLOW = ".github/workflows/ci.yml"
 
 #: Where test modules live. Any of them could gate on the extension, so all
 #: are scanned, not only the directories holding gated modules today.
@@ -74,25 +70,57 @@ _COMPANION_TARGETS: typ.Final[dict[str, str]] = {
 }
 
 
+#: Matches a Makefile variable declared with ``?=``, which assigns only when
+#: the name is not already defined — and a name present in the environment
+#: counts as defined. ``make`` exports each of its own command-line overrides
+#: under that name, so a suite run as ``make test EXTENSION_TEST_TARGETS=…``
+#: would otherwise have the nested ``make`` below report the caller's list as
+#: though the Makefile declared it. Stripping ``MAKEFLAGS`` does not prevent
+#: that: the override travels under its own name as well.
+_CONDITIONAL_ASSIGNMENT: typ.Final = re.compile(
+    r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\?=", re.MULTILINE
+)
+
+#: ``make``'s own bookkeeping, which leaks in when pytest is itself launched
+#: from ``make test``; an inherited jobserver flag makes the nested ``make``
+#: warn about it.
+_MAKE_BOOKKEEPING: typ.Final = frozenset({"MAKEFLAGS", "MAKELEVEL", "MFLAGS"})
+
+
 @functools.cache
-def _dry_run(*goals: str) -> str:
+def _caller_owned_names() -> frozenset[str]:
+    """Return environment names that would redefine a Makefile variable.
+
+    Derived from the Makefile rather than listed here, so a variable gaining
+    or losing its ``?=`` cannot leave the scrub quietly out of date.
+    """
+    makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
+    overridable = frozenset(_CONDITIONAL_ASSIGNMENT.findall(makefile))
+    assert overridable, (
+        "no `?=` assignments were found in the Makefile, so this scrub has "
+        "stopped protecting anything; check the pattern still matches"
+    )
+    return overridable | _MAKE_BOOKKEEPING
+
+
+def _make_dry_run(*goals: str) -> str:
     """Return what ``make --dry-run`` prints for `goals`, recipes expanded."""
-    # MAKEFLAGS leaks in when pytest is itself launched from `make test`, and
-    # an inherited jobserver flag makes this nested make warn about it.
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in {"MAKEFLAGS", "MAKELEVEL", "MFLAGS"}
-    }
+    ignored = _caller_owned_names()
     completed = subprocess.run(  # noqa: S603 - fixed argument vector.
         ["make", "--dry-run", *goals],  # noqa: S607 - `make` resolved from PATH.
         capture_output=True,
         check=True,
         cwd=repo_root(),
-        env=environment,
+        env={key: value for key, value in os.environ.items() if key not in ignored},
         text=True,
     )
     return completed.stdout
+
+
+@functools.cache
+def _dry_run(*goals: str) -> str:
+    """Cache `_make_dry_run`: nothing it reads changes during a session."""
+    return _make_dry_run(*goals)
 
 
 def _sole_line_containing(text: str, needle: str, *, subject: str) -> str:
@@ -160,45 +188,6 @@ def _gated_modules() -> dict[str, str]:
         if reason is not None:
             gated[module] = reason
     return gated
-
-
-@functools.cache
-def _workflow() -> dict[str, typ.Any]:
-    """Parse the CI workflow."""
-    parsed = yaml.safe_load((repo_root() / CI_WORKFLOW).read_text(encoding="utf-8"))
-    assert isinstance(parsed, dict), f"{CI_WORKFLOW} must parse to a mapping"
-    return parsed
-
-
-def _job_steps(job_name: str) -> list[dict[str, typ.Any]]:
-    """Return the steps of a named CI job."""
-    jobs = _workflow().get("jobs")
-    assert isinstance(jobs, dict), f"{CI_WORKFLOW} must declare a jobs mapping"
-    job = jobs.get(job_name)
-    assert isinstance(job, dict), (
-        f"{CI_WORKFLOW} must declare a {job_name!r} job; found {sorted(jobs)}"
-    )
-    steps = job.get("steps")
-    assert isinstance(steps, list), f"the {job_name!r} job must declare steps"
-    return steps
-
-
-def _run_scripts() -> cabc.Iterator[tuple[str, str]]:
-    """Yield the job name and script of every ``run:`` step in the workflow."""
-    for job_name, job in (_workflow().get("jobs") or {}).items():
-        for step in (job or {}).get("steps") or []:
-            script = step.get("run")
-            if isinstance(script, str):
-                yield job_name, script
-
-
-def _step_index_running(command: str, *, job_name: str) -> int:
-    """Return the index of the first step in `job_name` running `command`."""
-    for index, step in enumerate(_job_steps(job_name)):
-        script = step.get("run")
-        if isinstance(script, str) and command in script:
-            return index
-    pytest.fail(f"no step in the {job_name!r} job runs {command!r}")
 
 
 def test_the_test_extension_recipe_sets_the_guard_variable() -> None:
@@ -284,19 +273,25 @@ def test_the_always_run_companions_stay_declared(module: str, reason: str) -> No
     )
 
 
-def test_the_ci_job_builds_the_extension_before_running_the_gated_tests() -> None:
-    """`extension-tests` must run `make develop` first.
+def test_a_caller_variable_cannot_reach_the_nested_make(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An inherited override must not become what these tests read back.
 
-    `make build` only syncs dependencies, so this ordering is the whole reason
-    the job can pass at all, and nothing else asserts it.
+    Otherwise the contract holds or breaks according to how the suite was
+    invoked: `make test EXTENSION_TEST_TARGETS=…` exports that name into
+    pytest's environment, the Makefile's `?=` yields to it, and every
+    assertion below reports on the caller instead of the repository.
     """
-    build = _step_index_running("make develop", job_name="extension-tests")
-    tests = _step_index_running("make test-extension", job_name="extension-tests")
+    intruder = "caller_owned_module.py"
+    monkeypatch.setenv("EXTENSION_TEST_TARGETS", intruder)
 
-    assert build < tests, (
-        "the extension-tests job must build the extension with `make "
-        "develop` before `make test-extension` runs; found the build at step "
-        f"{build} and the tests at step {tests}"
+    recipe = _make_dry_run("test-extension")
+
+    assert intruder not in recipe, (
+        "an inherited EXTENSION_TEST_TARGETS reached the nested make, so "
+        "these tests would assert about whoever ran them rather than about "
+        "the Makefile"
     )
 
 
@@ -348,37 +343,4 @@ def test_the_develop_target_forwards_the_release_flag() -> None:
     assert "--release" in command, (
         "`make develop MATURIN_DEVELOP_FLAGS=--release` must pass --release "
         "through to maturin, or the benchmark ratchet measures a debug build"
-    )
-
-
-def test_the_benchmark_job_builds_through_the_develop_target() -> None:
-    """`benchmark-ratchet` must reach an optimized build via `make develop`.
-
-    Its numbers mean nothing against a debug build, so the flag matters as
-    much as the shared target does.
-    """
-    index = _step_index_running("make develop", job_name="benchmark-ratchet")
-    script = _job_steps("benchmark-ratchet")[index]["run"]
-
-    assert "make develop MATURIN_DEVELOP_FLAGS=--release" in script, (
-        "the benchmark-ratchet job must build with `make develop "
-        "MATURIN_DEVELOP_FLAGS=--release`; without the flag the ratchet "
-        "compares debug builds and its thresholds mean nothing"
-    )
-
-
-def test_no_ci_step_invokes_maturin_develop_directly() -> None:
-    """`make develop` must be the only definition of the extension build.
-
-    A second copy of the three-step sequence is how the two drift: the copy
-    stops matching the target, and whichever job owns it quietly builds
-    something nobody maintains.
-    """
-    offenders = sorted({
-        job_name for job_name, script in _run_scripts() if "maturin develop" in script
-    })
-
-    assert not offenders, (
-        "these CI jobs invoke `maturin develop` directly instead of going "
-        f"through `make develop`: {offenders}"
     )

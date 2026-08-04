@@ -1650,13 +1650,19 @@ present in the environment. CI's `extension-tests` job runs the same target, so
 a local run and a CI run build the extension identically. The Makefile keeps
 only a pointer to this section rather than repeating the reasoning.
 
-Every extension build in CI goes through this target. The `benchmark-ratchet`
-job needs an optimized build, and that is the only thing it needs differently,
-so it passes `make develop MATURIN_DEVELOP_FLAGS=--release` rather than
-restating the three-step sequence. Keep it that way: a second copy of the
-sequence is how the two drift, and the ratchet then measures a build nobody
-maintains. `MATURIN_DEVELOP_FLAGS` is empty by default, because a debug build
-is what contributors and the `extension-tests` job want.
+Every CI job that installs the extension and then runs against it goes through
+this target — `extension-tests` and `benchmark-ratchet`, and no others. The
+wheel build is not one of them: `.github/workflows/build-wheels.yml` runs
+`maturin build` to produce a distributable artefact rather than installing it
+into a virtual environment, so it neither uses nor needs this target.
+
+The `benchmark-ratchet` job needs an optimized build, and that is the only
+thing it needs differently, so it passes
+`make develop MATURIN_DEVELOP_FLAGS=--release` rather than restating the
+three-step sequence. Keep it that way: a second copy of the sequence is how
+the two drift, and the ratchet then measures a build nobody maintains.
+`MATURIN_DEVELOP_FLAGS` is empty by default, because a debug build is what
+contributors and the `extension-tests` job want.
 
 Without it these modules skip rather than fail, which is the right default
 locally — most changes do not need the native path rebuilt — and the wrong one
@@ -1677,12 +1683,28 @@ list lives in one place, the Makefile's `EXTENSION_TEST_TARGETS`, which the CI
 job consumes too, so the two cannot drift apart.
 
 None of that wiring is exercised by ordinary tests — drop the guard variable
-and the suite still passes — so `test_extension_build_contract.py` reads it
-back and asserts the contract: that the recipe sets the guard variable, that
-the `extension-tests` job runs `make develop` before `make test-extension`,
-and that `benchmark-ratchet` builds through the same target. It reads the
-Makefile with `make --dry-run` rather than by parsing the file, because the
-expanded recipe is the command line CI actually runs.
+and the suite still passes — so two contract modules read it back, split by
+what they read rather than by what they assert.
+
+`test_extension_build_contract.py` covers the Makefile: that the recipe sets
+the guard variable, and what `EXTENSION_TEST_TARGETS` must contain. It reads
+the Makefile with `make --dry-run` rather than by parsing the file, because
+the expanded recipe is the command line CI actually runs. It scrubs the
+Makefile's `?=` variables from that nested `make`'s environment first. `make`
+exports each of its command-line overrides under its own name, and a `?=`
+assignment yields to a name already in the environment, so without the scrub
+a run of `make test EXTENSION_TEST_TARGETS=…` would have the contract report
+on whoever invoked it rather than on the repository — passing or failing
+according to the command line rather than the wiring. Stripping `MAKEFLAGS`
+alone does not prevent that, because the override travels under its own name
+as well.
+
+`test_extension_ci_contract.py` covers `ci.yml`: that the `extension-tests`
+job runs `make develop` before `make test-extension`, that `benchmark-ratchet`
+builds through the same target with `--release`, and that no job reintroduces
+a second copy of the build sequence. It declares the workflow shapes it reads
+— jobs, steps, and a step's `run:` — so that a misspelled key is a type error
+rather than a `None` that quietly satisfies the assertion above it.
 
 `EXTENSION_TEST_TARGETS` gets two separate checks, because neither implies the
 other:
