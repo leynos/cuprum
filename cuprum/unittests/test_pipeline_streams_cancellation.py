@@ -115,11 +115,13 @@ def test_cancellation_restores_descriptors_only_after_worker_returns(
     worker_started = threading.Event()
     worker_finished = threading.Event()
 
+    release_waits: list[bool] = []
+
     def blocking_pump(reader_fd: int, writer_fd: int) -> int:
         """Block until released, standing in for an in-flight Rust transfer."""
         del reader_fd, writer_fd
         worker_started.set()
-        release.wait(timeout=5.0)
+        release_waits.append(release.wait(timeout=5.0))
         events.append("worker_returned")
         worker_finished.set()
         return 0
@@ -135,6 +137,15 @@ def test_cancellation_restores_descriptors_only_after_worker_returns(
         )
     )
 
+    # `Event.wait` reports a timeout by returning False, so a worker that timed
+    # out would still append "worker_returned" and satisfy the ordering below
+    # without the drain ever having held it. Checked here rather than inside the
+    # double because an assertion raised on the worker thread would only ever be
+    # retrieved from the future and logged, never failing the test.
+    assert release_waits == [True], (
+        "the pump worker must return because it was released, not because its "
+        f"5s wait timed out; observed waits {release_waits}"
+    )
     assert "restored" in events, "the descriptors must still be restored"
     assert events.index("worker_returned") < events.index("restored"), (
         f"restore must happen only after the worker thread returns, even after "
@@ -158,11 +169,13 @@ def test_a_failing_pump_on_a_cancelled_hop_reports_the_cancellation(
     worker_started = threading.Event()
     worker_finished = threading.Event()
 
+    release_waits: list[bool] = []
+
     def failing_pump(reader_fd: int, writer_fd: int) -> int:
         """Fail after the cancellation has been delivered."""
         del reader_fd, writer_fd
         worker_started.set()
-        release.wait(timeout=5.0)
+        release_waits.append(release.wait(timeout=5.0))
         events.append("worker_returned")
         worker_finished.set()
         msg = "the pump failed while the hop was being cancelled"
@@ -186,6 +199,15 @@ def test_a_failing_pump_on_a_cancelled_hop_reports_the_cancellation(
         # Force collection of the executor future while capture is still live.
         gc.collect()
 
+    # A timed-out wait returns False rather than raising, so the pump would
+    # still fail and still be reported — but after the cancellation had already
+    # been drained, which is not the scenario under test. Checked on this thread
+    # because an assertion on the worker would merely replace the OSError the
+    # rest of the test inspects.
+    assert release_waits == [True], (
+        "the pump must fail because it was released mid-cancellation, not "
+        f"because its 5s wait timed out; observed waits {release_waits}"
+    )
     assert "restored" in events, "a failing pump must still restore the FDs"
     unretrieved = [
         record.getMessage()
