@@ -496,7 +496,14 @@ stage's recorded start to the injected completion time), and `cuprum_exec_id`:
 
 No record is emitted for a successful exit, for a later failure once
 `failure_index` is latched, or — for the two termination records — for a
-final-stage or single-stage failure, which have no other stage to stop.
+failure with no other stage left to stop. That last case covers more than the
+final-stage and single-stage failures the ordering query rules out: a batch is
+processed in stage order, so an upstream failure can be reached after every
+sibling has already exited. `_process_completed_task` therefore asks
+`_has_stages_to_terminate`, which wraps the same `_stages_to_terminate` reducer
+the teardown selects its targets with, before publishing anything; the
+`pipeline_fail_fast` event is withheld on the same condition.
+`pipeline_stage_first_failure` is not, because the failure latched regardless.
 
 Their shape lives in `cuprum/_pipeline_wait_records.py`, separately from the
 decision that fires them, because the payload is a published contract that the
