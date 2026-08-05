@@ -91,7 +91,10 @@ def test_repeated_run_sync_transfers_payload_and_leaks_no_descriptors() -> None:
                 f"run {run_index} must transfer its payload intact; "
                 f"got {result.stdout!r}"
             )
-            assert _open_fd_count() == baseline, (
+            # Measure once: a second call inside the message could report a
+            # different count than the one that tripped the assertion.
+            open_fds = _open_fd_count()
+            assert open_fds == baseline, (
                 f"run {run_index} left descriptors open; "
-                f"expected {baseline}, now {_open_fd_count()}"
+                f"expected {baseline}, now {open_fds}"
             )

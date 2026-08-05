@@ -22,6 +22,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from cuprum._pipeline_pipe_tasks import (
+    _cancel_stream_tasks,
     _collect_pipe_results,
     _create_pipe_tasks,
     _flatten_stream_tasks,
@@ -307,4 +308,76 @@ def test_collect_returns_exceptions_in_task_order() -> None:
     assert results[1] is None, f"a successful task must yield its value: {results!r}"
     assert results[2] is second, (
         f"the third task's failure must come third: {results!r}"
+    )
+
+
+_NEVER = 3600.0
+_TEARDOWN_FAILURE = "teardown failed while the capture task was being cancelled"
+type _CaptureTask = asyncio.Task[str | None]
+
+
+async def _quiet_until_cancelled(name: str, cancelled: list[str]) -> str | None:
+    """Wait forever, recording the cancellation that ends it."""
+    try:
+        await asyncio.sleep(_NEVER)
+    except asyncio.CancelledError:
+        cancelled.append(name)
+        raise
+    return None
+
+
+async def _failing_on_cancel(name: str, cancelled: list[str]) -> str | None:
+    """Fail while unwinding, standing in for a capture whose teardown breaks."""
+    try:
+        await asyncio.sleep(_NEVER)
+    except asyncio.CancelledError:
+        cancelled.append(name)
+        raise RuntimeError(_TEARDOWN_FAILURE) from None
+    return None
+
+
+def test_cancelling_stream_tasks_survives_a_failing_teardown() -> None:
+    """Every capture task is cancelled, and a broken teardown is swallowed.
+
+    This runs on the pipeline's error path, where a failure has already been
+    decided: a capture task that raises while unwinding must not displace it,
+    or the caller is told about the teardown rather than the fault that caused
+    it. The awaited cancellations matter just as much — returning before the
+    tasks settle would leave them running against a pipeline already torn down.
+    """
+    cancelled: list[str] = []
+
+    async def drive() -> tuple[list[_CaptureTask], _CaptureTask]:
+        """Cancel a mixed set of capture tasks, one of which fails to unwind."""
+        hostile = asyncio.create_task(_failing_on_cancel("stderr-1", cancelled))
+        stderr_tasks: list[asyncio.Task[str | None] | None] = [
+            asyncio.create_task(_quiet_until_cancelled("stderr-0", cancelled)),
+            None,
+            hostile,
+        ]
+        stdout_task = asyncio.create_task(_quiet_until_cancelled("stdout", cancelled))
+        # Let every task reach its await: cancelling one that has not yet
+        # started never runs the teardown this test exists to exercise.
+        await asyncio.sleep(0)
+
+        await _cancel_stream_tasks(stderr_tasks, stdout_task)
+
+        running = [task for task in stderr_tasks if task is not None]
+        running.append(stdout_task)
+        return running, hostile
+
+    tasks, hostile = asyncio.run(drive())
+
+    assert sorted(cancelled) == ["stderr-0", "stderr-1", "stdout"], (
+        "every flattened task must be cancelled, including the one that then "
+        f"failed to unwind; observed {sorted(cancelled)}"
+    )
+    assert all(task.done() for task in tasks), (
+        "the cancellations must be awaited, not merely requested; found "
+        f"{[task for task in tasks if not task.done()]}"
+    )
+    # Retrieved rather than assumed: the teardown failure has to be consumed
+    # here, or asyncio reports it as an unretrieved exception later.
+    assert isinstance(hostile.exception(), RuntimeError), (
+        f"the failing teardown must be collected, found {hostile.exception()!r}"
     )

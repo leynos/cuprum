@@ -38,10 +38,12 @@ def _nonblocking_pipe_pair() -> cabc.Iterator[tuple[int, int, int, int]]:
     try:
         yield read_fd, read_write_fd, write_read_fd, write_fd
     finally:
-        os.close(read_fd)
-        os.close(read_write_fd)
-        os.close(write_read_fd)
-        os.close(write_fd)
+        # A double close would raise EBADF out of the teardown and mask
+        # whatever the body was asserting, so each close is suppressed
+        # independently — matching ``_pipe_fds`` in the FD lifecycle tests.
+        for fd in (read_fd, read_write_fd, write_read_fd, write_fd):
+            with contextlib.suppress(OSError):
+                os.close(fd)
 
 
 class _TransportWithoutPause:
