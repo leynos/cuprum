@@ -1641,22 +1641,39 @@ stays diagnosable instead of vanishing behind the cancellation. It sits at
 `DEBUG` too, so the logger adjustment above reveals it.
 
 
+### A teardown step that failed and was ignored
+
+Handing the descriptors back is best-effort: resuming the reader transport,
+restoring the descriptors' blocking mode, and closing the writer after the pump
+has already closed it all run while the hop is unwinding, so an error there is
+suppressed rather than raised. Each suppression records a `DEBUG` event with a
+`cuprum_action` of `rust_pump_teardown_failed`, a `cuprum_site` naming the step
+— `resume`, `restore_blocking`, or `writer_close` — and the exception class and
+errno. The record carries nothing drawn from the transfer itself.
+
+`writer_close` reporting `EBADF` is routine: the Rust pump closes that
+descriptor on return, so the subsequent transport close finds it gone. The
+other two sites, and any other errno at `writer_close`, mean a descriptor was
+left in a state nothing else reports. The `resume` and `restore_blocking`
+records come from the `cuprum._pipeline_stream_fds` logger; `writer_close`
+comes from `cuprum._pipeline_streams`.
+
 ### Counting pump routing decisions
 
 Aggregating debug logs answers "why did this hop fall back?" one record at a
 time. To count the same decisions instead, register a pump observer. It is a
 separate channel from `sh.observe`: pump events describe an internal routing
 decision rather than a command's lifecycle, so they are not `ExecEvent` values
-and never reach an observe hook. An `ExecEvent` consumer registered elsewhere in
-the process is unaffected.
+and never reach an observe hook. An `ExecEvent` consumer registered elsewhere
+in the process is unaffected.
 
 The channel counts declines and post-cancellation failures, and nothing else. A
 successful hand-off emits no event, deliberately: there is no per-hop counter
 and no total-hop counter to divide by. So these counters give the *number* of
 hops that left the fast path, not the *fraction* that stayed on it. To report
-that fraction, pair the decline counter with a hop total measured
-independently — for example, a counter of your own incremented once per
-inter-stage hop you submit.
+that fraction, pair the decline counter with a hop total measured independently
+— for example, a counter of your own incremented once per inter-stage hop you
+submit.
 
 ```python
 from cuprum.adapters.metrics_adapter import InMemoryMetrics
@@ -1703,10 +1720,16 @@ from cuprum.adapters.pump_metrics import UNKNOWN_DECLINE_REASON
 print([reason.value for reason in RustPumpDeclineReason] + [UNKNOWN_DECLINE_REASON])
 ```
 
-`unknown` is a guard rather than an outcome: it is what a decline that named no
-seam would be labelled, and no call site produces one. It is listed because a
-dashboard filtering on the enum alone would drop such a decline silently rather
-than showing it.
+`unknown` is a guard rather than an outcome: it is what a decline whose reason
+is not one of the three would be labelled, and no call site produces one. It is
+listed because a dashboard filtering on the enum alone would drop such a
+decline silently rather than showing it.
+
+`PumpEvent` is a public dataclass and performs no run-time validation, so a
+caller can construct one carrying any object as its `reason`. The hook
+therefore checks the value against `RustPumpDeclineReason` before labelling and
+degrades anything else to `unknown`; a hand-built event cannot widen the label
+domain.
 
 Nothing derived from a descriptor, an argument vector, or an exception reaches
 a label, so the series count is fixed. A successful hand-off increments

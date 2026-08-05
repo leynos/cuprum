@@ -19,6 +19,25 @@
   structured logging adapter renders it at `LogLevels.fail_fast_level` (WARNING
   by default).
 
+- **`observe_pump`:** Register a hook for Rust-pump routing events in the
+  current context, returning a detachable `PumpHookRegistration`. The channel
+  is separate from `sh.observe`, so an existing observer is untouched.
+- **`PumpEvent`:** The frozen event a pump hook receives, carrying the routing
+  `phase` and, for a decline, the `reason` that refused.
+- **`PumpHook`:** The synchronous callable type a pump observer must satisfy.
+- **`PumpHookRegistration`:** The handle `observe_pump` returns, usable as a
+  context manager or detached explicitly.
+- **`RustPumpDeclineReason`:** The closed enum of reasons an inter-stage hop
+  falls back from the Rust pump to the Python one, bounding the `reason` label.
+- **`UNKNOWN_DECLINE_REASON`:** The fixed label a decline carrying no recognized
+  reason degrades to, so a malformed event cannot widen the label domain.
+- **`PumpMetricsHook`:** A pump observer that counts routing decisions against
+  any `MetricsCollector`.
+- **`cuprum_rust_pump_declined_total{reason}`:** Incremented once per hop that
+  fell back to the Python pump, labelled with the seam that refused.
+- **`cuprum_rust_pump_failed_after_cancel_total`:** Incremented once,
+  unlabelled, per Rust-pump worker failure recovered after its hop was
+  cancelled.
 ### Breaking changes
 
 - **New `ExecPhase` value (breaking for fail-closed hooks):** `ExecPhase` gains
