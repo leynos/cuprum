@@ -16,8 +16,10 @@ An inter-stage pipe hop may hand its raw descriptors to the Rust stream pump.
 It may also decline to, for one of three reasons, and a hop cancelled while the
 pump owns the descriptors may be hiding a worker failure. Both facts are
 recorded as `DEBUG` log records carrying `cuprum_action` and, for a decline,
-`cuprum_reason`. Neither had a counter beside it, so answering "what fraction
-of hops still take the fast path?" meant aggregating debug logs.
+`cuprum_reason`. Neither had a counter beside it, so aggregating debug logs
+could yield only the *count* of declines, never the *fraction* of hops still
+taking the fast path — that needs the decline count paired with an
+independently measured hop total.
 
 The obvious route — a new `ExecPhase` member consumed by the existing
 `MetricsHook` — is closed. `ExecPhase` is a closed `Literal` and
