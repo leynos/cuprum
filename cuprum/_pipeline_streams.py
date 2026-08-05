@@ -34,6 +34,7 @@ from cuprum._pipeline_stream_fds import (
     _BlockingModeGuard,
     _extract_stream_fd,
     _paused_reader,
+    _suppressed_teardown_failure,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
 from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
@@ -146,8 +147,10 @@ async def _run_rust_pump(
         return False
     # The Rust pump closes the writer FD on return (drop semantics).
     # Suppress OSError so the asyncio transport close does not raise
-    # EBADF when the descriptor is already gone.
-    with contextlib.suppress(OSError):
+    # EBADF when the descriptor is already gone — but record it, since the
+    # expected EBADF and a close that failed for some other reason are
+    # otherwise the same silence.
+    with _suppressed_teardown_failure(_LOGGER, "writer_close", OSError):
         await _close_stream_writer(writer)
     return True
 

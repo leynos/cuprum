@@ -15,12 +15,59 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses as dc
+import logging
 import os
 import typing as typ
 
 if typ.TYPE_CHECKING:
     import asyncio
     import collections.abc as cabc
+
+_LOGGER = logging.getLogger(__name__)
+
+RUST_PUMP_TEARDOWN_FAILED_ACTION = "rust_pump_teardown_failed"
+"""``cuprum_action`` for a Rust-pump teardown step that failed and was ignored."""
+
+
+@contextlib.contextmanager
+def _suppressed_teardown_failure(
+    logger: logging.Logger,
+    site: str,
+    *errors: type[Exception],
+) -> cabc.Iterator[None]:
+    """Suppress a teardown failure at ``site``, recording it at DEBUG first.
+
+    Suppresses exactly what ``contextlib.suppress(*errors)`` would; the only
+    addition is the record. Each of these steps undoes something the Rust pump
+    did to a descriptor, and a step that has quietly stopped working leaves the
+    descriptor in a state nothing else reports — the same question
+    ``_log_rust_pump_declined`` exists to answer, so it is answered the same
+    way and at the same level.
+
+    Only the site and the exception class reach the record. Both are drawn from
+    closed sets, so an operator aggregating these cannot be handed a series per
+    descriptor or per message.
+
+    The record is best-effort by construction: these steps run during teardown,
+    which includes cancellation unwinding, and a logging handler that raised
+    would displace the ``CancelledError`` the caller is owed. The emission is
+    therefore wrapped in its own suppression rather than being allowed to
+    convert a suppressed teardown error into a raised logging one.
+    """
+    try:
+        yield
+    except errors as exc:
+        with contextlib.suppress(Exception):
+            logger.debug(
+                "Rust pump teardown step %r failed and was ignored",
+                site,
+                extra={
+                    "cuprum_action": RUST_PUMP_TEARDOWN_FAILED_ACTION,
+                    "cuprum_site": site,
+                    "cuprum_error_type": type(exc).__name__,
+                    "cuprum_errno": getattr(exc, "errno", None),
+                },
+            )
 
 
 def _fd_from_transport(transport: object | None) -> int | None:
@@ -124,8 +171,8 @@ def _pause_reader_transport(reader: asyncio.StreamReader) -> _ReaderPause:
         return _ReaderPause(may_hand_off=False)
 
     def _resume() -> None:
-        """Resume the paused reader transport, ignoring teardown errors."""
-        with contextlib.suppress(RuntimeError, OSError):
+        """Resume the paused reader transport, recording teardown errors."""
+        with _suppressed_teardown_failure(_LOGGER, "resume", RuntimeError, OSError):
             resume_reading()
 
     return _ReaderPause(may_hand_off=True, resume=_resume)
@@ -158,9 +205,9 @@ def _restore_stream_fd_blocking(
     writer_was_blocking: bool,
 ) -> None:
     """Restore pipe FD blocking mode captured before Rust pumping."""
-    with contextlib.suppress(OSError, ValueError):
+    with _suppressed_teardown_failure(_LOGGER, "restore_blocking", OSError, ValueError):
         os.set_blocking(reader_fd, reader_was_blocking)
-    with contextlib.suppress(OSError, ValueError):
+    with _suppressed_teardown_failure(_LOGGER, "restore_blocking", OSError, ValueError):
         os.set_blocking(writer_fd, writer_was_blocking)
 
 
