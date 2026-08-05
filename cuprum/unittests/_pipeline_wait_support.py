@@ -20,6 +20,8 @@ from cuprum._pipeline_types import _ExecutionHooks, _StageObservation
 from cuprum._pipeline_wait import _PipelineWaitState
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     import pytest
 
     from cuprum.events import ExecHook
@@ -29,6 +31,17 @@ async def immediate(exit_code: int) -> int:
     """Return ``exit_code`` after a yield, standing in for ``Process.wait()``."""
     await asyncio.sleep(0)
     return exit_code
+
+
+async def _still_running() -> int:
+    """Never complete, standing in for a stage that has not yet exited.
+
+    The fail-fast path asks the wait tasks which stages are still running, so a
+    stage whose completion has not been applied has to read as pending rather
+    than be missing from the list.
+    """
+    never: asyncio.Future[int] = asyncio.get_running_loop().create_future()
+    return await never
 
 
 def stage_exec_id(stage_index: int) -> str:
@@ -237,8 +250,21 @@ class CompletionPlan:
 def apply_completions(
     state: _PipelineWaitState,
     completions: list[tuple[int, int]],
+    *,
+    before_each: cabc.Callable[[int], None] | None = None,
 ) -> None:
     """Apply each ``(stage_index, exit_code)`` through the async boundary.
+
+    The state is given one wait task per stage, the way `_wait_for_pipeline`
+    builds it, and a stage's task is swapped for a settled one only when that
+    stage's completion is applied. Stages whose completions have not been
+    applied therefore read as still running — which is what the fail-fast path
+    consults to decide there is anything left to terminate. A single-task
+    stand-in would make every sibling look already settled and suppress the
+    teardown these tests are about.
+
+    ``before_each`` is called with the zero-based step index just before each
+    completion, for tests that move the clock between them.
 
     Split out from `drive_completions` so a test that needs its own
     termination stub, or that expects the boundary to raise, can drive the
@@ -248,12 +274,24 @@ def apply_completions(
 
     async def drive() -> None:
         """Apply each completion through ``_process_completed_task``."""
-        for idx, exit_code in completions:
-            task = asyncio.create_task(immediate(exit_code))
-            await task
-            state.wait_tasks = [task]
-            state.task_to_index = {task: idx}
-            await _pipeline_wait._process_completed_task(task, state, [], 0.25)
+        standins = [asyncio.create_task(_still_running()) for _ in state.exit_codes]
+        state.wait_tasks = list(standins)
+        state.task_to_index = {task: idx for idx, task in enumerate(standins)}
+        try:
+            for step, (idx, exit_code) in enumerate(completions):
+                if before_each is not None:
+                    before_each(step)
+                task = asyncio.create_task(immediate(exit_code))
+                await task
+                state.wait_tasks[idx] = task
+                state.task_to_index[task] = idx
+                await _pipeline_wait._process_completed_task(task, state, [], 0.25)
+        finally:
+            # Runs on the raising path too, so a hook failure leaves no
+            # stand-in behind for the loop to complain about on shutdown.
+            for standin in standins:
+                standin.cancel()
+            await asyncio.gather(*standins, return_exceptions=True)
 
     asyncio.run(drive())
 

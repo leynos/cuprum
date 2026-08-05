@@ -127,13 +127,18 @@ class _PipelineStageResultInputs:
 class _StageWaitContext:
     """Per-stage data the wait path reads, all indexed by stage.
 
+    Every field is immutable, so the context stays a snapshot the wait path can
+    only read. ``_PipelineWaitState`` copies ``started_at`` into its own list
+    rather than aliasing it, which is what stops its live bookkeeping writing
+    back through this supposedly frozen record.
+
     ``started_at`` is what stage durations are measured from. ``exec_ids``
     renders each stage's ``_StageObservation.exec_id``, so the wait path can
     label its records with the same correlation token the observe hooks
     publish without depending on the observations themselves.
     """
 
-    started_at: list[float]
+    started_at: tuple[float, ...]
     exec_ids: tuple[str, ...]
 
 
