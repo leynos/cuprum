@@ -28,7 +28,7 @@ from cuprum._pipeline_stream_fds import _BlockingModeGuard, _paused_reader
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-_unix_only = pytest.mark.skipif(
+_UNIX_ONLY = pytest.mark.skipif(
     sys.platform == "win32",
     reason="os.set_blocking on pipe FDs is a Unix contract",
 )
@@ -46,7 +46,7 @@ def _pipe_fds() -> cabc.Iterator[tuple[int, int]]:
                 os.close(fd)
 
 
-@_unix_only
+@_UNIX_ONLY
 @given(reader_blocking=st.booleans(), writer_blocking=st.booleans())
 def test_blocking_guard_round_trips_prior_mode(
     *,
@@ -89,14 +89,25 @@ def test_blocking_guard_round_trips_prior_mode(
         )
 
 
-@_unix_only
-@given(other_blocking=st.booleans(), fault_target=st.sampled_from(["reader", "writer"]))
+@_UNIX_ONLY
+@given(
+    other_blocking=st.booleans(),
+    fault_target=st.sampled_from(["reader", "writer"]),
+    fault_error=st.sampled_from([OSError, ValueError]),
+)
 def test_failed_engage_leaks_no_blocking_state(
     *,
     other_blocking: bool,
     fault_target: str,
+    fault_error: type[Exception],
 ) -> None:
-    """A toggle failure rolls back any change, leaking no blocking state."""
+    """A toggle failure rolls back any change, leaking no blocking state.
+
+    Both refusals are exercised because ``_restore_stream_fd_blocking``
+    suppresses ``OSError`` and ``ValueError`` alike, so the rollback has to
+    cover the same pair: rolling back on only one of them would leave the
+    reader switched to blocking mode with no guard in existence to restore it.
+    """
     with _pipe_fds() as (reader_fd, writer_fd):
         # Force the faulted FD non-blocking so ``engage`` attempts to toggle it
         # and the injected fault fires; the other FD's mode is free.
@@ -118,7 +129,7 @@ def test_failed_engage_leaks_no_blocking_state(
             """Fail when the target FD is toggled to blocking; else delegate."""
             if fd == target_fd and blocking:
                 msg = "injected toggle failure"
-                raise OSError(msg)
+                raise fault_error(msg)
             real_set_blocking(fd, blocking)
 
         # `monkeypatch` is function-scoped and so unavailable inside a
@@ -127,7 +138,7 @@ def test_failed_engage_leaks_no_blocking_state(
         # rebinding an `os` attribute otherwise needs.
         with (
             mock.patch.object(os, "set_blocking", faulting_set_blocking),
-            pytest.raises(OSError, match="injected toggle failure"),
+            pytest.raises(fault_error, match="injected toggle failure"),
         ):
             _BlockingModeGuard.engage(reader_fd=reader_fd, writer_fd=writer_fd)
 

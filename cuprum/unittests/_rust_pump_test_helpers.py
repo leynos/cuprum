@@ -67,6 +67,20 @@ def fail_engage(**_kwargs: object) -> object:
     raise OSError(msg)
 
 
+def fail_engage_with_value_error(**_kwargs: object) -> object:
+    """Refuse the descriptors with ``ValueError`` rather than ``OSError``.
+
+    Injected rather than provoked: on CPython ``os.set_blocking`` reports a bad
+    descriptor as ``OSError``. The refusal is doubled anyway because
+    ``_restore_stream_fd_blocking`` already suppresses ``ValueError``, so the
+    module treats it as a possible outcome of the same call; the two halves of
+    that lifecycle have to agree, or a ``ValueError`` would escape the decline
+    seam and crash a hop the fallback could have carried.
+    """
+    msg = "I/O operation on closed file"
+    raise ValueError(msg)
+
+
 @contextlib.contextmanager
 def owned_fds() -> cabc.Iterator[tuple[int, int]]:
     """Yield a private pipe's descriptors, closing both on exit.
@@ -111,11 +125,34 @@ def decline_on_pause_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     run_raw_fd_pump()
 
 
+def _decline_on_blocking_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+    engage: cabc.Callable[..., object],
+) -> None:
+    """Route a hop whose blocking seam refuses via ``engage``.
+
+    Asserts the fallback signal as well as driving the path, because a refusal
+    that escaped as an exception would never reach the decline seam at all —
+    and a caller that then crashed would leave the log and counter assertions
+    downstream with nothing to disprove.
+    """
+    allow_pause(monkeypatch, may_hand_off=True)
+    monkeypatch.setattr(_pipeline_stream_fds._BlockingModeGuard, "engage", engage)
+    handled = run_raw_fd_pump()
+    assert handled is False, (
+        "a blocking-mode refusal must decline the fast path and fall back to "
+        f"the Python pump, found handled={handled!r}"
+    )
+
+
 def decline_on_blocking_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """Route a hop whose descriptors cannot be made blocking."""
-    allow_pause(monkeypatch, may_hand_off=True)
-    monkeypatch.setattr(_pipeline_stream_fds._BlockingModeGuard, "engage", fail_engage)
-    run_raw_fd_pump()
+    _decline_on_blocking_refusal(monkeypatch, fail_engage)
+
+
+def decline_on_blocking_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route a hop whose blocking toggle refuses with ``ValueError``."""
+    _decline_on_blocking_refusal(monkeypatch, fail_engage_with_value_error)
 
 
 def run_raw_fd_pump() -> bool:
@@ -156,13 +193,24 @@ def hand_off_successfully(monkeypatch: pytest.MonkeyPatch) -> bool:
     return run_raw_fd_pump()
 
 
+class _FakeStreamsModule(types.ModuleType):
+    """A ``cuprum._streams_rs`` stand-in declaring the pump entry point.
+
+    A bare ``ModuleType`` has no such attribute to assign to, so the assignment
+    needs either a type suppression or this declaration. ``setattr`` is not the
+    third option: the lint suite rejects it for a constant attribute name.
+    """
+
+    rust_pump_stream: cabc.Callable[[int, int], int]
+
+
 def install_fake_pump(
     monkeypatch: pytest.MonkeyPatch,
     pump: cabc.Callable[[int, int], int],
 ) -> None:
     """Replace the Rust pump entry point with ``pump``."""
-    fake_streams_rs = types.ModuleType("cuprum._streams_rs")
-    fake_streams_rs.rust_pump_stream = pump  # type: ignore[attr-defined]
+    fake_streams_rs = _FakeStreamsModule("cuprum._streams_rs")
+    fake_streams_rs.rust_pump_stream = pump
     monkeypatch.setitem(sys.modules, "cuprum._streams_rs", fake_streams_rs)
 
 
@@ -237,5 +285,16 @@ DECLINE_PATHS: tuple[
     ("missing_fds", decline_on_missing_fds, "raw_fd_unavailable"),
     ("pause_failure", decline_on_pause_failure, "reader_pause_failed"),
     ("blocking_failure", decline_on_blocking_failure, "blocking_mode_unavailable"),
+    (
+        "blocking_value_error",
+        decline_on_blocking_value_error,
+        "blocking_mode_unavailable",
+    ),
 )
-"""Each real decline path paired with the ``reason`` it must report."""
+"""Each real decline path paired with the ``reason`` it must report.
+
+Two paths share ``blocking_mode_unavailable`` because the blocking seam can
+refuse in two ways, and only one of them was originally caught: a hop that met
+``ValueError`` there crashed instead of declining, so the reason is pinned for
+both refusals rather than for the exception type that happened to be handled.
+"""

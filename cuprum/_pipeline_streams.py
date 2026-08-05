@@ -207,7 +207,7 @@ async def _pump_over_raw_fds(
 
         try:
             guard = _BlockingModeGuard.engage(reader_fd=reader_fd, writer_fd=writer_fd)
-        except OSError:
+        except (OSError, ValueError):
             _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
             return False
 

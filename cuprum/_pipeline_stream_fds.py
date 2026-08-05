@@ -142,7 +142,7 @@ def _set_stream_fds_blocking(*, reader_fd: int, writer_fd: int) -> tuple[bool, b
             reader_changed = True
         if not writer_was_blocking:
             os.set_blocking(writer_fd, True)
-    except OSError:
+    except (OSError, ValueError):
         if reader_changed:
             with contextlib.suppress(OSError, ValueError):
                 os.set_blocking(reader_fd, reader_was_blocking)
@@ -183,8 +183,10 @@ class _BlockingModeGuard:
     def engage(cls, *, reader_fd: int, writer_fd: int) -> _BlockingModeGuard:
         """Switch both FDs to blocking mode, capturing their prior state.
 
-        Raises ``OSError`` — after rolling back any partial change so no
-        descriptor is left switched — when either FD cannot be made blocking.
+        Raises ``OSError`` or ``ValueError`` — after rolling back any partial
+        change so no descriptor is left switched — when either FD cannot be
+        made blocking. ``os.set_blocking`` raises ``ValueError`` for a closed
+        descriptor, so both belong to the same failure mode.
         """
         reader_was_blocking, writer_was_blocking = _set_stream_fds_blocking(
             reader_fd=reader_fd,
