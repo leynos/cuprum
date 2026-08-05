@@ -5,7 +5,9 @@ pump, so no caller-visible signal distinguishes a deployment that has quietly
 stopped taking the fast path from one that never had it. These tests pin the
 three decline reasons to the real code paths that emit them, rather than
 calling the log helper directly, so a decline that stops being recorded fails
-here.
+here. The paths outnumber the reasons: the blocking seam can refuse in two
+ways, and both must be attributed to the same reason rather than one of them
+escaping as an exception.
 """
 
 from __future__ import annotations
@@ -64,7 +66,7 @@ def test_declining_the_rust_pump_records_its_reason(
     )
     # Asserted per reason rather than once: falling back is a routing decision
     # rather than a fault, and a single-path check would miss a regression that
-    # promoted only one of the three above DEBUG, making a working pipeline
+    # promoted only one of them above DEBUG, making a working pipeline
     # noisy on every platform where the fast path does not apply.
     assert records[0]["levelno"] == logging.DEBUG, (
         f"{expected_reason!r} must be recorded at DEBUG, found "
