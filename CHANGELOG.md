@@ -9,6 +9,18 @@
   `cuprum.context.ExecHook` re-export has been removed; only the import path
   changes, not the hook signature or registration behaviour.
 
+### Added
+
+- **Timeout and teardown telemetry:** Emit `timeout` and `teardown_error`
+  `ExecEvent` phases, each carrying `timeout_s` and `timeout_mode` fields,
+  alongside a structured `cuprum.timeout` log channel, the
+  `cuprum_timeouts_total` and `cuprum_teardown_errors_total` metrics
+  counters, and ancillary tracing span events. Adoption is additive:
+  existing hooks, the `TimeoutExpired` exception and its payload, and the
+  `start` / `exit` events are unchanged, so no caller has to do anything,
+  and telemetry failures cannot mask `TimeoutExpired` or `CancelledError`
+  ([#271](https://github.com/leynos/cuprum/pull/271)).
+
 ## [0.2.0] - 2026-06-21
 
 ### Changed

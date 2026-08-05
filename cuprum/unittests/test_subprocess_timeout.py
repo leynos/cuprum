@@ -8,6 +8,7 @@ wait/teardown semantics. The telemetry these paths emit is covered by
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses as dc
 import typing as typ
 
@@ -315,6 +316,78 @@ def test_non_positive_timeout_terminates_running_process() -> None:
         assert process.returncode == -15, (
             "the process must be terminated when a non-positive deadline expires, "
             f"but returncode={process.returncode}"
+        )
+
+    asyncio.run(run_case())
+
+
+class _SigtermImmuneProcess:
+    """Process double that ignores ``terminate()``; only ``kill()`` ends it."""
+
+    def __init__(self) -> None:
+        """Start unexited, recording which signals were delivered."""
+        self.returncode: int | None = None
+        self.pid = 7321
+        self.terminated = asyncio.Event()
+        self.killed = False
+        self.wait_started = asyncio.Event()
+        self._exited = asyncio.Event()
+
+    async def wait(self) -> int:
+        """Block until ``kill()`` records an exit code."""
+        self.wait_started.set()
+        await self._exited.wait()
+        return self.returncode if self.returncode is not None else 0
+
+    def terminate(self) -> None:
+        """Signal receipt without exiting, as a SIGTERM-immune child would."""
+        self.terminated.set()
+
+    def kill(self) -> None:
+        """Record the escalation and exit."""
+        self.killed = True
+        self.returncode = -9
+        self._exited.set()
+
+
+def test_cancellation_during_grace_still_escalates_to_kill() -> None:
+    """A cancel landing in the grace period must not skip the SIGKILL escalation.
+
+    A deadline expiry already consumes one cancellation to reach the teardown,
+    so the caller's own ``cancel()`` is delivered to the grace-period wait
+    inside it. Unshielded, that skipped the escalation and left a
+    ``SIGTERM``-immune child running after the run had returned.
+    """
+
+    async def run_case() -> None:
+        """Expire the deadline, then cancel while the grace period runs."""
+        process = _SigtermImmuneProcess()
+        ctx = ExecutionContext(cancel_grace=0.3)
+
+        async def waiter() -> None:
+            """Drive the wait under a deadline that expires almost at once."""
+            with contextlib.suppress(TimeoutError):
+                async with asyncio.timeout(0.01):
+                    await _wait_for_exit_code(
+                        typ.cast("asyncio.subprocess.Process", process), ctx
+                    )
+
+        task = asyncio.create_task(waiter())
+        await process.wait_started.wait()
+        # Wait for the deadline to fire and teardown to send SIGTERM, so the
+        # cancellation below lands inside the grace period rather than before
+        # it — no sleep-based guess at the timing.
+        await process.terminated.wait()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        assert process.killed, (
+            "the SIGKILL escalation must complete before the cancellation "
+            "propagates, otherwise a SIGTERM-immune child outlives the run"
+        )
+        assert process.returncode == -9, (
+            f"the child must be reaped, got returncode={process.returncode!r}"
         )
 
     asyncio.run(run_case())
