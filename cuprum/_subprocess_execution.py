@@ -16,10 +16,7 @@ import typing as typ
 
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_exit import _await_process_exit
-from cuprum._process_lifecycle import (
-    _merge_env,
-    _terminate_process,
-)
+from cuprum._process_lifecycle import _merge_env, _terminate_all_shielded
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
@@ -89,7 +86,12 @@ async def _wait_for_exit_code(
         # both surface here as CancelledError and need the same teardown:
         # terminate the process so the caller's drain can reach EOF, then
         # re-raise so the cancellation can propagate.
-        await _terminate_process(process, ctx.cancel_grace)
+        #
+        # Shielded, because this teardown is itself interruptible. A deadline
+        # expiry has already consumed one cancellation, so the caller's next
+        # ``cancel()`` lands on the grace-period wait here and would skip the
+        # ``SIGKILL`` escalation, leaving a ``SIGTERM``-immune child running.
+        await _terminate_all_shielded((process,), ctx.cancel_grace)
         raise
     exited_at = time.perf_counter()
     return exit_code, exited_at
@@ -177,7 +179,9 @@ async def _wait_for_exit_code_within_timeout(
     """
     timeout = execution.timeout
     if timeout is not None and timeout <= 0:
-        await _terminate_process(process, execution.ctx.cancel_grace)
+        # Shielded for the same reason as the cancellation branch above: a
+        # caller cancelling here would otherwise skip the reap.
+        await _terminate_all_shielded((process,), execution.ctx.cancel_grace)
         _report_timeout_expiry(
             execution.observation,
             pid=process.pid,

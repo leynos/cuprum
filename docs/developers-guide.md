@@ -2735,13 +2735,13 @@ executes:
    call `_handle_stream_timeout`, which merely raises
    `_SubprocessTimeoutError` carrying the pre-drained stdout/stderr; on the
    cancellation path `CancelledError` is re-raised directly.
-6. In the non-streaming path (`_execute_subprocess`), the same writer task is
-   created and awaited after `_wait_for_exit_code` completes.  On
-   `TimeoutError` or `asyncio.CancelledError` from `_wait_for_exit_code`,
-   `_execute_subprocess` itself cancels and drains the writer task via
-   `_cancel_stdin_writer` before the timeout is translated or the
-   cancellation propagates, so a stdin drain blocked on an unread pipe cannot
-   delay completion.
+6. In the non-streaming path, `_execute_subprocess` delegates to
+   `_run_subprocess_without_streams`, which creates the same writer task and
+   awaits `_wait_for_exit_code` itself.  On `TimeoutError` or
+   `asyncio.CancelledError` from that wait, `_run_subprocess_without_streams`
+   itself cancels and drains the writer task via `_cancel_stdin_writer`
+   before the timeout is translated or the cancellation propagates, so a
+   stdin drain blocked on an unread pipe cannot delay completion.
 
 The `tests/helpers/stream_pipes.py` module provides
 `drain_blocking_payload_size()`, a shared helper returning a stdin payload
