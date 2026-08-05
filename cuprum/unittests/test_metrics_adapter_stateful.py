@@ -48,13 +48,13 @@ _KNOWN_PHASES: list[str] = [
     "pipeline_fail_fast",
 ]
 
-_UNIT_COUNTER_PHASES = [
+_UNIT_COUNTER_PHASES = (
     ("start", "cuprum_executions_total"),
     ("stdout", "cuprum_stdout_lines_total"),
     ("stderr", "cuprum_stderr_lines_total"),
     ("stdin_error", "cuprum_stdin_errors_total"),
     ("pipeline_fail_fast", "cuprum_pipeline_fail_fast_total"),
-]
+)
 
 # The same pairs keyed for lookup, so the stateful oracle and the parametrized
 # cases cannot drift apart. This stays a *test-local* restatement of the

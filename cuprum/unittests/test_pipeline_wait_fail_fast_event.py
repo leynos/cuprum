@@ -23,9 +23,11 @@ from cuprum.unittests._pipeline_wait_support import (
     CompletionPlan,
     apply_completions,
     drive_completions,
+    field_values,
     make_stage_observations,
     make_wait_state,
     pin_clock,
+    record_actions,
     record_terminations,
 )
 
@@ -165,9 +167,7 @@ class TestFailFastEventEmission:
             f"found {event.exec_id!r}"
         )
         logged = {
-            str(vars(record)["cuprum_exec_id"])
-            for record in driven.records
-            if "cuprum_exec_id" in vars(record)
+            str(value) for value in field_values(driven.records, "cuprum_exec_id")
         }
         assert logged == {str(expected)}, (
             f"the log records must carry the same token, found {logged!r}"
@@ -319,11 +319,7 @@ class TestFailFastEventWithoutHooks:
                 CompletionPlan(stage_count=3, completions=[(0, 4)]),
             )
 
-        actions = [
-            vars(record)["cuprum_action"]
-            for record in records
-            if "cuprum_action" in vars(record)
-        ]
+        actions = record_actions(records)
 
         assert "pipeline_fail_fast_termination" in actions, (
             f"the teardown must still be reported and requested, found {actions!r}"
