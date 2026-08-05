@@ -335,6 +335,24 @@ async def _terminate_timed_out_stages(
     await _terminate_all_shielded(processes, cancel_grace)
 
 
+def _has_stages_to_terminate(
+    failure_index: int,
+    wait_tasks: cabc.Sequence[asyncio.Task[int]],
+) -> bool:
+    """Report whether a fail-fast at ``failure_index`` has anything to stop.
+
+    Asks the same reducer `_terminate_pipeline_remaining_stages` picks its
+    targets with, so a caller that announces the decision before requesting the
+    teardown cannot disagree with it about whether a stage was left running.
+    """
+    return bool(
+        _stages_to_terminate(
+            failure_index,
+            [wait_task.done() for wait_task in wait_tasks],
+        ),
+    )
+
+
 async def _terminate_pipeline_remaining_stages(
     processes: list[asyncio.subprocess.Process],
     wait_tasks: list[asyncio.Task[int]],

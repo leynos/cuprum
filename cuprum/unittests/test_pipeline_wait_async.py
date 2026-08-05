@@ -8,23 +8,27 @@ awaiting fail-fast termination when the query says so.
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
+import logging
 import typing as typ
 
 from cuprum import _pipeline_wait
 from cuprum._pipeline_types import _StageWaitContext
 from cuprum.unittests._pipeline_wait_support import (
     advancing_clock,
-    immediate,
+    apply_completions,
+    make_stage_observations,
     make_wait_state,
     pin_clock,
+    record_actions,
     record_terminations,
-    stage_exec_id,
 )
 
 if typ.TYPE_CHECKING:
     import pytest
 
     from cuprum._pipeline_wait import _PipelineWaitResult, _PipelineWaitState
+    from cuprum.events import ExecEvent
 
 
 class TestProcessCompletedTask:
@@ -51,21 +55,7 @@ class TestProcessCompletedTask:
         pin_clock(monkeypatch, 12.5)
 
         state = make_wait_state(stage_count)
-
-        async def drive() -> None:
-            """Build a settled wait task for the stage and process it."""
-            task = asyncio.create_task(immediate(exit_code))
-            await task
-            state.wait_tasks = [task]
-            state.task_to_index = {task: completed_idx}
-            await _pipeline_wait._process_completed_task(
-                task,
-                state,
-                [],
-                0.25,
-            )
-
-        asyncio.run(drive())
+        apply_completions(state, [(completed_idx, exit_code)])
         return state, terminations
 
     def test_records_the_completion_and_terminates_on_first_failure(
@@ -140,17 +130,11 @@ class TestProcessCompletedTask:
 
         state = make_wait_state(stage_count)
 
-        async def drive() -> None:
-            """Apply each completion through the real async boundary."""
-            for step, (idx, exit_code) in enumerate(completions):
-                clock.reading = 10.0 * (step + 1)
-                task = asyncio.create_task(immediate(exit_code))
-                await task
-                state.wait_tasks = [task]
-                state.task_to_index = {task: idx}
-                await _pipeline_wait._process_completed_task(task, state, [], 0.25)
+        def advance(step: int) -> None:
+            """Move the clock on one tick per completion, not per reading."""
+            clock.reading = 10.0 * (step + 1)
 
-        asyncio.run(drive())
+        apply_completions(state, completions, before_each=advance)
         return state, terminations
 
     def test_an_earlier_completion_outranks_a_lower_stage_index(
@@ -210,6 +194,17 @@ class _SettledProcess:
         return self._exit_code
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _BatchRun:
+    """Everything one all-at-once pipeline wait produced."""
+
+    processed: list[int]
+    result: _PipelineWaitResult
+    terminations: list[tuple[int, float]]
+    events: list[ExecEvent]
+    records: list[logging.LogRecord]
+
+
 class TestSimultaneousCompletions:
     """Stages completing in one batch resolve by stage order, not set order.
 
@@ -223,11 +218,15 @@ class TestSimultaneousCompletions:
     @staticmethod
     def _run(
         monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
         exit_codes: list[int],
-    ) -> tuple[list[int], _PipelineWaitResult]:
-        """Settle every stage at once, returning the processing order and result."""
-        record_terminations(monkeypatch)
+    ) -> _BatchRun:
+        """Settle every stage at once, returning everything the wait published."""
+        terminations = record_terminations(monkeypatch)
         pin_clock(monkeypatch, 12.5)
+
+        events: list[ExecEvent] = []
+        observations = make_stage_observations(len(exit_codes), (events.append,))
 
         processed: list[int] = []
         process_completed = _pipeline_wait._process_completed_task
@@ -258,21 +257,30 @@ class TestSimultaneousCompletions:
                 pipe_tasks=[],
                 cancel_grace=0.25,
                 stages=_StageWaitContext(
-                    started_at=[0.0] * len(exit_codes),
-                    exec_ids=tuple(
-                        stage_exec_id(idx) for idx in range(len(exit_codes))
-                    ),
+                    started_at=(0.0,) * len(exit_codes),
+                    exec_ids=tuple(str(obs.exec_id) for obs in observations),
+                    observations=observations,
                 ),
             )
 
-        return processed, asyncio.run(drive())
+        with caplog.at_level(logging.WARNING, logger=_pipeline_wait.__name__):
+            result = asyncio.run(drive())
+
+        return _BatchRun(
+            processed=processed,
+            result=result,
+            terminations=terminations,
+            events=events,
+            records=caplog.records,
+        )
 
     def test_a_batch_is_processed_in_stage_order(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Every stage in one batch is handled lowest index first."""
-        processed, _result = self._run(monkeypatch, [1, 1, 1, 1, 1, 1, 1, 1])
+        processed = self._run(monkeypatch, caplog, [1, 1, 1, 1, 1, 1, 1, 1]).processed
 
         assert processed == sorted(processed), (
             f"a batch must be processed in stage order, found {processed!r}"
@@ -284,6 +292,7 @@ class TestSimultaneousCompletions:
     def test_the_earliest_failing_stage_latches(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """The upstream failure is reported, not whichever the set yielded.
 
@@ -291,8 +300,47 @@ class TestSimultaneousCompletions:
         is the one that caused stage 5's failure and the one an operator needs
         named.
         """
-        _processed, result = self._run(monkeypatch, [0, 0, 3, 0, 0, 7, 0])
+        result = self._run(monkeypatch, caplog, [0, 0, 3, 0, 0, 7, 0]).result
 
         assert result.failure_index == 2, (
             f"the earliest failing stage must latch, found {result.failure_index!r}"
+        )
+
+    def test_a_fully_settled_batch_announces_no_teardown(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A failure whose siblings have all already exited terminates nothing.
+
+        Every stage settles into one ``asyncio.wait`` batch, and the batch is
+        processed in stage order, so by the time stage 0's failure is handled
+        stages 1 and 2 have exited on their own. ``should_terminate_others``
+        still answers ``True`` — it reasons about stage positions, not about
+        which processes are alive — so without the runtime check the pipeline
+        would log a teardown it never performed, publish a
+        ``pipeline_fail_fast`` event, and increment
+        ``cuprum_pipeline_fail_fast_total`` for a decision with no subject. The
+        closing record would then report
+        ``cuprum_terminated_stage_count`` of zero, contradicting the record
+        that opened it.
+
+        The latch itself is unaffected: the failure happened, ``failure_index``
+        reports it, and the first-failure record is what tells an operator
+        which stage it was.
+        """
+        run = self._run(monkeypatch, caplog, [4, 0, 0])
+
+        assert run.result.failure_index == 0, (
+            f"the failure must still latch, found {run.result.failure_index!r}"
+        )
+        assert record_actions(run.records) == ["pipeline_stage_first_failure"], (
+            "only the latch may be reported when there is nothing to terminate, "
+            f"found {record_actions(run.records)!r}"
+        )
+        assert run.terminations == [], (
+            f"no termination may be requested, found {run.terminations!r}"
+        )
+        assert run.events == [], (
+            f"no fail-fast event may be published, found {run.events!r}"
         )

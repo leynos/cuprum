@@ -559,7 +559,7 @@ async def _exercise_wait_for_pipeline(
         pipe_tasks=[],
         cancel_grace=0.01,
         stages=_StageWaitContext(
-            started_at=[0.0, 0.0, 0.0],
+            started_at=(0.0, 0.0, 0.0),
             exec_ids=("exec-0", "exec-1", "exec-2"),
         ),
     )

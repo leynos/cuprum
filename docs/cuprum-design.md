@@ -1230,7 +1230,7 @@ execution logic. `cuprum._pipeline_internals` re-exports the shared types only
 for compatibility. Do not reintroduce the combined `_run_before_hooks`
 responsibility in `_pipeline_types`.
 
-Error propagation policy (to be finalized, but roughly):
+Error propagation policy:
 
 - Pipelines fail fast: once any stage exits non-zero, Cuprum terminates every
   other still-running stage — upstream as well as downstream — leaving the
@@ -1248,6 +1248,12 @@ caller schedules `_terminate_process_via_wait_task` with `asyncio.create_task`,
 then awaits the scheduled tasks together using `asyncio.gather`. When the
 reducer selects no stages — every other stage has already settled — no tasks
 are created and no gather occurs.
+
+`cuprum._pipeline_wait` consults the same reducer *before* it reports anything,
+so a completion that would select no stages is not announced as a fail-fast
+decision at all: no `pipeline_fail_fast` event, and neither termination record.
+The first-failure record and `PipelineResult.failure_index` are unaffected,
+because the failure latched regardless of whether a teardown followed it.
 
 Figure 5: Fail-fast termination selection via the `_stages_to_terminate` reducer
 

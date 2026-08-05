@@ -254,8 +254,10 @@ Notes:
 
 ### Diagnosing a fail-fast pipeline
 
-`result.failure_index` reports which stage triggered fail-fast, but not why the
-other stages ended when they did. Three records fill that gap. All are emitted
+`result.failure_index` reports the index of the stage that failed first, in
+completion order — whether or not that failure went on to trigger fail-fast
+termination — but not why the other stages ended when they did. Three records
+fill that gap. All are emitted
 at `WARNING` on the `cuprum._pipeline_wait` logger, so they appear in a default
 logging configuration without any opt-in.
 
@@ -296,7 +298,8 @@ parse log text to see it. The event is emitted at the same moment as the
 `pipeline_fail_fast_termination` record — after the failure is latched, before
 termination begins — and carries the same stage index, stage count, exit code,
 duration, and `exec_id`. It fires under exactly the conditions that produce a
-termination record, so a final-stage or single-stage failure emits none. See
+termination record, so a final-stage failure, a single-stage pipeline, and a
+failure whose sibling stages have all already exited emit none. See
 [Structured execution events](#structured-execution-events) for the event and
 the adapters that consume it.
 
@@ -314,13 +317,21 @@ rather than a second failure.
 
 A stage that fails last emits `pipeline_stage_first_failure` alone, with
 neither termination record: it latched the failure, but there was nothing left
-running to terminate. The same is true of a single-stage pipeline.
+running to terminate. The same is true of a single-stage pipeline, and of a
+failure that is only reached once every other stage has already exited — as
+when a short pipeline settles all at once. The failure is still latched and
+still reported as `failure_index` in each of those cases; what is absent is a
+termination decision, because there was nothing left to terminate. A run that
+reported one anyway would show `cuprum_terminated_stage_count` of zero and add
+to `cuprum_pipeline_fail_fast_total` for a teardown that never happened.
 
 Which stage is reported follows the order the stages actually finished in. When
-two stages finish too close together for that order to be observed, the earlier
-stage in the pipeline is reported — so the same pipeline failing the same way
-reports the same stage every time, and the reported stage is the upstream cause
-rather than a downstream stage it took down with it.
+two stages finish too close together for that order to be observed — because
+they settled in the same underlying wait batch — the earlier stage in the
+pipeline is reported instead, so the reported stage is the upstream cause
+rather than a downstream stage it took down with it. That tie-break only
+applies within such a batch: across batches, whichever stage genuinely
+finished first is the one reported.
 
 The fields are prefixed so they cannot collide with `LogRecord`'s own
 attributes. To surface them, read them off the record:

@@ -21,6 +21,13 @@ records and the ``pipeline_fail_fast`` observe event — and acts on the query.
 Keeping the I/O there leaves the ordering rules as a pure transition that
 Hypothesis and CrossHair drive directly.
 
+It also decides the one thing the ordering rules cannot see: whether the
+teardown has a subject. ``should_terminate_others`` reasons from stage
+positions, so it still says ``True`` for a failure whose siblings have all
+already exited — as they have when a pipeline settles in one ``asyncio.wait``
+batch. Nothing is then announced but the first-failure record, which reports a
+latch that happened either way.
+
 Work that belongs to neighbouring modules rather than here: terminating and
 cleaning up processes lives in ``cuprum._process_lifecycle``
 (``_terminate_pipeline_remaining_stages``, ``_cleanup_pipeline_on_error``),
@@ -55,6 +62,7 @@ from cuprum._pipeline_wait_records import (
 )
 from cuprum._process_lifecycle import (
     _cleanup_pipeline_on_error,
+    _has_stages_to_terminate,
     _terminate_pipeline_remaining_stages,
 )
 
@@ -103,7 +111,9 @@ class _PipelineWaitState:
             wait_tasks=wait_tasks,
             task_to_index={task: idx for idx, task in enumerate(wait_tasks)},
             exit_codes=[None] * len(processes),
-            started_at=stages.started_at,
+            # Copied, not aliased: this state stamps its own bookkeeping, and
+            # `stages` is meant to stay the immutable snapshot it declares.
+            started_at=list(stages.started_at),
             ended_at=[None] * len(processes),
             exec_ids=stages.exec_ids,
             observations=stages.observations,
@@ -191,6 +201,11 @@ class _PipelineWaitState:
         ``True`` the caller terminates every *other* still-running stage — both
         upstream and downstream — not merely the ones after the failure.
 
+        It reasons about ordering alone, so it needs no wait tasks; whether a
+        sibling is still running is the caller's separate
+        `_has_stages_to_terminate` check. A batch whose stages all settled
+        together answers ``True`` here and still terminates nothing.
+
         Examples
         --------
         ::
@@ -275,7 +290,15 @@ async def _process_completed_task(
     state.record_completion(idx, exit_code, ended_at=ended_at)
     latched_first_failure = not had_failure and state.failure_index == idx
 
-    terminate_others = state.should_terminate_others(idx)
+    # The query says whether this completion *is* the trigger; the wait tasks
+    # say whether the decision still has a subject. A batch handled in stage
+    # order can reach an upstream failure after every sibling has exited, and
+    # announcing a teardown of nothing would report a termination that never
+    # happened and count a fail-fast the operator cannot act on.
+    terminate_others = state.should_terminate_others(idx) and _has_stages_to_terminate(
+        idx,
+        state.wait_tasks,
+    )
 
     # Every stage passes through here, and most emit nothing: a success logs
     # no record at all. Derive the fields once it is known one will carry them.
@@ -283,6 +306,8 @@ async def _process_completed_task(
         return
 
     fields = _completion_log_fields(state, idx, exit_code, ended_at)
+    # Independent of the teardown: the failure latched, and `failure_index`
+    # reports it whether or not there was anything left to stop.
     if latched_first_failure:
         _log_completion_event(
             "pipeline_stage_first_failure",
@@ -293,8 +318,8 @@ async def _process_completed_task(
     # decision even if the teardown then blocks on a stage that will not die.
     # Both conditions are spelled out rather than relying on the query alone:
     # the event reports a *newly latched* failure that leaves stages to stop,
-    # which excludes a later failure, a final-stage failure, and a
-    # single-stage pipeline.
+    # which excludes a later failure, a final-stage failure, a single-stage
+    # pipeline, and a batch in which every sibling had already settled.
     if latched_first_failure and terminate_others:
         _emit_fail_fast_event(state.observation(idx), fields)
     if terminate_others:
