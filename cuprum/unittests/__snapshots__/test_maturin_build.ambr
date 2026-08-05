@@ -26,6 +26,7 @@
       'cuprum/_subprocess_execution.py',
       'cuprum/_subprocess_stdin.py',
       'cuprum/_subprocess_timeout.py',
+      'cuprum/_subprocess_wait.py',
       'cuprum/_testing.py',
       'cuprum/_timeout_reporting.py',
       'cuprum/adapters/__init__.py',

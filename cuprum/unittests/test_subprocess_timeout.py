@@ -16,15 +16,15 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from cuprum._subprocess_execution import (
-    _drain_stream_consumers,
-    _wait_for_exit_code,
-    _wait_for_exit_code_within_timeout,
-)
 from cuprum._subprocess_timeout import (
     _handle_stream_timeout,
     _SubprocessInvariantError,
     _SubprocessTimeoutError,
+)
+from cuprum._subprocess_wait import (
+    _drain_stream_consumers,
+    _wait_for_exit_code,
+    _wait_for_exit_code_within_timeout,
 )
 from cuprum.sh import ExecutionContext
 from cuprum.unittests._timeout_test_helpers import (

@@ -23,7 +23,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from cuprum._subprocess_execution import (
+from cuprum._subprocess_wait import (
     _drain_stream_consumers,
     _wait_for_exit_code_within_timeout,
 )
