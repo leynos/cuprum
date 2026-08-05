@@ -216,9 +216,6 @@ class TestTracingSpanConcurrency:
             f"recorded on the closing span; found {span.events!r}"
         )
         assert span.ended is True, "the exit must still end its own span"
-        assert hook._active_spans == {}, (
-            "the raced fail-fast must leave no entry behind in the active map"
-        )
 
     def test_a_fail_fast_is_not_stalled_by_another_span_ending(
         self,

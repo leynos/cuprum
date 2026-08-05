@@ -12,17 +12,21 @@ from __future__ import annotations
 
 import typing as typ
 
+import pytest
+
 from cuprum import ScopeConfig, scoped, sh
 from cuprum.sh import RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum.events import ExecEvent
 
 _READ_STDIN = "import sys; sys.stdout.write(sys.stdin.read())"
 
 
-def _run_failing_pipeline() -> list[ExecEvent]:
+def _run_failing_pipeline() -> tuple[ExecEvent, ...]:
     """Run a three-stage pipeline whose first stage fails, capturing events."""
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
@@ -40,10 +44,23 @@ def _run_failing_pipeline() -> list[ExecEvent]:
     ):
         pipeline.run_sync(output=RunOutputOptions(capture=True, echo=False))
 
-    return events
+    return tuple(events)
 
 
-def _phase(events: list[ExecEvent], phase: str) -> list[ExecEvent]:
+@pytest.fixture(scope="module")
+def fail_fast_events() -> tuple[ExecEvent, ...]:
+    """Publish one run of the failing pipeline to every test in this module.
+
+    The run costs three real subprocesses, and repeating it per test buys
+    nothing: `scoped` is entered and left inside the helper, so no state
+    survives it, and each test only reads the events it returned. The tuple is
+    what keeps that sharing safe — no test can leave the next one a shortened
+    or reordered sequence.
+    """
+    return _run_failing_pipeline()
+
+
+def _phase(events: cabc.Sequence[ExecEvent], phase: str) -> list[ExecEvent]:
     """Return the events of one phase, in the order they were published."""
     return [event for event in events if event.phase == phase]
 
@@ -53,7 +70,9 @@ def _stage_of(event: ExecEvent) -> int:
     return typ.cast("int", event.tags["pipeline_stage_index"])
 
 
-def test_a_real_pipeline_publishes_one_fail_fast_event() -> None:
+def test_a_real_pipeline_publishes_one_fail_fast_event(
+    fail_fast_events: tuple[ExecEvent, ...],
+) -> None:
     """A failing non-final stage produces exactly one event, describing itself.
 
     The first stage exits 3 while two downstream stages are still running, so
@@ -61,9 +80,7 @@ def test_a_real_pipeline_publishes_one_fail_fast_event() -> None:
     land in, stage 0 is the earliest failing stage and is not the final one,
     so the decision is the same every time.
     """
-    events = _run_failing_pipeline()
-
-    fail_fast = _phase(events, "pipeline_fail_fast")
+    fail_fast = _phase(fail_fast_events, "pipeline_fail_fast")
 
     assert len(fail_fast) == 1, (
         f"a real fail-fast pipeline must publish exactly one event, "
@@ -80,7 +97,9 @@ def test_a_real_pipeline_publishes_one_fail_fast_event() -> None:
     )
 
 
-def test_the_event_joins_the_failing_stage_span() -> None:
+def test_the_event_joins_the_failing_stage_span(
+    fail_fast_events: tuple[ExecEvent, ...],
+) -> None:
     """Its ``exec_id`` is the token stage 0's own lifecycle events carry.
 
     This is the wiring the module exists to check: the token has to come from
@@ -88,11 +107,9 @@ def test_the_event_joins_the_failing_stage_span() -> None:
     stage's ``start`` opened. A token from a different stage, or a fresh one,
     would leave the event correlated to nothing.
     """
-    events = _run_failing_pipeline()
-
-    (event,) = _phase(events, "pipeline_fail_fast")
+    (event,) = _phase(fail_fast_events, "pipeline_fail_fast")
     tokens_by_stage = {
-        _stage_of(start): start.exec_id for start in _phase(events, "start")
+        _stage_of(start): start.exec_id for start in _phase(fail_fast_events, "start")
     }
 
     assert tokens_by_stage[0] == event.exec_id, (
@@ -103,17 +120,17 @@ def test_the_event_joins_the_failing_stage_span() -> None:
     assert event.exec_id not in others, "the event must not carry another stage's token"
 
 
-def test_the_existing_lifecycle_events_are_unchanged() -> None:
+def test_the_existing_lifecycle_events_are_unchanged(
+    fail_fast_events: tuple[ExecEvent, ...],
+) -> None:
     """Every stage still reports plan, start, and exit, in that order.
 
     The fail-fast event is additive. It must not displace, reorder, or suppress
     a stage's own lifecycle events — including those of the stages that the
     teardown stops, which still have to report their exit.
     """
-    events = _run_failing_pipeline()
-
     by_stage: dict[int, list[str]] = {}
-    for event in events:
+    for event in fail_fast_events:
         if event.phase == "pipeline_fail_fast":
             continue
         by_stage.setdefault(_stage_of(event), []).append(event.phase)
