@@ -32,6 +32,8 @@ from __future__ import annotations
 import types
 import typing as typ
 
+from cuprum.pump_events import RustPumpDeclineReason
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
@@ -52,7 +54,7 @@ _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
 })
 
 UNKNOWN_DECLINE_REASON = "unknown"
-"""The ``reason`` label a decline carrying no reason degrades to.
+"""The ``reason`` label a decline carrying no recognized reason degrades to.
 
 Public because it is operator-visible: it is the fourth and last value the
 ``reason`` label can take, so a dashboard filtering on
@@ -69,11 +71,21 @@ def _phase_labels(event: PumpEvent) -> dict[str, str]:
     derived from a descriptor, an argument vector, or an exception reaches a
     label, so the series count stays fixed at the size of that enum plus
     :data:`UNKNOWN_DECLINE_REASON`.
+
+    The reason is checked against the enum at run time rather than trusted from
+    the annotation. :class:`~cuprum.pump_events.PumpEvent` is a public,
+    caller-constructible dataclass with no runtime validation, so a hook fed an
+    event carrying an arbitrary object would otherwise put ``str(object)`` on a
+    metric label — one series per value, which is the unbounded cardinality this
+    label set exists to rule out. Type checking cannot close that hole for a
+    caller who is not type checked.
     """
     if event.phase != "declined":
         return {}
     reason = event.reason
-    return {"reason": str(reason) if reason is not None else UNKNOWN_DECLINE_REASON}
+    if not isinstance(reason, RustPumpDeclineReason):
+        return {"reason": UNKNOWN_DECLINE_REASON}
+    return {"reason": str(reason)}
 
 
 class PumpMetricsHook:
@@ -85,7 +97,8 @@ class PumpMetricsHook:
       back to the Python pump, labelled ``reason`` with one of
       ``raw_fd_unavailable``, ``reader_pause_failed``, or
       ``blocking_mode_unavailable`` — or :data:`UNKNOWN_DECLINE_REASON` for a
-      decline that named no seam, which no current call site produces.
+      decline whose reason is not one of those, which no call site in this
+      library produces but a hand-built event can carry.
     - ``cuprum_rust_pump_failed_after_cancel_total``: incremented once,
       unlabelled, per Rust-pump worker failure recovered after its hop was
       cancelled.
