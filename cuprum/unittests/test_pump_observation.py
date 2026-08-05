@@ -33,6 +33,8 @@ from cuprum.unittests._rust_pump_test_helpers import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.pump_events import PumpHook
+
 _LOGGER_NAME = "cuprum.pump_observation"
 _DECLINE = PumpEvent(
     phase="declined",
@@ -225,6 +227,90 @@ def test_an_awaitable_returning_hook_is_reported_and_closed(
     assert state == inspect.CORO_CLOSED, (
         "the coroutine must be closed, or it resurfaces later as a 'never "
         f"awaited' warning detached from the event that produced it; found {state}"
+    )
+
+
+async def _emit_under_own_hook(
+    hook: PumpHook,
+    event: PumpEvent,
+    barrier: asyncio.Barrier,
+) -> tuple[PumpHook, ...]:
+    """Register ``hook``, emit ``event`` while a sibling task is registered too.
+
+    Returns the hooks visible from inside the registration, so the caller can
+    check what this task's context saw rather than only what its hook received.
+    """
+    with observe_pump(hook):
+        # Both registrations are live at once before either emits. A registry
+        # shared across tasks — a module global, or a hook list mutated in
+        # place rather than replaced — would show both hooks here and deliver
+        # each event to both.
+        await barrier.wait()
+        visible = current_pump_hooks()
+        _emit_pump_event(event)
+        # Hold the registration until the sibling has emitted, so neither
+        # task's detach can tidy away the evidence before the other looks.
+        await barrier.wait()
+    return visible
+
+
+async def _register_in_two_tasks() -> tuple[
+    list[PumpEvent],
+    list[PumpEvent],
+    tuple[PumpHook, ...],
+    tuple[PumpHook, ...],
+]:
+    """Run two concurrently registered tasks and return what each observed."""
+    seen_a: list[PumpEvent] = []
+    seen_b: list[PumpEvent] = []
+    event_a = PumpEvent(
+        phase="declined", reason=RustPumpDeclineReason.RAW_FD_UNAVAILABLE
+    )
+    event_b = PumpEvent(phase="failed_after_cancel")
+    barrier = asyncio.Barrier(2)
+
+    visible_a, visible_b = await asyncio.gather(
+        _emit_under_own_hook(seen_a.append, event_a, barrier),
+        _emit_under_own_hook(seen_b.append, event_b, barrier),
+    )
+    return seen_a, seen_b, visible_a, visible_b
+
+
+def test_registrations_in_sibling_tasks_stay_isolated() -> None:
+    """Two tasks registering concurrently never see each other's hooks.
+
+    ``asyncio.create_task`` copies the current context, so a registration made
+    inside a task belongs to that task alone. Every other test here registers
+    in one context and would pass just as well against a module-level registry,
+    which would cross-deliver events between concurrent pipelines — the case a
+    library that observes pipelines actually meets.
+    """
+    seen_a, seen_b, visible_a, visible_b = asyncio.run(_register_in_two_tasks())
+
+    assert len(seen_a) == 1, (
+        f"task A's hook must receive exactly its own event, got {seen_a}"
+    )
+    assert len(seen_b) == 1, (
+        f"task B's hook must receive exactly its own event, got {seen_b}"
+    )
+    assert seen_a[0].phase == "declined", (
+        f"task A's hook received task B's event: {seen_a[0]}"
+    )
+    assert seen_b[0].phase == "failed_after_cancel", (
+        f"task B's hook received task A's event: {seen_b[0]}"
+    )
+    assert len(visible_a) == 1, (
+        f"task A must see only its own registration, found {visible_a}"
+    )
+    assert len(visible_b) == 1, (
+        f"task B must see only its own registration, found {visible_b}"
+    )
+    assert set(visible_a).isdisjoint(visible_b), (
+        f"the two tasks' hook sets must be disjoint, found {visible_a} and {visible_b}"
+    )
+    assert current_pump_hooks() == (), (
+        "neither task's registration may survive into the parent context, "
+        f"found {current_pump_hooks()}"
     )
 
 
