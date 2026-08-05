@@ -314,16 +314,18 @@ async def _process_completed_task(
             "pipeline stage %d exited %d, latching first failure",
             fields,
         )
+    if not terminate_others:
+        return
+
     # Published before termination is requested, so a consumer learns the
     # decision even if the teardown then blocks on a stage that will not die.
-    # Both conditions are spelled out rather than relying on the query alone:
-    # the event reports a *newly latched* failure that leaves stages to stop,
-    # which excludes a later failure, a final-stage failure, a single-stage
+    # The latch is re-tested rather than assumed from `terminate_others`: the
+    # event reports a *newly latched* failure that leaves stages to stop, which
+    # excludes a later failure as well as a final-stage failure, a single-stage
     # pipeline, and a batch in which every sibling had already settled.
-    if latched_first_failure and terminate_others:
+    if latched_first_failure:
         _emit_fail_fast_event(state.observation(idx), fields)
-    if terminate_others:
-        await _terminate_and_report(state, processes, cancel_grace, fields)
+    await _terminate_and_report(state, processes, cancel_grace, fields)
 
 
 async def _finalize_pipeline_wait(
