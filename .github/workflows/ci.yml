@@ -291,11 +291,48 @@ jobs:
           access-token: ${{ env.CS_ACCESS_TOKEN }}
           installer-checksum: ${{ vars.CODESCENE_CLI_SHA256 }}
 
+  # Detects whether performance-relevant paths changed so that
+  # benchmark-ratchet can skip docs-only and Dependabot-batch pull
+  # requests. Runs on every event (cheap, GitHub-hosted) so that the
+  # `needs` edge never leaves benchmark-ratchet skipped on pushes to
+  # main, where the baseline artifact must stay fresh.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      bench: ${{ steps.filter.outputs.bench }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Detect performance-relevant changes
+        id: filter
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          filters: |
+            bench:
+              - 'cuprum/**'
+              - 'rust/**'
+              - 'benchmarks/**'
+              - 'conftest.py'
+              - 'Makefile'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.github/workflows/ci.yml'
+
   benchmark-ratchet:
     runs-on: ubicloud-standard-4-ubuntu-2404
     needs:
       - lint-test
       - typecheck-test
+      - changes
+    # Benchmarks are the estate's dominant paid-runner cost, and most CI
+    # runs (Dependabot dev-dependency bumps, docs edits) cannot change
+    # pipeline throughput. Pushes to main always run so the ratchet
+    # baseline artifact is refreshed for every merge.
+    if: github.event_name != 'pull_request' || needs.changes.outputs.bench == 'true'
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
