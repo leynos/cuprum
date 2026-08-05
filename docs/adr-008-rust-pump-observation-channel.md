@@ -100,9 +100,13 @@ Table 1: counters emitted by `PumpMetricsHook`
 | `cuprum_rust_pump_failed_after_cancel_total` | none     | a cancelled hop's Rust worker failure is consumed and recorded |
 
 `reason` takes exactly the three `RustPumpDeclineReason` values, plus
-`UNKNOWN_DECLINE_REASON` for a decline that named no seam — a guard no call site
-reaches, kept so a malformed event degrades to a fixed label rather than an
-unbounded one. The series count is therefore four, fixed by construction.
+`UNKNOWN_DECLINE_REASON` for a decline whose reason is not one of them — a
+guard no call site reaches, kept so a malformed event degrades to a fixed label
+rather than an unbounded one. The adapter checks the reason against the enum at
+run time rather than trusting the annotation: `PumpEvent` is public and
+unvalidated, so a caller who is not type checked can construct one carrying any
+object, whose `str()` would otherwise become a label value. The series count is
+therefore four, fixed by construction rather than by convention.
 
 Pump hooks live on their own `ContextVar` rather than on `CuprumContext`. That
 keeps `ScopeConfig`, `CuprumContext.narrow`, and every consumer that reads the

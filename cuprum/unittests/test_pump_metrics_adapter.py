@@ -301,3 +301,35 @@ def test_a_decline_without_a_reason_falls_back_to_a_bounded_label() -> None:
     assert labels == {"reason": "unknown"}, (
         f"a missing reason must degrade to a fixed label, found {labels}"
     )
+
+class _ChattyReason:
+    """A ``reason`` stand-in whose ``str()`` differs on every instance."""
+
+    def __str__(self) -> str:
+        """Return a value no two instances share."""
+        return f"session-{id(self):x}"
+
+def test_a_decline_carrying_a_non_enum_reason_is_still_bounded() -> None:
+    """An off-enum ``reason`` degrades to the fixed label, not to ``str()``.
+
+    ``PumpEvent`` is public and frozen but not validated, so a caller — or a
+    future call site that forgets the enum — can hand a hook any object at all.
+    The annotation does not run, so without a run-time check ``str(reason)``
+    would reach the label and give the counter one series per distinct value,
+    which is precisely the cardinality this label set is designed to exclude.
+    """
+    collector = RecordingCollector()
+    reason = _ChattyReason()
+    event = PumpEvent(phase="declined", reason=typ.cast("None", reason))
+
+    PumpMetricsHook(collector)(event)
+
+    _name, _value, labels = collector.counters[0]
+    assert labels == {"reason": UNKNOWN_DECLINE_REASON}, (
+        f"an unrecognized reason must degrade to {UNKNOWN_DECLINE_REASON!r} "
+        f"rather than reaching the label, found {labels}"
+    )
+    assert str(reason) not in labels.values(), (
+        "the object's own string must never appear as a label value, or the "
+        f"series count follows the caller's data; found {labels}"
+    )
