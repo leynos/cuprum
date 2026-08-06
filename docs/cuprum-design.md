@@ -1397,8 +1397,9 @@ For screen readers: The following sequence diagram shows what changes when
 fail-fast mode is enabled. The caller invokes `run_concurrent` with a config
 whose `fail_fast` is true. Every command is launched as a task in a task group.
 When the first non-zero exit is detected, the group raises `_FirstFailureError`
-and cancels the tasks still pending; each cancelled process is signalled with
-`SIGTERM`, given a grace period, then `SIGKILL`. The group returns the partial
+and cancels the tasks still pending. Tasks whose process had already spawned
+are signalled with `SIGTERM`, given a grace period, then `SIGKILL`; tasks
+cancelled before spawning simply never start. The group returns the partial
 results — the commands that *completed*; cancelled ones produced no
 `CommandResult` and are omitted — and `run_concurrent` returns a
 `ConcurrentResult` carrying those, compacted, alongside `submission_indices`
