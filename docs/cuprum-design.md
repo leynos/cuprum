@@ -1003,10 +1003,11 @@ implemented with the following decisions:
   stages — every lifecycle phase in `ExecPhase`. Pipeline stage events are
   tagged with a stage index and stage count.
 - **Fail-fast decision:** a pipeline additionally emits one
-  `pipeline_fail_fast` event when a non-final stage is the first to fail,
-  published before every other still-running stage — upstream producers and
-  downstream consumers alike — is terminated, and carrying that stage's
-  `exec_id`, so it joins the same span and lifecycle events. Its `stage_index`
+  `pipeline_fail_fast` event marking a termination decision: it fires when a
+  non-final stage is the first to fail and at least one other stage is still
+  running, published before every other still-running stage — upstream
+  producers and downstream consumers alike — is terminated, and carrying that
+  stage's `exec_id`, so it joins the same span and lifecycle events. Its `stage_index`
   and `stage_count` are typed fields rather than tags, because caller-supplied
   tags are merged last and may legitimately shadow the `pipeline_stage_index`
   key; the decision must report the index the coordinator acted on.
