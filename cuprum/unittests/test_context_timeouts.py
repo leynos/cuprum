@@ -62,9 +62,15 @@ def test_scope_config_timeout_validation(
             ScopeConfig(timeout=timeout_input)
     else:
         config = ScopeConfig(timeout=timeout_input)
-        assert config.timeout == expected_result
+        assert config.timeout == expected_result, (
+            f"ScopeConfig(timeout={timeout_input!r}) must store "
+            f"{expected_result!r}, got {config.timeout!r}"
+        )
         if expected_result is not None:
-            assert isinstance(config.timeout, float)
+            assert isinstance(config.timeout, float), (
+                f"ScopeConfig(timeout={timeout_input!r}) must coerce the value "
+                f"to float, got {type(config.timeout).__name__}"
+            )
 
 
 @pytest.mark.parametrize(
@@ -82,9 +88,15 @@ def test_cuprum_context_timeout_validation(
             CuprumContext(timeout=timeout_input)
     else:
         ctx = CuprumContext(timeout=timeout_input)
-        assert ctx.timeout == expected_result
+        assert ctx.timeout == expected_result, (
+            f"CuprumContext(timeout={timeout_input!r}) must store "
+            f"{expected_result!r}, got {ctx.timeout!r}"
+        )
         if expected_result is not None:
-            assert isinstance(ctx.timeout, float)
+            assert isinstance(ctx.timeout, float), (
+                f"CuprumContext(timeout={timeout_input!r}) must coerce the "
+                f"value to float, got {type(ctx.timeout).__name__}"
+            )
 
 
 @pytest.mark.crosshair
@@ -92,7 +104,9 @@ def test_cuprum_context_timeout_validation(
 @given(timeout=st.none())
 def test_validate_timeout_preserves_none(timeout: None) -> None:
     """Property: None timeout values are preserved."""
-    assert _validate_timeout(timeout, "Test") is None
+    assert _validate_timeout(timeout, "Test") is None, (
+        "a None timeout must pass validation unchanged as None"
+    )
 
 
 @pytest.mark.crosshair
@@ -102,9 +116,15 @@ def test_validate_timeout_preserves_non_negative_floats(timeout: float) -> None:
     """Property: non-negative float timeouts are accepted unchanged."""
     result = _validate_timeout(timeout, "Test")
 
-    assert result is not None
-    assert result >= timeout
-    assert result <= timeout
+    assert result is not None, (
+        f"validating the non-negative timeout {timeout!r} must not return None"
+    )
+    assert result >= timeout, (
+        f"validated timeout {result!r} must not be less than the input {timeout!r}"
+    )
+    assert result <= timeout, (
+        f"validated timeout {result!r} must not exceed the input {timeout!r}"
+    )
 
 
 @pytest.mark.crosshair
@@ -114,9 +134,16 @@ def test_validate_timeout_coerces_non_negative_integers(timeout: int) -> None:
     """Property: non-negative integer timeouts are coerced to float."""
     result = _validate_timeout(typ.cast("float", timeout), "Test")
 
-    assert result is not None
-    assert isinstance(result, float)
-    assert result.hex() == float(timeout).hex()
+    assert result is not None, (
+        f"validating the non-negative integer timeout {timeout!r} must not return None"
+    )
+    assert isinstance(result, float), (
+        f"integer timeout {timeout!r} must be coerced to float, got "
+        f"{type(result).__name__}"
+    )
+    assert result.hex() == float(timeout).hex(), (
+        f"coerced timeout {result!r} must equal float({timeout!r}) exactly"
+    )
 
 
 @pytest.mark.crosshair
@@ -157,7 +184,9 @@ def test_resolve_narrowed_timeout_inherits_without_config(
     parent: float | None,
 ) -> None:
     """Property: absent config timeout inherits the parent timeout."""
-    assert _resolve_narrowed_timeout(parent, None) == parent
+    assert _resolve_narrowed_timeout(parent, None) == parent, (
+        f"a None config timeout must inherit the parent timeout {parent!r}"
+    )
 
 
 @pytest.mark.crosshair
@@ -171,4 +200,7 @@ def test_resolve_narrowed_timeout_config_overrides_parent(
     config: float,
 ) -> None:
     """Property: explicit config timeout overrides any parent timeout."""
-    assert _resolve_narrowed_timeout(parent, config) == config
+    assert _resolve_narrowed_timeout(parent, config) == config, (
+        f"an explicit config timeout {config!r} must override the parent "
+        f"timeout {parent!r}"
+    )

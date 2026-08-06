@@ -45,7 +45,7 @@ _REENTRANT_SELECTOR_MESSAGE = (
 _logger = logging.getLogger("benchmarks.tee_profile_worker")
 
 
-class ReentrantBackendSelectorError(BenchmarkError, RuntimeError):
+class ReentrantBackendSelectorError(RuntimeError, BenchmarkError):
     """Raised when ``_EnvBackendSelector`` is entered re-entrantly on a thread.
 
     Retains ``RuntimeError`` ancestry so existing callers that catch

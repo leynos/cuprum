@@ -23,6 +23,7 @@ from cuprum import (
 from cuprum.concurrent import (
     ConcurrentConfig,
     ConcurrentResult,
+    _collect_results_and_failures,
     run_concurrent_sync,
 )
 from cuprum.unittests import strategies as cuprum_st
@@ -193,8 +194,6 @@ class TestFailFastExecution:
         items : list[int | None]
             Generated per-submission exit codes; ``None`` marks a cancelled command.
         """
-        from cuprum.concurrent import _collect_results_and_failures
-
         indexed = [
             (
                 submission_index,

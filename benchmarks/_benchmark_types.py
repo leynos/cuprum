@@ -101,8 +101,9 @@ class PipelineBenchmarkScenario:
     TypeError
         If ``name`` is not a string.
     ValueError
-        If ``name`` is empty, ``payload_bytes`` is non-positive, ``stages`` is
-        less than two, or ``backend`` is not supported.
+        If ``name`` is empty or whitespace-only, ``payload_bytes`` is
+        non-positive, ``stages`` is less than two, or ``backend`` is not
+        supported.
 
     Examples
     --------
@@ -241,7 +242,7 @@ class PipelineBenchmarkConfig:
         If boolean settings are not booleans, or if a configured executable
         name is not a string.
     ValueError
-        If configured executable names are empty.
+        If configured executable names are empty or whitespace-only.
 
     Examples
     --------

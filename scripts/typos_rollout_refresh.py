@@ -33,7 +33,14 @@ _atomic_write = typos_rollout_cache.atomic_write
 _parse_dictionary_text = typos_rollout_dictionary.parse_dictionary_text
 _load_dictionary = typos_rollout_dictionary.load_dictionary
 
-HTTP_NOT_MODIFIED = 304
+# Private: an HTTP transport detail of this adapter, not part of the
+# refresh policy's public surface.
+_HTTP_NOT_MODIFIED = 304
+
+# Upper bound on a remote dictionary body. The shared dictionary is a small
+# TOML word list, so anything beyond this is either misconfiguration or a
+# hostile endpoint; the body is rejected before it is decoded or parsed.
+MAX_DICTIONARY_BYTES: typ.Final = 10 * 1024 * 1024
 
 _logger = logging.getLogger(__name__)
 
@@ -120,8 +127,11 @@ def _remote_is_not_newer(
 ) -> bool:
     """Return whether HTTP validators prove the response is not newer."""
     etag = headers.get("ETag")
-    if etag is not None and etag == saved.get("etag"):
-        return True
+    if etag is not None:
+        # An ETag is the strongest validator on offer: when one is present it
+        # alone decides freshness. A mismatch must not fall through to
+        # Last-Modified, which can stay unchanged while the entity changes.
+        return etag == saved.get("etag")
     modified = headers.get("Last-Modified")
     saved_modified = saved.get("last_modified")
     if not isinstance(modified, str) or not isinstance(saved_modified, str):
@@ -263,6 +273,11 @@ def _write_remote_cache(
     headers: cabc.Mapping[str, str],
 ) -> RefreshResult:
     """Validate and atomically persist an HTTP dictionary response."""
+    if len(content) > MAX_DICTIONARY_BYTES:
+        message = (
+            f"shared dictionary response exceeds the {MAX_DICTIONARY_BYTES}-byte limit"
+        )
+        raise ValueError(message)
     _parse_dictionary_text(content.decode())
     _atomic_write(targets.cache, content)
     _write_metadata(
@@ -281,16 +296,19 @@ def _remote_response_result(
     response: _RemoteResponse,
 ) -> RefreshResult:
     """Return the cache result for a successful HTTP response."""
-    if response.status == HTTP_NOT_MODIFIED and _valid_cache(targets.cache):
+    if response.status == _HTTP_NOT_MODIFIED and _valid_cache(targets.cache):
         return RefreshResult("current", targets.cache)
     if _valid_cache(targets.cache) and _remote_is_not_newer(saved, response.headers):
         return RefreshResult("current", targets.cache)
-    return _write_remote_cache(targets, response.read(), response.headers)
+    # Read one byte past the limit so _write_remote_cache can tell an
+    # exactly-at-limit body from an oversized one without unbounded buffering.
+    content = response.read(MAX_DICTIONARY_BYTES + 1)
+    return _write_remote_cache(targets, content, response.headers)
 
 
 def _stale_cache_or_raise(
     cache: pathlib.Path,
-    error: OSError | urllib.error.URLError,
+    error: OSError | urllib.error.URLError | ValueError,
 ) -> RefreshResult:
     """Return a valid stale cache or propagate the download failure."""
     if _valid_cache(cache):
@@ -311,7 +329,7 @@ def _http_error_result(
     error: urllib.error.HTTPError,
 ) -> RefreshResult:
     """Translate an HTTP failure into the available cache result."""
-    if error.code == HTTP_NOT_MODIFIED and _valid_cache(cache):
+    if error.code == _HTTP_NOT_MODIFIED and _valid_cache(cache):
         return RefreshResult("current", cache)
     return _stale_cache_or_raise(cache, error)
 
@@ -337,7 +355,10 @@ def _refresh_http(
             )
     except urllib.error.HTTPError as error:
         return _http_error_result(cache, error)
-    except (OSError, urllib.error.URLError) as error:
+    # ValueError covers oversized and unparseable response bodies (including
+    # ``tomllib.TOMLDecodeError``): a bad download degrades to a valid stale
+    # cache rather than failing the refresh outright.
+    except (OSError, urllib.error.URLError, ValueError) as error:
         return _stale_cache_or_raise(cache, error)
 
 
@@ -375,7 +396,9 @@ def refresh_base(
         If the local or HTTP refresh path fails and no stale cache is
         available.
     ValueError
-        If the refreshed dictionary source cannot be parsed.
+        If the refreshed dictionary source cannot be parsed, or a remote
+        response body exceeds ``MAX_DICTIONARY_BYTES`` and no valid stale
+        cache is available to fall back on.
     TypeError
         If the refreshed dictionary source is not a mapping.
     tomllib.TOMLDecodeError

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import threading
 import typing  # noqa: ICN001 - This isolation test intentionally uses the direct module name.
 
 from cuprum.catalogue import ECHO, LS
@@ -24,10 +25,15 @@ if typing.TYPE_CHECKING:
 
 def test_context_is_isolated_per_thread() -> None:
     """Each thread has its own context."""
+    # Both workers rendezvous inside their scoped blocks so the two scopes
+    # provably overlap; the bounded wait keeps a wedged worker from stalling
+    # the suite indefinitely.
+    scopes_overlap = threading.Barrier(2)
 
     def thread_worker(programs: frozenset[Program]) -> bool:
         """Return the allowlist decision observed inside the worker thread."""
         with scoped(ScopeConfig(allowlist=programs)):
+            scopes_overlap.wait(timeout=5.0)
             return current_context().is_allowed(ECHO)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:

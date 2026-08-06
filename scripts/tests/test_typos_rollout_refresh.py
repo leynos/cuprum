@@ -65,7 +65,8 @@ def test_local_refresh_switches_authority_and_records_metadata(
     result = rollout.refresh_base(second, cache, metadata=metadata)
 
     assert result.status == "refreshed", (
-        "a newer local authority must refresh the cache"
+        "an older local authority must still refresh the cache "
+        "because the recorded source path changed"
     )
     assert rollout.load_dictionary(cache).stems == ("second",), (
         "switching authority must replace the cached dictionary contents"
@@ -96,9 +97,9 @@ def test_http_refresh_uses_validators_and_preserves_newer_cache(
             "Last-Modified": "Fri, 10 Jul 2026 08:00:00 GMT",
         }
 
-        def read(self) -> bytes:
-            """Return a valid shared dictionary."""
-            return dictionary_text().encode()
+        def read(self, limit: int | None = None) -> bytes:
+            """Return a valid shared dictionary, honouring any byte limit."""
+            return dictionary_text().encode()[:limit]
 
         def __enter__(self) -> Response:
             """Enter the fake response context."""
@@ -182,9 +183,9 @@ def test_remote_refresh_rejects_insecure_and_invalid_content(
         status = 200
         headers: typ.ClassVar[dict[str, str]] = {}
 
-        def read(self) -> bytes:
-            """Return malformed bytes."""
-            return b"not = [valid"
+        def read(self, limit: int | None = None) -> bytes:
+            """Return malformed bytes, honouring any byte limit."""
+            return b"not = [valid"[:limit]
 
         def __enter__(self) -> InvalidResponse:
             """Enter the fake response context."""
@@ -258,6 +259,16 @@ def test_remote_freshness_uses_dates_and_falls_back_on_invalid_values(
     assert not refresh_module._remote_is_not_newer({}, {"Last-Modified": "invalid"}), (
         "invalid dates without saved metadata must not prove freshness"
     )
+    assert not refresh_module._remote_is_not_newer(
+        {
+            "etag": '"estate-v1"',
+            "last_modified": "Fri, 10 Jul 2026 08:00:00 GMT",
+        },
+        {
+            "ETag": '"estate-v2"',
+            "Last-Modified": "Fri, 10 Jul 2026 08:00:00 GMT",
+        },
+    ), "a changed ETag must prove the entity newer even when Last-Modified is unchanged"
 
 
 def test_https_redirect_to_http_is_rejected(
@@ -364,3 +375,71 @@ def test_degradation_reset_clears_every_counter(
     assert all(
         count == 0 for count in refresh_module.degradation_snapshot().values()
     ), "reset must zero every degradation counter"
+
+
+class _OversizedResponse:
+    """Return a body one byte past the dictionary size limit."""
+
+    status = 200
+    headers: typ.ClassVar[dict[str, str]] = {}
+
+    def __init__(self, limit: int) -> None:
+        """Record the size limit the body must exceed."""
+        self._limit = limit
+
+    def read(self, limit: int | None = None) -> bytes:
+        """Return an oversized body, honouring any byte limit."""
+        return (b"x" * (self._limit + 1))[:limit]
+
+    def __enter__(self) -> _OversizedResponse:
+        """Enter the fake response context."""
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        """Leave the fake response context."""
+
+
+def test_oversized_remote_body_falls_back_to_stale_cache(
+    rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
+    refresh_module: types.ModuleType,
+    tmp_path: Path,
+    dictionary_text: cabc.Callable[..., str],
+    patch_https_opener: cabc.Callable[[cabc.Callable[..., object]], None],
+) -> None:
+    """An oversized download degrades to a valid stale cache."""
+    _, rollout, _ = rollout_modules
+    cache = tmp_path / "cache.toml"
+    metadata = tmp_path / "cache.json"
+    cache.write_text(dictionary_text(), encoding="utf-8")
+    patch_https_opener(
+        lambda *_args, **_kwargs: _OversizedResponse(
+            refresh_module.MAX_DICTIONARY_BYTES
+        )
+    )
+
+    result = rollout.refresh_base("https://example.test/base", cache, metadata=metadata)
+
+    assert result.status == "stale-cache", (
+        "an oversized response must fall back to the valid stale cache"
+    )
+
+
+def test_oversized_remote_body_without_cache_raises(
+    rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
+    refresh_module: types.ModuleType,
+    tmp_path: Path,
+    patch_https_opener: cabc.Callable[[cabc.Callable[..., object]], None],
+) -> None:
+    """An oversized download with no cache to fall back on is rejected."""
+    _, rollout, _ = rollout_modules
+    cache = tmp_path / "cache.toml"
+    metadata = tmp_path / "cache.json"
+    patch_https_opener(
+        lambda *_args, **_kwargs: _OversizedResponse(
+            refresh_module.MAX_DICTIONARY_BYTES
+        )
+    )
+
+    with pytest.raises(ValueError, match="byte limit"):
+        rollout.refresh_base("https://example.test/base", cache, metadata=metadata)
+    assert not cache.exists(), "an oversized download must not leave a cache behind"

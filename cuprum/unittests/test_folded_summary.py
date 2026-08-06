@@ -204,8 +204,11 @@ def test_folded_summary_accepts_valid_limits(
 
     top_leaf = typ.cast("list[dict[str, object]]", summary["top_leaf_frames"])
     assert top_leaf, "a valid limit must still produce ranked leaf frames"
-    assert len(top_leaf) <= limit, (
-        "the ranked list must never exceed the requested limit"
+    # The fixture yields exactly three leaf frames (alpha, beta, gamma), so
+    # the ranked list must hold every frame the limit permits — no more.
+    assert len(top_leaf) == min(limit, 3), (
+        f"the ranked list must hold exactly min(limit={limit}, 3) frames, "
+        f"got {len(top_leaf)}"
     )
     for entry in top_leaf:
         examples = typ.cast("list[str]", entry["example_stacks"])

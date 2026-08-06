@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import ast
+import dataclasses as dc
 import logging
-import os
 import tomllib
 import typing as typ
 import urllib.error
@@ -39,6 +39,25 @@ def _invalid_corrections(dictionary_text: cabc.Callable[..., str]) -> str:
     )
 
 
+@dc.dataclass(frozen=True)
+class _InvalidDictionaryCase:
+    """Describe one invalid shared-dictionary document and its rejection.
+
+    Attributes
+    ----------
+    document_builder : cabc.Callable[[cabc.Callable[..., str]], str]
+        Builder that derives the invalid document from the valid fixture.
+    error_type : type[Exception]
+        The exception ``load_dictionary`` must raise for the document.
+    match : str
+        Regular expression the raised message must match.
+    """
+
+    document_builder: cabc.Callable[[cabc.Callable[..., str]], str]
+    error_type: type[Exception]
+    match: str
+
+
 def test_rollout_scripts_support_python_313(script_directory: Path) -> None:
     """Every rollout script parses with the declared minimum Python version."""
     rollout_scripts = tuple(script_directory.glob("*.py"))
@@ -70,26 +89,28 @@ def test_local_refresh_keeps_a_newer_cache(
     tmp_path: Path,
     dictionary_text: cabc.Callable[..., str],
 ) -> None:
-    """An older local authority cannot replace a newer untracked cache."""
+    """An unchanged local authority leaves a locally edited cache in place.
+
+    Freshness is decided by the metadata sidecar (recorded source path and
+    mtime), not by the cache file's own mtime, so no timestamp manipulation
+    is needed to exercise the contract.
+    """
     _, rollout, _ = rollout_modules
     source = tmp_path / "shared.toml"
     cache = tmp_path / ".typos-base.toml"
     metadata = tmp_path / ".typos-base.json"
     source.write_text(dictionary_text(), encoding="utf-8")
-    source.touch()
     rollout.refresh_base(source, cache, metadata=metadata)
     cache.write_text(dictionary_text("newer"), encoding="utf-8")
-    cache.touch()
-    source_mtime = source.stat().st_mtime_ns
-    cache_mtime = max(cache.stat().st_mtime_ns, source_mtime + 1)
-    os.utime(cache, ns=(cache_mtime, cache_mtime))
 
     result = rollout.refresh_base(source, cache, metadata=metadata)
 
     assert result.status == "current", (
-        "a newer cache must not be replaced by an older local authority"
+        "metadata recording an unchanged source must keep the cache current"
     )
-    assert rollout.load_dictionary(cache).stems == ("newer",)
+    assert rollout.load_dictionary(cache).stems == ("newer",), (
+        "a current cache must retain its locally edited contents"
+    )
 
 
 def test_https_failure_reuses_valid_tracked_config(
@@ -132,15 +153,38 @@ def test_https_failure_reuses_valid_tracked_config(
 
 
 @pytest.mark.parametrize(
-    ("document_builder", "error_type", "match"),
+    "case",
     [
-        pytest.param(_invalid_schema, ValueError, "schema", id="schema"),
-        pytest.param(_invalid_oxford_table, TypeError, "oxford", id="oxford"),
-        pytest.param(_invalid_stems, TypeError, "stems", id="stems"),
         pytest.param(
-            _invalid_corrections,
-            TypeError,
-            "corrections",
+            _InvalidDictionaryCase(
+                document_builder=_invalid_schema,
+                error_type=ValueError,
+                match="schema",
+            ),
+            id="schema",
+        ),
+        pytest.param(
+            _InvalidDictionaryCase(
+                document_builder=_invalid_oxford_table,
+                error_type=TypeError,
+                match="oxford",
+            ),
+            id="oxford",
+        ),
+        pytest.param(
+            _InvalidDictionaryCase(
+                document_builder=_invalid_stems,
+                error_type=TypeError,
+                match="stems",
+            ),
+            id="stems",
+        ),
+        pytest.param(
+            _InvalidDictionaryCase(
+                document_builder=_invalid_corrections,
+                error_type=TypeError,
+                match="corrections",
+            ),
             id="corrections",
         ),
     ],
@@ -149,16 +193,14 @@ def test_dictionary_validation_rejects_invalid_documents(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
     tmp_path: Path,
     dictionary_text: cabc.Callable[..., str],
-    document_builder: cabc.Callable[[cabc.Callable[..., str]], str],
-    error_type: type[Exception],
-    match: str,
+    case: _InvalidDictionaryCase,
 ) -> None:
     """Schema, table, string-list and correction types remain validated."""
     _, rollout, _ = rollout_modules
     source = tmp_path / "base.toml"
-    source.write_text(document_builder(dictionary_text), encoding="utf-8")
+    source.write_text(case.document_builder(dictionary_text), encoding="utf-8")
 
-    with pytest.raises(error_type, match=match):
+    with pytest.raises(case.error_type, match=case.match):
         rollout.load_dictionary(source)
 
 
