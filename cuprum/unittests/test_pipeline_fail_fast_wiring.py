@@ -23,7 +23,14 @@ if typ.TYPE_CHECKING:
 
     from cuprum.events import ExecEvent
 
-_READ_STDIN = "import sys; sys.stdout.write(sys.stdin.read())"
+# Downstream stages linger briefly after their stdin closes so they cannot
+# settle in the same ``asyncio.wait`` batch as the failing stage; see
+# ``fail_fast_events``.
+_SETTLE_DELAY_S = 0.2
+_READ_STDIN = (
+    "import sys, time; sys.stdout.write(sys.stdin.read()); "
+    f"time.sleep({_SETTLE_DELAY_S})"
+)
 
 
 def _run_failing_pipeline() -> tuple[ExecEvent, ...]:
@@ -56,6 +63,16 @@ def fail_fast_events() -> tuple[ExecEvent, ...]:
     survives it, and each test only reads the events it returned. The tuple is
     what keeps that sharing safe — no test can leave the next one a shortened
     or reordered sequence.
+
+    The single run must reach the fail-fast decision, and that is not free.
+    ``asyncio.wait(..., FIRST_COMPLETED)`` returns every task that settled
+    before the waiter was resumed, not just the first, so three stages that
+    all exit promptly can arrive in one batch. Stage 0 is then processed after
+    its siblings have already finished; nothing is left to terminate, and the
+    run latches a failure index without emitting an event. The downstream
+    stages therefore sleep for ``_SETTLE_DELAY_S`` after their stdin closes,
+    which puts them in a later batch than the failing stage. Being
+    module-scoped, that delay is paid once.
     """
     return _run_failing_pipeline()
 
