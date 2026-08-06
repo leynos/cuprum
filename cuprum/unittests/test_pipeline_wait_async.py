@@ -198,11 +198,11 @@ class _SettledProcess:
 class _BatchRun:
     """Everything one all-at-once pipeline wait produced."""
 
-    processed: list[int]
+    processed: tuple[int, ...]
     result: _PipelineWaitResult
-    terminations: list[tuple[int, float]]
-    events: list[ExecEvent]
-    records: list[logging.LogRecord]
+    terminations: tuple[tuple[int, float], ...]
+    events: tuple[ExecEvent, ...]
+    records: tuple[logging.LogRecord, ...]
 
 
 class TestSimultaneousCompletions:
@@ -266,12 +266,14 @@ class TestSimultaneousCompletions:
         with caplog.at_level(logging.WARNING, logger=_pipeline_wait.__name__):
             result = asyncio.run(drive())
 
+        # Snapshot the mutable collectors here: the run is over, so the tuples
+        # cannot drift from what it published.
         return _BatchRun(
-            processed=processed,
+            processed=tuple(processed),
             result=result,
-            terminations=terminations,
-            events=events,
-            records=caplog.records,
+            terminations=tuple(terminations),
+            events=tuple(events),
+            records=tuple(caplog.records),
         )
 
     def test_a_batch_is_processed_in_stage_order(
@@ -282,10 +284,10 @@ class TestSimultaneousCompletions:
         """Every stage in one batch is handled lowest index first."""
         processed = self._run(monkeypatch, caplog, [1, 1, 1, 1, 1, 1, 1, 1]).processed
 
-        assert processed == sorted(processed), (
+        assert list(processed) == sorted(processed), (
             f"a batch must be processed in stage order, found {processed!r}"
         )
-        assert processed == list(range(8)), (
+        assert processed == tuple(range(8)), (
             f"every stage must be processed exactly once, found {processed!r}"
         )
 
@@ -338,9 +340,9 @@ class TestSimultaneousCompletions:
             "only the latch may be reported when there is nothing to terminate, "
             f"found {record_actions(run.records)!r}"
         )
-        assert run.terminations == [], (
+        assert run.terminations == (), (
             f"no termination may be requested, found {run.terminations!r}"
         )
-        assert run.events == [], (
+        assert run.events == (), (
             f"no fail-fast event may be published, found {run.events!r}"
         )
