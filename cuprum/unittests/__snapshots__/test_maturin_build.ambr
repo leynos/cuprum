@@ -131,6 +131,7 @@
       'cuprum/unittests/test_public_api.py',
       'cuprum/unittests/test_pump_stream_dispatch_fd_blocking.py',
       'cuprum/unittests/test_pump_stream_dispatch_selection.py',
+      'cuprum/unittests/test_ratchet_ratio_properties.py',
       'cuprum/unittests/test_rust_errno.py',
       'cuprum/unittests/test_rust_extension.py',
       'cuprum/unittests/test_rust_splice.py',
