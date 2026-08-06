@@ -13,12 +13,13 @@ import asyncio
 import gc
 import logging
 import threading
-import typing as typ
 
 import pytest
 
-from cuprum import _pipeline_stream_fds, _pipeline_streams
-from cuprum.unittests._rust_pump_test_helpers import install_fake_pump, owned_fds
+from cuprum.unittests._rust_pump_test_helpers import (
+    cancel_mid_transfer,
+    install_fake_pump,
+)
 
 
 class _RecordingGuard:
@@ -31,50 +32,6 @@ class _RecordingGuard:
     def restore(self) -> None:
         """Record the restore so its ordering can be asserted."""
         self.events.append("restored")
-
-
-async def _cancel_mid_transfer(
-    events: list[str],
-    worker_started: threading.Event,
-    release: threading.Event,
-    *,
-    cancellations: int = 1,
-) -> None:
-    """Start the pump, cancel it mid-transfer, then release the worker.
-
-    ``cancellations`` controls how many times the awaiting task is cancelled
-    before the worker is released. More than one exercises the drain's own
-    interruption: each extra cancellation lands while the pump is still
-    waiting for the worker thread.
-    """
-    with owned_fds() as (reader_fd, writer_fd):
-        task = asyncio.create_task(
-            _pipeline_streams._await_rust_pump(
-                typ.cast(
-                    "_pipeline_stream_fds._BlockingModeGuard",
-                    _RecordingGuard(events),
-                ),
-                reader_fd=reader_fd,
-                writer_fd=writer_fd,
-            )
-        )
-        # `Event.wait` reports timeout by returning False rather than raising,
-        # so discarding it would let the test cancel a task that never reached
-        # the pause point — passing without exercising mid-transfer
-        # cancellation at all, which is the whole scenario.
-        started = await asyncio.to_thread(worker_started.wait, 5.0)
-        assert started, (
-            "the pump worker did not start within 5s, so the cancellation below "
-            "would not be mid-transfer"
-        )
-        for _ in range(cancellations):
-            task.cancel()
-            # Give the cancellation a chance to land while the worker runs.
-            await asyncio.sleep(0.05)
-        events.append("released")
-        release.set()
-        with pytest.raises(asyncio.CancelledError):
-            await task
 
 
 @pytest.mark.parametrize(
@@ -114,10 +71,10 @@ def test_cancellation_restores_descriptors_only_after_worker_returns(
 
     install_fake_pump(monkeypatch, blocking_pump)
     asyncio.run(
-        _cancel_mid_transfer(
-            events,
+        cancel_mid_transfer(
             worker_started,
             release,
+            guard=_RecordingGuard(events),
             cancellations=cancellations,
         )
     )
@@ -170,8 +127,14 @@ def test_a_failing_pump_on_a_cancelled_hop_reports_the_cancellation(
         caplog.at_level(logging.ERROR, logger="asyncio"),
         caplog.at_level(logging.DEBUG, logger="cuprum._pipeline_streams"),
     ):
-        # CancelledError, not OSError: _cancel_mid_transfer asserts it.
-        asyncio.run(_cancel_mid_transfer(events, worker_started, release))
+        # CancelledError, not OSError: cancel_mid_transfer asserts it.
+        asyncio.run(
+            cancel_mid_transfer(
+                worker_started,
+                release,
+                guard=_RecordingGuard(events),
+            )
+        )
         # Force collection of the executor future while capture is still live.
         gc.collect()
 

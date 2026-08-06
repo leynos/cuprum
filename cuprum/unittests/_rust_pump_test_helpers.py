@@ -18,12 +18,12 @@ import threading
 import types
 import typing as typ
 
+import pytest
+
 from cuprum import _pipeline_stream_fds, _pipeline_streams
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-    import pytest
 
 
 class RecordingCollector:
@@ -217,6 +217,9 @@ def install_fake_pump(
 async def cancel_mid_transfer(
     worker_started: threading.Event,
     release: threading.Event,
+    *,
+    guard: object | None = None,
+    cancellations: int = 1,
 ) -> None:
     """Start the pump, cancel it mid-transfer, then release the worker."""
     with owned_fds() as (reader_fd, writer_fd):
@@ -225,6 +228,8 @@ async def cancel_mid_transfer(
             release,
             reader_fd=reader_fd,
             writer_fd=writer_fd,
+            guard=guard,
+            cancellations=cancellations,
         )
 
 
@@ -234,11 +239,29 @@ async def _drive_cancelled_pump(
     *,
     reader_fd: int,
     writer_fd: int,
+    guard: object | None = None,
+    cancellations: int = 1,
 ) -> None:
-    """Cancel an in-flight pump over ``reader_fd``/``writer_fd``."""
+    """Cancel an in-flight pump over ``reader_fd``/``writer_fd``.
+
+    Parameters
+    ----------
+    guard:
+        Blocking-mode guard double handed to the pump. Defaults to a fresh
+        :class:`_NoopGuard`; pass a recording double to assert when the
+        descriptors are restored.
+    cancellations:
+        How many times the awaiting task is cancelled before the worker is
+        released. More than one exercises the drain's own interruption: each
+        extra cancellation lands while the pump still waits for the worker
+        thread.
+    """
     task = asyncio.create_task(
         _pipeline_streams._await_rust_pump(
-            typ.cast("_pipeline_stream_fds._BlockingModeGuard", _NoopGuard()),
+            typ.cast(
+                "_pipeline_stream_fds._BlockingModeGuard",
+                _NoopGuard() if guard is None else guard,
+            ),
             reader_fd=reader_fd,
             writer_fd=writer_fd,
         )
@@ -251,32 +274,40 @@ async def _drive_cancelled_pump(
         "the pump worker did not start within 5s, so the cancellation below "
         "would not be mid-transfer"
     )
-    task.cancel()
-    await asyncio.sleep(0.05)
+    for _ in range(cancellations):
+        task.cancel()
+        # Give the cancellation a chance to land while the worker runs.
+        await asyncio.sleep(0.05)
     release.set()
-    try:
+    with pytest.raises(asyncio.CancelledError):
         await task
-    except asyncio.CancelledError:
-        return
-    msg = "the cancelled hop must report the cancellation to its caller"
-    raise AssertionError(msg)
 
 
 def run_failing_pump_on_a_cancelled_hop(monkeypatch: pytest.MonkeyPatch) -> None:
     """Cancel a hop whose Rust worker then fails, so the failure is recovered."""
     release = threading.Event()
     worker_started = threading.Event()
+    release_waits: list[bool] = []
 
     def failing_pump(reader_fd: int, writer_fd: int) -> int:
         """Fail after the cancellation has been delivered."""
         del reader_fd, writer_fd
         worker_started.set()
-        release.wait(timeout=5.0)
+        release_waits.append(release.wait(timeout=5.0))
         msg = "the pump failed while the hop was being cancelled"
         raise OSError(msg)
 
     install_fake_pump(monkeypatch, failing_pump)
     asyncio.run(cancel_mid_transfer(worker_started, release))
+    # A timed-out wait returns False rather than raising, so the pump would
+    # still fail — but after the cancellation had already been drained, which is
+    # not the scenario this helper claims to drive. Asserted on this thread
+    # because an AssertionError raised in the executor would merely replace the
+    # OSError the callers inspect.
+    assert release_waits == [True], (
+        "the pump must fail because it was released mid-cancellation, not "
+        f"because its 5s wait timed out; observed waits {release_waits}"
+    )
 
 
 DECLINE_PATHS: tuple[
