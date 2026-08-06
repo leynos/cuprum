@@ -279,10 +279,12 @@ independent phase-count oracle.
 Two consequences are worth preserving when changing the mapping. Labels are
 projected only when the reducer yields at least one operation, so a `plan`
 event never touches `event.program` or the project tag. And the reducer is
-total over `ExecPhase` — all seven phases (`plan`, `start`, `stdout`,
-`stderr`, `stdin`, `stdin_error`, `exit`) have an arm — and fail-closed beyond
-it: any other phase raises `_UnhandledMetricsPhaseError` rather than being
-silently dropped. That is deliberate, and its cost is worth stating plainly. A
+total over `ExecPhase` — all nine phases (`plan`, `start`, `stdout`,
+`stderr`, `exit`, `stdin`, `stdin_error`, `timeout`, `teardown_error`) have
+an arm, with `plan`, `stdin` and `exit` handled directly and the remaining
+six routed through `_PHASE_COUNTERS` — and fail-closed beyond it: any other
+phase raises `_UnhandledMetricsPhaseError` rather than being silently
+dropped. That is deliberate, and its cost is worth stating plainly. A
 hook exception is not swallowed, so adding a value to `ExecPhase` without
 adding an arm here would raise for every caller that has already registered
 `MetricsHook`. A new phase therefore cannot reach metrics without a decision in
@@ -2448,6 +2450,47 @@ shielding, a cancellation landing in the grace-period wait would skip the
 `_terminate_pipeline_remaining_stages` uses the shared
 `_await_teardown_shielded` helper directly.
 
+`_await_teardown_shielded` retries the shielded wait in a loop rather than
+awaiting the teardown task once: cancelling a task propagates to whatever
+future it is blocked on, so a second cancellation landing on a bare
+`await termination` would cancel the teardown itself, and `asyncio.gather`
+would pass that on to each `_terminate_process`, again skipping the
+`SIGKILL` escalation and leaving a `SIGTERM`-immune child alive. The loop
+re-enters `asyncio.shield(termination)` until the task reports done, so
+every wait — including the retries — stays shielded, and it terminates
+because the termination always settles, bounding it by the grace period
+rather than by the caller's patience.
+
+`_await_teardown_shielded` is itself built on `_shielded_cleanup`
+(`cuprum/_process_lifecycle.py`), the shared primitive behind every shielded
+cleanup in the codebase: `async def _shielded_cleanup[T](cleanup:
+cabc.Awaitable[T]) -> T`. It owns `cleanup` in a task, awaits it under
+`asyncio.shield`, and on cancellation re-enters the shielded wait until the
+task reports done, then re-raises. A bare `await asyncio.shield(coro)` is not
+enough on its own: the shield keeps cancellation off the inner coroutine, but
+the *awaiting* coroutine resumes immediately, so the run propagates its
+`CancelledError` while its own cleanup tasks are still live — leaking exactly
+the tasks the cleanup exists to reconcile. The retry loop exists because
+cancelling a task propagates to whatever future it is awaiting, so
+re-awaiting the cleanup task unshielded would cancel the cleanup itself. It
+returns the cleanup's value and propagates the cleanup's own failure when the
+caller was not cancelled; callers that must absorb failures do so themselves —
+`_await_teardown_shielded` does this by passing `return_exceptions=True`.
+
+Callers routed through `_shielded_cleanup` now include
+`_await_teardown_shielded`; the timeout, cancellation, and stdin-failure
+cleanup paths in `_run_subprocess_with_streams` and
+`_run_subprocess_without_streams` (`cuprum/_subprocess_execution.py`); the
+spawn-failure, timeout, and run-failure paths, plus
+`_finalize_pipeline_execution`, in `cuprum/_pipeline_internals.py`; and
+`_execute_with_hooks` in `cuprum/sh.py`, which previously used a bare `await
+asyncio.shield(...)`. Two further helpers keep multi-step cleanup as one
+shielded unit: `_reconcile_run_tasks` in `cuprum/_subprocess_wait.py` cancels
+the stdin writer, then drains the stream consumers, and
+`_reconcile_pipeline_run_failure` in `cuprum/_pipeline_internals.py` cancels
+the stream tasks, then drains the observe-hook tasks. Shielding the halves
+separately would let a cancellation landing between them abandon the second.
+
 The inter-stage pump tasks, created by `_create_pipe_tasks`, are created and
 owned by `_collect_pipeline_inputs` rather than by `_wait_for_pipeline`. This
 matters because a non-positive deadline gives `asyncio.wait_for` a zero
@@ -2455,6 +2498,60 @@ timeout, and that cancels `_wait_for_pipeline` before its body — and
 therefore its `finally` — ever runs, so that `finally` cannot reconcile the
 pumps. On the timeout route, `_reconcile_pipe_tasks` cancels and drains the
 pump tasks instead.
+
+## Subprocess timeout observability
+
+Subprocess timeouts surface through the existing `ExecEvent` / `sh.observe()`
+observe-hook stream (see the [users' guide](users-guide.md) for the public
+event contract) and, mirroring the `cuprum.stdin` convention, through a
+best-effort `cuprum.timeout` log record carrying the same stable `cuprum_*`
+`extra` fields. Both accompany — never replace — the public `TimeoutExpired`
+exception and the existing `start` and `exit` events.
+
+Two observe events are added to `ExecPhase`:
+
+- **`timeout`** — emitted before `TimeoutExpired` when a run exceeds its
+  deadline. Fields: `operation` (`"wait"`), `pid`, `timeout_s` (the configured
+  timeout), `error_type` (`"TimeoutError"`), and `timeout_mode`, which
+  distinguishes an `"elapsed_deadline"` wall-clock expiry from a
+  `"non_positive_immediate"` expiry taken for a non-positive (`timeout <= 0`)
+  deadline that never awaits the process.
+- **`teardown_error`** — emitted when cancelling and draining a stream
+  consumer surfaces an unexpected exception during teardown. Fields:
+  `operation` (`"drain"`), `pid`, and `error_type` (the comma-joined failure
+  classes). The failure is absorbed to preserve the primary timeout or
+  cancellation, but stays observable through this event.
+
+Both expiry routes report through `_report_timeout_expiry` in
+`cuprum._timeout_reporting`, which pairs the log record with the observe event
+from one set of values so the two channels cannot drift. The single-command
+path calls it from `_wait_for_exit_code_within_timeout`; the pipeline path
+calls it from `_report_pipeline_timeout_expiry`, once per stage, because a
+pipeline enforces its deadline for the whole run and so never passes through
+the single-command wait helper.
+
+`_timeout_reporting` is a module of its own rather than part of
+`_subprocess_timeout` because this surface is shared by both paths: the
+pipeline caller cannot import the timeout-translation module without closing
+an import cycle. It imports `_EventDetails` from `_pipeline_types`, the module
+that defines it, rather than from `_pipeline_internals`, which merely
+re-exports it and would reintroduce that cycle. Splitting it out also brought
+`_subprocess_timeout` back under the 400-line module ceiling.
+
+Emission is best-effort and cannot alter control flow: an observe-hook failure
+(which `_StageObservation.emit` otherwise re-raises) is swallowed so telemetry
+can never mask `TimeoutExpired` or `CancelledError`, and scheduled async-hook
+tasks are still tracked and drained. The metrics adapter counts the two phases
+as `cuprum_timeouts_total` and `cuprum_teardown_errors_total`; the tracing
+adapter records them as ancillary span events that leave the span open for the
+subsequent `exit`.
+
+The parallel `cuprum.timeout` log records use the same field names under the
+`cuprum_` prefix (`cuprum_operation`, `cuprum_pid`, `cuprum_timeout_s`,
+`cuprum_error_type`, `cuprum_timeout_mode`, and `cuprum_teardown_outcome`):
+`subprocess_timeout_expired` (`WARNING`) for expiry and
+`subprocess_teardown_drain_failed` (`ERROR`, `cuprum_teardown_outcome` of
+`"drain_error"`) for a drain failure. A logging failure is likewise swallowed.
 
 ## Subprocess stdin injection
 
@@ -2484,13 +2581,13 @@ executes:
    call `_handle_stream_timeout`, which merely raises
    `_SubprocessTimeoutError` carrying the pre-drained stdout/stderr; on the
    cancellation path `CancelledError` is re-raised directly.
-6. In the non-streaming path (`_execute_subprocess`), the same writer task is
-   created and awaited after `_wait_for_exit_code` completes.  On
-   `TimeoutError` or `asyncio.CancelledError` from `_wait_for_exit_code`,
-   `_execute_subprocess` itself cancels and drains the writer task via
-   `_cancel_stdin_writer` before the timeout is translated or the
-   cancellation propagates, so a stdin drain blocked on an unread pipe cannot
-   delay completion.
+6. In the non-streaming path, `_execute_subprocess` delegates to
+   `_run_subprocess_without_streams`, which creates the same writer task and
+   awaits `_wait_for_exit_code` itself.  On `TimeoutError` or
+   `asyncio.CancelledError` from that wait, `_run_subprocess_without_streams`
+   itself cancels and drains the writer task via `_cancel_stdin_writer`
+   before the timeout is translated or the cancellation propagates, so a
+   stdin drain blocked on an unread pipe cannot delay completion.
 
 The `tests/helpers/stream_pipes.py` module provides
 `drain_blocking_payload_size()`, a shared helper returning a stdin payload
@@ -2504,10 +2601,10 @@ blocked-writer tests should reuse it rather than hardcoding a payload size.
 
 `_execute_with_hooks(cmd, execution, tracking)` is the single site that runs
 `_execute_subprocess`, iterates after-hooks, and co-ordinates cancellation-safe
-cleanup of pending hook tasks via `asyncio.shield`. It replaces the try/except
-ladder that previously lived inline in `SafeCmd.run`, keeping the public method
-to a minimal orchestration skeleton (plan event, before-hooks dispatch,
-delegation).
+cleanup of pending hook tasks via `_shielded_cleanup` (see "Pipeline timeout
+and teardown" above). It replaces the try/except ladder that previously lived
+inline in `SafeCmd.run`, keeping the public method to a minimal orchestration
+skeleton (plan event, before-hooks dispatch, delegation).
 
 `_build_stream_config(execution)` centralizes construction of the
 `_StreamConfig` used by the streaming execution path

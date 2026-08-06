@@ -16,6 +16,7 @@ from pathlib import Path
 
 from cuprum._observability import (
     _base_stage_tags,
+    _drain_tasks_during_cleanup,
     _merge_tags,
     _resolve_env_overlay,
     _wait_for_exec_hook_tasks,
@@ -30,6 +31,7 @@ from cuprum._pipeline_internals import (
     _StageObservation,
 )
 from cuprum._pipeline_streams import _prepare_pipeline_config
+from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum._subprocess_execution import (
     _execute_subprocess,
@@ -55,6 +57,9 @@ type _EnvMapping = cabc.Mapping[str, str] | None
 type _CwdType = str | Path | None
 
 _DEFAULT_CANCEL_GRACE = 0.5
+# Names the aggregate raised when draining observe-hook tasks fails while a
+# single-command execution is already unwinding.
+_COMMAND_FINALIZATION_ERROR = "command finalization failed"
 _DEFAULT_ENCODING = "utf-8"
 _DEFAULT_ERROR_HANDLING = "replace"
 
@@ -403,18 +408,46 @@ async def _execute_with_hooks(
     execution: _SubprocessExecution,
     tracking: _ExecutionTracking,
 ) -> CommandResult:
-    """Execute *execution*, dispatch after-hooks, and handle cancellation."""
+    """Execute *execution*, dispatch after-hooks, and handle cancellation.
+
+    Draining the observe-hook tasks during cleanup must not let a failing
+    background hook stand in for the error that triggered the cleanup: a caller
+    awaiting ``TimeoutExpired`` (or a cancellation) would otherwise see the
+    hook's exception instead. Both cleanup paths therefore drain through
+    :func:`_drain_tasks_during_cleanup`, which aggregates a drain failure with
+    the active error into a ``BaseExceptionGroup`` rather than replacing it —
+    matching the pipeline path. The drain on the success path still surfaces a
+    hook failure directly, because there is no primary error to preserve.
+
+    Every drain runs through :func:`_shielded_cleanup` rather than a bare
+    ``await asyncio.shield(...)``. The shield alone keeps the cancellation off
+    the drain, but the *awaiting* coroutine resumes immediately, so the run
+    would propagate its ``CancelledError`` while the hook tasks were still
+    settling — leaking exactly the tasks the drain exists to reconcile.
+    """
     try:
         result = await _execute_subprocess(execution)
         for hook in tracking.execution_hooks.after_hooks:
             hook(cmd, result)
-    except asyncio.CancelledError:
-        await asyncio.shield(_wait_for_exec_hook_tasks(tracking.pending_tasks))
+    except asyncio.CancelledError as cancelled:
+        await _shielded_cleanup(
+            _drain_tasks_during_cleanup(
+                tracking.pending_tasks,
+                cancelled,
+                message=_COMMAND_FINALIZATION_ERROR,
+            )
+        )
         raise
-    except BaseException:
-        await _wait_for_exec_hook_tasks(tracking.pending_tasks)
+    except BaseException as run_error:
+        await _shielded_cleanup(
+            _drain_tasks_during_cleanup(
+                tracking.pending_tasks,
+                run_error,
+                message=_COMMAND_FINALIZATION_ERROR,
+            )
+        )
         raise
-    await _wait_for_exec_hook_tasks(tracking.pending_tasks)
+    await _shielded_cleanup(_wait_for_exec_hook_tasks(tracking.pending_tasks))
     return result
 
 

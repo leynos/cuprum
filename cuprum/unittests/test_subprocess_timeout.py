@@ -1,8 +1,14 @@
-"""Unit tests for subprocess timeout cleanup."""
+"""Unit tests for subprocess timeout and cancellation cleanup.
+
+Covers the drain-once helper, the synchronous timeout handler, and the
+wait/teardown semantics. The telemetry these paths emit is covered by
+``test_subprocess_timeout_logging`` and ``test_subprocess_timeout_observe``.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses as dc
 import typing as typ
 
@@ -10,21 +16,26 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from cuprum._subprocess_execution import (
-    _drain_stream_consumers,
-    _wait_for_exit_code,
-    _wait_for_exit_code_within_timeout,
-)
 from cuprum._subprocess_timeout import (
     _handle_stream_timeout,
     _SubprocessInvariantError,
     _SubprocessTimeoutError,
 )
+from cuprum._subprocess_wait import (
+    _drain_stream_consumers,
+    _wait_for_exit_code,
+    _wait_for_exit_code_within_timeout,
+)
 from cuprum.sh import ExecutionContext
+from cuprum.unittests._timeout_test_helpers import (
+    _DeadlineExecution,
+    _ExitedProcess,
+    _TimeoutWaitProcess,
+)
 
 if typ.TYPE_CHECKING:
-    # Only referenced through the string-based ``typ.cast`` below, so it carries
-    # no runtime dependency and stays type-checking-only.
+    # Referenced only in annotations and string-based ``typ.cast`` below, so
+    # these carry no runtime dependency and stay type-checking-only.
     from cuprum._subprocess_execution import _SubprocessExecution
 
 # A consumer either completes with captured text or fails with an exception.
@@ -188,39 +199,6 @@ def test_handle_stream_timeout_requires_configured_timeout() -> None:
         )
 
 
-class _TimeoutWaitProcess:
-    """Process double whose ``wait()`` blocks until terminate()/kill()."""
-
-    def __init__(self) -> None:
-        """Start unexited, with a pid and unset started/termination events."""
-        self.returncode: int | None = None
-        self.pid = 4321
-        self._exited = asyncio.Event()
-        self.wait_started = asyncio.Event()
-
-    async def wait(self) -> int:
-        """Block until a termination signal records an exit code."""
-        self.wait_started.set()
-        await self._exited.wait()
-        assert self.returncode is not None, (
-            "process double invariant: terminate()/kill() must record "
-            "returncode before _exited is set"
-        )
-        return self.returncode
-
-    def terminate(self) -> None:
-        """Record a SIGTERM exit code and release ``wait()``."""
-        if self.returncode is None:
-            self.returncode = -15
-        self._exited.set()
-
-    def kill(self) -> None:
-        """Record a SIGKILL exit code and release ``wait()``."""
-        if self.returncode is None:
-            self.returncode = -9
-        self._exited.set()
-
-
 def test_wait_for_exit_code_terminates_process_on_timeout() -> None:
     """A timed-out wait terminates the process before propagating TimeoutError.
 
@@ -289,33 +267,6 @@ def test_wait_for_exit_code_terminates_process_on_cancellation() -> None:
     asyncio.run(run_case())
 
 
-class _ExitedProcess:
-    """Process double whose ``wait()`` returns immediately (already exited)."""
-
-    def __init__(self, returncode: int = 0) -> None:
-        """Start already exited, with a recorded exit code and a pid."""
-        self.returncode = returncode
-        self.pid = 5678
-
-    async def wait(self) -> int:
-        """Return the recorded exit code without ever suspending."""
-        return self.returncode
-
-    def terminate(self) -> None:
-        """No-op: the process has already exited."""
-
-    def kill(self) -> None:
-        """No-op: the process has already exited."""
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _DeadlineExecution:
-    """Execution stand-in exposing only the fields the waiter reads."""
-
-    ctx: ExecutionContext
-    timeout: float | None
-
-
 @pytest.mark.parametrize("timeout", [0, 0.0, -1.0])
 def test_non_positive_timeout_expires_immediately(timeout: float) -> None:
     """A non-positive deadline times out even when the process already exited.
@@ -365,6 +316,78 @@ def test_non_positive_timeout_terminates_running_process() -> None:
         assert process.returncode == -15, (
             "the process must be terminated when a non-positive deadline expires, "
             f"but returncode={process.returncode}"
+        )
+
+    asyncio.run(run_case())
+
+
+class _SigtermImmuneProcess:
+    """Process double that ignores ``terminate()``; only ``kill()`` ends it."""
+
+    def __init__(self) -> None:
+        """Start unexited, recording which signals were delivered."""
+        self.returncode: int | None = None
+        self.pid = 7321
+        self.terminated = asyncio.Event()
+        self.killed = False
+        self.wait_started = asyncio.Event()
+        self._exited = asyncio.Event()
+
+    async def wait(self) -> int:
+        """Block until ``kill()`` records an exit code."""
+        self.wait_started.set()
+        await self._exited.wait()
+        return self.returncode if self.returncode is not None else 0
+
+    def terminate(self) -> None:
+        """Signal receipt without exiting, as a SIGTERM-immune child would."""
+        self.terminated.set()
+
+    def kill(self) -> None:
+        """Record the escalation and exit."""
+        self.killed = True
+        self.returncode = -9
+        self._exited.set()
+
+
+def test_cancellation_during_grace_still_escalates_to_kill() -> None:
+    """A cancel landing in the grace period must not skip the SIGKILL escalation.
+
+    A deadline expiry already consumes one cancellation to reach the teardown,
+    so the caller's own ``cancel()`` is delivered to the grace-period wait
+    inside it. Unshielded, that skipped the escalation and left a
+    ``SIGTERM``-immune child running after the run had returned.
+    """
+
+    async def run_case() -> None:
+        """Expire the deadline, then cancel while the grace period runs."""
+        process = _SigtermImmuneProcess()
+        ctx = ExecutionContext(cancel_grace=0.3)
+
+        async def waiter() -> None:
+            """Drive the wait under a deadline that expires almost at once."""
+            with contextlib.suppress(TimeoutError):
+                async with asyncio.timeout(0.01):
+                    await _wait_for_exit_code(
+                        typ.cast("asyncio.subprocess.Process", process), ctx
+                    )
+
+        task = asyncio.create_task(waiter())
+        await process.wait_started.wait()
+        # Wait for the deadline to fire and teardown to send SIGTERM, so the
+        # cancellation below lands inside the grace period rather than before
+        # it — no sleep-based guess at the timing.
+        await process.terminated.wait()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        assert process.killed, (
+            "the SIGKILL escalation must complete before the cancellation "
+            "propagates, otherwise a SIGTERM-immune child outlives the run"
+        )
+        assert process.returncode == -9, (
+            f"the child must be reaped, got returncode={process.returncode!r}"
         )
 
     asyncio.run(run_case())

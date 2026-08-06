@@ -11,6 +11,7 @@ import pytest
 
 from cuprum import sh
 from cuprum.adapters.tracing_adapter import (
+    _MAX_ACTIVE_SPANS,
     InMemorySpan,
     InMemoryTracer,
     TracingHook,
@@ -144,8 +145,63 @@ print('stderr-line', file=sys.stderr)""",
             "test_records_output_events should preserve stdout line text"
         )
 
-    def test_records_stdin_error_event(self) -> None:
-        """Hook surfaces stdin_error as a span event with stable fields."""
+    @pytest.mark.parametrize(
+        ("phase", "extra_fields", "expected_attributes"),
+        [
+            pytest.param(
+                "stdin_error",
+                {
+                    "operation": "write",
+                    "error_type": "OSError",
+                    "note": "OSError: broken pipe",
+                },
+                {"operation": "write", "error_type": "OSError"},
+                id="stdin_error",
+            ),
+            pytest.param(
+                "timeout",
+                {
+                    "operation": "wait",
+                    "error_type": "TimeoutError",
+                    "timeout_s": 1.5,
+                    "timeout_mode": "elapsed_deadline",
+                },
+                {
+                    "operation": "wait",
+                    "error_type": "TimeoutError",
+                    "timeout_s": 1.5,
+                    "timeout_mode": "elapsed_deadline",
+                },
+                id="timeout",
+            ),
+            pytest.param(
+                "teardown_error",
+                {
+                    "operation": "drain",
+                    "error_type": "ValueError",
+                    "note": "consumer drain failed: ValueError",
+                },
+                {"operation": "drain", "error_type": "ValueError"},
+                id="teardown_error",
+            ),
+        ],
+    )
+    def test_records_ancillary_event_without_ending_span(
+        self,
+        phase: str,
+        extra_fields: dict[str, object],
+        expected_attributes: dict[str, object],
+    ) -> None:
+        """Ancillary phases become span events and leave the span open.
+
+        ``stdin_error``, ``timeout``, and ``teardown_error`` are all diagnostics
+        that accompany rather than conclude an execution, so each must be
+        recorded as a ``cuprum.<phase>`` span event carrying the stable
+        attributes in ``expected_attributes`` — ``operation`` and
+        ``error_type`` for every phase, plus ``timeout_s`` / ``timeout_mode``
+        for ``timeout`` — while the span stays open for the subsequent
+        ``exit``.
+        """
         tracer = InMemoryTracer()
         hook = TracingHook(tracer)
 
@@ -154,32 +210,124 @@ print('stderr-line', file=sys.stderr)""",
         hook(_make_exec_event(phase="start", overrides=base))
         hook(
             _make_exec_event(
-                phase="stdin_error",
-                overrides={
-                    **base,
-                    "operation": "write",
-                    "error_type": "OSError",
-                    "note": "OSError: broken pipe",
-                },
+                phase=typ.cast("ExecPhase", phase),
+                overrides={**base, **extra_fields},
             ),
         )
 
         span = tracer.spans[0]
-        stdin_error_attrs = next(
-            (attrs for name, attrs in span.events if name == "cuprum.stdin_error"),
+        event_name = f"cuprum.{phase}"
+        attrs = next(
+            (attrs for name, attrs in span.events if name == event_name),
             None,
         )
-        assert stdin_error_attrs is not None, (
-            "the tracing hook should surface stdin_error as a span event"
+        assert attrs is not None, (
+            f"the tracing hook should surface {phase} as a {event_name} span event, "
+            f"but recorded {[name for name, _ in span.events]}"
         )
-        assert stdin_error_attrs.get("operation") == "write", (
-            "the stdin_error span event should carry the failing pipe operation"
-        )
-        assert stdin_error_attrs.get("error_type") == "OSError", (
-            "the stdin_error span event should carry the exception type"
-        )
+        for key, want in expected_attributes.items():
+            assert attrs.get(key) == want, (
+                f"the {phase} span event should carry {key}={want!r}, "
+                f"got {attrs.get(key)!r}"
+            )
         assert span.ended is False, (
-            "a non-fatal stdin_error must not end the execution span"
+            f"an ancillary {phase} event must not end the execution span"
+        )
+
+    def test_teardown_error_after_exit_is_dropped(self) -> None:
+        """A late ``teardown_error`` must not disturb a concluded execution.
+
+        The drain runs after the process has been reaped, so its failure can be
+        reported once ``exit`` has already closed the span. The hook keys on
+        ``exec_id``, and ``exit`` removes the entry, so the late event finds no
+        open span and is dropped rather than reopening or re-ending one.
+        """
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+
+        exec_id = new_exec_id()
+        base = {"program": "cat", "argv": ("cat",), "pid": 4321, "exec_id": exec_id}
+        hook(_make_exec_event(phase="start", overrides=base))
+        hook(
+            _make_exec_event(
+                phase="exit",
+                overrides={**base, "exit_code": 0, "duration_s": 0.5},
+            ),
+        )
+        hook(
+            _make_exec_event(
+                phase="teardown_error",
+                overrides={**base, "operation": "drain", "error_type": "ValueError"},
+            ),
+        )
+
+        span = tracer.spans[0]
+        assert span.ended is True, "the exit event must still have closed the span"
+        assert not any(name == "cuprum.teardown_error" for name, _ in span.events), (
+            "a teardown_error arriving after exit must not be recorded on the "
+            f"closed span, got {[name for name, _ in span.events]}"
+        )
+
+    def test_abandoned_spans_are_evicted_once_the_registry_fills(self) -> None:
+        """An execution that never emits ``exit`` must not accumulate forever.
+
+        Cleanup also runs on external cancellation and on a stdin-writer
+        failure, and on those paths the original exception propagates with no
+        ``exit`` — so a ``teardown_error`` can be the last event an execution
+        emits. Those spans have nothing left to close them, so the registry is
+        bounded and evicts the oldest, ending it as failed.
+        """
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+
+        abandoned = new_exec_id()
+        hook(
+            _make_exec_event(
+                phase="start",
+                overrides={
+                    "program": "cat",
+                    "argv": ("cat",),
+                    "pid": 1,
+                    "exec_id": abandoned,
+                },
+            ),
+        )
+        hook(
+            _make_exec_event(
+                phase="teardown_error",
+                overrides={
+                    "program": "cat",
+                    "argv": ("cat",),
+                    "pid": 1,
+                    "exec_id": abandoned,
+                    "operation": "drain",
+                    "error_type": "ValueError",
+                },
+            ),
+        )
+        assert tracer.spans[0].ended is False, (
+            "the abandoned span should still be open before the registry fills"
+        )
+
+        for index in range(_MAX_ACTIVE_SPANS):
+            hook(
+                _make_exec_event(
+                    phase="start",
+                    overrides={
+                        "program": "cat",
+                        "argv": ("cat",),
+                        "pid": index + 2,
+                        "exec_id": new_exec_id(),
+                    },
+                ),
+            )
+
+        assert tracer.spans[0].ended is True, (
+            "the oldest abandoned span must be ended once the cap is exceeded, "
+            "otherwise a run that never emits exit leaks one entry per execution"
+        )
+        assert len(hook._active_spans) == _MAX_ACTIVE_SPANS, (
+            f"the registry must stay bounded, got {len(hook._active_spans)}"
         )
 
     def test_disables_output_recording(self) -> None:

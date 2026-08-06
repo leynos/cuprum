@@ -58,6 +58,40 @@ async def _terminate_process_with_wait(
         await wait_for_exit()
 
 
+async def _shielded_cleanup[T](cleanup: cabc.Awaitable[T]) -> T:
+    """Run ``cleanup`` to completion, holding off caller cancellation.
+
+    Cleanup runs in an owned task and every wait on it is shielded. A bare
+    ``await asyncio.shield(coro)`` is not enough on its own: the shield stops
+    the cancellation reaching the inner coroutine, but the *outer* task returns
+    immediately, so the caller propagates its ``CancelledError`` while cleanup
+    is still running — the tasks and processes it owns outlive the run.
+
+    Awaiting the task directly on the cancellation path is no better, because
+    cancelling a task propagates to whatever future it is blocked on: a second
+    ``cancel()`` landing on a bare ``await task`` cancels the cleanup itself.
+    The wait is therefore retried under a shield until the task reports done,
+    absorbing however many cancellations arrive, and only then re-raised.
+
+    Returns whatever ``cleanup`` returned, and propagates its failure when the
+    caller was not cancelled — callers that must absorb cleanup failures say so
+    themselves, as :func:`_await_teardown_shielded` does.
+    """
+    task = asyncio.ensure_future(cleanup)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(task)
+        if not task.cancelled():
+            # Retrieve the outcome so a cleanup failure is not reported as an
+            # unretrieved task exception. The caller's cancellation still wins:
+            # it is the error the run is ending on.
+            task.exception()
+        raise
+
+
 async def _await_teardown_shielded(
     teardowns: cabc.Iterable[cabc.Awaitable[object]],
 ) -> None:
@@ -71,22 +105,21 @@ async def _await_teardown_shielded(
 
     The cancellation is held until teardown finishes and then re-raised,
     mirroring the ``asyncio.shield`` cleanup in
-    ``cuprum.sh._execute_with_hooks``. A second cancellation arriving during
-    that wait is suppressed rather than allowed to strand a process: the
-    teardown task is independent and completes regardless.
+    ``cuprum.sh._execute_with_hooks``.
 
-    Failures are absorbed — every caller runs this while another exception is
-    already propagating, and teardown must not replace it.
+    :func:`_shielded_cleanup` owns the retry rules; were a further ``cancel()``
+    to reach the teardown task, ``gather`` would pass it on to each
+    ``_terminate_process``, skipping the ``SIGKILL`` escalation and the reap.
+
+    Termination always settles — it escalates to ``SIGKILL`` and awaits the
+    exit — so the wait is bounded by the grace period rather than by the
+    caller's patience.
+
+    Failures are absorbed via ``return_exceptions`` — every caller runs this
+    while another exception is already propagating, and teardown must not
+    replace it.
     """
-    termination = asyncio.ensure_future(
-        asyncio.gather(*teardowns, return_exceptions=True)
-    )
-    try:
-        await asyncio.shield(termination)
-    except asyncio.CancelledError:
-        with contextlib.suppress(asyncio.CancelledError):
-            await termination
-        raise
+    await _shielded_cleanup(asyncio.gather(*teardowns, return_exceptions=True))
 
 
 async def _terminate_all_shielded(
@@ -104,9 +137,9 @@ async def _terminate_all_shielded(
 
     The cancellation is held until termination finishes and then re-raised,
     mirroring the ``asyncio.shield`` cleanup in
-    ``cuprum.sh._execute_with_hooks``. A second cancellation arriving during
-    that wait is suppressed rather than allowed to strand a process: the
-    termination task is independent and completes regardless.
+    ``cuprum.sh._execute_with_hooks``. Further cancellations arriving during
+    that wait are absorbed and the shielded wait retried, so no number of them
+    can strand a process — see :func:`_await_teardown_shielded`.
 
     Failures are absorbed — every caller runs this while another exception is
     already propagating, and teardown must not replace it.

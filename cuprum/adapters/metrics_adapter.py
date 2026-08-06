@@ -208,6 +208,8 @@ _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
     "stdout": "cuprum_stdout_lines_total",
     "stderr": "cuprum_stderr_lines_total",
     "stdin_error": "cuprum_stdin_errors_total",
+    "timeout": "cuprum_timeouts_total",
+    "teardown_error": "cuprum_teardown_errors_total",
 })
 
 
@@ -268,6 +270,8 @@ class MetricsHook:
     - ``cuprum_stderr_lines_total``: Counter of stderr lines emitted
     - ``cuprum_stdin_bytes_total``: Counter of successful stdin bytes written
     - ``cuprum_stdin_errors_total``: Counter of stdin writer failures
+    - ``cuprum_timeouts_total``: Counter of subprocess and pipeline expiries
+    - ``cuprum_teardown_errors_total``: Counter of consumer drain failures
 
     All metrics include ``program`` and ``project`` labels.
 
