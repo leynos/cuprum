@@ -3,13 +3,28 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import os
+import re
 import threading
 import typing as typ
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from types import ModuleType
+
+# An unusable descriptor reports `EBADF` on POSIX and `EINVAL` where Windows
+# rejects the handle instead. The pump and consume entry points are tested in
+# separate modules but are held to the same expectation, so the pair lives here
+# rather than being restated in each.
+INVALID_FD_ERRNOS = (errno.EBADF, errno.EINVAL)
+
+# `pytest.raises(OSError)` needs a `match` to satisfy ruff PT011, but `strerror`
+# comes from the C library and is translated under a non-English locale. Anchor
+# on the `[Errno N]` prefix CPython formats itself, which no locale changes.
+INVALID_FD_MESSAGE_RE = "|".join(
+    re.escape(f"[Errno {code}]") for code in INVALID_FD_ERRNOS
+)
 
 
 def _safe_close(fd: int) -> None:

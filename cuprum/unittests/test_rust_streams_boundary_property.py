@@ -1,7 +1,8 @@
 """Property-based boundary tests for the Rust stream entry points.
 
-The example-based suite in ``test_rust_streams.py`` covers a curated set of
-buffer sizes and I/O failures. These properties fuzz the argument-validation
+The example-based suites in ``test_rust_streams.py`` and
+``test_rust_consume_stream.py`` cover a curated set of buffer sizes and I/O
+failures. These properties fuzz the argument-validation
 boundary of ``rust_pump_stream`` / ``rust_consume_stream`` at the Python/Rust
 seam:
 
