@@ -257,9 +257,11 @@ Notes:
 `result.failure_index` reports the index of the stage that failed first, in
 completion order — whether or not that failure went on to trigger fail-fast
 termination — but not why the other stages ended when they did. Three records
-fill that gap. All are emitted
-at `WARNING` on the `cuprum._pipeline_wait` logger, so they appear in a default
-logging configuration without any opt-in.
+fill that gap. All are emitted at `WARNING` on the `cuprum._pipeline_wait`
+logger, so they appear in a default logging configuration without any opt-in.
+The level is fixed; it is not the configurable one. That belongs to the
+separate, opt-in `pipeline_fail_fast` event published to observe hooks — see
+[Structured logging adapter](#structured-logging-adapter).
 
 Table 1: fail-fast records emitted while a pipeline is being torn down
 
@@ -944,7 +946,10 @@ set the field to change it.
 > is **not** redacted. Any secret passed on the command line — a
 > `--password=…`, an API token, a connection string — is written into the log
 > record (and into the `JsonLoggingFormatter` output) exactly as supplied. The
-> same applies to the plain-text `logging_hook()`. Prefer passing secrets via
+> same applies to the plain-text `logging_hook()`, and to every phase alike:
+> `pipeline_fail_fast` inherits the same `cuprum_argv` projection as `start`
+> and `exit`, so a fail-fast event adds no exposure the surrounding lifecycle
+> events did not already carry. Prefer passing secrets via
 > the environment or files rather than as arguments; where arguments may carry
 > sensitive values, wrap `structured_logging_hook()` in a custom observe hook
 > that drops or masks `cuprum_argv` before the record reaches configured
