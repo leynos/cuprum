@@ -8,7 +8,7 @@
   current context, returning a detachable `PumpHookRegistration`. The channel
   is separate from `sh.observe`, so an existing observer is untouched.
 - **`PumpEvent`:** The frozen event a pump hook receives, carrying the routing
-  `phase` and, for a decline, the `reason` that refused.
+  `phase` and, for a decline, the `reason` for the decline.
 - **`PumpHook`:** The synchronous callable type a pump observer must satisfy.
 - **`PumpHookRegistration`:** The handle `observe_pump` returns, usable as a
   context manager or detached explicitly.
