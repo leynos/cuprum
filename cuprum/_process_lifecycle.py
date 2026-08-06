@@ -16,7 +16,7 @@ from cuprum.context import current_context, resolve_env
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum._pipeline_streams import _PipelineRunConfig
+    from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum.sh import SafeCmd
 
 

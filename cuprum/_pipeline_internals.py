@@ -53,7 +53,7 @@ from cuprum.context import current_context
 if typ.TYPE_CHECKING:
     import types
 
-    from cuprum._pipeline_streams import _PipelineRunConfig
+    from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum.context import CuprumContext
     from cuprum.sh import CommandResult, PipelineResult, SafeCmd
 

@@ -45,11 +45,6 @@ if typ.TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# Retained under its historical private name so existing internal call sites and
-# tests keep working now that the closed set is published beside the event type
-# that carries it.
-_RustPumpDeclineReason = RustPumpDeclineReason
-
 
 def _log_rust_pump_declined(reason: RustPumpDeclineReason) -> None:
     """Record why an inter-stage hop fell back from the Rust pump to Python.
