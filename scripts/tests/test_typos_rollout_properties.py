@@ -10,6 +10,7 @@ remote-freshness decision.
 from __future__ import annotations
 
 import collections
+import dataclasses as dc
 import datetime as dt
 import email.utils
 import typing as typ
@@ -50,6 +51,49 @@ _corrections_pool = st.dictionaries(
 _shared_settings = settings(
     max_examples=50,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+
+
+@dc.dataclass(frozen=True)
+class _MergeUnionCase:
+    """Define generated inputs for one dictionary-union merge.
+
+    Attributes
+    ----------
+    pool : dict[str, str]
+        Correction pool split across both sides, so shared keys agree.
+    stems_a : list[str]
+        Oxford stems for the left-hand dictionary.
+    stems_b : list[str]
+        Oxford stems for the right-hand dictionary.
+    accepted_a : list[str]
+        Accepted words for the left-hand dictionary.
+    accepted_b : list[str]
+        Accepted words for the right-hand dictionary.
+    patterns_a : list[str]
+        Ignore patterns for the left-hand dictionary.
+    patterns_b : list[str]
+        Ignore patterns for the right-hand dictionary.
+    """
+
+    pool: dict[str, str]
+    stems_a: list[str]
+    stems_b: list[str]
+    accepted_a: list[str]
+    accepted_b: list[str]
+    patterns_a: list[str]
+    patterns_b: list[str]
+
+
+_merge_union_cases = st.builds(
+    _MergeUnionCase,
+    pool=_corrections_pool,
+    stems_a=_stems,
+    stems_b=_stems,
+    accepted_a=_accepted,
+    accepted_b=_accepted,
+    patterns_a=_patterns,
+    patterns_b=_patterns,
 )
 
 
@@ -117,58 +161,44 @@ def test_merge_is_associative_without_conflicts(
     )
 
 
-@given(
-    pool=_corrections_pool,
-    stems_a=_stems,
-    stems_b=_stems,
-    accepted_a=_accepted,
-    accepted_b=_accepted,
-    patterns_a=_patterns,
-    patterns_b=_patterns,
-)
+@given(case=_merge_union_cases)
 @_shared_settings
 def test_merge_unions_fields_and_is_idempotent(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
-    pool: dict[str, str],
-    stems_a: list[str],
-    stems_b: list[str],
-    accepted_a: list[str],
-    accepted_b: list[str],
-    patterns_a: list[str],
-    patterns_b: list[str],
+    case: _MergeUnionCase,
 ) -> None:
     """A merge is the sorted union of both sides and absorbs re-merging."""
     _, rollout, _ = rollout_modules
-    items = sorted(pool.items())
+    items = sorted(case.pool.items())
     left = _dictionary(
         rollout,
-        stems=stems_a,
-        accepted=accepted_a,
+        stems=case.stems_a,
+        accepted=case.accepted_a,
         corrections=dict(items[::2]),
-        ignore_patterns=patterns_a,
+        ignore_patterns=case.patterns_a,
     )
     right = _dictionary(
         rollout,
-        stems=stems_b,
-        accepted=accepted_b,
+        stems=case.stems_b,
+        accepted=case.accepted_b,
         corrections=dict(items[1::2]),
-        ignore_patterns=patterns_b,
+        ignore_patterns=case.patterns_b,
     )
 
     merged = rollout.merge_dictionaries(left, right)
 
-    assert merged.stems == tuple(sorted(set(stems_a) | set(stems_b))), (
+    assert merged.stems == tuple(sorted(set(case.stems_a) | set(case.stems_b))), (
         "merged stems must be the sorted union of both sides"
     )
-    assert merged.accepted == tuple(sorted(set(accepted_a) | set(accepted_b))), (
-        "merged accepted words must be the sorted union of both sides"
-    )
-    assert merged.corrections == tuple(sorted(pool.items())), (
+    assert merged.accepted == tuple(
+        sorted(set(case.accepted_a) | set(case.accepted_b))
+    ), "merged accepted words must be the sorted union of both sides"
+    assert merged.corrections == tuple(sorted(case.pool.items())), (
         "merged corrections must be the sorted union of both sides"
     )
-    assert merged.ignore_patterns == tuple(sorted(set(patterns_a) | set(patterns_b))), (
-        "merged ignore patterns must be the sorted union of both sides"
-    )
+    assert merged.ignore_patterns == tuple(
+        sorted(set(case.patterns_a) | set(case.patterns_b))
+    ), "merged ignore patterns must be the sorted union of both sides"
     assert rollout.merge_dictionaries(merged, merged) == merged, (
         "merging a normalized dictionary with itself must be a fixed point"
     )
