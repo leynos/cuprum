@@ -35,7 +35,6 @@ from cuprum._pipeline_wait import _wait_for_pipeline
 from cuprum._process_lifecycle import _terminate_timed_out_stages
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     import types
 
     from cuprum._pipeline_wait import _PipelineWaitResult
@@ -68,7 +67,6 @@ async def _await_pipeline_wait_result(
     *,
     timeout_deadline: float | None,
     pipe_tasks: list[asyncio.Task[None]],
-    clock: cabc.Callable[[], float] = time.monotonic,
 ) -> _PipelineWaitResult:
     """Wait for the pipeline to finish, honouring any timeout deadline.
 
@@ -78,7 +76,7 @@ async def _await_pipeline_wait_result(
     """
     wait_timeout: float | None = None
     if timeout_deadline is not None:
-        wait_timeout = max(0.0, timeout_deadline - clock())
+        wait_timeout = max(0.0, timeout_deadline - time.monotonic())
     pipeline_wait = _wait_for_pipeline(
         spawn.processes,
         pipe_tasks=pipe_tasks,

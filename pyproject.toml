@@ -119,7 +119,7 @@ extend-ignore = [
 # (trio/anyio async paths are not in use). Scoped to these paths so unrelated
 # and future async tests do not silently inherit the exemption.
 "cuprum/unittests/test_observe_stdin_early_close.py" = ["ASYNC109", "ASYNC240"]
-"tests/behaviour/test_execution_runtime.py" = ["ASYNC109", "ASYNC240"]
+"tests/behaviour/_execution_runtime_support.py" = ["ASYNC109", "ASYNC240"]
 # Test scaffolding modules (shared helpers imported by test_*.py) get the same
 # allowances as the tests they support; they use bare ``assert`` for fixtures.
 "cuprum/unittests/*_test_helpers.py" = ["S101", "PLR0913", "PLR0917", "PLR2004", "PLR6301"]
