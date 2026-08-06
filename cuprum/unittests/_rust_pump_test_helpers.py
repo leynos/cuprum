@@ -221,28 +221,7 @@ async def cancel_mid_transfer(
     guard: object | None = None,
     cancellations: int = 1,
 ) -> None:
-    """Start the pump, cancel it mid-transfer, then release the worker."""
-    with owned_fds() as (reader_fd, writer_fd):
-        await _drive_cancelled_pump(
-            worker_started,
-            release,
-            reader_fd=reader_fd,
-            writer_fd=writer_fd,
-            guard=guard,
-            cancellations=cancellations,
-        )
-
-
-async def _drive_cancelled_pump(
-    worker_started: threading.Event,
-    release: threading.Event,
-    *,
-    reader_fd: int,
-    writer_fd: int,
-    guard: object | None = None,
-    cancellations: int = 1,
-) -> None:
-    """Cancel an in-flight pump over ``reader_fd``/``writer_fd``.
+    """Start the pump, cancel it mid-transfer, then release the worker.
 
     Parameters
     ----------
@@ -256,31 +235,33 @@ async def _drive_cancelled_pump(
         extra cancellation lands while the pump still waits for the worker
         thread.
     """
-    task = asyncio.create_task(
-        _pipeline_streams._await_rust_pump(
-            typ.cast(
-                "_pipeline_stream_fds._BlockingModeGuard",
-                _NoopGuard() if guard is None else guard,
-            ),
-            reader_fd=reader_fd,
-            writer_fd=writer_fd,
+    with owned_fds() as (reader_fd, writer_fd):
+        task = asyncio.create_task(
+            _pipeline_streams._await_rust_pump(
+                typ.cast(
+                    "_pipeline_stream_fds._BlockingModeGuard",
+                    _NoopGuard() if guard is None else guard,
+                ),
+                reader_fd=reader_fd,
+                writer_fd=writer_fd,
+            )
         )
-    )
-    # `Event.wait` reports timeout by returning False rather than raising, so a
-    # discarded result would let the cancellation land before the worker ever
-    # started — passing without exercising mid-transfer cancellation at all.
-    started = await asyncio.to_thread(worker_started.wait, 5.0)
-    assert started, (
-        "the pump worker did not start within 5s, so the cancellation below "
-        "would not be mid-transfer"
-    )
-    for _ in range(cancellations):
-        task.cancel()
-        # Give the cancellation a chance to land while the worker runs.
-        await asyncio.sleep(0.05)
-    release.set()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+        # `Event.wait` reports timeout by returning False rather than raising,
+        # so a discarded result would let the cancellation land before the
+        # worker ever started — passing without exercising mid-transfer
+        # cancellation at all.
+        started = await asyncio.to_thread(worker_started.wait, 5.0)
+        assert started, (
+            "the pump worker did not start within 5s, so the cancellation "
+            "below would not be mid-transfer"
+        )
+        for _ in range(cancellations):
+            task.cancel()
+            # Give the cancellation a chance to land while the worker runs.
+            await asyncio.sleep(0.05)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
 
 def run_failing_pump_on_a_cancelled_hop(monkeypatch: pytest.MonkeyPatch) -> None:
