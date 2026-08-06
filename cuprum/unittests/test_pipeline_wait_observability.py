@@ -42,8 +42,8 @@ class _RecordCase:
     """One completion sequence and the records it must produce."""
 
     stage_count: int
-    completions: list[tuple[int, int]]
-    expected_actions: list[str]
+    completions: tuple[tuple[int, int], ...]
+    expected_actions: tuple[str, ...]
     reason: str
 
 
@@ -107,8 +107,8 @@ class TestCompletionObservability:
             pytest.param(
                 _RecordCase(
                     stage_count=3,
-                    completions=[(1, 0)],
-                    expected_actions=[],
+                    completions=((1, 0),),
+                    expected_actions=(),
                     reason="a successful stage must emit no records",
                 ),
                 id="successful_completion",
@@ -116,8 +116,8 @@ class TestCompletionObservability:
             pytest.param(
                 _RecordCase(
                     stage_count=3,
-                    completions=[(2, 1)],
-                    expected_actions=[_FIRST_FAILURE_ACTION],
+                    completions=((2, 1),),
+                    expected_actions=(_FIRST_FAILURE_ACTION,),
                     reason="a failing final stage must not emit a termination record",
                 ),
                 id="final_stage_failure",
@@ -125,8 +125,8 @@ class TestCompletionObservability:
             pytest.param(
                 _RecordCase(
                     stage_count=1,
-                    completions=[(0, 9)],
-                    expected_actions=[_FIRST_FAILURE_ACTION],
+                    completions=((0, 9),),
+                    expected_actions=(_FIRST_FAILURE_ACTION,),
                     reason="a single-stage pipeline has no other stage to terminate",
                 ),
                 id="single_stage_failure",
@@ -134,12 +134,12 @@ class TestCompletionObservability:
             pytest.param(
                 _RecordCase(
                     stage_count=4,
-                    completions=[(0, 1), (1, 1)],
-                    expected_actions=[
+                    completions=((0, 1), (1, 1)),
+                    expected_actions=(
                         _FIRST_FAILURE_ACTION,
                         _TERMINATION_ACTION,
                         _TERMINATED_ACTION,
-                    ],
+                    ),
                     reason="fail-fast reporting must fire exactly once per pipeline",
                 ),
                 id="later_failure_after_latch",
@@ -158,11 +158,11 @@ class TestCompletionObservability:
             caplog,
             CompletionPlan(
                 stage_count=case.stage_count,
-                completions=case.completions,
+                completions=list(case.completions),
             ),
         )
 
-        assert record_actions(records) == case.expected_actions, case.reason
+        assert tuple(record_actions(records)) == case.expected_actions, case.reason
 
     def test_a_completion_timed_before_its_start_reports_zero(
         self,
