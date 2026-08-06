@@ -281,17 +281,24 @@ def test_paused_reader_undoes_a_half_applied_pause() -> None:
     )
 
 
-def _raise_oserror(**_kwargs: object) -> tuple[bool, bool]:
-    """Stand in for ``_set_stream_fds_blocking`` failing to toggle a FD."""
-    msg = "cannot switch descriptor to blocking mode"
-    raise OSError(msg)
-
-
+@pytest.mark.parametrize("fault_error", [OSError, ValueError])
 def test_run_rust_pump_falls_back_and_resumes_when_blocking_fails(
     monkeypatch: pytest.MonkeyPatch,
+    fault_error: type[OSError] | type[ValueError],
 ) -> None:
-    """A blocking-toggle failure returns the Python-fallback signal and resumes."""
+    """A blocking-toggle failure returns the Python-fallback signal and resumes.
+
+    Both halves of ``_pump_over_raw_fds``' catch are driven: ``os.set_blocking``
+    reports a closed descriptor as ``ValueError`` and a bad one as ``OSError``,
+    so a fallback that only survived the latter would still crash a hop the
+    Python pump could have carried.
+    """
     resume_calls = {"count": 0}
+
+    def raise_blocking_error(**_kwargs: object) -> tuple[bool, bool]:
+        """Fail the blocking-mode hand-off as the chosen fault class."""
+        msg = "cannot switch descriptor to blocking mode"
+        raise fault_error(msg)
 
     def fake_pause_reader_transport(
         reader: asyncio.StreamReader,
@@ -326,7 +333,7 @@ def test_run_rust_pump_falls_back_and_resumes_when_blocking_fails(
     monkeypatch.setattr(
         _pipeline_stream_fds,
         "_set_stream_fds_blocking",
-        _raise_oserror,
+        raise_blocking_error,
     )
 
     reader = typ.cast("asyncio.StreamReader", object())
