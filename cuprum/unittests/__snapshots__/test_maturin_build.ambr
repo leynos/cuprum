@@ -214,6 +214,7 @@
       'cuprum/unittests/test_tee_profile_worker_core.py',
       'cuprum/unittests/test_tee_profile_worker_selector_metrics.py',
       'cuprum/unittests/test_tee_profile_worker_selector_reentrancy.py',
+      'cuprum/unittests/test_timeout_capture_contract.py',
       'cuprum/unittests/test_timeout_resolution.py',
       'cuprum/unittests/test_timeout_telemetry_pairing.py',
       'cuprum/unittests/test_token_registration_stateful.py',

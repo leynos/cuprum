@@ -137,6 +137,7 @@ def test_teardown_drain_failure_emits_observe_event() -> None:
 
         await _drain_stream_consumers(
             (consumer, completed),
+            capture=False,
             pid=5678,
             observation=typ.cast("_StageObservation", observation),
         )

@@ -161,7 +161,11 @@ async def _run_subprocess_with_streams(
         # otherwise abandon the consumers mid-drain and leak them.
         stdout_text, stderr_text = await _shielded_cleanup(
             _reconcile_run_tasks(
-                stdin_task, consumers, pid=pid, observation=execution.observation
+                stdin_task,
+                consumers,
+                pid=pid,
+                observation=execution.observation,
+                capture=execution.capture,
             )
         )
         _handle_stream_timeout(
@@ -179,7 +183,11 @@ async def _run_subprocess_with_streams(
         # arriving *during* that reconciliation cannot cut it short either.
         await _shielded_cleanup(
             _reconcile_run_tasks(
-                stdin_task, consumers, pid=pid, observation=execution.observation
+                stdin_task,
+                consumers,
+                pid=pid,
+                observation=execution.observation,
+                capture=False,
             )
         )
         raise
@@ -194,7 +202,10 @@ async def _run_subprocess_with_streams(
             # has already settled here, so only the consumers need draining.
             await _shielded_cleanup(
                 _drain_stream_consumers(
-                    consumers, pid=pid, observation=execution.observation
+                    consumers,
+                    pid=pid,
+                    observation=execution.observation,
+                    capture=False,
                 )
             )
             raise
@@ -208,7 +219,10 @@ async def _run_subprocess_with_streams(
         # propagating — and here the consumer failure *is* that error.
         await _shielded_cleanup(
             _drain_stream_consumers(
-                consumers, pid=pid, observation=execution.observation
+                consumers,
+                pid=pid,
+                observation=execution.observation,
+                capture=False,
             )
         )
         raise

@@ -361,7 +361,7 @@ async def _drain_while_raising(
     try:
         raise primary
     finally:
-        await _drain_stream_consumers(consumers)
+        await _drain_stream_consumers(consumers, capture=False)
 
 
 class TestConsumerDrainProperties:
@@ -393,7 +393,9 @@ class TestConsumerDrainProperties:
             # consumers have settled so "completed" means what it says.
             for _ in range(4):
                 await asyncio.sleep(0)
-            stdout_text, stderr_text = await _drain_stream_consumers(consumers)
+            stdout_text, stderr_text = await _drain_stream_consumers(
+                consumers, capture=False
+            )
 
             for task, kind, value in (
                 (consumers[0], stdout_kind, stdout_text),

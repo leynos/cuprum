@@ -192,6 +192,7 @@ class TestSingleCommandRun:
         async def gated_drain(
             consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
             *,
+            capture: bool,
             pid: int | None = None,
             observation: _StageObservation | None = None,
         ) -> tuple[str | None, str | None]:
@@ -199,7 +200,12 @@ class TestSingleCommandRun:
             observed["consumers"] = consumers
             gate.entered.set()
             await gate.release.wait()
-            return await real_drain(consumers, pid=pid, observation=observation)
+            return await real_drain(
+                consumers,
+                capture=capture,
+                pid=pid,
+                observation=observation,
+            )
 
         monkeypatch.setattr(_subprocess_wait, "_drain_stream_consumers", gated_drain)
 

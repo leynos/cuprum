@@ -156,7 +156,7 @@ def test_teardown_drain_failure_logs_diagnostic(
         # CancelledError during the drain.
         await asyncio.sleep(0)
 
-        await _drain_stream_consumers((consumer, completed), pid=5678)
+        await _drain_stream_consumers((consumer, completed), capture=False, pid=5678)
 
     with caplog.at_level(logging.ERROR, logger=_TIMEOUT_LOGGER):
         asyncio.run(run_case())

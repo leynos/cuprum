@@ -80,6 +80,12 @@
 
 ### Fixed
 
+- **Partial capture on timeout:** A capturing `run()` or `run_sync()` that times
+  out now reports text for both streams, preserving partial output when readers
+  have not yet observed EOF. The bounded drain grace avoids dependence on
+  event-loop scheduling while leaving non-capturing teardown prompt
+  ([#292](https://github.com/leynos/cuprum/issues/292)).
+
 - **Repeated cancellation during teardown:** Repeated cancellation arriving
   during timeout or fail-fast teardown no longer strands a `SIGTERM`-immune
   child process; the shielded teardown wait is now retried until it
