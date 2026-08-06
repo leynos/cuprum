@@ -11,7 +11,7 @@ differences are the point:
 - logging renders them into a message an operator can read at ``WARNING``.
 
 The adapters' fallback contracts are asserted alongside, because adding a
-recognised phase must not soften the handling of an unrecognised one.
+recognized phase must not soften the handling of an unrecognized one.
 """
 
 from __future__ import annotations
@@ -127,12 +127,12 @@ class TestMetricsFailFast:
             f"no identifying field may appear as a label value, found {labels!r}"
         )
 
-    def test_an_unrecognised_phase_still_raises(self) -> None:
-        """Adding a recognised phase must not soften the fail-closed default.
+    def test_an_unrecognized_phase_still_raises(self) -> None:
+        """Adding a recognized phase must not soften the fail-closed default.
 
         The metrics hook rejects phases it has no semantics for, so a phase
         added to the event contract without a metrics decision is caught rather
-        than silently uncounted. Recognising ``pipeline_fail_fast`` must not
+        than silently uncounted. Recognizing ``pipeline_fail_fast`` must not
         turn that into a catch-all that accepts anything.
         """
         hook = MetricsHook(InMemoryMetrics())

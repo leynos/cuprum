@@ -2,7 +2,7 @@
 
 ``TracingHook`` holds its lifecycle lock only across the active-span map, never
 across a ``Span`` callback: an arbitrary ``Span`` may block on I/O in
-``set_status``/``end``, and holding the lock across that would serialise every
+``set_status``/``end``, and holding the lock across that would serialize every
 other execution's handlers. Both tests here park a ``Span.end`` and assert what
 must still happen while it is parked.
 
@@ -218,7 +218,7 @@ class TestTracingSpanConcurrency:
         """A parked ``Span.end`` must not block another execution's fail-fast.
 
         ``_handle_exit`` ends its span outside the lifecycle lock precisely so
-        that an arbitrary backend blocking in ``end()`` cannot serialise every
+        that an arbitrary backend blocking in ``end()`` cannot serialize every
         other execution's handler. Holding the lock across the pop and the end
         would leave the fail-fast lookup — which takes the same lock — parked
         behind it until the backend returned.

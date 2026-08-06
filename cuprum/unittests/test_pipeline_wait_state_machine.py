@@ -34,7 +34,7 @@ class _PipelineCompletionMachine(RuleBasedStateMachine):
     """Drive random stage-completion orders through the pure transition."""
 
     def __init__(self) -> None:
-        """Start with no pipeline; ``setup`` initialises one per example."""
+        """Start with no pipeline; ``setup`` initializes one per example."""
         super().__init__()
         self._state: _PipelineWaitState | None = None
         self._stage_count = 0
