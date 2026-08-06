@@ -38,7 +38,6 @@ from tests.helpers.timeouts import (
 )
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     from pathlib import Path
 
     from cuprum.events import ExecEvent
@@ -169,6 +168,7 @@ class _SigtermImmuneProcess:
         self.pid = 9101
         self.terminated = False
         self.killed = False
+        self.terminate_signalled = asyncio.Event()
         self._exited = asyncio.Event()
 
     async def wait(self) -> int:
@@ -179,6 +179,7 @@ class _SigtermImmuneProcess:
     def terminate(self) -> None:
         """Record the signal without exiting, as a SIGTERM-immune child would."""
         self.terminated = True
+        self.terminate_signalled.set()
 
     def kill(self) -> None:
         """Record the escalation and exit."""
@@ -215,6 +216,48 @@ def test_timeout_teardown_completes_despite_caller_cancellation() -> None:
         assert process.killed, (
             "the SIGKILL escalation must complete before the cancellation "
             "propagates, otherwise a SIGTERM-immune stage outlives the run"
+        )
+        assert process.returncode == -9, (
+            f"the stage must be reaped, got returncode={process.returncode!r}"
+        )
+
+    asyncio.run(run_case())
+
+
+def test_timeout_teardown_survives_repeated_cancellation() -> None:
+    """A second cancellation during the grace period must not strand a stage.
+
+    Cancelling a task propagates to whatever future it is awaiting, so a
+    further ``cancel()`` landing while teardown is being waited out would
+    cancel the teardown itself and skip the ``SIGKILL`` escalation. The wait is
+    therefore retried under a shield until it completes, however many
+    cancellations arrive.
+    """
+
+    async def run_case() -> None:
+        """Cancel twice inside the grace window and inspect the stage."""
+        process = _SigtermImmuneProcess()
+        task = asyncio.create_task(
+            _terminate_timed_out_stages(
+                [typ.cast("asyncio.subprocess.Process", process)], 0.2
+            )
+        )
+        # Wait for the initial signal to land, so both cancellations fall
+        # inside the grace-period wait rather than before teardown starts.
+        await process.terminate_signalled.wait()
+        task.cancel()
+        # Let the first cancellation be delivered and the retry loop re-enter
+        # its shielded wait before the second one arrives.
+        for _ in range(4):
+            await asyncio.sleep(0)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert process.killed, (
+            "the SIGKILL escalation must complete even when a second "
+            "cancellation lands during the grace-period wait"
         )
         assert process.returncode == -9, (
             f"the stage must be reaped, got returncode={process.returncode!r}"

@@ -71,9 +71,20 @@ async def _await_teardown_shielded(
 
     The cancellation is held until teardown finishes and then re-raised,
     mirroring the ``asyncio.shield`` cleanup in
-    ``cuprum.sh._execute_with_hooks``. A second cancellation arriving during
-    that wait is suppressed rather than allowed to strand a process: the
-    teardown task is independent and completes regardless.
+    ``cuprum.sh._execute_with_hooks``.
+
+    Every wait is shielded, including the retries. Awaiting the task directly
+    would not do: cancelling a task propagates to whatever future it is
+    blocked on, so a further ``cancel()`` landing on a bare ``await
+    termination`` would cancel the teardown itself — and ``gather`` passes
+    that on to each ``_terminate_process``, skipping the ``SIGKILL``
+    escalation and the reap. The loop therefore re-enters the shielded wait
+    until the task reports done, absorbing however many cancellations arrive,
+    and only then re-raises.
+
+    Termination always settles — it escalates to ``SIGKILL`` and awaits the
+    exit — so the loop is bounded by the grace period rather than by the
+    caller's patience.
 
     Failures are absorbed — every caller runs this while another exception is
     already propagating, and teardown must not replace it.
@@ -84,8 +95,9 @@ async def _await_teardown_shielded(
     try:
         await asyncio.shield(termination)
     except asyncio.CancelledError:
-        with contextlib.suppress(asyncio.CancelledError):
-            await termination
+        while not termination.done():
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(termination)
         raise
 
 
@@ -104,9 +116,9 @@ async def _terminate_all_shielded(
 
     The cancellation is held until termination finishes and then re-raised,
     mirroring the ``asyncio.shield`` cleanup in
-    ``cuprum.sh._execute_with_hooks``. A second cancellation arriving during
-    that wait is suppressed rather than allowed to strand a process: the
-    termination task is independent and completes regardless.
+    ``cuprum.sh._execute_with_hooks``. Further cancellations arriving during
+    that wait are absorbed and the shielded wait retried, so no number of them
+    can strand a process — see :func:`_await_teardown_shielded`.
 
     Failures are absorbed — every caller runs this while another exception is
     already propagating, and teardown must not replace it.

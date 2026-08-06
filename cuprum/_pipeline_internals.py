@@ -155,7 +155,17 @@ async def _collect_pipeline_inputs(
     spawn: _PipelineSpawnResult,
     config: _PipelineRunConfig,
 ) -> _PipelineStageResultInputs:
-    """Await pipeline completion and collect outputs, mapping timeouts."""
+    """Await pipeline completion and collect outputs, mapping timeouts.
+
+    The inter-stage pumps are owned here, so they are reconciled in a
+    ``finally`` that covers every exit: success, the deadline path, caller
+    cancellation, and the non-positive deadline that cancels
+    :func:`_wait_for_pipeline` before its own ``finally`` can run. The timeout
+    branch still reconciles explicitly, because the pumps must reach EOF after
+    the stages are terminated but *before* the outputs are gathered;
+    :func:`_reconcile_pipe_tasks` is safe to run twice, so the ``finally`` is a
+    no-op once that has happened.
+    """
     timeout = config.timeout
     timeout_deadline: float | None = None
     if timeout is not None:
@@ -188,6 +198,8 @@ async def _collect_pipeline_inputs(
             capture=config.capture,
         )
         raise _build_timeout_expired_error(parts, timeout, outputs) from exc
+    finally:
+        await _reconcile_pipe_tasks(pipe_tasks)
 
 
 def _build_pipeline_observations(

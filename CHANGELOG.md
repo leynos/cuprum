@@ -25,6 +25,14 @@
   and telemetry failures cannot mask `TimeoutExpired` or `CancelledError`
   ([#271](https://github.com/leynos/cuprum/pull/271)).
 
+### Fixed
+
+- **Repeated cancellation during teardown:** Repeated cancellation arriving
+  during timeout or fail-fast teardown no longer strands a `SIGTERM`-immune
+  child process; the shielded teardown wait is now retried until it
+  completes, so the `SIGKILL` escalation and reap always run
+  ([#271](https://github.com/leynos/cuprum/pull/271)).
+
 ## [0.2.0] - 2026-06-21
 
 ### Changed

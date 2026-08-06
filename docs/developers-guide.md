@@ -2450,6 +2450,17 @@ shielding, a cancellation landing in the grace-period wait would skip the
 `_terminate_pipeline_remaining_stages` uses the shared
 `_await_teardown_shielded` helper directly.
 
+`_await_teardown_shielded` retries the shielded wait in a loop rather than
+awaiting the teardown task once: cancelling a task propagates to whatever
+future it is blocked on, so a second cancellation landing on a bare
+`await termination` would cancel the teardown itself, and `asyncio.gather`
+would pass that on to each `_terminate_process`, again skipping the
+`SIGKILL` escalation and leaving a `SIGTERM`-immune child alive. The loop
+re-enters `asyncio.shield(termination)` until the task reports done, so
+every wait — including the retries — stays shielded, and it terminates
+because the termination always settles, bounding it by the grace period
+rather than by the caller's patience.
+
 The inter-stage pump tasks, created by `_create_pipe_tasks`, are created and
 owned by `_collect_pipeline_inputs` rather than by `_wait_for_pipeline`. This
 matters because a non-positive deadline gives `asyncio.wait_for` a zero
