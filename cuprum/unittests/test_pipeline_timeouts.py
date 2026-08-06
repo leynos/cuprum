@@ -2,7 +2,8 @@
 
 Kept apart from ``test_pipeline`` so that module stays about composition and
 streaming: these exercise a different concern — what a caller sees when a
-deadline expires, and what survives when the caller cancels mid-teardown.
+deadline expires. Cancellation arriving during the resulting teardown is its
+own concern and lives in ``test_pipeline_teardown_cancellation``.
 
 The public-boundary cases have single-command counterparts in
 ``test_safe_cmd_run``; the property-level invariants live in
@@ -22,18 +23,13 @@ from unittest import mock
 import pytest
 
 from cuprum import ScopeConfig, TimeoutExpired, _pipeline_internals, scoped, sh
-from cuprum._process_lifecycle import (
-    _terminate_pipeline_remaining_stages,
-    _terminate_timed_out_stages,
-)
-from cuprum.sh import ExecutionContext, Pipeline, RunOutputOptions
+from cuprum.sh import Pipeline, RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.execution import _RunKwargs
 from tests.helpers.timeouts import (
     child_argv,
     pending_tasks,
     started_pids,
-    stubborn_child_argv,
     wait_for_process_death,
 )
 
@@ -155,177 +151,6 @@ def test_pipeline_non_positive_timeout_at_public_boundary(
         assert expired.stderr is None, (
             f"a non-capturing pipeline must leave stderr unset, got {detail}"
         )
-
-
-# -- Cancellation during post-timeout teardown --------------------------------
-
-
-class _SigtermImmuneProcess:
-    """Process double that ignores ``terminate()``; only ``kill()`` ends it."""
-
-    def __init__(self) -> None:
-        """Start unexited, recording which signals were delivered."""
-        self.returncode: int | None = None
-        self.pid = 9101
-        self.terminated = False
-        self.killed = False
-        self._exited = asyncio.Event()
-
-    async def wait(self) -> int:
-        """Block until ``kill()`` records an exit code."""
-        await self._exited.wait()
-        return self.returncode if self.returncode is not None else 0
-
-    def terminate(self) -> None:
-        """Record the signal without exiting, as a SIGTERM-immune child would."""
-        self.terminated = True
-
-    def kill(self) -> None:
-        """Record the escalation and exit."""
-        self.killed = True
-        self.returncode = -9
-        self._exited.set()
-
-
-def test_timeout_teardown_completes_despite_caller_cancellation() -> None:
-    """Cancelling mid-grace must not strand a stage before the SIGKILL escalation.
-
-    ``terminate()`` is synchronous and always lands, but the escalation waits
-    out ``cancel_grace`` first. If the caller's cancellation interrupted that
-    wait, a stage ignoring ``SIGTERM`` would survive the run that spawned it.
-    Teardown is therefore shielded and finishes before the cancellation
-    propagates.
-    """
-
-    async def run_case() -> None:
-        """Cancel the teardown inside its grace window and inspect the stage."""
-        process = _SigtermImmuneProcess()
-        task = asyncio.create_task(
-            _terminate_timed_out_stages(
-                [typ.cast("asyncio.subprocess.Process", process)], 0.2
-            )
-        )
-        await asyncio.sleep(0.02)
-        task.cancel()
-
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        assert process.terminated, "teardown must still deliver the initial signal"
-        assert process.killed, (
-            "the SIGKILL escalation must complete before the cancellation "
-            "propagates, otherwise a SIGTERM-immune stage outlives the run"
-        )
-        assert process.returncode == -9, (
-            f"the stage must be reaped, got returncode={process.returncode!r}"
-        )
-
-    asyncio.run(run_case())
-
-
-def test_pipeline_run_cancelled_during_grace_still_reaps_stages(
-    tmp_path: Path,
-) -> None:
-    """Cancelling ``Pipeline.run()`` mid-teardown still leaves no stage running.
-
-    The end-to-end counterpart of the helper test above: a real first stage
-    ignores ``SIGTERM``, so only the escalation can reap it. Cancellation is
-    issued once the child has confirmed its handler is installed, so the test
-    does not race interpreter start-up.
-    """
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-    marker = tmp_path / "immune"
-    pipeline = python(*stubborn_child_argv(marker)) | python(
-        "-c", "import sys; sys.stdin.read()"
-    )
-    events: list[ExecEvent] = []
-
-    async def run_case() -> None:
-        """Time out, then cancel while the grace period is still running."""
-        ctx = ExecutionContext(cancel_grace=1.0)
-        task = asyncio.create_task(
-            pipeline.run(
-                timeout=0.05, output=RunOutputOptions(capture=False), context=ctx
-            )
-        )
-        # ASYNC110: the readiness signal is a file written by another process,
-        # which no asyncio.Event can observe. Polling it is the coordination,
-        # and it is bounded by the child writing the marker at start-up.
-        while not marker.exists():  # noqa: ASYNC110
-            await asyncio.sleep(0.01)
-        await asyncio.sleep(0.15)
-        task.cancel()
-        with contextlib.suppress(BaseException):
-            await task
-
-    with (
-        scoped(ScopeConfig(allowlist=frozenset([python_program]))),
-        sh.observe(events.append),
-    ):
-        asyncio.run(run_case())
-
-    pids = started_pids(events)
-    assert pids, "the pipeline must report at least the first stage's pid"
-    for pid in pids:
-        wait_for_process_death(pid, context="cancellation during timeout teardown")
-
-
-# -- Cancellation during fail-fast teardown -----------------------------------
-
-
-def test_fail_fast_teardown_completes_despite_caller_cancellation() -> None:
-    """Fail-fast teardown is shielded like the timeout path.
-
-    ``_terminate_pipeline_remaining_stages`` tears down the surviving stages
-    after one exits non-zero. It runs inside the pipeline wait loop, so a
-    caller cancelling the run can land on its grace-period wait; without the
-    shield the ``SIGKILL`` escalation would be skipped and a ``SIGTERM``-immune
-    stage would outlive the pipeline.
-    """
-
-    async def run_case() -> None:
-        """Cancel fail-fast teardown mid-grace and inspect the surviving stage."""
-        failed = _SigtermImmuneProcess()
-        failed.returncode = 1
-        survivor = _SigtermImmuneProcess()
-        wait_tasks = [
-            asyncio.create_task(_settled(1)),
-            asyncio.create_task(survivor.wait()),
-        ]
-        await asyncio.sleep(0)
-
-        task = asyncio.create_task(
-            _terminate_pipeline_remaining_stages(
-                [
-                    typ.cast("asyncio.subprocess.Process", failed),
-                    typ.cast("asyncio.subprocess.Process", survivor),
-                ],
-                wait_tasks,
-                0,
-                cancel_grace=0.2,
-            )
-        )
-        await asyncio.sleep(0.02)
-        task.cancel()
-
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        assert survivor.killed, (
-            "the SIGKILL escalation must complete before the cancellation "
-            "propagates, otherwise a SIGTERM-immune stage outlives the pipeline"
-        )
-        for wait_task in wait_tasks:
-            wait_task.cancel()
-
-    asyncio.run(run_case())
-
-
-async def _settled(code: int) -> int:
-    """Yield once, then return ``code``, standing in for an exited stage."""
-    await asyncio.sleep(0)
-    return code
 
 
 # -- Inter-stage pump ownership on the immediate path -------------------------

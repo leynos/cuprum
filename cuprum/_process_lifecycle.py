@@ -23,8 +23,8 @@ Both routes escalate alike — ``SIGTERM``, a grace period, then ``SIGKILL`` and
 a final reap — inside a shielded, independently owned task. ``terminate()`` is
 synchronous but the grace-period wait is not, so a caller cancelling mid-grace
 would land its cancellation on that wait: the escalation and reap would never
-run, and a process ignoring ``SIGTERM`` would survive the run that spawned it.
-The cancellation is instead held until teardown completes, then re-raised.
+run, and a process ignoring ``SIGTERM`` would survive the run that spawned
+it. Cancellations, however many arrive, are held until teardown completes.
 
 The division of labour with ``cuprum._pipeline_wait`` is deliberate: that
 module decides whether and when a pipeline should be torn down, while this one
@@ -36,7 +36,6 @@ escalation policy be changed without touching the waiter.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 import typing as typ
 
@@ -96,25 +95,30 @@ async def _await_teardown_shielded(
 ) -> None:
     """Run ``teardowns`` to completion, holding off caller cancellation.
 
-    This is the single implementation of the shielded teardown the module
-    docstring describes; every termination route funnels through it. The
-    shielding mirrors the ``asyncio.shield`` cleanup in
-    ``cuprum.sh._execute_with_hooks``. A second cancellation arriving while the
-    held one is pending is suppressed rather than allowed to strand a process:
-    the teardown task is independent and completes regardless.
-
-    Failures are absorbed — every caller runs this while another exception is
-    already propagating, and teardown must not replace it.
+    Every termination route funnels through here. Each cancellation is
+    recorded and the wait resumed behind a *fresh* ``asyncio.shield``: a
+    shield protects only the await it wraps, so re-awaiting the teardown bare
+    would let the next cancellation into the ``SIGTERM``/grace/``SIGKILL``
+    escalation itself. Only the teardown's own completion ends the loop, so it
+    runs to the end however many cancellations arrive; the first is re-raised,
+    so the caller still sees one. (``cuprum.sh._execute_with_hooks`` shields
+    once rather than in a loop; it drains bookkeeping tasks, not process
+    lifetimes, so a second cancellation there orphans nothing.) Failures are
+    absorbed — every caller runs this while another exception is already
+    propagating, and teardown must not replace it.
     """
     termination = asyncio.ensure_future(
         asyncio.gather(*teardowns, return_exceptions=True)
     )
-    try:
-        await asyncio.shield(termination)
-    except asyncio.CancelledError:
-        with contextlib.suppress(asyncio.CancelledError):
-            await termination
-        raise
+    first_cancellation: asyncio.CancelledError | None = None
+    while not termination.done():
+        try:
+            await asyncio.shield(termination)
+        except asyncio.CancelledError as exc:
+            if first_cancellation is None:
+                first_cancellation = exc
+    if first_cancellation is not None:
+        raise first_cancellation
 
 
 async def _terminate_all_shielded(

@@ -116,6 +116,7 @@
       'cuprum/unittests/test_pipeline_fail_fast_wiring.py',
       'cuprum/unittests/test_pipeline_output_options.py',
       'cuprum/unittests/test_pipeline_stream_backend_selection.py',
+      'cuprum/unittests/test_pipeline_teardown_cancellation.py',
       'cuprum/unittests/test_pipeline_timeouts.py',
       'cuprum/unittests/test_pipeline_wait_async.py',
       'cuprum/unittests/test_pipeline_wait_correlation.py',

@@ -29,6 +29,15 @@
   `cuprum.context.ExecHook` re-export has been removed; only the import path
   changes, not the hook signature or registration behaviour.
 
+### Fixed
+
+- **Stage teardown survives repeated cancellation:** A second cancellation
+  delivered while a pipeline was already being torn down could interrupt the
+  `SIGTERM`/grace/`SIGKILL` escalation itself, leaving a `SIGTERM`-immune stage
+  running after the call returned. Teardown is now resumed behind a fresh
+  shield after every cancellation, so it completes however many arrive, and the
+  first cancellation is re-raised to the caller.
+
 ## [0.2.0] - 2026-06-21
 
 ### Changed
