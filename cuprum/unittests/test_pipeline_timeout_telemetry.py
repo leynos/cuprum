@@ -185,9 +185,73 @@ def test_pipeline_timeout_emits_terminal_exit_events() -> None:
         ev.pid for ev in events if ev.phase == "start"
     }, "the exit events must cover exactly the stages that started"
 
-    phases = [ev.phase for ev in events]
-    assert phases.index("timeout") < phases.index("exit"), (
-        f"timeout must precede the exit it accompanies, got {phases}"
+    # Per stage, not globally: `phases.index` reports only the *first*
+    # occurrence in the whole stream, so with two stages it would compare one
+    # stage's timeout against the other's exit and accept an interleaving in
+    # which a stage reported its exit before its own timeout.
+    by_pid: dict[int | None, list[str]] = {}
+    for event in events:
+        by_pid.setdefault(event.pid, []).append(event.phase)
+
+    timed_out = [(pid, phases) for pid, phases in by_pid.items() if "timeout" in phases]
+    assert timed_out, f"at least one stage must report a timeout, got {by_pid}"
+    for pid, phases in timed_out:
+        assert "exit" in phases, (
+            f"stage pid={pid} reported a timeout but no exit, got {phases}"
+        )
+        assert phases.index("timeout") < phases.index("exit"), (
+            f"stage pid={pid} must report its timeout before its own exit, got {phases}"
+        )
+
+
+def test_exit_hook_failure_cannot_mask_the_timeout() -> None:
+    """A hook raising on ``exit`` must not displace ``TimeoutExpired``.
+
+    The terminal ``exit`` events are emitted from inside the runner's
+    ``except TimeoutExpired`` handler. ``_StageObservation.emit`` re-raises a
+    synchronous observe-hook failure, so without a per-stage guard the first
+    stage's failing hook would both replace the ``TimeoutExpired`` the caller
+    is owed and abandon the remaining stages — stranding the open spans the
+    exit events exist to close.
+    """
+    pipeline, allowlist = _sleeping_pipeline()
+    seen: list[ExecEvent] = []
+    tracer = InMemoryTracer()
+
+    def failing_on_exit(ev: ExecEvent) -> None:
+        """Record every event, then fail on each ``exit``."""
+        seen.append(ev)
+        if ev.phase == "exit":
+            msg = "exit hook boom"
+            raise RuntimeError(msg)
+
+    # The tracing hook is registered first deliberately. ``_emit_exec_event``
+    # abandons the hook chain at the first failure, so a hook ordered ahead of
+    # the tracer would stop it seeing the event at all — cross-hook isolation
+    # the library does not offer and this test is not about. What is under test
+    # is per-*stage* isolation: stage two must still emit after stage one's
+    # hook raised.
+    with (
+        scoped(ScopeConfig(allowlist=allowlist)),
+        sh.observe(TracingHook(tracer)),
+        sh.observe(failing_on_exit),
+        pytest.raises(TimeoutExpired) as exc_info,
+    ):
+        pipeline.run_sync(timeout=0.2, output=RunOutputOptions(capture=False))
+
+    assert exc_info.value.timeout == pytest.approx(0.2), (
+        "the hook failure must not replace the TimeoutExpired the caller is owed"
+    )
+    exits = [ev for ev in seen if ev.phase == "exit"]
+    assert len(exits) == _STAGE_COUNT, (
+        f"every stage must still emit exit after an earlier stage's hook "
+        f"failed, got {[(ev.phase, ev.pid) for ev in seen]}"
+    )
+    open_spans = [span.name for span in tracer.spans if not span.ended]
+    assert tracer.spans, "the tracing hook must have opened a span per stage"
+    assert not open_spans, (
+        "a failing hook on one stage must not strand another stage's span, "
+        f"got open spans {open_spans}"
     )
 
 

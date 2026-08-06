@@ -24,6 +24,11 @@
   `start` / `exit` events are unchanged, so no caller has to do anything,
   and telemetry failures cannot mask `TimeoutExpired` or `CancelledError`
   ([#271](https://github.com/leynos/cuprum/pull/271)).
+- A public `TimeoutMode` type alias is exported from `cuprum.events`, naming
+  the two stable `timeout_mode` values (`"elapsed_deadline"` and
+  `"non_positive_immediate"`), and `ExecEvent.timeout_mode` is now annotated
+  with it instead of a bare `str`
+  ([#271](https://github.com/leynos/cuprum/pull/271)).
 
 ### Fixed
 
@@ -31,6 +36,20 @@
   during timeout or fail-fast teardown no longer strands a `SIGTERM`-immune
   child process; the shielded teardown wait is now retried until it
   completes, so the `SIGKILL` escalation and reap always run
+  ([#271](https://github.com/leynos/cuprum/pull/271)).
+- Cleanup now completes before a cancellation arriving mid-cleanup propagates.
+  Stream consumers, the stdin writer, and background observe-hook tasks are
+  reconciled through a shielded, cancellation-resistant wait, so a cancelled
+  run no longer unwinds while the tasks it owns are still live
+  ([#271](https://github.com/leynos/cuprum/pull/271)).
+- An observe hook raising on a pipeline stage's terminal `exit` event during a
+  timeout no longer replaces the `TimeoutExpired` nor stops the remaining
+  stages emitting their `exit` events
+  ([#271](https://github.com/leynos/cuprum/pull/271)).
+- `TracingHook` no longer accumulates span entries for executions that never
+  emit an `exit` event (external cancellation, a stdin-writer failure, or a
+  terminal `teardown_error`); the registry of open spans is now bounded and
+  evicts the oldest, ending it as failed
   ([#271](https://github.com/leynos/cuprum/pull/271)).
 
 ## [0.2.0] - 2026-06-21
