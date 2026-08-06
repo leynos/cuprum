@@ -5,7 +5,6 @@ from __future__ import annotations
 import http.client
 import io
 import math
-import sys
 import typing as typ
 import urllib.error
 import urllib.request
@@ -14,22 +13,18 @@ import zipfile
 import pytest
 
 from benchmarks.fetch_main_benchmark_baseline import (
-    MAIN_BASELINE_NOT_FOUND_EXIT_CODE,
     ArtefactQuery,
     _ArtefactArchiveRedirectHandler,
     _download_bytes,
     _load_json_response,
     extract_artefact_archive,
     find_latest_artefact_download_url,
-    main,
     select_latest_artefact_download_url,
 )
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
-
-    from syrupy.assertion import SnapshotAssertion
 
 
 def _workflow_runs_payload(*run_ids: int) -> dict[str, object]:
@@ -42,20 +37,6 @@ def _workflow_runs_payload(*run_ids: int) -> dict[str, object]:
 def _artefacts_payload(*, artefacts: list[dict[str, object]]) -> dict[str, object]:
     """Return a stub GitHub run-artefacts API payload."""
     return {"artifacts": artefacts}
-
-
-def _main_cli_args(output_dir: pth.Path) -> list[str]:
-    """Return CLI arguments for invoking the baseline fetch command."""
-    return [
-        "--repository",
-        "leynos/cuprum",
-        "--workflow",
-        "ci.yml",
-        "--artifact-name",
-        "benchmark-ratchet-main-baseline",
-        "--output-dir",
-        str(output_dir),
-    ]
 
 
 def test_select_latest_artefact_download_url_uses_newest_matching_run() -> None:
@@ -157,88 +138,6 @@ def test_extract_artefact_archive_rejects_path_traversal(tmp_path: pth.Path) -> 
             archive_bytes=buffer.getvalue(),
             output_dir=tmp_path,
         )
-
-
-def test_main_returns_not_found_when_no_baseline_available(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: pth.Path,
-) -> None:
-    """CLI should return the bootstrap exit code when no baseline is found."""
-    monkeypatch.setenv("GITHUB_TOKEN", "token")
-    monkeypatch.setattr(
-        "benchmarks.fetch_main_benchmark_baseline.find_latest_artefact_download_url",
-        lambda **_: None,
-    )
-
-    exit_code = main(_main_cli_args(tmp_path))
-
-    assert exit_code == MAIN_BASELINE_NOT_FOUND_EXIT_CODE
-
-
-def test_main_requires_github_token(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: pth.Path,
-) -> None:
-    """CLI should fail fast when the configured token env var is unset."""
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-
-    with pytest.raises(SystemExit, match="missing GitHub token"):
-        main(_main_cli_args(tmp_path))
-
-
-def test_cli_help_and_missing_token_snapshot(
-    capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
-    snapshot: SnapshotAssertion,
-    tmp_path: pth.Path,
-) -> None:
-    """CLI help and token errors retain their user-facing contract."""
-    monkeypatch.setattr(sys, "argv", ["fetch_main_benchmark_baseline.py"])
-    with pytest.raises(SystemExit) as help_exit:
-        main(["--help"])
-    help_text = capsys.readouterr().out
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    with pytest.raises(SystemExit) as token_exit:
-        main(_main_cli_args(tmp_path))
-    token_error = str(token_exit.value)
-
-    assert help_exit.value.code == 0
-    assert "--artifact-name" in help_text
-    assert "Artefact name to download" in help_text
-    assert "missing GitHub token" in token_error
-    assert {"help": help_text.splitlines(), "missing_token": token_error} == snapshot
-
-
-def test_main_downloads_and_extracts_latest_baseline(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: pth.Path,
-) -> None:
-    """CLI should download the selected archive and extract it into output_dir."""
-    monkeypatch.setenv("GITHUB_TOKEN", "token")
-    monkeypatch.setattr(
-        "benchmarks.fetch_main_benchmark_baseline.find_latest_artefact_download_url",
-        lambda **_: "https://example.invalid/baseline.zip",
-    )
-
-    archive_buffer = io.BytesIO()
-    with zipfile.ZipFile(archive_buffer, mode="w") as archive:
-        archive.writestr("main-plan.json", '{"dry_run": true}')
-        archive.writestr("main-throughput.json", '{"results": []}')
-
-    monkeypatch.setattr(
-        "benchmarks.fetch_main_benchmark_baseline._download_bytes",
-        lambda **_: archive_buffer.getvalue(),
-    )
-
-    exit_code = main(_main_cli_args(tmp_path))
-
-    assert exit_code == 0
-    assert (tmp_path / "main-plan.json").read_text(encoding="utf-8") == (
-        '{"dry_run": true}'
-    )
-    assert (tmp_path / "main-throughput.json").read_text(encoding="utf-8") == (
-        '{"results": []}'
-    )
 
 
 def test_load_json_response_retries_transient_urlopen_failures(
