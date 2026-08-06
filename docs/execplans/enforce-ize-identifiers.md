@@ -108,7 +108,7 @@ continuing.
 Update `AGENTS.md` so identifiers, comments, docstrings, and source prose are
 explicitly governed while external APIs remain exempt. Update the generated
 configuration note and the developers' guide with the source scope and narrow
-exception workflow. Add ADR-008 using the established ADR structure and index
+exception workflow. Add ADR-009 using the established ADR structure and index
 it in `docs/contents.md` and the developers' guide. Add an Unreleased Changed
 entry to `CHANGELOG.md` with the issue/PR convention used by the file. Run
 formatting, Markdown spelling/lint, Nixie, and the complete applicable gate
@@ -161,7 +161,7 @@ The final widened `spelling` target must report no unapproved source spelling.
   corpus, preserved GitHub wire/CLI names through anchored exceptions, and
   passed the full repository gate stack.
 - [x] 2026-07-30: Milestone 3 made the source/identifier policy explicit,
-  documented narrow exception handling, added and indexed ADR-008, added the
+  documented narrow exception handling, added and indexed ADR-009, added the
   Unreleased changelog entry, and passed the full repository gate stack.
 - [x] 2026-07-30: Milestone 4 audited the complete branch, confirmed all three
   CodeRabbit reviews had zero findings, renamed and pushed the exact requested
@@ -212,7 +212,7 @@ The final widened `spelling` target must report no unapproved source spelling.
 The branch delivered the policy in three atomic implementation commits:
 `1b99b19` normalized the twelve internal identifiers, `750342b` widened the
 gate and corrected the full source corpus, and `cf3da0b` recorded the policy in
-ADR-008 and contributor documentation. The final gate stack passed at each
+ADR-009 and contributor documentation. The final gate stack passed at each
 milestone, and three foreground `coderabbit review --agent` runs reported zero
 findings.
 

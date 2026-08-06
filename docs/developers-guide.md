@@ -12,7 +12,7 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-005: Unify Rust availability probe](adr-005-unified-rust-availability-probe.md)
 - [ADR-006: Split cuprum/context.py into a context package](adr-006-context-package-split.md)
 - [ADR-007: Subprocess execution module boundaries](adr-007-subprocess-execution-module-boundaries.md)
-- [ADR-008: Enforce Oxford spelling in source](adr-008-enforce-oxford-spelling-in-source.md)
+- [ADR-009: Enforce Oxford spelling in source](adr-009-enforce-oxford-spelling-in-source.md)
 
 ## Rust availability probing
 

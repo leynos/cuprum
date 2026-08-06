@@ -1746,7 +1746,7 @@ should treat it as a set of behavioural contracts and design constraints rather
 than a rigid class diagram, and should favour boring, explicit implementations
 over cleverness—especially in the type‑system and configuration layers.
 
-[ADR-008](adr-008-enforce-oxford-spelling-in-source.md) governs en-GB-oxendict
+[ADR-009](adr-009-enforce-oxford-spelling-in-source.md) governs en-GB-oxendict
 spelling for identifiers and source prose; the repository spelling gate
 enforces that policy.
 

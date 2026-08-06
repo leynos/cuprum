@@ -1,4 +1,4 @@
-# Architectural decision record (ADR) 008: Enforce Oxford spelling in source
+# Architectural decision record (ADR) 009: Enforce Oxford spelling in source
 
 ## Status
 
