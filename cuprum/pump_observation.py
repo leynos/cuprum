@@ -18,10 +18,11 @@ import logging
 import typing as typ
 from contextvars import ContextVar
 
-if typ.TYPE_CHECKING:
-    from contextvars import Token
+from cuprum._token_registration import _TokenRegistrationBase
+from cuprum.pump_events import PumpHook
 
-    from cuprum.pump_events import PumpEvent, PumpHook
+if typ.TYPE_CHECKING:
+    from cuprum.pump_events import PumpEvent
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,52 +53,34 @@ def current_pump_hooks() -> tuple[PumpHook, ...]:
     return _pump_hooks.get()
 
 
-class PumpHookRegistration:
+class PumpHookRegistration(_TokenRegistrationBase[tuple[PumpHook, ...]]):
     """Registration handle for a Rust-pump observation hook.
 
     Supports ``detach()`` and context-manager use. The handle captures a
     :class:`~contextvars.Token` when it installs the extended hook tuple, and
-    :meth:`detach` restores the exact tuple that was current when the handle was
-    created — the same discipline
-    :class:`cuprum.context.registration._TokenRegistration` applies to execution
-    contexts. Detach in the :class:`~contextvars.Context` that created the
+    ``detach`` restores the exact tuple that was current when the handle was
+    created. Detach in the :class:`~contextvars.Context` that created the
     registration; resetting a ``ContextVar`` with a token from another context
     raises :class:`ValueError`.
 
     Prefer ``with`` blocks, which detach in last-in-first-out order; detaching
     out of order restores a tuple that discards later registrations.
+
+    The lifecycle itself comes from
+    :class:`cuprum._token_registration._TokenRegistrationBase`, shared with the
+    execution-context handles in :mod:`cuprum.context.registration`. The base
+    is generic over a bare ``ContextVar``, so sharing it adds no dependency on
+    :mod:`cuprum.context`: this channel still owns its own variable, which is
+    the separation ADR-008 records.
     """
 
-    __slots__ = ("_detached", "_hook", "_token")
+    __slots__ = ("_hook",)
 
     def __init__(self, hook: PumpHook) -> None:
         """Append ``hook`` to the current context's pump hooks."""
+        super().__init__(_pump_hooks)
         self._hook = hook
-        self._detached = False
-        self._token: Token[tuple[PumpHook, ...]] = _pump_hooks.set((
-            *_pump_hooks.get(),
-            hook,
-        ))
-
-    def detach(self) -> None:
-        """Restore the pump hooks that preceded this registration."""
-        if self._detached:
-            return
-        _pump_hooks.reset(self._token)
-        self._detached = True
-
-    def __enter__(self) -> typ.Self:
-        """Enter the context manager; the hook is already registered."""
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Detach the registration on scope exit."""
-        self.detach()
+        self._install((*_pump_hooks.get(), hook))
 
 
 def observe_pump(hook: PumpHook) -> PumpHookRegistration:

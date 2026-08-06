@@ -203,7 +203,8 @@ surface is re-exported from `cuprum/context/__init__.py`:
   hierarchy and its `ForbiddenProgramError` subclass, timeout validation, and
   the before/after hook type aliases.
 - `cuprum/context/state.py` — the `ContextVar` plumbing (`current_context`,
-  `get_context`, and the internal set/reset helpers).
+  `get_context`, the internal set/reset helpers, and the `_context_var()`
+  accessor the shared registration base binds to).
 - `cuprum/context/registration.py` — `scoped`, the `_TokenRegistration`
   base, the registration handles, and the `allow`/`before`/`after`/`env`/
   `observe` factories.
@@ -730,17 +731,32 @@ streams.
 
 ## Canonical `_TokenRegistration` handle base
 
-All `ContextVar`-backed scope-registration handles — `AllowRegistration`,
-`HookRegistration`, and `EnvRegistration` in `cuprum/context/registration.py` —
-derive from one canonical `_TokenRegistration` base. The base owns the `_token`/
-`_detached` pair, the idempotent `detach()`, the context-manager protocol, and
-the `_install(new_ctx)` step that sets the derived context and captures the
-restoration token. Subclasses implement only the context-derivation step in
-`__init__`. The consolidated "Token-based Restoration" docstring lives on the
-base.
+The token-restoration lifecycle itself lives in `cuprum/_token_registration.py`
+as `_TokenRegistrationBase[T]`, generic over the value type of a bare
+`ContextVar[T]`. The base owns the `_var`/`_token`/`_detached` triple, the
+idempotent `detach()`, the context-manager protocol, and the
+`_install(new_value)` step that sets the value and captures the restoration
+token. `detach()` marks the handle detached only *after* the reset succeeds, so
+a cross-context detach — which raises `ValueError` — can be retried from the
+owning context instead of stranding the installed value.
 
-Re-use policy: any new scope-registration handle must derive from
-`_TokenRegistration` and confine itself to deriving the new context; the
+That module is deliberately neutral: it imports nothing from `cuprum.context`
+and nothing from the pump modules, so the two channels can share the lifecycle
+without either depending on the other. Two handle families bind it:
+
+- `_TokenRegistration` in `cuprum/context/registration.py` binds it to
+  `CuprumContext` and the execution-context `ContextVar` (reached through the
+  `_context_var()` accessor in `cuprum/context/state.py`, which keeps
+  `_current_context` a single owned definition). `AllowRegistration`,
+  `HookRegistration`, and `EnvRegistration` derive from it and implement only
+  the context-derivation step in `__init__`.
+- `PumpHookRegistration` in `cuprum/pump_observation.py` binds it to
+  `tuple[PumpHook, ...]` and the pump-hook `ContextVar` that channel owns. See
+  ADR-008 for why that variable stays separate from `CuprumContext`.
+
+Re-use policy: any new `ContextVar`-backed registration handle must derive from
+`_TokenRegistrationBase` (via `_TokenRegistration` when it registers against the
+execution context) and confine itself to deriving the new value; the
 restoration protocol is subtle (`ContextVar` token discipline), so a divergent
 copy is a latent correctness hazard. Note that `LoggingHookRegistration`
 (`cuprum/logging_hooks.py`) is a *pair* handle: it composes two

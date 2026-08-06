@@ -114,6 +114,21 @@ execution context unchanged, so the channel cannot alter how an existing
 caller's commands execute. Registration still follows the repository's
 token-restoration discipline.
 
+That discipline is now shared rather than duplicated. `PumpHookRegistration`
+and the execution-context handles had grown two copies of one token lifecycle —
+install, capture the token, restore idempotently on detach, and mark the handle
+detached only after a successful reset so a cross-context failure can be
+retried — where a divergence between the copies would leak a context rather
+than fail visibly. The lifecycle therefore moved to
+`cuprum/_token_registration.py` as `_TokenRegistrationBase[T]`, generic over a
+bare `ContextVar[T]`. The module is neutral by construction: it imports nothing
+from `cuprum.context` and nothing from the pump modules. Sharing it does not
+weaken the separation decided above, because what is shared is the token
+protocol, not the variable — `cuprum.pump_observation` still owns the
+`ContextVar` its hooks live on, and takes on no dependency on `cuprum.context`.
+Deriving from a base defined *inside* `cuprum.context` would have created
+exactly that dependency, which is why the base sits outside both channels.
+
 ### Hook-failure policy
 
 The pump channel reports a failing hook at `WARNING` with its traceback under

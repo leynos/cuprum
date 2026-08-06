@@ -34,6 +34,16 @@ def get_context() -> CuprumContext:
     return current_context()
 
 
+def _context_var() -> ContextVar[CuprumContext]:
+    """Return the ``ContextVar`` holding the active execution context.
+
+    The shared registration base in :mod:`cuprum._token_registration` needs the
+    variable itself rather than the set/reset pair below. An accessor keeps
+    ``_current_context`` a single owned definition that no other module binds.
+    """
+    return _current_context
+
+
 def _set_context(ctx: CuprumContext) -> Token[CuprumContext]:
     """Set the current context and return a token for restoration."""
     return _current_context.set(ctx)

@@ -29,6 +29,7 @@
       'cuprum/_subprocess_stdin.py',
       'cuprum/_subprocess_timeout.py',
       'cuprum/_testing.py',
+      'cuprum/_token_registration.py',
       'cuprum/adapters/__init__.py',
       'cuprum/adapters/_support.py',
       'cuprum/adapters/logging_adapter.py',
