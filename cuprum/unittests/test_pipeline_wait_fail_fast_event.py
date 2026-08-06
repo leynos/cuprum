@@ -32,6 +32,8 @@ from cuprum.unittests._pipeline_wait_support import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum._pipeline_types import _StageObservation
     from cuprum.events import ExecEvent
 
@@ -42,9 +44,9 @@ _FAIL_FAST_PHASE = "pipeline_fail_fast"
 class _Driven:
     """One driven completion sequence and everything it published."""
 
-    events: list[ExecEvent]
+    events: tuple[ExecEvent, ...]
     observations: tuple[_StageObservation, ...]
-    records: list[logging.LogRecord]
+    records: tuple[logging.LogRecord, ...]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -52,7 +54,7 @@ class _SilentCase:
     """One completion sequence that must announce nothing, and why."""
 
     stage_count: int
-    completions: list[tuple[int, int]]
+    completions: tuple[tuple[int, int], ...]
     reason: str
 
 
@@ -61,7 +63,7 @@ def _drive(
     caplog: pytest.LogCaptureFixture,
     *,
     stage_count: int,
-    completions: list[tuple[int, int]],
+    completions: cabc.Sequence[tuple[int, int]],
 ) -> _Driven:
     """Drive completions through the async boundary with a collecting hook."""
     events: list[ExecEvent] = []
@@ -71,16 +73,20 @@ def _drive(
         caplog,
         CompletionPlan(
             stage_count=stage_count,
-            completions=completions,
+            completions=list(completions),
             observations=observations,
         ),
     )
-    return _Driven(events=events, observations=observations, records=records)
+    # Snapshot both collectors: the result is shared with assertions that must
+    # not be able to append to the sequence they are reading.
+    return _Driven(
+        events=tuple(events), observations=observations, records=tuple(records)
+    )
 
 
-def _fail_fast_events(driven: _Driven) -> list[ExecEvent]:
+def _fail_fast_events(driven: _Driven) -> tuple[ExecEvent, ...]:
     """Return only the fail-fast events from a driven sequence."""
-    return [event for event in driven.events if event.phase == _FAIL_FAST_PHASE]
+    return tuple(event for event in driven.events if event.phase == _FAIL_FAST_PHASE)
 
 
 class TestFailFastEventEmission:
@@ -179,7 +185,7 @@ class TestFailFastEventEmission:
             pytest.param(
                 _SilentCase(
                     stage_count=3,
-                    completions=[(1, 0)],
+                    completions=((1, 0),),
                     reason="a stage that succeeded triggers no teardown to report",
                 ),
                 id="successful_completion",
@@ -187,7 +193,7 @@ class TestFailFastEventEmission:
             pytest.param(
                 _SilentCase(
                     stage_count=3,
-                    completions=[(2, 1)],
+                    completions=((2, 1),),
                     reason="a failing final stage has nothing left to terminate",
                 ),
                 id="final_stage_failure",
@@ -195,7 +201,7 @@ class TestFailFastEventEmission:
             pytest.param(
                 _SilentCase(
                     stage_count=1,
-                    completions=[(0, 9)],
+                    completions=((0, 9),),
                     reason="a single-stage pipeline has no other stage to terminate",
                 ),
                 id="single_stage_failure",
@@ -216,7 +222,7 @@ class TestFailFastEventEmission:
             completions=case.completions,
         )
 
-        assert driven.events == [], f"{case.reason}, found {driven.events!r}"
+        assert driven.events == (), f"{case.reason}, found {driven.events!r}"
 
     def test_a_later_failure_does_not_publish_a_second_event(
         self,
