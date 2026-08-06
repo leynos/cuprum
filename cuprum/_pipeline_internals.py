@@ -34,6 +34,7 @@ from cuprum._pipeline_streams import (
     _create_pipe_tasks,
     _gather_optional_text_tasks,
     _PipelineRunConfig,
+    _reconcile_pipe_tasks,
 )
 from cuprum._pipeline_types import (
     _EventDetails,
@@ -44,7 +45,10 @@ from cuprum._pipeline_types import (
     _StageObservation,
 )
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
-from cuprum._process_lifecycle import _spawn_pipeline_processes
+from cuprum._process_lifecycle import (
+    _spawn_pipeline_processes,
+    _terminate_timed_out_stages,
+)
 from cuprum.context import current_context
 
 if typ.TYPE_CHECKING:
@@ -85,22 +89,28 @@ async def _await_pipeline_wait_result(
     config: _PipelineRunConfig,
     *,
     timeout_deadline: float | None,
+    pipe_tasks: list[asyncio.Task[None]],
 ) -> _PipelineWaitResult:
-    """Wait for the pipeline to finish, honouring any timeout deadline."""
+    """Wait for the pipeline to finish, honouring any timeout deadline.
+
+    ``pipe_tasks`` belongs to the caller: a non-positive deadline cancels
+    ``_wait_for_pipeline`` before the ``finally`` that would reconcile them,
+    so the caller reconciles them instead (see the developers' guide).
+    """
     wait_timeout: float | None = None
     if timeout_deadline is not None:
         wait_timeout = max(0.0, timeout_deadline - time.monotonic())
     if wait_timeout is None:
         return await _wait_for_pipeline(
             spawn.processes,
-            pipe_tasks=_create_pipe_tasks(spawn.processes),
+            pipe_tasks=pipe_tasks,
             cancel_grace=config.ctx.cancel_grace,
             started_at=spawn.started_at,
         )
     return await asyncio.wait_for(
         _wait_for_pipeline(
             spawn.processes,
-            pipe_tasks=_create_pipe_tasks(spawn.processes),
+            pipe_tasks=pipe_tasks,
             cancel_grace=config.ctx.cancel_grace,
             started_at=spawn.started_at,
         ),
@@ -146,11 +156,13 @@ async def _collect_pipeline_inputs(
     if timeout is not None:
         timeout_deadline = time.monotonic() + timeout
 
+    pipe_tasks = _create_pipe_tasks(spawn.processes)
     try:
         wait_result = await _await_pipeline_wait_result(
             spawn,
             config,
             timeout_deadline=timeout_deadline,
+            pipe_tasks=pipe_tasks,
         )
         stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)
         return _PipelineStageResultInputs(
@@ -159,6 +171,8 @@ async def _collect_pipeline_inputs(
             final_stdout=final_stdout,
         )
     except TimeoutError as exc:
+        await _terminate_timed_out_stages(spawn.processes, config.ctx.cancel_grace)
+        await _reconcile_pipe_tasks(pipe_tasks)
         stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)
         if timeout is None:
             msg = "TimeoutError without a configured timeout"

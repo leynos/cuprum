@@ -7,13 +7,12 @@ import collections.abc as cabc
 import io
 import os
 import sys
-import time
 import typing as typ
 from pathlib import Path
 
 import pytest
 
-from cuprum import ECHO, TimeoutExpired, sh
+from cuprum import ECHO, Program, TimeoutExpired, sh
 from cuprum.sh import (
     CommandResult,
     ExecutionContext,
@@ -21,19 +20,27 @@ from cuprum.sh import (
     RunOutputOptions,
 )
 from tests.helpers.catalogue import python_builder as build_python_builder
+from tests.helpers.catalogue import python_catalogue
+from tests.helpers.execution import ExecuteFn, _RunKwargs
+from tests.helpers.timeouts import (
+    child_argv,
+    pending_tasks,
+    python_interpreter,
+    started_pids,
+    wait_for_process_death,
+)
 
 if typ.TYPE_CHECKING:
+    from cuprum.events import ExecEvent
     from cuprum.sh import SafeCmd
 
-type ExecuteFn = cabc.Callable[[SafeCmd, dict[str, typ.Any]], CommandResult]
 
-
-def _execute_async(cmd: SafeCmd, kwargs: dict[str, typ.Any]) -> CommandResult:
+def _execute_async(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
     """Execute a SafeCmd using the async run() method."""
     return asyncio.run(cmd.run(**kwargs))
 
 
-def _execute_sync(cmd: SafeCmd, kwargs: dict[str, typ.Any]) -> CommandResult:
+def _execute_sync(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
     """Execute a SafeCmd using the sync run_sync() method."""
     return cmd.run_sync(**kwargs)
 
@@ -351,16 +358,110 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
         return int(pid_file.read_text())
 
     pid = asyncio.run(orchestrate())
-    _poll_process_death(pid)
+    wait_for_process_death(pid, seconds=1.0, context="cancellation")
 
 
-def _poll_process_death(pid: int, *, timeout: float = 1.0) -> None:
-    """Poll for process exit within a timeout, failing if still alive."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.02)
-    pytest.fail(f"Process {pid} still alive after {timeout}s of polling")
+# -- Public-boundary timeout contract -----------------------------------------
+#
+# The private-helper tests in ``test_subprocess_timeout`` drive
+# ``_wait_for_exit_code_within_timeout`` with process doubles, which isolates
+# branches a public test cannot reach. These cover what a caller actually sees:
+# the public ``TimeoutExpired``, its payload, and the absence of any surviving
+# child or stranded task.
+
+
+type TimeoutRunFn = cabc.Callable[
+    [SafeCmd, _RunKwargs], tuple[TimeoutExpired, set[asyncio.Task[object]]]
+]
+
+
+def _timeout_async(
+    cmd: SafeCmd, kwargs: _RunKwargs
+) -> tuple[TimeoutExpired, set[asyncio.Task[object]]]:
+    """Run via ``run()``, returning the timeout and any tasks left pending."""
+
+    async def run_case() -> tuple[TimeoutExpired, set[asyncio.Task[object]]]:
+        """Await the run inside a loop that is still open for inspection."""
+        with pytest.raises(TimeoutExpired) as exc_info:
+            await cmd.run(**kwargs)
+        return exc_info.value, pending_tasks()
+
+    return asyncio.run(run_case())
+
+
+def _timeout_sync(
+    cmd: SafeCmd, kwargs: _RunKwargs
+) -> tuple[TimeoutExpired, set[asyncio.Task[object]]]:
+    """Run via ``run_sync()``; its loop is closed before control returns.
+
+    ``run_sync`` owns and closes its event loop, so no task can outlive the
+    call and there is nothing left to inspect. The leak assertion has its teeth
+    in the ``run()`` variant; here the surviving-child assertion carries the
+    cleanup contract.
+    """
+    with pytest.raises(TimeoutExpired) as exc_info:
+        cmd.run_sync(**kwargs)
+    return exc_info.value, set()
+
+
+@pytest.fixture(params=["async", "sync"], ids=["run()", "run_sync()"])
+def timeout_execution_strategy(request: pytest.FixtureRequest) -> TimeoutRunFn:
+    """Provide run()/run_sync() strategies that expect a timeout."""
+    return _timeout_async if request.param == "async" else _timeout_sync
+
+
+@pytest.mark.parametrize("configured_timeout", [0, -1.0])
+@pytest.mark.parametrize("capture", [True, False])
+def test_non_positive_timeout_at_public_boundary(
+    configured_timeout: float,
+    *,
+    capture: bool,
+    timeout_execution_strategy: TimeoutRunFn,
+    tmp_path: Path,
+) -> None:
+    """A non-positive timeout expires immediately through the public API.
+
+    A non-positive deadline is already elapsed, so expiry is structural: the
+    child blocks forever and only the timeout can end the run, with no reliance
+    on elapsed wall-clock time. Asserts the public exception and its payload,
+    that no child survives, and that nothing is left pending on the loop.
+    """
+    command = sh.make(Program(python_interpreter()), catalogue=python_catalogue()[0])(
+        *child_argv(tmp_path / "ready")
+    )
+    events: list[ExecEvent] = []
+
+    with sh.observe(events.append):
+        expired, leaked = timeout_execution_strategy(
+            command,
+            {
+                "timeout": configured_timeout,
+                "output": RunOutputOptions(capture=capture),
+            },
+        )
+
+    assert expired.timeout == configured_timeout, (
+        f"TimeoutExpired must preserve the configured timeout "
+        f"{configured_timeout!r}, got {expired.timeout!r}"
+    )
+    assert not leaked, f"the run left pending tasks behind: {leaked!r}"
+
+    pids = started_pids(events)
+    assert len(pids) == 1, f"expected exactly one spawned child, got {pids!r}"
+    wait_for_process_death(pids[0], seconds=1.0, context="the timeout")
+
+    detail = f"output={expired.output!r} stderr={expired.stderr!r}"
+    if capture:
+        assert isinstance(expired.output, str), (
+            f"a capturing run must surface partial stdout as a string, got {detail}"
+        )
+        assert isinstance(expired.stderr, str), (
+            f"a capturing run must surface partial stderr as a string, got {detail}"
+        )
+    else:
+        assert expired.output is None, (
+            f"a non-capturing run must leave stdout unset, got {detail}"
+        )
+        assert expired.stderr is None, (
+            f"a non-capturing run must leave stderr unset, got {detail}"
+        )

@@ -361,6 +361,21 @@ async def _collect_pipe_results(
     return list(await asyncio.gather(*pipe_tasks, return_exceptions=True))
 
 
+async def _reconcile_pipe_tasks(pipe_tasks: list[asyncio.Task[None]]) -> None:
+    """Cancel and drain the inter-stage pumps after a pipeline deadline.
+
+    Safe to run whether or not ``_wait_for_pipeline`` already reconciled them:
+    cancelling a finished task is a no-op and gathering an already-gathered one
+    returns its recorded outcome. Failures are absorbed because a
+    ``TimeoutExpired`` is already propagating and a broken pump must not
+    replace it.
+    """
+    for task in pipe_tasks:
+        if not task.done():
+            task.cancel()
+    await _collect_pipe_results(pipe_tasks)
+
+
 def _surface_unexpected_pipe_failures(pipe_results: list[object]) -> None:
     """Raise non-BrokenPipe exceptions from pipe results.
 

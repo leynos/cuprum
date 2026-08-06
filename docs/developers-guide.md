@@ -1985,6 +1985,41 @@ When changing lint policy, update both `pyproject.toml` and this guide. If the
 change alters the architecture of the lint gate, update
 [ADR-003](adr-003-two-tier-python-linting.md) as well.
 
+### Ruff `ASYNC` (flake8-async) policy
+
+Cuprum selects the Ruff `ASYNC` (flake8-async) rule family in
+`[tool.ruff.lint]` so async-correctness lints run as part of `make lint`. The
+two that matter for the subprocess surface are `ASYNC109` (async functions
+that take a `timeout` parameter) and `ASYNC240` (blocking `pathlib` calls
+inside an async function). The family guards the async subprocess code
+against callee-owned deadlines and accidental blocking I/O.
+
+Two suppressions are scoped as narrowly as possible rather than disabling the
+family:
+
+- **Public API (`# noqa: ASYNC109`).** `SafeCmd.run` and `Pipeline.run` keep
+  their documented `timeout` parameter, which deliberately mirrors
+  `subprocess.run(timeout=...)`. `ASYNC109` would instead have the caller own
+  the deadline through `asyncio.timeout()`, but the parameter is public,
+  documented ergonomics, so each definition carries a per-line
+  `# noqa: ASYNC109` with a rationale comment rather than dropping the
+  parameter. Internal helpers do not take a `timeout` parameter (see
+  [ADR-007](adr-007-subprocess-execution-module-boundaries.md)); only the
+  public surface is suppressed.
+- **Test scaffolding (`per-file-ignore`).** `ASYNC109` and `ASYNC240` are
+  ignored through `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` for
+  exactly two modules — `cuprum/unittests/test_observe_stdin_early_close.py`
+  and `tests/behaviour/test_execution_runtime.py`. Their async scaffolding
+  polls a PID file with asyncio-only helpers, so a `timeout` parameter and
+  blocking `pathlib` calls are acceptable there; the async-native path
+  libraries (`trio.Path` / `anyio.Path`) that `ASYNC240` recommends are not in
+  use. Naming the two paths rather than globbing `**/test_*.py` stops
+  unrelated and future async tests inheriting the exemption silently. The
+  rationale is recorded next to the ignore in `pyproject.toml`.
+
+When changing either suppression, keep the `pyproject.toml` comments and this
+section in step.
+
 ## Maturin pin synchronization and native wheel tests
 
 These checks span three test modules, one per concern —
@@ -2366,6 +2401,60 @@ Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; timeout or exit-event policy belongs in
 `_subprocess_timeout`; and orchestration that coordinates them belongs in
 `_subprocess_execution`.
+
+The subprocess wait path uses caller-owned deadlines: `asyncio.timeout()` was
+adopted in place of `asyncio.wait_for()`, so the deadline is applied by the
+caller rather than threaded through a `timeout` parameter. The wait logic is
+split accordingly: `_wait_for_exit_code` awaits the process and terminates it
+on cancellation, and no longer takes a timeout argument, while
+`_wait_for_exit_code_within_timeout` applies `execution.timeout` around it. A
+non-positive timeout is special-cased to expire immediately and
+deterministically, because `asyncio.timeout()` alone would let a fast,
+already-exited process race past a zero or negative deadline; this preserves
+the behaviour of the previous `asyncio.wait_for()` implementation and is
+guarded by regression tests in `cuprum/unittests/test_subprocess_timeout.py`.
+
+Neither wait helper terminates unconditionally, and neither drains.
+`_wait_for_exit_code` terminates the process only when the wait is cancelled —
+which is also how an `asyncio.timeout` expiry arrives — while a successful wait
+returns the exit code as soon as `process.wait()` completes, leaving the
+process alone. `_wait_for_exit_code_within_timeout` terminates only on its
+non-positive fast path, before any wait begins.
+
+Draining is the caller's job either way: after termination it drains the stream
+consumers exactly once via `_drain_stream_consumers` (see the stdin-injection
+sequence below), and terminating the process before that drain is what lets it
+reach EOF.
+
+### Pipeline timeout and teardown
+
+A pipeline enforces one deadline for the whole run, rather than a separate
+deadline per stage. `_collect_pipeline_inputs`, in
+`cuprum/_pipeline_internals.py`, awaits the pipeline against that single
+deadline and maps its expiry to `TimeoutExpired`.
+
+On expiry, `_collect_pipeline_inputs` calls `_terminate_timed_out_stages`
+(in `cuprum/_process_lifecycle.py`) before it gathers stage output. Doing so
+first lets the stage pipes reach EOF, so a captured pipeline cannot block on
+a producer stage that is still running.
+
+`_terminate_timed_out_stages` delegates to `_terminate_all_shielded`, which
+runs the terminations in an owned, `asyncio.shield`ed task and holds off a
+caller's cancellation until they finish before re-raising it. Without that
+shielding, a cancellation landing in the grace-period wait would skip the
+`SIGKILL` escalation and leave a `SIGTERM`-immune stage running.
+`_terminate_all_shielded` also backs `_cleanup_spawned_processes` and
+`_cleanup_pipeline_on_error`, and the fail-fast route in
+`_terminate_pipeline_remaining_stages` uses the shared
+`_await_teardown_shielded` helper directly.
+
+The inter-stage pump tasks, created by `_create_pipe_tasks`, are created and
+owned by `_collect_pipeline_inputs` rather than by `_wait_for_pipeline`. This
+matters because a non-positive deadline gives `asyncio.wait_for` a zero
+timeout, and that cancels `_wait_for_pipeline` before its body — and
+therefore its `finally` — ever runs, so that `finally` cannot reconcile the
+pumps. On the timeout route, `_reconcile_pipe_tasks` cancels and drains the
+pump tasks instead.
 
 ## Subprocess stdin injection
 

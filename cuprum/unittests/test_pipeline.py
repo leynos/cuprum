@@ -25,7 +25,11 @@ from cuprum._testing import (
     _spawn_pipeline_processes,
     _wait_for_pipeline,
 )
-from cuprum.sh import Pipeline, PipelineResult, RunOutputOptions
+from cuprum.sh import (
+    Pipeline,
+    PipelineResult,
+    RunOutputOptions,
+)
 from tests.helpers.catalogue import python_catalogue
 
 

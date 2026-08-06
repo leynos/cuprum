@@ -375,6 +375,13 @@ exception: `exc.output` / `exc.stderr` hold the partial stdout/stderr (or
 `None` when `capture=False`), so callers can inspect what the command
 produced before it was killed.
 
+**Non-positive timeout behaviour:** a `timeout` of `0` or a negative value is
+treated as an already-elapsed deadline, so the command expires immediately:
+it never waits for the process to exit on its own. Cuprum instead terminates
+the running process (or every pipeline stage), waits for it to actually exit —
+honouring `cancel_grace` and escalating to `SIGKILL` if needed — drains the
+stream consumers, and then raises `TimeoutExpired`.
+
 Timeout resolution order:
 
 - Explicit `timeout` argument on `run()` / `run_sync` when not `None`.

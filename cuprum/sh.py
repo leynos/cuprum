@@ -445,7 +445,9 @@ class SafeCmd:
         self,
         *,
         output: RunOutputOptions | None = None,
-        timeout: float | None = None,
+        # ASYNC109: `timeout` is public API mirroring subprocess.run(timeout=…),
+        # not a callee-owned deadline; keeping it is a deliberate design choice.
+        timeout: float | None = None,  # noqa: ASYNC109
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
     ) -> CommandResult:
@@ -566,7 +568,9 @@ class Pipeline:
         self,
         *,
         output: RunOutputOptions | None = None,
-        timeout: float | None = None,
+        # ASYNC109: `timeout` is public API mirroring subprocess.run(timeout=…),
+        # not a callee-owned deadline; keeping it is a deliberate design choice.
+        timeout: float | None = None,  # noqa: ASYNC109
         context: ExecutionContext | None = None,
         **deprecated_flags: typ.Unpack[_DeprecatedOutputFlags],
     ) -> PipelineResult:
