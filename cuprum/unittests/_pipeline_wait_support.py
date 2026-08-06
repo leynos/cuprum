@@ -213,7 +213,10 @@ def structured_fields(record: logging.LogRecord) -> dict[str, object]:
     }
 
 
-def field_values(records: list[logging.LogRecord], key: str) -> list[object]:
+def field_values(
+    records: cabc.Sequence[logging.LogRecord],
+    key: str,
+) -> list[object]:
     """Return ``key`` from each record that carries it, in record order.
 
     Selecting one structured field across a run of records is what nearly
@@ -229,7 +232,7 @@ def field_values(records: list[logging.LogRecord], key: str) -> list[object]:
     ]
 
 
-def record_actions(records: list[logging.LogRecord]) -> list[str]:
+def record_actions(records: cabc.Sequence[logging.LogRecord]) -> list[str]:
     """Return the ``cuprum_action`` field of each pipeline-wait record."""
     return [str(value) for value in field_values(records, "cuprum_action")]
 
