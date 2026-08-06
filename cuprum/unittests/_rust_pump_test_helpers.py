@@ -21,6 +21,7 @@ import typing as typ
 import pytest
 
 from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum.pump_events import RustPumpDeclineReason
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -104,13 +105,49 @@ def owned_fds() -> cabc.Iterator[tuple[int, int]]:
                 os.close(fd)
 
 
-def allow_pause(monkeypatch: pytest.MonkeyPatch, *, may_hand_off: bool) -> None:
-    """Force the reader-pause seam to the given hand-off verdict."""
+def force_pause_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    decline_reason: RustPumpDeclineReason | None = None,
+) -> None:
+    """Force the reader-pause seam to the given outcome.
+
+    A ``decline_reason`` of ``None`` permits the hand-off; any member names the
+    refusal the seam reports, so a caller cannot ask for a refusal without
+    saying which one it is.
+    """
     monkeypatch.setattr(
         _pipeline_stream_fds,
         "_pause_reader_transport",
-        lambda _reader: _pipeline_stream_fds._ReaderPause(may_hand_off=may_hand_off),
+        lambda _reader: _pipeline_stream_fds._ReaderPause(
+            decline_reason=decline_reason
+        ),
     )
+
+
+class PauseOnlyTransport:
+    """A transport offering ``pause_reading`` but no ``resume_reading``.
+
+    Pausing this transport could never be undone, so a correct implementation
+    leaves it alone entirely; the method records calls so an implementation
+    that pauses anyway is caught rather than merely suspected.
+    """
+
+    def __init__(self) -> None:
+        """Start with no calls recorded."""
+        self.pause_calls = 0
+
+    def pause_reading(self) -> None:
+        """Record a pause that could never be undone."""
+        self.pause_calls += 1
+
+
+class TransportOnlyReader:
+    """Minimal ``StreamReader`` stand-in exposing a ``transport`` attribute."""
+
+    def __init__(self, transport: object) -> None:
+        """Wrap ``transport`` as the reader's public transport."""
+        self.transport = transport
 
 
 def decline_on_missing_fds(_monkeypatch: pytest.MonkeyPatch) -> None:
@@ -120,9 +157,26 @@ def decline_on_missing_fds(_monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def decline_on_pause_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Route a hop whose reader transport cannot be paused."""
-    allow_pause(monkeypatch, may_hand_off=False)
+    """Route a hop whose ``pause_reading()`` raised."""
+    force_pause_outcome(
+        monkeypatch,
+        decline_reason=RustPumpDeclineReason.READER_PAUSE_FAILED,
+    )
     run_raw_fd_pump()
+
+
+def decline_on_unresumable_reader(_monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route a hop whose reader transport offers no ``resume_reading``.
+
+    Left unpatched, so the reason this path reports is the one
+    ``_pause_reader_transport`` derives from the transport's own shape rather
+    than one the test handed it.
+    """
+    reader = typ.cast(
+        "asyncio.StreamReader",
+        TransportOnlyReader(PauseOnlyTransport()),
+    )
+    run_raw_fd_pump(reader)
 
 
 def _decline_on_blocking_refusal(
@@ -136,7 +190,7 @@ def _decline_on_blocking_refusal(
     and a caller that then crashed would leave the log and counter assertions
     downstream with nothing to disprove.
     """
-    allow_pause(monkeypatch, may_hand_off=True)
+    force_pause_outcome(monkeypatch)
     monkeypatch.setattr(_pipeline_stream_fds._BlockingModeGuard, "engage", engage)
     handled = run_raw_fd_pump()
     assert handled is False, (
@@ -155,9 +209,15 @@ def decline_on_blocking_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
     _decline_on_blocking_refusal(monkeypatch, fail_engage_with_value_error)
 
 
-def run_raw_fd_pump() -> bool:
-    """Drive ``_pump_over_raw_fds`` over a pipe this helper owns."""
-    reader = typ.cast("asyncio.StreamReader", object())
+def run_raw_fd_pump(reader: asyncio.StreamReader | None = None) -> bool:
+    """Drive ``_pump_over_raw_fds`` over a pipe this helper owns.
+
+    ``reader`` defaults to a transport-less stand-in, which the pause seam
+    waves through; pass one when the transport's own shape is what the path
+    under test turns on.
+    """
+    if reader is None:
+        reader = typ.cast("asyncio.StreamReader", object())
     with owned_fds() as (reader_fd, writer_fd):
         return asyncio.run(
             _pipeline_streams._pump_over_raw_fds(
@@ -183,7 +243,7 @@ def hand_off_successfully(monkeypatch: pytest.MonkeyPatch) -> bool:
     reaches the pump and returns without a decline. This is the negative
     control: whatever a declined hop records, this must not.
     """
-    allow_pause(monkeypatch, may_hand_off=True)
+    force_pause_outcome(monkeypatch)
     monkeypatch.setattr(
         _pipeline_stream_fds._BlockingModeGuard,
         "engage",
@@ -295,6 +355,7 @@ DECLINE_PATHS: tuple[
     tuple[str, cabc.Callable[[pytest.MonkeyPatch], None], str], ...
 ] = (
     ("missing_fds", decline_on_missing_fds, "raw_fd_unavailable"),
+    ("reader_unresumable", decline_on_unresumable_reader, "reader_unresumable"),
     ("pause_failure", decline_on_pause_failure, "reader_pause_failed"),
     ("blocking_failure", decline_on_blocking_failure, "blocking_mode_unavailable"),
     (
@@ -304,6 +365,14 @@ DECLINE_PATHS: tuple[
     ),
 )
 """Each real decline path paired with the ``reason`` it must report.
+
+The pause seam refuses in two ways and reports them apart, because they call
+for different investigations: ``reader_pause_failed`` means ``pause_reading()``
+raised and the descriptor's state is unknown, while ``reader_unresumable``
+means a transport that could never be resumed was deliberately left alone. Only
+the latter is driven through the real ``_pause_reader_transport``, so collapsing
+the two reasons at their source fails here rather than passing on a doubled
+seam.
 
 Two paths share ``blocking_mode_unavailable`` because the blocking seam can
 refuse in two ways, and only one of them was originally caught: a hop that met

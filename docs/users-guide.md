@@ -1359,6 +1359,7 @@ Table 1: reasons an inter-stage hop declines the Rust pump
 | `cuprum_reason`             | Meaning                                                                                 |
 | --------------------------- | --------------------------------------------------------------------------------------- |
 | `raw_fd_unavailable`        | the asyncio transport exposed no raw descriptor, so there was nothing to hand over      |
+| `reader_unresumable`        | the reader transport exposes `pause_reading` but not `resume_reading`, left unpaused    |
 | `reader_pause_failed`       | the reader transport could not be paused, so asyncio might still consume the descriptor |
 | `blocking_mode_unavailable` | the descriptors could not be switched to the blocking mode the pump requires            |
 
@@ -1374,8 +1375,8 @@ logging.getLogger("cuprum._pipeline_streams").setLevel(logging.DEBUG)
 ```
 
 `raw_fd_unavailable` on every hop usually means the streams are not real OS
-pipes. The other two indicate the descriptors were found but could not be
-borrowed safely, which is worth investigating rather than accepting.
+pipes. The others indicate the descriptors were found but could not be borrowed
+safely, which is worth investigating rather than accepting.
 
 ### A pump failure hidden by cancellation
 
@@ -1451,12 +1452,10 @@ Table 2: counters emitted by `PumpMetricsHook`
 | `cuprum_rust_pump_declined_total`            | `reason` | a hop fell back from the Rust pump to the Python pump           |
 | `cuprum_rust_pump_failed_after_cancel_total` | none     | a cancelled hop's Rust worker failure was consumed and recorded |
 
-The `reason` label takes exactly the three values in Table 1 —
-`raw_fd_unavailable`, `reader_pause_failed`, and `blocking_mode_unavailable` —
-plus `unknown`, and nothing else. The three are published as the
-`RustPumpDeclineReason` enum and `unknown` as
-`cuprum.adapters.pump_metrics.UNKNOWN_DECLINE_REASON`, so a dashboard can
-enumerate the series it will see:
+The `reason` label takes exactly the values in Table 1, plus `unknown`, and
+nothing else. Table 1's values are published as the `RustPumpDeclineReason`
+enum and `unknown` as `cuprum.adapters.pump_metrics.UNKNOWN_DECLINE_REASON`, so
+a dashboard can enumerate the series it will see:
 
 ```python
 from cuprum import RustPumpDeclineReason
@@ -1466,7 +1465,7 @@ print([reason.value for reason in RustPumpDeclineReason] + [UNKNOWN_DECLINE_REAS
 ```
 
 `unknown` is a guard rather than an outcome: it is what a decline whose reason
-is not one of the three would be labelled, and no call site produces one. It is
+is not an enum member would be labelled, and no call site produces one. It is
 listed because a dashboard filtering on the enum alone would drop such a
 decline silently rather than showing it.
 

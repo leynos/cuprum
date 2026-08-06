@@ -344,10 +344,7 @@ class TestPumpStreamDispatch:
                 """Record that the reader transport was resumed."""
                 call_order.append("resume")
 
-            return _pipeline_stream_fds._ReaderPause(
-                may_hand_off=True,
-                resume=_resume,
-            )
+            return _pipeline_stream_fds._ReaderPause(resume=_resume)
 
         async def fake_drain_reader_buffer(
             reader: asyncio.StreamReader,

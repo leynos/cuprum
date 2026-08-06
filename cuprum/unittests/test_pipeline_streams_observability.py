@@ -2,12 +2,12 @@
 
 Every decline is silent by construction: the hop still completes on the Python
 pump, so no caller-visible signal distinguishes a deployment that has quietly
-stopped taking the fast path from one that never had it. These tests pin the
-three decline reasons to the real code paths that emit them, rather than
-calling the log helper directly, so a decline that stops being recorded fails
-here. The paths outnumber the reasons: the blocking seam can refuse in two
-ways, and both must be attributed to the same reason rather than one of them
-escaping as an exception.
+stopped taking the fast path from one that never had it. These tests pin every
+decline reason to the real code path that emits it, rather than calling the log
+helper directly, so a decline that stops being recorded fails here. The paths
+outnumber the reasons: the blocking seam can refuse in two ways, and both must
+be attributed to the same reason rather than one of them escaping as an
+exception.
 
 The teardown steps that undo the hand-off are covered on the same terms. Each
 is deliberately suppressed — a failure there must not displace whatever the hop
@@ -190,9 +190,9 @@ def test_a_reader_that_cannot_be_resumed_is_recorded(
 
     with (
         caplog.at_level(logging.DEBUG, logger=_FDS_LOGGER_NAME),
-        _paused_reader(reader) as may_hand_off,
+        _paused_reader(reader) as pause,
     ):
-        assert may_hand_off is True, (
+        assert pause.may_hand_off is True, (
             "a transport that pauses must permit the hand-off, or the resume "
             "under test never runs"
         )

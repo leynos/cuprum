@@ -162,8 +162,10 @@ async def _pump_over_raw_fds(
     Pauses the reader transport (always resuming on exit via ``_paused_reader``)
     and switches the FDs to blocking mode under a ``_BlockingModeGuard`` that
     restores their prior mode. Returns ``False`` — the signal to fall back to
-    the Python pump — when the FDs cannot be made blocking; the writer close is
-    left to the caller.
+    the Python pump — when either seam refuses: when the reader could not be
+    safely paused, or when the FDs cannot be made blocking. Each refusal is
+    recorded under its own :class:`~cuprum.pump_events.RustPumpDeclineReason`.
+    The writer close is left to the caller.
 
     Examples
     --------
@@ -192,11 +194,14 @@ async def _pump_over_raw_fds(
             await _run_python_pump(reader, writer)
 
     """
-    with _paused_reader(reader) as may_hand_off:
-        if not may_hand_off:
-            # Pausing failed, so asyncio may still be consuming the reader.
-            # Fall back rather than race it for the descriptor.
-            _log_rust_pump_declined(RustPumpDeclineReason.READER_PAUSE_FAILED)
+    with _paused_reader(reader) as pause:
+        if pause.decline_reason is not None:
+            # Either the pause raised, leaving the descriptor's state unknown,
+            # or the transport could never be resumed and was left untouched.
+            # Both mean asyncio may still be consuming the reader, so fall back
+            # rather than race it for the descriptor — reporting which of the
+            # two it was, since they call for different investigations.
+            _log_rust_pump_declined(pause.decline_reason)
             return False
 
         # Flush any bytes asyncio already buffered in the StreamReader before

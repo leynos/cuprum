@@ -42,6 +42,7 @@ class RustPumpDeclineReason(enum.StrEnum):
     """
 
     RAW_FD_UNAVAILABLE = "raw_fd_unavailable"
+    READER_UNRESUMABLE = "reader_unresumable"
     READER_PAUSE_FAILED = "reader_pause_failed"
     BLOCKING_MODE_UNAVAILABLE = "blocking_mode_unavailable"
 

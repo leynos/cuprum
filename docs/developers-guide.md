@@ -464,14 +464,15 @@ partial-failure paths in one place rather than inlined in the pump:
   captured modes. This is what stops a descriptor being left blocking.
 - `_paused_reader` is a context manager that pauses the reader transport and
   resumes it on every exit path, including exceptions and cancellation. Only a
-  pause that took effect is resumed. It yields whether the descriptor may be
-  handed over: a *failed* pause answers `False`, because asyncio may still be
-  consuming the reader, and the caller falls back to the Python pump rather
-  than racing it. A transport exposing no `pause_reading` answers `True`, since
-  there are no callbacks to suspend. A transport exposing `pause_reading` but no
-  `resume_reading` answers `False` without being paused: its pause hook is
-  evidence of callbacks that would race the pump, but a pause nothing could
-  undo would strand the Python fallback on the same stream.
+  pause that took effect is resumed. It yields the pause outcome: a *failed*
+  pause sets `decline_reason` to `reader_pause_failed`, because asyncio may
+  still be consuming the reader, and the caller falls back to the Python pump
+  rather than racing it. A transport exposing no `pause_reading` leaves
+  `decline_reason` `None`, since there are no callbacks to suspend. A transport
+  exposing `pause_reading` but no `resume_reading` sets `decline_reason` to
+  `reader_unresumable` without being paused: its pause hook is evidence of
+  callbacks that would race the pump, but a pause nothing could undo would
+  strand the Python fallback on the same stream.
 
 Cancellation is handled explicitly. `run_in_executor` cannot interrupt the
 worker thread running the Rust pump, and that thread still owns both
@@ -500,11 +501,12 @@ the pipeline fail-fast records: a `cuprum_action` of `rust_pump_declined` plus a
 
 Table 2: `cuprum_reason` values and the seam each one reports
 
-| `cuprum_reason`             | Seam that declined                                                 |
-| --------------------------- | ------------------------------------------------------------------ |
-| `raw_fd_unavailable`        | `_extract_stream_fd` found no descriptor on at least one transport |
-| `reader_pause_failed`       | `pause_reading()` raised, so asyncio may still be consuming        |
-| `blocking_mode_unavailable` | `_BlockingModeGuard.engage` could not switch both descriptors      |
+| `cuprum_reason`             | Seam that declined                                                                     |
+| --------------------------- | -------------------------------------------------------------------------------------- |
+| `raw_fd_unavailable`        | `_extract_stream_fd` found no descriptor on at least one transport                     |
+| `reader_unresumable`        | the transport exposes `pause_reading` but no `resume_reading`, so it was left unpaused |
+| `reader_pause_failed`       | `pause_reading()` raised, so asyncio may still be consuming                            |
+| `blocking_mode_unavailable` | `_BlockingModeGuard.engage` could not switch both descriptors                          |
 
 These are logged at `DEBUG`, deliberately. A fall-back is a per-hop routing
 decision rather than a fault, so promoting it to a warning would make a
@@ -542,8 +544,8 @@ exceptions are not swallowed — `_emit_exec_event` re-raises and
 would therefore raise inside every `MetricsHook` a caller had already
 registered, turning a library-side addition into a failure in code that was
 correct when it was written. Cardinality was never the obstacle:
-`RustPumpDeclineReason` is a closed three-member `StrEnum`, so a `reason` label
-is bounded by construction.
+`RustPumpDeclineReason` is a closed `StrEnum`, so a `reason` label is bounded
+by construction.
 
 The channel lives in three small modules:
 

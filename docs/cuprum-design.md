@@ -2369,14 +2369,16 @@ each path is testable without a live pump:
   transport may have set its paused flag before whatever raised — leaving a
   reader nobody resumes while the Python fallback reads a descriptor nothing is
   watching. Having already been corrected, it is not resumed again on exit. It
-  yields whether the descriptor may be handed to the Rust pump — a failed pause
-  answers `False`, because asyncio may still be consuming the reader, and the
-  caller falls back to the Python pump rather than racing it. A transport with
-  no `pause_reading` answers `True`, since it has no callbacks to suspend. A
-  transport with `pause_reading` but no `resume_reading` answers `False` and is
-  never paused: the pause hook shows callbacks that would race the pump, yet
-  pausing it could never be undone, and the Python fallback reads the same
-  stream and would wait forever on a reader nothing can restart.
+  yields the pause outcome, whose `decline_reason` is `None` when the
+  descriptor may be handed to the Rust pump — a failed pause sets
+  `reader_pause_failed`, because asyncio may still be consuming the reader, and
+  the caller falls back to the Python pump rather than racing it. A transport
+  with no `pause_reading` leaves `decline_reason` `None`, since it has no
+  callbacks to suspend. A transport with `pause_reading` but no
+  `resume_reading` sets `reader_unresumable` and is never paused: the pause
+  hook shows callbacks that would race the pump, yet pausing it could never be
+  undone, and the Python fallback reads the same stream and would wait forever
+  on a reader nothing can restart.
 
 Cancellation is handled explicitly rather than implicitly. `run_in_executor`
 cannot interrupt the worker thread running the Rust pump, and that thread still
