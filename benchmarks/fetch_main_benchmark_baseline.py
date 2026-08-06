@@ -223,7 +223,13 @@ def find_latest_artefact_download_url(
 
 def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
     """Parse CLI arguments."""
-    parser = argparse.ArgumentParser(description=__doc__)
+    # An explicit prog keeps the usage line naming this script regardless of
+    # how the interpreter was launched: Python 3.14 derives the default from
+    # the actual invocation (for example `python3 -m pytest`), not argv[0].
+    parser = argparse.ArgumentParser(
+        prog="fetch_main_benchmark_baseline.py",
+        description=__doc__,
+    )
     parser.add_argument(
         "--repository",
         required=True,

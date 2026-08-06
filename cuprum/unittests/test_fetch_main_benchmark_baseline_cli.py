@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import io
-import sys
 import typing as typ
 import zipfile
 
@@ -46,15 +45,16 @@ def _unwrapped(text: str) -> str:
 
 def test_cli_help_documents_every_option(
     capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``--help`` should exit cleanly and describe each supported option."""
-    monkeypatch.setattr(sys, "argv", ["fetch_main_benchmark_baseline.py"])
     with pytest.raises(SystemExit) as help_exit:
         main(["--help"])
     help_text = _unwrapped(capsys.readouterr().out)
 
     assert help_exit.value.code == 0
+    assert "fetch_main_benchmark_baseline.py" in help_text, (
+        "the usage line must identify the program"
+    )
     assert _unwrapped(EXPECTED_HELP_DESCRIPTION) in help_text
     for option, description in EXPECTED_CLI_OPTIONS:
         assert option in help_text
