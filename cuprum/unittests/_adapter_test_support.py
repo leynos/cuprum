@@ -16,7 +16,7 @@ from cuprum.program import Program
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.events import ExecId
+    from cuprum.events import ExecId, TimeoutMode
 
 
 def _python_builder(
@@ -89,7 +89,7 @@ def _make_exec_event(
         operation=typ.cast("str | None", values["operation"]),
         error_type=typ.cast("str | None", values["error_type"]),
         timeout_s=typ.cast("float | None", values["timeout_s"]),
-        timeout_mode=typ.cast("str | None", values["timeout_mode"]),
+        timeout_mode=typ.cast("TimeoutMode | None", values["timeout_mode"]),
         exec_id=typ.cast("ExecId | None", values["exec_id"]),
     )
 

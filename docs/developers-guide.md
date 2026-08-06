@@ -2461,6 +2461,36 @@ every wait — including the retries — stays shielded, and it terminates
 because the termination always settles, bounding it by the grace period
 rather than by the caller's patience.
 
+`_await_teardown_shielded` is itself built on `_shielded_cleanup`
+(`cuprum/_process_lifecycle.py`), the shared primitive behind every shielded
+cleanup in the codebase: `async def _shielded_cleanup[T](cleanup:
+cabc.Awaitable[T]) -> T`. It owns `cleanup` in a task, awaits it under
+`asyncio.shield`, and on cancellation re-enters the shielded wait until the
+task reports done, then re-raises. A bare `await asyncio.shield(coro)` is not
+enough on its own: the shield keeps cancellation off the inner coroutine, but
+the *awaiting* coroutine resumes immediately, so the run propagates its
+`CancelledError` while its own cleanup tasks are still live — leaking exactly
+the tasks the cleanup exists to reconcile. The retry loop exists because
+cancelling a task propagates to whatever future it is awaiting, so
+re-awaiting the cleanup task unshielded would cancel the cleanup itself. It
+returns the cleanup's value and propagates the cleanup's own failure when the
+caller was not cancelled; callers that must absorb failures do so themselves —
+`_await_teardown_shielded` does this by passing `return_exceptions=True`.
+
+Callers routed through `_shielded_cleanup` now include
+`_await_teardown_shielded`; the timeout, cancellation, and stdin-failure
+cleanup paths in `_run_subprocess_with_streams` and
+`_run_subprocess_without_streams` (`cuprum/_subprocess_execution.py`); the
+spawn-failure, timeout, and run-failure paths, plus
+`_finalize_pipeline_execution`, in `cuprum/_pipeline_internals.py`; and
+`_execute_with_hooks` in `cuprum/sh.py`, which previously used a bare `await
+asyncio.shield(...)`. Two further helpers keep multi-step cleanup as one
+shielded unit: `_reconcile_run_tasks` in `cuprum/_subprocess_wait.py` cancels
+the stdin writer, then drains the stream consumers, and
+`_reconcile_pipeline_run_failure` in `cuprum/_pipeline_internals.py` cancels
+the stream tasks, then drains the observe-hook tasks. Shielding the halves
+separately would let a cancellation landing between them abandon the second.
+
 The inter-stage pump tasks, created by `_create_pipe_tasks`, are created and
 owned by `_collect_pipeline_inputs` rather than by `_wait_for_pipeline`. This
 matters because a non-positive deadline gives `asyncio.wait_for` a zero
@@ -2571,10 +2601,10 @@ blocked-writer tests should reuse it rather than hardcoding a payload size.
 
 `_execute_with_hooks(cmd, execution, tracking)` is the single site that runs
 `_execute_subprocess`, iterates after-hooks, and co-ordinates cancellation-safe
-cleanup of pending hook tasks via `asyncio.shield`. It replaces the try/except
-ladder that previously lived inline in `SafeCmd.run`, keeping the public method
-to a minimal orchestration skeleton (plan event, before-hooks dispatch,
-delegation).
+cleanup of pending hook tasks via `_shielded_cleanup` (see "Pipeline timeout
+and teardown" above). It replaces the try/except ladder that previously lived
+inline in `SafeCmd.run`, keeping the public method to a minimal orchestration
+skeleton (plan event, before-hooks dispatch, delegation).
 
 `_build_stream_config(execution)` centralizes construction of the
 `_StreamConfig` used by the streaming execution path

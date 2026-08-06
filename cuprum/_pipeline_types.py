@@ -15,7 +15,7 @@ import time
 import typing as typ
 
 from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
-from cuprum.events import ExecEvent, new_exec_id
+from cuprum.events import ExecEvent, ExecPhase, TimeoutMode, new_exec_id
 
 if typ.TYPE_CHECKING:
     import asyncio
@@ -50,7 +50,7 @@ class _EventDetails:
     operation: str | None = None
     error_type: str | None = None
     timeout_s: float | None = None
-    timeout_mode: str | None = None
+    timeout_mode: TimeoutMode | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -70,17 +70,7 @@ class _StageObservation:
 
     def emit(
         self,
-        phase: typ.Literal[
-            "plan",
-            "start",
-            "stdout",
-            "stderr",
-            "exit",
-            "stdin",
-            "stdin_error",
-            "timeout",
-            "teardown_error",
-        ],
+        phase: ExecPhase,
         details: _EventDetails,
     ) -> None:
         """Emit an observe event for ``phase`` when observe hooks are set."""

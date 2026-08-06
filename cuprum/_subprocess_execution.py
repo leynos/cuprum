@@ -15,7 +15,7 @@ import time
 import typing as typ
 
 from cuprum._pipeline_types import _EventDetails, _StageObservation
-from cuprum._process_lifecycle import _merge_env
+from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
@@ -29,6 +29,7 @@ from cuprum._subprocess_timeout import (
 )
 from cuprum._subprocess_wait import (
     _drain_stream_consumers,
+    _reconcile_run_tasks,
     _wait_for_exit_code_within_timeout,
 )
 
@@ -155,10 +156,13 @@ async def _run_subprocess_with_streams(
     except TimeoutError as exc:
         # The process has been terminated; cancel the stdin writer and drain the
         # stream consumers exactly once here, then hand the decoded output to the
-        # timeout handler so it survives on the resulting TimeoutExpired.
-        await _cancel_stdin_writer(stdin_task)
-        stdout_text, stderr_text = await _drain_stream_consumers(
-            consumers, pid=pid, observation=execution.observation
+        # timeout handler so it survives on the resulting TimeoutExpired. The
+        # reconciliation is shielded because a caller cancelling now would
+        # otherwise abandon the consumers mid-drain and leak them.
+        stdout_text, stderr_text = await _shielded_cleanup(
+            _reconcile_run_tasks(
+                stdin_task, consumers, pid=pid, observation=execution.observation
+            )
         )
         _handle_stream_timeout(
             exc,
@@ -171,10 +175,12 @@ async def _run_subprocess_with_streams(
         # while terminating, say — need the same reconciliation: the timeout
         # clause above already handled its own case, so everything reaching
         # here cancels the stdin writer, drains the consumers, and re-raises
-        # unchanged rather than leaking those tasks.
-        await _cancel_stdin_writer(stdin_task)
-        await _drain_stream_consumers(
-            consumers, pid=pid, observation=execution.observation
+        # unchanged rather than leaking those tasks. Shielded, so a cancellation
+        # arriving *during* that reconciliation cannot cut it short either.
+        await _shielded_cleanup(
+            _reconcile_run_tasks(
+                stdin_task, consumers, pid=pid, observation=execution.observation
+            )
         )
         raise
     if stdin_task is not None:
@@ -184,9 +190,12 @@ async def _run_subprocess_with_streams(
             # An unexpected stdin-writer failure (or a cancellation landing on
             # this await) must still reconcile the stdout/stderr consumers,
             # mirroring the timeout and cancellation paths above, so those tasks
-            # are cancelled and drained before the error propagates.
-            await _drain_stream_consumers(
-                consumers, pid=pid, observation=execution.observation
+            # are cancelled and drained before the error propagates. The writer
+            # has already settled here, so only the consumers need draining.
+            await _shielded_cleanup(
+                _drain_stream_consumers(
+                    consumers, pid=pid, observation=execution.observation
+                )
             )
             raise
     stdout_text, stderr_text = await asyncio.gather(*consumers)
@@ -204,8 +213,10 @@ async def _run_subprocess_without_streams(
     an unexpected failure — it is cancelled and drained through
     :func:`_cancel_stdin_writer` *before* the exception propagates, so a stdin
     drain blocked on an unread pipe cannot delay timeout translation or
-    cancellation, and no writer is left running behind a failure. An unexpected
-    stdin-writer failure after the process exits normally propagates unchanged.
+    cancellation, and no writer is left running behind a failure. That cleanup
+    is shielded, so a cancellation arriving while it runs cannot abandon it. An
+    unexpected stdin-writer failure after the process exits normally propagates
+    unchanged.
     """
     stdin_task = _spawn_stdin_writer(
         process, execution.stdin_data, execution.observation
@@ -216,7 +227,7 @@ async def _run_subprocess_without_streams(
             execution,
         )
     except BaseException:
-        await _cancel_stdin_writer(stdin_task)
+        await _shielded_cleanup(_cancel_stdin_writer(stdin_task))
         raise
     if stdin_task is not None:
         await stdin_task

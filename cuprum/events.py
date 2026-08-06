@@ -36,6 +36,13 @@ type ExecPhase = typ.Literal[
 # operating system recycles a process identifier across executions.
 ExecId = typ.NewType("ExecId", uuid.UUID)
 
+# The stable ``timeout_mode`` values, shared by the ``timeout`` observe event
+# and the ``cuprum.timeout`` log records so a consumer keying on either sees
+# the same two strings. ``elapsed_deadline`` is a positive wall-clock deadline
+# that ran out; ``non_positive_immediate`` is a ``timeout <= 0`` that expired
+# at once, without ever awaiting the process.
+type TimeoutMode = typ.Literal["elapsed_deadline", "non_positive_immediate"]
+
 
 def new_exec_id() -> ExecId:
     """Return a fresh, process-unique execution correlation token.
@@ -155,10 +162,17 @@ class ExecEvent:
     # Appended after exec_id to keep its positional slot stable; see the note
     # in the class docstring.
     timeout_s: float | None = None
-    timeout_mode: str | None = None
+    timeout_mode: TimeoutMode | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]
 
 
-__all__ = ["ExecEvent", "ExecHook", "ExecId", "ExecPhase", "new_exec_id"]
+__all__ = [
+    "ExecEvent",
+    "ExecHook",
+    "ExecId",
+    "ExecPhase",
+    "TimeoutMode",
+    "new_exec_id",
+]

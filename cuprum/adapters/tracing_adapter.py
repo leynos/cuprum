@@ -74,103 +74,24 @@ from cuprum.adapters._support import (
     _project_tag,
 )
 from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
+from cuprum.adapters.tracing_protocols import Span, Tracer
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
     from cuprum.events import ExecEvent, ExecHook, ExecId
 
 
 # Ancillary span-event fields; the timeout pair distinguishes expiry modes.
 _SPAN_FIELDS = ("line", "operation", "error_type", "note", "timeout_s", "timeout_mode")
 
-
-class Span(typ.Protocol):
-    """Protocol for a tracing span.
-
-    Spans represent a unit of work (in this case, command execution) and
-    can be enriched with attributes and events.
-    """
-
-    def set_attribute(self, key: str, value: object) -> None:
-        """Set a span attribute.
-
-        Parameters
-        ----------
-        key:
-            Attribute name (e.g., ``cuprum.program``).
-        value:
-            Attribute value (string, int, float, bool, or list thereof).
-
-        """
-        # PEP 544 protocol stub.
-        ...  # pylint: disable=unnecessary-ellipsis
-
-    def add_event(
-        self,
-        name: str,
-        attributes: cabc.Mapping[str, object] | None = None,
-    ) -> None:
-        """Add an event to the span.
-
-        Parameters
-        ----------
-        name:
-            Event name (e.g., ``cuprum.stdout``).
-        attributes:
-            Optional attributes for the event.
-
-        """
-        # PEP 544 protocol stub.
-        ...  # pylint: disable=unnecessary-ellipsis
-
-    def set_status(self, *, ok: bool) -> None:
-        """Set the span status.
-
-        Parameters
-        ----------
-        ok:
-            True if the operation succeeded, False otherwise.
-
-        """
-        # PEP 544 protocol stub.
-        ...  # pylint: disable=unnecessary-ellipsis
-
-    def end(self) -> None:
-        """End the span, recording its duration."""
-        # PEP 544 protocol stub.
-        ...  # pylint: disable=unnecessary-ellipsis
-
-
-class Tracer(typ.Protocol):
-    """Protocol for a tracing backend.
-
-    Implementations must be thread-safe; hooks may be invoked from multiple
-    threads or async tasks concurrently.
-    """
-
-    def start_span(
-        self,
-        name: str,
-        attributes: cabc.Mapping[str, object] | None = None,
-    ) -> Span:
-        """Start a new span.
-
-        Parameters
-        ----------
-        name:
-            Span name (e.g., ``cuprum.exec echo``).
-        attributes:
-            Initial span attributes.
-
-        Returns
-        -------
-        Span
-            A span that must be ended by calling :meth:`Span.end`.
-
-        """
-        # PEP 544 protocol stub.
-        ...  # pylint: disable=unnecessary-ellipsis
+# An execution's span is ended by its ``exit`` event, but not every execution
+# emits one: cleanup also runs on external cancellation and on an unexpected
+# stdin-writer failure, and on those paths the original exception propagates
+# without an ``exit`` (see the ``ExecEvent.phase`` docstring, which documents
+# ``teardown_error`` as possibly the last event a consumer sees). Without a
+# bound, every such execution would leave an entry behind for the lifetime of
+# the hook. The cap is generous enough that no realistic burst of concurrent
+# executions evicts a live span, so eviction means a genuinely abandoned one.
+_MAX_ACTIVE_SPANS = 1024
 
 
 class TracingHook:
@@ -299,6 +220,13 @@ class TracingHook:
             # the replacement, never a missing/partial entry.
             stale = self._active_spans.get(exec_id)
             self._active_spans[exec_id] = span
+            abandoned = self._evict_overflow_locked()
+
+        for span_to_close in abandoned:
+            # Detached from the map, so exactly one handler ends each. Ended
+            # outside the lock for the same reason as the stale span below.
+            span_to_close.set_status(ok=False)
+            span_to_close.end()
 
         if stale is not None:
             # Duplicated/reused exec_id: the prior span is now detached from the
@@ -308,6 +236,26 @@ class TracingHook:
             # other execution's handler.
             stale.set_status(ok=False)
             stale.end()
+
+    def _evict_overflow_locked(self) -> list[Span]:
+        """Detach the oldest spans once the registry exceeds its cap.
+
+        Must be called with ``self._lock`` held. Returns the detached spans so
+        the caller can end them outside the lock — an arbitrary ``Span`` may
+        block on I/O in ``set_status``/``end``, and holding the lifecycle lock
+        across that would serialise every other execution's handler.
+
+        Insertion order is arrival order, so the oldest entry is the execution
+        least likely to still be running. An execution whose ``exit`` never
+        arrives would otherwise sit here forever.
+        """
+        if len(self._active_spans) <= _MAX_ACTIVE_SPANS:
+            return []
+        overflow = len(self._active_spans) - _MAX_ACTIVE_SPANS
+        return [
+            self._active_spans.pop(stale_id)
+            for stale_id in list(self._active_spans)[:overflow]
+        ]
 
     def _record_span_event(self, event: ExecEvent) -> None:
         """Record ``event``'s diagnostic fields as a span event, keyed by exec_id."""
@@ -321,7 +269,12 @@ class TracingHook:
         if span is None:
             return
 
-        # The span is left open and unmarked; the ``exit`` event still closes it.
+        # The span is left open and unmarked. An ``exit`` event closes it when
+        # one arrives; ``teardown_error`` carries no such guarantee, so a span
+        # left open here is bounded by ``_evict_overflow_locked`` instead. An
+        # ancillary event arriving after ``exit`` finds no entry and is dropped
+        # by the ``span is None`` guard above rather than touching an ended
+        # span.
         event_attrs: dict[str, object] = {}
         for field in _SPAN_FIELDS:
             value = getattr(event, field)

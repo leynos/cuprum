@@ -7,7 +7,9 @@ process is terminated, and how the stream consumers are drained exactly once.
 
 Termination goes through ``_terminate_all_shielded`` rather than
 ``_terminate_process`` directly, so a caller cancelling during the grace
-period cannot skip the ``SIGKILL`` escalation and strand a child.
+period cannot skip the ``SIGKILL`` escalation and strand a child. The task
+reconciliation a run ends with is likewise owned by ``_reconcile_run_tasks``
+so its callers can run it under ``_shielded_cleanup`` as one unit.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import time
 import typing as typ
 
 from cuprum._process_lifecycle import _terminate_all_shielded
+from cuprum._subprocess_stdin import _cancel_stdin_writer
 from cuprum._subprocess_timeout import _require_timeout
 from cuprum._timeout_reporting import (
     _report_teardown_drain_failure,
@@ -170,9 +173,28 @@ async def _wait_for_exit_code_within_timeout(
         raise
 
 
+async def _reconcile_run_tasks(
+    stdin_task: asyncio.Task[None] | None,
+    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+    *,
+    pid: int | None,
+    observation: _StageObservation | None = None,
+) -> tuple[str | None, str | None]:
+    """Cancel the stdin writer and drain the stream consumers, in that order.
+
+    The two halves are one unit so a caller can run them under
+    :func:`_shielded_cleanup` and know both finish: draining first would leave
+    a writer blocked on a pipe nobody is reading, and shielding them separately
+    would let a cancellation landing between the two strand the consumers.
+    """
+    await _cancel_stdin_writer(stdin_task)
+    return await _drain_stream_consumers(consumers, pid=pid, observation=observation)
+
+
 __all__ = [
     "_cancel_pending_consumers",
     "_drain_stream_consumers",
+    "_reconcile_run_tasks",
     "_wait_for_exit_code",
     "_wait_for_exit_code_within_timeout",
 ]

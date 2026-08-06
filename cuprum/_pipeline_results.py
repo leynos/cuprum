@@ -11,14 +11,14 @@ module, so a stage never reports a ``timeout`` and then falls silent.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import time
 import typing as typ
 
 from cuprum._pipeline_types import _EventDetails
 
 if typ.TYPE_CHECKING:
-    import asyncio
-
     from cuprum._pipeline_types import (
         _PipelineSpawnResult,
         _PipelineStageResultInputs,
@@ -47,18 +47,30 @@ def _emit_timeout_exit_events(
     Every stage has been terminated and reaped by this point, so ``returncode``
     is available; ``-1`` stands in for a stage with no recorded code, matching
     ``_get_exit_code``.
+
+    Each stage emits best-effort, matching ``_timeout_reporting._safe_emit``.
+    :meth:`_StageObservation.emit` re-raises a synchronous observe-hook
+    failure, and this runs inside the caller's ``except TimeoutExpired``
+    handler: letting one escape would replace the ``TimeoutExpired`` the caller
+    is about to re-raise *and* abandon the remaining stages, leaving exactly
+    the open spans this function exists to close. ``emit`` records any
+    scheduled async-hook tasks before raising, so those are still drained by
+    the runner; only the synchronous failure is swallowed.
     """
     ended_at = time.perf_counter()
     for idx, obs in enumerate(observations):
         process = spawn.processes[idx]
-        obs.emit(
-            "exit",
-            _EventDetails(
-                pid=process.pid,
-                exit_code=process.returncode if process.returncode is not None else -1,
-                duration_s=max(0.0, ended_at - spawn.started_at[idx]),
-            ),
-        )
+        with contextlib.suppress(Exception, asyncio.CancelledError):
+            obs.emit(
+                "exit",
+                _EventDetails(
+                    pid=process.pid,
+                    exit_code=(
+                        process.returncode if process.returncode is not None else -1
+                    ),
+                    duration_s=max(0.0, ended_at - spawn.started_at[idx]),
+                ),
+            )
 
 
 def _build_pipeline_stage_results(

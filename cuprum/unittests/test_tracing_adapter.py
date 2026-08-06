@@ -11,6 +11,7 @@ import pytest
 
 from cuprum import sh
 from cuprum.adapters.tracing_adapter import (
+    _MAX_ACTIVE_SPANS,
     InMemorySpan,
     InMemoryTracer,
     TracingHook,
@@ -231,6 +232,102 @@ print('stderr-line', file=sys.stderr)""",
             )
         assert span.ended is False, (
             f"an ancillary {phase} event must not end the execution span"
+        )
+
+    def test_teardown_error_after_exit_is_dropped(self) -> None:
+        """A late ``teardown_error`` must not disturb a concluded execution.
+
+        The drain runs after the process has been reaped, so its failure can be
+        reported once ``exit`` has already closed the span. The hook keys on
+        ``exec_id``, and ``exit`` removes the entry, so the late event finds no
+        open span and is dropped rather than reopening or re-ending one.
+        """
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+
+        exec_id = new_exec_id()
+        base = {"program": "cat", "argv": ("cat",), "pid": 4321, "exec_id": exec_id}
+        hook(_make_exec_event(phase="start", overrides=base))
+        hook(
+            _make_exec_event(
+                phase="exit",
+                overrides={**base, "exit_code": 0, "duration_s": 0.5},
+            ),
+        )
+        hook(
+            _make_exec_event(
+                phase="teardown_error",
+                overrides={**base, "operation": "drain", "error_type": "ValueError"},
+            ),
+        )
+
+        span = tracer.spans[0]
+        assert span.ended is True, "the exit event must still have closed the span"
+        assert not any(name == "cuprum.teardown_error" for name, _ in span.events), (
+            "a teardown_error arriving after exit must not be recorded on the "
+            f"closed span, got {[name for name, _ in span.events]}"
+        )
+
+    def test_abandoned_spans_are_evicted_once_the_registry_fills(self) -> None:
+        """An execution that never emits ``exit`` must not accumulate forever.
+
+        Cleanup also runs on external cancellation and on a stdin-writer
+        failure, and on those paths the original exception propagates with no
+        ``exit`` — so a ``teardown_error`` can be the last event an execution
+        emits. Those spans have nothing left to close them, so the registry is
+        bounded and evicts the oldest, ending it as failed.
+        """
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+
+        abandoned = new_exec_id()
+        hook(
+            _make_exec_event(
+                phase="start",
+                overrides={
+                    "program": "cat",
+                    "argv": ("cat",),
+                    "pid": 1,
+                    "exec_id": abandoned,
+                },
+            ),
+        )
+        hook(
+            _make_exec_event(
+                phase="teardown_error",
+                overrides={
+                    "program": "cat",
+                    "argv": ("cat",),
+                    "pid": 1,
+                    "exec_id": abandoned,
+                    "operation": "drain",
+                    "error_type": "ValueError",
+                },
+            ),
+        )
+        assert tracer.spans[0].ended is False, (
+            "the abandoned span should still be open before the registry fills"
+        )
+
+        for index in range(_MAX_ACTIVE_SPANS):
+            hook(
+                _make_exec_event(
+                    phase="start",
+                    overrides={
+                        "program": "cat",
+                        "argv": ("cat",),
+                        "pid": index + 2,
+                        "exec_id": new_exec_id(),
+                    },
+                ),
+            )
+
+        assert tracer.spans[0].ended is True, (
+            "the oldest abandoned span must be ended once the cap is exceeded, "
+            "otherwise a run that never emits exit leaks one entry per execution"
+        )
+        assert len(hook._active_spans) == _MAX_ACTIVE_SPANS, (
+            f"the registry must stay bounded, got {len(hook._active_spans)}"
         )
 
     def test_disables_output_recording(self) -> None:

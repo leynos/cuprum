@@ -998,10 +998,19 @@ Output lines (stdout/stderr) are recorded as span events when
 
 **Ancillary span events.** The `stdin_error`, `timeout`, and `teardown_error`
 phases are recorded as span events named `cuprum.<phase>` on the execution's
-open span, which is neither ended nor marked: the subsequent `exit` event
-still closes it exactly as it would without the ancillary event. Each event
-carries whichever of `line`, `operation`,
-`error_type`, `note`, `timeout_s`, and `timeout_mode` are set on the
+open span, which the ancillary event leaves neither ended nor marked; an
+`exit` event, when one is emitted, closes it exactly as it would without the
+ancillary event. `timeout` is always followed by `exit`, whereas
+`teardown_error` carries no such guarantee and may be the last event a
+consumer sees for that execution — see the `ExecEvent.phase` docstring for the
+paths (external cancellation, an unexpected stdin-writer failure) on which
+cleanup runs without a following `exit`. An execution that never emits `exit`
+would otherwise leave its span open indefinitely, so `TracingHook` bounds its
+registry of open spans (`_MAX_ACTIVE_SPANS`, currently 1024) and, once that
+bound is exceeded, evicts the oldest span and ends it as failed. An ancillary
+event arriving after `exit` finds no open span and is dropped. Each event
+carries whichever of `line`, `operation`, `error_type`, `note`, `timeout_s`,
+and `timeout_mode` are set on the
 `ExecEvent`; unset fields are omitted rather than recorded as `None`. A
 `cuprum.timeout` event therefore carries `operation`, `error_type`,
 `timeout_s`, and `timeout_mode`, which is what lets a consumer distinguish an

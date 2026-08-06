@@ -25,6 +25,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._pipeline_types import _StageObservation
+    from cuprum.events import TimeoutMode
 
 # Timeout diagnostics ride the module-scoped ``cuprum.timeout`` logger,
 # mirroring the ``cuprum.stdin`` convention in ``cuprum._subprocess_stdin``:
@@ -32,11 +33,10 @@ if typ.TYPE_CHECKING:
 # stable attributes rather than parsing the human-readable message.
 _LOGGER = logging.getLogger("cuprum.timeout")
 
-# Distinguishes an elapsed wall-clock deadline from an immediate expiry forced
-# by a non-positive (``<= 0``) timeout, which cannot await the process at all.
-# These are the stable ``timeout_mode`` values on both the ``cuprum.timeout``
-# log records and the ``timeout`` observe event.
-type _TimeoutMode = typ.Literal["elapsed_deadline", "non_positive_immediate"]
+# The module-local spelling of the public :data:`cuprum.events.TimeoutMode`.
+# Aliasing rather than redeclaring keeps the emitted ``timeout_mode`` values
+# and the type consumers see on ``ExecEvent`` from drifting apart.
+type _TimeoutMode = TimeoutMode
 
 
 def _emit_timeout_log(
@@ -236,7 +236,12 @@ def _report_pipeline_timeout_expiry(
     mode: _TimeoutMode = (
         "non_positive_immediate" if configured_timeout <= 0 else "elapsed_deadline"
     )
-    with contextlib.suppress(Exception):
+    # ``CancelledError`` is caught alongside ``Exception`` for the same reason
+    # as ``_safe_emit``: this runs inside the caller's ``except TimeoutExpired``
+    # handler, so anything escaping here replaces the ``TimeoutExpired`` the
+    # caller is about to re-raise. The guard spans the whole per-stage
+    # operation, ``process.pid`` included.
+    with contextlib.suppress(Exception, asyncio.CancelledError):
         for observation, process in zip(observations, processes, strict=False):
             _report_timeout_expiry(
                 observation,

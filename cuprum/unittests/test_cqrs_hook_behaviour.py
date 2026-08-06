@@ -19,13 +19,13 @@ from cuprum import (
     sh,
 )
 from cuprum._observability import (
+    _drain_tasks_during_cleanup,
     _emit_exec_event,
     _ExecEventEmissionError,
     _wait_for_exec_hook_tasks,
 )
 from cuprum._pipeline_internals import (
     _PIPELINE_FINALIZATION_ERROR,
-    _drain_tasks_during_cleanup,
     _finalize_pipeline_execution,
 )
 from cuprum._pipeline_types import _EventDetails, _ExecutionHooks, _StageObservation
