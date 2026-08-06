@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import io
 import sys
+import types
 import typing as typ
 
 import pytest
@@ -101,7 +102,13 @@ def test_timeout_without_configured_timeout_raises_invariant_error(
         fake_gather_pipeline_outputs,
     )
 
-    spawn = typ.cast("_PipelineSpawnResult", object())
+    # The guarded branch needs only ``spawn.processes`` (consumed by the
+    # pipe-task creation and the timed-out stage termination); an empty
+    # process list keeps both no-ops.
+    spawn = typ.cast(
+        "_PipelineSpawnResult",
+        types.SimpleNamespace(processes=[]),
+    )
     parts = typ.cast("tuple[SafeCmd, ...]", ())
 
     with pytest.raises(_PipelineInvariantError) as exc_info:
