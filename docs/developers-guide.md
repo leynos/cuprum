@@ -2843,7 +2843,11 @@ a producer stage that is still running.
 runs the terminations in an owned, `asyncio.shield`ed task and holds off a
 caller's cancellation until they finish before re-raising it. Without that
 shielding, a cancellation landing in the grace-period wait would skip the
-`SIGKILL` escalation and leave a `SIGTERM`-immune stage running.
+`SIGKILL` escalation and leave a `SIGTERM`-immune stage running. A shield
+covers only the one `await` it wraps, so the wait is resumed behind a fresh
+shield after each cancellation rather than re-awaited bare: only the
+teardown's own completion ends the loop, and the first cancellation is
+re-raised so the caller still sees exactly one.
 `_terminate_all_shielded` also backs `_cleanup_spawned_processes` and
 `_cleanup_pipeline_on_error`, and the fail-fast route in
 `_terminate_pipeline_remaining_stages` uses the shared

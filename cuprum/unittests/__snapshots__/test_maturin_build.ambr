@@ -139,6 +139,7 @@
       'cuprum/unittests/test_pipeline_output_options.py',
       'cuprum/unittests/test_pipeline_process_exit.py',
       'cuprum/unittests/test_pipeline_process_lifecycle.py',
+      'cuprum/unittests/test_pipeline_teardown_cancellation.py',
       'cuprum/unittests/test_pipeline_timeout_telemetry.py',
       'cuprum/unittests/test_pipeline_timeouts.py',
       'cuprum/unittests/test_pipeline_wait.py',
