@@ -34,6 +34,10 @@ from cuprum._pipeline_collect import (
     _gather_pipeline_outputs,
     _sh_module,
 )
+from cuprum._pipeline_results import (
+    _build_pipeline_stage_results,
+    _emit_timeout_exit_events,
+)
 from cuprum._pipeline_streams import (
     _cancel_stream_tasks,
     _PipelineRunConfig,
@@ -42,7 +46,6 @@ from cuprum._pipeline_types import (
     _EventDetails,
     _ExecutionHooks,
     _PipelineSpawnResult,
-    _PipelineStageResultInputs,
     _StageObservation,
 )
 from cuprum._process_lifecycle import _spawn_pipeline_processes
@@ -122,45 +125,6 @@ def _emit_plan_events_and_run_before_hooks(
         obs.emit("plan", _EventDetails(pid=None))
         for hook in obs.hooks.before_hooks:
             hook(obs.cmd)
-
-
-def _build_pipeline_stage_results(
-    parts: tuple[SafeCmd, ...],
-    observations: tuple[_StageObservation, ...],
-    *,
-    processes: list[asyncio.subprocess.Process],
-    inputs: _PipelineStageResultInputs,
-) -> list[CommandResult]:
-    """Emit exit events and assemble a command result per pipeline stage."""
-    sh = _sh_module()
-    stage_results: list[CommandResult] = []
-    for idx, obs in enumerate(observations):
-        process = processes[idx]
-        ended_at = inputs.wait_result.ended_at[idx]
-        duration_s = (
-            None
-            if ended_at is None
-            else max(0.0, ended_at - inputs.wait_result.started_at[idx])
-        )
-        obs.emit(
-            "exit",
-            _EventDetails(
-                pid=process.pid,
-                exit_code=inputs.wait_result.exit_codes[idx],
-                duration_s=duration_s,
-            ),
-        )
-        stage_results.append(
-            sh.CommandResult(
-                program=obs.cmd.program,
-                argv=obs.cmd.argv,
-                exit_code=inputs.wait_result.exit_codes[idx],
-                pid=process.pid if process.pid is not None else -1,
-                stdout=inputs.final_stdout if idx == len(parts) - 1 else None,
-                stderr=inputs.stderr_by_stage[idx],
-            ),
-        )
-    return stage_results
 
 
 async def _drain_tasks_during_cleanup(
@@ -250,6 +214,7 @@ async def _run_pipeline(
             spawn.processes,
             configured_timeout=config.timeout,
         )
+        _emit_timeout_exit_events(observations, spawn)
         await _drain_tasks_during_cleanup(
             pending_tasks, timeout_error, message=_PIPELINE_FINALIZATION_ERROR
         )

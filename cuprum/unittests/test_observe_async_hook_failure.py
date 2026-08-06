@@ -26,7 +26,7 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent
 
 
-class _ObserveTaskError(RuntimeError):
+class _ObserveTaskError(Exception):
     """Raised by a deliberately failing async observe hook."""
 
 

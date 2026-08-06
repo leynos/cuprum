@@ -990,9 +990,11 @@ The structured event stream (`ExecEvent`) is exposed via `sh.observe()` and
 implemented with the following decisions:
 
 - **Event phases:** Cuprum emits `plan`, `start`, `stdout`, `stderr`, `stdin`,
-  `stdin_error`, and `exit` phases for both single commands and pipeline
-  stages — the full `ExecPhase` set. Pipeline stage events are tagged with a
-  stage index and stage count.
+  `stdin_error`, `exit`, `timeout`, and `teardown_error` phases for both
+  single commands and pipeline stages — the full `ExecPhase` set. `timeout`
+  and `teardown_error` are ancillary diagnostics rather than lifecycle
+  phases. Pipeline stage events are tagged with a stage index and stage
+  count.
 - **Correlation:** every event for one execution carries the same
   `ExecEvent.exec_id`, a stable token minted once per execution (per pipeline
   stage for pipelines). Consumers that track per-execution state — such as the
