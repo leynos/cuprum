@@ -36,6 +36,7 @@
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
     }),
+    'tracing_span_event': None,
   })
 # ---
 # name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[plan]
@@ -69,6 +70,7 @@
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
     }),
+    'tracing_span_event': None,
   })
 # ---
 # name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[start]
@@ -104,6 +106,7 @@
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
     }),
+    'tracing_span_event': None,
   })
 # ---
 # name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[stderr]
@@ -141,6 +144,7 @@
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
     }),
+    'tracing_span_event': None,
   })
 # ---
 # name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[stdin]
@@ -176,6 +180,7 @@
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
     }),
+    'tracing_span_event': None,
   })
 # ---
 # name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[stdin_error]
@@ -210,6 +215,11 @@
       'cuprum.pipeline_stages': 2,
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
+    }),
+    'tracing_span_event': dict({
+      'error_type': 'ValueError',
+      'name': 'cuprum.stdin_error',
+      'operation': 'write',
     }),
   })
 # ---
@@ -248,6 +258,7 @@
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
     }),
+    'tracing_span_event': None,
   })
 # ---
 # name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[teardown_error]
@@ -283,6 +294,12 @@
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
     }),
+    'tracing_span_event': dict({
+      'error_type': 'ValueError',
+      'name': 'cuprum.teardown_error',
+      'note': 'consumer drain failed: ValueError',
+      'operation': 'drain',
+    }),
   })
 # ---
 # name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[timeout]
@@ -317,6 +334,13 @@
       'cuprum.pipeline_stages': 2,
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
+    }),
+    'tracing_span_event': dict({
+      'error_type': 'TimeoutError',
+      'name': 'cuprum.timeout',
+      'operation': 'wait',
+      'timeout_mode': 'elapsed_deadline',
+      'timeout_s': 1.5,
     }),
   })
 # ---

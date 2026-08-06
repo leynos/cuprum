@@ -12,8 +12,12 @@
 ### Added
 
 - **Timeout and teardown telemetry:** Emit `timeout` and `teardown_error`
-  `ExecEvent` phases, each carrying `timeout_s` and `timeout_mode` fields,
-  alongside a structured `cuprum.timeout` log channel, the
+  `ExecEvent` phases. `timeout` carries `operation="wait"`, `error_type`,
+  `timeout_s` (the configured timeout), and `timeout_mode`, which
+  distinguishes an elapsed deadline from an immediate non-positive expiry;
+  `teardown_error` instead carries `operation="drain"` and `error_type` (the
+  comma-joined failure classes), with both timeout fields unset. Both
+  phases are accompanied by a structured `cuprum.timeout` log channel, the
   `cuprum_timeouts_total` and `cuprum_teardown_errors_total` metrics
   counters, and ancillary tracing span events. Adoption is additive:
   existing hooks, the `TimeoutExpired` exception and its payload, and the

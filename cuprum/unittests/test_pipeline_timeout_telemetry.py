@@ -20,6 +20,7 @@ import pytest
 
 from cuprum import Program, ScopeConfig, TimeoutExpired, scoped, sh
 from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
+from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
 from cuprum.sh import RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 
@@ -161,4 +162,57 @@ def test_pipeline_timeout_expired_still_reaches_the_caller() -> None:
 
     assert exc_info.value.timeout == pytest.approx(0.2), (
         "the raised TimeoutExpired must still carry the configured timeout"
+    )
+
+
+def test_pipeline_timeout_emits_terminal_exit_events() -> None:
+    """Every reaped stage still reports a terminal ``exit`` event.
+
+    The success path emits these while assembling stage results, which a
+    timeout never reaches. Without an explicit emission the stage would report
+    a ``timeout`` and then go silent — and, because ``TracingHook`` ends a span
+    only on ``exit``, its span would stay open for the tracer's lifetime.
+    """
+    events: list[ExecEvent] = []
+    _run_until_timeout(0.2, events, InMemoryMetrics())
+
+    exits = [ev for ev in events if ev.phase == "exit"]
+    assert len(exits) == _STAGE_COUNT, (
+        f"each of the {_STAGE_COUNT} stages must report a terminal exit event, "
+        f"got {[(ev.phase, ev.pid) for ev in events]}"
+    )
+    assert {ev.pid for ev in exits} == {
+        ev.pid for ev in events if ev.phase == "start"
+    }, "the exit events must cover exactly the stages that started"
+
+    phases = [ev.phase for ev in events]
+    assert phases.index("timeout") < phases.index("exit"), (
+        f"timeout must precede the exit it accompanies, got {phases}"
+    )
+
+
+def test_pipeline_timeout_closes_tracing_spans() -> None:
+    """A timed-out pipeline leaves no span open in the tracer.
+
+    This is what the terminal ``exit`` event buys: ancillary phases record a
+    span event and deliberately leave the span open, so only ``exit`` can end
+    it. A pipeline that timed out previously stranded one span per stage.
+    """
+    tracer = InMemoryTracer()
+    pipeline, allowlist = _sleeping_pipeline()
+
+    with (
+        scoped(ScopeConfig(allowlist=allowlist)),
+        sh.observe(TracingHook(tracer)),
+        pytest.raises(TimeoutExpired),
+    ):
+        pipeline.run_sync(timeout=0.2, output=RunOutputOptions(capture=False))
+
+    assert len(tracer.spans) == _STAGE_COUNT, (
+        f"expected one span per stage, got {len(tracer.spans)}"
+    )
+    unfinished = [span for span in tracer.spans if not span.ended]
+    assert not unfinished, (
+        f"a timed-out pipeline must end every span it opened, {len(unfinished)} "
+        "were left open"
     )
