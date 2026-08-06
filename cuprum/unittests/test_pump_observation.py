@@ -25,8 +25,8 @@ from cuprum.pump_observation import (
     observe_pump,
 )
 from cuprum.unittests._rust_pump_test_helpers import (
-    allow_pause,
     decline_on_pause_failure,
+    force_pause_outcome,
     run_raw_fd_pump,
 )
 
@@ -151,7 +151,10 @@ def test_a_raising_collector_leaves_the_fall_back_signal_intact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The hop still reports that it fell back, so the Python pump runs."""
-    allow_pause(monkeypatch, may_hand_off=False)
+    force_pause_outcome(
+        monkeypatch,
+        decline_reason=RustPumpDeclineReason.READER_PAUSE_FAILED,
+    )
     with observe_pump(_raise_boom):
         handled = run_raw_fd_pump()
 

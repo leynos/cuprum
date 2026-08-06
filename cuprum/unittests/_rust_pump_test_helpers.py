@@ -19,6 +19,7 @@ import types
 import typing as typ
 
 from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum.pump_events import RustPumpDeclineReason
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -99,6 +100,42 @@ def owned_fds() -> cabc.Iterator[tuple[int, int]]:
             # already have taken one of these.
             with contextlib.suppress(OSError):
                 os.close(fd)
+
+
+def force_pause_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    decline_reason: RustPumpDeclineReason | None = None,
+) -> None:
+    """Force the reader-pause seam to the given outcome."""
+    monkeypatch.setattr(
+        _pipeline_streams,
+        "_pause_reader_transport",
+        lambda _reader: _pipeline_stream_fds._ReaderPause(
+            may_hand_off=decline_reason is None,
+            decline_reason=decline_reason,
+        ),
+    )
+
+
+class PauseOnlyTransport:
+    """A transport offering ``pause_reading`` but no ``resume_reading``."""
+
+    def __init__(self) -> None:
+        """Start with no calls recorded."""
+        self.pause_calls = 0
+
+    def pause_reading(self) -> None:
+        """Record a pause that could never be undone."""
+        self.pause_calls += 1
+
+
+class TransportOnlyReader:
+    """Minimal ``StreamReader`` stand-in exposing a ``transport`` attribute."""
+
+    def __init__(self, transport: object) -> None:
+        """Wrap ``transport`` as the reader's public transport."""
+        self.transport = transport
 def allow_pause(monkeypatch: pytest.MonkeyPatch, *, may_hand_off: bool) -> None:
     """Force the reader-pause seam to the given hand-off verdict."""
     monkeypatch.setattr(

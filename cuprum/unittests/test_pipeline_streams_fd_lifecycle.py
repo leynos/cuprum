@@ -24,6 +24,11 @@ from hypothesis import strategies as st
 
 from cuprum import _pipeline_stream_fds, _pipeline_streams
 from cuprum._pipeline_stream_fds import _BlockingModeGuard, _paused_reader
+from cuprum.pump_events import RustPumpDeclineReason
+from cuprum.unittests._rust_pump_test_helpers import (
+    PauseOnlyTransport,
+    TransportOnlyReader,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -172,16 +177,6 @@ class _FakeTransport:
     def resume_reading(self) -> None:
         """Record a resume."""
         self.resume_calls += 1
-
-
-class _FakeReader:
-    """Minimal stand-in exposing a ``transport`` attribute."""
-
-    def __init__(self, transport: object) -> None:
-        """Wrap ``transport`` as the reader's public transport."""
-        self.transport = transport
-
-
 def _raise_boom() -> None:
     """Raise a deterministic error from inside a paused-reader block."""
     msg = "boom"
@@ -195,7 +190,7 @@ def test_paused_reader_always_resumes_a_pausable_transport(
 ) -> None:
     """Resume fires exactly once on both the normal and exception exits."""
     transport = _FakeTransport()
-    reader = typ.cast("asyncio.StreamReader", _FakeReader(transport))
+    reader = typ.cast("asyncio.StreamReader", TransportOnlyReader(transport))
 
     if body_raises:
         with pytest.raises(ValueError, match="boom"), _paused_reader(reader):
@@ -232,29 +227,14 @@ def test_paused_reader_skips_resume_when_pause_unavailable() -> None:
     that resumes whatever hook it can find regardless of whether a pause
     succeeded.
     """
-    reader = typ.cast("asyncio.StreamReader", _FakeReader(_ResumeOnlyTransport()))
+    reader = typ.cast(
+        "asyncio.StreamReader", TransportOnlyReader(_ResumeOnlyTransport())
+    )
 
-    with _paused_reader(reader) as may_hand_off:
-        assert may_hand_off is True, (
+    with _paused_reader(reader) as pause:
+        assert pause.may_hand_off is True, (
             "with no callbacks to race, the descriptor hand-off is safe"
         )
-
-class _PauseOnlyTransport:
-    """A transport offering ``pause_reading`` but no ``resume_reading``.
-
-    Pausing this transport could never be undone, so a correct implementation
-    leaves it alone entirely; the method records calls so an implementation
-    that pauses anyway is caught rather than merely suspected.
-    """
-
-    def __init__(self) -> None:
-        """Start with no calls recorded."""
-        self.pause_calls = 0
-
-    def pause_reading(self) -> None:
-        """Record a pause that could never be undone."""
-        self.pause_calls += 1
-
 def test_paused_reader_declines_an_unresumable_transport() -> None:
     """A pausable transport with no resume hook declines the hand-off, unpaused.
 
@@ -263,12 +243,13 @@ def test_paused_reader_declines_an_unresumable_transport() -> None:
     Python fallback reads the same stream and would stall on a reader nothing
     can restart. The only safe move is to leave the transport untouched.
     """
-    transport = _PauseOnlyTransport()
-    reader = typ.cast("asyncio.StreamReader", _FakeReader(transport))
+    transport = PauseOnlyTransport()
+    reader = typ.cast("asyncio.StreamReader", TransportOnlyReader(transport))
 
-    with _paused_reader(reader) as may_hand_off:
-        assert may_hand_off is False, (
-            "a transport that cannot be resumed must decline the hand-off"
+    with _paused_reader(reader) as pause:
+        assert pause.decline_reason is RustPumpDeclineReason.READER_UNRESUMABLE, (
+            "a transport that cannot be resumed must decline the hand-off, and "
+            "say so in its own name rather than a pause that raised"
         )
 
     assert transport.pause_calls == 0, (
@@ -277,11 +258,12 @@ def test_paused_reader_declines_an_unresumable_transport() -> None:
 def test_paused_reader_undoes_a_half_applied_pause() -> None:
     """A pause that raises is corrected once, at the failure site."""
     transport = _FakeTransport(pause_raises=True)
-    reader = typ.cast("asyncio.StreamReader", _FakeReader(transport))
+    reader = typ.cast("asyncio.StreamReader", TransportOnlyReader(transport))
 
-    with _paused_reader(reader) as may_hand_off:
-        assert may_hand_off is False, (
-            "a pause that raised must report the hand-off as unsafe"
+    with _paused_reader(reader) as pause:
+        assert pause.decline_reason is RustPumpDeclineReason.READER_PAUSE_FAILED, (
+            "a pause that raised must report the hand-off as unsafe, named "
+            "apart from a transport that was never paused at all"
         )
 
     assert transport.pause_calls == 1, "the pause must be attempted exactly once"
@@ -315,7 +297,7 @@ def test_run_rust_pump_falls_back_and_resumes_when_blocking_fails(
             """Record a resume invocation."""
             resume_calls["count"] += 1
 
-        return _pipeline_stream_fds._ReaderPause(may_hand_off=True, resume=_resume)
+        return _pipeline_stream_fds._ReaderPause(resume=_resume)
 
     async def fake_drain_reader_buffer(
         reader: asyncio.StreamReader,
@@ -368,7 +350,9 @@ def test_pump_over_raw_fds_falls_back_when_pause_fails(
     monkeypatch.setattr(
         _pipeline_streams,
         "_pause_reader_transport",
-        lambda _reader: _pipeline_stream_fds._ReaderPause(may_hand_off=False),
+        lambda _reader: _pipeline_stream_fds._ReaderPause(
+            decline_reason=RustPumpDeclineReason.READER_PAUSE_FAILED,
+        ),
     )
     monkeypatch.setattr(_pipeline_stream_fds._BlockingModeGuard, "engage", fake_engage)
 

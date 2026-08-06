@@ -13,6 +13,8 @@ import logging
 import os
 import typing as typ
 
+from cuprum.pump_events import RustPumpDeclineReason
+
 if typ.TYPE_CHECKING:
     import asyncio
     import collections.abc as cabc
@@ -58,7 +60,7 @@ def _extract_stream_fd(
     return _fd_from_transport(transport)
 
 
-@dc.dataclass(frozen=True, slots=True)
+@dc.dataclass(frozen=True, slots=True, init=False)
 class _ReaderPause:
     """The outcome of trying to pause a reader transport.
 
@@ -68,7 +70,23 @@ class _ReaderPause:
     """
 
     may_hand_off: bool
-    resume: cabc.Callable[[], None] | None = None
+    resume: cabc.Callable[[], None] | None
+    decline_reason: RustPumpDeclineReason | None
+
+    def __init__(
+        self,
+        may_hand_off: bool | None = None,
+        resume: cabc.Callable[[], None] | None = None,
+        decline_reason: RustPumpDeclineReason | None = None,
+    ) -> None:
+        """Record a pause outcome, deriving its verdict from a decline reason."""
+        object.__setattr__(
+            self,
+            "may_hand_off",
+            decline_reason is None if may_hand_off is None else may_hand_off,
+        )
+        object.__setattr__(self, "resume", resume)
+        object.__setattr__(self, "decline_reason", decline_reason)
 
 
 def _pause_reader_transport(
@@ -83,7 +101,10 @@ def _pause_reader_transport(
     if not callable(pause_reading):
         return _ReaderPause(may_hand_off=True)
     if not callable(resume_reading):
-        return _ReaderPause(may_hand_off=False)
+        return _ReaderPause(
+            may_hand_off=False,
+            decline_reason=RustPumpDeclineReason.READER_UNRESUMABLE,
+        )
     try:
         pause_reading()
     except (RuntimeError, OSError):
@@ -91,7 +112,10 @@ def _pause_reader_transport(
         # Python fallback never inherits a reader that has lost its callbacks.
         with contextlib.suppress(RuntimeError, OSError):
             resume_reading()
-        return _ReaderPause(may_hand_off=False)
+        return _ReaderPause(
+            may_hand_off=False,
+            decline_reason=RustPumpDeclineReason.READER_PAUSE_FAILED,
+        )
 
     def _resume() -> None:
         """Resume the paused reader transport, recording teardown errors."""
@@ -168,7 +192,7 @@ class _BlockingModeGuard:
 
 
 @contextlib.contextmanager
-def _paused_reader(reader: asyncio.StreamReader) -> cabc.Iterator[bool]:
+def _paused_reader(reader: asyncio.StreamReader) -> cabc.Iterator[_ReaderPause]:
     """Pause ``reader`` for the block and report whether hand-off is safe.
 
     An unsupported or unresumable transport is never paused, and a failed pause
@@ -177,7 +201,7 @@ def _paused_reader(reader: asyncio.StreamReader) -> cabc.Iterator[bool]:
     """
     pause = _pause_reader_transport(reader)
     try:
-        yield pause.may_hand_off
+        yield pause
     finally:
         _resume_reader_transport(pause.resume)
 

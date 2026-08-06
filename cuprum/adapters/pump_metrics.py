@@ -56,11 +56,11 @@ _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
 UNKNOWN_DECLINE_REASON = "unknown"
 """The ``reason`` label a decline carrying no recognized reason degrades to.
 
-Public because it is operator-visible: it is the fourth and last value the
-``reason`` label can take, so a dashboard filtering on
-:class:`~cuprum.pump_events.RustPumpDeclineReason` alone would silently miss
-these. Declared here rather than as an enum member because no seam reports it —
-it exists only so a malformed event cannot introduce an unbounded label.
+Public because it is operator-visible: it is the one value the ``reason`` label
+can take that is not a :class:`~cuprum.pump_events.RustPumpDeclineReason`
+member, so a dashboard filtering on that enum alone would silently miss these.
+Declared here rather than as an enum member because no seam reports it — it
+exists only so a malformed event cannot introduce an unbounded label.
 """
 
 
@@ -94,11 +94,11 @@ class PumpMetricsHook:
     The hook emits:
 
     - ``cuprum_rust_pump_declined_total``: incremented once per hop that fell
-      back to the Python pump, labelled ``reason`` with one of
-      ``raw_fd_unavailable``, ``reader_pause_failed``, or
-      ``blocking_mode_unavailable`` — or :data:`UNKNOWN_DECLINE_REASON` for a
-      decline whose reason is not one of those, which no call site in this
-      library produces but a hand-built event can carry.
+      back to the Python pump, labelled ``reason`` with the
+      :class:`~cuprum.pump_events.RustPumpDeclineReason` member naming the seam
+      that refused — or :data:`UNKNOWN_DECLINE_REASON` for a decline whose
+      reason is not one of them, which no call site in this library produces
+      but a hand-built event can carry.
     - ``cuprum_rust_pump_failed_after_cancel_total``: incremented once,
       unlabelled, per Rust-pump worker failure recovered after its hop was
       cancelled.

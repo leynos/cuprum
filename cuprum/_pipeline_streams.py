@@ -38,6 +38,7 @@ from cuprum._pipeline_stream_fds import (
     _extract_stream_fd,
     _pause_reader_transport,
     _resume_reader_transport,
+    _suppressed_teardown_failure,
 )
 from cuprum._pipeline_stream_results import (
     _cancel_stream_tasks as _cancel_stream_tasks,
@@ -232,7 +233,7 @@ async def _run_rust_pump(
         return False
     # Rust closed only its duplicate, so the transport descriptor is still
     # valid: close it through asyncio to signal EOF downstream.
-    with contextlib.suppress(OSError):
+    with _suppressed_teardown_failure(_LOGGER, "writer_close", OSError):
         await _close_stream_writer(writer)
     return True
 
@@ -249,7 +250,10 @@ async def _pump_over_raw_fds(
     # before the Rust pump takes over the raw file descriptor.
     reader_pause = _pause_reader_transport(reader)
     if not reader_pause.may_hand_off:
-        _log_rust_pump_declined(_RustPumpDeclineReason.READER_PAUSE_FAILED)
+        _log_rust_pump_declined(
+            reader_pause.decline_reason
+            or _RustPumpDeclineReason.READER_PAUSE_FAILED,
+        )
         return False
     try:
         await _drain_reader_buffer(reader, writer)
