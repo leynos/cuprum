@@ -2426,6 +2426,28 @@ consumers exactly once via `_drain_stream_consumers` (see the stdin-injection
 sequence below), and terminating the process before that drain is what lets it
 reach EOF.
 
+Terminating the process makes EOF imminent, but it does not make the readers
+observe it. `_drain_stream_consumers` therefore takes a `capture` flag, and a
+capturing drain does two things a non-capturing one does not:
+
+- It waits up to `_CAPTURE_EOF_GRACE_S` for the readers to reach EOF before
+  cancelling them, so a reader parked in `read()` one scheduling turn short of
+  EOF still delivers what it captured. The window is bounded because a
+  grandchild that inherited the pipe can wedge a reader indefinitely, and
+  teardown must never wait on that.
+- It reports a reader that still has no text as the empty string rather than
+  `None`, so the documented "a capturing run reports its streams as text"
+  contract holds by construction rather than by scheduling luck.
+
+Pass `capture=False` wherever the drained text is discarded — the cancellation
+and stdin-failure paths — so teardown pays neither the window nor the contract.
+Relying on the readers happening to finish first is what broke under Python
+3.15.0rc1, where the process exit is observed before the pipes' pending
+end-of-file events are; see
+[issue #292](https://github.com/leynos/cuprum/issues/292). The contract is
+guarded by `cuprum/unittests/test_timeout_capture_contract.py`, which withholds
+EOF outright so the assertions hold on every interpreter.
+
 ### Pipeline timeout and teardown
 
 A pipeline enforces one deadline for the whole run, rather than a separate

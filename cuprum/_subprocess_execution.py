@@ -80,22 +80,53 @@ async def _wait_for_exit_code(
     return exit_code, exited_at
 
 
+# How long a capturing drain lets readers observe EOF before cancelling them.
+# The process is already dead by then, so EOF is imminent rather than
+# hypothetical, and a reader cancelled a scheduling turn short of it loses the
+# capture it was about to deliver. The window stays short because a grandchild
+# holding the pipe can wedge a reader indefinitely.
+_CAPTURE_EOF_GRACE_S = 0.25
+
+
+def _decode_consumer_result(
+    result: str | BaseException | None,
+    *,
+    capture: bool,
+) -> str | None:
+    """Decode one drained consumer into the text its stream reports.
+
+    A reader that failed, was cancelled, or was never capturing has no text of
+    its own. A capturing run promised a string, so it reports the empty string;
+    a non-capturing run reports ``None``, having never had text to report.
+    """
+    if isinstance(result, BaseException) or result is None:
+        return "" if capture else None
+    return result
+
+
 async def _drain_stream_consumers(
     consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+    *,
+    capture: bool,
 ) -> tuple[str | None, str | None]:
-    """Cancel pending consumers, drain them once, and decode their output.
+    """Settle pending consumers, drain them once, and decode their output.
 
-    A consumer that failed or was cancelled maps to ``None`` so a broken reader
-    cannot mask the surrounding failure. Draining here exactly once keeps the
-    timeout and cancellation paths from reconciling the same tasks twice.
+    Draining exactly once keeps the timeout and cancellation paths from
+    reconciling the same tasks twice. Under ``capture`` the readers first get a
+    bounded window to reach EOF (see :data:`_CAPTURE_EOF_GRACE_S`), and one that
+    still has no text reports the empty string. Pass ``capture=False`` where the
+    drained text is discarded, so teardown pays neither window nor contract.
     """
+    if capture:
+        await asyncio.wait(consumers, timeout=_CAPTURE_EOF_GRACE_S)
     _cancel_pending_consumers(consumers)
     stdout_result, stderr_result = await asyncio.gather(
         *consumers, return_exceptions=True
     )
-    stdout_text = None if isinstance(stdout_result, BaseException) else stdout_result
-    stderr_text = None if isinstance(stderr_result, BaseException) else stderr_result
-    return stdout_text, stderr_text
+    return (
+        _decode_consumer_result(stdout_result, capture=capture),
+        _decode_consumer_result(stderr_result, capture=capture),
+    )
 
 
 async def _wait_for_exit_code_within_timeout(
@@ -245,7 +276,10 @@ async def _run_subprocess_with_streams(
         # stream consumers exactly once here, then hand the decoded output to the
         # timeout handler so it survives on the resulting TimeoutExpired.
         await _cancel_stdin_writer(stdin_task)
-        stdout_text, stderr_text = await _drain_stream_consumers(consumers)
+        stdout_text, stderr_text = await _drain_stream_consumers(
+            consumers,
+            capture=execution.capture,
+        )
         _handle_stream_timeout(
             exc,
             stdout_text=stdout_text,
@@ -254,7 +288,10 @@ async def _run_subprocess_with_streams(
         )
     except asyncio.CancelledError:
         await _cancel_stdin_writer(stdin_task)
-        await _drain_stream_consumers(consumers)
+        # The drained text is discarded here: a cancelled run raises rather than
+        # reporting output, so the capture contract does not apply and teardown
+        # need not wait for readers to reach EOF.
+        await _drain_stream_consumers(consumers, capture=False)
         raise
     if stdin_task is not None:
         try:
@@ -263,8 +300,9 @@ async def _run_subprocess_with_streams(
             # An unexpected stdin-writer failure (or a cancellation landing on
             # this await) must still reconcile the stdout/stderr consumers,
             # mirroring the timeout and cancellation paths above, so those tasks
-            # are cancelled and drained before the error propagates.
-            await _drain_stream_consumers(consumers)
+            # are cancelled and drained before the error propagates. Its text is
+            # discarded, so this drain skips the capture contract too.
+            await _drain_stream_consumers(consumers, capture=False)
             raise
     stdout_text, stderr_text = await asyncio.gather(*consumers)
     return exit_code, exited_at, stdout_text, stderr_text
@@ -346,6 +384,7 @@ __all__ = [
     "_build_stream_config",
     "_cancel_pending_consumers",
     "_create_stream_callback",
+    "_decode_consumer_result",
     "_drain_stream_consumers",
     "_execute_subprocess",
     "_run_subprocess_with_streams",

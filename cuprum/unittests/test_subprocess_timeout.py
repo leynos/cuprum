@@ -77,7 +77,9 @@ def test_drain_stream_consumers_cancels_pending_and_decodes() -> None:
         completed = asyncio.create_task(asyncio.sleep(0, result="stderr"))
         await completed  # the completed consumer must be genuinely done
 
-        stdout_text, stderr_text = await _drain_stream_consumers((pending, completed))
+        stdout_text, stderr_text = await _drain_stream_consumers(
+            (pending, completed), capture=False
+        )
 
         assert pending.cancelled(), (
             "a consumer left pending at drain must be cancelled, "
@@ -125,7 +127,9 @@ def test_drain_stream_consumers_decodes_across_orderings(case: _DrainCase) -> No
         for _ in range(_SETTLE_TURNS):
             await asyncio.sleep(0)
 
-        stdout_text, stderr_text = await _drain_stream_consumers(consumers)
+        stdout_text, stderr_text = await _drain_stream_consumers(
+            consumers, capture=False
+        )
 
         assert all(task.done() for task in consumers), (
             "every consumer task must be drained before the helper returns"
