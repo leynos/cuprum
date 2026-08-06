@@ -20,9 +20,7 @@ import logging
 
 _READ_SIZE = 4096
 _POST_CLOSE_DRAIN_TIMEOUT_S = 0.25
-# Preserve the ``cuprum._streams`` log namespace expected by callers and tests
-# even though these helpers now live in a sibling module.
-_LOGGER = logging.getLogger("cuprum._streams")
+_LOGGER = logging.getLogger(__name__)
 
 
 @dc.dataclass(slots=True)

@@ -103,21 +103,19 @@ def _build_scenario_comparisons(
     max_regression: float,
 ) -> tuple[ScenarioComparison, ...]:
     """Build ordered scenario comparisons from validated ratio maps."""
-    comparisons: list[ScenarioComparison] = []
-    for scenario_name in sorted(baseline_ratios):
-        baseline_ratio = baseline_ratios[scenario_name]
-        candidate_ratio = candidate_ratios[scenario_name]
-        regression_ratio = (candidate_ratio - baseline_ratio) / baseline_ratio
-        comparisons.append(
-            ScenarioComparison(
-                scenario_name=scenario_name,
-                baseline_ratio=baseline_ratio,
-                candidate_ratio=candidate_ratio,
-                regression_ratio=regression_ratio,
-                max_regression=max_regression,
+    return tuple(
+        ScenarioComparison(
+            scenario_name=scenario_name,
+            baseline_ratio=baseline_ratios[scenario_name],
+            candidate_ratio=candidate_ratios[scenario_name],
+            regression_ratio=(
+                (candidate_ratios[scenario_name] - baseline_ratios[scenario_name])
+                / baseline_ratios[scenario_name]
             ),
+            max_regression=max_regression,
         )
-    return tuple(comparisons)
+        for scenario_name in sorted(baseline_ratios)
+    )
 
 
 def compare_rust_regressions(

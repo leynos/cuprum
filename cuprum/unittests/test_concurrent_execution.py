@@ -15,6 +15,7 @@ import pytest
 
 from cuprum import (
     ECHO,
+    LS,
     ForbiddenProgramError,
     ScopeConfig,
     scoped,
@@ -173,8 +174,6 @@ class TestConcurrentExecution:
     @staticmethod
     def test_forbidden_program_raises_before_execution() -> None:
         """ForbiddenProgramError is raised before any command executes."""
-        from cuprum import LS
-
         echo = sh.make(ECHO)
         cmd1 = echo("-n", "hello")
         cmd2 = echo("-n", "world")

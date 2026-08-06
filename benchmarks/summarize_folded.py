@@ -125,6 +125,14 @@ def summarize_folded_file(
         Summary with keys ``total_samples`` (int), ``top_inclusive_frames``
         (list of dicts), ``top_leaf_frames`` (list of dicts), and
         ``top_stacks`` (list of dicts).
+
+    Raises
+    ------
+    TypeError
+        If ``limit`` or ``example_limit`` is not an integer (``bool`` is
+        rejected as a non-integer).
+    ValueError
+        If ``limit`` or ``example_limit`` is not positive.
     """
     _validate_positive_int("limit", limit)
     _validate_positive_int("example_limit", example_limit)

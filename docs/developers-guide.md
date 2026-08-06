@@ -258,7 +258,7 @@ tracing backend.  Hook scheduling and hook failures use the
 `cuprum._observability` logger with structured `extra` fields such as
 `cuprum_phase`, `cuprum_program`, `cuprum_error_type`, and
 `cuprum_scheduled_task_count`.  Stream early-close decisions use warning-level
-records on the `cuprum._streams` logger and include `cuprum_discarded_bytes`
+records on the `cuprum._streams_pump` logger and include `cuprum_discarded_bytes`
 when upstream bytes are drained after the downstream writer has closed.
 Suppressed writer cleanup failures remain debug-level diagnostics with
 `cuprum_operation` and `cuprum_error_type`, because they are expected during

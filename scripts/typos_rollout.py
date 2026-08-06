@@ -13,6 +13,19 @@ import typos_rollout_refresh
 if typ.TYPE_CHECKING:
     import pathlib
 
+# The façade's public surface: the aliases scripts and tests consume.
+# Private helpers such as ``_atomic_write`` stay unexported.
+__all__ = [
+    "SCHEMA_VERSION",
+    "SUFFIX_PAIRS",
+    "Dictionary",
+    "RefreshResult",
+    "generate_word_mappings",
+    "load_dictionary",
+    "merge_dictionaries",
+    "refresh_base",
+]
+
 _atomic_write = typos_rollout_cache.atomic_write
 
 SCHEMA_VERSION = typos_rollout_dictionary.SCHEMA_VERSION

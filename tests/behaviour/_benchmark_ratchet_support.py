@@ -18,7 +18,21 @@ if typ.TYPE_CHECKING:
 
 
 class FixtureBundle(typ.TypedDict):
-    """Typed fixture paths for one ratchet CLI invocation."""
+    """Typed fixture paths for one ratchet CLI invocation.
+
+    Attributes
+    ----------
+    baseline_plan_path : pth.Path
+        Path to the baseline benchmark plan JSON document.
+    baseline_throughput_path : pth.Path
+        Path to the baseline throughput JSON document.
+    candidate_plan_path : pth.Path
+        Path to the candidate benchmark plan JSON document.
+    candidate_throughput_path : pth.Path
+        Path to the candidate throughput JSON document.
+    report_path : pth.Path
+        Path at which the ratchet report is written.
+    """
 
     baseline_plan_path: pth.Path
     baseline_throughput_path: pth.Path

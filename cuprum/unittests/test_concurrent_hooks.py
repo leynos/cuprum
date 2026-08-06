@@ -15,7 +15,12 @@ if typ.TYPE_CHECKING:
 from cuprum import (
     ECHO,
     CommandResult,
+    ExecEvent,
+    SafeCmd,
     ScopeConfig,
+    after,
+    before,
+    observe,
     scoped,
     sh,
 )
@@ -45,7 +50,6 @@ class TestConcurrentHooks:
     @staticmethod
     def test_before_hooks_fire_per_command() -> None:
         """Before hooks fire for each command in concurrent execution."""
-        from cuprum import SafeCmd, before
 
         def make_tracker(calls: list[str]) -> cabc.Callable[[SafeCmd], None]:
             """Build a before-hook that records each command's program."""
@@ -66,7 +70,6 @@ class TestConcurrentHooks:
     @staticmethod
     def test_after_hooks_fire_per_command() -> None:
         """After hooks fire for each command in concurrent execution."""
-        from cuprum import SafeCmd, after
 
         def make_tracker(
             calls: list[int],
@@ -90,18 +93,22 @@ class TestConcurrentHooks:
     @staticmethod
     def test_observe_hooks_receive_events_per_command() -> None:
         """Observe hooks receive events for each command."""
-        from cuprum import ExecEvent, observe
 
-        echo = sh.make(ECHO)
-        commands = [echo("-n", f"cmd{i}") for i in range(2)]
-        events: list[ExecEvent] = []
+        def make_tracker(
+            calls: list[ExecEvent],
+        ) -> cabc.Callable[[ExecEvent], None]:
+            """Build an observe-hook that records each execution event."""
 
-        def track_events(ev: ExecEvent) -> None:
-            """Append each received execution event to the tracked list."""
-            events.append(ev)
+            def track_events(ev: ExecEvent) -> None:
+                """Append each received execution event to the tracked list."""
+                calls.append(ev)
 
-        with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), observe(track_events):
-            run_concurrent_sync(*commands)
+            return track_events
+
+        events = _run_hook_test(
+            lambda calls: observe(make_tracker(calls)),
+            num_commands=2,
+        )
 
         # Each command should emit plan, start, stdout (if any), exit events
         phases = [ev.phase for ev in events]

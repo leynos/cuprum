@@ -27,7 +27,15 @@ _WRITER_TOGGLE_FAILURE = "writer toggle failed"
 
 
 class PumpCallCounts(typ.TypedDict, total=False):
-    """Count Rust and Python pump dispatches in test doubles."""
+    """Count Rust and Python pump dispatches in test doubles.
+
+    Attributes
+    ----------
+    rust_pump : int
+        Number of times the Rust pump was dispatched.
+    python_pump : int
+        Number of times the Python pump fallback was dispatched.
+    """
 
     rust_pump: int
     python_pump: int
@@ -87,7 +95,18 @@ class _WriterWithoutPause:
 
 @pytest.fixture
 def clear_backend_caches() -> cabc.Iterator[None]:
-    """Clear and restore backend-selection test hooks for each test."""
+    """Clear and restore backend-selection caches and test hooks.
+
+    Resets the Rust availability override, the pump-dispatch test hooks, and
+    the ``_check_rust_available``/``get_stream_backend`` LRU caches before the
+    test runs, then restores the prior state afterwards so backend selection
+    for other tests is unaffected.
+
+    Yields
+    ------
+    None
+        Control passes to the test while the caches and hooks are cleared.
+    """
     from cuprum import _backend
 
     def reset() -> None:

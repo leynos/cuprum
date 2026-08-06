@@ -137,13 +137,13 @@ def test_pump_stream_logs_discarded_bytes_after_downstream_close(
             typ.cast("asyncio.StreamWriter", writer),
         )
 
-    with caplog.at_level(logging.DEBUG, logger="cuprum._streams"):
+    with caplog.at_level(logging.DEBUG, logger="cuprum._streams_pump"):
         asyncio.run(exercise())
 
     discarded_records = [
         record
         for record in caplog.records
-        if record.name == "cuprum._streams"
+        if record.name == "cuprum._streams_pump"
         and "stream_downstream_closed" in record.message
     ]
     assert discarded_records, "early downstream close should log discarded bytes"
@@ -164,13 +164,13 @@ def test_pump_stream_omits_downstream_close_log_without_writer(
         await _pump_stream(typ.cast("asyncio.StreamReader", reader), None)
         return reader
 
-    with caplog.at_level(logging.DEBUG, logger="cuprum._streams"):
+    with caplog.at_level(logging.DEBUG, logger="cuprum._streams_pump"):
         reader = asyncio.run(exercise())
 
     close_records = [
         record
         for record in caplog.records
-        if record.name == "cuprum._streams"
+        if record.name == "cuprum._streams_pump"
         and "stream_downstream_closed" in record.message
     ]
     assert reader.read_calls == 3, "pump should drain all chunks plus EOF"

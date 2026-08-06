@@ -608,6 +608,9 @@ class Pipeline:
 
         Raises
         ------
+        TypeError
+            If ``deprecated_flags`` contains keys other than ``capture`` or
+            ``echo``.
         ValueError
             If both ``output`` and the deprecated ``capture``/``echo`` flags
             are supplied.
