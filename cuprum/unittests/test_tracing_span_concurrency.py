@@ -74,6 +74,9 @@ def _block_span_end(
     ``end`` is reached, and setting ``release`` lets it proceed. Other spans'
     ``end`` calls are unaffected.
     """
+    # Other spans' ``end`` calls are unaffected. Returns a
+    # ``(entered, release)`` pair: ``entered`` is set when the blocked
+    # ``end`` is reached, and setting ``release`` lets it proceed.
     entered = threading.Event()
     release = threading.Event()
     real_end = InMemorySpan.end

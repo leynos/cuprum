@@ -312,11 +312,14 @@ def test_cuprum_context_with_env_overlay_is_immutable_proxy() -> None:
 
 def test_env_restores_on_exception() -> None:
     """``env(...)`` restores the previous context even when an exception is raised."""
+    # The ValueError is raised deliberately inside the ``env`` block and caught
+    # by ``pytest.raises``, so it never escapes this test.
     original = current_context()
+    message = "test"
     with (
         pytest.raises(ValueError, match=r"test"),
         env(CUPRUM_TEST_EXCEPTION_RESTORE="1"),
     ):
-        raise ValueError("test")
+        raise ValueError(message)
     assert current_context() is original
     assert current_context().env_overlay is None

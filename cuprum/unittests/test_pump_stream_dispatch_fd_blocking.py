@@ -1,13 +1,13 @@
-"""Unit integration tests for pipeline stream backend pathway selection.
+"""Unit integration tests for pump-stream dispatch FD-blocking behaviour.
 
-These tests exercise the dispatch layer used by pipeline pumping to verify
-backend overrides, forced fallback to Python, and forced-rust error handling.
+These tests exercise the Rust dispatch path used by pipeline pumping to verify
+file-descriptor blocking toggles, reader transport pause/resume ordering, and
+rollback of blocking changes when a toggle fails partway through.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import typing as typ
 from unittest import mock
 
@@ -16,190 +16,29 @@ import pytest
 from cuprum import _pipeline_streams
 from cuprum._testing import (
     configure_pump_stream_dispatch_for_testing,
-    reset_pump_stream_dispatch_for_testing,
     set_rust_availability_for_testing,
+)
+from cuprum.unittests._pump_stream_dispatch_support import (
+    _WRITER_TOGGLE_FAILURE,
+    PumpCallCounts,
+    _fake_python_fallback,
+    _make_blocking_fd_spy,
+    _nonblocking_pipe_pair,
+    _ReaderWithoutPause,
+    _WriterWithoutPause,
+    clear_backend_caches,
 )
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+__all__ = ["clear_backend_caches"]
+
 pytestmark = pytest.mark.usefixtures("clear_backend_caches")
-_WRITER_TOGGLE_FAILURE = "writer toggle failed"
-
-
-@contextlib.contextmanager
-def _nonblocking_pipe_pair() -> cabc.Iterator[tuple[int, int, int, int]]:
-    """Yield two pipes with active ends configured for non-blocking I/O."""
-    read_fd, read_write_fd = _pipeline_streams.os.pipe()
-    write_read_fd, write_fd = _pipeline_streams.os.pipe()
-    _pipeline_streams.os.set_blocking(read_fd, False)
-    _pipeline_streams.os.set_blocking(write_fd, False)
-    try:
-        yield read_fd, read_write_fd, write_read_fd, write_fd
-    finally:
-        _pipeline_streams.os.close(read_fd)
-        _pipeline_streams.os.close(read_write_fd)
-        _pipeline_streams.os.close(write_read_fd)
-        _pipeline_streams.os.close(write_fd)
-
-
-class _TransportWithoutPause:
-    """Transport shim exposing fileno() and pipe info for tests."""
-
-    def __init__(self, fd: int) -> None:
-        """Store the file descriptor backing this stub transport."""
-        self._fd = fd
-
-    def get_extra_info(self, name: str) -> object | None:
-        """Return stub transport info for the requested key."""
-        if name != "pipe":
-            return None
-        return self
-
-    def fileno(self) -> int:
-        """Return the file descriptor exposed by this stub transport."""
-        return self._fd
-
-
-class _ReaderWithoutPause:
-    """Test reader object holding a transport without pause support."""
-
-    def __init__(self, fd: int) -> None:
-        """Attach a pause-free transport built from the given descriptor."""
-        self.transport = _TransportWithoutPause(fd)
-
-
-class _WriterWithoutPause:
-    """Test writer object holding a transport without pause support."""
-
-    def __init__(self, fd: int) -> None:
-        """Attach a pause-free transport built from the given descriptor."""
-        self.transport = _TransportWithoutPause(fd)
-
-
-@pytest.fixture
-def clear_backend_caches() -> cabc.Iterator[None]:
-    """Clear and restore backend-selection test hooks for each test."""
-    from cuprum import _backend
-
-    set_rust_availability_for_testing(is_available=None)
-    reset_pump_stream_dispatch_for_testing()
-    _backend._check_rust_available.cache_clear()
-    _backend.get_stream_backend.cache_clear()
-    yield
-    set_rust_availability_for_testing(is_available=None)
-    reset_pump_stream_dispatch_for_testing()
-    _backend._check_rust_available.cache_clear()
-    _backend.get_stream_backend.cache_clear()
 
 
 class TestPumpStreamDispatch:
-    """Unit integration tests for ``_pump_stream_dispatch`` selection paths."""
-
-    @pytest.mark.parametrize(
-        "case",
-        [
-            pytest.param(
-                {
-                    "backend_env": "python",
-                    "rust_available": None,
-                    "force_fd_extraction_failure": False,
-                    "expected_rust_fd_attempts": 0,
-                },
-                id="forced-python",
-            ),
-            pytest.param(
-                {
-                    "backend_env": "rust",
-                    "rust_available": True,
-                    "force_fd_extraction_failure": True,
-                    "expected_rust_fd_attempts": 1,
-                },
-                id="rust-fd-extraction-fails",
-            ),
-        ],
-    )
-    def test_dispatch_falls_back_to_python(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        case: dict[str, str | bool | int | None],
-    ) -> None:
-        """Python pump is used when forced or when Rust FD extraction fails.
-
-        Parameters
-        ----------
-        monkeypatch : pytest.MonkeyPatch
-            Fixture used to override environment variables.
-        case : dict[str, str | bool | None | int]
-            Parameterized backend mode and expected call counts.
-        """
-        _ = self
-        backend_env = typ.cast("str", case["backend_env"])
-        rust_available = typ.cast("bool | None", case["rust_available"])
-        force_fd_extraction_failure = typ.cast(
-            "bool", case["force_fd_extraction_failure"]
-        )
-        expected_rust_fd_attempts = typ.cast("int", case["expected_rust_fd_attempts"])
-        monkeypatch.setenv("CUPRUM_STREAM_BACKEND", backend_env)
-        if rust_available is not None:
-            set_rust_availability_for_testing(is_available=rust_available)
-
-        calls = {"rust_fd_path_attempts": 0, "python_pump": 0}
-
-        async def fake_pump(
-            reader: asyncio.StreamReader | None,
-            writer: asyncio.StreamWriter | None,
-        ) -> None:
-            """Stand in for the Python pump and record that it ran."""
-            await asyncio.sleep(0)
-            calls["python_pump"] += 1
-
-        def on_rust_fd_path_attempt() -> None:
-            """Record that the Rust FD-extraction path was attempted."""
-            calls["rust_fd_path_attempts"] += 1
-
-        configure_pump_stream_dispatch_for_testing(
-            force_fd_extraction_failure=force_fd_extraction_failure,
-            on_rust_fd_path_attempt=on_rust_fd_path_attempt,
-            python_pump=fake_pump,
-        )
-
-        reader = typ.cast("asyncio.StreamReader", object())
-        writer = typ.cast("asyncio.StreamWriter", object())
-        asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
-
-        assert calls["rust_fd_path_attempts"] == expected_rust_fd_attempts, (
-            f"expected {expected_rust_fd_attempts} Rust FD extraction attempt(s), "
-            f"got {calls['rust_fd_path_attempts']}"
-        )
-        assert calls["python_pump"] == 1, "expected Python pump to handle the dispatch"
-
-    @staticmethod
-    def _make_blocking_fd_spy(
-        calls: dict[str, int],
-        expected_reader_fd: int,
-        expected_writer_fd: int,
-    ) -> cabc.Callable[[int, int], int]:
-        """Return a fake ``rust_pump_stream`` that asserts FDs are blocking."""
-
-        def _spy(reader_fd: int, writer_fd: int) -> int:
-            """Assert both descriptors are blocking, then record the call."""
-            assert _pipeline_streams.os.get_blocking(reader_fd), (
-                "expected reader FD to be switched to blocking mode"
-            )
-            assert _pipeline_streams.os.get_blocking(writer_fd), (
-                "expected writer FD to be switched to blocking mode"
-            )
-            assert reader_fd == expected_reader_fd, (
-                "expected Rust path to use extracted reader FD"
-            )
-            assert writer_fd == expected_writer_fd, (
-                "expected Rust path to use extracted writer FD"
-            )
-            calls["rust_pump"] += 1
-            return 0
-
-        return _spy
+    """Unit integration tests for ``_pump_stream_dispatch`` FD toggling."""
 
     def test_dispatch_sets_rust_fds_blocking_before_native_pump(
         self,
@@ -240,7 +79,7 @@ class TestPumpStreamDispatch:
                 ),
             )
 
-            calls = {"rust_pump": 0, "python_pump": 0}
+            calls: PumpCallCounts = {"rust_pump": 0, "python_pump": 0}
 
             async def fake_python_pump(
                 reader: asyncio.StreamReader | None,
@@ -255,7 +94,7 @@ class TestPumpStreamDispatch:
             monkeypatch.setattr(
                 streams_rs,
                 "rust_pump_stream",
-                self._make_blocking_fd_spy(calls, read_fd, write_fd),
+                _make_blocking_fd_spy(calls, read_fd, write_fd),
             )
             configure_pump_stream_dispatch_for_testing(python_pump=fake_python_pump)
 
@@ -274,53 +113,6 @@ class TestPumpStreamDispatch:
         assert not original_writer_blocking, (
             "expected original writer FD to remain non-blocking"
         )
-
-    def test_dispatch_raises_import_error_when_rust_forced_but_unavailable(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Forced Rust mode surfaces ImportError when extension is unavailable.
-
-        Parameters
-        ----------
-        monkeypatch : pytest.MonkeyPatch
-            Fixture used to override environment variables.
-        """
-        _ = self
-        monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
-        set_rust_availability_for_testing(is_available=False)
-
-        calls = {"python_pump": 0}
-
-        async def fake_pump(
-            reader: asyncio.StreamReader | None,
-            writer: asyncio.StreamWriter | None,
-        ) -> None:
-            """Stand in for the Python pump and record that it ran."""
-            await asyncio.sleep(0)
-            calls["python_pump"] += 1
-
-        configure_pump_stream_dispatch_for_testing(python_pump=fake_pump)
-
-        reader = typ.cast("asyncio.StreamReader", object())
-        writer = typ.cast("asyncio.StreamWriter", object())
-        with pytest.raises(ImportError, match="CUPRUM_STREAM_BACKEND"):
-            asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
-
-        assert calls["python_pump"] == 0, (
-            "Python pump should not run when forced Rust is unavailable"
-        )
-
-    @staticmethod
-    async def _fake_python_fallback(
-        reader: asyncio.StreamReader | None,
-        writer: asyncio.StreamWriter | None,
-        calls: dict[str, int],
-    ) -> None:
-        """Stand in for the Python pump fallback and record that it ran."""
-        del reader, writer
-        await asyncio.sleep(0)
-        calls["python_pump"] += 1
 
     def test_run_rust_pump_pauses_reader_before_draining(
         self,
@@ -414,10 +206,17 @@ class TestPumpStreamDispatch:
             )
 
             original_set_blocking = _pipeline_streams.os.set_blocking
-            calls = {"python_pump": 0}
+            calls: PumpCallCounts = {"python_pump": 0}
 
             def fake_set_blocking(fd: int, blocking: object) -> None:
-                """Toggle blocking but fail when the writer FD is set blocking."""
+                """Toggle blocking but fail when the writer FD is set blocking.
+
+                Raises
+                ------
+                OSError
+                    If the writer FD is switched to blocking mode, simulating
+                    a failure partway through the toggle sequence.
+                """
                 if fd == read_fd and blocking is True:
                     original_set_blocking(
                         fd,
@@ -430,7 +229,7 @@ class TestPumpStreamDispatch:
 
             monkeypatch.setattr(_pipeline_streams.os, "set_blocking", fake_set_blocking)
             configure_pump_stream_dispatch_for_testing(
-                python_pump=lambda reader, writer: self._fake_python_fallback(
+                python_pump=lambda reader, writer: _fake_python_fallback(
                     reader,
                     writer,
                     calls,
@@ -465,10 +264,16 @@ class TestPumpStreamDispatch:
             write_fd,
         ):
             del read_write_fd, write_read_fd
-            calls = {"rust_pump": 0, "python_pump": 0}
+            calls: PumpCallCounts = {"rust_pump": 0, "python_pump": 0}
 
             def fake_rust_pump_stream(reader_fd: int, writer_fd: int) -> int:
-                """Stand in for the Rust pump and record that it ran."""
+                """Stand in for the Rust pump and record that it ran.
+
+                Returns
+                -------
+                int
+                    Always ``0`` to mimic a successful native pump.
+                """
                 assert reader_fd == read_fd
                 assert writer_fd == write_fd
                 calls["rust_pump"] += 1
@@ -487,7 +292,7 @@ class TestPumpStreamDispatch:
                 lambda _writer: asyncio.sleep(0),
             )
             configure_pump_stream_dispatch_for_testing(
-                python_pump=lambda reader, writer: self._fake_python_fallback(
+                python_pump=lambda reader, writer: _fake_python_fallback(
                     reader,
                     writer,
                     calls,

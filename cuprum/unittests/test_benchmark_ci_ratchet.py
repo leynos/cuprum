@@ -11,6 +11,7 @@ from benchmarks.benchmark_profile import (
     BENCHMARK_PROFILE_VERSION,
     IncompatibleBenchmarkProfileError,
 )
+from benchmarks.ratchet_ratio_extraction import _extract_scenario_entry
 from benchmarks.ratchet_rust_performance import (
     BenchmarkRunPayload,
     ComparisonReport,
@@ -53,8 +54,8 @@ def _throughput_payload(*, python_mean: float, rust_mean: float) -> dict[str, ob
     """Return a throughput payload."""
     return {
         "results": [
-            {"command": "python-run", "mean": python_mean},
-            {"command": "rust-run", "mean": rust_mean},
+            {"command": "python-small-single-nocb", "mean": python_mean},
+            {"command": "rust-small-single-nocb", "mean": rust_mean},
         ],
     }
 
@@ -210,6 +211,59 @@ def test_compare_rust_regressions_passes_within_threshold() -> None:
     assert report.comparisons[0].regression_ratio == pytest.approx(0.10)
 
 
+def test_extract_scenario_entry_accepts_matching_command() -> None:
+    """A result command may match its positionally paired scenario name."""
+    entry = _extract_scenario_entry(
+        index=0,
+        scenario_value={"name": "rust-small", "backend": "rust"},
+        result_value={"command": "rust-small", "mean": 1.5},
+    )
+
+    assert entry == ("small", "rust", 1.5), (
+        "matching positional entries must preserve comparison extraction"
+    )
+
+
+def test_extract_scenario_entry_rejects_mismatched_command() -> None:
+    """A result command must identify its positionally paired scenario."""
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"results\[0\]\.command 'python-small' must match "
+            r"scenarios\[0\]\.name 'rust-small'"
+        ),
+    ):
+        _extract_scenario_entry(
+            index=0,
+            scenario_value={"name": "rust-small", "backend": "rust"},
+            result_value={"command": "python-small", "mean": 1.5},
+        )
+
+
+@pytest.mark.parametrize(
+    ("result_value", "expected_exception"),
+    [
+        pytest.param({"mean": 1.5}, TypeError, id="missing"),
+        pytest.param({"command": 7, "mean": 1.5}, TypeError, id="non-string"),
+        pytest.param({"command": "", "mean": 1.5}, ValueError, id="empty"),
+    ],
+)
+def test_extract_scenario_entry_rejects_invalid_command(
+    result_value: dict[str, object],
+    expected_exception: type[Exception],
+) -> None:
+    """Result commands must be present, string typed, and non-empty."""
+    with pytest.raises(
+        expected_exception,
+        match=r"results\[0\]\.command must be a non-empty string",
+    ):
+        _extract_scenario_entry(
+            index=0,
+            scenario_value={"name": "rust-small", "backend": "rust"},
+            result_value=result_value,
+        )
+
+
 def test_compare_rust_regressions_ignores_runner_speed_differences() -> None:
     """Uniform runner slowdowns cancel out of the within-run ratio."""
     report = _run_comparison(
@@ -232,6 +286,75 @@ def test_compare_rust_regressions_fails_beyond_threshold() -> None:
     assert report.worst_regression_ratio == pytest.approx(0.25)
     assert len(report.regressions) == 1
     assert report.regressions[0].scenario_name == "small-single-nocb"
+
+
+def _multi_scenario_plan() -> dict[str, object]:
+    """Return a plan payload with three comparison groups in unsorted order."""
+    return {
+        "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+        "dry_run": True,
+        "rust_available": True,
+        "worker_iterations": 20,
+        "command": ["hyperfine", "placeholder"],
+        "scenarios": [
+            _scenario_payload(name="python-zeta", backend="python"),
+            _scenario_payload(name="rust-zeta", backend="rust"),
+            _scenario_payload(name="python-alpha", backend="python"),
+            _scenario_payload(name="rust-alpha", backend="rust"),
+            _scenario_payload(name="python-mid", backend="python"),
+            _scenario_payload(name="rust-mid", backend="rust"),
+        ],
+    }
+
+
+def _multi_scenario_throughput(
+    *, zeta: float, alpha: float, mid: float
+) -> dict[str, object]:
+    """Return throughput results whose Rust means are the desired ratios."""
+    return {
+        "results": [
+            {"command": "python-zeta", "mean": 1.0},
+            {"command": "rust-zeta", "mean": zeta},
+            {"command": "python-alpha", "mean": 1.0},
+            {"command": "rust-alpha", "mean": alpha},
+            {"command": "python-mid", "mean": 1.0},
+            {"command": "rust-mid", "mean": mid},
+        ],
+    }
+
+
+def test_compare_rust_regressions_sorts_scenarios_and_computes_ratios() -> None:
+    """The report sorts comparisons and carries exact ratios and the threshold."""
+    report = compare_rust_regressions(
+        baseline=BenchmarkRunPayload(
+            plan=_multi_scenario_plan(),
+            throughput=_multi_scenario_throughput(zeta=2.0, alpha=1.0, mid=4.0),
+            context_name="baseline",
+        ),
+        candidate=BenchmarkRunPayload(
+            plan=_multi_scenario_plan(),
+            throughput=_multi_scenario_throughput(zeta=3.0, alpha=1.5, mid=3.0),
+            context_name="candidate",
+        ),
+        max_regression=0.10,
+    )
+
+    assert isinstance(report.comparisons, tuple), (
+        "comparisons must be exposed as a tuple"
+    )
+    assert [entry.scenario_name for entry in report.comparisons] == [
+        "alpha",
+        "mid",
+        "zeta",
+    ], "comparisons must be ordered by sorted scenario name, not payload order"
+    assert [entry.regression_ratio for entry in report.comparisons] == pytest.approx([
+        0.5,
+        -0.25,
+        0.5,
+    ]), "regression ratio must be (candidate - baseline) / baseline"
+    assert all(entry.max_regression == 0.10 for entry in report.comparisons), (
+        "the configured threshold must be carried onto every comparison"
+    )
 
 
 def test_compare_rust_regressions_rejects_result_count_mismatch() -> None:
@@ -272,7 +395,7 @@ def test_compare_rust_regressions_rejects_missing_python_scenarios() -> None:
     }
     rust_only_throughput = {
         "results": [
-            {"command": "rust-run", "mean": 1.0},
+            {"command": "rust-small-single-nocb", "mean": 1.0},
         ],
     }
 
@@ -306,7 +429,7 @@ def test_compare_rust_regressions_rejects_missing_rust_scenarios() -> None:
     }
     python_only_throughput = {
         "results": [
-            {"command": "python-run", "mean": 1.0},
+            {"command": "python-small-single-nocb", "mean": 1.0},
         ],
     }
 
@@ -372,9 +495,9 @@ def test_compare_rust_regressions_rejects_duplicate_rust_scenario_names() -> Non
     }
     duplicate_throughput = {
         "results": [
-            {"command": "python-run", "mean": 1.0},
-            {"command": "rust-run", "mean": 1.0},
-            {"command": "rust-run-duplicate", "mean": 1.1},
+            {"command": "python-small-single-nocb", "mean": 1.0},
+            {"command": "rust-small-single-nocb", "mean": 1.0},
+            {"command": "rust-small-single-nocb", "mean": 1.1},
         ],
     }
 

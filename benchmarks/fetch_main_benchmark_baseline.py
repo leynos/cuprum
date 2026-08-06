@@ -16,6 +16,7 @@ import urllib.request
 import zipfile
 
 from benchmarks._validation import (
+    _require_bool,
     _require_list,
     _require_mapping,
     _require_non_empty_string,
@@ -54,14 +55,6 @@ def _require_int(value: object, *, name: str) -> int:
     """Validate that *value* is an integer."""
     if isinstance(value, bool) or not isinstance(value, int):
         msg = f"{name} must be an integer"
-        raise TypeError(msg)
-    return value
-
-
-def _require_bool(value: object, *, name: str) -> bool:
-    """Validate that *value* is a boolean."""
-    if not isinstance(value, bool):
-        msg = f"{name} must be a boolean"
         raise TypeError(msg)
     return value
 

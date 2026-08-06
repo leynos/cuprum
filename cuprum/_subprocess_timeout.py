@@ -12,6 +12,7 @@ import time
 import typing as typ
 
 from cuprum._pipeline_internals import _EventDetails
+from cuprum._pipeline_types import _ExecutionInvariantError
 from cuprum._subprocess_context import _sh_module
 
 if typ.TYPE_CHECKING:
@@ -21,12 +22,11 @@ if typ.TYPE_CHECKING:
     from cuprum._subprocess_execution import _SubprocessExecution
 
 
-class _SubprocessInvariantError(RuntimeError):
+class _SubprocessInvariantError(_ExecutionInvariantError):
     """Raised when an internal subprocess-execution invariant is violated.
 
-    Subclasses :class:`RuntimeError` so it is still caught by broad runtime
-    handlers, while giving these impossible-state guards a distinct,
-    package-scoped type that callers can tell apart from unrelated runtime
+    Subclasses the shared package-level invariant error, which itself derives
+    from :class:`RuntimeError`, while retaining a distinct type for subprocess
     failures.
     """
 

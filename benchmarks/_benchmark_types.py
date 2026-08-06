@@ -47,12 +47,11 @@ from benchmarks._benchmark_type_validators import (
     _validate_bool,
     _validate_hyperfine_iterations,
     _validate_iteration_count,
-    _validate_non_empty_string,
     _validate_path,
     _validate_payload_bytes,
-    _validate_scenario_name,
     _validate_stages,
 )
+from benchmarks._validation import _require_non_empty_string
 
 BackendName = typ.Literal["python", "rust"]
 
@@ -99,9 +98,12 @@ class PipelineBenchmarkScenario:
 
     Raises
     ------
+    TypeError
+        If ``name`` is not a string.
     ValueError
-        If ``name`` is empty, ``payload_bytes`` is non-positive, ``stages`` is
-        less than two, or ``backend`` is not supported.
+        If ``name`` is empty or whitespace-only, ``payload_bytes`` is
+        non-positive, ``stages`` is less than two, or ``backend`` is not
+        supported.
 
     Examples
     --------
@@ -124,7 +126,7 @@ payload_bytes=1024, stages=3, with_line_callbacks=False)
 
     def __post_init__(self) -> None:
         """Validate scenario values that are critical for execution."""
-        _validate_scenario_name(self.name)
+        _require_non_empty_string(self.name, name="name")
         _validate_payload_bytes(self.payload_bytes)
         _validate_stages(self.stages)
         _validate_bool(self.with_line_callbacks, name="with_line_callbacks")
@@ -175,9 +177,11 @@ class HyperfineConfig:
     Raises
     ------
     TypeError
-        If ``warmup`` or ``runs`` are not integers.
+        If ``warmup`` or ``runs`` are not integers, or ``hyperfine_bin`` is
+        not a string.
     ValueError
-        If ``warmup`` is negative or ``runs`` is less than one.
+        If ``warmup`` is negative, ``runs`` is less than one, or
+        ``hyperfine_bin`` is empty or contains only whitespace.
 
     Examples
     --------
@@ -191,7 +195,7 @@ class HyperfineConfig:
 
     def __post_init__(self) -> None:
         """Validate hyperfine invocation configuration."""
-        _validate_non_empty_string(self.hyperfine_bin, name="hyperfine_bin")
+        _require_non_empty_string(self.hyperfine_bin, name="hyperfine_bin")
         _validate_hyperfine_iterations(warmup=self.warmup, runs=self.runs)
 
 
@@ -235,9 +239,10 @@ class PipelineBenchmarkConfig:
     Raises
     ------
     TypeError
-        If boolean settings are not booleans.
+        If boolean settings are not booleans, or if a configured executable
+        name is not a string.
     ValueError
-        If configured executable names are empty.
+        If configured executable names are empty or whitespace-only.
 
     Examples
     --------
@@ -276,10 +281,10 @@ class PipelineBenchmarkConfig:
             _validate_path(self.worker_path, name="worker_path"),
         )
         _validate_hyperfine_iterations(warmup=self.warmup, runs=self.runs)
-        _validate_non_empty_string(self.hyperfine_bin, name="hyperfine_bin")
-        _validate_non_empty_string(self.python_bin, name="python_bin")
+        _require_non_empty_string(self.hyperfine_bin, name="hyperfine_bin")
+        _require_non_empty_string(self.python_bin, name="python_bin")
         if self.uv_bin is not None:
-            _validate_non_empty_string(self.uv_bin, name="uv_bin")
+            _require_non_empty_string(self.uv_bin, name="uv_bin")
         _validate_bool(self.dry_run, name="dry_run")
         _validate_bool(self.rust_available, name="rust_available")
         _validate_iteration_count(

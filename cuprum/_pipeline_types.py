@@ -17,6 +17,11 @@ import typing as typ
 from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
 from cuprum.events import ExecEvent, new_exec_id
 
+
+class _ExecutionInvariantError(RuntimeError):
+    """Base class for internal pipeline and subprocess invariant failures."""
+
+
 if typ.TYPE_CHECKING:
     import asyncio
     import collections.abc as cabc

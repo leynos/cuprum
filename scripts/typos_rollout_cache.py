@@ -33,8 +33,8 @@ class RemoteResponse(typ.Protocol):
     status: int
     headers: cabc.Mapping[str, str]
 
-    def read(self) -> bytes:
-        """Read the response body."""
+    def read(self, limit: int | None = None, /) -> bytes:
+        """Read at most *limit* bytes of the response body (all when None)."""
         ...
 
 

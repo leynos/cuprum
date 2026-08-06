@@ -132,16 +132,23 @@ def test_folded_summary_counts_repeated_frames_once_per_stack(
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "fragment"),
+    ("kwargs", "error_type", "fragment"),
     [
-        pytest.param({"limit": 0}, "limit must be a positive integer", id="limit-zero"),
+        pytest.param(
+            {"limit": 0},
+            ValueError,
+            "limit must be a positive integer",
+            id="limit-zero",
+        ),
         pytest.param(
             {"example_limit": 0},
+            ValueError,
             "example_limit must be a positive integer",
             id="example-limit-zero",
         ),
         pytest.param(
             {"limit": True},
+            TypeError,
             "limit must be a positive integer",
             id="limit-bool",
         ),
@@ -150,18 +157,66 @@ def test_folded_summary_counts_repeated_frames_once_per_stack(
 def test_folded_summary_rejects_invalid_limits(
     tmp_path: pth.Path,
     kwargs: dict[str, object],
+    error_type: type[Exception],
     fragment: str,
 ) -> None:
     """Folded summary API rejects non-positive and non-integer limits."""
     folded = tmp_path / "stacks.folded"
     folded.write_text("root;leaf 1\n")
 
-    with pytest.raises(ValueError, match=fragment):
-        summarize_folded_file(  # type: ignore[call-overload]
+    with pytest.raises(error_type, match=fragment):
+        summarize_folded_file(  # pyright: ignore[reportCallIssue] - Exercise runtime validation with deliberately invalid keyword values.
             folded,
             output=tmp_path / "summary.json",
-            **kwargs,  # type: ignore[invalid-argument-type]
+            **kwargs,  # ty: ignore[invalid-argument-type] - Exercise runtime validation with deliberately invalid keyword values.
         )
+
+
+@pytest.mark.parametrize(
+    ("limit", "example_limit"),
+    [
+        pytest.param(1, 1, id="minimum"),
+        pytest.param(5, 2, id="typical"),
+        pytest.param(1000, 100, id="large"),
+    ],
+)
+def test_folded_summary_accepts_valid_limits(
+    tmp_path: pth.Path,
+    limit: int,
+    example_limit: int,
+) -> None:
+    """Positive integer limits are accepted and bound the generated summary."""
+    folded = tmp_path / "stacks.folded"
+    # Three distinct call paths share the ``alpha`` leaf, so that frame has more
+    # candidate examples than the smaller ``example_limit`` values allow.
+    folded.write_text(
+        "root;one;alpha 3\nroot;two;alpha 2\nroot;three;alpha 1\n"
+        "root;beta 2\nroot;gamma 1\n"
+    )
+    output = tmp_path / "summary.json"
+
+    summary = summarize_folded_file(
+        folded,
+        output=output,
+        limit=limit,
+        example_limit=example_limit,
+    )
+
+    top_leaf = typ.cast("list[dict[str, object]]", summary["top_leaf_frames"])
+    assert top_leaf, "a valid limit must still produce ranked leaf frames"
+    # The fixture yields exactly three leaf frames (alpha, beta, gamma), so
+    # the ranked list must hold every frame the limit permits — no more.
+    assert len(top_leaf) == min(limit, 3), (
+        f"the ranked list must hold exactly min(limit={limit}, 3) frames, "
+        f"got {len(top_leaf)}"
+    )
+    for entry in top_leaf:
+        examples = typ.cast("list[str]", entry["example_stacks"])
+        assert len(examples) <= example_limit, (
+            f"{entry['frame']!r} kept {len(examples)} examples, "
+            f"exceeding the requested example_limit of {example_limit}"
+        )
+    assert output.exists(), "the summary must be written to the requested path"
 
 
 def _run_folded_summary_cli(

@@ -12,8 +12,12 @@ import sys
 
 def _validate_positive_int(name: str, value: int) -> None:
     """Validate a positive integer public argument."""
-    if type(value) is not int or value <= 0:
-        msg = f"{name} must be a positive integer, got {value!r}"
+    msg = f"{name} must be a positive integer, got {value!r}"
+    # ``type(value) is not int`` deliberately excludes ``bool`` (a subclass of
+    # ``int``) so ``True``/``False`` are rejected as non-integers.
+    if type(value) is not int:
+        raise TypeError(msg)
+    if value <= 0:
         raise ValueError(msg)
 
 
@@ -121,6 +125,14 @@ def summarize_folded_file(
         Summary with keys ``total_samples`` (int), ``top_inclusive_frames``
         (list of dicts), ``top_leaf_frames`` (list of dicts), and
         ``top_stacks`` (list of dicts).
+
+    Raises
+    ------
+    TypeError
+        If ``limit`` or ``example_limit`` is not an integer (``bool`` is
+        rejected as a non-integer).
+    ValueError
+        If ``limit`` or ``example_limit`` is not positive.
     """
     _validate_positive_int("limit", limit)
     _validate_positive_int("example_limit", example_limit)
