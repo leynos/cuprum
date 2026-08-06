@@ -18,6 +18,10 @@ awaiting coroutine resumes immediately, so a caller's
 ``_shielded_cleanup`` instead retries the wait under a shield until the
 owned task is done, absorbing however many cancellations arrive before
 re-raising.
+
+The pipeline waiter decides when fail-fast teardown is necessary; this module
+owns the subprocess handles and executes that decision alongside timeout and
+error cleanup.
 """
 
 from __future__ import annotations
