@@ -16,7 +16,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import ScopeConfig, scoped, sh
+from cuprum import ScopeConfig, TimeoutExpired, scoped, sh
 from cuprum._process_lifecycle import (
     _terminate_pipeline_remaining_stages,
     _terminate_timed_out_stages,
@@ -71,6 +71,20 @@ class _SigtermImmuneProcess:
         self._exited.set()
 
 
+class _SignallingImmuneProcess(_SigtermImmuneProcess):
+    """SIGTERM-immune double that announces when ``terminate()`` lands."""
+
+    def __init__(self) -> None:
+        """Start unexited, with the signal announcement unset."""
+        super().__init__()
+        self.signalled = asyncio.Event()
+
+    def terminate(self) -> None:
+        """Record the signal and announce that the grace window has opened."""
+        super().terminate()
+        self.signalled.set()
+
+
 def test_timeout_teardown_completes_despite_caller_cancellation() -> None:
     """Cancelling mid-grace must not strand a stage before the SIGKILL escalation.
 
@@ -78,18 +92,19 @@ def test_timeout_teardown_completes_despite_caller_cancellation() -> None:
     out ``cancel_grace`` first. If the caller's cancellation interrupted that
     wait, a stage ignoring ``SIGTERM`` would survive the run that spawned it.
     Teardown is therefore shielded and finishes before the cancellation
-    propagates.
+    propagates. The stage announces the signal, so the cancellation is timed
+    against the opening of the grace window rather than against the clock.
     """
 
     async def run_case() -> None:
         """Cancel the teardown inside its grace window and inspect the stage."""
-        process = _SigtermImmuneProcess()
+        process = _SignallingImmuneProcess()
         task = asyncio.create_task(
             _terminate_timed_out_stages(
                 [typ.cast("asyncio.subprocess.Process", process)], 0.2
             )
         )
-        await asyncio.sleep(0.02)
+        await process.signalled.wait()
         task.cancel()
 
         with pytest.raises(asyncio.CancelledError):
@@ -105,20 +120,6 @@ def test_timeout_teardown_completes_despite_caller_cancellation() -> None:
         )
 
     asyncio.run(run_case())
-
-
-class _SignallingImmuneProcess(_SigtermImmuneProcess):
-    """SIGTERM-immune double that announces when ``terminate()`` lands."""
-
-    def __init__(self) -> None:
-        """Start unexited, with the signal announcement unset."""
-        super().__init__()
-        self.signalled = asyncio.Event()
-
-    def terminate(self) -> None:
-        """Record the signal and announce that the grace window has opened."""
-        super().terminate()
-        self.signalled.set()
 
 
 async def _deliver_cancellation(task: asyncio.Task[object]) -> None:
@@ -169,6 +170,36 @@ def test_teardown_completes_despite_a_second_caller_cancellation() -> None:
     asyncio.run(run_case())
 
 
+async def _wait_for_marker(marker: Path, *, seconds: float = 10.0) -> None:
+    """Fail unless ``marker`` appears within ``seconds``.
+
+    The asyncio counterpart of ``wait_for_process_death``. The readiness signal
+    is a file written by another process, which no ``asyncio.Event`` can
+    observe, so polling is the coordination. The deadline keeps a child that
+    never reaches its handler installation from hanging the session instead of
+    failing it.
+
+    Parameters
+    ----------
+    marker : Path
+        The readiness file the child writes once it is genuinely immune.
+    seconds : float
+        How long to wait before failing, in seconds.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    while loop.time() < deadline:
+        # ASYNC240: the readiness signal is a file written by another process,
+        # which no asyncio primitive can observe. Stat-ing it is the
+        # coordination, and it is cheap enough not to stall the loop.
+        if marker.exists():  # noqa: ASYNC240
+            return
+        await asyncio.sleep(0.01)
+    pytest.fail(  # pragma: no cover - defensive failure
+        f"the child never announced its SIGTERM handler within {seconds}s",
+    )
+
+
 def test_pipeline_run_cancelled_during_grace_still_reaps_stages(
     tmp_path: Path,
 ) -> None:
@@ -195,14 +226,14 @@ def test_pipeline_run_cancelled_during_grace_still_reaps_stages(
                 timeout=0.05, output=RunOutputOptions(capture=False), context=ctx
             )
         )
-        # ASYNC110: the readiness signal is a file written by another process,
-        # which no asyncio.Event can observe. Polling it is the coordination,
-        # and it is bounded by the child writing the marker at start-up.
-        while not marker.exists():  # noqa: ASYNC110
-            await asyncio.sleep(0.01)
+        await _wait_for_marker(marker)
         await asyncio.sleep(0.15)
         task.cancel()
-        with contextlib.suppress(BaseException):
+        # The run is cancelled mid-teardown, so the shielded teardown re-raises
+        # CancelledError. Should the cancellation instead arrive after teardown
+        # finished, the expired deadline surfaces as TimeoutExpired. Neither is
+        # what this case asserts; the reaping check below is.
+        with contextlib.suppress(asyncio.CancelledError, TimeoutExpired):
             await task
 
     with (
@@ -227,14 +258,16 @@ def test_fail_fast_teardown_completes_despite_caller_cancellation() -> None:
     after one exits non-zero. It runs inside the pipeline wait loop, so a
     caller cancelling the run can land on its grace-period wait; without the
     shield the ``SIGKILL`` escalation would be skipped and a ``SIGTERM``-immune
-    stage would outlive the pipeline.
+    stage would outlive the pipeline. The surviving stage announces the signal,
+    so the cancellation is timed against the opening of the grace window rather
+    than against the clock.
     """
 
     async def run_case() -> None:
         """Cancel fail-fast teardown mid-grace and inspect the surviving stage."""
         failed = _SigtermImmuneProcess()
         failed.returncode = 1
-        survivor = _SigtermImmuneProcess()
+        survivor = _SignallingImmuneProcess()
         wait_tasks = [
             asyncio.create_task(_settled(1)),
             asyncio.create_task(survivor.wait()),
@@ -252,7 +285,7 @@ def test_fail_fast_teardown_completes_despite_caller_cancellation() -> None:
                 cancel_grace=0.2,
             )
         )
-        await asyncio.sleep(0.02)
+        await survivor.signalled.wait()
         task.cancel()
 
         with pytest.raises(asyncio.CancelledError):
