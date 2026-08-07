@@ -7,7 +7,9 @@ readers are a turn away from EOF, and on interpreters where the exit is
 observed before those EOF events are processed a drain that cancels
 immediately loses the capture entirely. These tests pin both halves of the
 answer — the bounded window that lets an imminent EOF land, and the empty
-string a reader with nothing to show still reports.
+string a reader with nothing to show still reports — and the obligation that
+window creates: a run cancelled while waiting it out must still leave no reader
+running behind it.
 """
 
 from __future__ import annotations
@@ -18,7 +20,10 @@ import typing as typ
 import pytest
 
 from cuprum import Program, TimeoutExpired, sh
-from cuprum._subprocess_execution import _drain_stream_consumers
+from cuprum._subprocess_execution import (
+    _CAPTURE_EOF_GRACE_S,
+    _drain_stream_consumers,
+)
 from cuprum.sh import RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.timeouts import child_argv, python_interpreter
@@ -103,6 +108,44 @@ def test_capturing_drain_waits_for_an_imminent_eof() -> None:
     asyncio.run(run_case())
 
 
+def test_capturing_drain_settles_its_readers_when_cancelled_mid_grace() -> None:
+    """Cancelling during the EOF grace window still settles both readers.
+
+    The grace window is the one place a timed-out capturing run suspends while
+    it still owns two reader tasks. ``asyncio.wait`` does not cancel what it
+    waits on, so a caller cancelling here would strand both readers if the
+    drain simply let the cancellation through. The drain must reconcile them
+    first and only then let the cancellation continue on its way.
+    """
+
+    async def run_case() -> None:
+        """Cancel a capturing drain while it waits out the grace window."""
+        consumers = (
+            asyncio.create_task(_never_reaches_eof()),
+            asyncio.create_task(_never_reaches_eof()),
+        )
+        drain = asyncio.create_task(
+            _drain_stream_consumers(consumers, capture=True),
+        )
+        # Let the drain reach the grace-period wait, well inside its window,
+        # so the cancellation lands where the readers are still pending.
+        await asyncio.sleep(_CAPTURE_EOF_GRACE_S / 5)
+        assert not drain.done(), "the drain must still be inside its grace window"
+        assert not any(task.done() for task in consumers), (
+            "the readers must still be pending when the cancellation lands"
+        )
+
+        drain.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await drain
+        assert all(task.done() for task in consumers), (
+            "a cancelled drain must leave no reader running behind it"
+        )
+
+    asyncio.run(run_case())
+
+
 def test_non_capturing_drain_leaves_a_wedged_reader_unset() -> None:
     """A non-capturing drain still reports ``None`` for a reader with no text."""
 
@@ -147,6 +190,7 @@ def readers_that_never_reach_eof(
         on_line: cabc.Callable[[str], None] | None = None,
     ) -> str | None:
         """Stand in for a reader that is cancelled before EOF ever arrives."""
+        del on_line  # Required by the _consume_stream callback interface.
         await asyncio.Event().wait()
         return None
 

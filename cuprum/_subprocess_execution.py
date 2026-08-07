@@ -9,6 +9,7 @@ timeout management, and execution lifecycle for SafeCmd.run().
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses as dc
 import sys
 import time
@@ -104,6 +105,14 @@ def _decode_consumer_result(
     return result
 
 
+async def _settle_consumers(
+    consumers: tuple[asyncio.Task[str | None], ...],
+) -> list[str | BaseException | None]:
+    """Cancel every unfinished consumer and drain them all exactly once."""
+    _cancel_pending_consumers(consumers)
+    return await asyncio.gather(*consumers, return_exceptions=True)
+
+
 async def _drain_stream_consumers(
     consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
     *,
@@ -118,11 +127,21 @@ async def _drain_stream_consumers(
     drained text is discarded, so teardown pays neither window nor contract.
     """
     if capture:
-        await asyncio.wait(consumers, timeout=_CAPTURE_EOF_GRACE_S)
-    _cancel_pending_consumers(consumers)
-    stdout_result, stderr_result = await asyncio.gather(
-        *consumers, return_exceptions=True
-    )
+        try:
+            await asyncio.wait(consumers, timeout=_CAPTURE_EOF_GRACE_S)
+        except asyncio.CancelledError:
+            # ``asyncio.wait`` does not cancel what it waits on, so a caller
+            # cancelling during the grace window would otherwise leave both
+            # readers running and unawaited. Settle them, then re-raise so the
+            # cancellation the caller asked for still propagates. Suppressing a
+            # second cancellation is enough here, unlike the shielded teardowns
+            # in ``_process_lifecycle``: the readers were already cancelled
+            # synchronously above, so they settle whether or not this await
+            # survives, and no OS process is left behind if it does not.
+            with contextlib.suppress(asyncio.CancelledError):
+                await _settle_consumers(consumers)
+            raise
+    stdout_result, stderr_result = await _settle_consumers(consumers)
     return (
         _decode_consumer_result(stdout_result, capture=capture),
         _decode_consumer_result(stderr_result, capture=capture),
@@ -388,6 +407,7 @@ __all__ = [
     "_drain_stream_consumers",
     "_execute_subprocess",
     "_run_subprocess_with_streams",
+    "_settle_consumers",
     "_spawn_stream_consumers",
     "_spawn_subprocess",
     "_wait_for_exit_code",
