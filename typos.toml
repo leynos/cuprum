@@ -32,10 +32,13 @@ locale = "en-gb"
 extend-ignore-re = [
     "\"artifacts\"",
     "--artifact-name(?:[=\\s\"`]|$)",
+    "--artifact-server-path",
     "/artifacts(?:[/?#]|$)",
     "\\(\"ises\", \"izes\"\\)",
     "\\(\"teh\", \"(?:the|ten)\"\\)",
+    "\\bbuild_native_wheel_artifact\\b",
     "\\brust-analyzer\\b",
+    "`color`",
     "b\"ond\\\\n\"",
     "mappings\\[\"organise\"\\]",
 ]
@@ -46,7 +49,6 @@ extend-glob = [
 ]
 extend-ignore-re = [
     "(?s)```.*?```",
-    "`[^`\\n]+`",
 ]
 
 [default.extend-words]
