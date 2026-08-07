@@ -28,6 +28,7 @@ from cuprum.pump_events import RustPumpDeclineReason
 from cuprum.unittests._rust_pump_test_helpers import (
     PauseOnlyTransport,
     TransportOnlyReader,
+    owned_fds,
 )
 
 if typ.TYPE_CHECKING:
@@ -337,14 +338,15 @@ def test_run_rust_pump_falls_back_and_resumes_when_blocking_fails(
     )
 
     reader = typ.cast("asyncio.StreamReader", object())
-    handled = asyncio.run(
-        _pipeline_streams._run_rust_pump(
-            reader=reader,
-            writer=None,
-            reader_fd=1,
-            writer_fd=2,
+    with owned_fds() as (reader_fd, writer_fd):
+        handled = asyncio.run(
+            _pipeline_streams._run_rust_pump(
+                reader=reader,
+                writer=None,
+                reader_fd=reader_fd,
+                writer_fd=writer_fd,
+            )
         )
-    )
 
     assert handled is False, "a blocking-toggle failure must fall back to Python"
     assert resume_calls["count"] == 1, "the reader must be resumed on fallback"
@@ -372,14 +374,15 @@ def test_pump_over_raw_fds_falls_back_when_pause_fails(
     monkeypatch.setattr(_pipeline_stream_fds._BlockingModeGuard, "engage", fake_engage)
 
     reader = typ.cast("asyncio.StreamReader", object())
-    handled = asyncio.run(
-        _pipeline_streams._pump_over_raw_fds(
-            reader=reader,
-            writer=None,
-            reader_fd=1,
-            writer_fd=2,
+    with owned_fds() as (reader_fd, writer_fd):
+        handled = asyncio.run(
+            _pipeline_streams._pump_over_raw_fds(
+                reader=reader,
+                writer=None,
+                reader_fd=reader_fd,
+                writer_fd=writer_fd,
+            )
         )
-    )
 
     assert handled is False, "a failed pause must report the Python-fallback signal"
     assert engaged["count"] == 0, (
