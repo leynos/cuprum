@@ -15,6 +15,7 @@ so its callers can run it under ``_shielded_cleanup`` as one unit.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 import typing as typ
 
@@ -127,11 +128,13 @@ async def _drain_stream_consumers(
         both streams, while other drains report ``None`` for absent text.
     """
     if capture:
-        await asyncio.wait(consumers, timeout=_CAPTURE_EOF_GRACE_S)
-    _cancel_pending_consumers(consumers)
-    stdout_result, stderr_result = await asyncio.gather(
-        *consumers, return_exceptions=True
-    )
+        try:
+            await asyncio.wait(consumers, timeout=_CAPTURE_EOF_GRACE_S)
+        except asyncio.CancelledError:
+            with contextlib.suppress(asyncio.CancelledError):
+                await _settle_consumers(consumers)
+            raise
+    stdout_result, stderr_result = await _settle_consumers(consumers)
     drain_errors = tuple(
         type(result).__name__
         for result in (stdout_result, stderr_result)
@@ -154,6 +157,14 @@ def _decode_consumer_result(
     if isinstance(result, BaseException) or result is None:
         return "" if capture else None
     return result
+
+
+async def _settle_consumers(
+    consumers: tuple[asyncio.Task[str | None], ...],
+) -> list[str | BaseException | None]:
+    """Cancel unfinished consumers and drain every result once."""
+    _cancel_pending_consumers(consumers)
+    return await asyncio.gather(*consumers, return_exceptions=True)
 
 
 async def _wait_for_exit_code_within_timeout(
@@ -257,6 +268,7 @@ __all__ = [
     "_decode_consumer_result",
     "_drain_stream_consumers",
     "_reconcile_run_tasks",
+    "_settle_consumers",
     "_wait_for_exit_code",
     "_wait_for_exit_code_within_timeout",
 ]
