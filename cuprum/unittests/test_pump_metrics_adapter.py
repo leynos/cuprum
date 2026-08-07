@@ -298,7 +298,7 @@ def test_a_decline_without_a_reason_falls_back_to_a_bounded_label() -> None:
     PumpMetricsHook(collector)(PumpEvent(phase="declined"))
 
     _name, _value, labels = collector.counters[0]
-    assert labels == {"reason": "unknown"}, (
+    assert labels == {"reason": UNKNOWN_DECLINE_REASON}, (
         f"a missing reason must degrade to a fixed label, found {labels}"
     )
 
