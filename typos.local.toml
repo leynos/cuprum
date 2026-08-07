@@ -22,6 +22,9 @@ ignore = [
   '\("ises", "izes"\)',
   # This byte-splitting fixture deliberately divides "second" after "sec".
   'b"ond\\n"',
+  # Inline code spans quote identifiers verbatim (`color`, `--artifact-name`);
+  # their spelling is the quoted API's, not this repository's prose policy.
+  '`[^`\n]+`',
 ]
 
 [files]
