@@ -450,6 +450,15 @@ exception: `exc.output` / `exc.stderr` hold the partial stdout/stderr (or
 `None` when `capture=False`), so callers can inspect what the command produced
 before it was killed.
 
+Under `capture=True` those attributes are always strings, never `None`: a
+stream that produced nothing before the deadline reports the empty string.
+Cuprum gives the readers a brief bounded window to observe end-of-file once the
+process has died, and keeps whatever a reader had already read even when the
+window closes first and that reader has to be cancelled — which is what happens
+when a grandchild process inherited the pipe and holds it open. The window is
+short and fixed, because teardown must never wait on a pipe that may never
+close.
+
 **Non-positive timeout behaviour:** a `timeout` of `0` or a negative value is
 treated as an already-elapsed deadline, so the command expires immediately: it
 never waits for the process to exit on its own. Cuprum instead terminates the
