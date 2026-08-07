@@ -119,6 +119,7 @@
       'cuprum/unittests/test_pipeline_output_options.py',
       'cuprum/unittests/test_pipeline_pipe_tasks.py',
       'cuprum/unittests/test_pipeline_stream_backend_selection.py',
+      'cuprum/unittests/test_pipeline_streams_blocking_mode.py',
       'cuprum/unittests/test_pipeline_streams_cancellation.py',
       'cuprum/unittests/test_pipeline_streams_fd_lifecycle.py',
       'cuprum/unittests/test_pipeline_streams_observability.py',
