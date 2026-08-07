@@ -22,6 +22,8 @@ if typ.TYPE_CHECKING:
 # The help text is asserted semantically rather than by snapshot: argparse
 # rewrapped ``--artifact-name ARTEFACT_NAME`` between Python 3.12 and 3.13, so a
 # stored transcript pins formatter behaviour rather than the CLI's contract.
+# This literal pins the parser's own ``description``, which is deliberately
+# decoupled from the module docstring so ``--help`` stays a single line.
 EXPECTED_HELP_DESCRIPTION = (
     "Download the latest successful `main` benchmark baseline artefact."
 )
@@ -51,24 +53,40 @@ def test_cli_help_documents_every_option(
         main(["--help"])
     help_text = _unwrapped(capsys.readouterr().out)
 
-    assert help_exit.value.code == 0
+    assert help_exit.value.code == 0, (
+        f"--help must exit successfully, got {help_exit.value.code}"
+    )
     assert "fetch_main_benchmark_baseline.py" in help_text, (
         "the usage line must identify the program"
     )
-    assert _unwrapped(EXPECTED_HELP_DESCRIPTION) in help_text
+    assert _unwrapped(EXPECTED_HELP_DESCRIPTION) in help_text, (
+        f"--help must carry the short CLI description, got: {help_text}"
+    )
     for option, description in EXPECTED_CLI_OPTIONS:
-        assert option in help_text
-        assert _unwrapped(description) in help_text
+        assert option in help_text, f"--help must list {option}, got: {help_text}"
+        assert _unwrapped(description) in help_text, (
+            f"--help must describe {option} as {description!r}, got: {help_text}"
+        )
 
 
 def test_cli_applies_optional_argument_defaults(tmp_path: pth.Path) -> None:
     """Optional arguments should keep their documented defaults."""
     arguments = _parse_args(main_cli_args(tmp_path))
 
-    assert arguments.branch == "main"
-    assert arguments.event == "push"
-    assert arguments.token_env == GITHUB_TOKEN_ENV_VAR
-    assert arguments.artefact_name == ARTEFACT_NAME
+    assert arguments.branch == "main", (
+        f"--branch must default to 'main', got {arguments.branch!r}"
+    )
+    assert arguments.event == "push", (
+        f"--event must default to 'push', got {arguments.event!r}"
+    )
+    assert arguments.token_env == GITHUB_TOKEN_ENV_VAR, (
+        f"--token-env must default to {GITHUB_TOKEN_ENV_VAR!r}, "
+        f"got {arguments.token_env!r}"
+    )
+    assert arguments.artefact_name == ARTEFACT_NAME, (
+        f"--artifact-name must bind to artefact_name as {ARTEFACT_NAME!r}, "
+        f"got {arguments.artefact_name!r}"
+    )
 
 
 @pytest.mark.parametrize("omitted", REQUIRED_CLI_OPTIONS)
@@ -84,7 +102,10 @@ def test_cli_rejects_missing_required_option(
     with pytest.raises(SystemExit) as parse_exit:
         _parse_args(argv)
 
-    assert parse_exit.value.code == ARGUMENT_ERROR_EXIT_CODE
+    assert parse_exit.value.code == ARGUMENT_ERROR_EXIT_CODE, (
+        f"omitting {omitted} must exit with {ARGUMENT_ERROR_EXIT_CODE}, "
+        f"got {parse_exit.value.code}"
+    )
 
 
 def test_main_requires_github_token(
@@ -99,6 +120,9 @@ def test_main_requires_github_token(
 
     assert str(token_exit.value) == (
         f"missing GitHub token in environment variable {GITHUB_TOKEN_ENV_VAR}"
+    ), (
+        f"a missing token must name {GITHUB_TOKEN_ENV_VAR}, "
+        f"got {str(token_exit.value)!r}"
     )
 
 
@@ -115,7 +139,10 @@ def test_main_returns_not_found_when_no_baseline_available(
 
     exit_code = main(main_cli_args(tmp_path))
 
-    assert exit_code == MAIN_BASELINE_NOT_FOUND_EXIT_CODE
+    assert exit_code == MAIN_BASELINE_NOT_FOUND_EXIT_CODE, (
+        f"a missing baseline must exit {MAIN_BASELINE_NOT_FOUND_EXIT_CODE} "
+        f"so CI can bootstrap, got {exit_code}"
+    )
 
 
 def test_main_downloads_and_extracts_latest_baseline(
@@ -141,10 +168,10 @@ def test_main_downloads_and_extracts_latest_baseline(
 
     exit_code = main(main_cli_args(tmp_path))
 
-    assert exit_code == 0
+    assert exit_code == 0, f"a successful download must exit 0, got {exit_code}"
     assert (tmp_path / "main-plan.json").read_text(encoding="utf-8") == (
         '{"dry_run": true}'
-    )
+    ), "main-plan.json must be extracted verbatim from the downloaded archive"
     assert (tmp_path / "main-throughput.json").read_text(encoding="utf-8") == (
         '{"results": []}'
-    )
+    ), "main-throughput.json must be extracted verbatim from the downloaded archive"

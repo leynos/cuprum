@@ -206,16 +206,29 @@ def _run_spelling_gate(
     )
 
 
-@pytest.mark.parametrize("suffix", [".md", ".py", ".rs"])
+def _spelling_fixture(*parts: str) -> str:
+    """Assemble a deliberate spelling fixture without weakening the source gate."""
+    return "".join(parts)
+
+
+@pytest.mark.parametrize(
+    ("suffix", "content"),
+    [
+        (".md", _spelling_fixture("organi", "se\n")),
+        (".py", _spelling_fixture("def organi", "se_value() -> None:\n    pass\n")),
+        (".rs", _spelling_fixture("fn organi", "se_value() {}\n")),
+    ],
+)
 def test_spelling_gate_detects_plain_british_spelling(
     script_directory: Path,
     tmp_path: Path,
     suffix: str,
+    content: str,
 ) -> None:
-    """The spelling scanner rejects Oxford-incompatible text in every scope."""
+    """The scanner rejects Oxford-incompatible prose and valid identifiers."""
     fixture = tmp_path / f"invalid{suffix}"
     plain_british = "organi" + "se"
-    fixture.write_text(f"{plain_british}\n", encoding="utf-8")
+    fixture.write_text(content, encoding="utf-8")
 
     result = _run_spelling_gate(script_directory.parent, fixture)
 
@@ -224,19 +237,32 @@ def test_spelling_gate_detects_plain_british_spelling(
     assert plain_british in output, f"expected offending spelling in: {output}"
 
 
+@pytest.mark.parametrize(
+    ("suffix", "content"),
+    [
+        (".md", "Use `--artifact-name` to organize output.\n"),
+        (".md", _spelling_fixture("Call `organi", "se` on the upstream handle.\n")),
+        (".md", _spelling_fixture("```text\norgani", "se\n```\n")),
+        (".py", 'url = "https://api.github.test/actions/runs/1/artifacts?per_page=1"\n'),
+        (".rs", 'const KEY: &str = "artifacts";\n'),
+        (".py", 'mappings["organise"] = "organize"\n'),
+        (".py", 'correction = ("teh", "the")\n'),
+        (".py", 'correction = ("teh", "ten")\n'),
+        (".py", 'correction = ("ises", "izes")\n'),
+        (".py", _spelling_fixture('chunk = b"o', "n", 'd\\n"\n')),
+    ],
+)
 def test_spelling_gate_preserves_documented_exceptions(
     script_directory: Path,
     tmp_path: Path,
+    suffix: str,
+    content: str,
 ) -> None:
     """External contracts and deliberate fixtures remain accepted."""
-    markdown = tmp_path / "external.md"
-    python = tmp_path / "fixture.py"
-    rust = tmp_path / "wire.rs"
-    markdown.write_text("Use `--artifact-name` to organize output.\n", encoding="utf-8")
-    python.write_text('mappings["organise"] = "organize"\n', encoding="utf-8")
-    rust.write_text('const KEY: &str = "artifacts";\n', encoding="utf-8")
+    fixture = tmp_path / f"exception{suffix}"
+    fixture.write_text(content, encoding="utf-8")
 
-    result = _run_spelling_gate(script_directory.parent, markdown, python, rust)
+    result = _run_spelling_gate(script_directory.parent, fixture)
 
     output = result.stdout + result.stderr
     assert result.returncode == 0, f"expected documented exceptions to pass: {output}"
@@ -397,7 +423,7 @@ def test_render_and_write_are_deterministic_valid_toml(
     dictionary = rollout.Dictionary(
         stems=("organ",),
         accepted=("proper-name",),
-        ignore_patterns=("https?://",),
+        ignore_patterns=("https?://", r"`[^`\n]+`", r"(?s)```.*?```"),
         excluded_files=("target",),
     )
     output = tmp_path / "nested" / "typos.toml"
@@ -411,8 +437,21 @@ def test_render_and_write_are_deterministic_valid_toml(
     assert output.read_text(encoding="utf-8") == first, (
         "the written file must match the rendered document"
     )
-    assert tomllib.loads(first)["default"]["locale"] == "en-gb", (
-        "the rendered document must be valid TOML with the en-gb locale"
+    rendered_config = tomllib.loads(first)
+    assert rendered_config["default"]["locale"] == "en-gb", (
+        "the global locale must stay en-gb"
+    )
+    assert rendered_config["default"]["extend-ignore-re"] == ["https?://"], (
+        "only non-Markdown patterns belong in the global scope"
+    )
+    assert rendered_config["type"]["markdown"]["extend-glob"] == ["*.md"], (
+        "the Markdown type must be scoped to *.md"
+    )
+    assert rendered_config["type"]["markdown"]["extend-ignore-re"] == [
+        r"`[^`\n]+`",
+        r"(?s)```.*?```",
+    ], (
+        "code-span and fenced-block patterns must be Markdown-only"
     )
     assert list(output.parent.glob(".typos.toml.*")) == [], (
         "the atomic write must leave no temporary files behind"
