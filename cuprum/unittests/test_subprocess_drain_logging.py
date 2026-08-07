@@ -21,6 +21,11 @@ if typ.TYPE_CHECKING:
 _DRAIN_LOGGER = "cuprum._subprocess_drain"
 
 
+def _field(record: logging.LogRecord, name: str) -> object:
+    """Read a structured field the drain attached to a record via ``extra``."""
+    return record.__dict__.get(name)
+
+
 class _ReaderFailureError(RuntimeError):
     """Raised by a stream-consumer double that fails during the drain."""
 
@@ -75,11 +80,13 @@ def test_a_failed_reader_is_recorded_before_it_is_discarded(
         f"only the failing reader may be recorded, got {caplog.messages}"
     )
     record = failures[0]
-    assert record.cuprum_operation == "drain_stdout", (
-        f"the record must name the failing stream, got {record.cuprum_operation!r}"
+    operation = _field(record, "cuprum_operation")
+    assert operation == "drain_stdout", (
+        f"the record must name the failing stream, got {operation!r}"
     )
-    assert record.cuprum_error_type == "_ReaderFailureError", (
-        f"the record must name the failure, got {record.cuprum_error_type!r}"
+    error_type = _field(record, "cuprum_error_type")
+    assert error_type == "_ReaderFailureError", (
+        f"the record must name the failure, got {error_type!r}"
     )
     assert record.exc_info is not None, "the record must carry the failure itself"
 
@@ -141,10 +148,11 @@ def test_an_expired_grace_window_is_recorded_with_its_pending_readers(
         f"an expired window must be recorded once, got {caplog.messages}"
     )
     record = expiries[0]
-    pending = record.cuprum_pending_readers
+    pending = _field(record, "cuprum_pending_readers")
     assert pending == 1, f"the record must count the parked readers, got {pending!r}"
-    assert record.cuprum_timeout_s == _CAPTURE_EOF_GRACE_S, (
-        f"the record must state the window, got {record.cuprum_timeout_s!r}"
+    window = _field(record, "cuprum_timeout_s")
+    assert window == _CAPTURE_EOF_GRACE_S, (
+        f"the record must state the window, got {window!r}"
     )
 
 
