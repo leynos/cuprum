@@ -20,6 +20,7 @@ from cuprum._testing import (
     reset_pump_stream_dispatch_for_testing,
     set_rust_availability_for_testing,
 )
+from cuprum.unittests._rust_pump_test_helpers import owned_fds
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -381,14 +382,15 @@ class TestPumpStreamDispatch:
         monkeypatch.setattr(streams_rs, "rust_pump_stream", lambda *_: 0)
 
         reader = typ.cast("asyncio.StreamReader", object())
-        asyncio.run(
-            _pipeline_streams._run_rust_pump(
-                reader=reader,
-                writer=None,
-                reader_fd=1,
-                writer_fd=2,
+        with owned_fds() as (reader_fd, writer_fd):
+            asyncio.run(
+                _pipeline_streams._run_rust_pump(
+                    reader=reader,
+                    writer=None,
+                    reader_fd=reader_fd,
+                    writer_fd=writer_fd,
+                )
             )
-        )
 
         expected_order = ["pause", "drain", "restore", "resume"]
         assert call_order == expected_order, (
