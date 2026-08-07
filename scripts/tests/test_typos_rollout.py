@@ -142,6 +142,13 @@ def test_spelling_gate_detects_plain_british_spelling(
     ("suffix", "content"),
     [
         (".md", "Use `--artifact-name` to organize output.\n"),
+        # The `[type.markdown]` code-span and fenced-block patterns are the
+        # regression cover that the inline-code exemption never had: a quoted
+        # identifier keeps the spelling of the API it names. Plain Markdown
+        # prose is still gated, which
+        # ``test_spelling_gate_detects_plain_british_spelling`` asserts.
+        (".md", _spelling_fixture("Call `organi", "se` on the upstream handle.\n")),
+        (".md", _spelling_fixture("```text\norgani", "se\n```\n")),
         (
             ".py",
             'url = "https://api.github.test/actions/runs/1/artifacts?per_page=1"\n',
@@ -356,17 +363,35 @@ def test_render_and_write_are_deterministic_valid_toml(
     first = rollout.render_typos_config(dictionary)
     rollout.write_config(output, dictionary)
 
-    assert first == rollout.render_typos_config(dictionary)
-    assert output.read_text(encoding="utf-8") == first
+    assert first == rollout.render_typos_config(dictionary), (
+        "rendering the same dictionary twice must produce identical output"
+    )
+    assert output.read_text(encoding="utf-8") == first, (
+        "the installed config must match the rendered document byte for byte"
+    )
     rendered_config = tomllib.loads(first)
-    assert rendered_config["default"]["locale"] == "en-gb"
-    assert rendered_config["default"]["extend-ignore-re"] == ["https?://"]
-    assert rendered_config["type"]["markdown"]["extend-glob"] == ["*.md"]
+    assert rendered_config["default"]["locale"] == "en-gb", (
+        "the global locale must stay en-gb, got "
+        f"{rendered_config['default']['locale']!r}"
+    )
+    assert rendered_config["default"]["extend-ignore-re"] == ["https?://"], (
+        "only non-Markdown patterns belong in the global scope, got "
+        f"{rendered_config['default']['extend-ignore-re']!r}"
+    )
+    assert rendered_config["type"]["markdown"]["extend-glob"] == ["*.md"], (
+        "the Markdown type must be scoped to *.md, got "
+        f"{rendered_config['type']['markdown']['extend-glob']!r}"
+    )
     assert rendered_config["type"]["markdown"]["extend-ignore-re"] == [
         r"`[^`\n]+`",
         r"(?s)```.*?```",
-    ]
-    assert list(output.parent.glob(".typos.toml.*")) == []
+    ], (
+        "code-span and fenced-block patterns must be Markdown-only, got "
+        f"{rendered_config['type']['markdown']['extend-ignore-re']!r}"
+    )
+    assert list(output.parent.glob(".typos.toml.*")) == [], (
+        "the atomic write must leave no temporary files behind"
+    )
 
 
 def test_offline_refresh_requires_and_reuses_valid_cache(

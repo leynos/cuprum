@@ -162,7 +162,42 @@ def _render_array(name: str, values: tuple[str, ...]) -> list[str]:
 
 
 def render_typos_config(dictionary: Dictionary) -> str:
-    """Render a deterministic, parse-checked ``typos.toml`` document."""
+    """Render a deterministic, parse-checked ``typos.toml`` document.
+
+    The rendered document is a pure function of *dictionary*, so regenerating
+    an unchanged dictionary leaves the tracked config byte-identical.
+
+    ``dictionary.ignore_patterns`` is partitioned by membership of
+    ``_MARKDOWN_IGNORE_PATTERNS``. Patterns in that set describe Markdown
+    syntax — inline code spans and fenced code blocks — where a quoted
+    identifier carries the spelling of the API being quoted rather than this
+    repository's prose policy; they are emitted under ``[type.markdown]`` so
+    they exempt only ``*.md`` files. Every other pattern is emitted under
+    ``[default]`` and therefore applies to all scanned files, so backticks in
+    Python or Rust source never suppress the spelling gate.
+
+    Parameters
+    ----------
+    dictionary : Dictionary
+        Curated stems, accepted words, corrections, ignore patterns, and
+        excluded files. Its tuples are rendered in the order given, which
+        callers keep sorted for determinism.
+
+    Returns
+    -------
+    str
+        The complete ``typos.toml`` document, newline-terminated.
+
+    Raises
+    ------
+    tomllib.TOMLDecodeError
+        If the rendered document does not parse as TOML. The render is
+        re-parsed before it is returned so a malformed config can never reach
+        the working tree.
+    ValueError
+        If :func:`generate_word_mappings` finds conflicting corrections for a
+        word.
+    """
     global_patterns = tuple(
         pattern
         for pattern in dictionary.ignore_patterns
