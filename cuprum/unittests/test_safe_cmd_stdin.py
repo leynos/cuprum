@@ -44,7 +44,7 @@ def _execute_sync(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
 
 @pytest.fixture(params=["async", "sync"], ids=["run()", "run_sync()"])
 def execution_strategy(request: pytest.FixtureRequest) -> tuple[str, ExecuteFn]:
-    """Provide parametrised execution strategies for run() and run_sync()."""
+    """Provide parametrized execution strategies for run() and run_sync()."""
     if request.param == "async":
         return ("async", _execute_async)
     return ("sync", _execute_sync)
@@ -267,7 +267,7 @@ def test_stdin_input_with_timeout_escalation(
     ],
 )
 def test_timeout_with_blocked_stdin_writer_does_not_hang(
-    capture: bool,  # noqa: FBT001 - pytest parametrises this value.
+    capture: bool,  # noqa: FBT001 - pytest parametrizes this value.
     mode: str,
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],

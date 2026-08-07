@@ -7,6 +7,9 @@ import email.message
 import importlib
 import json
 import os
+import shlex
+import subprocess  # noqa: S404 - integration tests run the pinned spelling tool.
+import sys
 import tomllib
 import typing as typ
 import urllib.error
@@ -19,6 +22,202 @@ if typ.TYPE_CHECKING:
     import types
 
 SCRIPT_DIRECTORY = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = SCRIPT_DIRECTORY.parent
+TYPOS_VERSION = "1.48.0"
+
+
+def _spelling_fixture(*parts: str) -> str:
+    """Assemble a deliberate negative fixture without weakening the source gate."""
+    return "".join(parts)
+
+
+def _run_spelling_gate(*paths: Path) -> subprocess.CompletedProcess[str]:
+    """Run the pinned spelling scanner with the repository policy."""
+    command = shlex.split(
+        os.environ.get(
+            "TYPOS_TEST_COMMAND",
+            f"uv tool run typos@{TYPOS_VERSION}",
+        )
+    )
+    return subprocess.run(  # noqa: S603 - arguments are fixed except test paths.
+        [
+            *command,
+            "--config",
+            str(REPOSITORY_ROOT / "typos.toml"),
+            "--force-exclude",
+            *(str(path) for path in paths),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_spelling_target_generates_config_and_scans_all_source_types(
+    tmp_path: Path,
+) -> None:
+    """The real spelling target generates config before scanning tracked source."""
+    event_log = tmp_path / "events.log"
+    generator = tmp_path / "generate.py"
+    scanner = tmp_path / "scan.py"
+    generator.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(event_log)!r}).write_text('generate\\n', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    scanner.write_text(
+        "import sys\n"
+        "from pathlib import Path\n"
+        f"log = Path({str(event_log)!r})\n"
+        "suffixes = {'.md', '.py', '.rs'}\n"
+        "paths = [arg for arg in sys.argv[1:] if Path(arg).suffix in suffixes]\n"
+        "with log.open('a', encoding='utf-8') as output:\n"
+        "    output.write('scan ' + ' '.join(paths) + '\\n')\n",
+        encoding="utf-8",
+    )
+    tracked_files = ("guide.md", "module.py", "crate.rs")
+    for filename in tracked_files:
+        (tmp_path / filename).write_text("organize\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)  # noqa: S607
+    subprocess.run(  # noqa: S603
+        ["git", "add", *tracked_files],  # noqa: S607
+        cwd=tmp_path,
+        check=True,
+    )
+
+    result = subprocess.run(  # noqa: S603
+        [  # noqa: S607
+            "make",
+            "-f",
+            str(REPOSITORY_ROOT / "Makefile"),
+            "spelling",
+            "SPELLING_HELPER_TARGET=",
+            f"SPELLING_CONFIG_COMMAND={sys.executable} {generator}",
+            f"TYPOS={sys.executable} {scanner}",
+        ],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = event_log.read_text(encoding="utf-8").splitlines()
+    assert events[0] == "generate", f"configuration must precede scan: {events}"
+    assert events[1].startswith("scan "), f"scanner event is missing: {events}"
+    assert set(events[1].removeprefix("scan ").split()) == set(tracked_files), (
+        f"spelling target did not scan every tracked source type: {events}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("suffix", "content"),
+    [
+        (".md", _spelling_fixture("organi", "se\n")),
+        (
+            ".py",
+            _spelling_fixture("def organi", "se_value() -> None:\n    pass\n"),
+        ),
+        (".rs", _spelling_fixture("fn organi", "se_value() {}\n")),
+    ],
+)
+def test_spelling_gate_detects_plain_british_spelling(
+    tmp_path: Path,
+    suffix: str,
+    content: str,
+) -> None:
+    """The scanner rejects Oxford-incompatible prose and valid identifiers."""
+    fixture = tmp_path / f"invalid{suffix}"
+    plain_british = "organi" + "se"
+    fixture.write_text(content, encoding="utf-8")
+
+    result = _run_spelling_gate(fixture)
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, f"expected spelling failure, got: {output}"
+    assert plain_british in output, f"expected offending spelling in: {output}"
+
+
+@pytest.mark.parametrize(
+    ("suffix", "content"),
+    [
+        (".md", "Use `--artifact-name` to organize output.\n"),
+        # The `[type.markdown]` code-span and fenced-block patterns are the
+        # regression cover that the inline-code exemption never had: a quoted
+        # identifier keeps the spelling of the API it names. Plain Markdown
+        # prose is still gated, which
+        # ``test_spelling_gate_detects_plain_british_spelling`` asserts.
+        (".md", _spelling_fixture("Call `organi", "se` on the upstream handle.\n")),
+        (".md", _spelling_fixture("```text\norgani", "se\n```\n")),
+        (
+            ".py",
+            'url = "https://api.github.test/actions/runs/1/artifacts?per_page=1"\n',
+        ),
+        (".rs", 'const KEY: &str = "artifacts";\n'),
+        (".py", 'mappings["organise"] = "organize"\n'),
+        (".py", 'correction = ("teh", "the")\n'),
+        (".py", 'correction = ("teh", "ten")\n'),
+        (".py", 'correction = ("ises", "izes")\n'),
+        (".py", _spelling_fixture('chunk = b"o', "n", 'd\\n"\n')),
+    ],
+)
+def test_spelling_gate_preserves_documented_exceptions(
+    tmp_path: Path,
+    suffix: str,
+    content: str,
+) -> None:
+    """External contracts and deliberate fixtures remain accepted."""
+    fixture = tmp_path / f"exception{suffix}"
+    fixture.write_text(content, encoding="utf-8")
+
+    result = _run_spelling_gate(fixture)
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, f"expected documented exceptions to pass: {output}"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        _spelling_fixture('"arti', 'facts-owned"'),
+        _spelling_fixture('"/arti', 'facts-owned"'),
+        _spelling_fixture('"--arti', 'fact-name-owned"'),
+    ],
+)
+def test_spelling_gate_rejects_longer_external_contract_near_misses(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    """External-contract exceptions do not hide repository-owned extensions."""
+    fixture = tmp_path / "near_miss.py"
+    fixture.write_text(f"value = {value}\n", encoding="utf-8")
+
+    result = _run_spelling_gate(fixture)
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, f"expected longer value to fail: {output}"
+
+
+@pytest.mark.parametrize(
+    ("suffix", "content"),
+    [
+        (".py", _spelling_fixture("# `organi", "se`\n")),
+        (".rs", _spelling_fixture("// `organi", "se`\n")),
+    ],
+)
+def test_source_backticks_do_not_disable_spelling(
+    tmp_path: Path,
+    suffix: str,
+    content: str,
+) -> None:
+    """Markdown code-span exceptions never apply to Python or Rust source."""
+    fixture = tmp_path / f"backticks{suffix}"
+    fixture.write_text(content, encoding="utf-8")
+
+    result = _run_spelling_gate(fixture)
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, f"expected source spelling failure: {output}"
 
 
 def test_rollout_scripts_support_python_313() -> None:
@@ -61,8 +260,10 @@ def test_rollout_generates_oxford_corrections(
 
     mappings = rollout.generate_word_mappings(rollout.Dictionary(stems=("organ",)))
 
-    assert mappings["organize"] == "organize"
     assert mappings["organise"] == "organize"
+    assert mappings["organize"] == "organize", (
+        "Oxford correction mappings must preserve 'organize'"
+    )
 
 
 def test_local_refresh_keeps_a_newer_cache(
@@ -154,7 +355,7 @@ def test_render_and_write_are_deterministic_valid_toml(
     dictionary = rollout.Dictionary(
         stems=("organ",),
         accepted=("proper-name",),
-        ignore_patterns=("https?://",),
+        ignore_patterns=("https?://", r"`[^`\n]+`", r"(?s)```.*?```"),
         excluded_files=("target",),
     )
     output = tmp_path / "nested" / "typos.toml"
@@ -162,10 +363,35 @@ def test_render_and_write_are_deterministic_valid_toml(
     first = rollout.render_typos_config(dictionary)
     rollout.write_config(output, dictionary)
 
-    assert first == rollout.render_typos_config(dictionary)
-    assert output.read_text(encoding="utf-8") == first
-    assert tomllib.loads(first)["default"]["locale"] == "en-gb"
-    assert list(output.parent.glob(".typos.toml.*")) == []
+    assert first == rollout.render_typos_config(dictionary), (
+        "rendering the same dictionary twice must produce identical output"
+    )
+    assert output.read_text(encoding="utf-8") == first, (
+        "the installed config must match the rendered document byte for byte"
+    )
+    rendered_config = tomllib.loads(first)
+    assert rendered_config["default"]["locale"] == "en-gb", (
+        "the global locale must stay en-gb, got "
+        f"{rendered_config['default']['locale']!r}"
+    )
+    assert rendered_config["default"]["extend-ignore-re"] == ["https?://"], (
+        "only non-Markdown patterns belong in the global scope, got "
+        f"{rendered_config['default']['extend-ignore-re']!r}"
+    )
+    assert rendered_config["type"]["markdown"]["extend-glob"] == ["*.md"], (
+        "the Markdown type must be scoped to *.md, got "
+        f"{rendered_config['type']['markdown']['extend-glob']!r}"
+    )
+    assert rendered_config["type"]["markdown"]["extend-ignore-re"] == [
+        r"`[^`\n]+`",
+        r"(?s)```.*?```",
+    ], (
+        "code-span and fenced-block patterns must be Markdown-only, got "
+        f"{rendered_config['type']['markdown']['extend-ignore-re']!r}"
+    )
+    assert list(output.parent.glob(".typos.toml.*")) == [], (
+        "the atomic write must leave no temporary files behind"
+    )
 
 
 def test_offline_refresh_requires_and_reuses_valid_cache(

@@ -106,14 +106,14 @@ def test_parse_backend_value_maps_exactly_or_rejects(raw: str) -> None:
     so the property never mutates global process state (avoiding the shared
     environment-guard requirement in AGENTS.md and any cross-thread races).
     """
-    normalised = raw.strip().lower()
+    normalized = raw.strip().lower()
     valid = {member.value for member in StreamBackend}
-    if normalised == "":
+    if normalized == "":
         # Empty/whitespace resolves to AUTO.
         assert _parse_backend_value(raw) is StreamBackend.AUTO
-    elif normalised in valid:
+    elif normalized in valid:
         # A recognized value maps to exactly that member, never a different one.
-        assert _parse_backend_value(raw).value == normalised
+        assert _parse_backend_value(raw).value == normalized
     else:
         with pytest.raises(ValueError, match=_ENV_VAR):
             _parse_backend_value(raw)

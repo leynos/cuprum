@@ -78,7 +78,7 @@ class _UnhandledMetricsPhaseError(ValueError):
     """Raised when metrics receive a phase outside the known event contract."""
 
     def __init__(self, phase: object) -> None:
-        """Capture the unsupported phase and initialise its diagnostic."""
+        """Capture the unsupported phase and initialize its diagnostic."""
         self.phase = phase
         msg = f"Unhandled metrics phase: {phase}"
         super().__init__(msg)

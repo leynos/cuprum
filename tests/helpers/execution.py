@@ -2,7 +2,7 @@
 
 Defines the ``_RunKwargs`` keyword-argument shape accepted by
 ``SafeCmd.run``/``SafeCmd.run_sync`` and the ``ExecuteFn`` callable alias used by
-the parametrised ``run()``/``run_sync()`` execution fixtures across the SafeCmd
+the parametrized ``run()``/``run_sync()`` execution fixtures across the SafeCmd
 test modules.
 """
 

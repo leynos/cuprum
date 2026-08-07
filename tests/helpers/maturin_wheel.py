@@ -1,4 +1,4 @@
-"""Wheel-artifact inspection helpers for maturin build contract tests.
+"""Wheel-artefact inspection helpers for maturin build contract tests.
 
 Split out of :mod:`tests.helpers.maturin` to keep each module focused: the
 parent module owns pin/version parsing, toolchain probing, and the wheel
@@ -121,15 +121,15 @@ def _parse_metadata(raw_metadata: str) -> WheelMetadata:
     }
 
 
-def _normalise_wheel_entry(name: str) -> str:
+def _normalize_wheel_entry(name: str) -> str:
     """Normalize platform/version wheel entry names to stable placeholders."""
     if _EXTENSION_MODULE_RE.match(name):
         return "cuprum/_rust_backend_native.cpython-<platform>.so"
     if "/sboms/" in name:
         return "cuprum-<version>.dist-info/sboms/<sbom>.cyclonedx.json"
-    for suffix, normalised in _DIST_INFO_SUFFIXES.items():
+    for suffix, normalized in _DIST_INFO_SUFFIXES.items():
         if name.endswith(suffix):
-            return normalised
+            return normalized
     return name
 
 
@@ -206,5 +206,5 @@ def wheel_build_snapshot(whl_path: Path) -> WheelBuildSnapshot:
             "root_is_purelib": root_is_purelib,
             "tag": "<platform-tag>",
         },
-        "entries": sorted(_normalise_wheel_entry(name) for name in entry_names),
+        "entries": sorted(_normalize_wheel_entry(name) for name in entry_names),
     }

@@ -106,7 +106,7 @@ def _expected_emitted_lines(payload: bytes) -> list[str]:
         remainder = lines.pop()
 
     def strip_ending(line: str) -> str:
-        """Strip the CR/LF endings recognised by stream line callbacks."""
+        """Strip the CR/LF endings recognized by stream line callbacks."""
         if line.endswith("\r\n"):
             return line[:-2]
         if line.endswith(("\n", "\r")):

@@ -37,7 +37,7 @@ class _StubPumpReader:
     """Stub stream reader yielding queued chunks then EOF."""
 
     def __init__(self, chunks: list[bytes]) -> None:
-        """Initialise the stub with the supplied queued chunks."""
+        """Initialize the stub with the supplied queued chunks."""
         self._chunks = list(chunks)
         self.read_calls = 0
 
@@ -54,7 +54,7 @@ class _StubPumpWriter:
     """Stub stream writer recording writes, drains, and closure."""
 
     def __init__(self, *, fail_on_drain_call: int | None = None) -> None:
-        """Initialise the stub, optionally failing on a given drain call."""
+        """Initialize the stub, optionally failing on a given drain call."""
         self.data = bytearray()
         self.drain_calls = 0
         self.write_calls = 0
@@ -94,7 +94,7 @@ class _StubSpawnProcess:
     """Stub subprocess recording terminate, kill, and wait calls."""
 
     def __init__(self, pid: int) -> None:
-        """Initialise the stub process with the given PID."""
+        """Initialize the stub process with the given PID."""
         self.pid = pid
         self.returncode: int | None = None
         self.stdout = None
@@ -485,7 +485,7 @@ class _StubPipelineWaitProcess:
         exit_code: int,
         ready: asyncio.Event | None = None,
     ) -> None:
-        """Initialise the stub with its PID, exit code, and ready event."""
+        """Initialize the stub with its PID, exit code, and ready event."""
         self.pid = pid
         self.returncode: int | None = None
         self.stdout = None

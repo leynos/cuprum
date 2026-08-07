@@ -69,14 +69,14 @@ def _parse_backend_value(raw: str) -> StreamBackend:
     ValueError
         If ``raw`` is a non-empty, unrecognized value.
     """
-    normalised = raw.strip().lower()
-    if not normalised:
+    normalized = raw.strip().lower()
+    if not normalized:
         return StreamBackend.AUTO
     try:
-        return StreamBackend(normalised)
+        return StreamBackend(normalized)
     except ValueError:
         valid = ", ".join(sorted(v.value for v in StreamBackend))
-        msg = f"invalid {_ENV_VAR} value {normalised!r}; expected one of: {valid}"
+        msg = f"invalid {_ENV_VAR} value {normalized!r}; expected one of: {valid}"
         raise ValueError(msg) from None
 
 

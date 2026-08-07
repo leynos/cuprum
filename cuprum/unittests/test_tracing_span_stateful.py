@@ -1,8 +1,8 @@
 """Hypothesis stateful coverage for ``TracingHook`` span correlation.
 
 The deterministic tests in ``test_tracing_span_lifecycle`` pin specific
-recycled-PID orderings. This state machine generalises their invariant:
-across randomised, interleaved sequences of ``start``/``stdout``/``stderr``/
+recycled-PID orderings. This state machine generalizes their invariant:
+across randomized, interleaved sequences of ``start``/``stdout``/``stderr``/
 ``exit`` events for two ``exec_id`` values that deliberately share one PID
 (plus uncorrelated ``exec_id=None`` events), correlation by ``exec_id`` must
 hold. Output only ever lands on its own execution's span, an exit ends and

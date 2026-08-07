@@ -3,7 +3,7 @@
 ``TracingHook._handle_start`` swaps the active-span mapping under its
 lifecycle lock but marks and ends a *detached* stale span **outside** the
 lock. An arbitrary ``Span`` may block on I/O in ``set_status``/``end``, and
-holding the lock across that would serialise every other execution's
+holding the lock across that would serialize every other execution's
 start/output/exit handler. This test parks a stale span's ``end`` and asserts
 an unrelated execution's full lifecycle still completes meanwhile.
 """

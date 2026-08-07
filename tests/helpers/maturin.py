@@ -137,7 +137,7 @@ def maturin_script_locatable() -> bool:
     )
 
 
-def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
+def build_native_wheel_artefact(root: Path, out_dir: Path) -> Path:
     """Build a native wheel using the current interpreter's maturin.
 
     Invokes ``python -m maturin`` with the running interpreter, so the maturin
@@ -145,6 +145,18 @@ def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
     environment. Alignment with the declared pin is asserted separately by
     ``test_installed_maturin_matches_expected_pin`` and by the snapshot test's
     generator check, not selected here.
+
+    Parameters
+    ----------
+    root
+        Repository root containing ``rust/cuprum-rust/Cargo.toml``.
+    out_dir
+        Directory that receives the built wheel.
+
+    Returns
+    -------
+    pathlib.Path
+        Path to the single wheel produced in ``out_dir``.
 
     Raises
     ------
@@ -154,6 +166,15 @@ def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
         If the output directory cannot be created or inspected.
     MaturinBuildError
         If the maturin build command exits non-zero.
+
+    Examples
+    --------
+    Build the native wheel into a repository-local distribution directory:
+
+    >>> root = Path.cwd()
+    >>> wheel = build_native_wheel_artefact(root, root / "dist")
+    >>> wheel.suffix
+    '.whl'
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     command = [
@@ -185,6 +206,6 @@ def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
     return wheels[0]
 
 
-# The wheel-artifact snapshot helpers live in a sibling module to keep this
+# The wheel-artefact snapshot helpers live in a sibling module to keep this
 # module focused; re-exported here so existing import sites keep working.
 wheel_build_snapshot = _maturin_wheel.wheel_build_snapshot

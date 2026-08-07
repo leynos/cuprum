@@ -105,7 +105,7 @@ def test_concurrent_workers_preserve_backend_environment(
 def test_selector_interleaving_blocks_environment_observation_until_unlock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Checkpointed interleaving proves lock serialisation of env mutation."""
+    """Checkpointed interleaving proves lock serialization of env mutation."""
     events = {
         "first_mutated_environment": threading.Event(),
         "second_waiting_for_lock": threading.Event(),
@@ -156,5 +156,5 @@ def test_selector_interleaving_blocks_environment_observation_until_unlock(
     assert not errors, f"expected no selector thread errors, got {errors!r}"
     with observation_lock:
         assert observations == ["python", None], (
-            f"expected serialised backend observations, got {observations}"
+            f"expected serialized backend observations, got {observations}"
         )

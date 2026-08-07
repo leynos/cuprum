@@ -30,8 +30,22 @@ extend-exclude = [
 [default]
 locale = "en-gb"
 extend-ignore-re = [
-    "(?s)```.*?```",
+    "\"artifacts\"",
+    "--artifact-name(?:[=\\s\"`]|$)",
+    "/artifacts(?:[/?#]|$)",
+    "\\(\"ises\", \"izes\"\\)",
+    "\\(\"teh\", \"(?:the|ten)\"\\)",
     "\\brust-analyzer\\b",
+    "b\"ond\\\\n\"",
+    "mappings\\[\"organise\"\\]",
+]
+
+[type.markdown]
+extend-glob = [
+    "*.md",
+]
+extend-ignore-re = [
+    "(?s)```.*?```",
     "`[^`\\n]+`",
 ]
 
