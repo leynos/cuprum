@@ -31,8 +31,10 @@ extend-exclude = [
 locale = "en-gb"
 extend-ignore-re = [
     "(?s)```.*?```",
+    "--artifact-server-path",
+    "\\bbuild_native_wheel_artifact\\b",
     "\\brust-analyzer\\b",
-    "`[^`\\n]+`",
+    "`color`",
 ]
 
 [default.extend-words]
