@@ -30,6 +30,7 @@ from cuprum._stream_text import (
 )
 
 if typ.TYPE_CHECKING:
+    import codecs
     import collections.abc as cabc
 
 _READ_SIZE = 4096
@@ -109,20 +110,27 @@ async def _drain(
             break
         if buffer is not None:
             buffer.extend(chunk)
-        if config.echo_output:
-            _write_chunk(
-                config,
-                chunk,
-                decoder=echo_decoder,
-            )
-        if on_chunk is not None:
-            on_chunk(chunk)
+        _tee_chunk(config, chunk, decoder=echo_decoder, on_chunk=on_chunk)
 
     _flush_echo_decoder(config, echo_decoder)
 
     if buffer is None:
         return None
     return buffer.decode(config.encoding, errors=config.errors)
+
+
+def _tee_chunk(
+    config: _StreamConfig,
+    chunk: bytes,
+    *,
+    decoder: codecs.IncrementalDecoder | None,
+    on_chunk: cabc.Callable[[bytes], None] | None,
+) -> None:
+    """Echo a chunk to the sink and hand it to the variant-specific callback."""
+    if config.echo_output:
+        _write_chunk(config, chunk, decoder=decoder)
+    if on_chunk is not None:
+        on_chunk(chunk)
 
 
 async def _consume_stream_without_lines(

@@ -2455,6 +2455,23 @@ A capturing reader consequently completes normally rather than reporting
 `task.cancelled()`, so `_decode_consumer_result`'s exception branch now covers
 only genuine reader failures.
 
+The drain runs while a failure is already propagating, so it can neither raise
+what it finds nor report it: a reader that broke decodes to the same empty
+string as one that had nothing to say. It therefore records two things at DEBUG
+on the `cuprum._subprocess_drain` logger, in the shape the stream-close
+suppression already uses (`exc_info` plus `cuprum_`-prefixed `extra` fields):
+
+- `stream_consumer_failed`, naming the stream (`cuprum_operation`) and the
+  exception type, for any settled reader whose result is an exception other
+  than a plain `CancelledError`. Cancellation is the drain's own doing and is
+  not recorded, or the record would be routine enough to be worthless.
+- `capture_eof_grace_expired`, counting the readers still parked when the
+  window closed (`cuprum_pending_readers`), which is how a wedged pipe shows
+  up.
+
+Neither is a metric or a trace event: emitting those belongs with the
+`ExecEvent` contract work in issues #285 and #286, not with a teardown helper.
+
 Pass `capture=False` wherever the drained text is discarded — the cancellation
 and stdin-failure paths — so teardown pays neither the window nor the contract.
 Relying on the readers happening to finish first is what broke under Python

@@ -135,6 +135,7 @@
       'cuprum/unittests/test_stream_parity.py',
       'cuprum/unittests/test_stream_property_based.py',
       'cuprum/unittests/test_stream_pump_runtime_behaviour.py',
+      'cuprum/unittests/test_subprocess_drain_logging.py',
       'cuprum/unittests/test_subprocess_drain_properties.py',
       'cuprum/unittests/test_subprocess_timeout.py',
       'cuprum/unittests/test_subprocess_timeout_properties.py',

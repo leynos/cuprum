@@ -6,12 +6,20 @@ must settle exactly once before the failure it is cleaning up after continues on
 its way. This module is that single settlement point: it cancels whatever is
 still pending, drains the tasks once, and decodes each result into the text its
 stream reports under the run's capture contract.
+
+Because it runs while a failure is already propagating, it can neither raise nor
+report what it discards. What it can do is say so: a reader that failed, and a
+grace window that expired with readers still parked, are both recorded at DEBUG
+before the drain moves on.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
+
+_LOGGER = logging.getLogger(__name__)
 
 # How long a capturing drain lets readers observe EOF before cancelling them.
 # The process is already dead by then, so EOF is imminent rather than
@@ -64,6 +72,62 @@ async def _settle_consumers(
     return await asyncio.gather(*consumers, return_exceptions=True)
 
 
+async def _await_eof_grace(
+    consumers: tuple[asyncio.Task[str | None], ...],
+) -> None:
+    """Give readers a bounded window to reach EOF before they are cancelled."""
+    try:
+        _, pending = await asyncio.wait(consumers, timeout=_CAPTURE_EOF_GRACE_S)
+    except asyncio.CancelledError:
+        # ``asyncio.wait`` does not cancel what it waits on, so a caller
+        # cancelling during the grace window would otherwise leave both
+        # readers running and unawaited. Settle them, then re-raise so the
+        # cancellation the caller asked for still propagates. Suppressing a
+        # second cancellation is enough here, unlike the shielded teardowns
+        # in ``_process_lifecycle``: the readers are cancelled synchronously
+        # by the settlement below, so they settle whether or not this await
+        # survives, and no OS process is left behind if it does not.
+        with contextlib.suppress(asyncio.CancelledError):
+            await _settle_consumers(consumers)
+        raise
+    if pending:
+        # A reader still parked here is about to be cancelled, and whatever it
+        # was waiting to read is lost. That is a wedged pipe — commonly a
+        # grandchild that inherited it — rather than a slow one.
+        _LOGGER.debug(
+            "capture_eof_grace_expired pending_readers=%s timeout_s=%s",
+            len(pending),
+            _CAPTURE_EOF_GRACE_S,
+            extra={
+                "cuprum_pending_readers": len(pending),
+                "cuprum_timeout_s": _CAPTURE_EOF_GRACE_S,
+            },
+        )
+
+
+def _log_discarded_consumer_failure(operation: str, result: object) -> None:
+    """Record a reader failure the drain absorbs to protect the primary error.
+
+    A plain cancellation is the drain's own doing and says nothing, but any
+    other exception is a reader that broke; decoding turns it into text that
+    cannot be told from an empty stream, so it is recorded before it goes.
+    """
+    if not isinstance(result, BaseException):
+        return
+    if type(result) is asyncio.CancelledError:
+        return
+    _LOGGER.debug(
+        "stream_consumer_failed operation=%s error=%s",
+        operation,
+        type(result).__name__,
+        exc_info=(type(result), result, result.__traceback__),
+        extra={
+            "cuprum_operation": operation,
+            "cuprum_error_type": type(result).__name__,
+        },
+    )
+
+
 async def _drain_stream_consumers(
     consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
     *,
@@ -78,21 +142,13 @@ async def _drain_stream_consumers(
     drained text is discarded, so teardown pays neither window nor contract.
     """
     if capture:
-        try:
-            await asyncio.wait(consumers, timeout=_CAPTURE_EOF_GRACE_S)
-        except asyncio.CancelledError:
-            # ``asyncio.wait`` does not cancel what it waits on, so a caller
-            # cancelling during the grace window would otherwise leave both
-            # readers running and unawaited. Settle them, then re-raise so the
-            # cancellation the caller asked for still propagates. Suppressing a
-            # second cancellation is enough here, unlike the shielded teardowns
-            # in ``_process_lifecycle``: the readers were already cancelled
-            # synchronously above, so they settle whether or not this await
-            # survives, and no OS process is left behind if it does not.
-            with contextlib.suppress(asyncio.CancelledError):
-                await _settle_consumers(consumers)
-            raise
+        await _await_eof_grace(consumers)
     stdout_result, stderr_result = await _settle_consumers(consumers)
+    for operation, result in (
+        ("drain_stdout", stdout_result),
+        ("drain_stderr", stderr_result),
+    ):
+        _log_discarded_consumer_failure(operation, result)
     return (
         _decode_consumer_result(stdout_result, capture=capture),
         _decode_consumer_result(stderr_result, capture=capture),
@@ -101,8 +157,10 @@ async def _drain_stream_consumers(
 
 __all__ = [
     "_CAPTURE_EOF_GRACE_S",
+    "_await_eof_grace",
     "_cancel_pending_consumers",
     "_decode_consumer_result",
     "_drain_stream_consumers",
+    "_log_discarded_consumer_failure",
     "_settle_consumers",
 ]
