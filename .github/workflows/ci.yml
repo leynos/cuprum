@@ -9,6 +9,17 @@ permissions:
   actions: read
   contents: read
 
+# One run per ref. Superseded pull-request runs are cancelled, because a
+# stale run only spends paid benchmark minutes on a diff nobody will merge.
+# Runs on `main` are never cancelled once started: each one republishes the
+# `benchmark-ratchet-main-baseline` artifact that pull-request runs compare
+# against, and a half-finished run would leave the baseline behind head.
+# Queueing them on one group also keeps two merges landing in quick
+# succession from racing to publish that artifact out of commit order.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint-test:
     runs-on: ubuntu-latest
@@ -321,6 +332,27 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - '.github/workflows/ci.yml'
+
+      # A skipped job is indistinguishable from a broken gate in the run
+      # list, so record the decision where a maintainer auditing paid-runner
+      # spend can read it: the run summary of every CI run. The three fields
+      # are all closed sets, so the summaries stay countable across runs.
+      - name: Record the benchmark gate decision
+        env:
+          EVENT: ${{ github.event_name }}
+          BENCH: ${{ steps.filter.outputs.bench }}
+        run: |
+          if [ "${EVENT}" != 'pull_request' ] || [ "${BENCH}" = 'true' ]; then
+            decision=run
+          else
+            decision=skip
+          fi
+          {
+            printf '### Benchmark gate\n\n'
+            printf '| event | performance-relevant changes | benchmark-ratchet |\n'
+            printf '| --- | --- | --- |\n'
+            printf '| %s | %s | %s |\n' "${EVENT}" "${BENCH:-false}" "${decision}"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
   benchmark-ratchet:
     runs-on: ubicloud-standard-4-ubuntu-2404

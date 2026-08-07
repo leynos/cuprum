@@ -2206,6 +2206,61 @@ link, and are lifted once the upstream fix lands.
   [pytest-bdd#823](https://github.com/pytest-dev/pytest-bdd/issues/823); remove
   the pin and this note once a released `pytest-bdd` supports pytest 9.1.
 
+## Gating the paid benchmark job
+
+`benchmark-ratchet` is the only job in `ci.yml` that runs on a paid runner
+(`ubicloud-standard-4-ubuntu-2404`, declared to `actionlint` in
+`.github/actionlint.yaml` alongside the one configuration variable the
+workflows read). Most pull requests — documentation edits, Dependabot
+`github-actions` batches — cannot change pipeline throughput, so a cheap
+GitHub-hosted `changes` job classifies the diff with `dorny/paths-filter` and
+publishes a single `bench` output. `benchmark-ratchet` takes `changes` in
+`needs` and gates on:
+
+```yaml
+if: github.event_name != 'pull_request' || needs.changes.outputs.bench == 'true'
+```
+
+Three properties of that arrangement are load-bearing:
+
+- **`changes` runs on every event, not only pull requests.** A skipped
+  dependency skips its dependants, so gating `changes` itself would stop
+  pushes to `main` from benchmarking.
+- **Non-pull-request events are never gated.** The run on `main` republishes
+  the `benchmark-ratchet-main-baseline` artefact that pull-request runs
+  compare against. Gating it fails open: the baseline ages, and regressions
+  stop being detected rather than being reported.
+- **The filter watches inputs, not just sources.** `cuprum/**`, `rust/**` and
+  `benchmarks/**` are the obvious entries; `uv.lock`, `pyproject.toml`,
+  `Makefile`, `conftest.py` and `.github/workflows/ci.yml` are there because a
+  dependency bump or a change to how the benchmark is invoked can move the
+  numbers as readily as a change to the code being measured.
+
+The `changes` job also writes the decision — event, filter verdict, and
+whether the benchmark ran or was skipped — to `$GITHUB_STEP_SUMMARY` on every
+run. A skipped job and a broken gate are indistinguishable in the run list, so
+that table is where a maintainer auditing paid-runner spend, or wondering why
+a pull request has no benchmark report, reads what happened. All three fields
+are closed sets, so the summaries stay countable across runs.
+
+The workflow declares `concurrency: ci-${{ github.ref }}` with
+`cancel-in-progress` true only for pull requests. A superseded pull-request
+run only spends benchmark minutes on a diff nobody will merge; a cancelled
+`main` run, by contrast, abandons the baseline upload, so those queue instead
+and publish in commit order.
+
+None of this is exercised by ordinary tests — invert the condition and the
+suite still passes — so `test_benchmark_gate_ci_contract.py` reads it back
+from `ci.yml`: the `bench` output wiring, the `needs` edge, the gate
+expression verbatim, the exact filter path set, the summary step, and the
+concurrency policy. Property tests over sampled changed-path sets then check
+the rule those parts encode: any watched path benchmarks however it is mixed
+with docs, a diff touching nothing watched skips, and a non-pull-request event
+always benchmarks. Their path model handles the two pattern forms the filter
+is allowed to use — a literal path, and a `dir/**` prefix — and a companion
+test fails if a pattern outside those forms is added, so the model cannot
+silently stop describing the filter.
+
 ## Workflow pins and Dependabot
 
 Dependabot owns the upgrade of GitHub Actions and reusable workflows, including
