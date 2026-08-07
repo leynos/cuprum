@@ -57,6 +57,8 @@ def stage_exec_id(stage_index: int) -> str:
 def make_stage_observations(
     stage_count: int,
     hooks: tuple[ExecHook, ...],
+    *,
+    tag_overrides: cabc.Mapping[str, object] | None = None,
 ) -> tuple[_StageObservation, ...]:
     """Build one observation per stage, each publishing to ``hooks``.
 
@@ -64,6 +66,11 @@ def make_stage_observations(
     pipeline — a distinct command, its position in the tags, and a freshly
     minted token per stage — without spawning anything, so a fail-fast event
     can be driven one completion at a time.
+
+    ``tag_overrides`` stands in for the caller's ``ExecutionContext.tags``, and
+    is merged last for the same reason the real builder merges them last: a
+    caller may shadow ``pipeline_stage_index``. Supplying it is how a test
+    pulls the tag apart from the index the coordinator acted on.
     """
     builder = sh.make(ECHO)
     execution_hooks = _ExecutionHooks(
@@ -80,6 +87,7 @@ def make_stage_observations(
                     "project": "pipeline-wait-tests",
                     "pipeline_stage_index": idx,
                     "pipeline_stages": stage_count,
+                    **(tag_overrides or {}),
                 },
             ),
             cwd=None,
