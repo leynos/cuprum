@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses as dc
-import os
+import logging
 import typing as typ
 
 from cuprum._backend import StreamBackend, get_stream_backend
@@ -30,10 +30,55 @@ from cuprum._pipeline_config import (
 from cuprum._pipeline_stage_streams import (
     _create_stage_capture_tasks as _create_stage_capture_tasks,
 )
+from cuprum._pipeline_stream_fds import (
+    _BlockingModeGuard,
+    _extract_stream_fd,
+    _paused_reader,
+    _suppressed_teardown_failure,
+)
 from cuprum._streams import _close_stream_writer, _pump_stream
+from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
+from cuprum.pump_observation import _emit_pump_event
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _log_rust_pump_declined(reason: RustPumpDeclineReason) -> None:
+    """Record why an inter-stage hop fell back from the Rust pump to Python.
+
+    Each decline is a silent performance decision: the hop still completes
+    correctly on the Python pump, so nothing surfaces to the caller. Without a
+    record, a deployment that has quietly stopped taking the fast path is
+    indistinguishable from one that never had it, which is the question an
+    operator actually asks. Logged at debug level because this is a per-hop
+    internal routing decision, not a fault.
+
+    The log record is written first and the pump event second, so a registered
+    observer can neither suppress nor precede the record operators already
+    filter on; the counter supplements that record rather than replacing it.
+
+    Examples
+    --------
+    Capture the reason a hop declined the fast path::
+
+        with caplog.at_level(logging.DEBUG, logger="cuprum._pipeline_streams"):
+            _log_rust_pump_declined(
+                RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE,
+            )
+        assert caplog.records[0].__dict__["cuprum_reason"] == (
+            "blocking_mode_unavailable"
+        )
+
+    """
+    _LOGGER.debug(
+        "Inter-stage hop declined the Rust pump (%s); using the Python pump",
+        reason.value,
+        extra={"cuprum_action": "rust_pump_declined", "cuprum_reason": reason.value},
+    )
+    _emit_pump_event(PumpEvent(phase="declined", reason=reason))
 
 
 @dc.dataclass(slots=True)
@@ -79,90 +124,6 @@ def reset_pump_stream_dispatch_for_testing() -> None:
     configure_pump_stream_dispatch_for_testing()
 
 
-def _fd_from_transport(transport: object | None) -> int | None:
-    """Extract a raw FD via ``transport.get_extra_info('pipe').fileno()``."""
-    get_extra = getattr(transport, "get_extra_info", None)
-    if get_extra is None:
-        return None
-    pipe: object | None = get_extra("pipe")
-    fileno = getattr(pipe, "fileno", None) if pipe is not None else None
-    if fileno is None:
-        return None
-    try:
-        return int(fileno())
-    except (OSError, ValueError, TypeError, AttributeError):
-        return None
-
-
-def _extract_stream_fd(
-    stream: asyncio.StreamReader | asyncio.StreamWriter | None,
-) -> int | None:
-    """Extract a raw FD from an asyncio stream via its transport."""
-    if stream is None:
-        return None
-    transport = getattr(stream, "transport", None)
-    if transport is None:
-        transport = getattr(stream, "_transport", None)
-    return _fd_from_transport(transport)
-
-
-def _pause_reader_transport(
-    reader: asyncio.StreamReader,
-) -> cabc.Callable[[], None] | None:
-    """Pause reader transport callbacks while Rust pump owns the raw FD."""
-    transport = getattr(reader, "transport", None)
-    if transport is None:
-        transport = getattr(reader, "_transport", None)
-    pause_reading = getattr(transport, "pause_reading", None)
-    resume_reading = getattr(transport, "resume_reading", None)
-    if not callable(pause_reading) or not callable(resume_reading):
-        return None
-    try:
-        pause_reading()
-    except (RuntimeError, OSError):
-        return None
-
-    def _resume() -> None:
-        """Resume the paused reader transport, ignoring teardown errors."""
-        with contextlib.suppress(RuntimeError, OSError):
-            resume_reading()
-
-    return _resume
-
-
-def _set_stream_fds_blocking(*, reader_fd: int, writer_fd: int) -> tuple[bool, bool]:
-    """Switch pipe FDs to blocking mode and return their prior state."""
-    reader_was_blocking = os.get_blocking(reader_fd)
-    writer_was_blocking = os.get_blocking(writer_fd)
-    reader_changed = False
-    try:
-        if not reader_was_blocking:
-            os.set_blocking(reader_fd, True)
-            reader_changed = True
-        if not writer_was_blocking:
-            os.set_blocking(writer_fd, True)
-    except OSError:
-        if reader_changed:
-            with contextlib.suppress(OSError, ValueError):
-                os.set_blocking(reader_fd, reader_was_blocking)
-        raise
-    return reader_was_blocking, writer_was_blocking
-
-
-def _restore_stream_fd_blocking(
-    *,
-    reader_fd: int,
-    writer_fd: int,
-    reader_was_blocking: bool,
-    writer_was_blocking: bool,
-) -> None:
-    """Restore pipe FD blocking mode captured before Rust pumping."""
-    with contextlib.suppress(OSError, ValueError):
-        os.set_blocking(reader_fd, reader_was_blocking)
-    with contextlib.suppress(OSError, ValueError):
-        os.set_blocking(writer_fd, writer_was_blocking)
-
-
 async def _run_rust_pump(
     *,
     reader: asyncio.StreamReader,
@@ -171,51 +132,174 @@ async def _run_rust_pump(
     writer_fd: int,
 ) -> bool:
     """Run the Rust pump for one pipe hop; return ``True`` when handled."""
-    # Flush any bytes asyncio already buffered in the StreamReader
-    # before the Rust pump takes over the raw file descriptor.
-    resume_reader = _pause_reader_transport(reader)
-    try:
-        await _drain_reader_buffer(reader, writer)
-    except Exception:
-        if resume_reader is not None:
-            resume_reader()
-        raise
+    handled = await _pump_over_raw_fds(
+        reader=reader,
+        writer=writer,
+        reader_fd=reader_fd,
+        writer_fd=writer_fd,
+    )
+    if not handled:
+        return False
+    # The Rust pump closes the writer FD on return (drop semantics).
+    # Suppress OSError so the asyncio transport close does not raise
+    # EBADF when the descriptor is already gone — but record it, since the
+    # expected EBADF and a close that failed for some other reason are
+    # otherwise the same silence.
+    with _suppressed_teardown_failure(_LOGGER, "writer_close", OSError):
+        await _close_stream_writer(writer)
+    return True
 
-    try:
-        reader_was_blocking, writer_was_blocking = _set_stream_fds_blocking(
+
+async def _pump_over_raw_fds(
+    *,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter | None,
+    reader_fd: int,
+    writer_fd: int,
+) -> bool:
+    """Drive the Rust pump over the raw FDs, managing the FD lifecycle.
+
+    Pauses the reader transport (always resuming on exit via ``_paused_reader``)
+    and switches the FDs to blocking mode under a ``_BlockingModeGuard`` that
+    restores their prior mode. Returns ``False`` — the signal to fall back to
+    the Python pump — when either seam refuses: when the reader could not be
+    safely paused, or when the FDs cannot be made blocking. Each refusal is
+    recorded under its own :class:`~cuprum.pump_events.RustPumpDeclineReason`.
+    The writer close is left to the caller.
+
+    Examples
+    --------
+    A successful hop reports that Rust handled it, leaving the caller to close
+    the writer::
+
+        handled = await _pump_over_raw_fds(
+            reader=reader,
+            writer=writer,
             reader_fd=reader_fd,
             writer_fd=writer_fd,
         )
-    except OSError:
-        if resume_reader is not None:
-            resume_reader()
-        return False
+        assert handled is True
 
+    When the descriptors cannot be switched to blocking mode the call reports
+    ``False`` instead of raising, and the reader transport has already been
+    resumed, so the caller falls back to the Python pump::
+
+        handled = await _pump_over_raw_fds(
+            reader=reader,
+            writer=writer,
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+        )
+        if not handled:
+            await _run_python_pump(reader, writer)
+
+    """
+    with _paused_reader(reader) as pause:
+        if pause.decline_reason is not None:
+            # Either the pause raised, leaving the descriptor's state unknown,
+            # or the transport could never be resumed and was left untouched.
+            # Both mean asyncio may still be consuming the reader, so fall back
+            # rather than race it for the descriptor — reporting which of the
+            # two it was, since they call for different investigations.
+            _log_rust_pump_declined(pause.decline_reason)
+            return False
+
+        # Flush any bytes asyncio already buffered in the StreamReader before
+        # the Rust pump takes over the raw file descriptor.
+        await _drain_reader_buffer(reader, writer)
+
+        try:
+            guard = _BlockingModeGuard.engage(reader_fd=reader_fd, writer_fd=writer_fd)
+        except (OSError, ValueError):
+            _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
+            return False
+
+        await _await_rust_pump(guard, reader_fd=reader_fd, writer_fd=writer_fd)
+    return True
+
+
+async def _await_rust_pump(
+    guard: _BlockingModeGuard,
+    *,
+    reader_fd: int,
+    writer_fd: int,
+) -> None:
+    """Run the Rust pump in an executor, restoring the FDs only once it ends.
+
+    Cancelling the awaiting task cannot interrupt the worker thread, which
+    still owns both raw descriptors. Restoring their blocking mode — or letting
+    ``_paused_reader`` resume the transport — while that thread is mid-transfer
+    would race it, so on cancellation this waits for the worker to return
+    before the descriptors are touched.
+    """
     from cuprum._streams_rs import rust_pump_stream
 
     loop = asyncio.get_running_loop()
+    future = loop.run_in_executor(None, rust_pump_stream, reader_fd, writer_fd)
     try:
-        await loop.run_in_executor(
-            None,
-            rust_pump_stream,
-            reader_fd,
-            writer_fd,
-        )
+        # Shielded so cancelling this task does not mark the executor future
+        # cancelled while its worker thread is still running.
+        await asyncio.shield(future)
+    except asyncio.CancelledError:
+        # Drain the worker before propagating: the descriptors must outlive it.
+        # A further cancellation interrupts the wait itself, so loop until the
+        # worker has actually finished — a single suppressed wait survives only
+        # one extra cancellation, and returning early would restore the
+        # descriptors while the worker still owns them, which is the precise
+        # hazard this drain exists to prevent. Only CancelledError is
+        # suppressed: KeyboardInterrupt and SystemExit must still travel, or a
+        # shutdown signal arriving here would be swallowed.
+        while not future.done():
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.wait([future])
+        _report_pump_outcome_after_cancel(future)
+        raise
     finally:
-        _restore_stream_fd_blocking(
-            reader_fd=reader_fd,
-            writer_fd=writer_fd,
-            reader_was_blocking=reader_was_blocking,
-            writer_was_blocking=writer_was_blocking,
+        guard.restore()
+
+
+def _report_pump_outcome_after_cancel(future: asyncio.Future[int]) -> None:
+    """Retrieve a drained pump's outcome, recording any failure it carried.
+
+    ``asyncio.wait`` never retrieves a future's outcome, so a pump that failed
+    on a cancelled hop would resurface at garbage collection as an
+    unretrieved-exception warning, detached from the hop that caused it.
+
+    The caller is told about the cancellation, which is what it asked for, so
+    the pump's own error would otherwise vanish entirely. Record it at debug
+    level — the same convention as ``_log_rust_pump_declined`` — so a failure
+    masked by cancellation stays diagnosable.
+
+    Examples
+    --------
+    Consume the outcome of a worker that failed while its hop was cancelled::
+
+        with caplog.at_level(logging.DEBUG, logger="cuprum._pipeline_streams"):
+            _report_pump_outcome_after_cancel(future)
+        assert caplog.records[0].__dict__["cuprum_action"] == (
+            "rust_pump_failed_after_cancel"
         )
-        if resume_reader is not None:
-            resume_reader()
-    # The Rust pump closes the writer FD on return (drop semantics).
-    # Suppress OSError so the asyncio transport close does not raise
-    # EBADF when the descriptor is already gone.
-    with contextlib.suppress(OSError):
-        await _close_stream_writer(writer)
-    return True
+
+    """
+    if future.cancelled():
+        return
+    error = future.exception()
+    if error is None:
+        return
+    # `exc_info` rather than `%r`: this record exists so a cancellation-masked
+    # failure stays diagnosable, and the type and message alone do not say
+    # where in the pump it happened.
+    _LOGGER.debug(
+        "Rust pump failed while its hop was being cancelled",
+        exc_info=error,
+        extra={"cuprum_action": "rust_pump_failed_after_cancel"},
+    )
+    # The event carries no error detail. The traceback above is the diagnostic;
+    # an exception type on a metric label is a series per failure mode the
+    # library does not control. Emission cannot raise past here — this runs
+    # inside cancellation unwinding, and a raise would displace the
+    # `CancelledError` the caller is owed. See `_emit_pump_event`.
+    _emit_pump_event(PumpEvent(phase="failed_after_cancel"))
 
 
 async def _drain_reader_buffer(
@@ -273,6 +357,7 @@ async def _try_rust_pump(
     writer_fd = _extract_stream_fd(writer)
 
     if reader_fd is None or writer_fd is None:
+        _log_rust_pump_declined(RustPumpDeclineReason.RAW_FD_UNAVAILABLE)
         return False
 
     return await _run_rust_pump(
@@ -297,95 +382,3 @@ async def _pump_stream_dispatch(
         return
 
     await _run_python_pump(reader, writer)
-
-
-def _create_pipe_tasks(
-    processes: list[asyncio.subprocess.Process],
-) -> list[asyncio.Task[None]]:
-    """Create streaming tasks between adjacent pipeline stages."""
-    return [
-        asyncio.create_task(
-            _pump_stream_dispatch(
-                processes[idx].stdout,
-                processes[idx + 1].stdin,
-            ),
-        )
-        for idx in range(len(processes) - 1)
-    ]
-
-
-def _flatten_stream_tasks(
-    stderr_tasks: list[asyncio.Task[str | None] | None],
-    stdout_task: asyncio.Task[str | None] | None,
-) -> list[asyncio.Task[str | None]]:
-    """Collect all running stream consumer tasks for cancellation cleanup."""
-    tasks = [task for task in stderr_tasks if task is not None]
-    if stdout_task is not None:
-        tasks.append(stdout_task)
-    return tasks
-
-
-async def _cancel_stream_tasks(
-    stderr_tasks: list[asyncio.Task[str | None] | None],
-    stdout_task: asyncio.Task[str | None] | None,
-) -> None:
-    """Cancel stream consumer tasks and await their completion."""
-    tasks = _flatten_stream_tasks(stderr_tasks, stdout_task)
-    for task in tasks:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
-
-
-async def _gather_optional_text_tasks(
-    tasks: list[asyncio.Task[str | None] | None],
-) -> tuple[str | None, ...]:
-    """Await optional capture tasks, returning a tuple aligned with inputs."""
-    return tuple(
-        await asyncio.gather(
-            *(
-                task if task is not None else asyncio.sleep(0, result=None)
-                for task in tasks
-            ),
-        ),
-    )
-
-
-async def _collect_pipe_results(
-    pipe_tasks: list[asyncio.Task[None]],
-) -> list[object]:
-    """Collect pipe task results, capturing exceptions rather than raising them.
-
-    Uses return_exceptions=True to gather all results including any exceptions
-    that occurred during pipe streaming between pipeline stages.
-    """
-    return list(await asyncio.gather(*pipe_tasks, return_exceptions=True))
-
-
-async def _reconcile_pipe_tasks(pipe_tasks: list[asyncio.Task[None]]) -> None:
-    """Cancel and drain the inter-stage pumps after a pipeline deadline.
-
-    Safe to run whether or not ``_wait_for_pipeline`` already reconciled them:
-    cancelling a finished task is a no-op and gathering an already-gathered one
-    returns its recorded outcome. Failures are absorbed because a
-    ``TimeoutExpired`` is already propagating and a broken pump must not
-    replace it.
-    """
-    for task in pipe_tasks:
-        if not task.done():
-            task.cancel()
-    await _collect_pipe_results(pipe_tasks)
-
-
-def _surface_unexpected_pipe_failures(pipe_results: list[object]) -> None:
-    """Raise non-BrokenPipe exceptions from pipe results.
-
-    BrokenPipeError and ConnectionResetError are expected when downstream
-    processes terminate early (e.g., head) and should not fail the pipeline.
-    Other exceptions indicate genuine failures and must be surfaced.
-    """
-    for result in pipe_results:
-        if isinstance(result, Exception) and not isinstance(
-            result,
-            (BrokenPipeError, ConnectionResetError),
-        ):
-            raise result

@@ -187,7 +187,9 @@ Implementation completed successfully:
 - Updated `docs/users-guide.md` with dispatcher wiring note
 - Marked roadmap item 4.3.1 as complete
 
-All quality gates passed:
+Every quality gate then in force passed on that run. The gate set has grown
+since: the CI `benchmark-ratchet` job arrived in #48, after 4.3.1 landed. This
+records the gates of the day, not today's:
 
 - `make check-fmt`: 66 files formatted
 - `make typecheck`: All checks passed
@@ -195,6 +197,21 @@ All quality gates passed:
 - `make test`: 281 passed, 26 skipped (Rust tests skipped when extension
   not built, which is expected)
 - `make markdownlint`: 0 errors
+
+> **Since superseded.** The file inventory below records where the code landed
+> when 4.3.1 completed, not where it lives now. Two of the extractors named
+> above are gone: `_extract_reader_fd` and `_extract_writer_fd` were one-line
+> pass-throughs to `_extract_stream_fd` — a fourth helper 4.3.1 added
+> alongside them, but the summary above does not name — and #136 deleted the
+> two aliases as dead code, inlining their call sites onto
+> `_extract_stream_fd`. The surviving extractors and the pause/blocking-mode
+> lifecycle (`_fd_from_transport`, `_extract_stream_fd`, `_paused_reader`,
+> `_BlockingModeGuard`) have since moved
+> out of `cuprum/_pipeline_streams.py` into `cuprum/_pipeline_stream_fds.py`,
+> and the pipe-task bookkeeping into `cuprum/_pipeline_pipe_tasks.py`, to keep
+> each module within the per-module line cap. `_pipeline_streams.py` still owns
+> the backend choice and the hand-off itself. See "Raw descriptor lifecycle" in
+> `docs/cuprum-design.md` for the current layering.
 
 Files modified (8 total, within tolerance of 10):
 

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import cuprum as c
-from cuprum import context
+from cuprum import context, pump_events, pump_observation
 from cuprum.events import ExecHook
 
 
 def test_public_exports_are_available() -> None:
-    """Top-level cuprum exports default catalogue symbols."""
+    """Top-level cuprum exports the catalogue and pump observation symbols."""
     assert c.DEFAULT_CATALOGUE is not None, "DEFAULT_CATALOGUE must be exported"
     assert c.DEFAULT_PROJECTS, "DEFAULT_PROJECTS must not be empty"
     assert c.CORE_OPS_PROJECT == "core-ops", "CORE_OPS_PROJECT value mismatch"
@@ -27,6 +27,25 @@ def test_public_exports_are_available() -> None:
     assert c.Pipeline is not None, "Pipeline must be exported"
     assert c.PipelineResult is not None, "PipelineResult must be exported"
     assert callable(c.is_rust_available), "is_rust_available must be exported"
+    # The pump observation channel is documented as a top-level surface in the
+    # changelog and ADR-008. Pinned by identity against its defining module so
+    # dropping a re-export, or re-pointing one at a different definition, fails
+    # here rather than in a caller's import.
+    assert c.PumpEvent is pump_events.PumpEvent, (
+        "PumpEvent must be exported from cuprum.pump_events"
+    )
+    assert c.PumpHook is pump_events.PumpHook, (
+        "PumpHook must be exported from cuprum.pump_events"
+    )
+    assert c.RustPumpDeclineReason is pump_events.RustPumpDeclineReason, (
+        "RustPumpDeclineReason must be exported from cuprum.pump_events"
+    )
+    assert c.PumpHookRegistration is pump_observation.PumpHookRegistration, (
+        "PumpHookRegistration must be exported from cuprum.pump_observation"
+    )
+    assert c.observe_pump is pump_observation.observe_pump, (
+        "observe_pump must be exported from cuprum.pump_observation"
+    )
 
 
 def test_exec_hook_uses_events_as_its_definition_site() -> None:

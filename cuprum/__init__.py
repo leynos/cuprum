@@ -59,6 +59,8 @@ from cuprum.context import (
 from cuprum.events import ExecEvent, ExecHook
 from cuprum.logging_hooks import LoggingHookRegistration, logging_hook
 from cuprum.program import Program
+from cuprum.pump_events import PumpEvent, PumpHook, RustPumpDeclineReason
+from cuprum.pump_observation import PumpHookRegistration, observe_pump
 from cuprum.rust import is_rust_available
 from cuprum.sh import (
     CommandResult,
@@ -108,7 +110,11 @@ __all__ = [
     "ProgramCatalogue",
     "ProgramEntry",
     "ProjectSettings",
+    "PumpEvent",
+    "PumpHook",
+    "PumpHookRegistration",
     "RunOutputOptions",
+    "RustPumpDeclineReason",
     "SafeCmd",
     "SafeCmdBuilder",
     "ScopeConfig",
@@ -126,6 +132,7 @@ __all__ = [
     "logging_hook",
     "merge_env_overlays",
     "observe",
+    "observe_pump",
     "resolve_env",
     "run_concurrent",
     "run_concurrent_sync",

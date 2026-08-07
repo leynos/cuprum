@@ -7,8 +7,8 @@ import contextlib
 import time
 import typing as typ
 
+from cuprum._pipeline_pipe_tasks import _collect_pipe_results
 from cuprum._pipeline_stage_streams import _get_stage_stream_fds
-from cuprum._pipeline_streams import _collect_pipe_results
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._subprocess_context import _cwd_arg
 from cuprum.context import current_context, resolve_env
@@ -16,7 +16,7 @@ from cuprum.context import current_context, resolve_env
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum._pipeline_streams import _PipelineRunConfig
+    from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum.sh import SafeCmd
 
 

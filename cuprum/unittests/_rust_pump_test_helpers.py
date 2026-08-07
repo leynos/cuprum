@@ -1,0 +1,381 @@
+"""Shared support for tests that observe Rust-pump routing decisions.
+
+Both the log-record tests and the metrics tests have to reach the *real*
+decline paths rather than calling the recording helper directly — a helper
+called by hand proves only that the helper works, not that the pump still calls
+it. The triggers below therefore drive ``_pump_over_raw_fds`` and
+``_try_rust_pump`` with exactly the descriptor state each seam refuses, so
+deleting the call site fails every test that uses them.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import os
+import sys
+import threading
+import types
+import typing as typ
+
+import pytest
+
+from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum.pump_events import RustPumpDeclineReason
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+
+class RecordingCollector:
+    """Metrics collector double that keeps every call with its labels.
+
+    ``InMemoryMetrics`` discards labels, which is exactly the dimension these
+    tests exist to pin, so the label mapping is copied per call here.
+    """
+
+    def __init__(self) -> None:
+        """Start with no recorded counter or histogram calls."""
+        self.counters: list[tuple[str, float, dict[str, str]]] = []
+        self.histograms: list[tuple[str, float, dict[str, str]]] = []
+
+    def inc_counter(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Record a counter increment and the labels it carried."""
+        self.counters.append((name, value, dict(labels)))
+
+    def observe_histogram(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Record a histogram observation and the labels it carried."""
+        self.histograms.append((name, value, dict(labels)))
+
+    def counter_names(self) -> list[str]:
+        """Return the names of the counters recorded, in call order."""
+        return [name for name, _value, _labels in self.counters]
+
+
+def fail_engage(**_kwargs: object) -> object:
+    """Refuse to switch the descriptors to blocking mode."""
+    msg = "blocking mode is unavailable for this descriptor pair"
+    raise OSError(msg)
+
+
+def fail_engage_with_value_error(**_kwargs: object) -> object:
+    """Refuse the descriptors with ``ValueError`` rather than ``OSError``.
+
+    Injected rather than provoked: on CPython ``os.set_blocking`` reports a bad
+    descriptor as ``OSError``. The refusal is doubled anyway because
+    ``_restore_stream_fd_blocking`` already suppresses ``ValueError``, so the
+    module treats it as a possible outcome of the same call; the two halves of
+    that lifecycle have to agree, or a ``ValueError`` would escape the decline
+    seam and crash a hop the fallback could have carried.
+    """
+    msg = "I/O operation on closed file"
+    raise ValueError(msg)
+
+
+@contextlib.contextmanager
+def owned_fds() -> cabc.Iterator[tuple[int, int]]:
+    """Yield a private pipe's descriptors, closing both on exit.
+
+    The pump seams are doubled out in every path below, but only by
+    convention: ``_pause_reader_transport`` reports ``may_hand_off=True`` for a
+    reader with no transport, so a caller that forgets one patch reaches
+    ``_BlockingModeGuard.engage`` for real. Against descriptors 1 and 2 that is
+    an ``fcntl`` on the test runner's own stdout and stderr, and the damage
+    surfaces far from here. Descriptors this helper owns make the same mistake
+    harmless.
+    """
+    reader_fd, writer_fd = os.pipe()
+    try:
+        yield reader_fd, writer_fd
+    finally:
+        for fd in (reader_fd, writer_fd):
+            # The Rust pump closes the writer on return, so a real hand-off may
+            # already have taken one of these.
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
+def force_pause_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    decline_reason: RustPumpDeclineReason | None = None,
+) -> None:
+    """Force the reader-pause seam to the given outcome.
+
+    A ``decline_reason`` of ``None`` permits the hand-off; any member names the
+    refusal the seam reports, so a caller cannot ask for a refusal without
+    saying which one it is.
+    """
+    monkeypatch.setattr(
+        _pipeline_stream_fds,
+        "_pause_reader_transport",
+        lambda _reader: _pipeline_stream_fds._ReaderPause(
+            decline_reason=decline_reason
+        ),
+    )
+
+
+class PauseOnlyTransport:
+    """A transport offering ``pause_reading`` but no ``resume_reading``.
+
+    Pausing this transport could never be undone, so a correct implementation
+    leaves it alone entirely; the method records calls so an implementation
+    that pauses anyway is caught rather than merely suspected.
+    """
+
+    def __init__(self) -> None:
+        """Start with no calls recorded."""
+        self.pause_calls = 0
+
+    def pause_reading(self) -> None:
+        """Record a pause that could never be undone."""
+        self.pause_calls += 1
+
+
+class TransportOnlyReader:
+    """Minimal ``StreamReader`` stand-in exposing a ``transport`` attribute."""
+
+    def __init__(self, transport: object) -> None:
+        """Wrap ``transport`` as the reader's public transport."""
+        self.transport = transport
+
+
+def decline_on_missing_fds(_monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route a hop whose streams expose no raw descriptors."""
+    reader = typ.cast("asyncio.StreamReader", object())
+    asyncio.run(_pipeline_streams._try_rust_pump(reader, None))
+
+
+def decline_on_pause_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route a hop whose ``pause_reading()`` raised."""
+    force_pause_outcome(
+        monkeypatch,
+        decline_reason=RustPumpDeclineReason.READER_PAUSE_FAILED,
+    )
+    run_raw_fd_pump()
+
+
+def decline_on_unresumable_reader(_monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route a hop whose reader transport offers no ``resume_reading``.
+
+    Left unpatched, so the reason this path reports is the one
+    ``_pause_reader_transport`` derives from the transport's own shape rather
+    than one the test handed it.
+    """
+    reader = typ.cast(
+        "asyncio.StreamReader",
+        TransportOnlyReader(PauseOnlyTransport()),
+    )
+    run_raw_fd_pump(reader)
+
+
+def _decline_on_blocking_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+    engage: cabc.Callable[..., object],
+) -> None:
+    """Route a hop whose blocking seam refuses via ``engage``.
+
+    Asserts the fallback signal as well as driving the path, because a refusal
+    that escaped as an exception would never reach the decline seam at all —
+    and a caller that then crashed would leave the log and counter assertions
+    downstream with nothing to disprove.
+    """
+    force_pause_outcome(monkeypatch)
+    monkeypatch.setattr(_pipeline_stream_fds._BlockingModeGuard, "engage", engage)
+    handled = run_raw_fd_pump()
+    assert handled is False, (
+        "a blocking-mode refusal must decline the fast path and fall back to "
+        f"the Python pump, found handled={handled!r}"
+    )
+
+
+def decline_on_blocking_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route a hop whose descriptors cannot be made blocking."""
+    _decline_on_blocking_refusal(monkeypatch, fail_engage)
+
+
+def decline_on_blocking_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route a hop whose blocking toggle refuses with ``ValueError``."""
+    _decline_on_blocking_refusal(monkeypatch, fail_engage_with_value_error)
+
+
+def run_raw_fd_pump(reader: asyncio.StreamReader | None = None) -> bool:
+    """Drive ``_pump_over_raw_fds`` over a pipe this helper owns.
+
+    ``reader`` defaults to a transport-less stand-in, which the pause seam
+    waves through; pass one when the transport's own shape is what the path
+    under test turns on.
+    """
+    if reader is None:
+        reader = typ.cast("asyncio.StreamReader", object())
+    with owned_fds() as (reader_fd, writer_fd):
+        return asyncio.run(
+            _pipeline_streams._pump_over_raw_fds(
+                reader=reader,
+                writer=None,
+                reader_fd=reader_fd,
+                writer_fd=writer_fd,
+            )
+        )
+
+
+class _NoopGuard:
+    """Blocking-mode guard double whose restore does nothing."""
+
+    def restore(self) -> None:
+        """Restore nothing; the descriptors here are placeholders."""
+
+
+def hand_off_successfully(monkeypatch: pytest.MonkeyPatch) -> bool:
+    """Drive a hop that the Rust pump accepts and completes.
+
+    Every seam the decline paths exercise is made to succeed, so the hop
+    reaches the pump and returns without a decline. This is the negative
+    control: whatever a declined hop records, this must not.
+    """
+    force_pause_outcome(monkeypatch)
+    monkeypatch.setattr(
+        _pipeline_stream_fds._BlockingModeGuard,
+        "engage",
+        lambda **_kwargs: _NoopGuard(),
+    )
+    install_fake_pump(monkeypatch, lambda _reader_fd, _writer_fd: 0)
+    return run_raw_fd_pump()
+
+
+class _FakeStreamsModule(types.ModuleType):
+    """A ``cuprum._streams_rs`` stand-in declaring the pump entry point.
+
+    A bare ``ModuleType`` has no such attribute to assign to, so the assignment
+    needs either a type suppression or this declaration. ``setattr`` is not the
+    third option: the lint suite rejects it for a constant attribute name.
+    """
+
+    rust_pump_stream: cabc.Callable[[int, int], int]
+
+
+def install_fake_pump(
+    monkeypatch: pytest.MonkeyPatch,
+    pump: cabc.Callable[[int, int], int],
+) -> None:
+    """Replace the Rust pump entry point with ``pump``."""
+    fake_streams_rs = _FakeStreamsModule("cuprum._streams_rs")
+    fake_streams_rs.rust_pump_stream = pump
+    monkeypatch.setitem(sys.modules, "cuprum._streams_rs", fake_streams_rs)
+
+
+async def cancel_mid_transfer(
+    worker_started: threading.Event,
+    release: threading.Event,
+    *,
+    guard: object | None = None,
+    cancellations: int = 1,
+) -> None:
+    """Start the pump, cancel it mid-transfer, then release the worker.
+
+    Parameters
+    ----------
+    guard:
+        Blocking-mode guard double handed to the pump. Defaults to a fresh
+        :class:`_NoopGuard`; pass a recording double to assert when the
+        descriptors are restored.
+    cancellations:
+        How many times the awaiting task is cancelled before the worker is
+        released. More than one exercises the drain's own interruption: each
+        extra cancellation lands while the pump still waits for the worker
+        thread.
+    """
+    with owned_fds() as (reader_fd, writer_fd):
+        task = asyncio.create_task(
+            _pipeline_streams._await_rust_pump(
+                typ.cast(
+                    "_pipeline_stream_fds._BlockingModeGuard",
+                    _NoopGuard() if guard is None else guard,
+                ),
+                reader_fd=reader_fd,
+                writer_fd=writer_fd,
+            )
+        )
+        # `Event.wait` reports timeout by returning False rather than raising,
+        # so a discarded result would let the cancellation land before the
+        # worker ever started — passing without exercising mid-transfer
+        # cancellation at all.
+        started = await asyncio.to_thread(worker_started.wait, 5.0)
+        assert started, (
+            "the pump worker did not start within 5s, so the cancellation "
+            "below would not be mid-transfer"
+        )
+        for _ in range(cancellations):
+            task.cancel()
+            # Give the cancellation a chance to land while the worker runs.
+            await asyncio.sleep(0.05)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+def run_failing_pump_on_a_cancelled_hop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cancel a hop whose Rust worker then fails, so the failure is recovered."""
+    release = threading.Event()
+    worker_started = threading.Event()
+    release_waits: list[bool] = []
+
+    def failing_pump(reader_fd: int, writer_fd: int) -> int:
+        """Fail after the cancellation has been delivered."""
+        del reader_fd, writer_fd
+        worker_started.set()
+        release_waits.append(release.wait(timeout=5.0))
+        msg = "the pump failed while the hop was being cancelled"
+        raise OSError(msg)
+
+    install_fake_pump(monkeypatch, failing_pump)
+    asyncio.run(cancel_mid_transfer(worker_started, release))
+    # A timed-out wait returns False rather than raising, so the pump would
+    # still fail — but after the cancellation had already been drained, which is
+    # not the scenario this helper claims to drive. Asserted on this thread
+    # because an AssertionError raised in the executor would merely replace the
+    # OSError the callers inspect.
+    assert release_waits == [True], (
+        "the pump must fail because it was released mid-cancellation, not "
+        f"because its 5s wait timed out; observed waits {release_waits}"
+    )
+
+
+DECLINE_PATHS: tuple[
+    tuple[str, cabc.Callable[[pytest.MonkeyPatch], None], str], ...
+] = (
+    ("missing_fds", decline_on_missing_fds, "raw_fd_unavailable"),
+    ("reader_unresumable", decline_on_unresumable_reader, "reader_unresumable"),
+    ("pause_failure", decline_on_pause_failure, "reader_pause_failed"),
+    ("blocking_failure", decline_on_blocking_failure, "blocking_mode_unavailable"),
+    (
+        "blocking_value_error",
+        decline_on_blocking_value_error,
+        "blocking_mode_unavailable",
+    ),
+)
+"""Each real decline path paired with the ``reason`` it must report.
+
+The pause seam refuses in two ways and reports them apart, because they call
+for different investigations: ``reader_pause_failed`` means ``pause_reading()``
+raised and the descriptor's state is unknown, while ``reader_unresumable``
+means a transport that could never be resumed was deliberately left alone. Only
+the latter is driven through the real ``_pause_reader_transport``, so collapsing
+the two reasons at their source fails here rather than passing on a doubled
+seam.
+
+Two paths share ``blocking_mode_unavailable`` because the blocking seam can
+refuse in two ways, and only one of them was originally caught: a hop that met
+``ValueError`` there crashed instead of declining, so the reason is pinned for
+both refusals rather than for the exception type that happened to be handled.
+"""

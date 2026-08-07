@@ -10,8 +10,15 @@ from __future__ import annotations
 
 import typing as typ
 
+from cuprum._token_registration import _TokenRegistrationBase
+from cuprum.context.core import CuprumContext
 from cuprum.context.env_overlay import _coerce_env_overlay
-from cuprum.context.state import _reset_context, _set_context, current_context
+from cuprum.context.state import (
+    _context_var,
+    _reset_context,
+    _set_context,
+    current_context,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -20,7 +27,6 @@ if typ.TYPE_CHECKING:
     from cuprum.context.core import (
         AfterHook,
         BeforeHook,
-        CuprumContext,
         ScopeConfig,
     )
     from cuprum.events import ExecHook
@@ -76,66 +82,28 @@ def scoped(config: ScopeConfig) -> _ScopedContext:
     return _ScopedContext(config)
 
 
-class _TokenRegistration:
+class _TokenRegistration(_TokenRegistrationBase[CuprumContext]):
     """Canonical base for ContextVar-backed scope-registration handles.
 
     All scope-registration handles (allowlist extensions, hook
     registrations, env overlays) derive from this base. Subclasses perform
     only the context-derivation step in ``__init__`` and hand the derived
-    context to :meth:`_install`; the token capture, idempotent
-    :meth:`detach`, and context-manager protocol live here so the subtle
-    restoration discipline cannot drift between handle types.
+    context to :meth:`~cuprum._token_registration._TokenRegistrationBase._install`.
 
-    Token-based Restoration
-    -----------------------
-    The registration captures a :class:`~contextvars.Token` when the derived
-    context is installed. When :meth:`detach` is called, the original context
-    is restored via the token, ensuring no context pollution even when used
-    outside ``scoped(ScopeConfig())`` blocks. This means :meth:`detach`
-    restores the exact context that existed when the registration was
-    created, regardless of subsequent context modifications. If multiple
-    registrations are created and detached in non-LIFO (last in, first out)
-    order, earlier tokens restore states that discard changes layered by
-    later registrations; prefer ``with`` blocks, which detach in LIFO order.
-
-    Detach in the same logical :class:`~contextvars.Context` (thread or
-    task) in which the registration was created. Resetting a
-    :class:`~contextvars.ContextVar` with a token from a different context
-    raises :class:`ValueError`.
+    The token capture, idempotent ``detach``, and context-manager protocol
+    live in :class:`cuprum._token_registration._TokenRegistrationBase`, which
+    the pump-observation channel shares. That base documents the
+    token-restoration discipline in full: ``detach`` restores the exact
+    context that existed when the registration was created, so non-LIFO
+    detaches discard changes layered by later registrations, and a detach must
+    happen in the :class:`~contextvars.Context` that created the registration.
     """
 
-    __slots__ = ("_detached", "_token")
+    __slots__ = ()
 
     def __init__(self) -> None:
-        """Initialise the handle in the attached, token-less state."""
-        self._detached = False
-        self._token: Token[CuprumContext] | None = None
-
-    def _install(self, new_ctx: CuprumContext) -> None:
-        """Set ``new_ctx`` as current and capture the restoration token."""
-        self._token = _set_context(new_ctx)
-
-    def detach(self) -> None:
-        """Restore the original context via the captured token."""
-        if self._detached:
-            return
-        if self._token is not None:
-            _reset_context(self._token)
-            self._token = None
-        self._detached = True
-
-    def __enter__(self) -> typ.Self:
-        """Enter context manager; the registration is already installed."""
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Exit context manager; detach the registration."""
-        self.detach()
+        """Bind the handle to the execution-context ``ContextVar``."""
+        super().__init__(_context_var())
 
 
 class AllowRegistration(_TokenRegistration):

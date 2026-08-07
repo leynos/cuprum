@@ -8,17 +8,19 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import typing as typ
 from unittest import mock
 
 import pytest
 
-from cuprum import _pipeline_streams
+from cuprum import _pipeline_stream_fds, _pipeline_streams
 from cuprum._testing import (
     configure_pump_stream_dispatch_for_testing,
     reset_pump_stream_dispatch_for_testing,
     set_rust_availability_for_testing,
 )
+from cuprum.unittests._rust_pump_test_helpers import owned_fds
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -30,17 +32,19 @@ _WRITER_TOGGLE_FAILURE = "writer toggle failed"
 @contextlib.contextmanager
 def _nonblocking_pipe_pair() -> cabc.Iterator[tuple[int, int, int, int]]:
     """Yield two pipes with active ends configured for non-blocking I/O."""
-    read_fd, read_write_fd = _pipeline_streams.os.pipe()
-    write_read_fd, write_fd = _pipeline_streams.os.pipe()
-    _pipeline_streams.os.set_blocking(read_fd, False)
-    _pipeline_streams.os.set_blocking(write_fd, False)
+    read_fd, read_write_fd = os.pipe()
+    write_read_fd, write_fd = os.pipe()
+    os.set_blocking(read_fd, False)
+    os.set_blocking(write_fd, False)
     try:
         yield read_fd, read_write_fd, write_read_fd, write_fd
     finally:
-        _pipeline_streams.os.close(read_fd)
-        _pipeline_streams.os.close(read_write_fd)
-        _pipeline_streams.os.close(write_read_fd)
-        _pipeline_streams.os.close(write_fd)
+        # A double close would raise EBADF out of the teardown and mask
+        # whatever the body was asserting, so each close is suppressed
+        # independently — matching ``_pipe_fds`` in the FD lifecycle tests.
+        for fd in (read_fd, read_write_fd, write_read_fd, write_fd):
+            with contextlib.suppress(OSError):
+                os.close(fd)
 
 
 class _TransportWithoutPause:
@@ -184,10 +188,10 @@ class TestPumpStreamDispatch:
 
         def _spy(reader_fd: int, writer_fd: int) -> int:
             """Assert both descriptors are blocking, then record the call."""
-            assert _pipeline_streams.os.get_blocking(reader_fd), (
+            assert os.get_blocking(reader_fd), (
                 "expected reader FD to be switched to blocking mode"
             )
-            assert _pipeline_streams.os.get_blocking(writer_fd), (
+            assert os.get_blocking(writer_fd), (
                 "expected writer FD to be switched to blocking mode"
             )
             assert reader_fd == expected_reader_fd, (
@@ -260,8 +264,8 @@ class TestPumpStreamDispatch:
             configure_pump_stream_dispatch_for_testing(python_pump=fake_python_pump)
 
             asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
-            original_reader_blocking = _pipeline_streams.os.get_blocking(read_fd)
-            original_writer_blocking = _pipeline_streams.os.get_blocking(write_fd)
+            original_reader_blocking = os.get_blocking(read_fd)
+            original_writer_blocking = os.get_blocking(write_fd)
             asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, None))
 
         assert calls["rust_pump"] == 1, "expected Rust pump path to execute once"
@@ -332,7 +336,7 @@ class TestPumpStreamDispatch:
 
         def fake_pause_reader_transport(
             reader: asyncio.StreamReader,
-        ) -> cabc.Callable[[], None]:
+        ) -> _pipeline_stream_fds._ReaderPause:
             """Record a pause and return a resume callback for the reader."""
             del reader
             call_order.append("pause")
@@ -341,7 +345,7 @@ class TestPumpStreamDispatch:
                 """Record that the reader transport was resumed."""
                 call_order.append("resume")
 
-            return _resume
+            return _pipeline_stream_fds._ReaderPause(resume=_resume)
 
         async def fake_drain_reader_buffer(
             reader: asyncio.StreamReader,
@@ -353,7 +357,7 @@ class TestPumpStreamDispatch:
             call_order.append("drain")
 
         monkeypatch.setattr(
-            _pipeline_streams,
+            _pipeline_stream_fds,
             "_pause_reader_transport",
             fake_pause_reader_transport,
         )
@@ -363,12 +367,12 @@ class TestPumpStreamDispatch:
             fake_drain_reader_buffer,
         )
         monkeypatch.setattr(
-            _pipeline_streams,
+            _pipeline_stream_fds,
             "_set_stream_fds_blocking",
             lambda **_: (True, True),
         )
         monkeypatch.setattr(
-            _pipeline_streams,
+            _pipeline_stream_fds,
             "_restore_stream_fd_blocking",
             lambda **_: call_order.append("restore"),
         )
@@ -378,16 +382,20 @@ class TestPumpStreamDispatch:
         monkeypatch.setattr(streams_rs, "rust_pump_stream", lambda *_: 0)
 
         reader = typ.cast("asyncio.StreamReader", object())
-        asyncio.run(
-            _pipeline_streams._run_rust_pump(
-                reader=reader,
-                writer=None,
-                reader_fd=1,
-                writer_fd=2,
+        with owned_fds() as (reader_fd, writer_fd):
+            asyncio.run(
+                _pipeline_streams._run_rust_pump(
+                    reader=reader,
+                    writer=None,
+                    reader_fd=reader_fd,
+                    writer_fd=writer_fd,
+                )
             )
-        )
 
-        assert call_order == ["pause", "drain", "restore", "resume"]
+        expected_order = ["pause", "drain", "restore", "resume"]
+        assert call_order == expected_order, (
+            f"expected the hand-off order {expected_order}, found {call_order}"
+        )
 
     def test_dispatch_restores_reader_blocking_when_writer_toggle_fails(
         self,
@@ -413,7 +421,7 @@ class TestPumpStreamDispatch:
                 lambda stream: read_fd if stream is reader else write_fd,
             )
 
-            original_set_blocking = _pipeline_streams.os.set_blocking
+            original_set_blocking = os.set_blocking
             calls = {"python_pump": 0}
 
             def fake_set_blocking(fd: int, blocking: object) -> None:
@@ -428,7 +436,7 @@ class TestPumpStreamDispatch:
                     raise OSError(_WRITER_TOGGLE_FAILURE)
                 original_set_blocking(fd, bool(blocking))
 
-            monkeypatch.setattr(_pipeline_streams.os, "set_blocking", fake_set_blocking)
+            monkeypatch.setattr(os, "set_blocking", fake_set_blocking)
             configure_pump_stream_dispatch_for_testing(
                 python_pump=lambda reader, writer: self._fake_python_fallback(
                     reader,
@@ -442,10 +450,10 @@ class TestPumpStreamDispatch:
             assert calls["python_pump"] == 1, (
                 "expected Python fallback when writer blocking toggle fails"
             )
-            assert not _pipeline_streams.os.get_blocking(read_fd), (
+            assert not os.get_blocking(read_fd), (
                 "expected reader FD blocking mode to be restored after fallback"
             )
-            assert not _pipeline_streams.os.get_blocking(write_fd), (
+            assert not os.get_blocking(write_fd), (
                 "expected writer FD to remain in its original non-blocking mode"
             )
 

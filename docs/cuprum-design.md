@@ -777,8 +777,10 @@ Internally, command execution can be described in terms of events:
   operation and the raised error's type;
 - `exit` – process finished, with exit code and duration.
 
-These seven phases are the whole of `ExecPhase`; there is no other value a
-hook can receive.
+These seven phases are the whole of the declared `ExecPhase` type. Nothing
+validates an event at run time, so a consumer still needs a policy for a
+malformed or future phase value: see the fail-closed reducer and the fail-open
+logging adapter described later in this document.
 
 These events are surfaced to user code via hooks. A typical hook signature
 might be:
@@ -987,9 +989,9 @@ The structured event stream (`ExecEvent`) is exposed via `sh.observe()` and
 implemented with the following decisions:
 
 - **Event phases:** Cuprum emits `plan`, `start`, `stdout`, `stderr`, `stdin`,
-  `stdin_error`, and `exit` phases for both single commands and pipeline
-  stages — the full `ExecPhase` set. Pipeline stage events are tagged with a
-  stage index and stage count.
+  `stdin_error`, and `exit` phases for both single commands and pipeline stages
+  — the full `ExecPhase` set. Pipeline stage events are tagged with a stage
+  index and stage count.
 - **Correlation:** every event for one execution carries the same
   `ExecEvent.exec_id`, a stable token minted once per execution (per pipeline
   stage for pipelines). Consumers that track per-execution state — such as the
@@ -1072,6 +1074,25 @@ Semantics (aligned with `subprocess.run` and plumbum):
   capture rules as successful runs (final stage stdout plus all stderr when
   capture is enabled).
 
+For screen readers: The following sequence diagram shows the logging hook's
+start and exit sequence around one command. The user calls `run_sync()` on a
+`SafeCmd`, which invokes the `on_start` hook. That hook first asks the logger
+whether the *exit* level is enabled — not the start level — because the only
+reason to take a timestamp now is to compute a duration for the exit record
+later; when it is enabled, the hook takes the store's lock, records
+`time.perf_counter()` against the command, and releases the lock. It then asks
+whether the start level is enabled and, if so, logs the `cuprum.start` record.
+The `SafeCmd` executes the process, then invokes the `on_exit` hook with the
+command and the resulting `CommandResult`, and only then returns that result to
+the user — `_execute_with_hooks` dispatches the after-hooks before its own
+return, so a hook cannot observe a command the caller has already been told
+about. The exit hook
+asks again whether the exit level is enabled: if it is disabled it returns
+immediately, leaving nothing to clean up because nothing was stored; if it is
+enabled it takes the lock, pops the recorded start time — removing the entry,
+so the store cannot grow without bound — releases the lock, computes
+`duration_s`, and logs the `cuprum.exit` record.
+
 Figure 3: Sequence of start/exit logging hook execution
 
 ```mermaid
@@ -1099,7 +1120,6 @@ sequenceDiagram
     end
 
     SafeCmd->>SafeCmd: execute process
-    SafeCmd-->>User: CommandResult
 
     SafeCmd->>AfterHooks: on_exit(cmd, result)
 
@@ -1114,16 +1134,19 @@ sequenceDiagram
         AfterHooks->>AfterHooks: compute duration_s
         AfterHooks->>Logger: log(exit_level, cuprum.exit ...)
     end
+
+    SafeCmd-->>User: CommandResult
 ```
 
 For screen readers: The following sequence diagram shows how a subprocess
-timeout is turned into the public `TimeoutExpired`. `_handle_subprocess_timeout`
-first calls `_resolve_timeout_payload`, passing the timeout exception and a
-`_TimeoutFallback`, and receives a `_SubprocessTimeoutDetails` payload carrying
-the timeout, captured stdout and stderr, and the exit time. It then reads the
-process exit code through `_get_exit_code`, emits an exit event via
-`_emit_exit_event` using `_ExitEventDetails`, and finally calls
-`_raise_timeout_expired`, which raises `TimeoutExpired` back to the caller.
+timeout is turned into the public `TimeoutExpired`.
+`_handle_subprocess_timeout` first calls `_resolve_timeout_payload`, passing
+the timeout exception and a `_TimeoutFallback`, and receives a
+`_SubprocessTimeoutDetails` payload carrying the timeout, captured stdout and
+stderr, and the exit time. It then reads the process exit code through
+`_get_exit_code`, emits an exit event via `_emit_exit_event` using
+`_ExitEventDetails`, and finally calls `_raise_timeout_expired`, which raises
+`TimeoutExpired` back to the caller.
 
 Figure 4: Subprocess timeout handling, from payload resolution to
 `TimeoutExpired`
@@ -1222,8 +1245,7 @@ then awaits the scheduled tasks together using `asyncio.gather`. When the
 reducer selects no stages — every other stage has already settled — no tasks
 are created and no gather occurs.
 
-Figure 5: Fail-fast termination selection via the `_stages_to_terminate`
-reducer
+Figure 5: Fail-fast termination selection via the `_stages_to_terminate` reducer
 
 ```mermaid
 sequenceDiagram
@@ -1328,6 +1350,18 @@ concurrently with optional concurrency limits. The implementation uses
 - `failure_submission_indices`: Property mapping each failure back to its
   original submission position, uniformly across both execution modes.
 
+For screen readers: The following sequence diagram shows how `run_concurrent`
+executes several commands at once. The caller invokes `run_concurrent` with the
+commands and a config. It first validates every program against the context
+allowlist in one step, and if any is forbidden it raises a
+`ForbiddenProgramError` to the caller immediately, before anything runs.
+Otherwise each `SafeCmd` runs concurrently: it acquires the semaphore when one
+is configured, which gates how many run at once; fires its before hook;
+executes the process; fires its exit hook; records its result and status with
+the result aggregator; and releases the semaphore. Once all have finished, the
+aggregator returns the results in submission order and `run_concurrent` returns
+a `ConcurrentResult` carrying the results, the failures, and the `ok` flag.
+
 Figure 6: Concurrent execution flow with allowlist validation and semaphore
 gating
 
@@ -1361,6 +1395,19 @@ sequenceDiagram
     run_concurrent-->>Caller: ConcurrentResult<br/>(results, failures, ok)
 ```
 
+For screen readers: The following sequence diagram shows what changes when
+fail-fast mode is enabled. The caller invokes `run_concurrent` with a config
+whose `fail_fast` is true. Every command is launched as a task in a task group.
+When the first non-zero exit is detected, the group raises `_FirstFailureError`
+and cancels the tasks still pending. Tasks whose process had already spawned
+are signalled with `SIGTERM`, given a grace period, then `SIGKILL`; tasks
+cancelled before spawning simply never start. The group returns the partial
+results — the commands that *completed*; cancelled ones produced no
+`CommandResult` and are omitted — and `run_concurrent` returns a
+`ConcurrentResult` carrying those, compacted, alongside `submission_indices`
+mapping each back to its original position and the failure indices within the
+compacted tuple.
+
 Figure 7: Fail-fast mode cancellation behaviour
 
 ```mermaid
@@ -1384,8 +1431,8 @@ sequenceDiagram
         end
     end
 
-    TaskGroup-->>run_concurrent: Partial results<br/>(completed + cancelled)
-    run_concurrent-->>Caller: ConcurrentResult<br/>(partial results,<br/>failure indices)
+    TaskGroup-->>run_concurrent: Completed results only<br/>(cancelled produced none)
+    run_concurrent-->>Caller: ConcurrentResult<br/>(compacted results,<br/>submission indices,<br/>failure indices)
 ```
 
 ### 8.4 Telemetry Adapter Design Decisions
@@ -1484,12 +1531,22 @@ design decisions guide these adapters:
 - The reducer is total over `ExecPhase` — all seven phases (`plan`, `start`,
   `stdout`, `stderr`, `stdin`, `stdin_error`, `exit`) have an arm — and
   fail-closed beyond it: any other phase raises `_UnhandledMetricsPhaseError`
-  rather than being silently ignored. That is deliberate, and its cost is
-  worth stating plainly. A hook exception is not swallowed, so adding a value
-  to `ExecPhase` without adding an arm here would raise for every caller that
-  has already registered `MetricsHook`. A new phase therefore cannot reach
-  metrics without a decision in this reducer. The structured logging adapter
-  is fail-open by contrast, formatting an unrecognized phase generically.
+  rather than being silently ignored. That is deliberate, and its cost is worth
+  stating plainly. A hook exception is not swallowed, so adding a value to
+  `ExecPhase` without adding an arm here would raise for every caller that has
+  already registered `MetricsHook`. A new phase therefore cannot reach metrics
+  without a decision in this reducer. The structured logging adapter is
+  fail-open by contrast, formatting an unrecognized phase generically.
+- That fail-closed arm is why Rust-pump routing telemetry is *not* an
+  `ExecPhase`. Pump declines and cancellation-masked pump failures travel on a
+  separate channel — `PumpEvent`, registered through
+  `cuprum.pump_observation.observe_pump` and counted by
+  `cuprum.adapters.pump_metrics.PumpMetricsHook` — which shares the
+  `MetricsCollector` protocol but not the event contract. None of it reaches an
+  `ExecEvent` consumer, so no already-registered hook can be affected by it.
+  Its emitter reports rather than re-raises a failing hook, because both
+  emission sites lie on paths contracted to complete. See
+  [ADR-008](adr-008-rust-pump-observation-channel.md).
 
 For screen readers: The following sequence diagram shows how one execution
 event becomes collector calls. The observe-hook dispatcher invokes
@@ -1497,9 +1554,9 @@ event becomes collector calls. The observe-hook dispatcher invokes
 operations that event yields and receives a tuple of `_MetricOp` records. When
 the tuple is empty the hook returns immediately without computing labels.
 Otherwise it extracts the `program` and `project` labels once, then applies
-each operation in turn: a `_CounterOp` becomes `inc_counter(name, value,
-labels)` on the collector, and a `_HistogramOp` becomes `observe_histogram(name,
-value, labels)`.
+each operation in turn: a `_CounterOp` becomes
+`inc_counter(name, value, labels)` on the collector, and a `_HistogramOp`
+becomes `observe_histogram(name, value, labels)`.
 
 Figure 8: Metrics hook dispatch, from `ExecEvent` to collector calls
 
@@ -1533,8 +1590,8 @@ For screen readers: an `ExecEvent` calls the `MetricsHook`, which asks
 `_metric_operations` for that event's operations and receives a tuple of
 `_MetricOp` records. If the tuple is empty the hook returns immediately,
 without computing labels. Otherwise it extracts the labels once and then loops
-over the operations, applying each: a `_CounterOp` calls `inc_counter(name,
-value, labels)` on the collector, and a `_HistogramOp` calls
+over the operations, applying each: a `_CounterOp` calls
+`inc_counter(name, value, labels)` on the collector, and a `_HistogramOp` calls
 `observe_histogram(name, value, labels)`.
 
 The loop is the contract, and it is deliberately **not** atomic. An `exit`
@@ -1551,8 +1608,7 @@ Three consequences follow, and collector implementations depend on them:
   call, the first stays applied — a failure can be recorded without its
   duration.
 - **The order is fixed.** The failure counter is applied before the duration
-  observation, so a partial application is always the prefix, never the
-  suffix.
+  observation, so a partial application is always the prefix, never the suffix.
 - **The exception propagates, and the command fails with it.**
   `cuprum._observability._emit_exec_event` logs `observe_hook_failed`, then
   wraps the error in `_ExecEventEmissionError` so that observe-hook tasks
@@ -1561,9 +1617,9 @@ Three consequences follow, and collector implementations depend on them:
   backend therefore takes the user's command down rather than being absorbed,
   so a collector that must not do that has to swallow its own errors.
 
-So a collector must treat each call as independent and ordered, and must
-never assume that seeing a `cuprum_failures_total` increment guarantees a
-matching `cuprum_duration_seconds` observation will follow.
+So a collector must treat each call as independent and ordered, and must never
+assume that seeing a `cuprum_failures_total` increment guarantees a matching
+`cuprum_duration_seconds` observation will follow.
 
 Note what the adapter does *not* offer. No event or operation identifier is
 passed to `inc_counter` or `observe_histogram`, so a collector has nothing to
@@ -1573,8 +1629,7 @@ application stays partial rather than being replayed. A collector that wants
 exactly-once semantics has to obtain the identity from somewhere else.
 
 The label mapping is read-only for the duration of the loop — it is extracted
-once, before the first call, and the same mapping is passed to every
-operation.
+once, before the first call, and the same mapping is passed to every operation.
 
 ______________________________________________________________________
 
@@ -2044,8 +2099,8 @@ The raw availability probe lives in `cuprum._rust_backend`. Its
 `False` when that native module is missing, and re-raises other import failures
 after logging a warning. The cached resolver in
 `cuprum._backend._check_rust_available()` wraps this probe and feeds both
-`cuprum.rust.is_rust_available()` and — through the `_probe_rust_availability()`
-seam — `get_stream_backend()`.
+`cuprum.rust.is_rust_available()` and — through the
+`_probe_rust_availability()` seam — `get_stream_backend()`.
 
 ### 13.4 Fallback Strategy
 
@@ -2256,31 +2311,93 @@ explicitly.
 
 The Rust extension releases the GIL during I/O operations, allowing other
 Python threads and asyncio tasks to proceed. Integration with asyncio uses
-`loop.run_in_executor()`:
+`loop.run_in_executor()`.
+
+The dispatcher itself only chooses; `_try_rust_pump` owns the whole attempt and
+reports whether it succeeded, so the caller never runs the native pump itself:
 
 ```python
 async def _pump_stream_dispatch(
     reader: asyncio.StreamReader | None,
     writer: asyncio.StreamWriter | None,
 ) -> None:
+    if reader is None:
+        await _run_python_pump(reader, writer)
+        return
+
     backend = get_stream_backend()
     if backend is StreamBackend.RUST and await _try_rust_pump(reader, writer):
-        loop = asyncio.get_running_loop()
-        reader_fd = _extract_fd(reader)
-        writer_fd = _extract_fd(writer)
-        await loop.run_in_executor(
-            None,
-            _streams_rs.rust_pump_stream,
-            reader_fd,
-            writer_fd,
-        )
-    else:
-        await _pump_stream(reader, writer)
+        return
+
+    await _run_python_pump(reader, writer)
 ```
+
+`_try_rust_pump` extracts both descriptors — declining with
+`raw_fd_unavailable` if either is missing — and hands off to `_run_rust_pump`,
+which drives `_pump_over_raw_fds` under the pause and blocking-mode lifecycle
+described below and closes the writer only once the pump has returned.
+
+The layering matters, and this example used to get it wrong. Awaiting
+`_try_rust_pump` and *then* calling `rust_pump_stream` would run the native
+pump twice, and extracting the descriptors in the dispatcher would restore
+their state before the cancellation-safe drain in `_await_rust_pump` had let
+the worker thread finish with them — which is the exact hazard that drain
+exists to prevent.
 
 Error propagation from Rust to Python uses standard exception mechanisms. The
 Rust extension raises `OSError` for I/O failures, matching the behaviour of
 Python's built-in I/O operations.
+
+#### Raw descriptor lifecycle
+
+Handing a descriptor to the Rust pump means taking it back from asyncio for the
+duration of the transfer, and that hand-off has several partial-failure paths:
+the descriptor may not be extractable from the transport, the reader transport
+may refuse to pause, and either descriptor may refuse to switch to blocking
+mode. `cuprum/_pipeline_stream_fds.py` owns that lifecycle behind two seams so
+each path is testable without a live pump:
+
+- `_BlockingModeGuard` — the FD-state object. `engage()` switches the reader and
+  writer to blocking mode while capturing their prior modes, rolling back a
+  partial change if the second switch fails; `restore()` returns both to the
+  captured modes. This is what stops a descriptor being left blocking after the
+  transfer.
+- `_paused_reader` — a context manager that pauses the reader transport and
+  resumes it on every exit path, including exceptions and cancellation, so a
+  resume can never be skipped. Exactly one resume fires per pause attempt, but
+  not always at block exit. A transport exposing no `pause_reading` needs none.
+  A `pause_reading()` that *raises* gets one corrective `resume_reading()`
+  immediately, at the failure site rather than at block exit, because the
+  transport may have set its paused flag before whatever raised — leaving a
+  reader nobody resumes while the Python fallback reads a descriptor nothing is
+  watching. Having already been corrected, it is not resumed again on exit. It
+  yields the pause outcome, whose `decline_reason` is `None` when the
+  descriptor may be handed to the Rust pump — a failed pause sets
+  `reader_pause_failed`, because asyncio may still be consuming the reader, and
+  the caller falls back to the Python pump rather than racing it. A transport
+  with no `pause_reading` leaves `decline_reason` `None`, since it has no
+  callbacks to suspend. A transport with `pause_reading` but no
+  `resume_reading` sets `reader_unresumable` and is never paused: the pause
+  hook shows callbacks that would race the pump, yet pausing it could never be
+  undone, and the Python fallback reads the same stream and would wait forever
+  on a reader nothing can restart.
+
+Cancellation is handled explicitly rather than implicitly. `run_in_executor`
+cannot interrupt the worker thread running the Rust pump, and that thread still
+owns both raw descriptors, so cancelling the awaiting task waits for the worker
+to return before the blocking mode is restored and the transport resumed.
+Restoring or resuming earlier would hand the descriptors back to asyncio while
+native code was still mid-transfer.
+
+The module's scope is deliberately narrow: descriptor extraction plus the pause
+and blocking-mode lifecycle for the Rust pump hand-off. Production code
+consumes it only from `cuprum/_pipeline_streams.py`; the
+`cuprum/unittests/test_pipeline_stream*` modules also import the seams
+directly, to inject the partial failures the public entry point cannot provoke.
+Its reuse policy is that new descriptor lifecycle concerns for that hand-off
+belong here rather than being inlined into the pump, but the seams are not a
+general-purpose descriptor utility — anything serving a different caller should
+be designed against that caller's real requirements instead of widening these.
 
 ### 13.7 Linux splice() Optimization
 
@@ -2336,10 +2453,10 @@ The splice implementation handles errors as follows:
 
 #### Stream instrumentation
 
-Both pathways emit bounded `tracing` diagnostics without installing a subscriber
-(the Python boundary owns subscriber configuration). The read/write seams log a
-`debug` event per successful transfer, a `warn` per `EINTR` retry, and an
-`error` on a fatal read/write failure, a zero-progress write, or a
+Both pathways emit bounded `tracing` diagnostics without installing a
+subscriber (the Python boundary owns subscriber configuration). The read/write
+seams log a `debug` event per successful transfer, a `warn` per `EINTR` retry,
+and an `error` on a fatal read/write failure, a zero-progress write, or a
 length-conversion overflow, so no fatal boundary stays silent.
 `pump_stream_readwrite` and `consume_stream` wrap the loop in an operation span
 created at `error` level — so `warn`/`error` events keep their context under a
@@ -2348,9 +2465,9 @@ The span carries `operation` and `buffer_size` and, on completion, records
 `total_bytes` plus the cumulative `EINTR` retry counts: `pump_stream_readwrite`
 records both `read_retries` and `write_retries`, while the read-only
 `consume_stream` records `read_retries` alone. Those retry counts accumulate in
-operation-scoped thread-local counters that the
-loops reset at operation start (keeping the seams parameter-free). See the
-developers' guide for the full contract.
+operation-scoped thread-local counters that the loops reset at operation start
+(keeping the seams parameter-free). See the developers' guide for the full
+contract.
 
 #### Read/write fallback state machine
 
@@ -2360,8 +2477,8 @@ outcome moves the running byte total and the latched writer state — in a pure,
 separate from the descriptor I/O that feeds it.
 
 `advance` is the whole public surface. It takes a `PumpState`, the length just
-read, and a closure that performs one write, and it returns a `Flow`
-(`Continue`/`Stop`):
+read, and a closure that performs one write, and it returns a `Flow` (`Continue`
+/`Stop`):
 
 ```rust,ignore
 pub(crate) fn advance<E>(

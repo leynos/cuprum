@@ -1,0 +1,297 @@
+"""Raw file-descriptor lifecycle for the Rust inter-stage pump.
+
+When the Rust backend pumps one pipeline stage's stdout into the next stage's
+stdin it takes over the raw pipe descriptors from asyncio for the duration of
+the transfer. That hand-off has several partial-failure paths: extracting the
+descriptor from an asyncio transport, pausing the reader transport so asyncio
+does not race the Rust pump, and switching the descriptors to blocking mode
+(then restoring their prior mode). This module isolates that lifecycle behind
+two seams — the [`_BlockingModeGuard`][cuprum._pipeline_stream_fds._BlockingModeGuard]
+FD-state object and the [`_paused_reader`][cuprum._pipeline_stream_fds._paused_reader]
+context manager — so it can be fault-injected without a live pump.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import dataclasses as dc
+import logging
+import os
+import typing as typ
+
+from cuprum.pump_events import RustPumpDeclineReason
+
+if typ.TYPE_CHECKING:
+    import asyncio
+    import collections.abc as cabc
+
+_LOGGER = logging.getLogger(__name__)
+
+RUST_PUMP_TEARDOWN_FAILED_ACTION = "rust_pump_teardown_failed"
+"""``cuprum_action`` for a Rust-pump teardown step that failed and was ignored."""
+
+
+@contextlib.contextmanager
+def _suppressed_teardown_failure(
+    logger: logging.Logger,
+    site: str,
+    *errors: type[Exception],
+) -> cabc.Iterator[None]:
+    """Suppress a teardown failure at ``site``, recording it at DEBUG first.
+
+    Suppresses exactly what ``contextlib.suppress(*errors)`` would; the only
+    addition is the record. Each of these steps undoes something the Rust pump
+    did to a descriptor, and a step that has quietly stopped working leaves the
+    descriptor in a state nothing else reports — the same question
+    ``_log_rust_pump_declined`` exists to answer, so it is answered the same
+    way and at the same level.
+
+    Only the site and the exception class reach the record. Both are drawn from
+    closed sets, so an operator aggregating these cannot be handed a series per
+    descriptor or per message.
+
+    The record is best-effort by construction: these steps run during teardown,
+    which includes cancellation unwinding, and a logging handler that raised
+    would displace the ``CancelledError`` the caller is owed. The emission is
+    therefore wrapped in its own suppression rather than being allowed to
+    convert a suppressed teardown error into a raised logging one.
+    """
+    try:
+        yield
+    except errors as exc:
+        with contextlib.suppress(Exception):
+            logger.debug(
+                "Rust pump teardown step %r failed and was ignored",
+                site,
+                extra={
+                    "cuprum_action": RUST_PUMP_TEARDOWN_FAILED_ACTION,
+                    "cuprum_site": site,
+                    "cuprum_error_type": type(exc).__name__,
+                    "cuprum_errno": getattr(exc, "errno", None),
+                },
+            )
+
+
+def _fd_from_transport(transport: object | None) -> int | None:
+    """Extract a raw FD via ``transport.get_extra_info('pipe').fileno()``.
+
+    Every attribute here is duck-typed, so each is checked for callability
+    before use: a transport double, or an unusual implementation carrying a
+    non-callable ``get_extra_info``, would otherwise raise ``TypeError`` from
+    outside the ``try`` below. Nothing upstream catches that —
+    ``_extract_stream_fd`` calls straight through — so it would surface as a
+    crash where the contract is to decline the fast path and return ``None``.
+    """
+    get_extra = getattr(transport, "get_extra_info", None)
+    if not callable(get_extra):
+        return None
+    pipe: object | None = get_extra("pipe")
+    fileno = getattr(pipe, "fileno", None) if pipe is not None else None
+    if not callable(fileno):
+        return None
+    try:
+        return int(fileno())
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def _extract_stream_fd(
+    stream: asyncio.StreamReader | asyncio.StreamWriter | None,
+) -> int | None:
+    """Extract a raw FD from an asyncio stream via its transport."""
+    if stream is None:
+        return None
+    transport = getattr(stream, "transport", None)
+    if transport is None:
+        transport = getattr(stream, "_transport", None)
+    return _fd_from_transport(transport)
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _ReaderPause:
+    """The outcome of trying to pause a reader transport.
+
+    Four outcomes are deliberately distinguished, because two of them are
+    safe to hand the raw descriptor to the Rust pump and two are not:
+
+    - **paused** — callbacks are suspended and ``resume`` restores them;
+    - **unsupported** — the transport exposes no ``pause_reading``, so there
+      are no suspendable callbacks to race and nothing to resume;
+    - **unresumable** — the transport exposes ``pause_reading`` but no
+      ``resume_reading``. The pause hook is evidence of read callbacks that
+      would race the pump, yet suspending them could never be undone, so the
+      hand-off is declined as ``READER_UNRESUMABLE`` and the transport is left
+      untouched;
+    - **failed** — ``pause_reading()`` raised, so the descriptor's state is
+      unknown: asyncio may still be reading it, or the pause may have
+      half-applied and left nothing watching it. Handing it to the Rust pump
+      could race that reader, so the hand-off is declined as
+      ``READER_PAUSE_FAILED`` and the caller falls back to Python. A corrective
+      resume has already been attempted at the failure site, so ``resume`` is
+      ``None`` here too.
+
+    The two refusals are kept apart all the way to the observability boundary:
+    an operator aggregating ``cuprum_reason`` can otherwise not tell a broken
+    pause from a transport that was deliberately never paused. Storing the
+    reason rather than a separate ``bool`` is what makes that impossible to get
+    wrong — there is no second field to fall out of step with it.
+    """
+
+    decline_reason: RustPumpDeclineReason | None = None
+    resume: cabc.Callable[[], None] | None = None
+
+    @property
+    def may_hand_off(self) -> bool:
+        """Whether the raw descriptor may be handed to the Rust pump."""
+        return self.decline_reason is None
+
+
+def _pause_reader_transport(reader: asyncio.StreamReader) -> _ReaderPause:
+    """Pause reader transport callbacks while the Rust pump owns the raw FD."""
+    transport = getattr(reader, "transport", None)
+    if transport is None:
+        transport = getattr(reader, "_transport", None)
+    pause_reading = getattr(transport, "pause_reading", None)
+    resume_reading = getattr(transport, "resume_reading", None)
+    if not callable(pause_reading):
+        # Without a pause hook there are no suspendable read callbacks to race
+        # the Rust pump, and nothing to resume afterwards. A transport carrying
+        # a lone resume_reading() does not change that: there is still no
+        # pause to undo.
+        return _ReaderPause()
+    if not callable(resume_reading):
+        # Pausable but not resumable. The pause hook is evidence of read
+        # callbacks that would race the pump, so handing the descriptor over
+        # unpaused is unsafe; but pausing would strand the transport, and the
+        # Python fallback reads the same StreamReader and would wait forever on
+        # a reader nothing can restart. Leave asyncio owning the descriptor and
+        # decline the fast path instead.
+        return _ReaderPause(decline_reason=RustPumpDeclineReason.READER_UNRESUMABLE)
+    try:
+        pause_reading()
+    except (RuntimeError, OSError):
+        # The pause did not complete, so asyncio may still consume from the
+        # descriptor. Report that the hand-off is unsafe rather than silently
+        # racing the reader.
+        #
+        # A transport can also half-apply the pause: asyncio's own transports
+        # set their paused flag and drop the reader before the trailing debug
+        # log, so a raise from that log leaves the descriptor unwatched. The
+        # Python fallback reads the same StreamReader and would stall on it
+        # forever, which is worse than the error we are already handling. Undo
+        # the half-applied pause here rather than at block exit, since a
+        # transport that never paused ignores resume_reading().
+        with contextlib.suppress(RuntimeError, OSError):
+            resume_reading()
+        return _ReaderPause(decline_reason=RustPumpDeclineReason.READER_PAUSE_FAILED)
+
+    def _resume() -> None:
+        """Resume the paused reader transport, recording teardown errors."""
+        with _suppressed_teardown_failure(_LOGGER, "resume", RuntimeError, OSError):
+            resume_reading()
+
+    return _ReaderPause(resume=_resume)
+
+
+def _set_stream_fds_blocking(*, reader_fd: int, writer_fd: int) -> tuple[bool, bool]:
+    """Switch pipe FDs to blocking mode and return their prior state."""
+    reader_was_blocking = os.get_blocking(reader_fd)
+    writer_was_blocking = os.get_blocking(writer_fd)
+    reader_changed = False
+    try:
+        if not reader_was_blocking:
+            os.set_blocking(reader_fd, True)
+            reader_changed = True
+        if not writer_was_blocking:
+            os.set_blocking(writer_fd, True)
+    except (OSError, ValueError):
+        if reader_changed:
+            with contextlib.suppress(OSError, ValueError):
+                os.set_blocking(reader_fd, reader_was_blocking)
+        raise
+    return reader_was_blocking, writer_was_blocking
+
+
+def _restore_stream_fd_blocking(
+    *,
+    reader_fd: int,
+    writer_fd: int,
+    reader_was_blocking: bool,
+    writer_was_blocking: bool,
+) -> None:
+    """Restore pipe FD blocking mode captured before Rust pumping."""
+    with _suppressed_teardown_failure(_LOGGER, "restore_blocking", OSError, ValueError):
+        os.set_blocking(reader_fd, reader_was_blocking)
+    with _suppressed_teardown_failure(_LOGGER, "restore_blocking", OSError, ValueError):
+        os.set_blocking(writer_fd, writer_was_blocking)
+
+
+@dc.dataclass(slots=True)
+class _BlockingModeGuard:
+    """The prior blocking mode of a reader/writer FD pair, restorable on demand.
+
+    This is the FD-state object behind the Rust pump's blocking lifecycle: it
+    captures each descriptor's blocking mode when the pump takes over the raw
+    FDs and restores it afterwards, so no descriptor is left in the temporary
+    blocking mode the Rust pump requires.
+    """
+
+    reader_fd: int
+    writer_fd: int
+    reader_was_blocking: bool
+    writer_was_blocking: bool
+
+    @classmethod
+    def engage(cls, *, reader_fd: int, writer_fd: int) -> _BlockingModeGuard:
+        """Switch both FDs to blocking mode, capturing their prior state.
+
+        Raises ``OSError`` or ``ValueError`` — after rolling back any partial
+        change so no descriptor is left switched — when either FD cannot be
+        made blocking. ``os.set_blocking`` raises ``ValueError`` for a closed
+        descriptor, so both belong to the same failure mode.
+        """
+        reader_was_blocking, writer_was_blocking = _set_stream_fds_blocking(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+        )
+        return cls(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+            reader_was_blocking=reader_was_blocking,
+            writer_was_blocking=writer_was_blocking,
+        )
+
+    def restore(self) -> None:
+        """Restore both FDs to the blocking mode captured by ``engage``."""
+        _restore_stream_fd_blocking(
+            reader_fd=self.reader_fd,
+            writer_fd=self.writer_fd,
+            reader_was_blocking=self.reader_was_blocking,
+            writer_was_blocking=self.writer_was_blocking,
+        )
+
+
+@contextlib.contextmanager
+def _paused_reader(reader: asyncio.StreamReader) -> cabc.Iterator[_ReaderPause]:
+    """Pause the reader transport for the block, resuming it on every exit.
+
+    Wraps ``_pause_reader_transport`` so a completed pause is always undone —
+    on normal return, exception, or cancellation. Exactly one resume ever
+    fires per pause attempt: a transport with no pause hook, and one that
+    could never be resumed, are both left unpaused, and a ``pause_reading()``
+    that raised has already had its corrective resume attempted at the failure
+    site, so none of the three is resumed again here.
+
+    Yields the :class:`_ReaderPause` rather than a bare verdict, so the caller
+    reports *which* seam refused instead of collapsing every refusal into one
+    reason. Its ``decline_reason`` is ``None`` when the raw descriptor may be
+    handed to the Rust pump, and otherwise names why the reader was not safely
+    paused, so the caller can fall back rather than race a reader that is still
+    consuming the descriptor.
+    """
+    pause = _pause_reader_transport(reader)
+    try:
+        yield pause
+    finally:
+        if pause.resume is not None:
+            pause.resume()
