@@ -34,7 +34,7 @@
 - **`PumpMetricsHook`:** A pump observer that counts routing decisions against
   any `MetricsCollector`.
 - **`cuprum_rust_pump_declined_total{reason}`:** Incremented once per hop that
-  fell back to the Python pump, labelled with the seam that refused.
+  fell back to the Python pump, labelled with the decline reason.
 - **`cuprum_rust_pump_failed_after_cancel_total`:** Incremented once,
   unlabelled, per Rust-pump worker failure recovered after its hop was
   cancelled.

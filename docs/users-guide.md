@@ -1609,12 +1609,12 @@ Each fall-back is recorded on the `cuprum._pipeline_streams` logger with a
 
 Table 1: reasons an inter-stage hop declines the Rust pump
 
-| `cuprum_reason`             | Meaning                                                                                 |
-| --------------------------- | --------------------------------------------------------------------------------------- |
-| `raw_fd_unavailable`        | the asyncio transport exposed no raw descriptor, so there was nothing to hand over      |
-| `reader_unresumable`        | the reader transport exposes `pause_reading` but not `resume_reading`, left unpaused    |
-| `reader_pause_failed`       | the reader transport could not be paused, so asyncio might still consume the descriptor |
-| `blocking_mode_unavailable` | the descriptors could not be switched to the blocking mode the pump requires            |
+| `cuprum_reason`             | Meaning                                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------------------- |
+| `raw_fd_unavailable`        | at least one asyncio transport exposed no raw descriptor, so there was nothing to hand over |
+| `reader_unresumable`        | the reader transport exposes `pause_reading` but not `resume_reading`, left unpaused        |
+| `reader_pause_failed`       | the reader transport could not be paused, so asyncio might still consume the descriptor     |
+| `blocking_mode_unavailable` | the descriptors could not be switched to the blocking mode the pump requires                |
 
 These sit at `DEBUG`, not `WARNING`: a fall-back is a routing decision rather
 than a fault, and on platforms where the fast path does not apply every hop
