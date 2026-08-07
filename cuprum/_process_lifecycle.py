@@ -1,9 +1,41 @@
-"""Process lifecycle management for pipeline execution."""
+"""Ownership of pipeline subprocesses, from spawn through to teardown.
+
+This module creates a pipeline's operating-system processes and stops them.
+`_spawn_pipeline_processes` starts one subprocess per stage with the stdio
+handles chosen by ``cuprum._pipeline_stage_streams``, records each start time,
+emits the ``start`` observation, and wires up the capture tasks. A spawn that
+fails part-way leaves no debris: the partly built pipeline is torn down and its
+capture tasks cancelled before the failure propagates, so a stage that started
+cannot outlive the run that could not finish assembling it.
+
+Stopping happens on two routes. On the fail-fast route a stage exits non-zero
+and the remaining stages become pointless work; `_stages_to_terminate` names
+the targets — every stage bar the one that owns its own exit and any already
+settled — `_has_stages_to_terminate` answers the same question against that
+same reducer, so a caller can announce the teardown without contradicting it,
+and `_terminate_pipeline_remaining_stages` performs it and reports how many
+stages it actually stopped. On the timeout route `_terminate_timed_out_stages`
+stops whatever still runs once a pipeline deadline expires, covering the
+degenerate non-positive deadline that cancels the normal waiter before it can
+tear anything down itself.
+
+Both routes escalate alike — ``SIGTERM``, a grace period, then ``SIGKILL`` and
+a final reap — inside a shielded, independently owned task. ``terminate()`` is
+synchronous but the grace-period wait is not, so a caller cancelling mid-grace
+would land its cancellation on that wait: the escalation and reap would never
+run, and a process ignoring ``SIGTERM`` would survive the run that spawned
+it. Cancellations, however many arrive, are held until teardown completes.
+
+The division of labour with ``cuprum._pipeline_wait`` is deliberate: that
+module decides whether and when a pipeline should be torn down, while this one
+owns the process handles and executes the decision. Separating them lets the
+fail-fast ordering be reasoned about without signal-handling detail, and the
+escalation policy be changed without touching the waiter.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 import typing as typ
 
@@ -63,30 +95,30 @@ async def _await_teardown_shielded(
 ) -> None:
     """Run ``teardowns`` to completion, holding off caller cancellation.
 
-    Teardown runs in an owned, shielded task. Awaiting it directly would let a
-    caller cancelling the run interrupt it part-way: ``process.terminate()`` is
-    synchronous and would still have fired, but the cancellation lands on the
-    grace-period wait, so the ``SIGKILL`` escalation and the final reap never
-    run and a process ignoring ``SIGTERM`` survives the run that spawned it.
-
-    The cancellation is held until teardown finishes and then re-raised,
-    mirroring the ``asyncio.shield`` cleanup in
-    ``cuprum.sh._execute_with_hooks``. A second cancellation arriving during
-    that wait is suppressed rather than allowed to strand a process: the
-    teardown task is independent and completes regardless.
-
-    Failures are absorbed — every caller runs this while another exception is
-    already propagating, and teardown must not replace it.
+    Every termination route funnels through here. Each cancellation is
+    recorded and the wait resumed behind a *fresh* ``asyncio.shield``: a
+    shield protects only the await it wraps, so re-awaiting the teardown bare
+    would let the next cancellation into the ``SIGTERM``/grace/``SIGKILL``
+    escalation itself. Only the teardown's own completion ends the loop, so it
+    runs to the end however many cancellations arrive; the first is re-raised,
+    so the caller still sees one. (``cuprum.sh._execute_with_hooks`` shields
+    once rather than in a loop; it drains bookkeeping tasks, not process
+    lifetimes, so a second cancellation there orphans nothing.) Failures are
+    absorbed — every caller runs this while another exception is already
+    propagating, and teardown must not replace it.
     """
     termination = asyncio.ensure_future(
         asyncio.gather(*teardowns, return_exceptions=True)
     )
-    try:
-        await asyncio.shield(termination)
-    except asyncio.CancelledError:
-        with contextlib.suppress(asyncio.CancelledError):
-            await termination
-        raise
+    first_cancellation: asyncio.CancelledError | None = None
+    while not termination.done():
+        try:
+            await asyncio.shield(termination)
+        except asyncio.CancelledError as exc:
+            if first_cancellation is None:
+                first_cancellation = exc
+    if first_cancellation is not None:
+        raise first_cancellation
 
 
 async def _terminate_all_shielded(
@@ -95,21 +127,10 @@ async def _terminate_all_shielded(
 ) -> None:
     """Terminate every process, holding off caller cancellation until done.
 
-    Termination owns its own task and is shielded. Awaiting it directly would
-    let a caller cancelling the run interrupt teardown: ``process.terminate()``
-    is synchronous and would still have fired, but the cancellation lands on
-    the grace-period wait, so the ``SIGKILL`` escalation and the final reap
-    never run and a process ignoring ``SIGTERM`` survives the run that spawned
-    it.
-
-    The cancellation is held until termination finishes and then re-raised,
-    mirroring the ``asyncio.shield`` cleanup in
-    ``cuprum.sh._execute_with_hooks``. A second cancellation arriving during
-    that wait is suppressed rather than allowed to strand a process: the
-    termination task is independent and completes regardless.
-
-    Failures are absorbed — every caller runs this while another exception is
-    already propagating, and teardown must not replace it.
+    Terminations are handed to
+    [`_await_teardown_shielded`][cuprum._process_lifecycle._await_teardown_shielded],
+    so a caller cancelling mid-grace cannot strand a process before its
+    ``SIGKILL`` escalation runs.
     """
     await _await_teardown_shielded(
         _terminate_process(process, cancel_grace) for process in processes
@@ -122,11 +143,7 @@ async def _cleanup_spawned_processes(
     stdout_task: asyncio.Task[str | None] | None,
     cancel_grace: float,
 ) -> None:
-    """Terminate processes and cancel tasks after a spawn failure.
-
-    Terminates all started processes and cancels any capture tasks to prevent
-    resource leaks when a pipeline stage fails to spawn.
-    """
+    """Terminate started processes and cancel capture tasks after a spawn failure."""
     await _terminate_all_shielded(processes, cancel_grace)
 
     tasks: list[asyncio.Task[str | None]] = [
@@ -321,18 +338,27 @@ async def _terminate_timed_out_stages(
     pipeline cannot block waiting on a producer that is still running.
 
     Failures are absorbed — this runs while a timeout is already propagating,
-    and must not replace the ``TimeoutExpired`` the caller is waiting for.
-
-    Teardown owns its own task and is shielded from the caller. Awaiting the
-    terminations directly would let a caller cancelling ``Pipeline.run()``
-    interrupt them: ``process.terminate()`` is synchronous and would still have
-    fired, but the cancellation lands on the grace-period wait, so the
-    ``SIGKILL`` escalation and the final reap never run and a stage ignoring
-    ``SIGTERM`` survives. The cancellation is therefore held until termination
-    has finished, mirroring the ``asyncio.shield`` cleanup in
-    ``cuprum.sh._execute_with_hooks``.
+    and must not replace the ``TimeoutExpired`` the caller awaits.
     """
     await _terminate_all_shielded(processes, cancel_grace)
+
+
+def _has_stages_to_terminate(
+    failure_index: int,
+    wait_tasks: cabc.Sequence[asyncio.Task[int]],
+) -> bool:
+    """Report whether a fail-fast at ``failure_index`` has anything to stop.
+
+    Asks the same reducer `_terminate_pipeline_remaining_stages` picks its
+    targets with, so a caller that announces the decision before requesting the
+    teardown cannot disagree with it about whether a stage was left running.
+    """
+    return bool(
+        _stages_to_terminate(
+            failure_index,
+            [wait_task.done() for wait_task in wait_tasks],
+        ),
+    )
 
 
 async def _terminate_pipeline_remaining_stages(
@@ -341,7 +367,7 @@ async def _terminate_pipeline_remaining_stages(
     failure_index: int,
     *,
     cancel_grace: float,
-) -> None:
+) -> int:
     """Terminate all still-running stages after a stage fails.
 
     Once a stage exits non-zero, Cuprum applies fail-fast semantics by
@@ -349,9 +375,10 @@ async def _terminate_pipeline_remaining_stages(
     hanging on long-running producers/consumers when downstream work is no
     longer meaningful.
 
-    Teardown is shielded for the same reason as the timeout path: a caller
-    cancelling mid-grace must not strand a stage before its ``SIGKILL``
-    escalation runs.
+    Returns the number of stages that were still running and so were
+    terminated. The caller reports that count, which is how an operator tells
+    a teardown that stopped stages from one that found them all already
+    settled and had nothing to do.
     """
     targets = set(
         _stages_to_terminate(
@@ -370,3 +397,4 @@ async def _terminate_pipeline_remaining_stages(
     ]
     if termination_tasks:
         await _await_teardown_shielded(termination_tasks)
+    return len(termination_tasks)

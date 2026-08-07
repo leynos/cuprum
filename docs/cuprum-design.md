@@ -607,7 +607,10 @@ processes concurrently, and streams data between them.
   streamed into the next stage and represented as `None` on its stage result.
 - `echo=True` tees the final stage stdout and all stage stderr streams.
 - Pipelines apply fail-fast semantics: the first stage to exit non-zero
-  terminates the remaining stages. The failing stage is surfaced via
+  terminates every other still-running stage — upstream producers and
+  downstream consumers alike — unless it is the final stage, in which case
+  nothing is left running to terminate. A single-stage pipeline terminates
+  nothing for the same reason. The failing stage is surfaced via
   `result.failure` / `result.failure_index`.
 
 #### 6.2.4 Context manipulation and allowlists
@@ -775,9 +778,15 @@ Internally, command execution can be described in terms of events:
 - `stdin` – bytes written to the child's standard input, with a byte count;
 - `stdin_error` – a standard-input write or close failed, with the failing
   operation and the raised error's type;
-- `exit` – process finished, with exit code and duration.
+- `exit` – process finished, with exit code and duration;
+- `pipeline_fail_fast` – a pipeline coordinator decision, not a lifecycle
+  phase: the stage named by `stage_index` was the first to fail and every other
+  still-running stage — upstream producers and downstream consumers alike — is
+  about to be terminated. Emitted at most once per pipeline, before termination
+  begins, on the failing stage's `exec_id`; the stage's own `exit` event still
+  follows.
 
-These seven phases are the whole of `ExecPhase`; there is no other value a
+These eight phases are the whole of `ExecPhase`; there is no other value a
 hook can receive.
 
 These events are surfaced to user code via hooks. A typical hook signature
@@ -787,7 +796,8 @@ might be:
 @dataclass
 class ExecEvent:
     phase: Literal[
-        "plan", "start", "stdout", "stderr", "exit", "stdin", "stdin_error"
+        "plan", "start", "stdout", "stderr", "exit", "stdin", "stdin_error",
+        "pipeline_fail_fast",
     ]
     program: Program | None
     argv: tuple[str, ...]
@@ -800,6 +810,8 @@ class ExecEvent:
     duration_s: float | None
     tags: Mapping[str, object]
     exec_id: ExecId | None  # stable per-execution correlation token
+    stage_index: int | None  # pipeline_fail_fast: failing stage's position
+    stage_count: int | None  # pipeline_fail_fast: pipeline width
 
 
 ExecHook = Callable[[ExecEvent], None | Awaitable[None]]
@@ -988,8 +1000,22 @@ implemented with the following decisions:
 
 - **Event phases:** Cuprum emits `plan`, `start`, `stdout`, `stderr`, `stdin`,
   `stdin_error`, and `exit` phases for both single commands and pipeline
-  stages — the full `ExecPhase` set. Pipeline stage events are tagged with a
-  stage index and stage count.
+  stages — every lifecycle phase in `ExecPhase`. Pipeline stage events are
+  tagged with a stage index and stage count.
+- **Fail-fast decision:** a pipeline additionally emits one
+  `pipeline_fail_fast` event marking a termination decision: it fires when a
+  non-final stage is the first to fail and at least one other stage is still
+  running, published before every other still-running stage — upstream
+  producers and downstream consumers alike — is terminated, and carrying that
+  stage's `exec_id`, so it joins the same span and lifecycle events. Its `stage_index`
+  and `stage_count` are typed fields rather than tags, because caller-supplied
+  tags are merged last and may legitimately shadow the `pipeline_stage_index`
+  key; the decision must report the index the coordinator acted on.
+  `MetricsHook` renders it as the `cuprum_pipeline_fail_fast_total` counter,
+  labelled only by `program` and `project`; `TracingHook` renders it as a
+  `cuprum.pipeline_fail_fast` span event on the failing stage's open span.
+  Adding a phase is a contract change: hooks that match on phase fail-closed
+  will raise until updated.
 - **Correlation:** every event for one execution carries the same
   `ExecEvent.exec_id`, a stable token minted once per execution (per pipeline
   stage for pipelines). Consumers that track per-execution state — such as the
@@ -1117,13 +1143,14 @@ sequenceDiagram
 ```
 
 For screen readers: The following sequence diagram shows how a subprocess
-timeout is turned into the public `TimeoutExpired`. `_handle_subprocess_timeout`
-first calls `_resolve_timeout_payload`, passing the timeout exception and a
-`_TimeoutFallback`, and receives a `_SubprocessTimeoutDetails` payload carrying
-the timeout, captured stdout and stderr, and the exit time. It then reads the
-process exit code through `_get_exit_code`, emits an exit event via
-`_emit_exit_event` using `_ExitEventDetails`, and finally calls
-`_raise_timeout_expired`, which raises `TimeoutExpired` back to the caller.
+timeout is turned into the public `TimeoutExpired`.
+`_handle_subprocess_timeout` first calls `_resolve_timeout_payload`, passing
+the timeout exception and a `_TimeoutFallback`, and receives a
+`_SubprocessTimeoutDetails` payload carrying the timeout, captured stdout and
+stderr, and the exit time. It then reads the process exit code through
+`_get_exit_code`, emits an exit event via `_emit_exit_event` using
+`_ExitEventDetails`, and finally calls `_raise_timeout_expired`, which raises
+`TimeoutExpired` back to the caller.
 
 Figure 4: Subprocess timeout handling, from payload resolution to
 `TimeoutExpired`
@@ -1204,10 +1231,11 @@ execution logic. `cuprum._pipeline_internals` re-exports the shared types only
 for compatibility. Do not reintroduce the combined `_run_before_hooks`
 responsibility in `_pipeline_types`.
 
-Error propagation policy (to be finalized, but roughly):
+Error propagation policy:
 
-- Pipelines fail fast: once any stage exits non-zero, Cuprum terminates the
-  remaining stages.
+- Pipelines fail fast: once any stage exits non-zero, Cuprum terminates every
+  other still-running stage — upstream as well as downstream — leaving the
+  failed stage to report its own exit.
 - The overall pipeline result surfaces the stage that triggered termination
   via `PipelineResult.failure` / `PipelineResult.failure_index`, alongside the
   per-stage results for diagnostics.
@@ -1222,8 +1250,13 @@ then awaits the scheduled tasks together using `asyncio.gather`. When the
 reducer selects no stages — every other stage has already settled — no tasks
 are created and no gather occurs.
 
-Figure 5: Fail-fast termination selection via the `_stages_to_terminate`
-reducer
+`cuprum._pipeline_wait` consults the same reducer *before* it reports anything,
+so a completion that would select no stages is not announced as a fail-fast
+decision at all: no `pipeline_fail_fast` event, and neither termination record.
+The first-failure record and `PipelineResult.failure_index` are unaffected,
+because the failure latched regardless of whether a teardown followed it.
+
+Figure 5: Fail-fast termination selection via the `_stages_to_terminate` reducer
 
 ```mermaid
 sequenceDiagram
@@ -1253,6 +1286,71 @@ Keeping the selection in `_stages_to_terminate` makes the rule testable without
 processes: it excludes the failed stage, which owns its own exit, and any stage
 whose wait task has already settled. Cleanup is therefore idempotent — a second
 pass over settled stages selects nothing.
+
+#### Completion ordering seam
+
+Deciding *which* completion triggers that termination is separated from the
+asyncio machinery that observes it, so the ordering rules can be verified
+without processes or a clock. `cuprum/_pipeline_wait.py` splits the decision
+into a command and a query on `_PipelineWaitState`, following the project's
+command/query segregation rule:
+
+- `record_completion(completed_idx, exit_code, *, ended_at)` is the command. It
+  stamps the stage's exit code and end time — the clock is injected rather than
+  read, so the transition is deterministic — and latches the first non-zero
+  exit **in completion order** as `failure_index`. Completion order, not stage
+  order, is what decides: a stage that fails earlier in wall-clock time wins
+  over a lower-indexed stage that fails later.
+- `should_terminate_others(completed_idx)` is the query. It inspects state
+  without changing it, so it is repeatable, and answers `True` only when the
+  completion is the latched first failure *and* is not the final stage — a
+  failing final stage has nothing left to stop.
+
+Completion order governs, but it cannot separate stages that settle together.
+`asyncio.wait` returns the settled tasks as an unordered set, so
+`_wait_for_pipeline` feeds each batch through in ascending stage-index order.
+That is a tie-break rather than a priority: across batches the stage that
+completed first still latches `failure_index`, and the sort only decides the
+order *within* one `asyncio.wait` batch, where set iteration would otherwise let
+`failure_index` vary between runs of the same pipeline. The tie is broken
+towards the earliest stage because an upstream failure is what causes the
+downstream failures it triggers, so the lowest index names the cause rather
+than a symptom.
+
+`_process_completed_task` is the only caller that joins the two: it reads the
+clock, invokes the command, then acts on the query by awaiting
+`_terminate_pipeline_remaining_stages`. Keeping the I/O there leaves the
+ordering rules as a pure transition, which is verified twice over — Hypothesis
+drives randomized completion orders, and CrossHair confirms the same invariants
+symbolically over a bounded model of at most three stages.
+
+Fail-fast is also observable rather than silent. `_process_completed_task`
+emits three structured records, distinguished by a stable `cuprum_action` field:
+`pipeline_stage_first_failure` when a completion newly latches `failure_index`,
+`pipeline_fail_fast_termination` immediately before termination is awaited, and
+`pipeline_fail_fast_terminated` once it returns. All carry the stage index,
+the pipeline width, the exit code, the elapsed duration, and the stage's
+execution token; the closing record adds how many stages were terminated and
+how long that took. Emitting the outcome separately is what distinguishes a
+teardown that finished from one still blocked on a stage that will not stop.
+
+The token is the existing per-stage `ExecId` the observe hooks already publish,
+so a fail-fast record joins to that stage's span and lifecycle events without a
+new identifier. Cuprum has no pipeline-level correlation id, and fail-fast is
+not the place to mint one: that would change the `ExecEvent` contract every
+adapter reads. The core wait path itself emits no metric and no span: it
+publishes the structured records and one `pipeline_fail_fast` `ExecEvent`, and
+the adapters project that event onto their own surfaces. `MetricsHook`
+increments `cuprum_pipeline_fail_fast_total`, and `TracingHook` records a
+`cuprum.pipeline_fail_fast` span event on the failing stage's already-open span.
+Both projections are described in section 8.4.
+
+The record payload lives in `cuprum/_pipeline_wait_records.py`, apart from the
+decision that fires it, so the published field contract and the verified
+ordering transition are not edited by accident together. The logging lives with
+the runtime concerns for the same reason the clock read does: the command and
+query must stay free of side effects to remain symbolically verifiable. The
+developers' guide documents the fields and the verification commands.
 
 ### 8.3 Parallel Execution (non‑pipeline)
 
@@ -1440,8 +1538,10 @@ design decisions guide these adapters:
 **Metrics adapter specifics:**
 
 - Counter metrics (`cuprum_executions_total`, `cuprum_failures_total`,
-  `cuprum_stdout_lines_total`, `cuprum_stderr_lines_total`) are incremented on
-  the corresponding event phases.
+  `cuprum_stdout_lines_total`, `cuprum_stderr_lines_total`,
+  `cuprum_stdin_bytes_total`, `cuprum_stdin_errors_total`,
+  `cuprum_pipeline_fail_fast_total`) are incremented on the corresponding event
+  phases.
 - Histogram metrics (`cuprum_duration_seconds`) are observed on `exit` events.
 - All metrics include `program` and `project` labels for multi‑dimensional
   analysis. The `project` label uses `_project_tag` and falls back to
@@ -1458,7 +1558,8 @@ design decisions guide these adapters:
   (8.1.3).
 - Events without an `exec_id` (legacy or manually constructed) are ambiguous
   and are ignored: no span is created for such a `start`, and their `stdout`/
-  `stderr`/`exit` events are dropped rather than guessed from PID.
+  `stderr`/`stdin_error`/`pipeline_fail_fast`/`exit` events are dropped rather
+  than guessed from PID.
 - Output lines can optionally be recorded as span events (controlled by
   `record_output` parameter).
 - Span status is set based on exit code (OK for 0, ERROR otherwise).
@@ -1468,7 +1569,8 @@ design decisions guide these adapters:
 
 - Builds on observe hooks rather than before/after hooks for richer event data.
 - Attaches structured `extra` fields with `cuprum_` prefix to log records.
-- Provides configurable log levels per phase (plan, start, output, exit).
+- Provides configurable log levels per phase (plan, start, output, exit,
+  fail-fast), the last defaulting to `WARNING`.
 - Includes a `JsonLoggingFormatter` for log aggregation systems.
 
 **Event-to-operation reduction:**
@@ -1481,8 +1583,9 @@ design decisions guide these adapters:
   property-tested without a collector at all.
 - Labels are resolved only when the reducer yields at least one operation, so a
   `plan` event — which records nothing — never projects labels off the event.
-- The reducer is total over `ExecPhase` — all seven phases (`plan`, `start`,
-  `stdout`, `stderr`, `stdin`, `stdin_error`, `exit`) have an arm — and
+- The reducer is total over `ExecPhase` — all eight phases (`plan`, `start`,
+  `stdout`, `stderr`, `stdin`, `stdin_error`, `exit`, `pipeline_fail_fast`)
+  have an arm — and
   fail-closed beyond it: any other phase raises `_UnhandledMetricsPhaseError`
   rather than being silently ignored. That is deliberate, and its cost is
   worth stating plainly. A hook exception is not swallowed, so adding a value
@@ -2044,8 +2147,8 @@ The raw availability probe lives in `cuprum._rust_backend`. Its
 `False` when that native module is missing, and re-raises other import failures
 after logging a warning. The cached resolver in
 `cuprum._backend._check_rust_available()` wraps this probe and feeds both
-`cuprum.rust.is_rust_available()` and — through the `_probe_rust_availability()`
-seam — `get_stream_backend()`.
+`cuprum.rust.is_rust_available()` and — through the
+`_probe_rust_availability()` seam — `get_stream_backend()`.
 
 ### 13.4 Fallback Strategy
 
@@ -2336,10 +2439,10 @@ The splice implementation handles errors as follows:
 
 #### Stream instrumentation
 
-Both pathways emit bounded `tracing` diagnostics without installing a subscriber
-(the Python boundary owns subscriber configuration). The read/write seams log a
-`debug` event per successful transfer, a `warn` per `EINTR` retry, and an
-`error` on a fatal read/write failure, a zero-progress write, or a
+Both pathways emit bounded `tracing` diagnostics without installing a
+subscriber (the Python boundary owns subscriber configuration). The read/write
+seams log a `debug` event per successful transfer, a `warn` per `EINTR` retry,
+and an `error` on a fatal read/write failure, a zero-progress write, or a
 length-conversion overflow, so no fatal boundary stays silent.
 `pump_stream_readwrite` and `consume_stream` wrap the loop in an operation span
 created at `error` level — so `warn`/`error` events keep their context under a
@@ -2348,9 +2451,9 @@ The span carries `operation` and `buffer_size` and, on completion, records
 `total_bytes` plus the cumulative `EINTR` retry counts: `pump_stream_readwrite`
 records both `read_retries` and `write_retries`, while the read-only
 `consume_stream` records `read_retries` alone. Those retry counts accumulate in
-operation-scoped thread-local counters that the
-loops reset at operation start (keeping the seams parameter-free). See the
-developers' guide for the full contract.
+operation-scoped thread-local counters that the loops reset at operation start
+(keeping the seams parameter-free). See the developers' guide for the full
+contract.
 
 #### Read/write fallback state machine
 

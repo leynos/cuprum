@@ -208,6 +208,7 @@ _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
     "stdout": "cuprum_stdout_lines_total",
     "stderr": "cuprum_stderr_lines_total",
     "stdin_error": "cuprum_stdin_errors_total",
+    "pipeline_fail_fast": "cuprum_pipeline_fail_fast_total",
 })
 
 
@@ -268,8 +269,15 @@ class MetricsHook:
     - ``cuprum_stderr_lines_total``: Counter of stderr lines emitted
     - ``cuprum_stdin_bytes_total``: Counter of successful stdin bytes written
     - ``cuprum_stdin_errors_total``: Counter of stdin writer failures
+    - ``cuprum_pipeline_fail_fast_total``: Counter of pipelines torn down early
+      because a non-final stage was the first to fail
 
-    All metrics include ``program`` and ``project`` labels.
+    All metrics include ``program`` and ``project`` labels, and only those. The
+    ``pipeline_fail_fast`` event's stage index, stage count, exit code, and
+    correlation token never become labels: ``exec_id`` is unique per execution
+    and would leave the counter unbounded, while stage index and exit code would
+    multiply series for no aggregate a dashboard needs. All stay on the event,
+    and on the trace span, for the cases wanting per-incident detail.
 
     Parameters
     ----------

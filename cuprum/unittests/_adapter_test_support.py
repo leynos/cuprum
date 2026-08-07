@@ -63,6 +63,8 @@ def _make_exec_event(
         "operation": None,
         "error_type": None,
         "exec_id": new_exec_id(),
+        "stage_index": None,
+        "stage_count": None,
     }
     if overrides is not None:
         unknown = set(overrides) - {field.name for field in dc.fields(ExecEvent)}
@@ -87,6 +89,8 @@ def _make_exec_event(
         operation=typ.cast("str | None", values["operation"]),
         error_type=typ.cast("str | None", values["error_type"]),
         exec_id=typ.cast("ExecId | None", values["exec_id"]),
+        stage_index=typ.cast("int | None", values["stage_index"]),
+        stage_count=typ.cast("int | None", values["stage_count"]),
     )
 
 

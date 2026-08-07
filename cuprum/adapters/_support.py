@@ -46,6 +46,10 @@ def _event_common_fields(
         yield name("exit_code"), event.exit_code
     if event.duration_s is not None:
         yield name("duration_s"), event.duration_s
+    if event.stage_index is not None:
+        yield name("stage_index"), event.stage_index
+    if event.stage_count is not None:
+        yield name("stage_count"), event.stage_count
     if event.line is not None:
         yield name("line"), event.line
 

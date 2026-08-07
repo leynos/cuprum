@@ -2,12 +2,44 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Pipeline fail-fast telemetry:** A pipeline now emits one
+  `pipeline_fail_fast` `ExecEvent`, marking a termination decision, when a
+  non-final stage is the first to fail and at least one other stage is still
+  running, published before every other still-running stage — upstream
+  producers and downstream consumers alike — is terminated, and carrying that
+  stage's existing `exec_id` alongside `stage_index`, `stage_count`,
+  `exit_code`, and `duration_s`. `stage_index` and `stage_count` are typed
+  fields rather than tags, so a caller that sets its own
+  `pipeline_stage_index` or `pipeline_stages` tag cannot shadow the stage the
+  pipeline actually acted on. `MetricsHook` counts it as
+  `cuprum_pipeline_fail_fast_total`, labelled only by `program` and `project`;
+  `TracingHook` records it as a `cuprum.pipeline_fail_fast` span event on the
+  failing stage's open span; the structured logging adapter renders it at
+  `LogLevels.fail_fast_level` (WARNING by default).
+
 ### Breaking changes
 
+- **New `ExecPhase` value (breaking for fail-closed hooks):** `ExecPhase` gains
+  `pipeline_fail_fast`. Observe hooks that match exhaustively on phase and
+  reject unknown values will raise on it until updated, and Cuprum re-raises
+  observe-hook failures rather than swallowing them. Cuprum's own adapters are
+  updated in the same change; third-party hooks written the same fail-closed
+  way need an explicit arm.
 - **`ExecHook` import path (breaking):** Import `ExecHook` from top-level
   `cuprum` or its definition site, `cuprum.events`. The former
   `cuprum.context.ExecHook` re-export has been removed; only the import path
   changes, not the hook signature or registration behaviour.
+
+### Fixed
+
+- **Stage teardown survives repeated cancellation:** A second cancellation
+  delivered while a pipeline was already being torn down could interrupt the
+  `SIGTERM`/grace/`SIGKILL` escalation itself, leaving a `SIGTERM`-immune stage
+  running after the call returned. Teardown is now resumed behind a fresh
+  shield after every cancellation, so it completes however many arrive, and the
+  first cancellation is re-raised to the caller.
 
 ## [0.2.0] - 2026-06-21
 
