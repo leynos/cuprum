@@ -11,7 +11,9 @@ accepted = []
 [words.corrections]
 
 [patterns]
-ignore = []
+# Inline code spans quote identifiers verbatim (`color`, `--artifact-name`);
+# their spelling is the quoted API's, not this repository's prose policy.
+ignore = ["`[^`\\n]+`"]
 
 [files]
 exclude = []
