@@ -197,6 +197,20 @@ Implementation completed successfully.
   `make check-fmt`, `make typecheck`, `make lint`, `make test`,
   `make markdownlint`, and `make nixie`.
 
+### Later amendment: gating the job on changed paths
+
+A July 2026 audit of Ubicloud usage found this job — the repository's only
+paid job — running on all 420 CI runs that month, including documentation
+edits and Dependabot `github-actions` batches. A `changes` job now classifies
+the diff with `dorny/paths-filter`, and `benchmark-ratchet` runs on pull
+requests only when a performance-relevant path changed. The
+`push`-to-`main` trigger stated above is deliberately left ungated: that run
+publishes the baseline artefact every later comparison reads, so filtering it
+would fail open rather than merely cost less. `.github/actionlint.yaml`
+declares the Ubicloud runner label so `actionlint` can check the workflow, and
+`cuprum/unittests/test_benchmark_gate_ci_contract.py` reads the gate back from
+`ci.yml`. See "Gating the paid benchmark job" in `docs/developers-guide.md`.
+
 ## Context and orientation
 
 Relevant files and current state:
