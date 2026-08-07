@@ -2443,11 +2443,23 @@ capturing drain does two things a non-capturing one does not:
   `None`, so the documented "a capturing run reports its streams as text"
   contract holds by construction rather than by scheduling luck.
 
+Cancelling a reader that outlasts the window must not cost the run what that
+reader already read. A capturing `_drain` (`cuprum/_streams.py`) therefore
+catches the `CancelledError` raised at its `read()` and returns the buffer it
+has, rather than discarding it. Nothing is awaited after that catch, so the
+task still settles on the turn the cancellation asked for. The exemption is
+scoped to capturing drains: a non-capturing drain has nothing to salvage and
+propagates the cancellation unchanged, as do the pipeline pump and relay paths,
+where swallowing a cancellation would strand a stage rather than save any text.
+A capturing reader consequently completes normally rather than reporting
+`task.cancelled()`, so `_decode_consumer_result`'s exception branch now covers
+only genuine reader failures.
+
 Pass `capture=False` wherever the drained text is discarded — the cancellation
 and stdin-failure paths — so teardown pays neither the window nor the contract.
 Relying on the readers happening to finish first is what broke under Python
 3.15.0rc1, where the process exit is observed before the pipes' pending
-end-of-file events are; see
+end-of-file events are processed; see
 [issue #292](https://github.com/leynos/cuprum/issues/292). The contract is
 guarded by `cuprum/unittests/test_timeout_capture_contract.py`, which withholds
 EOF outright so the assertions hold on every interpreter.

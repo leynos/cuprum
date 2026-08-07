@@ -42,13 +42,18 @@ def _decode_consumer_result(
 ) -> str | None:
     """Decode one drained consumer into the text its stream reports.
 
-    A reader that failed, was cancelled, or was never capturing has no text of
-    its own. A capturing run promised a string, so it reports the empty string;
-    a non-capturing run reports ``None``, having never had text to report.
+    A capturing reader keeps whatever it had buffered even when cancellation
+    cut its read short (see :func:`cuprum._streams._drain`), so the exception
+    branch is reached only by a reader that genuinely failed. Such a reader has
+    no text of its own, as has one that was never capturing: a capturing run
+    promised a string, so it reports the empty string; a non-capturing run
+    reports ``None``, having never had text to report.
     """
-    if isinstance(result, BaseException) or result is None:
-        return "" if capture else None
-    return result
+    match result:
+        case BaseException() | None:
+            return "" if capture else None
+        case str():
+            return result
 
 
 async def _settle_consumers(

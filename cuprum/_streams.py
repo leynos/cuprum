@@ -85,11 +85,26 @@ async def _drain(
 
     Returns the captured text decoded with the configured encoding/errors, or
     ``None`` when capture is disabled.
+
+    A capturing loop cancelled while parked in ``read()`` returns what it has
+    buffered rather than propagating the cancellation, so the bytes the stream
+    already produced survive teardown. A non-capturing loop has nothing to
+    salvage and lets the cancellation through unchanged.
     """
     buffer = bytearray() if config.capture_output else None
     echo_decoder = _echo_decoder(config)
     while True:
-        chunk = await stream.read(_READ_SIZE)
+        try:
+            chunk = await stream.read(_READ_SIZE)
+        except asyncio.CancelledError:
+            if buffer is None:
+                raise
+            # Teardown cancels readers that are still short of EOF, and this
+            # buffer is the run's only record of what the stream produced
+            # before it arrived. Report it instead of discarding it. Nothing is
+            # awaited past this point, so the task still settles on the turn
+            # the cancellation asked for.
+            break
         if not chunk:
             break
         if buffer is not None:
