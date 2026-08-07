@@ -1,10 +1,12 @@
-"""Property coverage for the timeout waiter and the consumer drain.
+"""Property coverage for the subprocess timeout waiter.
 
 ``test_subprocess_timeout`` pins these paths at hand-picked values. These
 generalize over the input domain instead, so an invariant that happens to hold
 at ``0`` and ``-1.0`` cannot pass by coincidence. It lives apart from that
 module because mixing example-based and generated cases there would obscure
 both, and because the module is already close to the project's line ceiling.
+The consumer drain's own properties live in
+``test_subprocess_drain_properties`` for that second reason.
 
 Nothing here spawns a subprocess: every case drives a deterministic double.
 Where a positive deadline must elapse, the double's ``wait()`` never completes,
@@ -23,10 +25,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from cuprum._subprocess_wait import (
-    _drain_stream_consumers,
-    _wait_for_exit_code_within_timeout,
-)
+from cuprum._subprocess_execution import _wait_for_exit_code_within_timeout
 from cuprum.sh import ExecutionContext
 
 if typ.TYPE_CHECKING:
@@ -303,151 +302,6 @@ class TestTimeoutWaiterProperties:
             assert process.returncode == _SIGTERM_CODE, (
                 "cancellation must terminate the process, got "
                 f"returncode={process.returncode!r}"
-            )
-
-        asyncio.run(run_case())
-
-
-# -- Invariants 7 and 8: the consumer drain -----------------------------------
-
-
-class _ConsumerFailureError(RuntimeError):
-    """Raised by a stream-consumer double that fails during the drain."""
-
-
-async def _make_consumer(kind: str, text: str) -> str | None:
-    """Behave as a stream consumer of the requested ``kind``.
-
-    ``completed`` and ``failing`` yield once before settling: a task the loop
-    has not scheduled yet is indistinguishable from a blocked one, and the
-    drain cancels both.
-
-    Returns
-    -------
-    str | None
-        ``text``, once the ``completed`` consumer has yielded. The
-        ``pending`` consumer never returns; it awaits an event that is
-        never set.
-
-    Raises
-    ------
-    _ConsumerFailureError
-        If ``kind`` is ``"failing"``, after yielding once.
-    ValueError
-        If ``kind`` is none of ``"completed"``, ``"pending"``, or
-        ``"failing"``.
-    """
-    if kind == "completed":
-        await asyncio.sleep(0)
-        return text
-    if kind == "pending":
-        await asyncio.Event().wait()
-        return text
-    if kind == "failing":
-        await asyncio.sleep(0)
-        raise _ConsumerFailureError
-    msg = f"unsupported consumer kind: {kind!r}"
-    raise ValueError(msg)
-
-
-_CONSUMER_KINDS = st.sampled_from(("completed", "pending", "failing"))
-
-
-async def _drain_while_raising(
-    primary: BaseException,
-    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-) -> None:
-    """Drain ``consumers`` while ``primary`` is propagating, as cleanup does."""
-    try:
-        raise primary
-    finally:
-        await _drain_stream_consumers(consumers, capture=False)
-
-
-class TestConsumerDrainProperties:
-    """Invariants of ``_drain_stream_consumers`` across consumer states."""
-
-    @settings(deadline=None, max_examples=_EXAMPLES)
-    @given(
-        stdout_kind=_CONSUMER_KINDS,
-        stderr_kind=_CONSUMER_KINDS,
-        text=st.text(max_size=16),
-    )
-    def test_drain_leaves_no_pending_consumer(
-        self, stdout_kind: str, stderr_kind: str, text: str
-    ) -> None:
-        """The drain settles both consumers whatever state they were in.
-
-        Draining owns the consumers on this path, so nothing may be left pending
-        afterwards; a stranded reader would outlive the run it belonged to.
-        """
-
-        async def run_case() -> None:
-            """Drain an arbitrary pair of consumers and inspect what remains."""
-            consumers = (
-                asyncio.create_task(_make_consumer(stdout_kind, text)),
-                asyncio.create_task(_make_consumer(stderr_kind, text)),
-            )
-            # A task the loop has not scheduled yet is indistinguishable from a
-            # blocked one, and the drain cancels both. Yield until the finishing
-            # consumers have settled so "completed" means what it says.
-            for _ in range(4):
-                await asyncio.sleep(0)
-            stdout_text, stderr_text = await _drain_stream_consumers(
-                consumers, capture=False
-            )
-
-            for task, kind, value in (
-                (consumers[0], stdout_kind, stdout_text),
-                (consumers[1], stderr_kind, stderr_text),
-            ):
-                assert task.done(), f"the {kind} consumer was left pending"
-                expected = text if kind == "completed" else None
-                assert value == expected, (
-                    f"a {kind} consumer must decode to {expected!r}, got {value!r}"
-                )
-
-        asyncio.run(run_case())
-
-    @settings(deadline=None, max_examples=_EXAMPLES)
-    @given(failing_slot=st.sampled_from((0, 1)), other_kind=_CONSUMER_KINDS)
-    def test_drain_absorbs_failures_without_replacing_primary_error(
-        self, failing_slot: int, other_kind: str
-    ) -> None:
-        """A failing consumer cannot displace the error being cleaned up after.
-
-        The drain runs while a timeout or cancellation is already propagating, so
-        it must absorb consumer failures rather than raise its own. Draining inside
-        an active ``TimeoutError`` handler asserts exactly that: the original error
-        is what leaves the block.
-
-        One slot is always ``failing`` and is awaited to completion first. Drawing
-        both kinds freely would let the property pass without a consumer ever
-        raising, and the drain cancels its consumers synchronously before it
-        awaits them, so a failing task that has not yet run is torn down as a
-        plain cancellation and never reaches its ``raise``.
-        """
-        kinds = [other_kind, other_kind]
-        kinds[failing_slot] = "failing"
-
-        async def run_case() -> None:
-            """Drain a genuinely failed consumer while a TimeoutError propagates."""
-            consumers = (
-                asyncio.create_task(_make_consumer(kinds[0], "out")),
-                asyncio.create_task(_make_consumer(kinds[1], "err")),
-            )
-            failing = consumers[failing_slot]
-            await asyncio.gather(failing, return_exceptions=True)
-            assert isinstance(failing.exception(), _ConsumerFailureError), (
-                "the drain must be handed a consumer that has already failed"
-            )
-
-            primary = TimeoutError("primary")
-            with pytest.raises(TimeoutError) as exc_info:
-                await _drain_while_raising(primary, consumers)
-            assert exc_info.value is primary, (
-                "the drain must not replace the propagating error, got "
-                f"{exc_info.value!r}"
             )
 
         asyncio.run(run_case())
