@@ -497,7 +497,7 @@ never had it, which is the question an operator actually asks.
 `_log_rust_pump_declined` in `cuprum/_pipeline_streams.py` records each decline
 against the `cuprum._pipeline_streams` logger, following the same convention as
 the pipeline fail-fast records: a `cuprum_action` of `rust_pump_declined` plus a
-`cuprum_reason` naming the seam that refused.
+`cuprum_reason` naming the reason for the decline.
 
 Table 2: `cuprum_reason` values and the seam each one reports
 

@@ -777,8 +777,10 @@ Internally, command execution can be described in terms of events:
   operation and the raised error's type;
 - `exit` – process finished, with exit code and duration.
 
-These seven phases are the whole of `ExecPhase`; there is no other value a hook
-can receive.
+These seven phases are the whole of the declared `ExecPhase` type. Nothing
+validates an event at run time, so a consumer still needs a policy for a
+malformed or future phase value: see the fail-closed reducer and the fail-open
+logging adapter described later in this document.
 
 These events are surfaced to user code via hooks. A typical hook signature
 might be:
