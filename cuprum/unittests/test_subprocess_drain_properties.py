@@ -12,11 +12,13 @@ Nothing here spawns a subprocess: every case drives a deterministic double.
 from __future__ import annotations
 
 import asyncio
+import io
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from cuprum._streams import _drain, _StreamConfig
 from cuprum._subprocess_drain import _drain_stream_consumers
 
 _EXAMPLES = 25
@@ -26,12 +28,33 @@ class _ConsumerFailureError(RuntimeError):
     """Raised by a stream-consumer double that fails during the drain."""
 
 
+def _capturing_config() -> _StreamConfig:
+    """Build a capturing stream config that writes to memory without echoing."""
+    return _StreamConfig(
+        capture_output=True,
+        echo_output=False,
+        sink=io.StringIO(),
+        encoding="utf-8",
+        errors="strict",
+    )
+
+
+async def _partial_capture(text: str) -> str | None:
+    """Run the real capturing drain over a pipe holding ``text`` and no EOF."""
+    config = _capturing_config()
+    reader = asyncio.StreamReader()
+    reader.feed_data(text.encode(config.encoding))
+    return await _drain(reader, config)
+
+
 async def _make_consumer(kind: str, text: str) -> str | None:
     """Behave as a stream consumer of the requested ``kind``.
 
     ``completed`` and ``failing`` yield once before settling: a task the loop
     has not scheduled yet is indistinguishable from a blocked one, and the
-    drain cancels both.
+    drain cancels both. ``partial`` is the only kind that runs production code
+    rather than standing in for it, because the text a cancelled capturing
+    reader keeps is precisely what that code decides.
     """
     if kind == "completed":
         await asyncio.sleep(0)
@@ -42,11 +65,22 @@ async def _make_consumer(kind: str, text: str) -> str | None:
     if kind == "failing":
         await asyncio.sleep(0)
         raise _ConsumerFailureError
+    if kind == "partial":
+        return await _partial_capture(text)
     msg = f"unsupported consumer kind: {kind!r}"
     raise ValueError(msg)
 
 
 _CONSUMER_KINDS = st.sampled_from(("completed", "pending", "failing"))
+_CAPTURING_CONSUMER_KINDS = st.sampled_from((
+    "completed",
+    "pending",
+    "failing",
+    "partial",
+))
+# The kinds that leave text behind for a capturing drain to report; every other
+# kind has none of its own and owes the empty string instead.
+_KINDS_WITH_TEXT = frozenset({"completed", "partial"})
 
 
 async def _drain_while_raising(
@@ -99,6 +133,51 @@ class TestConsumerDrainProperties:
             ):
                 assert task.done(), f"the {kind} consumer was left pending"
                 expected = text if kind == "completed" else None
+                assert value == expected, (
+                    f"a {kind} consumer must decode to {expected!r}, got {value!r}"
+                )
+
+        asyncio.run(run_case())
+
+    @settings(deadline=None, max_examples=_EXAMPLES)
+    @given(
+        stdout_kind=_CAPTURING_CONSUMER_KINDS,
+        stderr_kind=_CAPTURING_CONSUMER_KINDS,
+        text=st.text(max_size=16),
+    )
+    def test_capturing_drain_reports_every_consumer_as_text(
+        self, stdout_kind: str, stderr_kind: str, text: str
+    ) -> None:
+        """A capturing drain reports both streams as strings, never ``None``.
+
+        The run promised captured output, so the contract holds whatever the
+        readers were doing when teardown reached them. A reader that had text —
+        because it finished, or because it was cancelled holding a partial
+        buffer — reports that text; one with none of its own reports the empty
+        string.
+        """
+
+        async def run_case() -> None:
+            """Drain an arbitrary pair of consumers under a capturing run."""
+            consumers = (
+                asyncio.create_task(_make_consumer(stdout_kind, text)),
+                asyncio.create_task(_make_consumer(stderr_kind, text)),
+            )
+            for _ in range(4):
+                await asyncio.sleep(0)
+            stdout_text, stderr_text = await _drain_stream_consumers(
+                consumers, capture=True
+            )
+
+            for task, kind, value in (
+                (consumers[0], stdout_kind, stdout_text),
+                (consumers[1], stderr_kind, stderr_text),
+            ):
+                assert task.done(), f"the {kind} consumer was left pending"
+                assert value is not None, (
+                    f"a capturing drain must report the {kind} consumer as text"
+                )
+                expected = text if kind in _KINDS_WITH_TEXT else ""
                 assert value == expected, (
                     f"a {kind} consumer must decode to {expected!r}, got {value!r}"
                 )
