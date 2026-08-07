@@ -31,15 +31,17 @@ from cuprum._process_lifecycle import (
     _spawn_pipeline_processes,
     _terminate_process,
 )
+from cuprum._stream_text import (
+    _split_complete_lines,
+    _strip_line_ending,
+    _write_chunk,
+)
 from cuprum._streams import (
     _READ_SIZE,
     _close_stream_writer,
     _consume_stream,
     _pump_stream,
-    _split_complete_lines,
     _StreamConfig,
-    _strip_line_ending,
-    _write_chunk,
 )
 from cuprum.sh import _resolve_timeout
 

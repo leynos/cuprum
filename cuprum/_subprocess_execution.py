@@ -2,9 +2,11 @@
 
 This module encapsulates the low-level subprocess spawning, stream handling,
 timeout management, and execution lifecycle for SafeCmd.run().
+
+Settling the stdout/stderr consumer tasks on every teardown path belongs to
+``cuprum._subprocess_drain``.
 """
 # TODO: refactor into smaller submodules (stdin/runner), see issue #30.
-# pylint: disable=too-many-lines
 
 from __future__ import annotations
 
@@ -18,6 +20,7 @@ from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _terminate_process
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._subprocess_context import _cwd_arg, _sh_module
+from cuprum._subprocess_drain import _drain_stream_consumers
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
@@ -32,20 +35,6 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
-
-
-def _cancel_pending_consumers(
-    consumers: tuple[asyncio.Task[str | None], ...],
-) -> None:
-    """Cancel each consumer task that has not already completed.
-
-    Finished readers keep their captured output; only tasks still blocked
-    after process termination (or on cancellation) are cancelled, so cleanup
-    cannot hang on a reader wedged on a pipe that never reached EOF.
-    """
-    for task in consumers:
-        if not task.done():
-            task.cancel()
 
 
 async def _wait_for_exit_code(
@@ -78,24 +67,6 @@ async def _wait_for_exit_code(
         raise
     exited_at = time.perf_counter()
     return exit_code, exited_at
-
-
-async def _drain_stream_consumers(
-    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-) -> tuple[str | None, str | None]:
-    """Cancel pending consumers, drain them once, and decode their output.
-
-    A consumer that failed or was cancelled maps to ``None`` so a broken reader
-    cannot mask the surrounding failure. Draining here exactly once keeps the
-    timeout and cancellation paths from reconciling the same tasks twice.
-    """
-    _cancel_pending_consumers(consumers)
-    stdout_result, stderr_result = await asyncio.gather(
-        *consumers, return_exceptions=True
-    )
-    stdout_text = None if isinstance(stdout_result, BaseException) else stdout_result
-    stderr_text = None if isinstance(stderr_result, BaseException) else stderr_result
-    return stdout_text, stderr_text
 
 
 async def _wait_for_exit_code_within_timeout(
@@ -245,7 +216,10 @@ async def _run_subprocess_with_streams(
         # stream consumers exactly once here, then hand the decoded output to the
         # timeout handler so it survives on the resulting TimeoutExpired.
         await _cancel_stdin_writer(stdin_task)
-        stdout_text, stderr_text = await _drain_stream_consumers(consumers)
+        stdout_text, stderr_text = await _drain_stream_consumers(
+            consumers,
+            capture=execution.capture,
+        )
         _handle_stream_timeout(
             exc,
             stdout_text=stdout_text,
@@ -254,7 +228,10 @@ async def _run_subprocess_with_streams(
         )
     except asyncio.CancelledError:
         await _cancel_stdin_writer(stdin_task)
-        await _drain_stream_consumers(consumers)
+        # The drained text is discarded here: a cancelled run raises rather than
+        # reporting output, so the capture contract does not apply and teardown
+        # need not wait for readers to reach EOF.
+        await _drain_stream_consumers(consumers, capture=False)
         raise
     if stdin_task is not None:
         try:
@@ -263,8 +240,9 @@ async def _run_subprocess_with_streams(
             # An unexpected stdin-writer failure (or a cancellation landing on
             # this await) must still reconcile the stdout/stderr consumers,
             # mirroring the timeout and cancellation paths above, so those tasks
-            # are cancelled and drained before the error propagates.
-            await _drain_stream_consumers(consumers)
+            # are cancelled and drained before the error propagates. Its text is
+            # discarded, so this drain skips the capture contract too.
+            await _drain_stream_consumers(consumers, capture=False)
             raise
     stdout_text, stderr_text = await asyncio.gather(*consumers)
     return exit_code, exited_at, stdout_text, stderr_text
@@ -344,9 +322,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
 __all__ = [
     "_SubprocessExecution",
     "_build_stream_config",
-    "_cancel_pending_consumers",
     "_create_stream_callback",
-    "_drain_stream_consumers",
     "_execute_subprocess",
     "_run_subprocess_with_streams",
     "_spawn_stream_consumers",

@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Partial capture on timeout:** A capturing `run()` or `run_sync()` that times
+  out now reports whatever its streams captured, rather than discarding it when
+  the readers had not yet observed end-of-file. The drain gives them a short
+  bounded window to do so, and a reader with nothing to show reports the empty
+  string instead of `None`, so the "a capturing run reports its streams as
+  text" contract no longer depends on event-loop scheduling. Python 3.15.0rc1
+  observes a process exit before the pending end-of-file events on its pipes,
+  which lost the capture outright
+  ([#292](https://github.com/leynos/cuprum/issues/292)).
+
 ### Breaking changes
 
 - **`ExecHook` import path (breaking):** Import `ExecHook` from top-level

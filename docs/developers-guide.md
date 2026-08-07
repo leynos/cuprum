@@ -151,6 +151,7 @@ configuration.
 ## Stream line-splitting properties
 
 Line callbacks in the Python stream backend use two pure helpers from
+`cuprum/_stream_text.py`, the synchronous decoding and line-splitting half of
 `cuprum/_streams.py`:
 
 - `_split_complete_lines(text)` splits text into completed lines, strips each
@@ -2392,8 +2393,11 @@ not obscure the documented ambiguity error.
 ## Subprocess execution module boundaries
 
 The subprocess execution implementation is split by lifecycle concern across
-`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stdin.py`, and
-`cuprum/_subprocess_timeout.py`. See [Cuprum design](cuprum-design.md) §8.1.5
+`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stdin.py`,
+`cuprum/_subprocess_drain.py`, and `cuprum/_subprocess_timeout.py`. Settling the
+stdout/stderr consumer tasks on every teardown path lives in
+`cuprum/_subprocess_drain.py`, so each path reconciles them exactly once through
+one helper. See [Cuprum design](cuprum-design.md) §8.1.5
 and [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the
 accepted rationale and compatibility constraints.
 
@@ -2425,6 +2429,57 @@ Draining is the caller's job either way: after termination it drains the stream
 consumers exactly once via `_drain_stream_consumers` (see the stdin-injection
 sequence below), and terminating the process before that drain is what lets it
 reach EOF.
+
+Terminating the process makes EOF imminent, but it does not make the readers
+observe it. `_drain_stream_consumers` therefore takes a `capture` flag, and a
+capturing drain does two things a non-capturing one does not:
+
+- It waits up to `_CAPTURE_EOF_GRACE_S` for the readers to reach EOF before
+  cancelling them, so a reader parked in `read()` one scheduling turn short of
+  EOF still delivers what it captured. The window is bounded because a
+  grandchild that inherited the pipe can wedge a reader indefinitely, and
+  teardown must never wait on that.
+- It reports a reader that still has no text as the empty string rather than
+  `None`, so the documented "a capturing run reports its streams as text"
+  contract holds by construction rather than by scheduling luck.
+
+Cancelling a reader that outlasts the window must not cost the run what that
+reader already read. A capturing `_drain` (`cuprum/_streams.py`) therefore
+catches the `CancelledError` raised at its `read()` and returns the buffer it
+has, rather than discarding it. Nothing is awaited after that catch, so the
+task still settles on the turn the cancellation asked for. The exemption is
+scoped to capturing drains: a non-capturing drain has nothing to salvage and
+propagates the cancellation unchanged, as do the pipeline pump and relay paths,
+where swallowing a cancellation would strand a stage rather than save any text.
+A capturing reader consequently completes normally rather than reporting
+`task.cancelled()`, so `_decode_consumer_result`'s exception branch now covers
+only genuine reader failures.
+
+The drain runs while a failure is already propagating, so it can neither raise
+what it finds nor report it: a reader that broke decodes to the same empty
+string as one that had nothing to say. It therefore records two things at DEBUG
+on the `cuprum._subprocess_drain` logger, in the shape the stream-close
+suppression already uses (`exc_info` plus `cuprum_`-prefixed `extra` fields):
+
+- `stream_consumer_failed`, naming the stream (`cuprum_operation`) and the
+  exception type, for any settled reader whose result is an exception other
+  than a plain `CancelledError`. Cancellation is the drain's own doing and is
+  not recorded, or the record would be routine enough to be worthless.
+- `capture_eof_grace_expired`, counting the readers still parked when the
+  window closed (`cuprum_pending_readers`), which is how a wedged pipe shows
+  up.
+
+Neither is a metric or a trace event: emitting those belongs with the
+`ExecEvent` contract work in issues #285 and #286, not with a teardown helper.
+
+Pass `capture=False` wherever the drained text is discarded — the cancellation
+and stdin-failure paths — so teardown pays neither the window nor the contract.
+Relying on the readers happening to finish first is what broke under Python
+3.15.0rc1, where the process exit is observed before the pipes' pending
+end-of-file events are processed; see
+[issue #292](https://github.com/leynos/cuprum/issues/292). The contract is
+guarded by `cuprum/unittests/test_timeout_capture_contract.py`, which withholds
+EOF outright so the assertions hold on every interpreter.
 
 ### Pipeline timeout and teardown
 
