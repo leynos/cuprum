@@ -768,6 +768,11 @@ hooks receive `ExecEvent` values describing:
   `stage_count`, `exit_code`, and `duration_s` for the failing stage. It is a
   decision rather than a lifecycle phase: the failing stage's own `exit` event
   still follows, and no stage's events are skipped or reordered because of it.
+  Read `stage_index` and `stage_count` from these typed fields rather than from
+  the event's tags: `ExecutionContext.tags` are merged last, so a caller that
+  sets its own `pipeline_stage_index` or `pipeline_stages` tag shadows the tag
+  copies, whereas the typed fields always report the stage the pipeline
+  actually acted on.
 
 Hooks can be used for structured logging, metrics, or tracing without coupling
 Cuprum to a specific telemetry library.
