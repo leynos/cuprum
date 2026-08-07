@@ -2,14 +2,15 @@
 
 This module encapsulates the low-level subprocess spawning, stream handling,
 timeout management, and execution lifecycle for SafeCmd.run().
+
+Settling the stdout/stderr consumer tasks on every teardown path belongs to
+``cuprum._subprocess_drain``.
 """
 # TODO: refactor into smaller submodules (stdin/runner), see issue #30.
-# pylint: disable=too-many-lines
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses as dc
 import sys
 import time
@@ -19,6 +20,7 @@ from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _terminate_process
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._subprocess_context import _cwd_arg, _sh_module
+from cuprum._subprocess_drain import _drain_stream_consumers
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
@@ -33,20 +35,6 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
-
-
-def _cancel_pending_consumers(
-    consumers: tuple[asyncio.Task[str | None], ...],
-) -> None:
-    """Cancel each consumer task that has not already completed.
-
-    Finished readers keep their captured output; only tasks still blocked
-    after process termination (or on cancellation) are cancelled, so cleanup
-    cannot hang on a reader wedged on a pipe that never reached EOF.
-    """
-    for task in consumers:
-        if not task.done():
-            task.cancel()
 
 
 async def _wait_for_exit_code(
@@ -79,73 +67,6 @@ async def _wait_for_exit_code(
         raise
     exited_at = time.perf_counter()
     return exit_code, exited_at
-
-
-# How long a capturing drain lets readers observe EOF before cancelling them.
-# The process is already dead by then, so EOF is imminent rather than
-# hypothetical, and a reader cancelled a scheduling turn short of it loses the
-# capture it was about to deliver. The window stays short because a grandchild
-# holding the pipe can wedge a reader indefinitely.
-_CAPTURE_EOF_GRACE_S = 0.25
-
-
-def _decode_consumer_result(
-    result: str | BaseException | None,
-    *,
-    capture: bool,
-) -> str | None:
-    """Decode one drained consumer into the text its stream reports.
-
-    A reader that failed, was cancelled, or was never capturing has no text of
-    its own. A capturing run promised a string, so it reports the empty string;
-    a non-capturing run reports ``None``, having never had text to report.
-    """
-    if isinstance(result, BaseException) or result is None:
-        return "" if capture else None
-    return result
-
-
-async def _settle_consumers(
-    consumers: tuple[asyncio.Task[str | None], ...],
-) -> list[str | BaseException | None]:
-    """Cancel every unfinished consumer and drain them all exactly once."""
-    _cancel_pending_consumers(consumers)
-    return await asyncio.gather(*consumers, return_exceptions=True)
-
-
-async def _drain_stream_consumers(
-    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-    *,
-    capture: bool,
-) -> tuple[str | None, str | None]:
-    """Settle pending consumers, drain them once, and decode their output.
-
-    Draining exactly once keeps the timeout and cancellation paths from
-    reconciling the same tasks twice. Under ``capture`` the readers first get a
-    bounded window to reach EOF (see :data:`_CAPTURE_EOF_GRACE_S`), and one that
-    still has no text reports the empty string. Pass ``capture=False`` where the
-    drained text is discarded, so teardown pays neither window nor contract.
-    """
-    if capture:
-        try:
-            await asyncio.wait(consumers, timeout=_CAPTURE_EOF_GRACE_S)
-        except asyncio.CancelledError:
-            # ``asyncio.wait`` does not cancel what it waits on, so a caller
-            # cancelling during the grace window would otherwise leave both
-            # readers running and unawaited. Settle them, then re-raise so the
-            # cancellation the caller asked for still propagates. Suppressing a
-            # second cancellation is enough here, unlike the shielded teardowns
-            # in ``_process_lifecycle``: the readers were already cancelled
-            # synchronously above, so they settle whether or not this await
-            # survives, and no OS process is left behind if it does not.
-            with contextlib.suppress(asyncio.CancelledError):
-                await _settle_consumers(consumers)
-            raise
-    stdout_result, stderr_result = await _settle_consumers(consumers)
-    return (
-        _decode_consumer_result(stdout_result, capture=capture),
-        _decode_consumer_result(stderr_result, capture=capture),
-    )
 
 
 async def _wait_for_exit_code_within_timeout(
@@ -401,13 +322,9 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
 __all__ = [
     "_SubprocessExecution",
     "_build_stream_config",
-    "_cancel_pending_consumers",
     "_create_stream_callback",
-    "_decode_consumer_result",
-    "_drain_stream_consumers",
     "_execute_subprocess",
     "_run_subprocess_with_streams",
-    "_settle_consumers",
     "_spawn_stream_consumers",
     "_spawn_subprocess",
     "_wait_for_exit_code",

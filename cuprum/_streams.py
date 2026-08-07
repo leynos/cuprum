@@ -8,16 +8,26 @@ between stages with ``writer.drain()`` backpressure, draining to EOF without a
 writer and best-effort under a bounded timeout after an early close so upstream
 stages never block. Used by the pipeline and single-command execution layers, it
 mirrors the optional Rust backend ``cuprum._streams_rs``. Callers own any writer.
+The synchronous decoding, echo-sink, and line-splitting helpers these loops drive
+live in ``cuprum._stream_text``.
 """
 
 from __future__ import annotations
 
 import asyncio
-import codecs
 import dataclasses as dc
 import enum
 import logging
 import typing as typ
+
+from cuprum._stream_text import (
+    _echo_decoder,
+    _emit_completed_lines,
+    _flush_echo_decoder,
+    _incremental_decoder,
+    _strip_line_ending,
+    _write_chunk,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -275,109 +285,6 @@ def _log_suppressed_stream_close_error(operation: str, exc: BaseException) -> No
             "cuprum_error_type": type(exc).__name__,
         },
     )
-
-
-def _write_chunk(
-    config: _StreamConfig,
-    chunk: bytes,
-    *,
-    decoder: codecs.IncrementalDecoder | None = None,
-    final: bool = False,
-) -> None:
-    """Write a bytes chunk to a sink synchronously, avoiding extra encoding.
-
-    For stdio echo this blocking write is acceptable; future slow-sink handling
-    can layer on a background writer if needed.
-    """
-    buffer = getattr(config.sink, "buffer", None)
-    if buffer is not None:
-        buffer.write(chunk)
-        buffer.flush()
-        return
-    text = (
-        chunk.decode(config.encoding, errors=config.errors)
-        if decoder is None
-        else decoder.decode(chunk, final=final)
-    )
-    if text:
-        config.sink.write(text)
-    config.sink.flush()
-
-
-def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:
-    """Create an incremental decoder configured for a stream invocation."""
-    decoder_factory = codecs.getincrementaldecoder(config.encoding)
-    return decoder_factory(errors=config.errors)
-
-
-def _echo_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder | None:
-    """Create the decoder needed by a text-only echo sink, if any."""
-    if not config.echo_output or getattr(config.sink, "buffer", None) is not None:
-        return None
-    return _incremental_decoder(config)
-
-
-def _flush_echo_decoder(
-    config: _StreamConfig,
-    decoder: codecs.IncrementalDecoder | None,
-) -> None:
-    """Flush a text-only echo decoder at end of stream."""
-    if decoder is not None:
-        _write_chunk(config, b"", decoder=decoder, final=True)
-
-
-def _emit_completed_lines(
-    text: str,
-    *,
-    on_line: cabc.Callable[[str], None],
-) -> str:
-    """Emit complete lines from text and return the remaining partial line."""
-    lines, remainder = _split_complete_lines(text)
-
-    for line in lines:
-        on_line(line)
-
-    return remainder
-
-
-def _split_complete_lines(text: str) -> tuple[list[str], str]:
-    """Split text into completed lines and a trailing partial line.
-
-    Parameters
-    ----------
-    text : str
-        Text to split using Python's universal line boundary rules.
-
-    Returns
-    -------
-    tuple[list[str], str]
-        Completed lines with one trailing line ending removed from each line,
-        followed by the remaining partial line. The remainder is empty when
-        ``text`` ends with a line ending or contains no partial line.
-    """
-    lines = text.splitlines(keepends=True)
-    if not lines:
-        return [], text
-
-    remainder = ""
-    if not _ends_with_line_ending(lines[-1]):
-        remainder = lines.pop()
-
-    return [_strip_line_ending(line) for line in lines], remainder
-
-
-def _ends_with_line_ending(line: str) -> bool:
-    """Return whether ``line`` ends with a newline or carriage return."""
-    return line.endswith("\n") or line.endswith("\r")
-
-
-def _strip_line_ending(line: str) -> str:
-    r"""Strip a single trailing ``\r\n``, ``\n``, or ``\r`` from ``line``."""
-    if line.endswith("\r\n"):
-        return line[:-2]
-    if line.endswith("\n") or line.endswith("\r"):
-        return line[:-1]
-    return line
 
 
 class _WriteOutcome(enum.Enum):

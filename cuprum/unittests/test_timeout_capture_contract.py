@@ -20,7 +20,7 @@ import typing as typ
 import pytest
 
 from cuprum import Program, TimeoutExpired, sh
-from cuprum._subprocess_execution import (
+from cuprum._subprocess_drain import (
     _CAPTURE_EOF_GRACE_S,
     _drain_stream_consumers,
 )

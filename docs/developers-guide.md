@@ -151,6 +151,7 @@ configuration.
 ## Stream line-splitting properties
 
 Line callbacks in the Python stream backend use two pure helpers from
+`cuprum/_stream_text.py`, the synchronous decoding and line-splitting half of
 `cuprum/_streams.py`:
 
 - `_split_complete_lines(text)` splits text into completed lines, strips each
@@ -2392,8 +2393,11 @@ not obscure the documented ambiguity error.
 ## Subprocess execution module boundaries
 
 The subprocess execution implementation is split by lifecycle concern across
-`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stdin.py`, and
-`cuprum/_subprocess_timeout.py`. See [Cuprum design](cuprum-design.md) §8.1.5
+`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stdin.py`,
+`cuprum/_subprocess_drain.py`, and `cuprum/_subprocess_timeout.py`. Settling the
+stdout/stderr consumer tasks on every teardown path lives in
+`cuprum/_subprocess_drain.py`, so each path reconciles them exactly once through
+one helper. See [Cuprum design](cuprum-design.md) §8.1.5
 and [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the
 accepted rationale and compatibility constraints.
 
