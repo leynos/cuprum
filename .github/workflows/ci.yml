@@ -9,6 +9,17 @@ permissions:
   actions: read
   contents: read
 
+# One run per ref. Superseded pull-request runs are cancelled, because a
+# stale run only spends paid benchmark minutes on a diff nobody will merge.
+# Runs on `main` are never cancelled once started: each one republishes the
+# `benchmark-ratchet-main-baseline` artifact that pull-request runs compare
+# against, and a half-finished run would leave the baseline behind head.
+# Queueing them on one group also keeps two merges landing in quick
+# succession from racing to publish that artifact out of commit order.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint-test:
     runs-on: ubuntu-latest
@@ -291,11 +302,69 @@ jobs:
           access-token: ${{ env.CS_ACCESS_TOKEN }}
           installer-checksum: ${{ vars.CODESCENE_CLI_SHA256 }}
 
+  # Detects whether performance-relevant paths changed so that
+  # benchmark-ratchet can skip docs-only and Dependabot-batch pull
+  # requests. Runs on every event (cheap, GitHub-hosted) so that the
+  # `needs` edge never leaves benchmark-ratchet skipped on pushes to
+  # main, where the baseline artifact must stay fresh.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      bench: ${{ steps.filter.outputs.bench }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Detect performance-relevant changes
+        id: filter
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          filters: |
+            bench:
+              - 'cuprum/**'
+              - 'rust/**'
+              - 'benchmarks/**'
+              - 'conftest.py'
+              - 'Makefile'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.github/workflows/ci.yml'
+
+      # A skipped job is indistinguishable from a broken gate in the run
+      # list, so record the decision where a maintainer auditing paid-runner
+      # spend can read it: the run summary of every CI run. The three fields
+      # are all closed sets, so the summaries stay countable across runs.
+      - name: Record the benchmark gate decision
+        env:
+          EVENT: ${{ github.event_name }}
+          BENCH: ${{ steps.filter.outputs.bench }}
+        run: |
+          if [ "${EVENT}" != 'pull_request' ] || [ "${BENCH}" = 'true' ]; then
+            decision=run
+          else
+            decision=skip
+          fi
+          {
+            printf '### Benchmark gate\n\n'
+            printf '| event | performance-relevant changes | benchmark-ratchet |\n'
+            printf '| --- | --- | --- |\n'
+            printf '| %s | %s | %s |\n' "${EVENT}" "${BENCH:-false}" "${decision}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
   benchmark-ratchet:
     runs-on: ubicloud-standard-4-ubuntu-2404
     needs:
       - lint-test
       - typecheck-test
+      - changes
+    # Benchmarks are the estate's dominant paid-runner cost, and most CI
+    # runs (Dependabot dev-dependency bumps, docs edits) cannot change
+    # pipeline throughput. Pushes to main always run so the ratchet
+    # baseline artifact is refreshed for every merge.
+    if: github.event_name != 'pull_request' || needs.changes.outputs.bench == 'true'
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4

@@ -2466,9 +2466,15 @@ Both pathways are tested as first-class implementations:
   `{backend}-{size}-{depth}-{callbacks}` (for example
   `python-small-single-nocb` or `rust-large-multi-cb`).
 
-CI includes a benchmark ratchet job on pull requests and pushes to `main`. The
-job executes smoke-mode throughput benchmarks for the current checkout (with a
-release build of the Rust extension) and compares each scenario's within-run
+CI includes a benchmark ratchet job on pushes to `main` and on pull requests
+that change performance-relevant paths. The job runs on a paid runner, so a
+cheap path filter decides whether a pull request can plausibly move the
+numbers; pushes to `main` are never filtered, because that run publishes the
+baseline artefact every later comparison depends on. The gate and its
+rationale are described under "Gating the paid benchmark job" in the
+developers' guide. The job executes smoke-mode throughput benchmarks for the
+current checkout (with a release build of the Rust extension) and compares
+each scenario's within-run
 Rust-to-Python mean ratio against the latest successful `main` baseline
 artefact. The CI profile measures ten runs per command and orders matched
 Python/Rust commands adjacently so time-dependent runner load is less likely to
