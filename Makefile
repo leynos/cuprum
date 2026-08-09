@@ -82,16 +82,19 @@ DF12_PYTHON_LINTS = git+https://github.com/leynos/df12-python-lints.git@$(DF12_P
 DF12_PYTHON ?= 3.14
 DF12_PYLINT_MESSAGES = R9101,C9102,R9103,R9104,C9105,C9106,C9107,R9108,R9109,R9110,R9111,C9112
 DF12_PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv run --isolated \
-  --python $(DF12_PYTHON) pylint \
+  --python $(DF12_PYTHON) --with 'pylint==$(PYLINT_VERSION)' \
+  --with '$(DF12_PYTHON_LINTS)' pylint \
   --disable=all --load-plugins=df12_python_lints \
   --enable=$(DF12_PYLINT_MESSAGES)
 AMBRLEAKS = $(UV_RUN_ENV) uv run ambrleaks
 
-.PHONY: help all clean build build-release lint lint-windows fmt check-fmt \
+.PHONY: help all clean build build-release lint python-lint rust-lint \
+        lint-windows fmt check-fmt \
         markdownlint spelling spelling-helper-test nixie test typecheck \
         test-extension develop \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
+.NOTPARALLEL: lint
 
 .DEFAULT_GOAL := all
 
@@ -157,10 +160,14 @@ check-fmt: ruff ## Verify formatting
 	cd $(RUST_DIR) && $(CARGO) fmt --all -- --check
 	# mdformat-all doesn't currently do checking
 
-lint: ruff uv ## Run Ruff, pylint, df12-python-lints, ambrleaks, Clippy, and Whitaker
+lint: python-lint rust-lint ## Run Python and Rust linters
+
+python-lint: ruff uv ## Run Ruff, interrogate, pylint, df12-python-lints, and ambrleaks
 	$(RUFF) check && $(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum && $(PYLINT) $(PYLINT_TARGETS)
 	$(DF12_PYLINT) $(PYLINT_TARGETS)
 	$(AMBRLEAKS) cuprum/unittests tests
+
+rust-lint: ## Run Rust documentation, Clippy, Whitaker, and spelling checks
 	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps $(DOC_FLAGS) && $(CARGO) clippy $(CLIPPY_FLAGS)
 	@if ! $(LOCAL_TOOL_ENV) command -v $(WHITAKER) >/dev/null 2>&1; then echo "whitaker is required for linting. Install it before running this target." >&2; exit 1; fi
 	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- $(WHITAKER_CARGO_FLAGS)

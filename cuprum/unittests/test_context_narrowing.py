@@ -202,7 +202,11 @@ def test_narrow_allowlist_two_steps_match_single_intersection(
     """Property: repeated narrowing matches one equivalent intersection."""
     first_step = _narrow_allowlist(parent, first, parent_is_restricted=True)
     two_step = _narrow_allowlist(first_step, second, parent_is_restricted=True)
-    single_step = _narrow_allowlist(parent, first & second)
+    single_step = _narrow_allowlist(
+        parent,
+        first & second,
+        parent_is_restricted=True,
+    )
 
     assert two_step == single_step, (
         f"narrowing {parent!r} by {first!r} then {second!r} must equal a single "

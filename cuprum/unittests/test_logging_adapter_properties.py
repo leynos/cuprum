@@ -60,22 +60,11 @@ class _CollectingHandler(logging.Handler):
 
 
 def _capturing_logger(name: str) -> tuple[logging.Logger, _CollectingHandler]:
-    """Return a logger that captures everything, plus its handler.
-
-    The level is set explicitly rather than left at ``NOTSET``, which would
-    defer to the root logger's ``WARNING`` and make the hook skip its own
-    debug and info records — a real behaviour of the hook (it checks
-    ``isEnabledFor`` before building anything), but not the one under test
-    here.
-
-    Returns
-    -------
-    tuple[logging.Logger, _CollectingHandler]
-        The configured logger and its attached collecting handler.
-    """
+    """Return a logger that captures everything, plus its handler."""
     logger = logging.getLogger(name)
     logger.handlers.clear()
     logger.propagate = False
+    # Avoid inheriting the root WARNING level; the hook checks isEnabledFor.
     logger.setLevel(logging.DEBUG)
     handler = _CollectingHandler()
     logger.addHandler(handler)

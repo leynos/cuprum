@@ -272,7 +272,8 @@ def get_stream_backend() -> StreamBackend:
     try:
         requested = _read_backend_env()
     except ValueError as exc:
-        raise ValueError(str(exc)) from exc
+        msg = str(exc)
+        raise ValueError(msg) from exc
     # Probe and resolution share one boundary handler so a forced-RUST failure
     # emits the structured warning whether the extension probes as unavailable
     # or the probe itself raises ImportError. ``rust_available`` stays ``None``
