@@ -194,8 +194,8 @@ def given_final_stage_failure_pipeline() -> _ScenarioPipeline:
     """
     _, python_program = python_catalogue()
     return _make_test_pipeline(
-        (python_program, ("-c", "import sys; sys.exit(0)")),
-        (python_program, ("-c", "import sys; sys.exit(0)")),
+        (python_program, ("-c", "import time; time.sleep(2)")),
+        (python_program, ("-c", "import time; time.sleep(2)")),
         (python_program, ("-c", "import sys; sys.exit(5)")),
     )
 
@@ -291,11 +291,11 @@ def then_pipeline_exposes_stage_metadata_on_final_stage_failure(
     assert pipeline_result.failure_index == len(pipeline_result.stages) - 1, (
         "Expected pipeline_result.failure_index == len(pipeline_result.stages) - 1"
     )
-    assert pipeline_result.stages[0].exit_code == 0, (
-        "Expected pipeline_result.stages[0].exit_code == 0"
+    assert pipeline_result.stages[0].exit_code == -15, (
+        "Expected final-stage failure to terminate stage 0"
     )
-    assert pipeline_result.stages[1].exit_code == 0, (
-        "Expected pipeline_result.stages[1].exit_code == 0"
+    assert pipeline_result.stages[1].exit_code == -15, (
+        "Expected final-stage failure to terminate stage 1"
     )
     assert pipeline_result.stages[2].exit_code != 0, (
         "Expected pipeline_result.stages[2].exit_code != 0"

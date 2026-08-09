@@ -32,9 +32,7 @@ locale = "en-gb"
 extend-ignore-re = [
     "(?s)```.*?```",
     "\\brust-analyzer\\b",
-    "`--artifact-server-path <dir>`",
-    "`build_native_wheel_artifact`",
-    "`color`",
+    "`[^`\\n]+`",
 ]
 
 [default.extend-words]

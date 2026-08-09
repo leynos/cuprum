@@ -220,6 +220,7 @@ class _TimeoutWaitProcess:
             self.returncode = -9
         self._exited.set()
 
+
 class _PublishedExitProcess:
     """Process double whose wait future strands after publishing an exit code."""
 
@@ -234,6 +235,7 @@ class _PublishedExitProcess:
         self.returncode = 0
         await asyncio.Event().wait()
         return 0
+
 
 def test_wait_for_exit_code_accepts_published_returncode() -> None:
     """A published return code wins over an orphan pending wait future."""
@@ -250,6 +252,8 @@ def test_wait_for_exit_code_accepts_published_returncode() -> None:
         assert exit_code == 0, f"published exit code must be returned, got {exit_code}"
 
     asyncio.run(run_case())
+
+
 def test_wait_for_exit_code_terminates_process_on_timeout() -> None:
     """A timed-out wait terminates the process before propagating TimeoutError.
 

@@ -77,6 +77,8 @@ def _serialize_kwargs(kwargs: dict[str, _ArgValue]) -> tuple[str, ...]:
         normalized_key = key.replace("_", "-")
         flags.append(f"--{normalized_key}={_stringify_arg(value)}")
     return tuple(flags)
+
+
 def build_argv(*args: _ArgValue, **kwargs: _ArgValue) -> tuple[str, ...]:
     """Build an argv tuple using the same rules as ``sh.make`` builders.
 

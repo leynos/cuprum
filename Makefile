@@ -72,7 +72,7 @@ PYLINT_PYPY_SHIM = git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_P
 # Pin pylint itself: the shim ref is pinned but pylint is a floating
 # dependency of it, so new pylint releases would otherwise change lint
 # behaviour without any repository change (same skew class as ruff above).
-PYLINT_VERSION ?= 4.0.6
+PYLINT_VERSION ?= 4.0.7
 PYLINT_CACHE ?= .cache/pylint
 PYLINT_ENV = PYLINTHOME=$(PYLINT_CACHE)
 PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) \
