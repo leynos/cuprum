@@ -410,6 +410,11 @@ def _timeout_sync(
     call and there is nothing left to inspect. The leak assertion has its teeth
     in the ``run()`` variant; here the surviving-child assertion carries the
     cleanup contract.
+
+    Returns
+    -------
+    tuple[TimeoutExpired, set[asyncio.Task[object]]]
+        The raised timeout and an always-empty task set.
     """
     with pytest.raises(TimeoutExpired) as exc_info:
         cmd.run_sync(**kwargs)

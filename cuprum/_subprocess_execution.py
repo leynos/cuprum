@@ -130,6 +130,18 @@ async def _wait_for_exit_code_within_timeout(
     Stream consumers belong to the caller, which drains them exactly once via
     :func:`_drain_stream_consumers`; terminating the process here lets those
     consumers reach EOF during that drain.
+
+    Returns
+    -------
+    tuple[int, float]
+        The process exit code and the ``perf_counter`` timestamp of exit,
+        as produced by :func:`_wait_for_exit_code`.
+
+    Raises
+    ------
+    TimeoutError
+        If ``execution.timeout`` is non-positive, denoting an
+        already-elapsed deadline; the process is terminated first.
     """
     timeout = execution.timeout
     if timeout is not None and timeout <= 0:

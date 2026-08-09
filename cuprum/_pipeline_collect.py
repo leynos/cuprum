@@ -73,6 +73,12 @@ async def _await_pipeline_wait_result(
     ``pipe_tasks`` belongs to the caller: a non-positive deadline cancels
     ``_wait_for_pipeline`` before the ``finally`` that would reconcile them,
     so the caller reconciles them instead (see the developers' guide).
+
+    Returns
+    -------
+    _PipelineWaitResult
+        The result of waiting on the pipeline's stage processes, as
+        produced by ``_wait_for_pipeline``.
     """
     wait_timeout: float | None = None
     if timeout_deadline is not None:

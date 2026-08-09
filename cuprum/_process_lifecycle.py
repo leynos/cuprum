@@ -78,6 +78,12 @@ async def _await_teardown_shielded(
 
     Failures are absorbed — every caller runs this while another exception is
     already propagating, and teardown must not replace it.
+
+    Raises
+    ------
+    asyncio.CancelledError
+        Re-raised after the shielded teardown completes, once the initial
+        cancellation that interrupted the shield has been held off.
     """
     termination = asyncio.ensure_future(
         asyncio.gather(*teardowns, return_exceptions=True)

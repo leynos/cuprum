@@ -93,6 +93,11 @@ def fixture_root_conftest(pytestconfig: pytest.Config) -> ModuleType:
     A plain ``import conftest`` reaches ``cuprum/unittests/conftest.py``, which
     shadows the root one, so the module is located through the plugin manager
     that already loaded it.
+
+    Returns
+    -------
+    ModuleType
+        The root ``conftest`` module as loaded by pytest's plugin manager.
     """
     root = pathlib.Path(str(pytestconfig.rootpath)) / "conftest.py"
     for plugin in pytestconfig.pluginmanager.get_plugins():

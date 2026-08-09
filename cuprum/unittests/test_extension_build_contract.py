@@ -93,6 +93,12 @@ def _caller_owned_names() -> frozenset[str]:
 
     Derived from the Makefile rather than listed here, so a variable gaining
     or losing its ``?=`` cannot leave the scrub quietly out of date.
+
+    Returns
+    -------
+    frozenset[str]
+        Names conditionally assigned in the Makefile, plus ``make``'s own
+        bookkeeping variables.
     """
     makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
     overridable = frozenset(_CONDITIONAL_ASSIGNMENT.findall(makefile))
@@ -162,6 +168,11 @@ def _scanned_sources() -> dict[str, str]:
 
     This module is excluded: it quotes every signal, so scanning it would
     match each one against its own definition.
+
+    Returns
+    -------
+    dict[str, str]
+        Each scanned module's repo-relative path mapped to its source text.
     """
     root = repo_root()
     this_module = pth.Path(__file__).resolve().relative_to(root).as_posix()
