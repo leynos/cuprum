@@ -207,9 +207,15 @@ requests only when a performance-relevant path changed. The
 `push`-to-`main` trigger stated above is deliberately left ungated: that run
 publishes the baseline artefact every later comparison reads, so filtering it
 would fail open rather than merely cost less. `.github/actionlint.yaml`
-declares the Ubicloud runner label so `actionlint` can check the workflow, and
-`cuprum/unittests/test_benchmark_gate_ci_contract.py` reads the gate back from
-`ci.yml`. See "Gating the paid benchmark job" in `docs/developers-guide.md`.
+declares the Ubicloud runner label so `actionlint` can check the workflow.
+
+Both test styles cover the gate, as this plan's constraints require:
+`cuprum/unittests/test_benchmark_gate_ci_contract.py` pins the declarations
+and property-tests the rule they encode, while
+`tests/behaviour/test_benchmark_path_gate_behaviour.py` and
+`tests/features/benchmark_path_gate.feature` state the decision for
+recognizable pull requests. See "Gating the paid benchmark job" in
+`docs/developers-guide.md`.
 
 ## Context and orientation
 

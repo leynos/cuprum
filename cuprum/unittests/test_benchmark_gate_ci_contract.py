@@ -16,41 +16,45 @@ a regression:
   whether to spend it.
 
 No ordinary test notices any of that, so these tests parse `ci.yml` and read
-the contract back. The build half of the same workflow's contract — which job
-builds the extension, and how — lives in `test_extension_ci_contract.py`.
-
-`yaml.safe_load` returns `typing.Any`, which erases every mistake an assertion
-can make about the shape it reads, so the shapes below declare the keys these
-tests reach for. Their *values* stay `object` and are narrowed where read.
+the contract back. They pin the *declarations*; the decision those
+declarations produce for a given pull request is stated in
+`tests/behaviour/test_benchmark_path_gate_behaviour.py`, and both suites read
+the workflow through `tests.helpers.workflow`. The build half of the same
+workflow's contract — which job builds the extension, and how — lives in
+`test_extension_ci_contract.py`.
 """
 
 from __future__ import annotations
 
-import functools
 import typing as typ
 
-import pytest
-import yaml
 from hypothesis import given
 from hypothesis import strategies as st
 
-from tests.helpers.docs import repo_root
+from tests.helpers.workflow import (
+    BENCHMARK_JOB,
+    CHANGES_JOB,
+    CI_WORKFLOW,
+    FILTER_NAME,
+    FILTER_STEP_ID,
+    bench_output,
+    benchmark_gate,
+    benchmark_runs,
+    filter_paths,
+    job,
+    mapping,
+    step_with_id,
+    steps,
+    workflow,
+)
 
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
-CI_WORKFLOW = ".github/workflows/ci.yml"
-
-CHANGES_JOB = "changes"
-BENCHMARK_JOB = "benchmark-ratchet"
-FILTER_STEP_ID = "filter"
-FILTER_NAME = "bench"
 PATHS_FILTER_ACTION = "dorny/paths-filter@"
 
 #: The gate, verbatim. Pinning the whole expression rather than probing it for
 #: substrings is what makes an inverted or half-deleted condition a failure:
 #: `needs.changes.outputs.bench != 'true'` contains every operand the loose
-#: check would look for.
+#: check would look for. It is also what keeps `benchmark_runs` — the model the
+#: property and behavioural tests reason with — describing the real gate.
 EXPECTED_GATE = (
     "github.event_name != 'pull_request' || needs.changes.outputs.bench == 'true'"
 )
@@ -72,7 +76,7 @@ EXPECTED_FILTER_PATHS = frozenset({
 
 #: Paths a docs-only or workflow-adjacent pull request touches. None of them
 #: may match the filter; `test_the_irrelevant_paths_are_genuinely_irrelevant`
-#: holds the pool to that, so the property test below cannot pass by
+#: holds the pool to that, so the property tests below cannot pass by
 #: accidentally sampling a performance-relevant path.
 IRRELEVANT_PATHS = (
     "README.md",
@@ -83,114 +87,12 @@ IRRELEVANT_PATHS = (
     ".github/actionlint.yaml",
 )
 
-
-class Step(typ.TypedDict, total=False):
-    """One step of a job, declaring only the keys these tests read."""
-
-    id: object
-    uses: object
-    run: object
-
-
-class Job(typ.TypedDict, total=False):
-    """One job of a workflow, declaring only the keys these tests read."""
-
-    needs: object
-    outputs: object
-    steps: list[Step]
-
-
-class Workflow(typ.TypedDict, total=False):
-    """A parsed workflow file, declaring only the keys these tests read."""
-
-    concurrency: object
-    jobs: dict[str, Job]
-
-
-@functools.cache
-def _workflow() -> Workflow:
-    """Parse the CI workflow."""
-    parsed = yaml.safe_load((repo_root() / CI_WORKFLOW).read_text(encoding="utf-8"))
-    assert isinstance(parsed, dict), f"{CI_WORKFLOW} must parse to a mapping"
-    return typ.cast("Workflow", parsed)
-
-
-def _job(job_name: str) -> dict[str, object]:
-    """Return a named job, failing with the available names when absent."""
-    jobs = _workflow().get("jobs")
-    assert isinstance(jobs, dict), f"{CI_WORKFLOW} must declare a jobs mapping"
-    job = jobs.get(job_name)
-    assert isinstance(job, dict), (
-        f"{CI_WORKFLOW} must declare a {job_name!r} job; found {sorted(jobs)}"
-    )
-    return typ.cast("dict[str, object]", job)
-
-
-def _steps(job_name: str) -> list[dict[str, object]]:
-    """Return the steps of a named job."""
-    steps = _job(job_name).get("steps")
-    assert isinstance(steps, list), f"the {job_name!r} job must declare steps"
-    return typ.cast("list[dict[str, object]]", steps)
-
-
-def _step_with_id(job_name: str, step_id: str) -> dict[str, object]:
-    """Return the step of a job carrying a given `id:`."""
-    for step in _steps(job_name):
-        if step.get("id") == step_id:
-            return step
-    pytest.fail(f"the {job_name!r} job must declare a step with id {step_id!r}")
-
-
-def _mapping(value: object, message: str) -> dict[str, object]:
-    """Assert that a value read from the workflow is a mapping, and type it.
-
-    `yaml.safe_load` produces mappings of unknown key type, which makes every
-    subsequent `.get("…")` a type error rather than a narrowing.
-    """
-    assert isinstance(value, dict), message
-    return typ.cast("dict[str, object]", value)
-
-
-@functools.cache
-def _filter_paths() -> frozenset[str]:
-    """Return the path patterns the `bench` filter declares."""
-    step = _step_with_id(CHANGES_JOB, FILTER_STEP_ID)
-    inputs = _mapping(
-        step.get("with"),
-        f"the {FILTER_STEP_ID!r} step must pass inputs to the filter action",
-    )
-    filters = _mapping(
-        yaml.safe_load(str(inputs["filters"])),
-        "the `filters` input must parse to a mapping",
-    )
-    patterns = filters.get(FILTER_NAME)
-    assert isinstance(patterns, list), (
-        f"the filter must declare a {FILTER_NAME!r} list; found {sorted(filters)}"
-    )
-    return frozenset(str(pattern) for pattern in patterns)
-
-
-def _matches(pattern: str, path: str) -> bool:
-    """Return whether a changed `path` matches a declared filter `pattern`.
-
-    A bounded model of the two pattern forms the filter is allowed to use;
-    `test_the_filter_uses_only_modelled_pattern_forms` keeps it honest.
-    """
-    if pattern.endswith("/**"):
-        return path.startswith(pattern.removesuffix("**"))
-    return path == pattern
-
-
-def _bench_output(changed_paths: cabc.Collection[str]) -> bool:
-    """Model the `bench` output the filter produces for a set of changes."""
-    return any(
-        _matches(pattern, path) for pattern in _filter_paths() for path in changed_paths
-    )
-
-
-def _benchmark_runs(*, event_name: str, bench: bool) -> bool:
-    """Model `EXPECTED_GATE`, returning whether `benchmark-ratchet` runs."""
-    return event_name != "pull_request" or bench
+#: GitHub inserts an implicit `success()` into a job's `if:` unless the
+#: expression already names a status function. Naming one here would let
+#: `benchmark-ratchet` run when the detector itself failed — that is, run
+#: ungated, on the paid runner, which is the failure this gate exists to
+#: prevent.
+STATUS_FUNCTIONS = ("always(", "failure(", "cancelled(")
 
 
 def test_the_changes_job_publishes_the_filter_result() -> None:
@@ -199,8 +101,8 @@ def test_the_changes_job_publishes_the_filter_result() -> None:
     The output is the whole interface between the two jobs; without it the
     gate reads an empty string and every pull request skips the benchmark.
     """
-    outputs = _mapping(
-        _job(CHANGES_JOB).get("outputs"),
+    outputs = mapping(
+        job(CHANGES_JOB).get("outputs"),
         f"the {CHANGES_JOB!r} job must declare outputs",
     )
 
@@ -211,7 +113,7 @@ def test_the_changes_job_publishes_the_filter_result() -> None:
         f"{FILTER_STEP_ID!r} step; found {outputs.get(FILTER_NAME)!r}"
     )
 
-    step = _step_with_id(CHANGES_JOB, FILTER_STEP_ID)
+    step = step_with_id(CHANGES_JOB, FILTER_STEP_ID)
     uses = step.get("uses")
     assert isinstance(uses, str), (
         f"the {FILTER_STEP_ID!r} step must run an action; found {uses!r}"
@@ -223,7 +125,7 @@ def test_the_changes_job_publishes_the_filter_result() -> None:
 
 def test_the_changes_job_runs_on_a_github_hosted_runner() -> None:
     """The detector must not run on the runner it exists to avoid paying for."""
-    runner = _job(CHANGES_JOB).get("runs-on")
+    runner = job(CHANGES_JOB).get("runs-on")
 
     assert runner == "ubuntu-latest", (
         f"the {CHANGES_JOB!r} job must run on ubuntu-latest so that deciding "
@@ -237,7 +139,7 @@ def test_the_benchmark_job_waits_for_the_detector() -> None:
     Without it `needs.changes.outputs.bench` is empty, the gate is false for
     every pull request, and the job silently never benchmarks anything.
     """
-    needs = _job(BENCHMARK_JOB).get("needs")
+    needs = job(BENCHMARK_JOB).get("needs")
     assert isinstance(needs, list), f"the {BENCHMARK_JOB!r} job must declare needs"
 
     assert CHANGES_JOB in needs, (
@@ -248,12 +150,27 @@ def test_the_benchmark_job_waits_for_the_detector() -> None:
 
 def test_the_benchmark_job_declares_the_expected_gate() -> None:
     """The gate expression must be exactly the rule the rest of these tests model."""
-    condition = _job(BENCHMARK_JOB).get("if")
+    condition = benchmark_gate()
 
     assert condition == EXPECTED_GATE, (
         f"the {BENCHMARK_JOB!r} job's `if:` must be {EXPECTED_GATE!r} — pushes to "
         "main always benchmark so the baseline artifact stays fresh, and pull "
         f"requests benchmark only on performance-relevant diffs; found {condition!r}"
+    )
+
+
+def test_a_failed_detector_does_not_benchmark_ungated() -> None:
+    """The gate must not name a status function, so a failed `changes` skips.
+
+    `if: always() && (…)` reads as a harmless robustness tweak and is the one
+    edit that turns a broken detector into an unconditional paid run.
+    """
+    named = sorted(fn for fn in STATUS_FUNCTIONS if fn in benchmark_gate())
+
+    assert not named, (
+        f"the {BENCHMARK_JOB!r} gate must leave GitHub's implicit `success()` in "
+        f"place so a failed {CHANGES_JOB!r} skips the paid job rather than running "
+        f"it ungated; found {named}"
     )
 
 
@@ -263,39 +180,39 @@ def test_the_filter_declares_every_performance_relevant_path() -> None:
     A missing entry merges a regression unmeasured; a spurious one pays for a
     benchmark that cannot move, which is the cost this gate exists to avoid.
     """
-    assert _filter_paths() == EXPECTED_FILTER_PATHS, (
+    assert filter_paths() == EXPECTED_FILTER_PATHS, (
         "the `bench` filter must watch exactly the performance-relevant paths; "
-        f"missing {sorted(EXPECTED_FILTER_PATHS - _filter_paths())}, "
-        f"unexpected {sorted(_filter_paths() - EXPECTED_FILTER_PATHS)}"
+        f"missing {sorted(EXPECTED_FILTER_PATHS - filter_paths())}, "
+        f"unexpected {sorted(filter_paths() - EXPECTED_FILTER_PATHS)}"
     )
 
 
 def test_the_filter_uses_only_modelled_pattern_forms() -> None:
-    """Every declared pattern must be a form `_matches` actually models.
+    """Every declared pattern must be a form `matches_filter` actually models.
 
-    The property test below is only evidence about the real filter for as long
-    as this holds; a `cuprum/**/*.py` added tomorrow would make the model
+    The property tests below are only evidence about the real filter for as
+    long as this holds; a `cuprum/**/*.py` added tomorrow would make the model
     silently over-match rather than fail.
     """
     unmodelled = sorted(
         pattern
-        for pattern in _filter_paths()
+        for pattern in filter_paths()
         if not pattern.endswith("/**") and any(c in pattern for c in "*?[")
     )
 
     assert not unmodelled, (
         "these filter patterns are neither a literal path nor a `dir/**` "
-        f"prefix, so `_matches` no longer models the filter: {unmodelled}"
+        f"prefix, so `matches_filter` no longer models the filter: {unmodelled}"
     )
 
 
 def test_the_irrelevant_paths_are_genuinely_irrelevant() -> None:
-    """The property test's docs-only pool must not match the filter."""
-    matched = sorted(path for path in IRRELEVANT_PATHS if _bench_output([path]))
+    """The property tests' docs-only pool must not match the filter."""
+    matched = sorted(path for path in IRRELEVANT_PATHS if bench_output([path]))
 
     assert not matched, (
         "these paths are sampled as performance-irrelevant but the filter "
-        f"matches them, so the property test below proves nothing: {matched}"
+        f"matches them, so the property tests below prove nothing: {matched}"
     )
 
 
@@ -305,7 +222,7 @@ def _relevant_paths() -> list[str]:
         f"{pattern.removesuffix('**')}pkg/module.rs"
         if pattern.endswith("/**")
         else pattern
-        for pattern in _filter_paths()
+        for pattern in filter_paths()
     )
 
 
@@ -319,7 +236,7 @@ def test_any_performance_relevant_change_benchmarks(
     """A pull request touching any watched path benchmarks, however mixed."""
     changed = [*relevant, *irrelevant]
 
-    assert _benchmark_runs(event_name="pull_request", bench=_bench_output(changed)), (
+    assert benchmark_runs(event_name="pull_request", bench=bench_output(changed)), (
         f"a pull request changing {changed} must run {BENCHMARK_JOB!r}"
     )
 
@@ -327,8 +244,8 @@ def test_any_performance_relevant_change_benchmarks(
 @given(irrelevant=st.lists(st.sampled_from(IRRELEVANT_PATHS), unique=True))
 def test_a_pull_request_touching_nothing_relevant_skips(irrelevant: list[str]) -> None:
     """A docs-only pull request — including an empty diff — skips the paid job."""
-    assert not _benchmark_runs(
-        event_name="pull_request", bench=_bench_output(irrelevant)
+    assert not benchmark_runs(
+        event_name="pull_request", bench=bench_output(irrelevant)
     ), f"a pull request changing only {irrelevant} must skip {BENCHMARK_JOB!r}"
 
 
@@ -345,7 +262,7 @@ def test_a_non_pull_request_event_always_benchmarks(
     baseline, which fails open: regressions stop being detected rather than
     being reported.
     """
-    assert _benchmark_runs(event_name=event_name, bench=_bench_output(changed)), (
+    assert benchmark_runs(event_name=event_name, bench=bench_output(changed)), (
         f"a {event_name!r} event changing {changed} must run {BENCHMARK_JOB!r} so "
         "the main baseline artifact is refreshed"
     )
@@ -360,7 +277,7 @@ def test_the_gate_decision_is_recorded_in_the_run_summary() -> None:
     """
     scripts = [
         script
-        for step in _steps(CHANGES_JOB)
+        for step in steps(CHANGES_JOB)
         if isinstance(script := step.get("run"), str)
     ]
     summary_steps = [script for script in scripts if "GITHUB_STEP_SUMMARY" in script]
@@ -383,8 +300,8 @@ def test_the_workflow_serializes_runs_per_ref() -> None:
     Cancelling a `main` run mid-flight abandons the baseline upload, leaving
     later pull requests comparing against a stale commit.
     """
-    concurrency = _mapping(
-        _workflow().get("concurrency"),
+    concurrency = mapping(
+        typ.cast("dict[str, object]", workflow()).get("concurrency"),
         f"{CI_WORKFLOW} must declare a concurrency policy",
     )
 

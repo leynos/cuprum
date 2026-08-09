@@ -2845,17 +2845,39 @@ run only spends benchmark minutes on a diff nobody will merge; a cancelled
 `main` run, by contrast, abandons the baseline upload, so those queue instead
 and publish in commit order.
 
+The gate deliberately names no status function. GitHub inserts an implicit
+`success()` into a job's `if:` unless the expression already names one, so a
+failed `changes` job skips `benchmark-ratchet` rather than running it. Adding
+`always()` reads as a harmless robustness tweak and is the single edit that
+turns a broken detector into an unconditional paid run, so a test pins its
+absence.
+
 None of this is exercised by ordinary tests — invert the condition and the
-suite still passes — so `test_benchmark_gate_ci_contract.py` reads it back
-from `ci.yml`: the `bench` output wiring, the `needs` edge, the gate
-expression verbatim, the exact filter path set, the summary step, and the
-concurrency policy. Property tests over sampled changed-path sets then check
-the rule those parts encode: any watched path benchmarks however it is mixed
-with docs, a diff touching nothing watched skips, and a non-pull-request event
-always benchmarks. Their path model handles the two pattern forms the filter
-is allowed to use — a literal path, and a `dir/**` prefix — and a companion
-test fails if a pattern outside those forms is added, so the model cannot
-silently stop describing the filter.
+suite still passes — so two suites read it back, split by what they assert
+rather than by what they parse. Both go through `tests/helpers/workflow.py`,
+which owns the parsing and the path model, so neither can pass against a gate
+the other does not see:
+
+- `cuprum/unittests/test_benchmark_gate_ci_contract.py` pins the
+  *declarations*: the `bench` output wiring, the `needs` edge, the gate
+  expression verbatim, the absent status function, the exact filter path set,
+  the runner `changes` uses, the summary step, and the concurrency policy.
+  Property tests over sampled changed-path sets then check the rule those
+  declarations encode — any watched path benchmarks however it is mixed with
+  docs, a diff touching nothing watched skips, and a non-pull-request event
+  always benchmarks.
+- `tests/behaviour/test_benchmark_path_gate_behaviour.py`, with
+  `tests/features/benchmark_path_gate.feature`, states the *decision* for pull
+  requests a maintainer would recognize: docs-only, a Rust change, a
+  dependency bump, a mixed diff, an empty diff, and a push to `main`.
+
+The path model handles the two pattern forms the filter is allowed to use — a
+literal path, and a `dir/**` prefix — and a companion test fails if a pattern
+outside those forms is added, so the model cannot silently stop describing the
+filter. Pinning the gate expression verbatim is what keeps the model honest
+about the other half: the property and behavioural tests reason with
+`benchmark_runs`, which is only evidence about `ci.yml` because the expression
+it mirrors is asserted character for character.
 
 ## Workflow pins and Dependabot
 
