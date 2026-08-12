@@ -119,6 +119,19 @@ class _PipelineStageResultInputs:
 
 
 @dc.dataclass(frozen=True, slots=True)
+class _PipelineObservers:
+    """Per-stage observations and the observe-hook tasks they schedule.
+
+    The tasks live alongside the observations because every stage shares one
+    list: :meth:`_StageObservation.emit` appends to it, and the runner drains
+    that single collection on the way out however the pipeline ends.
+    """
+
+    observations: tuple[_StageObservation, ...]
+    pending_tasks: list[asyncio.Task[None]]
+
+
+@dc.dataclass(frozen=True, slots=True)
 class _PipelineSpawnResult:
     """Processes and output tasks produced when spawning a pipeline."""
 

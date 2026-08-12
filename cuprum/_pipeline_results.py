@@ -114,4 +114,7 @@ def _build_pipeline_stage_results(
     return stage_results
 
 
-__all__ = ["_build_pipeline_stage_results", "_emit_timeout_exit_events"]
+__all__ = [
+    "_build_pipeline_stage_results",
+    "_emit_timeout_exit_events",
+]

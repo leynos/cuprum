@@ -46,6 +46,7 @@ from cuprum._pipeline_streams import (
 from cuprum._pipeline_types import (
     _EventDetails,
     _ExecutionHooks,
+    _PipelineObservers,
     _PipelineSpawnResult,
     _StageObservation,
 )
@@ -171,42 +172,27 @@ async def _reconcile_pipeline_run_failure(
     )
 
 
-async def _run_pipeline(
+async def _run_spawned_pipeline(
     parts: tuple[SafeCmd, ...],
     config: _PipelineRunConfig,
+    spawn: _PipelineSpawnResult,
+    observers: _PipelineObservers,
 ) -> PipelineResult:
-    """Execute a pipeline and return a structured result."""
-    pending_tasks: list[asyncio.Task[None]] = []
-    observations = _build_pipeline_observations(
-        parts,
-        config,
-        pending_tasks=pending_tasks,
-    )
-    try:
-        _emit_plan_events_and_run_before_hooks(observations)
-        (
-            processes,
-            stderr_tasks,
-            stdout_task,
-            started_at,
-        ) = await _spawn_pipeline_processes(
-            parts,
-            config,
-            observations=observations,
-        )
-        spawn = _PipelineSpawnResult(
-            processes=processes,
-            stderr_tasks=stderr_tasks,
-            stdout_task=stdout_task,
-            started_at=started_at,
-        )
-    except BaseException as spawn_error:
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                pending_tasks, spawn_error, message=_PIPELINE_FINALIZATION_ERROR
-            )
-        )
-        raise
+    """Drive a spawned pipeline to a result, reconciling whatever ends it.
+
+    Split from :func:`_run_pipeline`, which keeps the pre-spawn half. The
+    stages are running by the time this is entered, so every exit path owes
+    them teardown; keeping those paths together is what makes the set
+    reviewable.
+
+    The two failure branches stay distinct because they owe different debts. A
+    deadline has already terminated the stages, so it reports the expiry and
+    emits each stage's terminal ``exit`` before draining the observe tasks.
+    Anything else — a cancellation, most often — still has live stream tasks,
+    which is why it goes through :func:`_reconcile_pipeline_run_failure`.
+    """
+    observations = observers.observations
+    pending_tasks = observers.pending_tasks
     try:
         inputs = await _collect_pipeline_inputs(
             parts,
@@ -249,6 +235,50 @@ async def _run_pipeline(
     return _sh_module().PipelineResult(
         stages=tuple(stage_results),
         failure_index=inputs.wait_result.failure_index,
+    )
+
+
+async def _run_pipeline(
+    parts: tuple[SafeCmd, ...],
+    config: _PipelineRunConfig,
+) -> PipelineResult:
+    """Execute a pipeline and return a structured result."""
+    pending_tasks: list[asyncio.Task[None]] = []
+    observations = _build_pipeline_observations(
+        parts,
+        config,
+        pending_tasks=pending_tasks,
+    )
+    try:
+        _emit_plan_events_and_run_before_hooks(observations)
+        (
+            processes,
+            stderr_tasks,
+            stdout_task,
+            started_at,
+        ) = await _spawn_pipeline_processes(
+            parts,
+            config,
+            observations=observations,
+        )
+        spawn = _PipelineSpawnResult(
+            processes=processes,
+            stderr_tasks=stderr_tasks,
+            stdout_task=stdout_task,
+            started_at=started_at,
+        )
+    except BaseException as spawn_error:
+        await _shielded_cleanup(
+            _drain_tasks_during_cleanup(
+                pending_tasks, spawn_error, message=_PIPELINE_FINALIZATION_ERROR
+            )
+        )
+        raise
+    return await _run_spawned_pipeline(
+        parts,
+        config,
+        spawn,
+        _PipelineObservers(observations, pending_tasks),
     )
 
 
