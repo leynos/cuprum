@@ -1202,7 +1202,8 @@ allowlist, collects hooks, builds stage observations, coordinates process
 execution and completion, and assembles stage results. `cuprum._pipeline_types`
 contains the passive shared dataclasses and types used by that coordination
 layer; it does not perform execution logic. `_pipeline_internals` re-exports
-those types for backwards compatibility. Do not reintroduce the combined
+selected `_pipeline_collect` helpers for backwards compatibility, not those
+types. Do not reintroduce the combined
 `_run_before_hooks` responsibility in `_pipeline_types`.
 
 Error propagation policy (to be finalized, but roughly):
