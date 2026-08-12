@@ -168,6 +168,12 @@ def test_validate_timeout_rejects_non_finite_values(timeout: float) -> None:
         _validate_timeout(timeout, "Test")
 
 
+def test_validate_timeout_rejects_integer_that_overflows_float() -> None:
+    """Integer timeouts that overflow float conversion use the value contract."""
+    with pytest.raises(ValueError, match="timeout must be non-negative"):
+        _validate_timeout(typ.cast("float", 10**10_000), "Test")
+
+
 @pytest.mark.crosshair
 @cuprum_st.PROPERTY_SETTINGS
 @given(timeout=st.integers(max_value=-1))

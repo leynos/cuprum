@@ -130,16 +130,16 @@ def _make_blocking_fd_spy(
 
     def _spy(reader_fd: int, writer_fd: int) -> int:
         """Assert both descriptors are blocking, then record the call."""
-        assert _pipeline_streams.os.get_blocking(reader_fd), (
+        assert _pipeline_streams.os.get_blocking(reader_fd), (  # noqa: S101 - test spy validates the dispatched reader FD
             "expected reader FD to be switched to blocking mode"
         )
-        assert _pipeline_streams.os.get_blocking(writer_fd), (
+        assert _pipeline_streams.os.get_blocking(writer_fd), (  # noqa: S101 - test spy validates the dispatched writer FD
             "expected writer FD to be switched to blocking mode"
         )
-        assert reader_fd == expected_reader_fd, (
+        assert reader_fd == expected_reader_fd, (  # noqa: S101 - test spy validates reader-FD dispatch
             "expected Rust path to use extracted reader FD"
         )
-        assert writer_fd == expected_writer_fd, (
+        assert writer_fd == expected_writer_fd, (  # noqa: S101 - test spy validates writer-FD dispatch
             "expected Rust path to use extracted writer FD"
         )
         calls["rust_pump"] += 1

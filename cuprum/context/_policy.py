@@ -25,7 +25,11 @@ def _validate_timeout(timeout: float | None, class_name: str) -> float | None:
     """Validate a timeout is finite and non-negative, coercing it to float."""
     if timeout is None:
         return None
-    timeout_float = float(timeout)
+    try:
+        timeout_float = float(timeout)
+    except OverflowError:
+        msg = f"{class_name} timeout must be non-negative, got an unrepresentable value"
+        raise ValueError(msg) from None
     if not math.isfinite(timeout_float):
         msg = f"{class_name} timeout must be finite, got {timeout_float}"
         raise ValueError(msg)

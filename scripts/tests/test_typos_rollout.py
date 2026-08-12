@@ -39,7 +39,7 @@ def _invalid_corrections(dictionary_text: cabc.Callable[..., str]) -> str:
     )
 
 
-@dc.dataclass(frozen=True)
+@dc.dataclass(frozen=True, slots=True)
 class _InvalidDictionaryCase:
     """Describe one invalid shared-dictionary document and its rejection.
 

@@ -256,7 +256,7 @@ def test_pipeline_run_cancelled_during_grace_still_reaps_stages(
             await asyncio.sleep(0.01)
         await asyncio.sleep(0.15)
         task.cancel()
-        with contextlib.suppress(BaseException):
+        with contextlib.suppress(asyncio.CancelledError):
             await task
 
     with (

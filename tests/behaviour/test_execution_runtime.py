@@ -207,7 +207,7 @@ def when_run_command_with_timeout(
 @when("I run the command with an already-elapsed timeout")
 def when_run_command_with_non_positive_timeout(
     behaviour_state: dict[str, object],
-    long_running_command: dict[str, object],
+    long_running_command: WorkerCommand,
 ) -> None:
     """Run with an already-elapsed deadline and record the error and PID.
 
@@ -217,8 +217,8 @@ def when_run_command_with_non_positive_timeout(
     at spawn, so the PID is available either way, and the run needs no
     coordination with the child at all.
     """
-    command = typ.cast("SafeCmd", long_running_command["command"])
-    pid_file = typ.cast("Path", long_running_command["pid_file"])
+    command = long_running_command["command"]
+    pid_file = long_running_command["pid_file"]
     configured = 0.0
     events: list[ExecEvent] = []
     ctx = ExecutionContext(env={"CUPRUM_PID_FILE": str(pid_file)})

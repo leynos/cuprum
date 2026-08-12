@@ -24,6 +24,8 @@ __all__ = [
     "load_dictionary",
     "merge_dictionaries",
     "refresh_base",
+    "render_typos_config",
+    "write_config",
 ]
 
 _atomic_write = typos_rollout_cache.atomic_write

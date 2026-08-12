@@ -54,7 +54,7 @@ _shared_settings = settings(
 )
 
 
-@dc.dataclass(frozen=True)
+@dc.dataclass(frozen=True, slots=True)
 class _MergeUnionCase:
     """Define generated inputs for one dictionary-union merge.
 

@@ -16,8 +16,10 @@ import pytest
 from cuprum import (
     ECHO,
     LS,
+    ExecEvent,
     ForbiddenProgramError,
     ScopeConfig,
+    observe,
     scoped,
     sh,
 )
@@ -177,11 +179,20 @@ class TestConcurrentExecution:
         echo = sh.make(ECHO)
         cmd1 = echo("-n", "hello")
         cmd2 = echo("-n", "world")
+        events: list[ExecEvent] = []
 
         # Allowlist only LS, so ECHO is forbidden
         forbidden_ctx = scoped(ScopeConfig(allowlist=frozenset([LS])))
-        with forbidden_ctx, pytest.raises(ForbiddenProgramError):
+        with (
+            forbidden_ctx,
+            observe(events.append),
+            pytest.raises(ForbiddenProgramError),
+        ):
             run_concurrent_sync(cmd1, cmd2)
+
+        assert not any(event.phase == "start" for event in events), (
+            "allowlist preflight must reject commands before start events are emitted"
+        )
 
     @staticmethod
     def test_single_command_works() -> None:

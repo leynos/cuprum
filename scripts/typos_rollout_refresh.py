@@ -401,6 +401,8 @@ def refresh_base(
         cache is available to fall back on.
     TypeError
         If the refreshed dictionary source is not a mapping.
+    UnicodeDecodeError
+        If a local authoritative dictionary is not valid UTF-8.
     tomllib.TOMLDecodeError
         If the refreshed dictionary source is not valid TOML.
     urllib.error.URLError

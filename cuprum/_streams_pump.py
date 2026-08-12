@@ -85,7 +85,7 @@ async def _relay_chunks(
         if await _write_to_stream_writer(writer, chunk) is _WriteOutcome.CLOSED:
             break
     discarded_bytes = await _drain_stream_reader_bounded(reader)
-    _LOGGER.warning(
+    _LOGGER.debug(
         "stream_downstream_closed discarded_bytes=%s",
         discarded_bytes,
         extra={"cuprum_discarded_bytes": discarded_bytes},
@@ -128,7 +128,7 @@ async def _write_to_stream_writer(
         writer.write(chunk)
         await writer.drain()
     except (BrokenPipeError, ConnectionResetError):
-        _LOGGER.warning(
+        _LOGGER.debug(
             "stream_write_closed bytes=%s",
             len(chunk),
             extra={"cuprum_attempted_bytes": len(chunk)},
