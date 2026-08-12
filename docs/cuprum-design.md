@@ -1197,12 +1197,13 @@ registered hooks without performing authorization, dispatching hooks, or
 mutating the context. Pipeline execution preserves this ordering for every
 stage before emitting its `plan` event and dispatching before-hooks.
 
-`cuprum._pipeline_types` owns the shared pipeline dataclasses and types.
-Keeping these passive definitions separate preserves the dependency-safe import
-boundary and the project file-size constraints; the module does not perform
-execution logic. `cuprum._pipeline_internals` re-exports the shared types only
-for compatibility. Do not reintroduce the combined `_run_before_hooks`
-responsibility in `_pipeline_types`.
+`cuprum._pipeline_internals` owns pipeline orchestration: it enforces the
+allowlist, collects hooks, builds stage observations, coordinates process
+execution and completion, and assembles stage results. `cuprum._pipeline_types`
+contains the passive shared dataclasses and types used by that coordination
+layer; it does not perform execution logic. `_pipeline_internals` re-exports
+those types for backwards compatibility. Do not reintroduce the combined
+`_run_before_hooks` responsibility in `_pipeline_types`.
 
 Error propagation policy (to be finalized, but roughly):
 
@@ -1760,17 +1761,23 @@ behavioural guarantees.
 ### 13.1 Motivation
 
 The current implementation reads and writes data in 4 KB chunks (defined by
-`_READ_SIZE = 4096` in `cuprum/_streams.py`). The core functions affected are:
+`_READ_SIZE = 4096` in `cuprum/_streams_pump.py`). The core functions affected
+are:
 
-- `_pump_stream()` – transfers data between pipeline stages with backpressure;
-- `_consume_stream()` – dispatcher that routes to one of the two functions
-  below based on whether line callbacks are registered;
+- `_pump_stream()` in `cuprum/_streams_pump.py` – transfers data between
+  pipeline stages with backpressure;
+- `_consume_stream()` in `cuprum/_streams.py` – dispatcher that routes to one
+  of the two functions below based on whether line callbacks are registered;
 - `_drain()` – canonical read/echo/capture loop shared by both consume
   variants;
 - `_consume_stream_without_lines()` – reads subprocess output without line
   parsing, optionally teeing to sinks;
 - `_consume_stream_with_lines()` – handles line-by-line callbacks with
   incremental decoding configured by `config.encoding` and `config.errors`.
+
+`cuprum/_streams_pump.py` owns the pump implementation and `_READ_SIZE`, while
+`cuprum/_streams.py` owns stream consumption and re-exports the pump surface
+for compatibility.
 
 `_drain()` owns the shared mechanics for reading stream chunks, forwarding
 echoed text to a configured sink, and accumulating captured bytes. The

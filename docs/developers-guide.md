@@ -257,7 +257,7 @@ Private helpers emit diagnostic logs rather than installing a global metrics or
 tracing backend.  Hook scheduling and hook failures use the
 `cuprum._observability` logger with structured `extra` fields such as
 `cuprum_phase`, `cuprum_program`, `cuprum_error_type`, and
-`cuprum_scheduled_task_count`.  Stream early-close decisions use warning-level
+`cuprum_scheduled_task_count`.  Stream early-close decisions use debug-level
 records on the `cuprum._streams_pump` logger and include `cuprum_discarded_bytes`
 when upstream bytes are drained after the downstream writer has closed.
 Suppressed writer cleanup failures remain debug-level diagnostics with
@@ -2088,7 +2088,7 @@ family:
 - **Test scaffolding (`per-file-ignore`).** `ASYNC109` and `ASYNC240` are
   ignored through `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` for
   exactly two modules — `cuprum/unittests/test_observe_stdin_early_close.py`
-  and `tests/behaviour/test_execution_runtime.py`. Their async scaffolding
+  and `tests/behaviour/_execution_runtime_support.py`. Their async scaffolding
   polls a PID file with asyncio-only helpers, so a `timeout` parameter and
   blocking `pathlib` calls are acceptable there; the async-native path
   libraries (`trio.Path` / `anyio.Path`) that `ASYNC240` recommends are not in
