@@ -396,7 +396,8 @@ these `cuprum_*` extra fields:
 
 If cleanup then fails to drain a stream consumer, a second record is written at
 `ERROR` — `subprocess_teardown_drain_failed pid=… errors=…` — carrying
-`cuprum_operation` (`"teardown"`), `cuprum_teardown_outcome`
+`cuprum_operation` (`"drain"`, the same operation the `teardown_error`
+observe event names), `cuprum_teardown_outcome`
 (`"drain_error"`), `cuprum_pid`, and `cuprum_error_type` set to the
 comma-joined class names of the failures. The drain failure itself is absorbed
 so it cannot displace the `TimeoutExpired` (or `CancelledError`) the caller is

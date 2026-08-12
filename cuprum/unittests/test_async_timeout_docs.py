@@ -8,6 +8,8 @@ rather than by prose review alone.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from tests.helpers import extract_markdown_subsection, read_doc, read_users_guide
@@ -235,7 +237,6 @@ def test_users_guide_documents_teardown_error_fields(
         "cuprum.timeout",
         "subprocess_timeout_expired",
         "subprocess_teardown_drain_failed",
-        "cuprum_operation",
         "cuprum_timeout_s",
         "cuprum_timeout_mode",
         "cuprum_teardown_outcome",
@@ -313,3 +314,66 @@ def test_adr_007_documents_wait_helper_split(adr_007: str, term: str) -> None:
     stream-consumer task is left behind.
     """
     assert term in adr_007, f"Missing documentation clause: '{term}'"
+
+
+# ``cuprum_operation`` is deliberately absent from the term list above. Asserting
+# it appears *somewhere* in the section would pass against a guide that named
+# the wrong value, which is exactly the drift these tests exist to catch: the
+# field carries "wait" on the expiry record and "drain" on the teardown record,
+# so what matters is which value sits with which record, not that both strings
+# occur. The two tests below bind each value to its own record instead.
+
+_EXPIRY_MARKER = "subprocess_teardown_drain_failed"
+
+
+def _split_timeout_section(section: str) -> tuple[str, str]:
+    """Split the Timeouts section into its expiry and teardown descriptions.
+
+    The teardown record is introduced by the sentence naming
+    ``subprocess_teardown_drain_failed``; everything before it describes the
+    expiry record.
+    """
+    marker = section.index(_EXPIRY_MARKER)
+    return section[:marker], section[marker:]
+
+
+def _binds_operation(text: str, value: str) -> bool:
+    """Report whether ``text`` gives ``cuprum_operation`` as ``value``.
+
+    Tolerates the line wrapping the guide applies between the field name and
+    its value, and the two renderings the guide uses — a ``field``: ``value``
+    bullet and a ``field`` (``value``) clause.
+    """
+    pattern = rf"`cuprum_operation`\s*[:(]\s*`\"{re.escape(value)}\"`"
+    return re.search(pattern, text) is not None
+
+
+def test_users_guide_binds_expiry_operation_to_wait(
+    users_timeouts_section: str,
+) -> None:
+    """The expiry record's ``cuprum_operation`` must be documented as ``wait``."""
+    expiry, _ = _split_timeout_section(users_timeouts_section)
+    assert _binds_operation(expiry, "wait"), (
+        "the timeout-expiry record must document cuprum_operation as "
+        f'"wait", got section: {expiry!r}'
+    )
+
+
+def test_users_guide_binds_teardown_operation_to_drain(
+    users_timeouts_section: str,
+) -> None:
+    """The teardown record's ``cuprum_operation`` must be documented as ``drain``.
+
+    It names the same operation as the ``teardown_error`` observe event's
+    ``operation`` field. Documenting it as anything else would leave a consumer
+    correlating the log record with the event across two spellings.
+    """
+    _, teardown = _split_timeout_section(users_timeouts_section)
+    assert _binds_operation(teardown, "drain"), (
+        "the teardown drain-failure record must document cuprum_operation as "
+        f'"drain", got section: {teardown!r}'
+    )
+    assert not _binds_operation(teardown, "teardown"), (
+        "the teardown record must not document cuprum_operation as "
+        '"teardown"; that spelling disagrees with the teardown_error event'
+    )

@@ -108,7 +108,12 @@ def _log_teardown_drain_failure(*, pid: int | None, joined: str) -> None:
         joined,
         extra={
             "cuprum_pid": pid,
-            "cuprum_operation": "teardown",
+            # "drain" matches the ``teardown_error`` observe event's
+            # ``operation``: both channels name the same operation, so a
+            # consumer correlating them is not left reconciling two spellings.
+            # The timeout-expiry record keeps "wait", which is a different
+            # operation, not a different spelling of this one.
+            "cuprum_operation": "drain",
             "cuprum_teardown_outcome": "drain_error",
             "cuprum_error_type": joined,
         },

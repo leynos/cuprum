@@ -162,9 +162,10 @@ def test_teardown_drain_failure_logs_diagnostic(
         asyncio.run(run_case())
 
     fields = vars(_single_timeout_record(caplog, logging.ERROR))
-    assert fields["cuprum_operation"] == "teardown", (
-        "the drain-failure record must carry cuprum_operation='teardown', "
-        f"got {fields['cuprum_operation']!r}"
+    assert fields["cuprum_operation"] == "drain", (
+        "the drain-failure record must carry cuprum_operation='drain', naming "
+        "the same operation as the teardown_error observe event, got "
+        f"{fields['cuprum_operation']!r}"
     )
     assert fields["cuprum_teardown_outcome"] == "drain_error", (
         "the drain-failure record must carry "
