@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
-_PROCESS_EXIT_POLL_INTERVAL = 0.01
+_PROCESS_EXIT_INITIAL_POLL_INTERVAL = 0.01
+_PROCESS_EXIT_MAX_POLL_INTERVAL = 1.0
 
 
 async def _await_process_exit(process: asyncio.subprocess.Process) -> int:
@@ -13,11 +14,13 @@ async def _await_process_exit(process: asyncio.subprocess.Process) -> int:
         return process.returncode
 
     async def _published_returncode() -> int:
-        """Poll the authoritative return code at a low frequency."""
+        """Poll the authoritative return code with capped exponential backoff."""
+        interval = _PROCESS_EXIT_INITIAL_POLL_INTERVAL
         # ASYNC110: Process exposes no completion event, so its published
         # return code is the only non-blocking recovery signal for a lost wake-up.
-        while process.returncode is None:  # noqa: ASYNC110
-            await asyncio.sleep(_PROCESS_EXIT_POLL_INTERVAL)
+        while process.returncode is None:
+            await asyncio.sleep(interval)
+            interval = min(interval * 2, _PROCESS_EXIT_MAX_POLL_INTERVAL)
         return process.returncode
 
     wait_task = asyncio.create_task(process.wait())

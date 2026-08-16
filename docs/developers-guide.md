@@ -2515,8 +2515,9 @@ standalone teardown wait used by `_terminate_process` for timeout or
 cancellation cleanup. Fail-fast pipeline teardown awaits the existing
 per-stage wait tasks and therefore inherits the same protection. The helper
 first accepts an already-published `process.returncode`; otherwise it races
-`process.wait()` against a low-frequency poll of that return code and cancels
-the losing task. This closes the asyncio lost-wakeup race where `returncode`
+`process.wait()` against a bounded exponential-backoff poll of that return
+code, starting at 0.01 seconds and capped at 1.0 second, and cancels the
+losing task. This closes the asyncio lost-wakeup race where `returncode`
 has been published but the waiter remains pending. Keep the regression in
 `cuprum/unittests/test_process_exit.py` aligned with this contract.
 

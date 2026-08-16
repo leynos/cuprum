@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from cuprum import (
@@ -138,6 +140,55 @@ def test_pipeline_run_streams_stdout_between_stages(stream_backend: str) -> None
     assert result.stages[1].exit_code == 0
     assert result.stages[0].pid > 0
     assert result.stages[1].pid > 0
+
+
+def test_pipeline_propagates_cancelled_pipe_task(
+    stream_backend: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancelled inter-stage pump must not let successful stages hide cancellation."""
+
+    async def cancelled_pipe_task() -> None:
+        """Model a pump cancelled independently of the process stages."""
+        await asyncio.sleep(0)
+        raise asyncio.CancelledError
+
+    def create_cancelled_pipe_task(_processes: object) -> list[asyncio.Task[None]]:
+        """Inject the cancelled pipe task at the pipeline creation boundary."""
+        return [asyncio.create_task(cancelled_pipe_task())]
+
+    monkeypatch.setattr(
+        "cuprum._pipeline_collect._create_pipe_tasks",
+        create_cancelled_pipe_task,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        _run_test_pipeline([0, 0])
+
+
+def test_pipeline_ignores_broken_pipe_task(
+    stream_backend: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broken inter-stage pump is expected when otherwise-successful stages exit."""
+
+    async def broken_pipe_task() -> None:
+        """Model a downstream stage closing its input early."""
+        await asyncio.sleep(0)
+        raise BrokenPipeError
+
+    def create_broken_pipe_task(_processes: object) -> list[asyncio.Task[None]]:
+        """Inject the expected broken-pipe task at the creation boundary."""
+        return [asyncio.create_task(broken_pipe_task())]
+
+    monkeypatch.setattr(
+        "cuprum._pipeline_collect._create_pipe_tasks",
+        create_broken_pipe_task,
+    )
+
+    assert _run_test_pipeline([0, 0]).ok, (
+        "an expected broken pipe must not fail otherwise-successful stages"
+    )
 
 
 def test_pipeline_timeout_raises_timeout_expired(stream_backend: str) -> None:
