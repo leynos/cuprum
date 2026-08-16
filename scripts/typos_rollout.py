@@ -55,7 +55,19 @@ def _render_array(name: str, values: tuple[str, ...]) -> list[str]:
 
 
 def render_typos_config(dictionary: Dictionary) -> str:
-    """Render a deterministic, parse-checked ``typos.toml`` document."""
+    """Render a deterministic, parse-checked ``typos.toml`` document.
+
+    Parameters
+    ----------
+    dictionary : Dictionary
+        Shared spelling policy to render.
+
+    Returns
+    -------
+    str
+        Newline-terminated TOML validated with :func:`tomllib.loads` before
+        it is returned.
+    """
     lines = [
         "# Generated from the shared en-GB-oxendict dictionary.",
         "# Regenerate with scripts/generate_typos_config.py; do not edit by hand.",
@@ -79,5 +91,18 @@ def render_typos_config(dictionary: Dictionary) -> str:
 
 
 def write_config(path: pathlib.Path, dictionary: Dictionary) -> None:
-    """Atomically write validated generated configuration to *path*."""
+    """Atomically write validated generated configuration to *path*.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Destination configuration path.
+    dictionary : Dictionary
+        Shared spelling policy to render and validate before writing.
+
+    Returns
+    -------
+    None
+        The validated configuration is atomically published at *path*.
+    """
     _atomic_write(path, render_typos_config(dictionary).encode())

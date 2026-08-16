@@ -15,6 +15,7 @@ import time
 import typing as typ
 
 from cuprum._pipeline_types import _EventDetails, _StageObservation
+from cuprum._process_exit import _await_process_exit
 from cuprum._process_lifecycle import _merge_env, _terminate_process
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._subprocess_context import _cwd_arg, _sh_module
@@ -68,7 +69,7 @@ async def _wait_for_exit_code(
     unchanged.
     """
     try:
-        exit_code = await process.wait()
+        exit_code = await _await_process_exit(process)
     except asyncio.CancelledError:
         # A deadline expiry (via asyncio.timeout) and an external cancellation
         # both surface here as CancelledError and need the same teardown:

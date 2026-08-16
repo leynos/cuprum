@@ -10,6 +10,7 @@ import typing as typ
 from cuprum._pipeline_stage_streams import _get_stage_stream_fds
 from cuprum._pipeline_streams import _collect_pipe_results
 from cuprum._pipeline_types import _EventDetails, _StageObservation
+from cuprum._process_exit import _await_process_exit
 from cuprum._subprocess_context import _cwd_arg
 from cuprum.context import current_context, resolve_env
 
@@ -29,7 +30,7 @@ async def _terminate_process(
         process,
         grace_period=grace_period,
         is_done=lambda: process.returncode is not None,
-        wait_for_exit=process.wait,
+        wait_for_exit=lambda: _await_process_exit(process),
     )
 
 

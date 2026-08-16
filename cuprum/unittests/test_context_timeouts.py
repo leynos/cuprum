@@ -169,9 +169,13 @@ def test_validate_timeout_rejects_non_finite_values(timeout: float) -> None:
 
 
 def test_validate_timeout_rejects_integer_that_overflows_float() -> None:
-    """Integer timeouts that overflow float conversion use the value contract."""
-    with pytest.raises(ValueError, match="timeout must be non-negative"):
+    """Integer timeouts preserve the overflow cause under the value contract."""
+    with pytest.raises(ValueError, match="timeout must be non-negative") as exc_info:
         _validate_timeout(typ.cast("float", 10**10_000), "Test")
+
+    assert isinstance(exc_info.value.__cause__, OverflowError), (
+        "an unrepresentable timeout must retain its OverflowError conversion cause"
+    )
 
 
 @pytest.mark.crosshair

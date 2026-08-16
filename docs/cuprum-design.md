@@ -2116,12 +2116,16 @@ an injectable `BackendSelector` around each worker run to set
 and then restore the previous environment.
 
 This selector mutates process-wide state, so the implementation serializes the
-critical section with a process-local `threading.RLock`. A thread-local
-reentrancy guard rejects nested activation on the same thread with
-`RuntimeError` before any environment mutation occurs. The lock permits
-well-formed helper code to re-acquire the same lock while preserving the
-stronger selector invariant that only one active backend override owns the
-environment/cache pair at a time.
+critical section with a process-local `threading.RLock`. `_EnvBackendSelector`
+holds `_BACKEND_LOCK` across the complete `repeat_count` loop, including every
+`run_sync` subprocess execution. Concurrent workers therefore cannot run their
+repeat loops in parallel while they need different, process-local stream
+backend selections. A thread-local reentrancy guard rejects nested activation
+on the same thread with `ReentrantBackendSelectorError`, a `RuntimeError`
+subclass, before any environment mutation occurs. The lock permits well-formed
+helper code to re-acquire the same lock while preserving the stronger selector
+invariant that only one active backend override owns the environment/cache pair
+at a time.
 
 The rejected reentry path emits a warning that includes the requested backend,
 the current thread id, and the active-selector flag. This makes accidental

@@ -671,16 +671,18 @@ The allowlist, hook, and timeout rules are split into pure helpers in
 - `_resolve_narrowed_timeout(parent, config)` inherits the parent timeout when
   the scoped config is silent and otherwise uses the scoped value.
 
-Context property tests live in `cuprum/unittests/test_context.py`, which
-exercises both ordering modes of `_merge_hooks` (parent-first FIFO and
-scoped-first LIFO) through the generic helper rather than per-hook variants.
-Run them directly with:
+Core context tests live in `cuprum/unittests/test_context.py`. Context policy
+property tests live in `cuprum/unittests/test_context_narrowing.py` and
+`cuprum/unittests/test_context_timeouts.py`; they exercise both ordering modes
+of `_merge_hooks` (parent-first FIFO and scoped-first LIFO) through the generic
+helper rather than per-hook variants. Run them directly with:
 
 ```bash
-uv run pytest -q cuprum/unittests/test_context.py
+uv run pytest -q cuprum/unittests/test_context_narrowing.py \
+    cuprum/unittests/test_context_timeouts.py
 ```
 
-The same test module marks pure-helper properties for optional CrossHair
+Those property modules mark pure-helper properties for optional CrossHair
 execution. The `crosshair` Hypothesis profile is registered in
 `cuprum/unittests/conftest.py`; using it requires the `hypothesis-crosshair`
 package from the dev dependency group.
@@ -733,8 +735,9 @@ Spelling policy (`scripts/`):
 
 Test helpers:
 
-- `tests/helpers/maturin_pins.py` — reads and validates the synchronized
-  maturin version pins (see
+- `cuprum/unittests/test_maturin_pins.py` — reads and validates the
+  synchronized maturin version pins; its narrowly shared exceptions live in
+  `cuprum/unittests/_maturin_pin_support.py` (see
   [Maturin pin synchronization and native wheel tests](#maturin-pin-synchronization-and-native-wheel-tests)).
 
 ## `rust_consume_stream` integration status
