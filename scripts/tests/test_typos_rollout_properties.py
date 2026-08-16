@@ -85,6 +85,16 @@ class _MergeUnionCase:
     patterns_b: list[str]
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _DictionaryParts:
+    """Define the generated components of one dictionary."""
+
+    stems: list[str] | None = None
+    accepted: list[str] | None = None
+    corrections: dict[str, str] | None = None
+    ignore_patterns: list[str] | None = None
+
+
 _merge_union_cases = st.builds(
     _MergeUnionCase,
     pool=_corrections_pool,
@@ -99,18 +109,14 @@ _merge_union_cases = st.builds(
 
 def _dictionary(
     rollout: types.ModuleType,
-    *,
-    stems: list[str] | None = None,
-    accepted: list[str] | None = None,
-    corrections: dict[str, str] | None = None,
-    ignore_patterns: list[str] | None = None,
+    parts: _DictionaryParts,
 ) -> object:
     """Build a ``Dictionary`` from unnormalized generated parts."""
     return rollout.Dictionary(
-        stems=tuple(stems or ()),
-        accepted=tuple(accepted or ()),
-        corrections=tuple((corrections or {}).items()),
-        ignore_patterns=tuple(ignore_patterns or ()),
+        stems=tuple(parts.stems or ()),
+        accepted=tuple(parts.accepted or ()),
+        corrections=tuple((parts.corrections or {}).items()),
+        ignore_patterns=tuple(parts.ignore_patterns or ()),
     )
 
 
@@ -126,8 +132,12 @@ def test_merge_is_commutative_without_conflicts(
     _, rollout, _ = rollout_modules
     # Overlapping keys are drawn from one pool, so shared keys always agree.
     items = sorted(pool.items())
-    left = _dictionary(rollout, stems=stems_a, corrections=dict(items[::2]))
-    right = _dictionary(rollout, stems=stems_b, corrections=dict(items[1::2]))
+    left = _dictionary(
+        rollout, _DictionaryParts(stems=stems_a, corrections=dict(items[::2]))
+    )
+    right = _dictionary(
+        rollout, _DictionaryParts(stems=stems_b, corrections=dict(items[1::2]))
+    )
 
     assert rollout.merge_dictionaries(left, right) == rollout.merge_dictionaries(
         right, left
@@ -145,7 +155,10 @@ def test_merge_is_associative_without_conflicts(
     _, rollout, _ = rollout_modules
     items = sorted(pool.items())
     parts = [
-        _dictionary(rollout, stems=stems[offset], corrections=dict(items[offset::3]))
+        _dictionary(
+            rollout,
+            _DictionaryParts(stems=stems[offset], corrections=dict(items[offset::3])),
+        )
         for offset in range(3)
     ]
 
@@ -172,17 +185,21 @@ def test_merge_unions_fields_and_is_idempotent(
     items = sorted(case.pool.items())
     left = _dictionary(
         rollout,
-        stems=case.stems_a,
-        accepted=case.accepted_a,
-        corrections=dict(items[::2]),
-        ignore_patterns=case.patterns_a,
+        _DictionaryParts(
+            stems=case.stems_a,
+            accepted=case.accepted_a,
+            corrections=dict(items[::2]),
+            ignore_patterns=case.patterns_a,
+        ),
     )
     right = _dictionary(
         rollout,
-        stems=case.stems_b,
-        accepted=case.accepted_b,
-        corrections=dict(items[1::2]),
-        ignore_patterns=case.patterns_b,
+        _DictionaryParts(
+            stems=case.stems_b,
+            accepted=case.accepted_b,
+            corrections=dict(items[1::2]),
+            ignore_patterns=case.patterns_b,
+        ),
     )
 
     merged = rollout.merge_dictionaries(left, right)
@@ -223,9 +240,11 @@ def test_generated_mappings_expand_every_stem_and_word(
     _, rollout, _ = rollout_modules
     dictionary = _dictionary(
         rollout,
-        stems=stems,
-        accepted=accepted,
-        corrections=corrections,
+        _DictionaryParts(
+            stems=stems,
+            accepted=accepted,
+            corrections=corrections,
+        ),
     )
 
     mappings = rollout.generate_word_mappings(dictionary)
@@ -269,8 +288,8 @@ def test_merge_rejects_any_conflicting_correction(
     """Every conflicting correction pair is rejected, whatever the words."""
     _, rollout, _ = rollout_modules
     assume(first != second)
-    base = _dictionary(rollout, corrections={word: first})
-    local = _dictionary(rollout, corrections={word: second})
+    base = _dictionary(rollout, _DictionaryParts(corrections={word: first}))
+    local = _dictionary(rollout, _DictionaryParts(corrections={word: second}))
 
     with pytest.raises(ValueError, match="conflicting correction"):
         rollout.merge_dictionaries(base, local)
@@ -323,34 +342,45 @@ _http_dates = st.datetimes(
 ).map(email.utils.format_datetime)
 
 
-@given(
+@dc.dataclass(frozen=True, slots=True)
+class _EtagFreshnessCase:
+    """Define validators for one ETag freshness decision."""
+
+    saved_etag: str | None
+    header_etag: str
+    saved_date: str | None
+    header_date: str | None
+
+
+_etag_freshness_cases = st.builds(
+    _EtagFreshnessCase,
     saved_etag=st.none() | _etags,
     header_etag=_etags,
     saved_date=st.none() | _http_dates,
     header_date=st.none() | _http_dates,
 )
+
+
+@given(case=_etag_freshness_cases)
 @_shared_settings
 def test_etag_alone_decides_freshness_when_present(
     refresh_module: types.ModuleType,
-    saved_etag: str | None,
-    header_etag: str,
-    saved_date: str | None,
-    header_date: str | None,
+    case: _EtagFreshnessCase,
 ) -> None:
     """With an ETag in the response, dates never influence the decision."""
     saved: dict[str, object] = {}
-    if saved_etag is not None:
-        saved["etag"] = saved_etag
-    if saved_date is not None:
-        saved["last_modified"] = saved_date
-    headers = {"ETag": header_etag}
-    if header_date is not None:
-        headers["Last-Modified"] = header_date
+    if case.saved_etag is not None:
+        saved["etag"] = case.saved_etag
+    if case.saved_date is not None:
+        saved["last_modified"] = case.saved_date
+    headers = {"ETag": case.header_etag}
+    if case.header_date is not None:
+        headers["Last-Modified"] = case.header_date
 
     assert refresh_module._remote_is_not_newer(saved, headers) is (
-        header_etag == saved_etag
+        case.header_etag == case.saved_etag
     ), (
-        f"an ETag response ({header_etag!r} vs saved {saved_etag!r}) must be "
+        f"an ETag response ({case.header_etag!r} vs saved {case.saved_etag!r}) must be "
         "decided by ETag equality alone"
     )
 

@@ -383,13 +383,10 @@ class _OversizedResponse:
     status = 200
     headers: typ.ClassVar[dict[str, str]] = {}
 
-    def __init__(self, limit: int) -> None:
-        """Record the size limit the body must exceed."""
-        self._limit = limit
-
     def read(self, limit: int | None = None) -> bytes:
         """Return an oversized body, honouring any byte limit."""
-        return (b"x" * (self._limit + 1))[:limit]
+        assert limit is not None
+        return b"x" * limit
 
     def __enter__(self) -> _OversizedResponse:
         """Enter the fake response context."""
@@ -401,7 +398,6 @@ class _OversizedResponse:
 
 def test_oversized_remote_body_falls_back_to_stale_cache(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
-    refresh_module: types.ModuleType,
     tmp_path: Path,
     dictionary_text: cabc.Callable[..., str],
     patch_https_opener: cabc.Callable[[cabc.Callable[..., object]], None],
@@ -411,11 +407,7 @@ def test_oversized_remote_body_falls_back_to_stale_cache(
     cache = tmp_path / "cache.toml"
     metadata = tmp_path / "cache.json"
     cache.write_text(dictionary_text(), encoding="utf-8")
-    patch_https_opener(
-        lambda *_args, **_kwargs: _OversizedResponse(
-            refresh_module.MAX_DICTIONARY_BYTES
-        )
-    )
+    patch_https_opener(lambda *_args, **_kwargs: _OversizedResponse())
 
     result = rollout.refresh_base("https://example.test/base", cache, metadata=metadata)
 
@@ -434,11 +426,7 @@ def test_oversized_remote_body_without_cache_raises(
     _, rollout, _ = rollout_modules
     cache = tmp_path / "cache.toml"
     metadata = tmp_path / "cache.json"
-    patch_https_opener(
-        lambda *_args, **_kwargs: _OversizedResponse(
-            refresh_module.MAX_DICTIONARY_BYTES
-        )
-    )
+    patch_https_opener(lambda *_args, **_kwargs: _OversizedResponse())
 
     with pytest.raises(ValueError, match="byte limit"):
         rollout.refresh_base("https://example.test/base", cache, metadata=metadata)
