@@ -2508,6 +2508,18 @@ consumers exactly once via `_drain_stream_consumers` (see the stdin-injection
 sequence below), and terminating the process before that drain is what lets it
 reach EOF.
 
+All three subprocess exit-wait paths use `_await_process_exit` from
+`cuprum/_process_exit.py`: the single-command wait in `_wait_for_exit_code`,
+the per-stage waits created by `_PipelineWaitState.from_processes`, and the
+standalone teardown wait used by `_terminate_process` for timeout or
+cancellation cleanup. Fail-fast pipeline teardown awaits the existing
+per-stage wait tasks and therefore inherits the same protection. The helper
+first accepts an already-published `process.returncode`; otherwise it races
+`process.wait()` against a low-frequency poll of that return code and cancels
+the losing task. This closes the asyncio lost-wakeup race where `returncode`
+has been published but the waiter remains pending. Keep the regression in
+`cuprum/unittests/test_process_exit.py` aligned with this contract.
+
 ### Pipeline timeout and teardown
 
 A pipeline enforces one deadline for the whole run, rather than a separate

@@ -388,6 +388,13 @@ Timeout resolution order:
 - `ExecutionContext.timeout` when provided and not `None`.
 - `ScopeConfig(timeout=...)` default set via `scoped()` when present.
 
+`ScopeConfig(timeout=...)` and `CuprumContext(timeout=...)` validate their
+timeouts when constructed. Values must be finite and non-negative; `None`
+means no timeout, and numeric values are stored as `float`. Negative values,
+`NaN`, and positive or negative infinity raise `ValueError`. A value too large
+to convert to `float` also raises `ValueError` rather than leaking the
+conversion `OverflowError`.
+
 Example usage:
 
 ```python
