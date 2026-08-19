@@ -158,12 +158,13 @@ def test_load_plan_rejects_immediate_predecessor_profile_version(
 ) -> None:
     """The immediate predecessor profile version is incompatible.
 
-    Baselines collected under ``pipeline-worker-release-ratio-v2`` used the
-    noisier v2 command order, so the current v3 ratchet must reject them even
-    though the version string differs by a single revision.
+    Baselines collected under ``pipeline-worker-release-ratio-v3`` recorded raw
+    worker command strings in ``results[*].command``, so the current v4 ratchet
+    must reject them even though the version string differs by a single
+    revision.
     """
     payload = _plan_payload()
-    payload["benchmark_profile_version"] = "pipeline-worker-release-ratio-v2"
+    payload["benchmark_profile_version"] = "pipeline-worker-release-ratio-v3"
     path = _write_json(tmp_path=tmp_path, filename="plan.json", payload=payload)
 
     with pytest.raises(IncompatibleBenchmarkProfileError, match="incompatible"):
@@ -211,8 +212,65 @@ def test_compare_rust_regressions_passes_within_threshold() -> None:
     assert report.comparisons[0].regression_ratio == pytest.approx(0.10)
 
 
+def test_compare_rust_regressions_pairs_command_names_with_raw_commands() -> None:
+    """Plans with raw worker commands pair with logical Hyperfine names.
+
+    The CI plan ``command`` vector carries the raw shell worker commands that
+    Hyperfine runs, while the v4 profile adds ``--command-name`` options so
+    the throughput JSON ``results[*].command`` fields expose the logical
+    scenario names. The ratchet must match those logical names against each
+    plan's ``scenarios[*].name`` without ever parsing the raw commands.
+    """
+    raw_command_plan = {
+        "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+        "dry_run": True,
+        "rust_available": True,
+        "worker_iterations": 20,
+        "command": [
+            "hyperfine",
+            "--export-json",
+            "throughput.json",
+            "--warmup",
+            "1",
+            "--runs",
+            "10",
+            "--command-name",
+            "python-small-single-nocb",
+            "--command-name",
+            "rust-small-single-nocb",
+            "CUPRUM_STREAM_BACKEND=python ...",
+            "CUPRUM_STREAM_BACKEND=rust ...",
+        ],
+        "scenarios": [
+            _scenario_payload(name="python-small-single-nocb", backend="python"),
+            _scenario_payload(name="rust-small-single-nocb", backend="rust"),
+        ],
+    }
+
+    report = compare_rust_regressions(
+        baseline=BenchmarkRunPayload(
+            plan=raw_command_plan,
+            throughput=_throughput_payload(python_mean=1.00, rust_mean=2.00),
+            context_name="baseline",
+        ),
+        candidate=BenchmarkRunPayload(
+            plan=raw_command_plan,
+            throughput=_throughput_payload(python_mean=1.00, rust_mean=2.00),
+            context_name="candidate",
+        ),
+        max_regression=0.10,
+    )
+
+    assert report.passed is True
+    assert report.rust_scenarios_compared == 1
+    assert report.comparisons[0].scenario_name == "small-single-nocb"
+    assert report.comparisons[0].baseline_ratio == pytest.approx(2.0)
+    assert report.comparisons[0].candidate_ratio == pytest.approx(2.0)
+    assert report.comparisons[0].regression_ratio == pytest.approx(0.0)
+
+
 def test_extract_scenario_entry_accepts_matching_command() -> None:
-    """A result command may match its positionally paired scenario name."""
+    """A result command may carry the logical name of its paired scenario."""
     entry = _extract_scenario_entry(
         index=0,
         scenario_value={"name": "rust-small", "backend": "rust"},
@@ -220,12 +278,12 @@ def test_extract_scenario_entry_accepts_matching_command() -> None:
     )
 
     assert entry == ("small", "rust", 1.5), (
-        "matching positional entries must preserve comparison extraction"
+        "matching logical names must preserve comparison extraction"
     )
 
 
 def test_extract_scenario_entry_rejects_mismatched_command() -> None:
-    """A result command must identify its positionally paired scenario."""
+    """A result command must identify the same scenario as the paired entry."""
     with pytest.raises(
         ValueError,
         match=(

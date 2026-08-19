@@ -8,9 +8,11 @@ import typing as typ
 
 _logger = logging.getLogger(__name__)
 
-# v3: the CI ratchet pairs matched Python/Rust commands and measures ten runs,
-# so baselines collected with the noisier v2 command order are not comparable.
-BENCHMARK_PROFILE_VERSION = "pipeline-worker-release-ratio-v3"
+# v4: the CI ratchet passes Hyperfine --command-name options so throughput
+# JSON results carry stable logical scenario names instead of raw worker
+# command strings. v3 baselines recorded raw worker commands in
+# results[*].command and are therefore not comparable.
+BENCHMARK_PROFILE_VERSION = "pipeline-worker-release-ratio-v4"
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc

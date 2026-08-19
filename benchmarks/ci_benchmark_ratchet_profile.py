@@ -117,7 +117,14 @@ def build_hyperfine_command(
     throughput_path: pth.Path,
     selected: cabc.Sequence[tuple[cabc.Mapping[str, object], str]],
 ) -> list[str]:
-    """Build the hyperfine command for the filtered CI scenario set."""
+    """Build the hyperfine command for the filtered CI scenario set.
+
+    Every selected scenario is tagged with a ``--command-name`` pair so
+    Hyperfine writes the logical scenario name into ``results[*].command``
+    instead of the raw worker command string. The raw worker commands are
+    preserved, in order, after all naming options so the ratchet can pair each
+    result with its positionally matched scenario.
+    """
     return [
         "hyperfine",
         "--export-json",
@@ -126,6 +133,17 @@ def build_hyperfine_command(
         "1",
         "--runs",
         str(_CI_RATCHET_RUNS),
+        *[
+            option
+            for scenario, _ in selected
+            for option in (
+                "--command-name",
+                _require_non_empty_string(
+                    scenario.get("name"),
+                    name="scenario name",
+                ),
+            )
+        ],
         *[scenario_command for _, scenario_command in selected],
     ]
 
