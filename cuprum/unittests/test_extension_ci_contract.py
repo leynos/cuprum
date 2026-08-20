@@ -9,156 +9,20 @@ these tests parse `ci.yml` and assert the contract it must uphold.
 
 The Makefile half of the same contract — the guard variable the recipe sets
 and the module list it hands to pytest — lives in
-`test_extension_build_contract.py`.
-
-`yaml.safe_load` returns `typing.Any`, which erases every mistake an assertion
-can make about the shape it reads: a misspelled key yields `None`, and the
-assertion above it then passes or fails for a reason unrelated to the
-contract. The shapes below declare the keys these tests reach for, so a typo
-is a type error. Their *values* stay `object`, because they come from a file
-this suite does not control and so are narrowed where they are read rather
-than assumed at the boundary.
+`test_extension_build_contract.py`. The parsing lives in
+`tests.helpers.workflow`, shared with the tests that assert the path gate in
+front of the same workflow's benchmark job.
 """
 
 from __future__ import annotations
 
-import functools
-import shlex
-import typing as typ
-
 import pytest
-import yaml
 
-from tests.helpers.docs import repo_root
-
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
-CI_WORKFLOW = ".github/workflows/ci.yml"
-
-
-class Step(typ.TypedDict, total=False):
-    """One step of a job, declaring only the keys these tests read."""
-
-    run: object
-
-
-class Job(typ.TypedDict, total=False):
-    """One job of a workflow, declaring only the keys these tests read."""
-
-    steps: list[Step]
-
-
-class Workflow(typ.TypedDict, total=False):
-    """A parsed workflow file, declaring only the keys these tests read."""
-
-    jobs: dict[str, Job]
-
-
-@functools.cache
-def _workflow() -> Workflow:
-    """Parse the CI workflow."""
-    parsed = yaml.safe_load((repo_root() / CI_WORKFLOW).read_text(encoding="utf-8"))
-    assert isinstance(parsed, dict), f"{CI_WORKFLOW} must parse to a mapping"
-    return typ.cast("Workflow", parsed)
-
-
-def _jobs() -> dict[str, Job]:
-    """Return the workflow's jobs, keyed by name."""
-    jobs = _workflow().get("jobs")
-    assert isinstance(jobs, dict), f"{CI_WORKFLOW} must declare a jobs mapping"
-    return jobs
-
-
-def _job_steps(job_name: str) -> list[Step]:
-    """Return the steps of a named CI job."""
-    jobs = _jobs()
-    job = jobs.get(job_name)
-    assert isinstance(job, dict), (
-        f"{CI_WORKFLOW} must declare a {job_name!r} job; found {sorted(jobs)}"
-    )
-    steps = job.get("steps")
-    assert isinstance(steps, list), f"the {job_name!r} job must declare steps"
-    return steps
-
-
-def _script_of(step: Step) -> str | None:
-    """Return a step's ``run:`` script, or None when it runs no script."""
-    script = step.get("run")
-    return script if isinstance(script, str) else None
-
-
-def _run_scripts() -> cabc.Iterator[tuple[str, str]]:
-    """Yield the job name and script of every ``run:`` step in the workflow."""
-    for job_name, job in _jobs().items():
-        # A job that calls a reusable workflow declares `uses:` and no steps.
-        for step in job.get("steps") or []:
-            if (script := _script_of(step)) is not None:
-                yield job_name, script
-
-
-def _is_environment_assignment(token: str) -> bool:
-    """Return whether *token* is a leading shell environment assignment."""
-    if "=" not in token:
-        return False
-    name, _ = token.split("=", maxsplit=1)
-    return name.isidentifier()
-
-
-def _command_segments(script: str) -> cabc.Iterator[list[str]]:
-    """Yield shell token segments split at command boundaries."""
-    boundaries = frozenset({
-        "&",
-        "&&",
-        ";",
-        "|",
-        "||",
-        "if",
-        "then",
-        "elif",
-        "else",
-        "do",
-    })
-
-    for line in script.replace("\\\n", " ").splitlines():
-        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        lexer.commenters = "#"
-        tokens = list(lexer)
-        segment_start = 0
-
-        for index, token in enumerate([*tokens, ";"]):
-            if token not in boundaries:
-                continue
-            yield tokens[segment_start:index]
-            segment_start = index + 1
-
-
-def _segment_starts_command(segment: list[str], expected: tuple[str, ...]) -> bool:
-    """Return whether a segment starts with the expected command tokens."""
-    while segment:
-        if not _is_environment_assignment(segment[0]):
-            break
-        segment.pop(0)
-    return tuple(segment[: len(expected)]) == expected
-
-
-def _script_runs_command(script: str, command: str) -> bool:
-    """Return whether *script* executes *command* as leading shell tokens."""
-    expected = tuple(shlex.split(command))
-    return any(
-        _segment_starts_command(segment, expected)
-        for segment in _command_segments(script)
-    )
-
-
-def _first_step_running(command: str, *, job_name: str) -> tuple[int, str]:
-    """Return the position and script of the first step running `command`."""
-    for index, step in enumerate(_job_steps(job_name)):
-        script = _script_of(step)
-        if script is not None and _script_runs_command(script, command):
-            return index, script
-    pytest.fail(f"no step in the {job_name!r} job runs {command!r}")
+from tests.helpers.workflow import (
+    first_step_running,
+    run_scripts,
+    script_runs_command,
+)
 
 
 def test_the_ci_job_builds_the_extension_before_running_the_gated_tests() -> None:
@@ -167,8 +31,8 @@ def test_the_ci_job_builds_the_extension_before_running_the_gated_tests() -> Non
     `make build` only syncs dependencies, so this ordering is the whole reason
     the job can pass at all, and nothing else asserts it.
     """
-    build, _ = _first_step_running("make develop", job_name="extension-tests")
-    tests, _ = _first_step_running("make test-extension", job_name="extension-tests")
+    build, _ = first_step_running("make develop", job_name="extension-tests")
+    tests, _ = first_step_running("make test-extension", job_name="extension-tests")
 
     assert build < tests, (
         "the extension-tests job must build the extension with `make "
@@ -204,7 +68,7 @@ def test_script_runs_command_ignores_comments_and_non_commands(
     expected: bool,
 ) -> None:
     """The workflow matcher detects executable commands, not text mentions."""
-    assert _script_runs_command(script, command) is expected, (
+    assert script_runs_command(script, command) is expected, (
         f"expected script {script!r} to match command {command!r} as {expected}"
     )
 
@@ -213,8 +77,8 @@ def test_only_boundary_jobs_build_the_extension() -> None:
     """Only jobs isolated from the full suite may install the extension."""
     builders = {
         job_name
-        for job_name, script in _run_scripts()
-        if _script_runs_command(script, "make develop")
+        for job_name, script in run_scripts()
+        if script_runs_command(script, "make develop")
     }
 
     assert builders == {"benchmark-ratchet", "extension-tests"}, (
@@ -229,7 +93,7 @@ def test_the_benchmark_job_builds_through_the_develop_target() -> None:
     Its numbers mean nothing against a debug build, so the flag matters
     as much as the shared target does.
     """
-    _, script = _first_step_running("make develop", job_name="benchmark-ratchet")
+    _, script = first_step_running("make develop", job_name="benchmark-ratchet")
 
     assert "make develop MATURIN_DEVELOP_FLAGS=--release" in script, (
         "the benchmark-ratchet job must build with `make develop "
@@ -247,8 +111,8 @@ def test_no_ci_step_invokes_maturin_develop_directly() -> None:
     """
     offenders = sorted({
         job_name
-        for job_name, script in _run_scripts()
-        if _script_runs_command(script, "maturin develop")
+        for job_name, script in run_scripts()
+        if script_runs_command(script, "maturin develop")
     })
 
     assert not offenders, (

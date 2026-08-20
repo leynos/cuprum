@@ -2150,9 +2150,14 @@ as well.
 `test_extension_ci_contract.py` covers `ci.yml`: that the `extension-tests`
 job runs `make develop` before `make test-extension`, that `benchmark-ratchet`
 builds through the same target with `--release`, and that no job reintroduces
-a second copy of the build sequence. It declares the workflow shapes it reads
-— jobs, steps, and a step's `run:` — so that a misspelled key is a type error
-rather than a `None` that quietly satisfies the assertion above it.
+a second copy of the build sequence.
+
+It reads the workflow through `tests/helpers/workflow.py`, which is the one
+place `ci.yml` is parsed. That helper declares the shapes it reads — jobs,
+steps, and a step's `run:` — so a misspelled key is a type error rather than a
+`None` that quietly satisfies the assertion above it. Keep it the only parser:
+a second one drifts from the first, and then two suites disagree about what
+the same file says.
 
 `EXTENSION_TEST_TARGETS` gets two separate checks, because neither implies the
 other:
@@ -2832,18 +2837,36 @@ Three properties of that arrangement are load-bearing:
   dependency bump or a change to how the benchmark is invoked can move the
   numbers as readily as a change to the code being measured.
 
-The `changes` job also writes the decision — event, filter verdict, and
-whether the benchmark ran or was skipped — to `$GITHUB_STEP_SUMMARY` on every
-run. A skipped job and a broken gate are indistinguishable in the run list, so
-that table is where a maintainer auditing paid-runner spend, or wondering why
-a pull request has no benchmark report, reads what happened. All three fields
-are closed sets, so the summaries stay countable across runs.
+The `changes` job also writes the decision — event, detector status, filter
+verdict, and whether the benchmark ran or was skipped — to
+`$GITHUB_STEP_SUMMARY` on every run. A skipped job and a broken gate are
+indistinguishable in the run list, so that table is where a maintainer
+auditing paid-runner spend, or wondering why a pull request has no benchmark
+report, reads what happened. Every field is a closed set, so the summaries
+stay countable across runs; `benchmark-ratchet` is exactly one of `run`,
+`skip`, or `skip-detector-failed`.
+
+That step carries `if: ${{ !cancelled() }}` rather than inheriting the
+implicit `success()`. A failed detector is the case most worth recording,
+because the benchmark then skips for a reason that has nothing to do with the
+diff, and a summary that stops being written exactly when the gate misbehaves
+documents only the runs that needed no explanation. When the detector did not
+produce a verdict the table says `unknown` rather than `false`: recording
+`false` would assert "no performance-relevant changes", which is a claim
+nothing measured.
 
 The workflow declares `concurrency: ci-${{ github.ref }}` with
 `cancel-in-progress` true only for pull requests. A superseded pull-request
 run only spends benchmark minutes on a diff nobody will merge; a cancelled
-`main` run, by contrast, abandons the baseline upload, so those queue instead
-and publish in commit order.
+`main` run, by contrast, abandons the baseline upload, so `main` runs are left
+to finish.
+
+Be precise about what that does *not* buy. GitHub replaces a pending run when
+a newer one arrives and promises nothing about the order runs complete in, so
+two merges in quick succession may still publish baselines out of commit
+order, and a superseded pending run publishes nothing at all. Concurrency is
+not an ordering mechanism; anything that needs monotonic baselines has to
+enforce it where the artefact is written.
 
 The gate deliberately names no status function. GitHub inserts an implicit
 `success()` into a job's `if:` unless the expression already names one, so a
@@ -2861,15 +2884,23 @@ the other does not see:
 - `cuprum/unittests/test_benchmark_gate_ci_contract.py` pins the
   *declarations*: the `bench` output wiring, the `needs` edge, the gate
   expression verbatim, the absent status function, the exact filter path set,
-  the runner `changes` uses, the summary step, and the concurrency policy.
-  Property tests over sampled changed-path sets then check the rule those
-  declarations encode — any watched path benchmarks however it is mixed with
-  docs, a diff touching nothing watched skips, and a non-pull-request event
-  always benchmarks.
+  the runner `changes` uses, the summary step's condition, and the concurrency
+  policy. Property tests over sampled changed-path sets then check the rule
+  those declarations encode — any watched path benchmarks however it is mixed
+  with docs, a diff touching nothing watched skips, and a non-pull-request
+  event always benchmarks.
 - `tests/behaviour/test_benchmark_path_gate_behaviour.py`, with
   `tests/features/benchmark_path_gate.feature`, states the *decision* for pull
   requests a maintainer would recognize: docs-only, a Rust change, a
   dependency bump, a mixed diff, an empty diff, and a push to `main`.
+- `tests/behaviour/test_benchmark_gate_summary_behaviour.py`, with
+  `tests/features/benchmark_gate_summary.feature`, extracts the summary step's
+  script from `ci.yml` and *runs* it under `bash` for each combination of
+  event and detector state, then reads back the row it emitted. Asserting that
+  the script mentions the right words is not enough: one that emitted nothing,
+  or the opposite verdict, would contain the same words. The script touches
+  only `$GITHUB_STEP_SUMMARY` and its own environment variables, which is what
+  makes running it outside Actions evidence rather than simulation.
 
 The path model handles the two pattern forms the filter is allowed to use — a
 literal path, and a `dir/**` prefix — and a companion test fails if a pattern

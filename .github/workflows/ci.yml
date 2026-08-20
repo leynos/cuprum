@@ -11,11 +11,16 @@ permissions:
 
 # One run per ref. Superseded pull-request runs are cancelled, because a
 # stale run only spends paid benchmark minutes on a diff nobody will merge.
-# Runs on `main` are never cancelled once started: each one republishes the
+# Runs on `main` are not cancelled once started: each one republishes the
 # `benchmark-ratchet-main-baseline` artifact that pull-request runs compare
 # against, and a half-finished run would leave the baseline behind head.
-# Queueing them on one group also keeps two merges landing in quick
-# succession from racing to publish that artifact out of commit order.
+#
+# That is the whole of what this buys. GitHub replaces a *pending* run when a
+# newer one arrives and does not promise runs finish in the order they were
+# queued, so this is not an ordering guarantee: two merges in quick
+# succession may still publish out of commit order, and a superseded pending
+# run publishes nothing at all. Anything that needs monotonic baselines has
+# to enforce it where the artifact is written, not here.
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -343,23 +348,38 @@ jobs:
 
       # A skipped job is indistinguishable from a broken gate in the run
       # list, so record the decision where a maintainer auditing paid-runner
-      # spend can read it: the run summary of every CI run. The three fields
-      # are all closed sets, so the summaries stay countable across runs.
+      # spend can read it: the run summary of every CI run. Every field is a
+      # closed set, so the summaries stay countable across runs — `decision`
+      # in particular is exactly {run, skip, skip-detector-failed}.
+      #
+      # `!cancelled()` rather than the implicit `success()`: a failed
+      # detector is the case most worth recording, because `benchmark-ratchet`
+      # then skips for a reason that has nothing to do with the diff, and a
+      # summary that stops being written precisely when the gate misbehaves
+      # records the runs that needed no explanation.
       - name: Record the benchmark gate decision
+        if: ${{ !cancelled() }}
         env:
           EVENT: ${{ github.event_name }}
           BENCH: ${{ steps.filter.outputs.bench }}
+          DETECTOR: ${{ steps.filter.outcome }}
         run: |
-          if [ "${EVENT}" != 'pull_request' ] || [ "${BENCH}" = 'true' ]; then
+          set -euo pipefail
+          detector="${DETECTOR:-unknown}"
+          if [ "${detector}" != 'success' ]; then
+            decision=skip-detector-failed
+          elif [ "${EVENT}" != 'pull_request' ] || [ "${BENCH}" = 'true' ]; then
             decision=run
           else
             decision=skip
           fi
           {
             printf '### Benchmark gate\n\n'
-            printf '| event | performance-relevant changes | benchmark-ratchet |\n'
-            printf '| --- | --- | --- |\n'
-            printf '| %s | %s | %s |\n' "${EVENT}" "${BENCH:-false}" "${decision}"
+            printf '| event | detector | performance-relevant changes |'
+            printf ' benchmark-ratchet |\n'
+            printf '| --- | --- | --- | --- |\n'
+            printf '| %s | %s | %s | %s |\n' \
+              "${EVENT}" "${detector}" "${BENCH:-unknown}" "${decision}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
   benchmark-ratchet:

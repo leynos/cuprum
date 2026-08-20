@@ -43,12 +43,14 @@ from tests.helpers.workflow import (
     filter_paths,
     job,
     mapping,
+    step_named,
     step_with_id,
     steps,
     workflow,
 )
 
 PATHS_FILTER_ACTION = "dorny/paths-filter@"
+SUMMARY_STEP = "Record the benchmark gate decision"
 
 #: The gate, verbatim. Pinning the whole expression rather than probing it for
 #: substrings is what makes an inverted or half-deleted condition a failure:
@@ -272,8 +274,11 @@ def test_the_gate_decision_is_recorded_in_the_run_summary() -> None:
     """The `changes` job must write its verdict to the run summary.
 
     A skipped job and a broken gate look identical in the run list, so the
-    decision — and the two inputs that produced it — has to be stated
-    somewhere a maintainer auditing paid-runner spend can read it.
+    decision — and the inputs that produced it — has to be stated somewhere a
+    maintainer auditing paid-runner spend can read it. What the script
+    actually emits for each input is asserted by running it, in
+    `tests/behaviour/test_benchmark_gate_summary_behaviour.py`; this only
+    pins that the step exists and reads the right things.
     """
     scripts = [
         script
@@ -287,18 +292,38 @@ def test_the_gate_decision_is_recorded_in_the_run_summary() -> None:
     )
 
     script = summary_steps[0]
-    for operand in ("EVENT", "BENCH", "pull_request", "run", "skip"):
+    for operand in ("EVENT", "BENCH", "DETECTOR", "pull_request"):
         assert operand in script, (
-            f"the gate summary must report {operand!r} so the recorded decision "
+            f"the gate summary must read {operand!r} so the recorded decision "
             f"matches the {BENCHMARK_JOB!r} gate; found:\n{script}"
         )
+
+
+def test_the_gate_decision_is_recorded_even_when_the_detector_fails() -> None:
+    """The summary step must not inherit the implicit `success()`.
+
+    A failed detector is the case most worth recording: `benchmark-ratchet`
+    then skips for a reason that has nothing to do with the diff. A summary
+    that stops being written exactly when the gate misbehaves documents only
+    the runs that needed no explanation.
+    """
+    condition = step_named(CHANGES_JOB, SUMMARY_STEP).get("if")
+
+    assert condition == "${{ !cancelled() }}", (
+        f"the {SUMMARY_STEP!r} step must run on every completed run, not only "
+        f"when the detector succeeded; found {condition!r}"
+    )
 
 
 def test_the_workflow_serializes_runs_per_ref() -> None:
     """Concurrency must cancel superseded pull-request runs but never main runs.
 
     Cancelling a `main` run mid-flight abandons the baseline upload, leaving
-    later pull requests comparing against a stale commit.
+    later pull requests comparing against a stale commit. Note the narrowness
+    of the claim: GitHub replaces a *pending* run when a newer one arrives and
+    promises nothing about completion order, so this is not a guarantee that
+    baselines are published in commit order. Anything needing that has to
+    enforce it where the artifact is written.
     """
     concurrency = mapping(
         typ.cast("dict[str, object]", workflow()).get("concurrency"),
@@ -306,8 +331,9 @@ def test_the_workflow_serializes_runs_per_ref() -> None:
     )
 
     assert concurrency.get("group") == "ci-${{ github.ref }}", (
-        "the concurrency group must be per-ref so that runs on `main` queue "
-        f"rather than race to publish the baseline; found {concurrency.get('group')!r}"
+        "the concurrency group must be per-ref, so a pull request's runs "
+        "supersede each other without touching another ref's; found "
+        f"{concurrency.get('group')!r}"
     )
     assert concurrency.get("cancel-in-progress") == (
         "${{ github.event_name == 'pull_request' }}"

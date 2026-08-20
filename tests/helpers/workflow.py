@@ -1,12 +1,16 @@
 """Shared helpers for reading the CI workflow back in contract tests.
 
-Two suites assert the path gate in front of `benchmark-ratchet`: the unit
-contract tests in `cuprum/unittests/test_benchmark_gate_ci_contract.py`, which
-pin the declarations that make up the gate, and the behavioural tests in
-`tests/behaviour/test_benchmark_path_gate_behaviour.py`, which state the
-decision it produces for a given pull request. Both must read the same
-`ci.yml` and model it the same way, so the reading and the model live here
-rather than in either suite.
+Several suites read `ci.yml` back: the unit contract tests in
+`cuprum/unittests/test_benchmark_gate_ci_contract.py`, which pin the
+declarations making up the path gate; the behavioural tests in
+`tests/behaviour/test_benchmark_path_gate_behaviour.py` and
+`test_benchmark_gate_summary_behaviour.py`, which state the decision those
+declarations produce and run the script that records it; and
+`cuprum/unittests/test_extension_ci_contract.py`, which asserts how the same
+workflow builds the extension. They must all read one file the same way, so
+the parsing and the path model live here rather than in any of them. Keep it
+that way: a second parser drifts from the first, and then two suites disagree
+about what the same file says.
 
 `yaml.safe_load` returns `typing.Any`, which erases every mistake an assertion
 can make about the shape it reads: a misspelled key yields `None`, and the
@@ -19,6 +23,7 @@ this suite does not control, and are narrowed where they are read.
 from __future__ import annotations
 
 import functools
+import shlex
 import typing as typ
 
 import yaml
@@ -59,19 +64,15 @@ class Workflow(typ.TypedDict, total=False):
     jobs: dict[str, Job]
 
 
-class WorkflowContractError(AssertionError):
-    """The workflow does not have the shape the contract tests require.
-
-    Raised rather than asserted so that a malformed workflow fails with the
-    same message whichever suite read it, and so that a suite can distinguish
-    "the file is not shaped like a workflow" from "the contract is not met".
-    """
-
-
 def _require(condition: bool, message: str) -> None:  # noqa: FBT001
-    """Raise `WorkflowContractError` when a shape requirement is unmet."""
+    """Raise `AssertionError` when a shape requirement is unmet.
+
+    Plain `AssertionError`, not a bespoke subclass: no caller distinguishes
+    "the file is not shaped like a workflow" from any other failed assertion,
+    and pytest reports both identically.
+    """
     if not condition:
-        raise WorkflowContractError(message)
+        raise AssertionError(message)
 
 
 def mapping(value: object, message: str) -> dict[str, object]:
@@ -117,6 +118,114 @@ def step_with_id(job_name: str, step_id: str) -> dict[str, object]:
     return mapping(
         found, f"the {job_name!r} job must declare a step with id {step_id!r}"
     )
+
+
+def step_named(job_name: str, step_name: str) -> dict[str, object]:
+    """Return the step of a job carrying a given `name:`."""
+    found = next(
+        (step for step in steps(job_name) if step.get("name") == step_name),
+        None,
+    )
+    names = [step.get("name") for step in steps(job_name)]
+    return mapping(
+        found,
+        f"the {job_name!r} job must declare a step named {step_name!r}; found {names}",
+    )
+
+
+def script_of(step: cabc.Mapping[str, object]) -> str | None:
+    """Return a step's ``run:`` script, or None when it runs no script."""
+    script = step.get("run")
+    return script if isinstance(script, str) else None
+
+
+def _declared_steps(job_payload: object, *, job_name: str) -> list[dict[str, object]]:
+    """Return a job's steps, or none for a job that declares no steps.
+
+    A job that calls a reusable workflow declares `uses:` and no steps, which
+    is a legitimate shape rather than a contract failure.
+    """
+    declared = mapping(job_payload, f"job {job_name!r}").get("steps")
+    if not isinstance(declared, list):
+        return []
+    return typ.cast("list[dict[str, object]]", declared)
+
+
+def run_scripts() -> cabc.Iterator[tuple[str, str]]:
+    """Yield the job name and script of every ``run:`` step in the workflow."""
+    jobs = mapping(workflow().get("jobs"), f"{CI_WORKFLOW} must declare a jobs mapping")
+    for job_name, job_payload in jobs.items():
+        for step in _declared_steps(job_payload, job_name=job_name):
+            if (script := script_of(step)) is not None:
+                yield job_name, script
+
+
+def _is_environment_assignment(token: str) -> bool:
+    """Return whether `token` is a leading shell environment assignment."""
+    if "=" not in token:
+        return False
+    name, _ = token.split("=", maxsplit=1)
+    return name.isidentifier()
+
+
+def _command_segments(script: str) -> cabc.Iterator[list[str]]:
+    """Yield shell-token segments split at command boundaries."""
+    boundaries = frozenset({
+        "&",
+        "&&",
+        ";",
+        "|",
+        "||",
+        "if",
+        "then",
+        "elif",
+        "else",
+        "do",
+    })
+
+    for line in script.replace("\\\n", " ").splitlines():
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        tokens = list(lexer)
+        segment_start = 0
+
+        for index, token in enumerate([*tokens, ";"]):
+            if token not in boundaries:
+                continue
+            yield tokens[segment_start:index]
+            segment_start = index + 1
+
+
+def _segment_starts_command(segment: list[str], expected: tuple[str, ...]) -> bool:
+    """Return whether a shell segment starts with the expected command."""
+    while segment and _is_environment_assignment(segment[0]):
+        segment.pop(0)
+    return tuple(segment[: len(expected)]) == expected
+
+
+def script_runs_command(script: str, command: str) -> bool:
+    """Return whether `script` executes `command` as leading shell tokens."""
+    expected = tuple(shlex.split(command))
+    return any(
+        _segment_starts_command(segment, expected)
+        for segment in _command_segments(script)
+    )
+
+
+def first_step_running(command: str, *, job_name: str) -> tuple[int, str]:
+    """Return the position and script of the first step running `command`."""
+    found = next(
+        (
+            (index, script)
+            for index, step in enumerate(steps(job_name))
+            if (script := script_of(step)) is not None
+            and script_runs_command(script, command)
+        ),
+        None,
+    )
+    _require(found is not None, f"no step in the {job_name!r} job runs {command!r}")
+    return typ.cast("tuple[int, str]", found)
 
 
 def benchmark_gate() -> str:
