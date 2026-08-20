@@ -2864,12 +2864,43 @@ speedups even when the Rust ratchet later fails the job.
 The ratchet rule is:
 
 - scenario ratio = `rust_mean / python_mean` within one benchmark run
+- baseline ratio = the median of the last seven `main` runs' ratios for that
+  scenario
 - regression ratio = `(candidate_ratio - baseline_ratio) / baseline_ratio`
-- fail when regression ratio `> 0.30` for any scenario pair
+- noise band = three estimated standard deviations of those same samples'
+  spread, expressed relative to the median, capped at `1.00`
+- fail when regression ratio exceeds both `0.30` and the noise band, for any
+  scenario pair
 
 Comparing within-run ratios rather than absolute wall-clock means cancels out
 runner-speed differences and interpreter startup overhead between the two CI
 jobs that produced the baseline and candidate runs.
+
+The median, rather than the latest sample, is the bar because a single run is
+not an estimate of anything: one anomalous measurement on `main` used to
+become the bar and fail every pull request after it until the next merge
+happened to measure low enough to squeeze under the threshold. The spread is
+measured rather than assumed for the same reason the threshold exists at all
+— `0.30` is a guess about how noisy the benchmark is, and the window can
+simply observe it. The two compose as a maximum: the flat threshold is the
+floor when the samples agree, and the noise band widens it when they do not.
+Spread is estimated from the median absolute deviation, which the outlier
+being tolerated barely moves, rather than from a standard deviation, which it
+would inflate in proportion to itself.
+
+Every push to `main` records its sample, whatever the ratchet decided, and the
+baseline artefact is published from every completed `main` run rather than
+only from passing ones. Recording only the runs that passed is what biased the
+old baseline: a measurement faster than the bar was always accepted, while the
+slower measurements that would have corrected it were exactly the ones
+rejected. For the same reason CI fetches the baseline with
+`--run-status completed`, so a run that failed its own ratchet is still read.
+
+The window is pruned to samples sharing the current `benchmark_profile_version`
+and `worker_iterations`, because a different sampling protocol measures a
+different question. A window emptied that way — or absent, on a first run or
+after an artefact expires — falls back to comparing against the single latest
+`main` run, which is the bar this ratchet used before the window existed.
 
 Artefacts uploaded by CI include:
 

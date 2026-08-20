@@ -32,13 +32,20 @@ _CLI_DESCRIPTION = "Download the latest successful `main` benchmark baseline art
 
 @dc.dataclass(frozen=True, slots=True)
 class ArtefactQuery:
-    """GitHub Actions workflow artefact lookup configuration."""
+    """GitHub Actions workflow artefact lookup configuration.
+
+    ``run_status`` defaults to ``success`` for artefacts that are useful only
+    when their workflow passed. The benchmark baseline records what a run
+    measured, however, so its caller uses ``completed`` to retain samples from
+    runs that failed their own ratchet.
+    """
 
     repository: str
     workflow: str
     branch: str
     event: str
     artefact_name: str
+    run_status: str = "success"
     api_base_url: str = GITHUB_API_BASE_URL
 
 
@@ -191,7 +198,7 @@ def find_latest_artefact_download_url(
         "branch": query.branch,
         "event": query.event,
         "per_page": 20,
-        "status": "success",
+        "status": query.run_status,
     })
     workflow_runs_url = (
         f"{query.api_base_url}/repos/{encoded_repository}/actions/workflows/"
@@ -265,6 +272,11 @@ def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
         help="Workflow event to query for successful runs.",
     )
     parser.add_argument(
+        "--run-status",
+        default="success",
+        help="GitHub run-status filter; use 'completed' for measurement artefacts.",
+    )
+    parser.add_argument(
         "--token-env",
         default=GITHUB_TOKEN_ENV_VAR,
         help="Environment variable containing the GitHub token.",
@@ -304,6 +316,7 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
             branch=args.branch,
             event=args.event,
             artefact_name=args.artefact_name,
+            run_status=args.run_status,
         ),
         token=token,
     )

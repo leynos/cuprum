@@ -24,6 +24,13 @@ if typ.TYPE_CHECKING:
     import pathlib as pth
 
 
+from benchmarks.ratchet_history import RatchetPolicy
+
+"""Unit tests for benchmark CI ratchet comparison helpers."""
+if typ.TYPE_CHECKING:
+    import pathlib as pth
+
+
 def _scenario_payload(*, name: str, backend: str) -> dict[str, object]:
     """Return a scenario payload dict."""
     return {
@@ -103,7 +110,7 @@ def _run_comparison(
             ),
             context_name="candidate",
         ),
-        max_regression=max_regression,
+        policy=RatchetPolicy(max_regression=max_regression),
     )
 
 
@@ -435,7 +442,7 @@ def test_compare_rust_regressions_rejects_result_count_mismatch() -> None:
                 throughput=candidate_throughput,
                 context_name="candidate",
             ),
-            max_regression=0.10,
+            policy=RatchetPolicy(max_regression=0.10),
         )
 
 
@@ -469,7 +476,7 @@ def test_compare_rust_regressions_rejects_missing_python_scenarios() -> None:
                 throughput=rust_only_throughput,
                 context_name="candidate",
             ),
-            max_regression=0.10,
+            policy=RatchetPolicy(max_regression=0.10),
         )
 
 
@@ -503,7 +510,7 @@ def test_compare_rust_regressions_rejects_missing_rust_scenarios() -> None:
                 throughput=python_only_throughput,
                 context_name="candidate",
             ),
-            max_regression=0.10,
+            policy=RatchetPolicy(max_regression=0.10),
         )
 
 
@@ -533,7 +540,7 @@ def test_compare_rust_regressions_rejects_invalid_backend() -> None:
                 throughput=_throughput_payload(python_mean=1.0, rust_mean=1.0),
                 context_name="candidate",
             ),
-            max_regression=0.10,
+            policy=RatchetPolicy(max_regression=0.10),
         )
 
 
@@ -571,7 +578,7 @@ def test_compare_rust_regressions_rejects_duplicate_rust_scenario_names() -> Non
                 throughput=duplicate_throughput,
                 context_name="candidate",
             ),
-            max_regression=0.10,
+            policy=RatchetPolicy(max_regression=0.10),
         )
 
 
@@ -605,7 +612,7 @@ def test_compare_rust_regressions_rejects_invalid_rust_mean(
                 throughput=_throughput_payload(python_mean=1.0, rust_mean=1.0),
                 context_name="candidate",
             ),
-            max_regression=0.10,
+            policy=RatchetPolicy(max_regression=0.10),
         )
 
 

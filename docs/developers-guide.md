@@ -1565,6 +1565,61 @@ it entirely. Keep it unset in new usage and set `python_bin` when a specific
 interpreter is required. In dry-run mode, command rendering does not resolve
 `python_bin` via PATH.
 
+
+### The baseline the ratchet compares against
+
+The bar is the median of a rolling window of the last seven `main` runs, held
+in `main-baseline-history.json` inside the `benchmark-ratchet-main-baseline`
+artefact. `benchmarks/ratchet_history.py` owns the window;
+`benchmarks/update_baseline_history.py` appends to it.
+
+It used to be the single latest `main` measurement, and two properties of
+that arrangement combined into a failure that no re-run could clear:
+
+- **One sample is not an estimate.** Its noise was the bar's noise.
+- **The sample was only published if its own run passed.** A run passes when
+  it is no more than 30% *slower* than the bar, so an anomalously fast
+  measurement was always accepted, while the ordinary measurements that would
+  have corrected it were rejected — a bar biased towards the low tail of the
+  noise, and sticky once it got there.
+
+On 2026-08-06 a `main` run measured `medium-single-nocb` at 0.760 against a
+baseline of 1.013, passed as a 25% improvement, and published. Pull requests
+whose code was identical to `main` then reported a 46% regression on that one
+scenario, three re-runs included, while the other three scenarios agreed with
+the baseline to within 0.14. Issue #219 has the wider analysis.
+
+Both properties are fixed, and both fixes are needed:
+
+- The window's **median** is the bar, so one sample cannot be it. The spread
+  of those samples then widens the threshold: a candidate must exceed both
+  the flat 0.30 and three estimated standard deviations of the observed
+  spread. The estimate comes from the median absolute deviation, because the
+  outlier being tolerated barely moves it but would inflate a standard
+  deviation in proportion to itself. The band is capped at 1.00 — past that
+  the benchmark is telling you it cannot measure what it gates on, and an
+  uncapped band would disable the ratchet silently instead of saying so.
+- **Every completed `main` run records its sample and publishes the
+  artefact**, whichever way its own ratchet went. That is why the recording
+  and upload steps are gated on `!cancelled()` rather than on success, and
+  why the fetch passes `--run-status completed`: publishing from a failing
+  run achieves nothing while the fetch still asks GitHub only for successful
+  ones. `!cancelled()` rather than `always()`, so an interrupted run does not
+  record a half-finished measurement.
+
+Two consequences are worth knowing. A re-run cannot clear a ratchet failure
+caused by the window, because a re-run does not change the window — only a
+merge does. And a regression that survives several merges eventually enters
+the window and raises the bar; the flat threshold still applies to each step,
+but the ratchet measures drift from recent `main`, not from a fixed point.
+
+Samples are pruned to those sharing the candidate's `benchmark_profile_version`
+and `worker_iterations`. A window emptied that way, or absent on a first run
+or after the artefact expires, falls back to comparing against the single
+latest `main` run — the pre-window bar, reported in `ratchet-report.json` as
+`baseline_sample_count: 1` so a surprising verdict can be read against the
+evidence behind it.
+
 ## Profiling harness overview
 
 The profiling benchmark harness provides deterministic parent-side tee and

@@ -2164,9 +2164,10 @@ The continuous integration (CI) workflows run the following checks:
     runner-speed differences between CI jobs cancel out.
   - It places matched Python/Rust commands next to each other and measures each
     command ten times to reduce temporal runner drift and outlier sensitivity.
-  - It skips comparison and writes a skip report when the saved baseline uses an
-    older benchmark profile shape because different sampling protocols and
-    worker timings are not comparable.
+  - It drops recorded samples that use an older benchmark profile shape,
+    because different sampling protocols and worker timings are not
+    comparable, and skips the comparison entirely when nothing comparable
+    remains.
   - Its baseline fetch helper follows GitHub’s signed archive redirects
     without forwarding GitHub-only authentication headers to the storage host.
   - It generates a Python-versus-Rust comparison report from the candidate
@@ -2174,13 +2175,22 @@ The continuous integration (CI) workflows run the following checks:
     workflow summary.
   - It uploads candidate JSON artefacts plus `ratchet-report.json` and
     `comparison-report.json`.
-  - On pushes to `main`, it also publishes the new smoke benchmark JSON as the
-    next baseline artefact for future runs.
+  - On pushes to `main`, it also publishes the new smoke benchmark JSON and
+    the updated `main-baseline-history.json` window as the baseline artefact
+    for future runs.
   - If no previous `main` baseline exists yet, it records a bootstrap skip
     report instead of failing the workflow.
-  - It fails when any scenario pair has
-    `(candidate_ratio - baseline_ratio) / baseline_ratio > 0.30`, where each
-    ratio is `rust_mean / python_mean` from the same benchmark run.
+  - It compares against the median of the last seven `main` runs rather than
+    the latest one, so a single noisy measurement cannot become the bar.
+  - It fails when a scenario pair's
+    `(candidate_ratio - baseline_ratio) / baseline_ratio` exceeds both `0.30`
+    and the spread those same samples exhibited, where each ratio is
+    `rust_mean / python_mean` from the same benchmark run. Requiring both
+    keeps a runner-to-runner swing from reading as a regression without
+    letting a consistent slowdown through.
+  - Every push to `main` records its sample, including runs whose own ratchet
+    failed. If you re-run a failing benchmark job, note that a re-run cannot
+    change the bar: the window only moves when `main` moves.
 
 The workflow summary table is derived from the filtered candidate smoke plan
 and throughput JSON. Rows are matched by the shared scenario label (

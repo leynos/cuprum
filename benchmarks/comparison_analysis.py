@@ -24,6 +24,17 @@ if typ.TYPE_CHECKING:
 _FLOAT_TOLERANCE = 1e-12
 
 
+from benchmarks.ratchet_ratios import (
+    _comparison_id_for_scenario,
+    _validate_backend,
+)
+
+"""Python-versus-Rust benchmark comparison analysis."""
+if typ.TYPE_CHECKING:
+    import pathlib as pth
+_FLOAT_TOLERANCE = 1e-12
+
+
 @dc.dataclass(frozen=True, slots=True)
 class BenchmarkComparisonRow:
     """One matched Python-versus-Rust benchmark comparison row."""

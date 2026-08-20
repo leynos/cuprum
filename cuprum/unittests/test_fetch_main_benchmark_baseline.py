@@ -341,3 +341,55 @@ def test_find_latest_artefact_download_url_queries_workflow_and_artefacts(
         "/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=20&status=success"
     )
     assert requested_urls[1].endswith("/actions/runs/42/artifacts?per_page=100")
+
+def test_find_latest_artefact_download_url_honours_the_run_status_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `completed` query must reach GitHub, not be narrowed to `success`.
+
+    The benchmark baseline records what a run measured rather than endorsing
+    it, so the run that failed its own ratchet is exactly the one whose
+    sample the window must not lose. Hard-coding `success` here is what let
+    one anomalously fast measurement stay the bar.
+    """
+    payloads: list[cabc.Mapping[str, object]] = [
+        {"workflow_runs": [{"id": 42}]},
+        {
+            "artifacts": [
+                {
+                    "name": "benchmark-ratchet-main-baseline",
+                    "expired": False,
+                    "archive_download_url": "https://example.invalid/archive.zip",
+                }
+            ]
+        },
+    ]
+    requested_urls: list[str] = []
+
+    def fake_load_json_response(*, url: str, token: str) -> cabc.Mapping[str, object]:
+        """Record the requested URL and return the next queued payload."""
+        del token
+        requested_urls.append(url)
+        return payloads.pop(0)
+
+    monkeypatch.setattr(
+        "benchmarks.fetch_main_benchmark_baseline._load_json_response",
+        fake_load_json_response,
+    )
+
+    find_latest_artefact_download_url(
+        query=ArtefactQuery(
+            repository="leynos/cuprum",
+            workflow="ci.yml",
+            branch="main",
+            event="push",
+            artefact_name="benchmark-ratchet-main-baseline",
+            run_status="completed",
+        ),
+        token="".join(("tok", "en")),
+    )
+
+    assert requested_urls[0].endswith(
+        "/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=20"
+        "&status=completed"
+    )

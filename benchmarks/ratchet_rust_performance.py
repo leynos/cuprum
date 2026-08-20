@@ -1,11 +1,22 @@
 """Compare baseline and candidate benchmark runs for Rust regressions.
 
-This module loads dry-run plan JSON and hyperfine throughput JSON from two
-benchmark runs (baseline and candidate), compares the Rust-to-Python mean
-ratio for each matched scenario pair, and writes a structured comparison
-report. Ratcheting on the within-run ratio rather than absolute wall-clock
-means cancels out runner-speed differences and interpreter startup overhead
-between the two CI jobs that produced the runs.
+This module loads dry-run plan JSON and hyperfine throughput JSON from a
+candidate benchmark run, compares the Rust-to-Python mean ratio for each
+matched scenario pair against the main-branch bar, and writes a structured
+comparison report. Ratcheting on the within-run ratio rather than absolute
+wall-clock means cancels out runner-speed differences and interpreter
+startup overhead between the CI jobs that produced the runs.
+
+The bar is the median of a rolling window of main-branch samples, and a
+scenario fails only when it exceeds both the configured flat threshold and
+the spread those samples exhibited — see `benchmarks/ratchet_history.py` for
+why. A run with no window falls back to a single-sample baseline, which is
+the bar this ratchet used before the window existed.
+
+Reading runs into ratios lives in `benchmarks/ratchet_ratios.py`; this
+module decides what those ratios mean. `load_plan`, `load_throughput`,
+`run_ratios` and `profile_metadata` are re-exported because callers have
+always reached them here.
 """
 
 from __future__ import annotations
@@ -14,25 +25,28 @@ import argparse
 import json
 import logging
 import pathlib as pth
+import sys  # noqa: F401
 import typing as typ
 
-from benchmarks._validation import (
-    _require_list,
-    _require_mapping,
-    _require_non_empty_string,
-    _require_non_negative_float,
-    _require_positive_float,
-)
 from benchmarks.benchmark_profile import (
     IncompatibleBenchmarkProfileError,
-    require_worker_iterations,
     validate_matching_profiles,
-    validate_profile_version,
     write_incompatible_profile_report,
 )
-from benchmarks.ratchet_ratio_extraction import (
-    _extract_rust_python_ratios,
-    _validate_matching_comparison_groups,
+from benchmarks.ratchet_history import (
+    DEFAULT_NOISE_SIGMAS,
+    DEFAULT_WINDOW_SIZE,
+    BaselineHistory,
+    RatchetPolicy,
+    load_history,
+    median_ratio,
+    noise_tolerance,
+)
+from benchmarks.ratchet_ratios import (
+    load_plan,
+    load_throughput,
+    profile_metadata,
+    run_ratios,
 )
 from benchmarks.ratchet_types import (
     BenchmarkRunPayload,
@@ -40,200 +54,141 @@ from benchmarks.ratchet_types import (
     ScenarioComparison,
 )
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+__all__ = [
+    "compare_rust_regressions",
+    "load_plan",
+    "load_throughput",
+    "main",
+    "profile_metadata",
+    "run_ratios",
+    "write_report",
+]
+
 _logger = logging.getLogger(__name__)
 
 
-def _load_json(path: pth.Path) -> dict[str, object]:
-    """Load a JSON object payload from ``path``."""
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        msg = f"expected a JSON object in {path}, got {type(payload).__name__}"
-        raise TypeError(msg)
-    return typ.cast("dict[str, object]", payload)
-
-
-def load_plan(path: pth.Path) -> dict[str, object]:
-    """Load and minimally validate dry-run plan JSON payload.
-
-    Parameters
-    ----------
-    path : pth.Path
-        The dry-run plan JSON file to load and validate.
-
-    Returns
-    -------
-    dict[str, object]
-        The validated plan payload.
-
-    Raises
-    ------
-    IncompatibleBenchmarkProfileError
-        If the plan's ``benchmark_profile_version`` is missing or
-        incompatible, or if its ``worker_iterations`` field is invalid.
-    OSError
-        If ``path`` cannot be read.
-    TypeError
-        If the parsed JSON root is not a mapping, or if the plan's
-        ``scenarios`` field or an entry within it has the wrong type.
-    ValueError
-        If a scenario's ``name`` or ``backend`` field is missing or empty.
-    json.JSONDecodeError
-        If ``path`` does not contain valid JSON.
-    """  # ruff: ignore[docstring-extraneous-exception] - propagates from _load_json and the validators
-    _logger.debug("loading benchmark plan: path=%s", path)
-    payload = _load_json(path)
-    validate_profile_version(payload)
-    try:
-        require_worker_iterations(payload)
-    except (TypeError, ValueError) as exc:
-        _logger.warning("benchmark plan worker_iterations invalid: %s", exc)
-        raise IncompatibleBenchmarkProfileError(str(exc)) from exc
-    scenarios = _require_list(payload.get("scenarios"), name="scenarios")
-
-    for index, scenario_value in enumerate(scenarios):
-        scenario = _require_mapping(
-            scenario_value,
-            name=f"scenarios[{index}]",
-        )
-        _require_non_empty_string(
-            scenario.get("name"),
-            name=f"scenarios[{index}].name",
-        )
-        _require_non_empty_string(
-            scenario.get("backend"),
-            name=f"scenarios[{index}].backend",
-        )
-
-    return payload
-
-
-def load_throughput(path: pth.Path) -> dict[str, object]:
-    """Load and minimally validate hyperfine throughput JSON payload.
-
-    Parameters
-    ----------
-    path : pth.Path
-        The hyperfine throughput JSON file to load and validate.
-
-    Returns
-    -------
-    dict[str, object]
-        The validated throughput payload.
-
-    Raises
-    ------
-    OSError
-        If ``path`` cannot be read.
-    TypeError
-        If the parsed JSON root is not a mapping, or if the payload's
-        ``results`` field or an entry within it has the wrong type.
-    ValueError
-        If a result's ``mean`` field is missing or not a positive float.
-    json.JSONDecodeError
-        If ``path`` does not contain valid JSON.
-    """  # ruff: ignore[docstring-extraneous-exception] - propagates from _load_json and the validators
-    payload = _load_json(path)
-    results = _require_list(payload.get("results"), name="results")
-
-    for index, result_value in enumerate(results):
-        result = _require_mapping(result_value, name=f"results[{index}]")
-        _require_positive_float(result.get("mean"), name=f"results[{index}].mean")
-
-    return payload
-
-
-def _build_scenario_comparisons(
+def _validate_matching_comparison_groups(
     *,
-    baseline_ratios: dict[str, float],
-    candidate_ratios: dict[str, float],
-    max_regression: float,
-) -> tuple[ScenarioComparison, ...]:
-    """Build ordered scenario comparisons from validated ratio maps."""
-    return tuple(
-        ScenarioComparison(
-            scenario_name=scenario_name,
-            baseline_ratio=baseline_ratios[scenario_name],
-            candidate_ratio=candidate_ratios[scenario_name],
-            regression_ratio=(
-                (candidate_ratios[scenario_name] - baseline_ratios[scenario_name])
-                / baseline_ratios[scenario_name]
-            ),
-            max_regression=max_regression,
+    baseline_ratios: cabc.Mapping[str, object],
+    candidate_ratios: cabc.Mapping[str, object],
+) -> None:
+    """Validate that baseline and candidate have the same comparison groups."""
+    baseline_names = set(baseline_ratios)
+    candidate_names = set(candidate_ratios)
+    if baseline_names != candidate_names:
+        missing_from_candidate = sorted(baseline_names - candidate_names)
+        missing_from_baseline = sorted(candidate_names - baseline_names)
+        msg = (
+            "comparison groups must match across baseline and candidate runs: "
+            f"missing_from_candidate={missing_from_candidate}, "
+            f"missing_from_baseline={missing_from_baseline}"
         )
-        for scenario_name in sorted(baseline_ratios)
+        raise ValueError(msg)
+
+
+def _baseline_window(
+    *,
+    baseline: BenchmarkRunPayload | None,
+    candidate: BenchmarkRunPayload,
+    history: BaselineHistory | None,
+    window_size: int,
+) -> dict[str, tuple[float, ...]]:
+    """Return the per-scenario main-branch samples the candidate is judged against.
+
+    The window is preferred whenever it holds a compatible sample. The
+    single-sample baseline is the fallback for a first run, an expired
+    artefact, or a window emptied by a benchmark-profile change — a worse bar
+    than the window, but the one this ratchet used before the window existed.
+    """
+    version, worker_iterations = profile_metadata(candidate.plan)
+    compatible = (
+        history.compatible_with(
+            benchmark_profile_version=version,
+            worker_iterations=worker_iterations,
+        )
+        if history is not None
+        else BaselineHistory()
+    )
+    recent = BaselineHistory(samples=compatible.samples[-window_size:])
+    if recent.samples:
+        return {name: recent.ratios_for(name) for name in recent.scenarios}
+
+    if baseline is None:
+        msg = "a baseline run or a non-empty baseline history is required"
+        raise ValueError(msg)
+    _logger.info("no compatible baseline history; comparing against one sample")
+    validate_matching_profiles(
+        baseline_plan=baseline.plan,
+        candidate_plan=candidate.plan,
+    )
+    return {name: (ratio,) for name, ratio in run_ratios(baseline).items()}
+
+
+def _compare_scenario(
+    *,
+    scenario_name: str,
+    samples: tuple[float, ...],
+    candidate_ratio: float,
+    policy: RatchetPolicy,
+) -> ScenarioComparison:
+    """Judge one scenario against its window of main-branch samples."""
+    baseline_ratio = median_ratio(samples)
+    return ScenarioComparison(
+        scenario_name=scenario_name,
+        baseline_ratio=baseline_ratio,
+        candidate_ratio=candidate_ratio,
+        regression_ratio=(candidate_ratio - baseline_ratio) / baseline_ratio,
+        max_regression=policy.max_regression,
+        baseline_sample_count=len(samples),
+        noise_tolerance=noise_tolerance(samples, sigmas=policy.noise_sigmas),
     )
 
 
 def compare_rust_regressions(
     *,
-    baseline: BenchmarkRunPayload,
     candidate: BenchmarkRunPayload,
-    max_regression: float,
+    baseline: BenchmarkRunPayload | None = None,
+    history: BaselineHistory | None = None,
+    policy: RatchetPolicy | None = None,
+    max_regression: float | None = None,
 ) -> ComparisonReport:
-    """Compare within-run Rust/Python ratios and evaluate the threshold.
-
-    Parameters
-    ----------
-    baseline : BenchmarkRunPayload
-        The baseline benchmark run payload defining the reference ratios.
-    candidate : BenchmarkRunPayload
-        The candidate benchmark run payload compared against the baseline.
-    max_regression : float
-        The maximum tolerated Rust/Python ratio regression; must be
-        non-negative.
-
-    Returns
-    -------
-    ComparisonReport
-        The per-scenario comparison and overall pass/fail verdict.
-
-    Raises
-    ------
-    TypeError
-        If ``max_regression`` is not a number, as rejected by
-        ``_require_non_negative_float``, or if a malformed ``scenarios`` or
-        ``results`` payload propagates from ``_extract_rust_python_ratios``.
-    ValueError
-        If validation fails in ``_extract_rust_python_ratios``,
-        ``_validate_matching_comparison_groups``, or
-        ``_require_non_negative_float``.
-    IncompatibleBenchmarkProfileError
-        If ``validate_matching_profiles`` finds incompatible profile
-        metadata between the baseline and candidate plans.
-    """  # ruff: ignore[docstring-extraneous-exception] - all raised exceptions propagate from validator calls
-    validated_max_regression = _require_non_negative_float(
-        max_regression,
-        name="max_regression",
+    """Compare within-run Rust/Python ratios and evaluate the threshold."""
+    if policy is not None and max_regression is not None:
+        msg = "pass either policy or max_regression, not both"
+        raise ValueError(msg)
+    resolved = (
+        policy
+        if policy is not None
+        else RatchetPolicy()
+        if max_regression is None
+        else RatchetPolicy(max_regression=max_regression)
     )
-    validate_matching_profiles(
-        baseline_plan=baseline.plan,
-        candidate_plan=candidate.plan,
+    window = _baseline_window(
+        baseline=baseline,
+        candidate=candidate,
+        history=history,
+        window_size=resolved.window_size,
     )
-
-    baseline_ratios = _extract_rust_python_ratios(
-        plan_payload=baseline.plan,
-        throughput_payload=baseline.throughput,
-        context_name=baseline.context_name,
-    )
-    candidate_ratios = _extract_rust_python_ratios(
-        plan_payload=candidate.plan,
-        throughput_payload=candidate.throughput,
-        context_name=candidate.context_name,
-    )
+    candidate_ratios = run_ratios(candidate)
     _validate_matching_comparison_groups(
-        baseline_ratios=baseline_ratios,
+        baseline_ratios=window,
         candidate_ratios=candidate_ratios,
-    )
-
-    comparisons = _build_scenario_comparisons(
-        baseline_ratios=baseline_ratios,
-        candidate_ratios=candidate_ratios,
-        max_regression=validated_max_regression,
     )
 
     return ComparisonReport(
-        max_regression=validated_max_regression,
-        comparisons=comparisons,
+        max_regression=resolved.max_regression,
+        comparisons=tuple(
+            _compare_scenario(
+                scenario_name=scenario_name,
+                samples=window[scenario_name],
+                candidate_ratio=candidate_ratios[scenario_name],
+                policy=resolved,
+            )
+            for scenario_name in sorted(window)
+        ),
     )
 
 
@@ -249,8 +204,23 @@ def write_report(*, report: ComparisonReport, output_path: pth.Path) -> None:
 def _parse_args() -> argparse.Namespace:
     """Parse command-line arguments for the benchmark ratchet CLI."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline-plan", type=pth.Path, required=True)
-    parser.add_argument("--baseline-throughput", type=pth.Path, required=True)
+    parser.add_argument(
+        "--baseline-plan",
+        type=pth.Path,
+        help=(
+            "Single-sample fallback baseline plan, used when no compatible "
+            "baseline history is available."
+        ),
+    )
+    parser.add_argument("--baseline-throughput", type=pth.Path)
+    parser.add_argument(
+        "--baseline-history",
+        type=pth.Path,
+        help=(
+            "Rolling window of recent main-branch samples. An absent or "
+            "unreadable file falls back to the single-sample baseline."
+        ),
+    )
     parser.add_argument("--candidate-plan", type=pth.Path, required=True)
     parser.add_argument("--candidate-throughput", type=pth.Path, required=True)
     parser.add_argument(
@@ -258,29 +228,44 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=0.30,
         help=(
-            "Maximum allowed relative increase in the within-run Rust/Python "
-            "mean ratio for any scenario pair."
+            "Minimum relative increase in the within-run Rust/Python mean "
+            "ratio that can count as a regression, whatever the observed "
+            "spread. The wider of this and the noise band decides."
         ),
+    )
+    parser.add_argument(
+        "--noise-sigmas",
+        type=float,
+        default=DEFAULT_NOISE_SIGMAS,
+        help=(
+            "Estimated standard deviations of the window's observed spread a "
+            "candidate must exceed before its regression counts. Zero judges "
+            "on --max-regression alone."
+        ),
+    )
+    parser.add_argument(
+        "--history-window",
+        type=int,
+        default=DEFAULT_WINDOW_SIZE,
+        help="How many of the most recent history samples to compare against.",
     )
     parser.add_argument("--output", type=pth.Path, required=True)
     return parser.parse_args()
 
 
+def _load_baseline(args: argparse.Namespace) -> BenchmarkRunPayload | None:
+    """Load the single-sample fallback baseline, when one was supplied."""
+    if args.baseline_plan is None or args.baseline_throughput is None:
+        return None
+    return BenchmarkRunPayload(
+        plan=load_plan(args.baseline_plan),
+        throughput=load_throughput(args.baseline_throughput),
+        context_name="baseline",
+    )
+
+
 def main() -> int:
-    """Execute benchmark ratchet comparison and return process exit code.
-
-    Returns
-    -------
-    int
-        The process exit code: ``0`` on pass or skip, ``1`` on regression,
-        ``2`` on invalid inputs.
-
-    Raises
-    ------
-    SystemExit
-        If ``_parse_args`` rejects invalid or missing command-line
-        arguments.
-    """  # ruff: ignore[docstring-extraneous-exception] - SystemExit propagates from _parse_args via argparse
+    """Execute benchmark ratchet comparison and return process exit code."""
     logging.basicConfig(
         level=logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
@@ -288,17 +273,18 @@ def main() -> int:
     args = _parse_args()
     try:
         report = compare_rust_regressions(
-            baseline=BenchmarkRunPayload(
-                plan=load_plan(args.baseline_plan),
-                throughput=load_throughput(args.baseline_throughput),
-                context_name="baseline",
-            ),
+            baseline=_load_baseline(args),
             candidate=BenchmarkRunPayload(
                 plan=load_plan(args.candidate_plan),
                 throughput=load_throughput(args.candidate_throughput),
                 context_name="candidate",
             ),
-            max_regression=args.max_regression,
+            history=load_history(args.baseline_history),
+            policy=RatchetPolicy(
+                max_regression=args.max_regression,
+                noise_sigmas=args.noise_sigmas,
+                window_size=args.history_window,
+            ),
         )
         write_report(report=report, output_path=args.output)
     except IncompatibleBenchmarkProfileError as exc:
@@ -306,23 +292,24 @@ def main() -> int:
         _logger.info("benchmark ratchet skipped: %s", exc)
         return 0
     except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
-        _logger.error(  # ruff: ignore[error-instead-of-exception]  # invalid inputs are an expected CLI outcome
-            "benchmark ratchet failed to evaluate inputs: %s",
-            exc,
-        )
+        _logger.error("benchmark ratchet failed to evaluate inputs: %s", exc)  # noqa: TRY400
         return 2
 
     if report.passed:
         _logger.info(
-            "benchmark ratchet passed: %d Rust scenarios compared",
+            "benchmark ratchet passed: %d Rust scenarios compared against %d "
+            "main-branch sample(s)",
             report.rust_scenarios_compared,
+            report.baseline_sample_count,
         )
         return 0
 
     _logger.error(
-        "benchmark ratchet failed: worst_regression_ratio=%.6f, max_regression=%.6f",
+        "benchmark ratchet failed: worst_regression_ratio=%.6f, "
+        "max_regression=%.6f, baseline_samples=%d",
         report.worst_regression_ratio,
         report.max_regression,
+        report.baseline_sample_count,
     )
     return 1
 
