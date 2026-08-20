@@ -55,18 +55,17 @@ TYPICAL_RATIOS = (1.013, 1.001, 1.069, 0.916, 1.105)
 def _sample(
     ratio: float,
     *,
-    scenario: str = SCENARIO,
     profile_version: str = BENCHMARK_PROFILE_VERSION,
     worker_iterations: int = WORKER_ITERATIONS,
     run_id: str = "1",
 ) -> HistorySample:
-    """Return a history sample recording one ratio for one scenario."""
+    """Return a history sample recording one ratio for `SCENARIO`."""
     return HistorySample(
         commit="0" * 40,
         run_id=run_id,
         benchmark_profile_version=profile_version,
         worker_iterations=worker_iterations,
-        ratios={scenario: ratio},
+        ratios={SCENARIO: ratio},
     )
 
 

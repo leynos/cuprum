@@ -13,6 +13,7 @@ the happy path:
 
 from __future__ import annotations
 
+import dataclasses as dc
 import json
 import typing as typ
 
@@ -29,7 +30,15 @@ SCENARIO = "small-single-nocb"
 WORKER_ITERATIONS = 20
 
 
-def _write_candidate(directory: pth.Path, *, ratio: float) -> tuple[pth.Path, pth.Path]:
+@dc.dataclass(frozen=True, slots=True)
+class Candidate:
+    """The pair of files a completed benchmark run leaves behind."""
+
+    plan: pth.Path
+    throughput: pth.Path
+
+
+def _write_candidate(directory: pth.Path, *, ratio: float) -> Candidate:
     """Write candidate plan and throughput JSON realizing one ratio."""
     plan_path = directory / "candidate-plan.json"
     throughput_path = directory / "candidate-throughput.json"
@@ -48,7 +57,7 @@ def _write_candidate(directory: pth.Path, *, ratio: float) -> tuple[pth.Path, pt
         json.dumps({"results": [{"mean": 1.0}, {"mean": ratio}]}),
         encoding="utf-8",
     )
-    return plan_path, throughput_path
+    return Candidate(plan=plan_path, throughput=throughput_path)
 
 
 def _existing_history(path: pth.Path, *ratios: float) -> BaselineHistory:
@@ -74,8 +83,7 @@ def _existing_history(path: pth.Path, *ratios: float) -> BaselineHistory:
 def _record(
     tmp_path: pth.Path,
     *,
-    plan: pth.Path,
-    throughput: pth.Path,
+    candidate: Candidate,
     history: pth.Path | None = None,
     window: int | None = None,
 ) -> tuple[int, pth.Path]:
@@ -83,9 +91,9 @@ def _record(
     output = tmp_path / "main-baseline-history.json"
     argv = [
         "--candidate-plan",
-        str(plan),
+        str(candidate.plan),
         "--candidate-throughput",
-        str(throughput),
+        str(candidate.throughput),
         "--commit",
         "abcdef1234",
         "--run-id",
@@ -102,9 +110,9 @@ def _record(
 
 def test_a_completed_run_is_appended_with_its_provenance(tmp_path: pth.Path) -> None:
     """The sample carries the commit and run that measured it."""
-    plan, throughput = _write_candidate(tmp_path, ratio=1.25)
+    candidate = _write_candidate(tmp_path, ratio=1.25)
 
-    exit_code, output = _record(tmp_path, plan=plan, throughput=throughput)
+    exit_code, output = _record(tmp_path, candidate=candidate)
 
     assert exit_code == 0
     recorded = load_history(output)
@@ -124,11 +132,9 @@ def test_a_regressed_measurement_is_recorded_like_any_other(
     """
     history_path = tmp_path / "existing.json"
     _existing_history(history_path, 1.0, 1.0, 1.0)
-    plan, throughput = _write_candidate(tmp_path, ratio=9.0)
+    candidate = _write_candidate(tmp_path, ratio=9.0)
 
-    _, output = _record(
-        tmp_path, plan=plan, throughput=throughput, history=history_path
-    )
+    _, output = _record(tmp_path, candidate=candidate, history=history_path)
 
     assert load_history(output).ratios_for(SCENARIO) == (
         pytest.approx(1.0),
@@ -142,11 +148,9 @@ def test_the_window_is_pruned_to_its_size(tmp_path: pth.Path) -> None:
     """Recording past the window drops the oldest sample."""
     history_path = tmp_path / "existing.json"
     _existing_history(history_path, 1.0, 2.0, 3.0)
-    plan, throughput = _write_candidate(tmp_path, ratio=4.0)
+    candidate = _write_candidate(tmp_path, ratio=4.0)
 
-    _, output = _record(
-        tmp_path, plan=plan, throughput=throughput, history=history_path, window=3
-    )
+    _, output = _record(tmp_path, candidate=candidate, history=history_path, window=3)
 
     assert load_history(output).ratios_for(SCENARIO) == (
         pytest.approx(2.0),
@@ -169,15 +173,15 @@ def test_an_unusable_run_carries_the_window_forward(
     history_path = tmp_path / "existing.json"
     existing = _existing_history(history_path, 1.0, 1.1)
     if scenario == "missing":
-        plan = tmp_path / "absent-plan.json"
-        throughput = tmp_path / "absent-throughput.json"
+        candidate = Candidate(
+            plan=tmp_path / "absent-plan.json",
+            throughput=tmp_path / "absent-throughput.json",
+        )
     else:
-        plan, throughput = _write_candidate(tmp_path, ratio=1.0)
-        plan.write_text("{ not json", encoding="utf-8")
+        candidate = _write_candidate(tmp_path, ratio=1.0)
+        candidate.plan.write_text("{ not json", encoding="utf-8")
 
-    exit_code, output = _record(
-        tmp_path, plan=plan, throughput=throughput, history=history_path
-    )
+    exit_code, output = _record(tmp_path, candidate=candidate, history=history_path)
 
     assert exit_code == 0, "an unmeasurable run must not fail the recorder"
     assert load_history(output) == existing
@@ -187,8 +191,10 @@ def test_a_first_run_writes_an_empty_but_valid_history(tmp_path: pth.Path) -> No
     """With neither history nor measurement, the output must still parse."""
     exit_code, output = _record(
         tmp_path,
-        plan=tmp_path / "absent-plan.json",
-        throughput=tmp_path / "absent-throughput.json",
+        candidate=Candidate(
+            plan=tmp_path / "absent-plan.json",
+            throughput=tmp_path / "absent-throughput.json",
+        ),
     )
 
     assert exit_code == 0
