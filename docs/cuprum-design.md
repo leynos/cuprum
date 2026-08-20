@@ -2869,8 +2869,10 @@ The ratchet rule is:
 - regression ratio = `(candidate_ratio - baseline_ratio) / baseline_ratio`
 - noise band = three estimated standard deviations of those same samples'
   spread, expressed relative to the median, capped at `1.00`
-- fail when regression ratio exceeds both `0.30` and the noise band, for any
-  scenario pair
+- flag a scenario when its regression ratio exceeds both `0.30` and the noise
+  band
+- fail only when a flagged scenario is still flagged by a second measurement
+  taken in the same job
 
 Comparing within-run ratios rather than absolute wall-clock means cancels out
 runner-speed differences and interpreter startup overhead between the two CI
@@ -2887,6 +2889,17 @@ floor when the samples agree, and the noise band widens it when they do not.
 Spread is estimated from the median absolute deviation, which the outlier
 being tolerated barely moves, rather than from a standard deviation, which it
 would inflate in proportion to itself.
+
+The window makes the bar robust to one noisy run but cannot make the
+candidate robust, since a pull request is measured once on whichever runner
+CI gave it. A flagged scenario is therefore measured again in the same job
+and fails only if it is flagged twice, so a flake has to land on the same
+scenario twice to survive. The second benchmark is spent only on runs that
+were about to fail. Confirmation may only turn a failure into a pass — a
+scenario the first measurement did not flag is never failed by the second —
+and a confirmation that could not compare leaves the first verdict standing.
+The re-measurement writes under its own prefix so the sample recorded into
+the window remains the primary measurement, one per merge.
 
 Every push to `main` records its sample, whatever the ratchet decided, and the
 baseline artefact is published from every completed `main` run rather than
@@ -2913,8 +2926,11 @@ Artefacts uploaded by CI include:
 - `comparison-report.json`
 - `comparison-summary.md`
 - `ratchet-report.json`
-- `main-plan.json` and `main-throughput.json` on pushes to `main`, published as
-  the baseline artefact consumed by later ratchet runs
+- `ratchet-report-primary.json` and `ratchet-report-confirmation.json` when a
+  flagged scenario was measured a second time
+- `main-plan.json`, `main-throughput.json` and `main-baseline-history.json` on
+  pushes to `main`, published as the baseline artefact consumed by later
+  ratchet runs
 
 The workflow summary table is generated from matched Python and Rust candidate
 scenarios using the backend-independent scenario label (for example

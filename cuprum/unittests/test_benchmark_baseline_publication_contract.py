@@ -1,17 +1,22 @@
 """Contract tests for how `ci.yml` publishes and reads the baseline window.
 
-The statistics in `benchmarks/ratchet_history.py` only describe reality if
-the workflow feeds them every main-branch sample and reads every one back.
-Three declarations decide that, and each fails silently in the direction
-that reinstates the bias the window exists to remove:
+The statistics in `benchmarks/ratchet_history.py` and the re-measurement in
+`benchmarks/confirm_regression.py` only describe reality if the workflow
+feeds them every main-branch sample, reads every one back, and measures a
+second time before failing. A handful of declarations decide that, and each
+fails silently in the direction that reinstates what this work removed:
 
 - gate the recording step on the ratchet passing, and the window fills with
   measurements that were only kept because they beat the bar;
 - leave the artefact fetch filtering on `status=success`, and the same
   samples are dropped a step later instead, because a run that failed its
-  own ratchet is not a successful run; and
+  own ratchet is not a successful run;
 - stop passing `--baseline-history` and the comparison silently falls back
-  to the single sample this work replaced, with nothing failing.
+  to the single sample this work replaced, with nothing failing; and
+- let the re-measurement write under the candidate prefix, and the sample
+  recorded into the window becomes the confirming run rather than the
+  primary one — but only for the merges that were about to fail, which is a
+  verdict-dependent bias in the samples all over again.
 
 None of that is observable from the benchmark code, so these tests read the
 workflow. They share `tests.helpers.workflow` with the path-gate contract
@@ -25,6 +30,7 @@ from tests.helpers.workflow import BENCHMARK_JOB, CI_WORKFLOW, mapping, steps
 RECORD_STEP = "Record this run's benchmark sample"
 UPLOAD_STEP = "Upload main benchmark baseline artifact"
 FETCH_STEP = "Fetch latest main benchmark baseline"
+BENCHMARK_STEP = "Run throughput benchmarks and ratchet comparison"
 
 #: The condition both main-branch publication steps must carry. `always()`
 #: would publish from a cancelled, half-measured run; plain `success()` —
@@ -120,11 +126,45 @@ def test_the_fetch_reads_runs_that_failed_their_own_ratchet() -> None:
 
 def test_the_comparison_reads_the_window() -> None:
     """The ratchet invocation must pass the history it is meant to judge against."""
-    script = _script_of("Run throughput benchmarks and ratchet comparison")
+    script = _script_of(BENCHMARK_STEP)
 
     assert "--baseline-history" in script, (
         f"{CI_WORKFLOW} must pass --baseline-history to the ratchet; without "
         "it the comparison silently uses the single-sample fallback"
+    )
+
+
+def test_a_reported_regression_is_measured_again_before_it_fails() -> None:
+    """The failure path must re-measure and combine, not just report.
+
+    Without the second measurement a single unlucky runner fails the job and
+    only a human pressing re-run can undo it.
+    """
+    script = _script_of(BENCHMARK_STEP)
+
+    assert "confirm_regression.py" in script, (
+        "the benchmark step must combine the two measurements through "
+        f"confirm_regression.py. Found:\n{script}"
+    )
+    assert "ratchet-report-confirmation.json" in script, (
+        "the confirming comparison must write its own report, so the "
+        "combined verdict has two verdicts to intersect"
+    )
+
+
+def test_the_re_measurement_does_not_overwrite_the_recorded_sample() -> None:
+    """The confirmation run must write under its own prefix.
+
+    `candidate-plan.json` is what the main-branch recorder reads. Letting the
+    re-measurement overwrite it would put the confirming run into the window
+    instead of the primary one, and only for the merges that were about to
+    fail — reintroducing a verdict-dependent bias in the samples.
+    """
+    script = _script_of(BENCHMARK_STEP)
+
+    assert 'run_smoke_benchmarks "${GITHUB_WORKSPACE}" "confirmation"' in script, (
+        "the re-measurement must use the 'confirmation' prefix so "
+        f"candidate-* stays the primary measurement. Found:\n{script}"
     )
 
 
@@ -135,7 +175,7 @@ def test_the_sample_is_staged_before_the_comparison_can_fail() -> None:
     step there. Copying the candidate afterwards would mean a regressed run
     published nothing — the exact sample the window most needs.
     """
-    script = _script_of("Run throughput benchmarks and ratchet comparison")
+    script = _script_of(BENCHMARK_STEP)
     staged = script.index("main-plan.json")
     compared = script.index("ratchet_rust_performance.py")
 

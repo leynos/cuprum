@@ -1607,6 +1607,35 @@ Both properties are fixed, and both fixes are needed:
   ones. `!cancelled()` rather than `always()`, so an interrupted run does not
   record a half-finished measurement.
 
+The window makes the *bar* robust to one noisy run. It cannot make the
+*candidate* robust: a pull request is measured once, on whichever runner CI
+gave it. So when the comparison reports a regression, the job measures again
+under the `confirmation` prefix, compares again against the same window, and
+`benchmarks/confirm_regression.py` intersects the two verdicts — a scenario
+fails only if it regressed both times. A flake has to land on the same
+scenario twice to survive, which turns a one-in-N false failure into roughly
+one-in-N². The second benchmark is only ever spent on a run that was about to
+fail, so ordinary runs cost exactly what they did before.
+
+Three properties of that pass are load-bearing:
+
+- Confirmation may only turn a failure into a pass. A scenario the first run
+  did not flag is not failed by the second, or re-measuring would be a second
+  chance to fail and would double the false failures it exists to halve.
+- A confirmation that could not compare at all — a skip report — leaves the
+  first verdict standing. The primary comparison succeeded on the same
+  inputs, so an unusable confirmation is a fault in the retry, not evidence
+  about the candidate.
+- The re-measurement writes under its own prefix, so `candidate-*`, and
+  therefore the sample recorded into the window, stays the primary
+  measurement. Recording the confirming run instead would put a second sample
+  into the window only for the merges that were about to fail — a
+  verdict-dependent bias in the samples, which is the thing being removed.
+
+An exit code of 2 from the comparison is malformed input rather than a
+regression, and fails on the spot rather than spending a second benchmark to
+reread the same broken file.
+
 Two consequences are worth knowing. A re-run cannot clear a ratchet failure
 caused by the window, because a re-run does not change the window — only a
 merge does. And a regression that survives several merges eventually enters

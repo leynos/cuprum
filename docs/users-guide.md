@@ -2174,7 +2174,10 @@ The continuous integration (CI) workflows run the following checks:
     smoke artefacts and appends the same Markdown table to the GitHub Actions
     workflow summary.
   - It uploads candidate JSON artefacts plus `ratchet-report.json` and
-    `comparison-report.json`.
+    `comparison-report.json`. When a regression was measured a second time,
+    `ratchet-report-primary.json` and `ratchet-report-confirmation.json`
+    record the two measurements behind the combined verdict, which lists both
+    `confirmed_regressions` and `unconfirmed_regressions`.
   - On pushes to `main`, it also publishes the new smoke benchmark JSON and
     the updated `main-baseline-history.json` window as the baseline artefact
     for future runs.
@@ -2188,6 +2191,10 @@ The continuous integration (CI) workflows run the following checks:
     `rust_mean / python_mean` from the same benchmark run. Requiring both
     keeps a runner-to-runner swing from reading as a regression without
     letting a consistent slowdown through.
+  - When a scenario is flagged, it measures again in the same job and fails
+    only if the same scenario is flagged twice, so an unlucky runner does not
+    fail a change a re-run would have passed. The second benchmark runs only
+    on a job that was about to fail.
   - Every push to `main` records its sample, including runs whose own ratchet
     failed. If you re-run a failing benchmark job, note that a re-run cannot
     change the bar: the window only moves when `main` moves.
