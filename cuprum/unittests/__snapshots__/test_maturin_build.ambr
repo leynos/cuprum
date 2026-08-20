@@ -124,6 +124,7 @@
       'cuprum/unittests/test_pipeline.py',
       'cuprum/unittests/test_pipeline_collect.py',
       'cuprum/unittests/test_pipeline_output_options.py',
+      'cuprum/unittests/test_pipeline_process_exit.py',
       'cuprum/unittests/test_pipeline_process_lifecycle.py',
       'cuprum/unittests/test_pipeline_timeouts.py',
       'cuprum/unittests/test_pipeline_wait.py',

@@ -2498,10 +2498,12 @@ guarded by regression tests in `cuprum/unittests/test_subprocess_timeout.py`.
 
 Neither wait helper terminates unconditionally, and neither drains.
 `_wait_for_exit_code` terminates the process only when the wait is cancelled —
-which is also how an `asyncio.timeout` expiry arrives — while a successful wait
-returns the exit code as soon as `process.wait()` completes, leaving the
-process alone. `_wait_for_exit_code_within_timeout` terminates only on its
-non-positive fast path, before any wait begins.
+which is also how an `asyncio.timeout` expiry arrives. A successful wait
+completes when `_await_process_exit` obtains either the normal
+`process.wait()` result or an already-published `process.returncode` when the
+asyncio waiter is stranded, leaving the process alone in both cases.
+`_wait_for_exit_code_within_timeout` terminates only on its non-positive fast
+path, before any wait begins.
 
 Draining is the caller's job either way: after termination it drains the stream
 consumers exactly once via `_drain_stream_consumers` (see the stdin-injection
