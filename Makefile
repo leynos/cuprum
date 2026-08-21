@@ -88,15 +88,16 @@ DF12_PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv run --isolated \
   --enable=$(DF12_PYLINT_MESSAGES)
 AMBRLEAKS = $(UV_RUN_ENV) uv run --python $(DF12_PYTHON) ambrleaks
 SKYLOS_VERSION = 4.33.2
-SKYLOS = $(UV_RUN_ENV) uv tool run --from 'skylos==$(SKYLOS_VERSION)' skylos \
-  --config-file pyproject.toml
+SKYLOS_COMMAND = $(UV_RUN_ENV) uv tool run --from 'skylos==$(SKYLOS_VERSION)' skylos
+SKYLOS = $(SKYLOS_COMMAND) --config-file pyproject.toml
+SKYLOS_WHITELIST = $(SKYLOS_COMMAND) whitelist
 SKYLOS_PRODUCTION_TARGETS ?= cuprum
 SKYLOS_EXCLUDE_FOLDERS ?= cuprum/unittests
 
 .PHONY: help all clean build build-release lint python-lint rust-lint \
         lint-windows fmt check-fmt \
         markdownlint spelling spelling-helper-test nixie test typecheck \
-        test-extension develop skylos-allow \
+        test-extension develop makeutil skylos-allow \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
 .NOTPARALLEL: lint
@@ -180,11 +181,9 @@ rust-lint: ## Run Rust documentation, Clippy, Whitaker, and spelling checks
 	+$(MAKE) spelling
 
 skylos-allow: export SKYLOS_NAME = $(value NAME)
-skylos-allow: export SKYLOS_REASON = $(value REASON)
 skylos-allow: ## Document one named Skylos exception, not an entry point
 	@test -n "$${SKYLOS_NAME}" || { printf "Error: NAME is required for a named whitelist exception\\n" >&2; exit 2; }
-	@test -n "$${SKYLOS_REASON}" || { printf "Error: REASON is required for a named whitelist exception\\n" >&2; exit 2; }
-	$(SKYLOS) whitelist "$${SKYLOS_NAME}" --reason "$${SKYLOS_REASON}"
+	$(SKYLOS_WHITELIST) "$${SKYLOS_NAME}"
 
 lint-windows: ## Lint the Rust extension's Windows cfg branches (cross-target)
 	@if ! rustup target list --installed | grep -qx '$(WINDOWS_TARGET)'; then \
@@ -223,7 +222,10 @@ nixie: ## Validate Mermaid diagrams
 	$(call ensure_tool,nixie)
 	$(LOCAL_TOOL_ENV) $(NIXIE) --no-sandbox
 
-test: build uv $(VENV_TOOLS) ## Run tests
+makeutil: ## Verify the Makefile parser used by contract tests
+	$(call ensure_tool,$@)
+
+test: build uv $(VENV_TOOLS) makeutil ## Run tests
 	@for pattern in $(foreach target,$(PYTEST_TARGETS),$(call shell_quote,$(target))); do \
 	  set -- $$pattern; [ -e "$$1" ] || continue; \
 	  CARGO_BUILD_JOBS="$(PYTEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$@" || exit $$?; \

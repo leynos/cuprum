@@ -94,8 +94,9 @@
     `[tool.skylos.dead_code]`; use `type = "method"` for methods and include
     the fully qualified symbol plus a caller-specific reason. Only when an
     entry-point rule cannot describe the boundary may a named allow-list
-    exception be added with
-    `make skylos-allow NAME=handler REASON="Loaded by plugin registry"`.
+    exception be added with `make skylos-allow NAME=handler`. The Skylos
+    subcommand records the name only, so retain the caller-specific rationale
+    with the reviewing change.
   - **Formatting:** Adheres to formatting standards (`make check-fmt`; use
     `make fmt` to apply fixes).
   - **Typechecking:** Passes type checking (`make typecheck`).

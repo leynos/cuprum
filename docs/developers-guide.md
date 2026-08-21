@@ -2179,11 +2179,17 @@ caller; declare methods as `type = "method"`. If that model cannot describe a
 verified false positive, record a named exception with:
 
 ```bash
-make skylos-allow NAME=handler REASON="Loaded by plugin registry"
+make skylos-allow NAME=handler
 ```
 
-The target requires both values and stores the reason in Skylos's documented
-allow list. Never use a broad or unreasoned exception.
+Skylos's `whitelist` subcommand accepts the name only. Record its specific
+rationale in the reviewing change, then never use a broad or unreasoned
+exception.
+
+The Skylos Makefile contract is parsed by the pinned `makeutil` executable in
+`test_skylos_lint_contract.py`; `make test` verifies that the parser is
+available before running the test suite. CI installs its pinned Makeutil
+revision before running that target.
 
 ### Spelling policy
 
