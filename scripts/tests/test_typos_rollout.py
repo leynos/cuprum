@@ -249,7 +249,23 @@ def test_merge_rejects_conflicting_corrections(
     with pytest.raises(ValueError, match="conflicting correction"):
         rollout.merge_dictionaries(base, local)
 
+def test_local_policy_preserves_inline_code_exemption(
+    rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
+    tmp_path: Path,
+) -> None:
+    """The generated config retains the repository's inline-code policy."""
+    _, _, generator = rollout_modules
+    (tmp_path / ".typos-oxendict-base.toml").write_text(
+        _dictionary_text(), encoding="utf-8"
+    )
+    (tmp_path / "typos.local.toml").write_text(
+        _dictionary_text().replace("ignore = []", 'ignore = ["`[^`\\\\n]+`"]'),
+        encoding="utf-8",
+    )
 
+    config = tomllib.loads(generator.render_config(tmp_path))
+
+    assert "`[^`\\n]+`" in config["default"]["extend-ignore-re"]
 def test_render_and_write_are_deterministic_valid_toml(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
     tmp_path: Path,

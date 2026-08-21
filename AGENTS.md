@@ -87,13 +87,22 @@
   - Formatting is correct and validated.
 - **For Python files:**
   - **Testing:** Passes all relevant unit and behavioural tests (`make test`).
-  - **Linting:** Passes lint checks (`make lint`).
+  - **Linting:** Passes lint checks (`make lint`), including the blocking
+    Skylos production dead-code scan. Investigate every finding and remove
+    genuine dead code. For a verified false positive, first model an implicit
+    runtime caller with a precise, typed entry-point rule in
+    `[tool.skylos.dead_code]`; use `type = "method"` for methods and include
+    the fully qualified symbol plus a caller-specific reason. Only when an
+    entry-point rule cannot describe the boundary may a named allow-list
+    exception be added with
+    `make skylos-allow NAME=handler REASON="Loaded by plugin registry"`.
   - **Formatting:** Adheres to formatting standards (`make check-fmt`; use
     `make fmt` to apply fixes).
   - **Typechecking:** Passes type checking (`make typecheck`).
 - For Rust files:
   - **Testing:** Passes relevant unit and behavioural tests (`make test`).
-  - **Linting:** Passes lint checks (`make lint`).
+  - **Linting:** Passes lint checks (`make lint`), including the blocking
+    Skylos production dead-code scan.
   - **Formatting:** Adheres to formatting standards (`make check-fmt`; use
     `make fmt` to apply fixes).
 - For Markdown files (`.md` only):

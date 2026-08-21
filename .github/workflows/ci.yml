@@ -75,7 +75,7 @@ jobs:
       - name: Check formatting
         run: make check-fmt
 
-      - name: Run lint
+      - name: Run lint, including Skylos dead-code detection
         run: make lint
 
       # The Windows wheel build compiles this arm but without `-D warnings`,

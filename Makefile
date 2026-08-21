@@ -87,11 +87,16 @@ DF12_PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv run --isolated \
   --disable=all --load-plugins=df12_python_lints \
   --enable=$(DF12_PYLINT_MESSAGES)
 AMBRLEAKS = $(UV_RUN_ENV) uv run --python $(DF12_PYTHON) ambrleaks
+SKYLOS_VERSION = 4.33.2
+SKYLOS = $(UV_RUN_ENV) uv tool run --from 'skylos==$(SKYLOS_VERSION)' skylos \
+  --config-file pyproject.toml
+SKYLOS_PRODUCTION_TARGETS ?= cuprum
+SKYLOS_EXCLUDE_FOLDERS ?= cuprum/unittests
 
 .PHONY: help all clean build build-release lint python-lint rust-lint \
         lint-windows fmt check-fmt \
         markdownlint spelling spelling-helper-test nixie test typecheck \
-        test-extension develop \
+        test-extension develop skylos-allow \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
 .NOTPARALLEL: lint
@@ -166,12 +171,20 @@ python-lint: ruff uv ## Run Ruff, interrogate, pylint, df12-python-lints, and am
 	$(RUFF) check && $(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum && $(PYLINT) $(PYLINT_TARGETS)
 	$(DF12_PYLINT) $(PYLINT_TARGETS)
 	$(AMBRLEAKS) cuprum/unittests tests
+	$(SKYLOS) $(SKYLOS_PRODUCTION_TARGETS) --exclude $(SKYLOS_EXCLUDE_FOLDERS) --category dead_code --gate --format concise --no-upload --no-provenance --no-grep-verify
 
 rust-lint: ## Run Rust documentation, Clippy, Whitaker, and spelling checks
 	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps $(DOC_FLAGS) && $(CARGO) clippy $(CLIPPY_FLAGS)
 	@if ! $(LOCAL_TOOL_ENV) command -v $(WHITAKER) >/dev/null 2>&1; then echo "whitaker is required for linting. Install it before running this target." >&2; exit 1; fi
 	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- $(WHITAKER_CARGO_FLAGS)
 	+$(MAKE) spelling
+
+skylos-allow: export SKYLOS_NAME = $(value NAME)
+skylos-allow: export SKYLOS_REASON = $(value REASON)
+skylos-allow: ## Document one named Skylos exception, not an entry point
+	@test -n "$${SKYLOS_NAME}" || { printf "Error: NAME is required for a named whitelist exception\\n" >&2; exit 2; }
+	@test -n "$${SKYLOS_REASON}" || { printf "Error: REASON is required for a named whitelist exception\\n" >&2; exit 2; }
+	$(SKYLOS) whitelist "$${SKYLOS_NAME}" --reason "$${SKYLOS_REASON}"
 
 lint-windows: ## Lint the Rust extension's Windows cfg branches (cross-target)
 	@if ! rustup target list --installed | grep -qx '$(WINDOWS_TARGET)'; then \

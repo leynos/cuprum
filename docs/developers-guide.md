@@ -2091,7 +2091,7 @@ requires that surface.
 
 ## Python linting
 
-Cuprum uses a five-stage Python lint gate. Ruff is the first stage and remains
+Cuprum uses a six-stage Python lint gate. Ruff is the first stage and remains
 the fast, broad lint pass for formatting-adjacent checks, import order,
 docstring *style*, security checks, naming, complexity, and Ruff's native
 Pylint-derived rules. `interrogate` is the second stage and enforces docstring
@@ -2123,6 +2123,8 @@ The short version is:
   `py-version = "3.12"` semantic baseline.
 - `$(AMBRLEAKS)` scans `cuprum/unittests` and `tests`; exact deterministic
   fixture values that resemble secrets belong in `ambrleaks.toml`.
+- `$(SKYLOS)` scans production modules for dead code in gate mode, keeping the
+  detector dependencies out of Cuprum's application dependency closure.
 
 ### Docstring structure
 
@@ -2152,11 +2154,36 @@ make lint
 4. The CPython 3.14 `df12-python-lints` pass stored in `$(DF12_PYLINT)`, over
    the same targets.
 5. The CPython 3.14 `ambrleaks` scanner over both Syrupy snapshot roots.
+6. `$(SKYLOS)` scanning `$(SKYLOS_PRODUCTION_TARGETS)` for dead code, excluding
+   `$(SKYLOS_EXCLUDE_FOLDERS)`, with gate mode enabled.
 
 Each stage must pass before the next runs. When investigating a lint failure,
 fix findings in execution order, then rerun `make lint` to reach the next
 stage. Do not disable df12 messages to absorb existing findings; repair the
 assertion, alias, suppression rationale, or dispatch structure instead.
+
+
+### Skylos dead-code policy
+
+Skylos analyses production code only: `cuprum/unittests` is excluded so
+test-only references cannot keep a production symbol live. It runs with
+`--no-grep-verify`, which prevents repository-wide text matches from masking a
+dead production symbol, and its strict gate configuration is in
+`pyproject.toml`.
+
+Remove confirmed dead code. Do not suppress a finding until its runtime caller
+has been verified. For framework callbacks, protocol implementations, or other
+implicit callers, add a narrowly typed entry-point record in
+`[tool.skylos.dead_code]`, using the symbol's full name and a reason naming the
+caller; declare methods as `type = "method"`. If that model cannot describe a
+verified false positive, record a named exception with:
+
+```bash
+make skylos-allow NAME=handler REASON="Loaded by plugin registry"
+```
+
+The target requires both values and stores the reason in Skylos's documented
+allow list. Never use a broad or unreasoned exception.
 
 ### Spelling policy
 
@@ -2225,6 +2252,10 @@ Table: Lint-related Makefile variables and their defaults.
 | `DF12_PYLINT_MESSAGES`  | All v0.1.0 message IDs                                                       | Explicit allowlist for the df12 Pylint pass.                               |
 | `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                   |
 | `AMBRLEAKS`             | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                  |
+| `SKYLOS_VERSION`        | `4.33.2`                                                                     | Pinned standalone Skylos release.                                          |
+| `SKYLOS`                | Derived command                                                              | Skylos command using the reviewed `pyproject.toml` configuration.          |
+| `SKYLOS_PRODUCTION_TARGETS` | `cuprum`                                                                  | Production paths passed to Skylos.                                         |
+| `SKYLOS_EXCLUDE_FOLDERS` | `cuprum/unittests`                                                         | Test-only paths excluded from the production scan.                          |
 | `LOCAL_TOOL_ENV`        | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools. |
 | `UV_ENV`                | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                  |
 | `UV_RUN_ENV`            | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment for locked `uv run` commands such as `$(RUFF)`.         |
