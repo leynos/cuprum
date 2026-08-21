@@ -154,7 +154,7 @@ MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT
         github-actions-lint \
         lint-windows fmt check-fmt \
         markdownlint spelling nixie test test-python test-rust typecheck \
-        test-extension test-markdown-format develop skylos-allow \
+        test-extension test-markdown-format develop makeutil skylos-allow \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
 .NOTPARALLEL: lint
@@ -291,13 +291,16 @@ nixie: ## Validate Mermaid diagrams
 	$(call ensure_tool,nixie)
 	$(LOCAL_TOOL_ENV) $(NIXIE) --no-sandbox
 
+makeutil: ## Verify the Makefile parser used by contract tests
+	$(call ensure_tool,$@)
+
 # Both suites, which is what a contributor wants locally. CI splits them: the
 # coverage job is the only place the Rust suite runs, under instrumentation, so
 # the interpreter matrix calls `test-python` alone. See "One execution per
 # suite" in docs/developers-guide.md.
-test: test-python test-rust ## Run the Python and Rust suites
+test: makeutil test-python test-rust ## Run the Python and Rust suites
 
-test-python: build uv $(VENV_TOOLS) ## Run the Python suite
+test-python: build uv $(VENV_TOOLS) makeutil ## Run the Python suite
 	@for pattern in $(foreach target,$(PYTEST_TARGETS),$(call shell_quote,$(target))); do \
 	  set -- $$pattern; [ -e "$$1" ] || continue; \
 	  CARGO_BUILD_JOBS="$(PYTEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$@" || exit $$?; \

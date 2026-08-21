@@ -355,6 +355,8 @@ jobs:
     timeout-minutes: 45
     env:
       MDTABLEFIX_VERSION: '0.6.0'
+      MAKEUTIL_REVISION: '29fc5a1634ffbaa18a773eed9dff1b2838a45d9c'
+      MAKEUTIL_TOOLCHAIN: 'nightly-2026-05-28'
     strategy:
       fail-fast: false
       matrix:
@@ -495,6 +497,16 @@ jobs:
           cache-provider: external
           use-sccache: 'false'
           install-binstall: 'false'
+
+      - name: Install Makefile parser
+        run: |
+          rustup toolchain install "${MAKEUTIL_TOOLCHAIN}" --profile minimal
+          RUSTFLAGS="-Zpolonius=next" cargo +"${MAKEUTIL_TOOLCHAIN}" install \
+            --git https://github.com/leynos/makeutil \
+            --rev "${MAKEUTIL_REVISION}" \
+            --locked \
+            --force \
+            makeutil
 
       # The full Python suite exercises the native mdtablefix file selector.
       # Restoring the tool cache is an optimization, not a prerequisite.
