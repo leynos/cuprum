@@ -27,11 +27,21 @@ from cuprum.unittests._adapter_test_support import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.events import ExecPhase
+    from cuprum.events import ExecId, ExecPhase
 
 
 class TestTracingHook:
     """Tests for TracingHook and InMemoryTracer."""
+
+    @staticmethod
+    def _cat_overrides(exec_id: ExecId, pid: int = 4321) -> dict[str, object]:
+        """Return the identifying overrides for a traced ``cat`` execution.
+
+        The span-lifecycle tests care about which execution an event belongs
+        to, not what it ran, so they all share one program and argv and vary
+        only the correlation token and pid.
+        """
+        return {"program": "cat", "argv": ("cat",), "pid": pid, "exec_id": exec_id}
 
     def _run_traced_command(
         self,
@@ -206,7 +216,7 @@ print('stderr-line', file=sys.stderr)""",
         hook = TracingHook(tracer)
 
         exec_id = new_exec_id()
-        base = {"program": "cat", "argv": ("cat",), "pid": 4321, "exec_id": exec_id}
+        base = self._cat_overrides(exec_id)
         hook(_make_exec_event(phase="start", overrides=base))
         hook(
             _make_exec_event(
@@ -246,7 +256,7 @@ print('stderr-line', file=sys.stderr)""",
         hook = TracingHook(tracer)
 
         exec_id = new_exec_id()
-        base = {"program": "cat", "argv": ("cat",), "pid": 4321, "exec_id": exec_id}
+        base = self._cat_overrides(exec_id)
         hook(_make_exec_event(phase="start", overrides=base))
         hook(
             _make_exec_event(
@@ -281,25 +291,13 @@ print('stderr-line', file=sys.stderr)""",
         hook = TracingHook(tracer)
 
         abandoned = new_exec_id()
-        hook(
-            _make_exec_event(
-                phase="start",
-                overrides={
-                    "program": "cat",
-                    "argv": ("cat",),
-                    "pid": 1,
-                    "exec_id": abandoned,
-                },
-            ),
-        )
+        abandoned_overrides = self._cat_overrides(abandoned, pid=1)
+        hook(_make_exec_event(phase="start", overrides=abandoned_overrides))
         hook(
             _make_exec_event(
                 phase="teardown_error",
                 overrides={
-                    "program": "cat",
-                    "argv": ("cat",),
-                    "pid": 1,
-                    "exec_id": abandoned,
+                    **abandoned_overrides,
                     "operation": "drain",
                     "error_type": "ValueError",
                 },
@@ -313,12 +311,7 @@ print('stderr-line', file=sys.stderr)""",
             hook(
                 _make_exec_event(
                     phase="start",
-                    overrides={
-                        "program": "cat",
-                        "argv": ("cat",),
-                        "pid": index + 2,
-                        "exec_id": new_exec_id(),
-                    },
+                    overrides=self._cat_overrides(new_exec_id(), pid=index + 2),
                 ),
             )
 
@@ -328,6 +321,53 @@ print('stderr-line', file=sys.stderr)""",
         )
         assert len(hook._active_spans) == _MAX_ACTIVE_SPANS, (
             f"the registry must stay bounded, got {len(hook._active_spans)}"
+        )
+
+    def test_eviction_spares_the_span_that_is_still_active(self) -> None:
+        """A span still receiving events outlives one that went quiet earlier.
+
+        Eviction order is recency of activity, not of arrival. Were it arrival
+        order, the execution that started first would be finalized as failed
+        even while it was demonstrably still producing output, and its real
+        ``exit`` would then find nothing to close.
+        """
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer, record_output=True)
+
+        busy, quiet = new_exec_id(), new_exec_id()
+        hook(
+            _make_exec_event(phase="start", overrides=self._cat_overrides(busy, pid=1))
+        )
+        busy_span = tracer.spans[0]
+        hook(
+            _make_exec_event(phase="start", overrides=self._cat_overrides(quiet, pid=2))
+        )
+        quiet_span = tracer.spans[1]
+
+        # The older execution is the one still doing work.
+        hook(
+            _make_exec_event(
+                phase="stdout",
+                overrides={**self._cat_overrides(busy, pid=1), "line": "still here"},
+            ),
+        )
+
+        # One short of the cap, so exactly one of the two above is evicted and
+        # the assertions below can say which.
+        for index in range(_MAX_ACTIVE_SPANS - 1):
+            hook(
+                _make_exec_event(
+                    phase="start",
+                    overrides=self._cat_overrides(new_exec_id(), pid=index + 3),
+                ),
+            )
+
+        assert quiet_span.ended is True, (
+            "the execution that went quiet is the one that should be evicted"
+        )
+        assert busy_span.ended is False, (
+            "an execution that was still emitting events must not be finalized "
+            "ahead of one that fell silent earlier"
         )
 
     def test_disables_output_recording(self) -> None:

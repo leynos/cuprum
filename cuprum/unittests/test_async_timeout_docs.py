@@ -323,7 +323,7 @@ def test_adr_007_documents_wait_helper_split(adr_007: str, term: str) -> None:
 # so what matters is which value sits with which record, not that both strings
 # occur. The two tests below bind each value to its own record instead.
 
-_EXPIRY_MARKER = "subprocess_teardown_drain_failed"
+_TEARDOWN_MARKER = "subprocess_teardown_drain_failed"
 
 
 def _split_timeout_section(section: str) -> tuple[str, str]:
@@ -333,7 +333,7 @@ def _split_timeout_section(section: str) -> tuple[str, str]:
     ``subprocess_teardown_drain_failed``; everything before it describes the
     expiry record.
     """
-    marker = section.index(_EXPIRY_MARKER)
+    marker = section.index(_TEARDOWN_MARKER)
     return section[:marker], section[marker:]
 
 

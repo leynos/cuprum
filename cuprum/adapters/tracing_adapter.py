@@ -64,6 +64,7 @@ Example with OpenTelemetry::
 
 from __future__ import annotations
 
+import collections
 import threading
 import typing as typ
 
@@ -90,7 +91,8 @@ _SPAN_FIELDS = ("line", "operation", "error_type", "note", "timeout_s", "timeout
 # ``teardown_error`` as possibly the last event a consumer sees). Without a
 # bound, every such execution would leave an entry behind for the lifetime of
 # the hook. The cap is generous enough that no realistic burst of concurrent
-# executions evicts a live span, so eviction means a genuinely abandoned one.
+# executions is likely to evict a live span; see ``_evict_overflow_locked``
+# for what the ordering does and does not promise.
 _MAX_ACTIVE_SPANS = 1024
 
 
@@ -158,7 +160,9 @@ class TracingHook:
         """Initialize the tracing hook with a tracer."""
         self._tracer = tracer
         self._record_output = record_output
-        self._active_spans: dict[ExecId, Span] = {}
+        self._active_spans: collections.OrderedDict[ExecId, Span] = (
+            collections.OrderedDict()
+        )
         self._lock = threading.Lock()
 
     def __call__(self, event: ExecEvent) -> None:
@@ -238,16 +242,23 @@ class TracingHook:
             stale.end()
 
     def _evict_overflow_locked(self) -> list[Span]:
-        """Detach the oldest spans once the registry exceeds its cap.
+        """Detach the least recently active spans once the cap is exceeded.
 
         Must be called with ``self._lock`` held. Returns the detached spans so
         the caller can end them outside the lock — an arbitrary ``Span`` may
         block on I/O in ``set_status``/``end``, and holding the lifecycle lock
         across that would serialise every other execution's handler.
 
-        Insertion order is arrival order, so the oldest entry is the execution
-        least likely to still be running. An execution whose ``exit`` never
-        arrives would otherwise sit here forever.
+        Order is recency of activity, not of arrival: ``_record_span_event``
+        moves a span to the back whenever one of its events lands, so a
+        long-running execution that is still producing output is not evicted
+        ahead of a short one that went quiet. That is a heuristic, not a
+        guarantee — a live but silent execution can still be evicted, and its
+        span is then ended as failed while the process runs on. Evicting is
+        nonetheless preferred to refusing to register new spans: the cap exists
+        because executions that never emit ``exit`` accumulate, and a registry
+        that rejected newcomers instead would stop tracing *every* subsequent
+        execution once the leaked ones filled it.
         """
         if len(self._active_spans) <= _MAX_ACTIVE_SPANS:
             return []
@@ -265,6 +276,10 @@ class TracingHook:
 
         with self._lock:
             span = self._active_spans.get(exec_id)
+            if span is not None:
+                # Activity is what keeps a span off the eviction end of the
+                # registry; see _evict_overflow_locked.
+                self._active_spans.move_to_end(exec_id)
 
         if span is None:
             return

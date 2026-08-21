@@ -126,10 +126,22 @@ def test_pipeline_timeout_writes_log_records(
     )
     for rec in records:
         fields = vars(rec)
-        assert fields["cuprum_operation"] == "wait"
-        assert fields["cuprum_timeout_s"] == pytest.approx(0.2)
-        assert fields["cuprum_timeout_mode"] == "elapsed_deadline"
-        assert fields["cuprum_error_type"] == "TimeoutError"
+        assert fields["cuprum_operation"] == "wait", (
+            "the expiry record must name the wait operation, got "
+            f"{fields['cuprum_operation']!r}"
+        )
+        assert fields["cuprum_timeout_s"] == pytest.approx(0.2), (
+            "the expiry record must carry the configured timeout, got "
+            f"{fields['cuprum_timeout_s']!r}"
+        )
+        assert fields["cuprum_timeout_mode"] == "elapsed_deadline", (
+            "a positive deadline that ran out must be reported as an elapsed "
+            f"deadline, got {fields['cuprum_timeout_mode']!r}"
+        )
+        assert fields["cuprum_error_type"] == "TimeoutError", (
+            "the expiry record must name the raised error class, got "
+            f"{fields['cuprum_error_type']!r}"
+        )
 
 
 def test_pipeline_timeout_increments_metrics_counter() -> None:

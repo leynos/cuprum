@@ -2733,11 +2733,15 @@ that defines it, rather than from `_pipeline_internals`, which merely
 re-exports it and would reintroduce that cycle. Splitting it out also brought
 `_subprocess_timeout` back under the 400-line module ceiling.
 
-Emission is best-effort and cannot alter control flow: an observe-hook failure
-(which `_StageObservation.emit` otherwise re-raises) is swallowed so telemetry
-can never mask `TimeoutExpired` or `CancelledError`, and scheduled async-hook
-tasks are still tracked and drained. The metrics adapter counts the two phases
-as `cuprum_timeouts_total` and `cuprum_teardown_errors_total`; the tracing
+Emission is best-effort and cannot alter control flow: a synchronous
+observe-hook failure (which `_StageObservation.emit` otherwise re-raises) is
+swallowed outright, so it can never mask `TimeoutExpired` or `CancelledError`.
+A hook that returns an awaitable is scheduled as a background task instead;
+those tasks are still tracked and drained during cleanup, and a failure there
+is aggregated with the active error into a `BaseExceptionGroup` rather than
+replacing it, so the primary error is preserved within the aggregate. The
+metrics adapter counts the two phases as `cuprum_timeouts_total` and
+`cuprum_teardown_errors_total`; the tracing
 adapter records them as ancillary span events that leave the span open for the
 subsequent `exit`.
 

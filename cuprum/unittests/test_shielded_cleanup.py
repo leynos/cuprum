@@ -148,7 +148,11 @@ def test_shielded_cleanup_returns_the_cleanup_result() -> None:
         """Await an ungated cleanup and check its return value."""
         gate = _CleanupGate()
         gate.release.set()
-        assert await _shielded_cleanup(gate.run()) == "cleaned"
+        result = await _shielded_cleanup(gate.run())
+        assert result == "cleaned", (
+            "the cleanup's return value must reach the caller unchanged, got "
+            f"{result!r}"
+        )
 
     asyncio.run(run_case())
 

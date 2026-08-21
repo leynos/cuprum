@@ -262,6 +262,35 @@ class TestAdapterProjection:
         name, attributes = tracer.spans[0].events[-1]
         return {"name": name, **attributes}
 
+    @pytest.mark.parametrize("timeout_s", [0.0, -1.5])
+    def test_non_positive_expiry_projects_both_timeout_fields(
+        self, timeout_s: float
+    ) -> None:
+        """A non-positive deadline carries its own mode *and* its own timeout.
+
+        The snapshots above fix the elapsed-deadline case, where ``timeout_s``
+        is a truthy 1.5. This pins the other mode, whose configured timeout is
+        ``0`` or negative: the projection includes a field when it is not
+        ``None``, so a regression to a falsy test would silently drop
+        ``timeout_s=0.0`` and leave a consumer unable to tell an immediate
+        expiry's configured deadline from an unset one.
+        """
+        event = dc.replace(
+            self._representative_event("timeout"),
+            timeout_mode="non_positive_immediate",
+            timeout_s=timeout_s,
+        )
+        attributes = self._span_event_projection(event)
+        assert attributes is not None, "the timeout phase must project a span event"
+        assert attributes.get("timeout_mode") == "non_positive_immediate", (
+            "an immediate expiry must be distinguishable from an elapsed "
+            f"deadline, got {attributes.get('timeout_mode')!r}"
+        )
+        assert attributes.get("timeout_s") == pytest.approx(timeout_s), (
+            "the configured non-positive timeout must survive the projection, "
+            f"got {attributes.get('timeout_s')!r}"
+        )
+
     @pytest.mark.parametrize("phase", _PHASES)
     def test_projection_snapshots_lock_the_wire_contract(
         self,

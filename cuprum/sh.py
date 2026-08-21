@@ -422,15 +422,6 @@ async def _execute_with_hooks(
         result = await _execute_subprocess(execution)
         for hook in tracking.execution_hooks.after_hooks:
             hook(cmd, result)
-    except asyncio.CancelledError as cancelled:
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                tracking.pending_tasks,
-                cancelled,
-                message=_COMMAND_FINALIZATION_ERROR,
-            )
-        )
-        raise
     except BaseException as run_error:
         await _shielded_cleanup(
             _drain_tasks_during_cleanup(

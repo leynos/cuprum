@@ -719,10 +719,15 @@ cancelling and draining the stream consumers. It fires at most once per
 execution, and only when a consumer fails with something other than the
 expected `CancelledError`.
 
-These ancillary events never change the public behaviour: the
-`start` and `exit` events and the `TimeoutExpired` exception (with its partial
-output) are unchanged, and an observe-hook failure while handling a `timeout` or
-`teardown_error` event cannot mask `TimeoutExpired` or `CancelledError`.
+These ancillary events never change the public behaviour on their own: the
+`start` and `exit` events are unchanged, and a synchronous observe-hook
+failure while handling a `timeout` or `teardown_error` event is suppressed and
+cannot mask `TimeoutExpired` or `CancelledError`. A **background**
+(awaitable-returning) observe hook is different: if it fails during cleanup,
+the primary `TimeoutExpired` or `CancelledError` is raised inside a
+`BaseExceptionGroup` rather than on its own — it is preserved within the
+aggregate, not replaced, but callers that catch it directly should be
+prepared for that aggregation.
 
 Each event carries a stable `exec_id` correlation token: every lifecycle event
 for one execution — a single command, or one stage of a pipeline — shares the
@@ -1015,10 +1020,14 @@ paths (external cancellation, an unexpected stdin-writer failure) on which
 cleanup runs without a following `exit`. An execution that never emits `exit`
 would otherwise leave its span open indefinitely, so `TracingHook` bounds its
 registry of open spans (`_MAX_ACTIVE_SPANS`, currently 1024) and, once that
-bound is exceeded, evicts the oldest span and ends it as failed. An ancillary
-event arriving after `exit` finds no open span and is dropped. Each event
-carries whichever of `line`, `operation`, `error_type`, `note`, `timeout_s`,
-and `timeout_mode` are set on the
+bound is exceeded, evicts the least recently active span and ends it as
+failed: any span event moves the span to the back of the registry, so a
+long-running execution that is still producing output is not evicted ahead of
+one that has fallen silent. This is a heuristic, not a guarantee — a live but
+silent execution can still be evicted and have its span ended as failed. An
+ancillary event arriving after `exit` finds no open span and is dropped. Each
+event carries whichever of `line`, `operation`, `error_type`, `note`,
+`timeout_s`, and `timeout_mode` are set on the
 `ExecEvent`; unset fields are omitted rather than recorded as `None`. A
 `cuprum.timeout` event therefore carries `operation`, `error_type`,
 `timeout_s`, and `timeout_mode`, which is what lets a consumer distinguish an

@@ -169,10 +169,17 @@ class _SigtermImmuneProcess:
         self.terminated = False
         self.killed = False
         self.terminate_signalled = asyncio.Event()
+        self.grace_started = asyncio.Event()
         self._exited = asyncio.Event()
 
     async def wait(self) -> int:
-        """Block until ``kill()`` records an exit code."""
+        """Block until ``kill()`` records an exit code.
+
+        Entry is announced so a test can place a cancellation *inside* the
+        grace-period wait: ``terminate()`` has already returned by this point,
+        so the escalation to ``SIGKILL`` is the only thing still outstanding.
+        """
+        self.grace_started.set()
         await self._exited.wait()
         return self.returncode if self.returncode is not None else 0
 
@@ -242,15 +249,22 @@ def test_timeout_teardown_survives_repeated_cancellation() -> None:
                 [typ.cast("asyncio.subprocess.Process", process)], 0.2
             )
         )
-        # Wait for the initial signal to land, so both cancellations fall
-        # inside the grace-period wait rather than before teardown starts.
-        await process.terminate_signalled.wait()
-        task.cancel()
-        # Let the first cancellation be delivered and the retry loop re-enter
-        # its shielded wait before the second one arrives.
-        for _ in range(4):
-            await asyncio.sleep(0)
-        task.cancel()
+        # Block until teardown is actually waiting out the grace period, so
+        # both cancellations land inside it rather than before the initial
+        # signal was even delivered.
+        await process.grace_started.wait()
+
+        assert task.cancel(), "the first cancellation must reach a live teardown"
+        # One scheduler pass delivers that cancellation; the retry loop then
+        # re-parks on the shield within the same pass. The count is not what
+        # the test rests on — the assertion below is: `cancel()` returns False
+        # once a task has finished, so a second cancellation that is accepted
+        # proves the first did not end the teardown early.
+        await asyncio.sleep(0)
+        assert task.cancel(), (
+            "the teardown completed on the first cancellation, so the retry "
+            "path this test exists to cover was never exercised"
+        )
 
         with pytest.raises(asyncio.CancelledError):
             await task
