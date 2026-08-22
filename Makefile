@@ -181,12 +181,12 @@ rust-lint: ## Run Rust documentation, Clippy, Whitaker, and spelling checks
 	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- $(WHITAKER_CARGO_FLAGS)
 	+$(MAKE) spelling
 
-skylos-allow: export SKYLOS_NAME = $(value NAME)
+skylos-allow: export SKYLOS_SYMBOL = $(value SYMBOL)
 skylos-allow: export SKYLOS_REASON = $(value REASON)
 skylos-allow: ## Document one named Skylos exception, not an entry point
-	@test -n "$${SKYLOS_NAME}" || { printf "Error: NAME is required for a named whitelist exception\\n" >&2; exit 2; }
+	@test -n "$${SKYLOS_SYMBOL}" || { printf "Error: SYMBOL is required for a named whitelist exception\\n" >&2; exit 2; }
 	@test -n "$${SKYLOS_REASON}" || { printf "Error: REASON is required for a named whitelist exception\\n" >&2; exit 2; }
-	$(SKYLOS_CLI) whitelist "$${SKYLOS_NAME}" --reason "$${SKYLOS_REASON}"
+	$(SKYLOS_CLI) whitelist "$${SKYLOS_SYMBOL}" --reason "$${SKYLOS_REASON}"
 
 lint-windows: ## Lint the Rust extension's Windows cfg branches (cross-target)
 	@if ! rustup target list --installed | grep -qx '$(WINDOWS_TARGET)'; then \

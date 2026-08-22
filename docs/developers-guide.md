@@ -2182,7 +2182,7 @@ caller; declare methods as `type = "method"`. If that model cannot describe a
 verified false positive, record a named exception with:
 
 ```bash
-make skylos-allow NAME=handler REASON="Loaded by plugin registry"
+make skylos-allow SYMBOL=handler REASON="Loaded by plugin registry"
 ```
 
 The target requires both values and stores the reason in Skylos's documented

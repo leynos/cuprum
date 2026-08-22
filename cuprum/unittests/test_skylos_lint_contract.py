@@ -179,7 +179,7 @@ def test_whitelist_target_uses_skylos_subcommand_contract() -> None:
         (
             "$(SKYLOS_CLI)",
             "whitelist",
-            "$${SKYLOS_NAME}",
+            "$${SKYLOS_SYMBOL}",
             "--reason",
             "$${SKYLOS_REASON}",
         )
