@@ -2123,8 +2123,11 @@ The short version is:
   `py-version = "3.12"` semantic baseline.
 - `$(AMBRLEAKS)` scans `cuprum/unittests` and `tests`; exact deterministic
   fixture values that resemble secrets belong in `ambrleaks.toml`.
-- `$(SKYLOS)` scans production modules for dead code in gate mode, keeping the
-  detector dependencies out of Cuprum's application dependency closure.
+- `$(SKYLOS_CLI)` provisions the pinned Skylos release in its own `uv tool`
+  environment with Python 3.14. Skylos parses source with that interpreter's
+  AST, so the pin prevents phantom dead-code findings from newer syntax.
+- `$(SKYLOS)` adds the scan configuration to `$(SKYLOS_CLI)`, keeping detector
+  dependencies out of Cuprum's application dependency closure.
 
 ### Docstring structure
 
@@ -2179,12 +2182,11 @@ caller; declare methods as `type = "method"`. If that model cannot describe a
 verified false positive, record a named exception with:
 
 ```bash
-make skylos-allow NAME=handler
+make skylos-allow NAME=handler REASON="Loaded by plugin registry"
 ```
 
-Skylos's `whitelist` subcommand accepts the name only. Record its specific
-rationale in the reviewing change, then never use a broad or unreasoned
-exception.
+The target requires both values and stores the reason in Skylos's documented
+allow list. Never use a broad or unreasoned exception.
 
 The Skylos Makefile contract is parsed by the pinned `makeutil` executable in
 `test_skylos_lint_contract.py`; `make test` verifies that the parser is

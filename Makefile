@@ -88,9 +88,10 @@ DF12_PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv run --isolated \
   --enable=$(DF12_PYLINT_MESSAGES)
 AMBRLEAKS = $(UV_RUN_ENV) uv run --python $(DF12_PYTHON) ambrleaks
 SKYLOS_VERSION = 4.33.2
-SKYLOS_COMMAND = $(UV_RUN_ENV) uv tool run --from 'skylos==$(SKYLOS_VERSION)' skylos
-SKYLOS = $(SKYLOS_COMMAND) --config-file pyproject.toml
-SKYLOS_WHITELIST = $(SKYLOS_COMMAND) whitelist
+# Skylos parses source using its own Python AST, so Python 3.14 prevents
+# phantom dead-code findings from syntax older tool runtimes cannot parse.
+SKYLOS_CLI = $(UV_RUN_ENV) uv tool run --python 3.14 --from 'skylos==$(SKYLOS_VERSION)' skylos
+SKYLOS = $(SKYLOS_CLI) --config-file pyproject.toml
 SKYLOS_PRODUCTION_TARGETS ?= cuprum
 SKYLOS_EXCLUDE_FOLDERS ?= cuprum/unittests
 
@@ -181,9 +182,11 @@ rust-lint: ## Run Rust documentation, Clippy, Whitaker, and spelling checks
 	+$(MAKE) spelling
 
 skylos-allow: export SKYLOS_NAME = $(value NAME)
+skylos-allow: export SKYLOS_REASON = $(value REASON)
 skylos-allow: ## Document one named Skylos exception, not an entry point
 	@test -n "$${SKYLOS_NAME}" || { printf "Error: NAME is required for a named whitelist exception\\n" >&2; exit 2; }
-	$(SKYLOS_WHITELIST) "$${SKYLOS_NAME}"
+	@test -n "$${SKYLOS_REASON}" || { printf "Error: REASON is required for a named whitelist exception\\n" >&2; exit 2; }
+	$(SKYLOS_CLI) whitelist "$${SKYLOS_NAME}" --reason "$${SKYLOS_REASON}"
 
 lint-windows: ## Lint the Rust extension's Windows cfg branches (cross-target)
 	@if ! rustup target list --installed | grep -qx '$(WINDOWS_TARGET)'; then \

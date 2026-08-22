@@ -2,9 +2,11 @@
 
 Skylos is invoked through variables and recipes whose order is significant:
 the scanner accepts ``--config-file`` before a scan path, while the standalone
-``whitelist`` subcommand must appear immediately after ``skylos``. Makeutil
-parses the Makefile into structured rules and variables, so these tests assert
-that interface without depending on whitespace or nearby source text.
+``whitelist`` subcommand must appear immediately after ``skylos``. Skylos also
+uses its own Python AST, so it must run with Python 3.14 to understand the
+project syntax. Makeutil parses the Makefile into structured rules and
+variables, so these tests assert that interface without depending on
+whitespace or nearby source text.
 """
 
 from __future__ import annotations
@@ -151,22 +153,37 @@ def test_lint_recipe_runs_the_production_dead_code_gate() -> None:
 
 def test_whitelist_target_uses_skylos_subcommand_contract() -> None:
     """`skylos whitelist` must precede the name and have no scan options."""
+    assert _variable_tokens("SKYLOS_CLI") == (
+        "$(UV_RUN_ENV)",
+        "uv",
+        "tool",
+        "run",
+        "--python",
+        "3.14",
+        "--from",
+        "skylos==$(SKYLOS_VERSION)",
+        "skylos",
+    )
     assert _variable_tokens("SKYLOS") == (
-        "$(SKYLOS_COMMAND)",
+        "$(SKYLOS_CLI)",
         "--config-file",
         "pyproject.toml",
-    )
-    assert _variable_tokens("SKYLOS_WHITELIST") == (
-        "$(SKYLOS_COMMAND)",
-        "whitelist",
     )
 
     whitelist_commands = [
         command
         for command in _recipe_tokens("skylos-allow")
-        if command[:1] == ("$(SKYLOS_WHITELIST)",)
+        if command[:1] == ("$(SKYLOS_CLI)",)
     ]
-    assert whitelist_commands == [("$(SKYLOS_WHITELIST)", "$${SKYLOS_NAME}")]
+    assert whitelist_commands == [
+        (
+            "$(SKYLOS_CLI)",
+            "whitelist",
+            "$${SKYLOS_NAME}",
+            "--reason",
+            "$${SKYLOS_REASON}",
+        )
+    ]
 
 
 def test_skylos_configuration_models_implicit_runtime_callers() -> None:
