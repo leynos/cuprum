@@ -3100,6 +3100,18 @@ The Skylos Makefile contract is parsed by the pinned `makeutil` executable in
 available before running the test suite. CI installs its pinned Makeutil
 revision before running that target.
 
+For local test runs, install the same pinned parser and toolchain before
+running `make test`:
+
+```bash
+rustup toolchain install nightly-2026-05-28 --profile minimal
+RUSTFLAGS="-Zpolonius=next" cargo +nightly-2026-05-28 install \
+  --git https://github.com/leynos/makeutil \
+  --rev 29fc5a1634ffbaa18a773eed9dff1b2838a45d9c \
+  --locked --force makeutil
+make test
+```
+
 ### Spelling policy
 
 `make spelling` is the whole gate. It runs the shared

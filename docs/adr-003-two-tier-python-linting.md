@@ -174,3 +174,28 @@ version explicit and reviewable.
 The explicit tag keeps the two installation paths aligned, but a future release
 update must change both references and the contract test together. The project
 lock file should also be regenerated when the development dependency changes.
+
+## Addendum — 2026-08-23: Skylos production dead-code stage
+
+The original two-tier decision remains the foundation for Ruff and the
+PyPy-backed Pylint checks. [ADR-004: Interrogate docstring-coverage gate]
+subsequently added `interrogate`, while later addenda introduced the DF12 and
+Ambrleaks stages. The effective Python lint order is now:
+
+1. Ruff — fast, broad lint rules and docstring style.
+2. `interrogate` — 100 per cent docstring presence.
+3. PyPy-backed Pylint — focused selected messages.
+4. `df12-python-lints` — shared Pylint rules under CPython 3.14.
+5. `ambrleaks` — snapshot-secret scanning under CPython 3.14.
+6. Skylos — strict production dead-code detection.
+
+Skylos is a blocking sixth stage in `make lint`. It scans production targets,
+excludes test folders, and uses the strict gate configuration in
+`pyproject.toml`. Its standalone tool environment is pinned to Python 3.14 so
+that Skylos parses the project's supported syntax with the intended `ast`
+implementation. This addendum supersedes the original two-tier count and any
+statement that `make lint` runs only Ruff and Pylint; ADR-004 remains the
+decision record for the `interrogate` gate.
+
+[ADR-004: Interrogate docstring-coverage gate]:
+  adr-004-interrogate-docstring-gate.md

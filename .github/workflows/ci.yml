@@ -882,6 +882,8 @@ jobs:
       CARGO_HTTP_MULTIPLEXING: 'false'
       CARGO_NET_RETRY: '5'
       MDTABLEFIX_VERSION: '0.6.0'
+      MAKEUTIL_REVISION: '29fc5a1634ffbaa18a773eed9dff1b2838a45d9c'
+      MAKEUTIL_TOOLCHAIN: 'nightly-2026-05-28'
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
@@ -996,6 +998,16 @@ jobs:
         uses: leynos/shared-actions/.github/actions/install-mdtablefix@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
         with:
           version: ${{ env.MDTABLEFIX_VERSION }}
+
+      - name: Install Makefile parser
+        run: |
+          rustup toolchain install "${MAKEUTIL_TOOLCHAIN}" --profile minimal
+          RUSTFLAGS="-Zpolonius=next" cargo +"${MAKEUTIL_TOOLCHAIN}" install \
+            --git https://github.com/leynos/makeutil \
+            --rev "${MAKEUTIL_REVISION}" \
+            --locked \
+            --force \
+            makeutil
 
       - name: Prepare Cargo dependencies
         run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml
