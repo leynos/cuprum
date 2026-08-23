@@ -11,6 +11,7 @@ the network is unavailable, and ``typos.local.toml`` supplies the narrow
 repository-specific policy that must not weaken the estate-wide base.
 """
 
+import logging
 import tomllib
 import urllib.error
 import urllib.parse
@@ -23,6 +24,8 @@ DEFAULT_BASE_URL = (
     "refs/heads/main/data/typos-oxendict-base.toml"
 )
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+
+_logger = logging.getLogger(__name__)
 
 
 def dictionary_from_cache(repository: Path = REPOSITORY_ROOT) -> rollout.Dictionary:
@@ -45,6 +48,7 @@ def render_config(repository: Path = REPOSITORY_ROOT) -> str:
 def _tracked_remote_fallback(
     source: str | Path,
     destination: Path,
+    error: OSError | urllib.error.URLError,
 ) -> rollout.RefreshResult | None:
     """Return a valid tracked config only for an unavailable HTTPS authority."""
     if not isinstance(source, str) or urllib.parse.urlsplit(source).scheme != "https":
@@ -53,6 +57,14 @@ def _tracked_remote_fallback(
         tomllib.loads(destination.read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, tomllib.TOMLDecodeError):
         return None
+    _logger.warning(
+        "Falling back to the tracked typos configuration; the shared "
+        "dictionary authority was unreachable",
+        extra={
+            "event": "typos_rollout.tracked_config_fallback",
+            "error_type": type(error).__name__,
+        },
+    )
     return rollout.RefreshResult("tracked-config", destination)
 
 
@@ -72,8 +84,8 @@ def main(
             metadata=repository / ".typos-oxendict-base.json",
             offline=offline,
         )
-    except (OSError, urllib.error.URLError):
-        fallback = _tracked_remote_fallback(source, destination)
+    except (OSError, urllib.error.URLError) as error:
+        fallback = _tracked_remote_fallback(source, destination, error)
         if fallback is not None:
             return fallback
         raise
@@ -82,5 +94,8 @@ def main(
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
+    )
     refresh = main()
     print(f"{refresh.status}: {REPOSITORY_ROOT / 'typos.toml'}")

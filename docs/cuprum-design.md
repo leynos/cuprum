@@ -1197,12 +1197,14 @@ registered hooks without performing authorization, dispatching hooks, or
 mutating the context. Pipeline execution preserves this ordering for every
 stage before emitting its `plan` event and dispatching before-hooks.
 
-`cuprum._pipeline_types` owns the shared pipeline dataclasses and types.
-Keeping these passive definitions separate preserves the dependency-safe import
-boundary and the project file-size constraints; the module does not perform
-execution logic. `cuprum._pipeline_internals` re-exports the shared types only
-for compatibility. Do not reintroduce the combined `_run_before_hooks`
-responsibility in `_pipeline_types`.
+`cuprum._pipeline_internals` owns pipeline orchestration: it enforces the
+allowlist, collects hooks, builds stage observations, coordinates process
+execution and completion, and assembles stage results. `cuprum._pipeline_types`
+contains the passive shared dataclasses and types used by that coordination
+layer; it does not perform execution logic. `_pipeline_internals` re-exports
+selected `_pipeline_collect` helpers for backwards compatibility, not those
+types. Do not reintroduce the combined
+`_run_before_hooks` responsibility in `_pipeline_types`.
 
 Error propagation policy (to be finalized, but roughly):
 
@@ -1760,17 +1762,23 @@ behavioural guarantees.
 ### 13.1 Motivation
 
 The current implementation reads and writes data in 4 KB chunks (defined by
-`_READ_SIZE = 4096` in `cuprum/_streams.py`). The core functions affected are:
+`_READ_SIZE = 4096` in `cuprum/_streams_pump.py`). The core functions affected
+are:
 
-- `_pump_stream()` – transfers data between pipeline stages with backpressure;
-- `_consume_stream()` – dispatcher that routes to one of the two functions
-  below based on whether line callbacks are registered;
+- `_pump_stream()` in `cuprum/_streams_pump.py` – transfers data between
+  pipeline stages with backpressure;
+- `_consume_stream()` in `cuprum/_streams.py` – dispatcher that routes to one
+  of the two functions below based on whether line callbacks are registered;
 - `_drain()` – canonical read/echo/capture loop shared by both consume
   variants;
 - `_consume_stream_without_lines()` – reads subprocess output without line
   parsing, optionally teeing to sinks;
 - `_consume_stream_with_lines()` – handles line-by-line callbacks with
   incremental decoding configured by `config.encoding` and `config.errors`.
+
+`cuprum/_streams_pump.py` owns the pump implementation and `_READ_SIZE`, while
+`cuprum/_streams.py` owns stream consumption and re-exports the pump surface
+for compatibility.
 
 `_drain()` owns the shared mechanics for reading stream chunks, forwarding
 echoed text to a configured sink, and accumulating captured bytes. The
@@ -2108,12 +2116,16 @@ an injectable `BackendSelector` around each worker run to set
 and then restore the previous environment.
 
 This selector mutates process-wide state, so the implementation serializes the
-critical section with a process-local `threading.RLock`. A thread-local
-reentrancy guard rejects nested activation on the same thread with
-`RuntimeError` before any environment mutation occurs. The lock permits
-well-formed helper code to re-acquire the same lock while preserving the
-stronger selector invariant that only one active backend override owns the
-environment/cache pair at a time.
+critical section with a process-local `threading.RLock`. `_EnvBackendSelector`
+holds `_BACKEND_LOCK` across the complete `repeat_count` loop, including every
+`run_sync` subprocess execution. Concurrent workers therefore cannot run their
+repeat loops in parallel while they need different, process-local stream
+backend selections. A thread-local reentrancy guard rejects nested activation
+on the same thread with `ReentrantBackendSelectorError`, a `RuntimeError`
+subclass, before any environment mutation occurs. The lock permits well-formed
+helper code to re-acquire the same lock while preserving the stronger selector
+invariant that only one active backend override owns the environment/cache pair
+at a time.
 
 The rejected reentry path emits a warning that includes the requested backend,
 the current thread id, and the active-selector flag. This makes accidental

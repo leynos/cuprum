@@ -36,7 +36,7 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecPhase
     from cuprum.program import Program
 
-_KNOWN_PHASES = ["plan", "start", "stdout", "stderr", "stdin", "stdin_error", "exit"]
+_KNOWN_PHASES = ("plan", "start", "stdout", "stderr", "stdin", "stdin_error", "exit")
 
 # Reserved names live directly on every LogRecord. Passing any of them through
 # `extra=` makes `Logger.makeRecord` raise, so the `cuprum_` prefix is what

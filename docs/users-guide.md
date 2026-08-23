@@ -388,6 +388,13 @@ Timeout resolution order:
 - `ExecutionContext.timeout` when provided and not `None`.
 - `ScopeConfig(timeout=...)` default set via `scoped()` when present.
 
+`ScopeConfig(timeout=...)` and `CuprumContext(timeout=...)` validate their
+timeouts when constructed. Values must be finite and non-negative; `None`
+means no timeout, and numeric values are stored as `float`. Negative values,
+`NaN`, and positive or negative infinity raise `ValueError`. A value too large
+to convert to `float` also raises `ValueError` rather than leaking the
+conversion `OverflowError`.
+
 Example usage:
 
 ```python
@@ -1171,6 +1178,51 @@ The `ConcurrentResult` dataclass provides:
   original submission position. Unlike `failures` (positions within the
   possibly compacted `results`), these are stable across collect-all and
   fail-fast modes.
+
+### Validation and error handling
+
+`ConcurrentConfig` and `ConcurrentResult` validate their arguments eagerly, so
+misuse is reported at construction time rather than surfacing later as a
+confusing failure.
+
+`ConcurrentConfig(concurrency=...)`:
+
+- `None` (the default) means unthrottled concurrency; otherwise the value
+  must be an `int` greater than or equal to `1`.
+- A non-integer value raises `TypeError`. `bool` values are rejected too:
+  since `True`/`False` are `int` subclasses in Python, they are excluded
+  deliberately rather than being silently treated as `1`/`0`.
+- A value below `1` (for example `0` or `-1`) raises `ValueError`.
+
+```python
+from cuprum import ConcurrentConfig
+
+ConcurrentConfig(concurrency=0)      # ValueError: concurrency must be >= 1
+ConcurrentConfig(concurrency=True)   # TypeError: concurrency must be an int, got bool
+```
+
+`ConcurrentResult` is normally returned by `run_concurrent`/
+`run_concurrent_sync` rather than constructed directly, but the same
+validation applies when constructed directly in tests:
+
+- Each entry in `failures` must be an `int` (again, `bool` is rejected),
+  otherwise `TypeError` is raised.
+- A failure index outside `range(len(results))` raises `ValueError`.
+- `failures` must be strictly ascending, and therefore unique; duplicate or
+  descending indices raise `ValueError`.
+- `submission_indices` defaults to `None`, which backfills the identity
+  sequence `(0, 1, …, n-1)`, including the empty tuple when `results` is
+  empty. Any supplied sequence whose length differs from `results` raises
+  `ValueError`; an explicit empty tuple paired with non-empty `results` is
+  therefore rejected rather than backfilled.
+- A supplied sequence must also satisfy entry-level constraints, in addition
+  to matching the length of `results`: each entry must be an exact `int`
+  (`bool` is rejected, raising `TypeError`), non-negative, and strictly
+  ascending (and therefore unique); violations raise `ValueError`. Entries
+  are *not* bounded above by `len(results)` — after fail-fast compaction a
+  surviving command's original submission index can exceed the compacted
+  result length, so direct construction must permit values greater than or
+  equal to `len(results)`.
 
 ## Performance extensions (optional Rust)
 

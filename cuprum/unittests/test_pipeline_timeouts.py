@@ -21,7 +21,7 @@ from unittest import mock
 
 import pytest
 
-from cuprum import ScopeConfig, TimeoutExpired, _pipeline_internals, scoped, sh
+from cuprum import ScopeConfig, TimeoutExpired, _pipeline_collect, scoped, sh
 from cuprum._process_lifecycle import (
     _terminate_pipeline_remaining_stages,
     _terminate_timed_out_stages,
@@ -256,7 +256,7 @@ def test_pipeline_run_cancelled_during_grace_still_reaps_stages(
             await asyncio.sleep(0.01)
         await asyncio.sleep(0.15)
         task.cancel()
-        with contextlib.suppress(BaseException):
+        with contextlib.suppress(asyncio.CancelledError):
             await task
 
     with (
@@ -345,7 +345,7 @@ def test_zero_timeout_reconciles_pipe_tasks() -> None:
     python = sh.make(python_program, catalogue=catalogue)
     created: list[asyncio.Task[None]] = []
     events: list[ExecEvent] = []
-    real_create = _pipeline_internals._create_pipe_tasks
+    real_create = _pipeline_collect._create_pipe_tasks
 
     def spy(processes: list[asyncio.subprocess.Process]) -> list[asyncio.Task[None]]:
         """Record the pumps the pipeline creates so they can be inspected."""
@@ -384,9 +384,9 @@ def test_zero_timeout_reconciles_pipe_tasks() -> None:
 
     try:
         with (
-            mock.patch.object(_pipeline_internals, "_create_pipe_tasks", spy),
+            mock.patch.object(_pipeline_collect, "_create_pipe_tasks", spy),
             mock.patch.object(
-                _pipeline_internals, "_terminate_timed_out_stages", no_termination
+                _pipeline_collect, "_terminate_timed_out_stages", no_termination
             ),
             scoped(ScopeConfig(allowlist=frozenset([python_program]))),
             sh.observe(events.append),

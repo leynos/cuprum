@@ -15,6 +15,7 @@ import time
 import typing as typ
 
 from cuprum._pipeline_types import _EventDetails, _StageObservation
+from cuprum._process_exit import _await_process_exit
 from cuprum._process_lifecycle import _merge_env, _terminate_process
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._subprocess_context import _cwd_arg, _sh_module
@@ -68,7 +69,7 @@ async def _wait_for_exit_code(
     unchanged.
     """
     try:
-        exit_code = await process.wait()
+        exit_code = await _await_process_exit(process)
     except asyncio.CancelledError:
         # A deadline expiry (via asyncio.timeout) and an external cancellation
         # both surface here as CancelledError and need the same teardown:
@@ -270,6 +271,31 @@ async def _run_subprocess_with_streams(
     return exit_code, exited_at, stdout_text, stderr_text
 
 
+async def _run_subprocess_without_streams(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+) -> tuple[int, float]:
+    """Run a subprocess without stream capture or echo."""
+    stdin_task = _spawn_stdin_writer(
+        process, execution.stdin_data, execution.observation
+    )
+    try:
+        exit_code, exited_at = await _wait_for_exit_code_within_timeout(
+            process,
+            execution,
+        )
+    except (TimeoutError, asyncio.CancelledError):
+        # Manage the stdin writer separately from _wait_for_exit_code's
+        # consumers: cancel and drain it before the timeout is
+        # translated or the cancellation propagates, so a stdin drain
+        # blocked on an unread pipe cannot delay completion.
+        await _cancel_stdin_writer(stdin_task)
+        raise
+    if stdin_task is not None:
+        await stdin_task
+    return exit_code, exited_at
+
+
 async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     """Execute a subprocess and return the command result."""
     process = await _spawn_subprocess(execution)
@@ -281,23 +307,9 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     stderr_text: str | None = None
     try:
         if not execution.capture and not execution.echo:
-            stdin_task = _spawn_stdin_writer(
-                process, execution.stdin_data, execution.observation
+            exit_code, exited_at = await _run_subprocess_without_streams(
+                process, execution
             )
-            try:
-                exit_code, exited_at = await _wait_for_exit_code_within_timeout(
-                    process,
-                    execution,
-                )
-            except (TimeoutError, asyncio.CancelledError):
-                # Manage the stdin writer separately from _wait_for_exit_code's
-                # consumers: cancel and drain it before the timeout is
-                # translated or the cancellation propagates, so a stdin drain
-                # blocked on an unread pipe cannot delay completion.
-                await _cancel_stdin_writer(stdin_task)
-                raise
-            if stdin_task is not None:
-                await stdin_task
         else:
             (
                 exit_code,
@@ -349,6 +361,7 @@ __all__ = [
     "_drain_stream_consumers",
     "_execute_subprocess",
     "_run_subprocess_with_streams",
+    "_run_subprocess_without_streams",
     "_spawn_stream_consumers",
     "_spawn_subprocess",
     "_wait_for_exit_code",

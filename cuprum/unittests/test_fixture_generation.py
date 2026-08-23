@@ -10,7 +10,11 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from benchmarks.deterministic_b64_fixture import FixtureConfig, write_fixture
+from benchmarks.deterministic_b64_fixture import (
+    FixtureConfig,
+    _CounterStream,
+    write_fixture,
+)
 from cuprum.unittests.conftest import _VOLATILE_KEYS, redact
 
 if typ.TYPE_CHECKING:
@@ -214,3 +218,20 @@ def test_fixture_wrap76_lines_are_at_most_76_characters(
     output_bytes = result["output_bytes"]
     assert isinstance(output_bytes, int)
     assert output_bytes > 0
+
+
+def test_counter_stream_read_rejects_negative_size() -> None:
+    """A negative read size is rejected with ``ValueError`` (regression)."""
+    stream = _CounterStream(seed_bytes=b"seed")
+    with pytest.raises(ValueError, match="size must be non-negative"):
+        stream.read(-1)
+
+
+@pytest.mark.parametrize("size", [0, 1, 32, 100], ids=["zero", "one", "block", "large"])
+def test_counter_stream_read_returns_exact_length(size: int) -> None:
+    """Zero- and positive-size reads still return exactly ``size`` bytes."""
+    stream = _CounterStream(seed_bytes=b"seed")
+    result = stream.read(size)
+    assert len(result) == size, (
+        f"expected read({size}) to return {size} bytes, got {len(result)}"
+    )

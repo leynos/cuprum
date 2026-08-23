@@ -271,7 +271,12 @@ def test_load_plan_payload_rejects_mismatched_command_count(tmp_path: pth.Path) 
 def test_build_hyperfine_command_includes_selected_scenarios(
     tmp_path: pth.Path,
 ) -> None:
-    """The hyperfine command should target the filtered scenario commands."""
+    """The hyperfine command should tag each scenario and keep raw commands.
+
+    Every selected scenario contributes exactly one ``--command-name`` option
+    followed by its logical name; the raw worker commands remain present and
+    ordered after all naming options.
+    """
     throughput_path = tmp_path / "throughput.json"
     selected = [
         (
@@ -311,9 +316,32 @@ def test_build_hyperfine_command_includes_selected_scenarios(
         "1",
         "--runs",
         "10",
+        "--command-name",
+        "python-small-single-nocb",
+        "--command-name",
+        "rust-small-single-nocb",
         "python cmd",
         "rust cmd",
     ]
+
+    assert len(selected) == 2, "test fixture should cover two scenarios"
+    name_pairs = [
+        command[index + 1]
+        for index, option in enumerate(command[:-1])
+        if option == "--command-name"
+    ]
+    assert len(name_pairs) == len(selected), (
+        "every selected scenario must contribute exactly one --command-name"
+    )
+    assert name_pairs == [scenario["name"] for scenario, _ in selected], (
+        "command-name options must carry the selected scenario names in order"
+    )
+
+    name_options_end = command.index("python cmd")
+    assert command[name_options_end:] == ["python cmd", "rust cmd"], (
+        "raw worker commands must remain present and ordered after the "
+        "command-name options"
+    )
 
 
 def test_write_filtered_plan_preserves_selected_scenarios(tmp_path: pth.Path) -> None:

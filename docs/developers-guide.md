@@ -257,8 +257,8 @@ Private helpers emit diagnostic logs rather than installing a global metrics or
 tracing backend.  Hook scheduling and hook failures use the
 `cuprum._observability` logger with structured `extra` fields such as
 `cuprum_phase`, `cuprum_program`, `cuprum_error_type`, and
-`cuprum_scheduled_task_count`.  Stream early-close decisions use warning-level
-records on the `cuprum._streams` logger and include `cuprum_discarded_bytes`
+`cuprum_scheduled_task_count`.  Stream early-close decisions use debug-level
+records on the `cuprum._streams_pump` logger and include `cuprum_discarded_bytes`
 when upstream bytes are drained after the downstream writer has closed.
 Suppressed writer cleanup failures remain debug-level diagnostics with
 `cuprum_operation` and `cuprum_error_type`, because they are expected during
@@ -651,8 +651,8 @@ replacement allowlist is empty, and a non-empty replacement establishes an
 explicit policy by setting restriction. So direct replacement cannot turn a
 deny-all context into the permissive default.
 
-The allowlist, hook, and timeout rules are split into pure helpers so the
-invariants can be tested directly:
+The allowlist, hook, and timeout rules are split into pure helpers in
+`cuprum/context/_policy.py` so the invariants can be tested directly:
 
 - `_narrow_allowlist(parent, config, parent_is_restricted=...)` returns the
   narrowed allowlist for the three parent/config cases without mutating either
@@ -660,28 +660,85 @@ invariants can be tested directly:
 - `_is_narrowed_allowlist_restricted(config, parent_is_restricted=...)`
   returns whether the child context should enforce allowlist policy after
   narrowing.
-- `_merge_before_hooks(parent, config)` appends scoped before hooks after
-  parent hooks so execution stays FIFO.
-- `_merge_after_hooks(parent, config)` prepends scoped after hooks before
-  parent hooks so teardown stays LIFO.
-- `_merge_observe_hooks(parent, config)` appends scoped observation hooks after
-  parent hooks so execution stays FIFO.
+- `_merge_hooks(parent, config, *, scoped_first)` merges parent and scoped
+  hooks under one generic ordering contract. With `scoped_first=False` it
+  returns `parent + config`, preserving FIFO ordering for before hooks and
+  observe hooks. With `scoped_first=True` it returns `config + parent`,
+  preserving LIFO teardown ordering for after hooks.
 - `_validate_timeout(timeout, class_name)` coerces non-negative timeout values
-  to `float`, preserves `None`, and rejects negative values.
+  to `float`, preserves `None`, and rejects negative values as well as
+  non-finite values (NaN and positive or negative infinity).
 - `_resolve_narrowed_timeout(parent, config)` inherits the parent timeout when
   the scoped config is silent and otherwise uses the scoped value.
 
-Context property tests live in `cuprum/unittests/test_context.py`. Run them
-directly with:
+Core context tests live in `cuprum/unittests/test_context.py`. Context policy
+property tests live in `cuprum/unittests/test_context_narrowing.py` and
+`cuprum/unittests/test_context_timeouts.py`; they exercise both ordering modes
+of `_merge_hooks` (parent-first FIFO and scoped-first LIFO) through the generic
+helper rather than per-hook variants. Run them directly with:
 
 ```bash
-uv run pytest -q cuprum/unittests/test_context.py
+uv run pytest -q cuprum/unittests/test_context_narrowing.py \
+    cuprum/unittests/test_context_timeouts.py
 ```
 
-The same test module marks pure-helper properties for optional CrossHair
+Those property modules mark pure-helper properties for optional CrossHair
 execution. The `crosshair` Hypothesis profile is registered in
 `cuprum/unittests/conftest.py`; using it requires the `hypothesis-crosshair`
 package from the dev dependency group.
+
+### Extracted module boundaries
+
+Several implementation modules were split out of larger files to keep each
+seam small and single-purpose. `cuprum/context/_policy.py` is described above;
+the subprocess module boundaries (`cuprum/_subprocess_execution.py`,
+`cuprum/_subprocess_stdin.py`, `cuprum/_subprocess_timeout.py`) and concurrent
+execution are covered in [Cuprum design](cuprum-design.md) §8.1.5 (with
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md)) and §8.3.1
+respectively, and are not repeated here.
+
+Runtime (`cuprum/`):
+
+- `cuprum/_concurrent_config.py` — the `ConcurrentConfig`/`ConcurrentResult`
+  dataclasses and their validation; an implementation detail of
+  `cuprum.concurrent`.
+- `cuprum/_pipeline_collect.py` — drives a spawned pipeline to completion and
+  collects its output; also hosts the `cuprum.sh` lazy-import shim. Its
+  `_PipelineInvariantError` reports a missing lazy import or a `TimeoutError`
+  reached without a configured timeout. It derives from the shared
+  `_ExecutionInvariantError` and `RuntimeError`, and the timeout path chains
+  the originating exception.
+- `cuprum/_pipeline_stream_results.py` — pipe-result triage for pipeline
+  stages.
+- `cuprum/_streams_pump.py` — the stream pump loop with backpressure.
+- `cuprum/adapters/_tracing_protocols.py` — the PEP 544 `Span`/`Tracer`
+  protocols for the tracing adapter.
+
+Benchmarks (`benchmarks/`):
+
+- `benchmarks/ratchet_ratio_extraction.py` — extracts within-run Rust/Python
+  ratio maps and validates that baseline and candidate comparison groups
+  match. `benchmarks/ratchet_rust_performance.py` owns report-value
+  construction; this module owns ratio extraction and ratio-map validation.
+- `benchmarks/_tee_profile_worker_backend.py` — backend selection for the tee
+  hot-path profiling worker (`_EnvBackendSelector` and its supporting state).
+
+Spelling policy (`scripts/`):
+
+- `scripts/typos_rollout_dictionary.py` — the shared dictionary model, TOML
+  parsing, and merging; standard library only.
+- `scripts/typos_rollout_refresh.py` — cache freshness policy: HTTP validator
+  metadata, local mtime comparison, and the conditional HTTPS fetch with its
+  HTTPS-only redirect handler and stale-cache fallback.
+- `scripts/typos_rollout.py` remains the rendering module and public façade,
+  re-exporting the API so callers keep one entry point.
+
+Test helpers:
+
+- `cuprum/unittests/test_maturin_pins.py` — reads and validates the
+  synchronized maturin version pins; its narrowly shared exceptions live in
+  `cuprum/unittests/_maturin_pin_support.py` (see
+  [Maturin pin synchronization and native wheel tests](#maturin-pin-synchronization-and-native-wheel-tests)).
 
 ## `rust_consume_stream` integration status
 
@@ -950,9 +1007,15 @@ Backend selection is process-local and environment-driven. `auto` unsets
 concurrent benchmark workers cannot race on `os.environ` or the backend
 availability and selection caches. The selector clears those caches before
 entering the context and again when restoring the previous environment value.
+It holds `_BACKEND_LOCK` across the complete `repeat_count` loop, serializing
+concurrent benchmark workers for the full worker workload, including every
+`run_sync` subprocess execution. Consequently, workers that require different
+or process-local stream backend selection cannot execute their repeat loops in
+parallel, which limits their aggregate throughput.
 It is intentionally not re-entrant: a thread-local guard detects nested entry
-on the same thread, logs the rejected backend and thread identifier, and raises
-`RuntimeError` before mutating backend state.
+on the same thread, logs the rejected backend and thread identifier, and
+raises `ReentrantBackendSelectorError` (a `RuntimeError` subclass, retained
+for backward compatibility) before mutating backend state.
 
 ### Selector observability metrics
 
@@ -1133,8 +1196,8 @@ that fixed examples cannot cover exhaustively:
 
 - `test_nested_selector_rejects_generated_backend_pairs` draws an outer and an
   inner backend from the available set and asserts that same-thread nested
-  entry always raises `RuntimeError` before mutating backend state, regardless
-  of which backend pair is generated.
+  entry always raises `ReentrantBackendSelectorError` before mutating backend
+  state, regardless of which backend pair is generated.
 - `test_generated_concurrent_workers_complete` draws a thread count (2–8) and a
   same-length sequence of backend selections, then runs one worker per backend
   concurrently and asserts every worker completes with `status == "ok"` and
@@ -1881,6 +1944,19 @@ Add repository-only proper names or quoted upstream terms to
 `typos.local.toml`; never edit generated entries in `typos.toml` by hand. The
 gate also runs the helper's Python 3.13 tests with at least 90% line coverage.
 
+The cache refresh in `scripts/typos_rollout_refresh.py` fetches the shared
+dictionary only over HTTPS and rejects any redirect that would downgrade the
+connection to plain HTTP: a dedicated `_HttpsOnlyRedirectHandler` refuses the
+redirect before urllib reissues the request, so a compromised or
+misconfigured upstream cannot silently serve the dictionary in cleartext.
+Refresh degradations — a rejected HTTPS-downgrade redirect, falling back to a
+stale cache after a failed refresh, or reusing the cache in offline mode —
+are counted in a bounded, fixed-key counter and reported through structured
+`logging` warnings (or info, for the offline case). Those log records never
+include the request URL; they carry only the event name and non-sensitive
+context such as the rejected redirect's scheme or the triggering error's
+type.
+
 Ruff must be invoked through the project virtual environment, not as a floating
 host tool. The `RUFF` variable expands to `$(UV_RUN_ENV) uv run ruff`, and the
 `ruff` probe lives in `VENV_TOOLS` so `make` verifies that the locked
@@ -1969,8 +2045,14 @@ for type checking.
 
 The canonical lint configuration lives in `pyproject.toml`:
 
+- `[dependency-groups] dev` pins `ruff==0.14.7`. The pin exists so that Ruff's
+  version — and therefore its rule set and preview-rule behaviour — is
+  reproducible between developer machines and CI; an unpinned Ruff could
+  silently gain or lose findings when a new release ships.
 - `[tool.ruff]` sets line length, preview mode, and target Python version.
-- `[tool.ruff.lint]` selects the active Ruff rule families.
+- `[tool.ruff.lint]` selects the active Ruff rule families, including `EM`
+  (require exception messages to be assigned to a variable before `raise`,
+  rather than written inline in the `raise` statement).
 - `[tool.ruff.lint.per-file-ignores]` records test-specific exceptions.
 - `[tool.ruff.lint.flake8-import-conventions]` and
   `[tool.ruff.lint.flake8-import-conventions.aliases]` enforce import aliases
@@ -2009,7 +2091,7 @@ family:
 - **Test scaffolding (`per-file-ignore`).** `ASYNC109` and `ASYNC240` are
   ignored through `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` for
   exactly two modules — `cuprum/unittests/test_observe_stdin_early_close.py`
-  and `tests/behaviour/test_execution_runtime.py`. Their async scaffolding
+  and `tests/behaviour/_execution_runtime_support.py`. Their async scaffolding
   polls a PID file with asyncio-only helpers, so a `timeout` parameter and
   blocking `pathlib` calls are acceptable there; the async-native path
   libraries (`trio.Path` / `anyio.Path`) that `ASYNC240` recommends are not in
@@ -2416,15 +2498,30 @@ guarded by regression tests in `cuprum/unittests/test_subprocess_timeout.py`.
 
 Neither wait helper terminates unconditionally, and neither drains.
 `_wait_for_exit_code` terminates the process only when the wait is cancelled —
-which is also how an `asyncio.timeout` expiry arrives — while a successful wait
-returns the exit code as soon as `process.wait()` completes, leaving the
-process alone. `_wait_for_exit_code_within_timeout` terminates only on its
-non-positive fast path, before any wait begins.
+which is also how an `asyncio.timeout` expiry arrives. A successful wait
+completes when `_await_process_exit` obtains either the normal
+`process.wait()` result or an already-published `process.returncode` when the
+asyncio waiter is stranded, leaving the process alone in both cases.
+`_wait_for_exit_code_within_timeout` terminates only on its non-positive fast
+path, before any wait begins.
 
 Draining is the caller's job either way: after termination it drains the stream
 consumers exactly once via `_drain_stream_consumers` (see the stdin-injection
 sequence below), and terminating the process before that drain is what lets it
 reach EOF.
+
+All three subprocess exit-wait paths use `_await_process_exit` from
+`cuprum/_process_exit.py`: the single-command wait in `_wait_for_exit_code`,
+the per-stage waits created by `_PipelineWaitState.from_processes`, and the
+standalone teardown wait used by `_terminate_process` for timeout or
+cancellation cleanup. Fail-fast pipeline teardown awaits the existing
+per-stage wait tasks and therefore inherits the same protection. The helper
+first accepts an already-published `process.returncode`; otherwise it races
+`process.wait()` against a bounded exponential-backoff poll of that return
+code, starting at 0.01 seconds and capped at 1.0 second, and cancels the
+losing task. This closes the asyncio lost-wakeup race where `returncode`
+has been published but the waiter remains pending. Keep the regression in
+`cuprum/unittests/test_process_exit.py` aligned with this contract.
 
 ### Pipeline timeout and teardown
 

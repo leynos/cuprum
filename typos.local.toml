@@ -11,7 +11,12 @@ accepted = []
 [words.corrections]
 
 [patterns]
-ignore = []
+# Inline code spans hold identifiers, CLI flags, and API names that must match
+# their upstream spelling exactly, so they are not the prose this policy
+# governs. The shared dictionary already excludes fenced blocks for that
+# reason; single-backtick spans are the same category. The style guide states
+# the rule directly: "Keep United States (US) spelling when used in an API".
+ignore = ['`[^`\n]+`']
 
 [files]
 exclude = []
