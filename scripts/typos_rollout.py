@@ -113,11 +113,6 @@ def write_config(path: pathlib.Path, dictionary: Dictionary) -> None:
     dictionary : Dictionary
         Shared spelling policy to render and validate before writing.
 
-    Returns
-    -------
-    None
-        The validated configuration is atomically published at *path*.
-
     Raises
     ------
     tomllib.TOMLDecodeError
