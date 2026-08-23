@@ -30,9 +30,10 @@ open each document.
   accepted decision for extending Rust coverage beyond the initial stream
   backend.
 - [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md) -
-  accepted decision for combining Ruff with Pylint under PyPy.
+  accepted decision for Ruff and PyPy-backed Pylint, with an addendum covering
+  the later `interrogate` and Skylos lint tiers.
 - [ADR-004: Interrogate docstring-coverage gate][adr-004] - accepted decision
-  to enforce 100% docstring coverage as a third lint tier.
+  to enforce 100% docstring coverage through `interrogate`.
 - [ADR-005: Unified Rust availability probe][adr-005] - accepted decision to
   unify Rust availability probing behind a cached dispatch resolver.
 - [ADR-006: Context package split][adr-006] - accepted decision to split

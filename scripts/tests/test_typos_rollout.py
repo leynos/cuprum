@@ -259,13 +259,15 @@ def test_local_policy_preserves_inline_code_exemption(
         _dictionary_text(), encoding="utf-8"
     )
     (tmp_path / "typos.local.toml").write_text(
-        _dictionary_text().replace("ignore = []", 'ignore = ["`[^`\\\\n]+`"]'),
+        (SCRIPT_DIRECTORY.parent / "typos.local.toml").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
 
     config = tomllib.loads(generator.render_config(tmp_path))
 
-    assert "`[^`\\n]+`" in config["default"]["extend-ignore-re"]
+    assert "`[^`\\n]+`" in config["default"]["extend-ignore-re"], (
+        "repository inline-code exemption must survive generated configuration"
+    )
 def test_render_and_write_are_deterministic_valid_toml(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
     tmp_path: Path,
