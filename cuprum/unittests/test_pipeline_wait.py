@@ -17,6 +17,9 @@ from cuprum._testing import (
     _wait_for_pipeline,
 )
 
+if typ.TYPE_CHECKING:
+    from collections import abc as cabc
+
 
 class _StubPipelineWaitProcess:
     """Stub process modelling exit codes and readiness for wait tests."""
@@ -96,6 +99,41 @@ class _StrandedPipelineWaitProcess:
         return 0
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _StrandedPipelineWaitCase:
+    """Capture one completed stranded pipeline-wait scenario."""
+
+    result: _PipelineWaitResult
+    processes: list[_StrandedPipelineWaitProcess]
+    polling_intervals: dict[asyncio.Task[object], list[float]]
+
+
+@dc.dataclass(slots=True)
+class _PollingRecorder:
+    """Record task-local polls and publish controlled pipeline completion."""
+
+    processes: list[_StrandedPipelineWaitProcess]
+    original_sleep: cabc.Callable[[float], cabc.Awaitable[None]]
+    required_poll_rounds: int = 3
+    polling_intervals: dict[asyncio.Task[object], list[float]] = dc.field(
+        default_factory=dict
+    )
+
+    async def __call__(self, interval: float) -> None:
+        """Record one poll, then yield without waiting for its interval."""
+        polling_task = asyncio.current_task()
+        assert polling_task is not None, "each poll must run in an asyncio task"
+        intervals = self.polling_intervals.setdefault(polling_task, [])
+        intervals.append(interval)
+        if len(self.polling_intervals) == len(self.processes) and all(
+            len(recorded) >= self.required_poll_rounds
+            for recorded in self.polling_intervals.values()
+        ):
+            for process in self.processes:
+                process.returncode = 0
+        await self.original_sleep(0)
+
+
 async def _exercise_wait_for_pipeline(
     exit_codes: tuple[int, int, int],
     ready_stages: frozenset[int],
@@ -123,6 +161,58 @@ async def _exercise_wait_for_pipeline(
     )
 
     return processes[0], processes[1], processes[2], result
+
+
+async def _run_stranded_pipeline_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> _StrandedPipelineWaitCase:
+    """Run a three-stage pipeline whose process waiters remain stranded."""
+    processes = [_StrandedPipelineWaitProcess(pid=index) for index in range(3)]
+    recorder = _PollingRecorder(processes, asyncio.sleep)
+    monkeypatch.setattr("cuprum._process_exit.asyncio.sleep", recorder)
+    result = await _wait_for_pipeline(
+        typ.cast("list[asyncio.subprocess.Process]", processes),
+        pipe_tasks=[],
+        cancel_grace=0.01,
+        started_at=[0.0] * len(processes),
+    )
+    return _StrandedPipelineWaitCase(
+        result=result,
+        processes=processes,
+        polling_intervals=recorder.polling_intervals,
+    )
+
+
+def _assert_stranded_pipeline_wait(case: _StrandedPipelineWaitCase) -> None:
+    """Assert successful recovery from every stranded process waiter."""
+    assert case.result.exit_codes == (0, 0, 0), "all published exits must succeed"
+    assert case.result.failure_index is None, "successful stages must not fail fast"
+    assert all(process.wait_cancelled for process in case.processes), (
+        "each stranded process waiter must be cancelled after publication"
+    )
+    assert all(process.terminate_calls == 0 for process in case.processes), (
+        "successful stages must not receive terminate requests"
+    )
+    assert all(process.kill_calls == 0 for process in case.processes), (
+        "successful stages must not receive kill requests"
+    )
+    assert len(case.polling_intervals) == len(case.processes), (
+        "each pipeline stage must own a distinct polling task"
+    )
+    for intervals in case.polling_intervals.values():
+        assert intervals[0] == _PROCESS_EXIT_INITIAL_POLL_INTERVAL, (
+            "each polling task must begin with the initial interval"
+        )
+        assert intervals[1:] == [
+            min(
+                _PROCESS_EXIT_INITIAL_POLL_INTERVAL * 2**index,
+                _PROCESS_EXIT_MAX_POLL_INTERVAL,
+            )
+            for index in range(1, len(intervals))
+        ], "later polling intervals must use capped exponential backoff"
+        assert all(
+            interval <= _PROCESS_EXIT_MAX_POLL_INTERVAL for interval in intervals
+        ), "no polling interval may exceed the configured cap"
 
 
 def _assert_stage_terminated(
@@ -235,68 +325,6 @@ def test_wait_for_pipeline_polls_stranded_waiters_independently(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Published exit codes complete each pipeline stage's stranded waiter."""
-
-    async def run_case() -> tuple[
-        _PipelineWaitResult,
-        list[_StrandedPipelineWaitProcess],
-        dict[asyncio.Task[object], list[float]],
-    ]:
-        """Publish exits after each stage has completed controlled poll rounds."""
-        processes = [_StrandedPipelineWaitProcess(pid=index) for index in range(3)]
-        polling_intervals: dict[asyncio.Task[object], list[float]] = {}
-        original_sleep = asyncio.sleep
-        required_poll_rounds = 3
-
-        async def record_poll(interval: float) -> None:
-            """Record task-local polling before deterministically yielding."""
-            polling_task = asyncio.current_task()
-            assert polling_task is not None, "each poll must run in an asyncio task"
-            intervals = polling_intervals.setdefault(polling_task, [])
-            intervals.append(interval)
-            if len(polling_intervals) == len(processes) and all(
-                len(recorded) >= required_poll_rounds
-                for recorded in polling_intervals.values()
-            ):
-                for process in processes:
-                    process.returncode = 0
-            await original_sleep(0)
-
-        monkeypatch.setattr("cuprum._process_exit.asyncio.sleep", record_poll)
-        result = await _wait_for_pipeline(
-            typ.cast("list[asyncio.subprocess.Process]", processes),
-            pipe_tasks=[],
-            cancel_grace=0.01,
-            started_at=[0.0] * len(processes),
-        )
-        return result, processes, polling_intervals
-
-    result, processes, polling_intervals = asyncio.run(run_case())
-
-    assert result.exit_codes == (0, 0, 0), "all published exits must succeed"
-    assert result.failure_index is None, "successful stages must not fail fast"
-    assert all(process.wait_cancelled for process in processes), (
-        "each stranded process waiter must be cancelled after publication"
+    _assert_stranded_pipeline_wait(
+        asyncio.run(_run_stranded_pipeline_wait(monkeypatch))
     )
-    assert all(process.terminate_calls == 0 for process in processes), (
-        "successful stages must not receive terminate requests"
-    )
-    assert all(process.kill_calls == 0 for process in processes), (
-        "successful stages must not receive kill requests"
-    )
-    assert len(polling_intervals) == len(processes), (
-        "each pipeline stage must own a distinct polling task"
-    )
-    for intervals in polling_intervals.values():
-        assert intervals[0] == _PROCESS_EXIT_INITIAL_POLL_INTERVAL, (
-            "each polling task must begin with the initial interval"
-        )
-        assert intervals[1:] == [
-            min(
-                _PROCESS_EXIT_INITIAL_POLL_INTERVAL * 2**index,
-                _PROCESS_EXIT_MAX_POLL_INTERVAL,
-            )
-            for index in range(1, len(intervals))
-        ], "later polling intervals must use capped exponential backoff"
-        assert all(
-            interval <= _PROCESS_EXIT_MAX_POLL_INTERVAL for interval in intervals
-        ), "no polling interval may exceed the configured cap"
