@@ -1,33 +1,19 @@
-"""When the fail-fast decision reaches the observe hooks, and what it says.
-
-The fail-fast log records are covered in `test_pipeline_wait_observability.py`;
-this module covers the other channel the same decision is published on — a
-single ``pipeline_fail_fast`` :class:`~cuprum.events.ExecEvent`. Its value to a
-consumer rests on three things, so each is pinned here: that it fires exactly
-once and only for the completion that actually triggers a teardown, that it
-carries the failing stage's own ``exec_id`` so it can be joined to that stage's
-span, and that it is published before termination is requested.
-"""
+"""When the fail-fast decision reaches the observe hooks, and what it says."""
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import logging
 import typing as typ
 
 import pytest
 
 from cuprum import _pipeline_wait
 from cuprum.unittests._pipeline_wait_support import (
-    CompletionPlan,
     apply_completions,
-    drive_completions,
-    field_values,
     make_stage_observations,
     make_wait_state,
     pin_clock,
-    record_actions,
     record_terminations,
 )
 
@@ -46,7 +32,7 @@ class _Driven:
 
     events: tuple[ExecEvent, ...]
     observations: tuple[_StageObservation, ...]
-    records: tuple[logging.LogRecord, ...]
+    terminations: tuple[tuple[int, float], ...]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -60,7 +46,6 @@ class _SilentCase:
 
 def _drive(
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
     *,
     stage_count: int,
     completions: cabc.Sequence[tuple[int, int]],
@@ -68,19 +53,16 @@ def _drive(
     """Drive completions through the async boundary with a collecting hook."""
     events: list[ExecEvent] = []
     observations = make_stage_observations(stage_count, (events.append,))
-    records = drive_completions(
-        monkeypatch,
-        caplog,
-        CompletionPlan(
-            stage_count=stage_count,
-            completions=list(completions),
-            observations=observations,
-        ),
-    )
+    terminations = record_terminations(monkeypatch)
+    pin_clock(monkeypatch, 12.5)
+    state = make_wait_state(stage_count, observations=observations)
+    apply_completions(state, list(completions))
     # Snapshot both collectors: the result is shared with assertions that must
     # not be able to append to the sequence they are reading.
     return _Driven(
-        events=tuple(events), observations=observations, records=tuple(records)
+        events=tuple(events),
+        observations=observations,
+        terminations=tuple(terminations),
     )
 
 
@@ -95,7 +77,6 @@ class TestFailFastEventEmission:
     def test_a_non_final_first_failure_publishes_one_event(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """The one completion that triggers a teardown publishes exactly once.
 
@@ -106,7 +87,6 @@ class TestFailFastEventEmission:
         """
         driven = _drive(
             monkeypatch,
-            caplog,
             stage_count=3,
             completions=[(0, 4)],
         )
@@ -118,7 +98,6 @@ class TestFailFastEventEmission:
     def test_the_event_carries_the_decision(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Stage position, pipeline width, exit code, and elapsed time travel with it.
 
@@ -128,7 +107,6 @@ class TestFailFastEventEmission:
         """
         driven = _drive(
             monkeypatch,
-            caplog,
             stage_count=4,
             completions=[(1, 7)],
         )
@@ -148,19 +126,16 @@ class TestFailFastEventEmission:
     def test_the_event_reuses_the_failing_stage_token(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """The token is the failing stage's own, not a fresh or neighbouring one.
 
         This is the whole correlation story: a tracing adapter finds the span
         to annotate by ``exec_id``, so a token minted for the occasion — or
         taken from a fixed position such as stage zero — would attach the
-        decision to nothing, or to the wrong stage. The log records are checked
-        against the same token, which is what proves the two channels agree.
+        decision to nothing, or to the wrong stage.
         """
         driven = _drive(
             monkeypatch,
-            caplog,
             stage_count=3,
             completions=[(1, 3)],
         )
@@ -171,12 +146,6 @@ class TestFailFastEventEmission:
         assert event.exec_id == expected, (
             f"the event must carry stage 1's own token {expected!r}, "
             f"found {event.exec_id!r}"
-        )
-        logged = {
-            str(value) for value in field_values(driven.records, "cuprum_exec_id")
-        }
-        assert logged == {str(expected)}, (
-            f"the log records must carry the same token, found {logged!r}"
         )
 
     @pytest.mark.parametrize(
@@ -212,12 +181,10 @@ class TestFailFastEventEmission:
         self,
         case: _SilentCase,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """No event where there is no fail-fast teardown to announce."""
         driven = _drive(
             monkeypatch,
-            caplog,
             stage_count=case.stage_count,
             completions=case.completions,
         )
@@ -227,7 +194,6 @@ class TestFailFastEventEmission:
     def test_a_later_failure_does_not_publish_a_second_event(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Only the latched failure is announced, however many stages then fail.
 
@@ -237,7 +203,6 @@ class TestFailFastEventEmission:
         """
         driven = _drive(
             monkeypatch,
-            caplog,
             stage_count=4,
             completions=[(0, 1), (1, 1), (2, 1)],
         )
@@ -255,7 +220,6 @@ class TestFailFastEventOrdering:
     def test_the_event_precedes_the_termination_request(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A teardown that never returns must not swallow the announcement.
 
@@ -296,8 +260,7 @@ class TestFailFastEventOrdering:
         observations = make_stage_observations(3, (note_event,))
         state = make_wait_state(3, observations=observations)
 
-        with caplog.at_level(logging.WARNING, logger=_pipeline_wait.__name__):
-            apply_completions(state, [(0, 4)])
+        apply_completions(state, [(0, 4)])
 
         assert order == ["event", "terminate"], (
             f"the event must be published before termination starts, found {order!r}"
@@ -310,7 +273,6 @@ class TestFailFastEventWithoutHooks:
     def test_no_observations_still_terminates(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Publishing is additive: with nothing to publish to, nothing changes.
 
@@ -318,17 +280,14 @@ class TestFailFastEventWithoutHooks:
         observations, so the absence must degrade to silence rather than an
         attribute error taken on the fail-fast path.
         """
-        with caplog.at_level(logging.WARNING, logger=_pipeline_wait.__name__):
-            records = drive_completions(
-                monkeypatch,
-                caplog,
-                CompletionPlan(stage_count=3, completions=[(0, 4)]),
-            )
+        terminations = record_terminations(monkeypatch)
+        pin_clock(monkeypatch, 12.5)
+        state = make_wait_state(3)
 
-        actions = record_actions(records)
+        apply_completions(state, [(0, 4)])
 
-        assert "pipeline_fail_fast_termination" in actions, (
-            f"the teardown must still be reported and requested, found {actions!r}"
+        assert terminations == [(0, 0.25)], (
+            f"the teardown must still be requested, found {terminations!r}"
         )
 
 
@@ -342,7 +301,6 @@ class TestFailFastHookFailure:
     def test_a_raising_hook_propagates_before_the_teardown(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Emission is fail-closed, and fails before termination is requested.
 
@@ -366,10 +324,7 @@ class TestFailFastHookFailure:
         observations = make_stage_observations(3, (raising_hook,))
         state = make_wait_state(3, observations=observations)
 
-        with (
-            pytest.raises(_HookFailureError),
-            caplog.at_level(logging.WARNING, logger=_pipeline_wait.__name__),
-        ):
+        with pytest.raises(_HookFailureError):
             apply_completions(state, [(0, 4)])
 
         assert terminations == [], (

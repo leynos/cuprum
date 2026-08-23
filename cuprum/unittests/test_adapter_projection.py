@@ -150,22 +150,33 @@ class TestAdapterProjection:
             Generated event with optional fields independently present or absent.
         """
         canonical = {key for key, _ in _event_common_fields(event, lambda field: field)}
+        expected_log_fields = (
+            canonical - {"argv"} if event.phase == "pipeline_fail_fast" else canonical
+        )
 
         extra_keys = {
             key.removeprefix("cuprum_")
             for key in _build_extra(event)
             if key not in {"cuprum_phase", "cuprum_tags"}
         }
-        assert extra_keys == canonical, (
+        assert extra_keys == expected_log_fields, (
             "logging extras must expose exactly the canonical common fields after "
             "removing their backend prefix"
         )
-        assert _build_extra(event)["cuprum_argv"] == event.argv, (
-            "logging extras must preserve argv as a tuple"
-        )
-        assert _build_extra(event)["cuprum_tags"] == dict(event.tags), (
-            "logging extras must preserve the event tag mapping"
-        )
+        if event.phase == "pipeline_fail_fast":
+            assert "cuprum_argv" not in _build_extra(event), (
+                "fail-fast extras must omit the raw argument vector"
+            )
+            assert "cuprum_tags" not in _build_extra(event), (
+                "fail-fast extras must omit arbitrary event tags"
+            )
+        else:
+            assert _build_extra(event)["cuprum_argv"] == event.argv, (
+                "logging extras must preserve argv as a tuple"
+            )
+            assert _build_extra(event)["cuprum_tags"] == dict(event.tags), (
+                "logging extras must preserve the event tag mapping"
+            )
 
         attr_keys = {
             key.removeprefix("cuprum.")

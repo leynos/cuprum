@@ -20,7 +20,6 @@ from cuprum.unittests._pipeline_wait_support import (
     make_stage_observations,
     make_wait_state,
     pin_clock,
-    record_actions,
     record_terminations,
 )
 
@@ -336,9 +335,9 @@ class TestSimultaneousCompletions:
         assert run.result.failure_index == 0, (
             f"the failure must still latch, found {run.result.failure_index!r}"
         )
-        assert record_actions(run.records) == ["pipeline_stage_first_failure"], (
-            "only the latch may be reported when there is nothing to terminate, "
-            f"found {record_actions(run.records)!r}"
+        assert run.records == (), (
+            "a fully settled batch has no termination to report, so direct log "
+            f"records must be absent, found {run.records!r}"
         )
         assert run.terminations == (), (
             f"no termination may be requested, found {run.terminations!r}"

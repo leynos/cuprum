@@ -10,7 +10,10 @@ lives here rather than in either of them.
 
 from __future__ import annotations
 
+import os
+import tempfile
 import typing as typ
+from pathlib import Path
 
 from cuprum import ScopeConfig, scoped, sh
 from cuprum.sh import RunOutputOptions
@@ -22,14 +25,16 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent
     from cuprum.sh import ExecutionContext
 
-# Downstream stages linger briefly after their stdin closes so they cannot
-# settle in the same ``asyncio.wait`` batch as the failing stage; see
-# `run_failing_pipeline`.
-_SETTLE_DELAY_S = 0.2
-_READ_STDIN = (
-    "import sys, time; sys.stdout.write(sys.stdin.read()); "
-    f"time.sleep({_SETTLE_DELAY_S})"
-)
+_READ_STDIN = """import select
+import sys
+
+sys.stdout.write(sys.stdin.read())
+sys.stdout.flush()
+with open(sys.argv[1], "rb", buffering=0) as gate:
+    ready, _, _ = select.select([gate], [], [], 5.0)
+if not ready:
+    raise SystemExit("fail-fast event was not observed")
+"""
 
 
 def run_failing_pipeline(
@@ -43,34 +48,76 @@ def run_failing_pipeline(
     exit promptly can arrive in one batch. Stage 0 is then processed after its
     siblings have already finished; nothing is left to terminate, and the run
     latches a failure index without emitting an event. The downstream stages
-    therefore sleep for ``_SETTLE_DELAY_S`` after their stdin closes, which puts
-    them in a later batch than the failing stage.
+    therefore block after their stdin closes until the observing hook has
+    received the fail-fast event. Each downstream stage waits on its own FIFO,
+    whose five-second ``select`` timeout is a watchdog: a regression fails the
+    test rather than hanging it.
 
     ``context`` is passed to the run unchanged, which is how a caller injects
     the execution tags whose shadowing is under test.
+
+    Parameters
+    ----------
+    context : ExecutionContext | None
+        Context passed through unchanged to ``Pipeline.run_sync``.
+
+    Returns
+    -------
+    tuple[ExecEvent, ...]
+        Events published by the pipeline, in publication order.
     """
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
     events: list[ExecEvent] = []
 
-    pipeline = (
-        python("-c", "import sys; sys.exit(3)")
-        | python("-c", _READ_STDIN)
-        | python("-c", _READ_STDIN)
-    )
+    with tempfile.TemporaryDirectory() as directory:
+        gates = [Path(directory) / f"stage-{index}.gate" for index in range(2)]
+        for gate in gates:
+            os.mkfifo(gate)
+        gate_fds = [os.open(gate, os.O_RDWR | os.O_NONBLOCK) for gate in gates]
 
-    with (
-        scoped(ScopeConfig(allowlist=frozenset([python_program]))),
-        sh.observe(events.append),
-    ):
-        pipeline.run_sync(
-            output=RunOutputOptions(capture=True, echo=False),
-            context=context,
+        def observe(event: ExecEvent) -> None:
+            """Capture an event and release the downstream fail-fast gates."""
+            events.append(event)
+            if event.phase == "pipeline_fail_fast":
+                for gate_fd in gate_fds:
+                    os.write(gate_fd, b"1")
+
+        pipeline = (
+            python("-c", "import sys; sys.exit(3)")
+            | python("-c", _READ_STDIN, str(gates[0]))
+            | python("-c", _READ_STDIN, str(gates[1]))
         )
+
+        try:
+            with (
+                scoped(ScopeConfig(allowlist=frozenset([python_program]))),
+                sh.observe(observe),
+            ):
+                pipeline.run_sync(
+                    output=RunOutputOptions(capture=True, echo=False),
+                    context=context,
+                )
+        finally:
+            for gate_fd in gate_fds:
+                os.close(gate_fd)
 
     return tuple(events)
 
 
 def phase(events: cabc.Sequence[ExecEvent], name: str) -> list[ExecEvent]:
-    """Return the events of one phase, in the order they were published."""
+    """Return the events of one phase, in the order they were published.
+
+    Parameters
+    ----------
+    events : Sequence[ExecEvent]
+        Published events to filter.
+    name : str
+        Phase name to select.
+
+    Returns
+    -------
+    list[ExecEvent]
+        Matching events in their original publication order.
+    """
     return [event for event in events if event.phase == name]

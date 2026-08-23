@@ -1,17 +1,16 @@
 """Shared scaffolding for the `_pipeline_wait` completion-ordering tests.
 
 The completion transition is exercised from four angles — a Hypothesis state
-machine, pinned examples, the async boundary, and the structured records — each
-in its own module. The setup they share lives here so a change to how a wait
-state is built, or to how termination is intercepted, lands in one place rather
-than four.
+machine, pinned examples, the async boundary, and fail-fast events — each in
+its own module. The setup they share lives here so a change to how a wait state
+is built, or to how termination is intercepted, lands in one place rather than
+four.
 """
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import logging
 import types
 import typing as typ
 
@@ -108,13 +107,12 @@ def make_wait_state(
     The pure ``record_completion`` transition touches only the exit-code,
     timing, and failure-index bookkeeping, so the task fields are left empty:
     no event loop or subprocess is required to exercise completion ordering.
-    Correlation tokens are supplied because the records the runtime layer
-    emits do read them.
+    Correlation tokens are supplied because the runtime event reads them.
 
     When ``observations`` is given the tokens are derived from it exactly as
     ``cuprum._pipeline_internals`` derives them, so a test can assert that the
-    token on the fail-fast event is the same one the log records carry rather
-    than two independently stubbed values that happen to agree.
+    token on the fail-fast event comes from the matching stage rather than a
+    hard-coded value.
     """
     exec_ids = (
         tuple(str(obs.exec_id) for obs in observations)
@@ -209,55 +207,6 @@ def advancing_clock(monkeypatch: pytest.MonkeyPatch) -> AdvancingClock:
     return clock
 
 
-def structured_fields(record: logging.LogRecord) -> dict[str, object]:
-    """Return a record's ``cuprum_``-prefixed structured fields.
-
-    ``extra=`` sets these directly on the record instance, so they are not
-    attributes of ``LogRecord`` itself; read them from the instance dictionary
-    the way ``cuprum.adapters.logging_adapter`` selects its own fields.
-    """
-    return {
-        key: value for key, value in vars(record).items() if key.startswith("cuprum_")
-    }
-
-
-def field_values(
-    records: cabc.Sequence[logging.LogRecord],
-    key: str,
-) -> list[object]:
-    """Return ``key`` from each record that carries it, in record order.
-
-    Selecting one structured field across a run of records is what nearly
-    every assertion in these modules does, whichever field it is about. This
-    is the one selector for all of them: records that do not carry ``key`` are
-    skipped rather than reported as ``None``, so an assertion on the values can
-    tell "no record carried it" from "a record carried a null".
-    """
-    return [
-        fields[key]
-        for fields in (structured_fields(record) for record in records)
-        if key in fields
-    ]
-
-
-def record_actions(records: cabc.Sequence[logging.LogRecord]) -> list[str]:
-    """Return the ``cuprum_action`` field of each pipeline-wait record."""
-    return [str(value) for value in field_values(records, "cuprum_action")]
-
-
-@dc.dataclass(frozen=True, slots=True)
-class CompletionPlan:
-    """One pipeline's worth of completions to drive through the boundary."""
-
-    stage_count: int
-    completions: list[tuple[int, int]]
-    # What the intercepted termination reports back as the stages it stopped.
-    terminated_count: int = 0
-    # Supplied only by tests that assert on the fail-fast observe event; the
-    # log records need no observation context.
-    observations: tuple[_StageObservation, ...] = ()
-
-
 def apply_completions(
     state: _PipelineWaitState,
     completions: list[tuple[int, int]],
@@ -277,10 +226,8 @@ def apply_completions(
     ``before_each`` is called with the zero-based step index just before each
     completion, for tests that move the clock between them.
 
-    Split out from `drive_completions` so a test that needs its own
-    termination stub, or that expects the boundary to raise, can drive the
-    same completions without `drive_completions` installing a second stub over
-    the top of it.
+    Tests install their own termination stub before calling this helper, so
+    each can inspect the requested stage index and count independently.
     """
 
     async def drive() -> None:
@@ -305,36 +252,3 @@ def apply_completions(
             await asyncio.gather(*standins, return_exceptions=True)
 
     asyncio.run(drive())
-
-
-def drive_completions(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    plan: CompletionPlan,
-) -> list[logging.LogRecord]:
-    """Drive ``plan`` through the real async boundary, capturing logs.
-
-    ``plan.completions`` is applied in order, one ``(stage_index, exit_code)``
-    pair at a time, to a state built for ``plan.stage_count`` stages;
-    ``plan.terminated_count`` is what the intercepted termination reports back
-    as the number of stages it stopped. ``started_at`` is zero for every stage
-    and the clock is pinned to 12.5, so an emitted stage duration is always
-    exactly 12.5.
-    """
-    terminations = record_terminations(
-        monkeypatch,
-        terminated_count=plan.terminated_count,
-    )
-    pin_clock(monkeypatch, 12.5)
-
-    state = make_wait_state(plan.stage_count, observations=plan.observations)
-
-    with caplog.at_level(logging.WARNING, logger=_pipeline_wait.__name__):
-        apply_completions(state, plan.completions)
-
-    # Termination bookkeeping must stay consistent with the records.
-    expected = record_actions(caplog.records).count("pipeline_fail_fast_termination")
-    assert len(terminations) == expected, (  # noqa: S101 - test scaffolding assertion
-        "each fail-fast termination record must accompany exactly one termination call"
-    )
-    return caplog.records

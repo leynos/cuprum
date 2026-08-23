@@ -24,10 +24,11 @@ import pytest
 from cuprum.sh import ExecutionContext
 from cuprum.unittests._fail_fast_pipeline_support import phase, run_failing_pipeline
 from cuprum.unittests._pipeline_wait_support import (
-    CompletionPlan,
-    drive_completions,
-    field_values,
+    apply_completions,
     make_stage_observations,
+    make_wait_state,
+    pin_clock,
+    record_terminations,
 )
 
 if typ.TYPE_CHECKING:
@@ -102,15 +103,12 @@ def test_the_caller_tag_still_reaches_the_hooks_unaltered(
 
 def test_the_emission_seam_ignores_a_shadowing_tag(
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Driving one completion directly pins the same rule without subprocesses.
 
     The end-to-end run can only exercise the stage the pipeline happens to
     fail at. Here the failing stage is chosen — stage 1 of 4 — so a reported
-    index that merely *looked* right at zero has nowhere to hide. The log
-    records are checked alongside the event because both channels derive their
-    index from the same completion, and both must stay clear of the tags.
+    index that merely *looked* right at zero has nowhere to hide.
     """
     events: list[ExecEvent] = []
     observations = make_stage_observations(
@@ -119,15 +117,10 @@ def test_the_emission_seam_ignores_a_shadowing_tag(
         tag_overrides=_SHADOWING_TAGS,
     )
 
-    records = drive_completions(
-        monkeypatch,
-        caplog,
-        CompletionPlan(
-            stage_count=4,
-            completions=[(1, 7)],
-            observations=observations,
-        ),
-    )
+    record_terminations(monkeypatch)
+    pin_clock(monkeypatch, 12.5)
+    state = make_wait_state(4, observations=observations)
+    apply_completions(state, [(1, 7)])
 
     (event,) = [item for item in events if item.phase == _FAIL_FAST_PHASE]
 
@@ -138,8 +131,4 @@ def test_the_emission_seam_ignores_a_shadowing_tag(
     assert event.tags["pipeline_stage_index"] == _SHADOWED_INDEX, (
         "the shadowing tag must survive on the event, "
         f"found {event.tags['pipeline_stage_index']!r}"
-    )
-    logged = set(field_values(records, "cuprum_stage_index"))
-    assert logged == {1}, (
-        f"every record must log the completed stage index, found {logged!r}"
     )

@@ -78,8 +78,11 @@ class _PipelineCompletionMachine(RuleBasedStateMachine):
         )
         ended_at = self._clock
 
-        self._state.record_completion(idx, exit_code, ended_at=ended_at)
-        needs_termination = self._state.should_terminate_others(idx)
+        needs_termination = self._state.record_completion(
+            idx,
+            exit_code,
+            ended_at=ended_at,
+        )
         self._pending.remove(idx)
 
         # Timing slot population and the exit code land in the right slots.
@@ -106,7 +109,7 @@ class _PipelineCompletionMachine(RuleBasedStateMachine):
             "should_terminate_others must hold only for a non-final first failure"
         )
 
-        # The query is pure: asking again changes nothing and answers the same.
+        # The compatibility query is pure and agrees with the transition.
         assert self._state.should_terminate_others(idx) == needs_termination, (
             "should_terminate_others must be repeatable without side effects"
         )

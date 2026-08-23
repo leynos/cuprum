@@ -27,8 +27,7 @@ class TestRecordCompletionExamples:
         ended_at: float,
     ) -> bool:
         """Record a completion and return the fail-fast decision for it."""
-        state.record_completion(idx, exit_code, ended_at=ended_at)
-        return state.should_terminate_others(idx)
+        return state.record_completion(idx, exit_code, ended_at=ended_at)
 
     def test_first_nonzero_exit_latches_failure_index(self) -> None:
         """The earliest-completed non-zero exit fixes ``failure_index``.

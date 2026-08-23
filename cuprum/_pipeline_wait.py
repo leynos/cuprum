@@ -58,7 +58,6 @@ from cuprum._pipeline_streams import (
 from cuprum._pipeline_wait_records import (
     _completion_log_fields,
     _emit_fail_fast_event,
-    _log_completion_event,
 )
 from cuprum._process_lifecycle import (
     _cleanup_pipeline_on_error,
@@ -68,7 +67,6 @@ from cuprum._process_lifecycle import (
 
 if typ.TYPE_CHECKING:
     from cuprum._pipeline_types import _StageObservation, _StageWaitContext
-    from cuprum._pipeline_wait_records import _CompletionLogFields
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -147,7 +145,7 @@ class _PipelineWaitState:
         exit_code: int,
         *,
         ended_at: float,
-    ) -> None:
+    ) -> bool:
         """Record a stage's completion (command).
 
         This is the pure completion-ordering transition behind
@@ -156,10 +154,11 @@ class _PipelineWaitState:
         injected as ``ended_at`` so the transition is deterministic) and latches
         the *first* non-zero exit — in completion order — as ``failure_index``.
 
-        Deciding whether to fail fast is the separate
-        [`should_terminate_others`][cuprum._pipeline_wait._PipelineWaitState.should_terminate_others]
-        query, and all I/O — reading the clock, terminating stages — stays with
-        the caller.
+        It returns whether this completion newly requests fail-fast
+        termination: only a newly latched failure from a non-final stage can
+        do so. All I/O — reading the clock and terminating stages — stays
+        with the caller, which separately checks whether a stage remains to
+        terminate.
 
         Examples
         --------
@@ -182,10 +181,12 @@ class _PipelineWaitState:
             assert state.ended_at == [2.0, 3.0, 1.0]
 
         """
+        is_first_failure = self.failure_index is None and exit_code != 0
         self.exit_codes[completed_idx] = exit_code
         self.ended_at[completed_idx] = ended_at
-        if self.failure_index is None and exit_code != 0:
+        if is_first_failure:
             self.failure_index = completed_idx
+        return is_first_failure and completed_idx != len(self.exit_codes) - 1
 
     def should_terminate_others(self, completed_idx: int) -> bool:
         """Report whether completing ``completed_idx`` should fail the pipeline fast.
@@ -235,34 +236,15 @@ class _PipelineWaitState:
 async def _terminate_and_report(
     state: _PipelineWaitState,
     processes: list[asyncio.subprocess.Process],
+    failure_index: int,
     cancel_grace: float,
-    fields: _CompletionLogFields,
 ) -> None:
-    """Terminate the other stages, reporting the teardown either side of it.
-
-    The starting record alone cannot distinguish a teardown that finished from
-    one still waiting on a stage that will not die, so the outcome — how many
-    stages were actually stopped, and how long the teardown took — is reported
-    once termination returns.
-    """
-    _log_completion_event(
-        "pipeline_fail_fast_termination",
-        "terminating other pipeline stages after stage %d exited %d",
-        fields,
-    )
-    started = perf_counter()
-    terminated = await _terminate_pipeline_remaining_stages(
+    """Terminate every other still-running stage after fail-fast is published."""
+    await _terminate_pipeline_remaining_stages(
         processes,
         state.wait_tasks,
-        fields.stage_index,
+        failure_index,
         cancel_grace=cancel_grace,
-    )
-    _log_completion_event(
-        "pipeline_fail_fast_terminated",
-        "terminated other pipeline stages after stage %d exited %d",
-        fields,
-        cuprum_terminated_stage_count=terminated,
-        cuprum_termination_duration_s=max(0.0, perf_counter() - started),
     )
 
 
@@ -275,57 +257,34 @@ async def _process_completed_task(
     """Process a completed wait task, terminating other stages on failure.
 
     This is where the runtime concerns live: reading the clock, invoking the
-    pure command, acting on the pure query, and emitting the structured records
-    that make fail-fast behaviour observable. Logging stays here deliberately —
-    `record_completion` and `should_terminate_others` must remain a
-    side-effect-free mutation and query so they can be verified symbolically.
+    pure transition, checking for a live termination target, and publishing the
+    domain-neutral event that makes fail-fast observable. The transition stays
+    side-effect-free so it can be verified symbolically.
     """
     idx = state.task_to_index[task]
     exit_code = task.result()
     ended_at = perf_counter()
 
-    # Captured before the command so this completion can be distinguished from
-    # one that merely follows an already-latched failure.
-    had_failure = state.failure_index is not None
-    state.record_completion(idx, exit_code, ended_at=ended_at)
-    latched_first_failure = not had_failure and state.failure_index == idx
+    request_termination = state.record_completion(idx, exit_code, ended_at=ended_at)
 
     # The query says whether this completion *is* the trigger; the wait tasks
     # say whether the decision still has a subject. A batch handled in stage
     # order can reach an upstream failure after every sibling has exited, and
     # announcing a teardown of nothing would report a termination that never
     # happened and count a fail-fast the operator cannot act on.
-    terminate_others = state.should_terminate_others(idx) and _has_stages_to_terminate(
+    terminate_others = request_termination and _has_stages_to_terminate(
         idx,
         state.wait_tasks,
     )
 
-    # Every stage passes through here, and most emit nothing: a success logs
-    # no record at all. Derive the fields once it is known one will carry them.
-    if not (latched_first_failure or terminate_others):
-        return
-
-    fields = _completion_log_fields(state, idx, exit_code, ended_at)
-    # Independent of the teardown: the failure latched, and `failure_index`
-    # reports it whether or not there was anything left to stop.
-    if latched_first_failure:
-        _log_completion_event(
-            "pipeline_stage_first_failure",
-            "pipeline stage %d exited %d, latching first failure",
-            fields,
-        )
     if not terminate_others:
         return
 
+    fields = _completion_log_fields(state, idx, exit_code, ended_at)
     # Published before termination is requested, so a consumer learns the
     # decision even if the teardown then blocks on a stage that will not die.
-    # The latch is re-tested rather than assumed from `terminate_others`: the
-    # event reports a *newly latched* failure that leaves stages to stop, which
-    # excludes a later failure as well as a final-stage failure, a single-stage
-    # pipeline, and a batch in which every sibling had already settled.
-    if latched_first_failure:
-        _emit_fail_fast_event(state.observation(idx), fields)
-    await _terminate_and_report(state, processes, cancel_grace, fields)
+    _emit_fail_fast_event(state.observation(idx), fields)
+    await _terminate_and_report(state, processes, idx, cancel_grace)
 
 
 async def _finalize_pipeline_wait(

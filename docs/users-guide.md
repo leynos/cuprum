@@ -256,100 +256,43 @@ Notes:
 
 `result.failure_index` reports the index of the stage that failed first, in
 completion order — whether or not that failure went on to trigger fail-fast
-termination — but not why the other stages ended when they did. Three records
-fill that gap. All are emitted at `WARNING` on the `cuprum._pipeline_wait`
-logger, so they appear in a default logging configuration without any opt-in.
-The level is fixed; it is not the configurable one. That belongs to the
-separate, opt-in `pipeline_fail_fast` event published to observe hooks — see
+termination — but not why the other stages ended when they did. When the first
+non-final failure still has stages to stop, the wait path publishes one
+`pipeline_fail_fast` `ExecEvent` to the registered observe hooks immediately
+before termination begins. There are no direct completion records on the wait
+logger, and no separate record after termination returns.
+
+The event carries the failing stage's index, pipeline width, exit code,
+duration, and execution token. The metrics and tracing adapters consume the
+same event, so they do not need to parse log text. The metrics adapter labels
+`cuprum_pipeline_fail_fast_total` with `program` and `project` alone; the
+execution token remains event and trace detail rather than a metric label. It
+also distinguishes concurrent pipelines whose stage indices would otherwise
+look identical.
+
+`structured_logging_hook()` consumes the event at `LogLevels.fail_fast_level`,
+which defaults to `logging.WARNING`. Once that hook is registered, no extra
+level configuration is needed for fail-fast records. Its fail-fast projection
+deliberately omits `argv` and arbitrary `tags`, so command-line secrets and
+user-supplied tag values do not reach the warning record. Other event phases
+retain their documented projections; see
 [Structured logging adapter](#structured-logging-adapter).
 
-Table 1: fail-fast records emitted while a pipeline is being torn down
-
-| `cuprum_action`                  | Emitted when                                                       |
-| -------------------------------- | ------------------------------------------------------------------ |
-| `pipeline_stage_first_failure`   | the first stage to exit non-zero is latched                        |
-| `pipeline_fail_fast_termination` | that failure is about to terminate every other still-running stage |
-| `pipeline_fail_fast_terminated`  | that termination has returned                                      |
-
-Every record carries the same core fields, so the failing stage can be
-identified without correlating against the result object.
-
-Table 2: fields carried by every fail-fast record
-
-| Field                | Meaning                                       |
-| -------------------- | --------------------------------------------- |
-| `cuprum_stage_index` | position of the failing stage in the pipeline |
-| `cuprum_stage_count` | how many stages the pipeline has              |
-| `cuprum_exit_code`   | the exit code that stage reported             |
-| `cuprum_duration_s`  | that stage's elapsed run time                 |
-| `cuprum_exec_id`     | the stage's execution token                   |
-
-`cuprum_exec_id` is the same per-execution token that stage's log records and
-`ExecEvent`s already carry, so a fail-fast record can be joined to that stage's
-span and its `start` and `exit` events. Correlation by token reaches the log
-and event channels only: the metrics adapter labels
-`cuprum_pipeline_fail_fast_total` with `program` and `project` alone, so a
-counter spike is joined to an individual stage through the matching log record
-or `pipeline_fail_fast` event rather than through a metric label. The token is
-also what tells two pipelines apart when they run concurrently in one process:
-both report a stage 0, but never the same token.
-
-The same decision is also published to any registered observe hook as one
-`pipeline_fail_fast` `ExecEvent`, so a metrics or tracing integration need not
-parse log text to see it. The event is emitted at the same moment as the
-`pipeline_fail_fast_termination` record — after the failure is latched, before
-termination begins — and carries the same stage index, stage count, exit code,
-duration, and `exec_id`. It fires under exactly the conditions that produce a
-termination record, so a final-stage failure, a single-stage pipeline, and a
-failure whose sibling stages have all already exited emit none. See
-[Structured execution events](#structured-execution-events) for the event and
-the adapters that consume it.
-
-The closing `pipeline_fail_fast_terminated` record adds two fields of its own:
-`cuprum_terminated_stage_count`, how many stages were still running and so were
-terminated, and `cuprum_termination_duration_s`, how long that teardown took.
-Its absence after a `pipeline_fail_fast_termination` record means termination
-has not returned — a pipeline still waiting on a stage that has not yet stopped.
-
-Only the *first* failure is reported. Fail-fast terminates the other stages, so
-those stages then exit non-zero too; reporting each would bury the cause under
-its own consequences. A pipeline therefore emits at most one
-`pipeline_stage_first_failure` record, and a second one indicates a real defect
-rather than a second failure.
-
-A stage that fails last emits `pipeline_stage_first_failure` alone, with
-neither termination record: it latched the failure, but there was nothing left
-running to terminate. The same is true of a single-stage pipeline, and of a
-failure that is only reached once every other stage has already exited — as
-when a short pipeline settles all at once. The failure is still latched and
-still reported as `failure_index` in each of those cases; what is absent is a
-termination decision, because there was nothing left to terminate. A run that
-reported one anyway would show `cuprum_terminated_stage_count` of zero and add
-to `cuprum_pipeline_fail_fast_total` for a teardown that never happened.
+The event fires only when the first non-final failure leaves at least one other
+stage running. A final-stage failure, a single-stage pipeline, and a failure
+whose sibling stages have all already exited therefore emit no event. The
+failure is still latched and reported as `failure_index` in each case; what is
+absent is the termination decision because there was nothing left to terminate.
+Only the first failure counts, since later non-zero exits are usually the
+consequences of the fail-fast decision.
 
 Which stage is reported follows the order the stages actually finished in. When
 two stages finish too close together for that order to be observed — because
 they settled in the same underlying wait batch — the earlier stage in the
 pipeline is reported instead, so the reported stage is the upstream cause
 rather than a downstream stage it took down with it. That tie-break only
-applies within such a batch: across batches, whichever stage genuinely
-finished first is the one reported.
-
-The fields are prefixed so they cannot collide with `LogRecord`'s own
-attributes. To surface them, read them off the record:
-
-```python
-import logging
-
-class StageFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        stage = record.__dict__.get("cuprum_stage_index")
-        if stage is not None:
-            record.msg = f"[stage {stage}] {record.msg}"
-        return True
-
-logging.getLogger("cuprum._pipeline_wait").addFilter(StageFilter())
-```
+applies within such a batch: across batches, whichever stage genuinely finished
+first is the one reported.
 
 ## Execution runtime
 
@@ -480,9 +423,9 @@ exception: `exc.output` / `exc.stderr` hold the partial stdout/stderr (or
 before it was killed.
 
 **Non-positive timeout behaviour:** a `timeout` of `0` or a negative value is
-treated as an already-elapsed deadline, so the command expires immediately:
-it never waits for the process to exit on its own. Cuprum instead terminates
-the running process (or every pipeline stage), waits for it to actually exit —
+treated as an already-elapsed deadline, so the command expires immediately: it
+never waits for the process to exit on its own. Cuprum instead terminates the
+running process (or every pipeline stage), waits for it to actually exit —
 honouring `cancel_grace` and escalating to `SIGKILL` if needed — drains the
 stream consumers, and then raises `TimeoutExpired`.
 
@@ -771,13 +714,13 @@ hooks receive `ExecEvent` values describing:
 - `pipeline_fail_fast` — a pipeline is being torn down early because a
   non-final stage was the first to fail. Emitted at most once per pipeline,
   before every other still-running stage — upstream producers and downstream
-  consumers alike — is terminated, and carrying `stage_index`,
-  `stage_count`, `exit_code`, and `duration_s` for the failing stage. It is a
-  decision rather than a lifecycle phase: the failing stage's own `exit` event
-  still follows, and no stage's events are skipped or reordered because of it.
-  Read `stage_index` and `stage_count` from these typed fields rather than from
-  the event's tags: `ExecutionContext.tags` are merged last, so a caller that
-  sets its own `pipeline_stage_index` or `pipeline_stages` tag shadows the tag
+  consumers alike — is terminated, and carrying `stage_index`, `stage_count`,
+  `exit_code`, and `duration_s` for the failing stage. It is a decision rather
+  than a lifecycle phase: the failing stage's own `exit` event still follows,
+  and no stage's events are skipped or reordered because of it. Read
+  `stage_index` and `stage_count` from these typed fields rather than from the
+  event's tags: `ExecutionContext.tags` are merged last, so a caller that sets
+  its own `pipeline_stage_index` or `pipeline_stages` tag shadows the tag
   copies, whereas the typed fields always report the stage the pipeline
   actually acted on.
 
@@ -796,9 +739,9 @@ before the run completes.
 
 #### When an observe hook raises
 
-A failing observe hook fails the run. Cuprum logs the failure and then re-raises
-the hook's *own* exception type out of `run()` / `run_sync()`; it is never
-swallowed. The two hook kinds differ only in when that happens:
+A failing observe hook fails the run. Cuprum logs the failure and then
+re-raises the hook's *own* exception type out of `run()` / `run_sync()`; it is
+never swallowed. The two hook kinds differ only in when that happens:
 
 - A **synchronous** hook raises inline, at the moment the event is emitted.
   Emission of that event stops there, so hooks registered after it do not
@@ -940,32 +883,32 @@ The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 - `cuprum_phase`: Event phase (plan, start, stdout, stderr, stdin,
   stdin_error, exit, pipeline_fail_fast)
 - `cuprum_program`: Program being executed
-- `cuprum_argv`: The command's argument vector, recorded verbatim (see the
-  security note below)
+- `cuprum_argv`: The command's argument vector, recorded verbatim for phases
+  that project it (see the security note below)
 - `cuprum_pid`: Process ID (when available)
 - `cuprum_exit_code`: Exit code (for exit and `pipeline_fail_fast` events)
 - `cuprum_duration_s`: Duration in seconds (for exit and `pipeline_fail_fast`
   events)
 - `cuprum_stage_index` / `cuprum_stage_count`: Failing stage position and
   pipeline width (for `pipeline_fail_fast` events)
-- `cuprum_tags`: Event tags as a dictionary
+- `cuprum_tags`: Event tags as a dictionary, except for
+  `pipeline_fail_fast`, whose projection omits tags
 
-`pipeline_fail_fast` records are emitted at `LogLevels.fail_fast_level`, which
-defaults to `logging.WARNING` so they are visible in a default configuration;
-set the field to change it.
+When registered, `structured_logging_hook()` emits `pipeline_fail_fast` at
+`LogLevels.fail_fast_level`, which defaults to `logging.WARNING`. This default
+means the registered adapter needs no extra level configuration; set the field
+to change it.
 
-> **Security note — argument logging.** `cuprum_argv` is emitted verbatim and
-> is **not** redacted. Any secret passed on the command line — a
-> `--password=…`, an API token, a connection string — is written into the log
-> record (and into the `JsonLoggingFormatter` output) exactly as supplied. The
-> same applies to the plain-text `logging_hook()`, and to every phase alike:
-> `pipeline_fail_fast` inherits the same `cuprum_argv` projection as `start`
-> and `exit`, so a fail-fast event adds no exposure the surrounding lifecycle
-> events did not already carry. Prefer passing secrets via
-> the environment or files rather than as arguments; where arguments may carry
-> sensitive values, wrap `structured_logging_hook()` in a custom observe hook
-> that drops or masks `cuprum_argv` before the record reaches configured
-> handlers, and scope log destinations accordingly.
+> **Security note — argument logging.** For phases that project it,
+> `cuprum_argv` is emitted verbatim and is **not** redacted. Any secret passed
+> on the command line — a `--password=…`, an API token, a connection string —
+> is written into that log record (and into the `JsonLoggingFormatter` output)
+> exactly as supplied. The same applies to the plain-text `logging_hook()`.
+> The `pipeline_fail_fast` projection is the exception: it omits both
+> `cuprum_argv` and `cuprum_tags`, so the fail-fast warning does not expose
+> command-line secrets or arbitrary tag values. Prefer passing secrets via the
+> environment or files rather than as arguments, and scope log destinations
+> accordingly.
 
 For JSON output suitable for log aggregation systems, use the
 `JsonLoggingFormatter`:
@@ -1022,9 +965,9 @@ unique per execution and would give the series unbounded cardinality; the
 others would multiply series for no aggregate a dashboard needs. Those fields
 remain on the `pipeline_fail_fast` event itself and on the trace span, which is
 where per-incident detail belongs. A counter spike therefore cannot be joined
-to a span through the metric: read the `cuprum_exec_id` off the matching log
-record or `pipeline_fail_fast` event, then use that token to find the
-individual stage spans behind the spike.
+to a span through the metric: read the `cuprum_exec_id` off the matching
+`pipeline_fail_fast` event, then use that token to find the individual stage
+spans behind the spike.
 
 To integrate with a real metrics library like `prometheus_client`, implement the
 `MetricsCollector` protocol:
@@ -1495,8 +1438,8 @@ by Python itself, so it can be handled the same way:
 - `errno` is populated, so failures are told apart by number rather than by
   matching message text — which is not a stable interface.
 - `strerror` carries the system's description on its own. Rust renders a raw OS
-  error as `"Bad file descriptor (os error 9)"`; that trailing `(os error N)` is
-  removed, so the number is stated once, by Python's own `[Errno N]` prefix.
+  error as `"Bad file descriptor (os error 9)"`; that trailing `(os error N)`
+  is removed, so the number is stated once, by Python's own `[Errno N]` prefix.
 - The exception is the **subclass** the error implies, not a bare `OSError`, so
   `except BrokenPipeError:` and `except IsADirectoryError:` work as expected.
 

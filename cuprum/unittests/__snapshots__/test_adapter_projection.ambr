@@ -42,10 +42,6 @@
 # name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[pipeline_fail_fast]
   dict({
     'logging_extra': dict({
-      'cuprum_argv': tuple(
-        'echo',
-        'hello',
-      ),
       'cuprum_cwd': '<cwd>',
       'cuprum_duration_s': '<duration_s>',
       'cuprum_exit_code': 3,
@@ -53,11 +49,6 @@
       'cuprum_program': 'echo',
       'cuprum_stage_count': 2,
       'cuprum_stage_index': 0,
-      'cuprum_tags': dict({
-        'pipeline_stage_index': 0,
-        'pipeline_stages': 2,
-        'project': 'proj',
-      }),
     }),
     'metrics_labels': dict({
       'program': 'echo',

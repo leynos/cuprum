@@ -141,8 +141,17 @@ def structured_logging_hook(
 def _build_extra(event: ExecEvent) -> dict[str, object]:
     """Build structured extra data for a log record."""
     extra: dict[str, object] = {"cuprum_phase": event.phase}
-    extra.update(_event_common_fields(event, _prefixed("cuprum_")))
-    extra["cuprum_tags"] = dict(event.tags)
+    common_fields = _event_common_fields(event, _prefixed("cuprum_"))
+    if event.phase == "pipeline_fail_fast":
+        # Fail-fast is warning-level by default. Its decision fields are enough
+        # to diagnose a teardown, so do not elevate arbitrary command arguments
+        # or caller tags into a channel operators commonly retain.
+        extra.update(
+            (name, value) for name, value in common_fields if name != "cuprum_argv"
+        )
+    else:
+        extra.update(common_fields)
+        extra["cuprum_tags"] = dict(event.tags)
     return extra
 
 def _format_duration(duration_s: float | None) -> str:

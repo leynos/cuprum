@@ -35,25 +35,30 @@ from cuprum.unittests._adapter_test_support import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum.events import ExecEvent, ExecId, ExecPhase
 
 _FAIL_FAST_COUNTER = "cuprum_pipeline_fail_fast_total"
 _FAIL_FAST_SPAN_EVENT = "cuprum.pipeline_fail_fast"
 
 
-def _fail_fast_event(*, exec_id: ExecId | None = None) -> ExecEvent:
+def _fail_fast_event(
+    *,
+    exec_id: ExecId | None = None,
+    overrides: cabc.Mapping[str, object] | None = None,
+) -> ExecEvent:
     """Build a representative fail-fast event for a stage 1-of-4 failure."""
-    return _make_exec_event(
-        phase="pipeline_fail_fast",
-        overrides={
-            "exec_id": exec_id if exec_id is not None else new_exec_id(),
-            "exit_code": 3,
-            "duration_s": 0.25,
-            "stage_index": 1,
-            "stage_count": 4,
-            "tags": {"project": "pipe"},
-        },
-    )
+    values: dict[str, object] = {
+        "exec_id": exec_id if exec_id is not None else new_exec_id(),
+        "exit_code": 3,
+        "duration_s": 0.25,
+        "stage_index": 1,
+        "stage_count": 4,
+        "tags": {"project": "pipe"},
+    }
+    values.update(overrides or {})
+    return _make_exec_event(phase="pipeline_fail_fast", overrides=values)
 
 
 class TestMetricsFailFast:
@@ -287,4 +292,46 @@ class TestLoggingFailFast:
 
         assert caplog.records[0].levelno == logging.ERROR, (
             f"the configured level must be used, found {caplog.records[0].levelname}"
+        )
+
+    def test_sensitive_values_stay_out_of_fail_fast_projections(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Warning logs, traces, and metrics retain only fail-fast decision data."""
+        sensitive_value = "pipeline-secret"
+        event = _fail_fast_event(
+            overrides={
+                "argv": ("cat", f"--token={sensitive_value}"),
+                "tags": {"project": "pipe", "token": sensitive_value},
+            }
+        )
+        logger_hook = structured_logging_hook()
+        caplog.set_level(logging.DEBUG, logger="cuprum.exec")
+
+        logger_hook(event)
+
+        tracer = InMemoryTracer()
+        trace_hook = TracingHook(tracer)
+        trace_hook(
+            _make_exec_event(phase="start", overrides={"exec_id": event.exec_id})
+        )
+        trace_hook(event)
+        collector = _LabelRecordingCollector()
+        MetricsHook(collector)(event)
+
+        projections = {
+            "log": vars(caplog.records[0]),
+            "span": tracer.spans[0].events,
+            "metrics": collector.calls,
+        }
+        assert sensitive_value not in repr(projections), (
+            "fail-fast telemetry and its snapshot-ready payload must not expose "
+            "argv or arbitrary tags"
+        )
+        assert "cuprum_argv" not in projections["log"], (
+            "fail-fast logs must not project the raw argument vector"
+        )
+        assert "cuprum_tags" not in projections["log"], (
+            "fail-fast logs must not project arbitrary caller tags"
         )

@@ -236,16 +236,22 @@ def test_pipeline_run_cancelled_during_grace_still_reaps_stages(
         with contextlib.suppress(asyncio.CancelledError, TimeoutExpired):
             await task
 
-    with (
-        scoped(ScopeConfig(allowlist=frozenset([python_program]))),
-        sh.observe(events.append),
-    ):
-        asyncio.run(run_case())
+    try:
+        with (
+            scoped(ScopeConfig(allowlist=frozenset([python_program]))),
+            sh.observe(events.append),
+        ):
+            asyncio.run(run_case())
 
-    pids = started_pids(events)
-    assert pids, "the pipeline must report at least the first stage's pid"
-    for pid in pids:
-        wait_for_process_death(pid, context="cancellation during timeout teardown")
+        assert started_pids(events), (
+            "the pipeline must report at least the first stage's pid"
+        )
+    finally:
+        for pid in started_pids(events):
+            wait_for_process_death(
+                pid,
+                context="cancellation during timeout teardown",
+            )
 
 
 # -- Cancellation during fail-fast teardown -----------------------------------
