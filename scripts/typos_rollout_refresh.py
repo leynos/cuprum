@@ -81,7 +81,13 @@ def reset_degradations() -> None:
 
 
 def degradation_snapshot() -> dict[str, int]:
-    """Return a consistent copy of the degradation counters."""
+    """Return a consistent copy of the degradation counters.
+
+    Returns
+    -------
+    dict[str, int]
+        A snapshot mapping each degradation reason to its current count.
+    """
     with _DEGRADATIONS_LOCK:
         return dict(_REFRESH_DEGRADATIONS)
 

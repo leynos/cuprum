@@ -34,13 +34,16 @@ def pytest_configure(config: pytest.Config) -> None:
     ----------
     config : pytest.Config
         The session configuration. Unused; the decision depends only on the
-        environment and on whether the extension is importable.
+        environment and on whether the extension reports availability.
 
     Raises
     ------
     pytest.UsageError
         If ``CUPRUM_REQUIRE_RUST_EXTENSION`` is set to a non-empty value and
         the native extension is unavailable.
+    ImportError
+        If ``_rust_backend.is_available()`` fails to import the native module
+        for a reason other than the module being absent.
 
     Notes
     -----
@@ -54,7 +57,7 @@ def pytest_configure(config: pytest.Config) -> None:
     covers every gated module regardless of how each one gates — fixture,
     module-level guard, or availability probe — so a new module cannot opt out
     of the requirement by skipping differently.
-    """
+    """  # noqa: DOC502 - ImportError propagates from is_available()
     del config
     message = missing_extension_message(
         required=bool(os.environ.get(REQUIRE_EXTENSION_ENV)),

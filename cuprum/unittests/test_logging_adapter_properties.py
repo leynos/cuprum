@@ -225,7 +225,7 @@ def test_each_phase_logs_at_its_configured_level(
     ``plan``, ``start``, ``stdout``, ``stderr``, and ``exit`` are mapped to
     ``levels`` and must log at their configured level. ``stdin`` and
     ``stdin_error`` are known phases that have no entry in the mapping, and
-    any unknown phase, must fall back to ``logging.DEBUG`` rather than raise
+    any unknown phases must fall back to ``logging.DEBUG`` rather than raise
     — phases are part of the event contract and may grow, and a logging hook
     is the wrong place to discover that.
 

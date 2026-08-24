@@ -72,12 +72,16 @@ def load_plan(path: pth.Path) -> dict[str, object]:
     ------
     IncompatibleBenchmarkProfileError
         If the plan's ``worker_iterations`` field is invalid.
+    OSError
+        If ``path`` cannot be read.
     TypeError
         If the plan's ``scenarios`` field or an entry within it has the
         wrong type.
     ValueError
         If a scenario's ``name`` or ``backend`` field is missing or empty.
-    """  # noqa: DOC502 - TypeError/ValueError propagate from the validators
+    json.JSONDecodeError
+        If ``path`` does not contain valid JSON.
+    """  # noqa: DOC502 - propagates from _load_json and the validators
     _logger.debug("loading benchmark plan: path=%s", path)
     payload = _load_json(path)
     validate_profile_version(payload)
@@ -120,12 +124,16 @@ def load_throughput(path: pth.Path) -> dict[str, object]:
 
     Raises
     ------
+    OSError
+        If ``path`` cannot be read.
     TypeError
         If the payload's ``results`` field or an entry within it has the
         wrong type.
     ValueError
         If a result's ``mean`` field is missing or not a positive float.
-    """  # noqa: DOC502 - TypeError/ValueError propagate from the validators
+    json.JSONDecodeError
+        If ``path`` does not contain valid JSON.
+    """  # noqa: DOC502 - propagates from _load_json and the validators
     payload = _load_json(path)
     results = _require_list(payload.get("results"), name="results")
 
@@ -268,7 +276,13 @@ def main() -> int:
     int
         The process exit code: ``0`` on pass or skip, ``1`` on regression,
         ``2`` on invalid inputs.
-    """
+
+    Raises
+    ------
+    SystemExit
+        If ``_parse_args`` rejects invalid or missing command-line
+        arguments.
+    """  # noqa: DOC502 - SystemExit propagates from _parse_args via argparse
     logging.basicConfig(
         level=logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
