@@ -1263,6 +1263,9 @@ The helper returns `False` on pure Python installations and does not raise when
 native wheels are missing. Other native-extension import failures still surface
 so broken installations are visible.
 
+The helper raises `TypeError` with the message `Rust availability resolver must
+return bool` if the canonical backend resolver returns a non-boolean value.
+
 ### Rust stream pump (internal)
 
 The Rust extension now includes an internal pump function exposed as
