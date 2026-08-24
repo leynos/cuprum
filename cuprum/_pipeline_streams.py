@@ -183,6 +183,38 @@ def _restore_stream_fd_blocking(
         os.set_blocking(writer_fd, writer_was_blocking)
 
 
+def _resume_reader_transport(
+    resume_reader: cabc.Callable[[], None] | None,
+) -> None:
+    """Resume a reader transport when it was paused for native pumping."""
+    if resume_reader is not None:
+        resume_reader()
+
+
+async def _run_rust_pump_with_blocking_fds(
+    *,
+    reader_fd: int,
+    writer_fd: int,
+    reader_was_blocking: bool,
+    writer_was_blocking: bool,
+) -> None:
+    """Run the native pump and restore the original descriptor modes."""
+    from cuprum._streams_rs import rust_pump_stream
+
+    try:
+        # Rust consumes this duplicate; asyncio keeps the transport descriptor.
+        rust_writer_fd = os.dup(writer_fd)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, rust_pump_stream, reader_fd, rust_writer_fd)
+    finally:
+        _restore_stream_fd_blocking(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+            reader_was_blocking=reader_was_blocking,
+            writer_was_blocking=writer_was_blocking,
+        )
+
+
 async def _run_rust_pump(
     *,
     reader: asyncio.StreamReader,
@@ -205,64 +237,39 @@ async def _run_rust_pump(
     bool
         ``True`` when the native pump handled the hop, ``False`` when the
         caller should fall back to the Python pump.
+
     """
     # Flush any bytes asyncio already buffered in the StreamReader
     # before the Rust pump takes over the raw file descriptor.
     resume_reader = _pause_reader_transport(reader)
     try:
         await _drain_reader_buffer(reader, writer)
-    except Exception:
-        if resume_reader is not None:
-            resume_reader()
+    except BaseException:
+        _resume_reader_transport(resume_reader)
         raise
-
-    from cuprum._streams_rs import rust_pump_stream
-
-    try:
-        # Rust consumes this duplicate; the original stays asyncio's to close.
-        rust_writer_fd = os.dup(writer_fd)
-    except OSError:
-        if resume_reader is not None:
-            resume_reader()
-        return False
 
     try:
         reader_was_blocking, writer_was_blocking = _set_stream_fds_blocking(
             reader_fd=reader_fd,
-            writer_fd=rust_writer_fd,
+            writer_fd=writer_fd,
         )
     except OSError:
-        with contextlib.suppress(OSError):
-            os.close(rust_writer_fd)
-        if resume_reader is not None:
-            resume_reader()
+        _resume_reader_transport(resume_reader)
         return False
 
-    loop = asyncio.get_running_loop()
     try:
-        # Ownership of ``rust_writer_fd`` passes to Rust here: it closes the
-        # duplicate on return, so Python must not close it again.
-        await loop.run_in_executor(
-            None,
-            rust_pump_stream,
-            reader_fd,
-            rust_writer_fd,
-        )
-    finally:
-        # Restore through the original descriptor. The duplicate may already be
-        # closed by Rust, and blocking mode lives on the shared open file
-        # description, so the original restores the same state.
-        _restore_stream_fd_blocking(
+        await _run_rust_pump_with_blocking_fds(
             reader_fd=reader_fd,
             writer_fd=writer_fd,
             reader_was_blocking=reader_was_blocking,
             writer_was_blocking=writer_was_blocking,
         )
-        if resume_reader is not None:
-            resume_reader()
+    finally:
+        _resume_reader_transport(resume_reader)
     # Rust closed only its duplicate, so the transport descriptor is still
     # valid: close it through asyncio to signal EOF downstream.
-    await _close_stream_writer(writer)
+    with contextlib.suppress(OSError):
+        await _close_stream_writer(writer)
     return True
 
 
