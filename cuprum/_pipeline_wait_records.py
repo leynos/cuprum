@@ -50,6 +50,11 @@ def _completion_log_fields(
     the stage's execution token travels with it: concurrent pipelines each
     report their own stage 0, and the token is what joins a record to the span
     and lifecycle events the observe hooks publish for that same stage.
+
+    Returns
+    -------
+    _CompletionLogFields
+        The structured fields for the completed stage.
     """
     return _CompletionLogFields(
         stage_index=completed_idx,

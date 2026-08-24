@@ -53,6 +53,11 @@ def shadowed_fail_fast_event() -> ExecEvent:
     Module-scoped for the reason `test_pipeline_fail_fast_wiring` shares its
     own run: three real subprocesses and a settling delay are not worth paying
     twice for a frozen event that no test can mutate.
+
+    Returns
+    -------
+    ExecEvent
+        The sanitised fail-fast event from the pipeline run.
     """
     events = run_failing_pipeline(ExecutionContext(tags=_SHADOWING_TAGS))
     fail_fast = phase(events, _FAIL_FAST_PHASE)

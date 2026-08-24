@@ -11,13 +11,13 @@
   producers and downstream consumers alike — is terminated, and carrying that
   stage's existing `exec_id` alongside `stage_index`, `stage_count`,
   `exit_code`, and `duration_s`. `stage_index` and `stage_count` are typed
-  fields rather than tags, so a caller that sets its own
-  `pipeline_stage_index` or `pipeline_stages` tag cannot shadow the stage the
-  pipeline actually acted on. `MetricsHook` counts it as
-  `cuprum_pipeline_fail_fast_total`, labelled only by `program` and `project`;
-  `TracingHook` records it as a `cuprum.pipeline_fail_fast` span event on the
-  failing stage's open span; the structured logging adapter renders it at
-  `LogLevels.fail_fast_level` (WARNING by default).
+  fields rather than tags, so a caller that sets its own `pipeline_stage_index`
+  or `pipeline_stages` tag cannot shadow the stage the pipeline actually acted
+  on. `MetricsHook` counts it as `cuprum_pipeline_fail_fast_total`, labelled
+  only by `program` and `project`; `TracingHook` records it as a
+  `cuprum.pipeline_fail_fast` span event on the failing stage's open span; the
+  structured logging adapter renders it at `LogLevels.fail_fast_level` (WARNING
+  by default).
 
 ### Breaking changes
 

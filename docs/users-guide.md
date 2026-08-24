@@ -237,13 +237,13 @@ Notes:
   stderr streams to their configured sinks.
 - Pipelines fail fast on the *first* non-final stage to exit non-zero when at
   least one other stage remains running: that stage terminates every other
-  still-running stage — upstream producers as well as downstream consumers,
-  not only the stages after the failure. A failing **final** stage or any
+  still-running stage — upstream producers as well as downstream consumers, not
+  only the stages after the failure. A failing **final** stage or any
   single-stage pipeline does not request fail-fast termination by policy. A
   non-final failure whose potential targets have already settled likewise has
-  no targets to terminate. Only the first failure counts, since later
-  non-zero exits are usually its consequences. The failing stage is available
-  via `result.failure` / `result.failure_index`.
+  no targets to terminate. Only the first failure counts, since later non-zero
+  exits are usually its consequences. The failing stage is available via
+  `result.failure` / `result.failure_index`.
 - When a downstream writer closes early, Cuprum drains the upstream reader
   until EOF or a short timeout elapses, even on a stalled upstream, so
   discarded input stays bounded. On the Rust backend that drain is reported —
@@ -277,8 +277,9 @@ and `ExecEvent.exec_id` remain. All projections consume this same sanitized
 event, so they do not need to parse log text. The metrics adapter labels
 `cuprum_pipeline_fail_fast_total` with `program` and `project` alone; `project`
 falls back to `unknown` because caller tags are absent, and the execution token
-remains event and trace detail rather than a metric label. It also distinguishes
-concurrent pipelines whose stage indices would otherwise look identical.
+remains event and trace detail rather than a metric label. It also
+distinguishes concurrent pipelines whose stage indices would otherwise look
+identical.
 
 `structured_logging_hook()` consumes the event at `LogLevels.fail_fast_level`,
 which defaults to `logging.WARNING`. Once that hook is registered, no extra
@@ -446,11 +447,11 @@ Timeout resolution order:
 - `ScopeConfig(timeout=...)` default set via `scoped()` when present.
 
 `ScopeConfig(timeout=...)` and `CuprumContext(timeout=...)` validate their
-timeouts when constructed. Values must be finite and non-negative; `None`
-means no timeout, and numeric values are stored as `float`. Negative values,
-`NaN`, and positive or negative infinity raise `ValueError`. A value too large
-to convert to `float` also raises `ValueError` rather than leaking the
-conversion `OverflowError`.
+timeouts when constructed. Values must be finite and non-negative; `None` means
+no timeout, and numeric values are stored as `float`. Negative values, `NaN`,
+and positive or negative infinity raise `ValueError`. A value too large to
+convert to `float` also raises `ValueError` rather than leaking the conversion
+`OverflowError`.
 
 Example usage:
 
@@ -1327,8 +1328,8 @@ ConcurrentConfig(concurrency=True)   # TypeError: concurrency must be an int, go
 ```
 
 `ConcurrentResult` is normally returned by `run_concurrent`/
-`run_concurrent_sync` rather than constructed directly, but the same
-validation applies when constructed directly in tests:
+`run_concurrent_sync` rather than constructed directly, but the same validation
+applies when constructed directly in tests:
 
 - Each entry in `failures` must be an `int` (again, `bool` is rejected),
   otherwise `TypeError` is raised.
@@ -1336,18 +1337,18 @@ validation applies when constructed directly in tests:
 - `failures` must be strictly ascending, and therefore unique; duplicate or
   descending indices raise `ValueError`.
 - `submission_indices` defaults to `None`, which backfills the identity
-  sequence `(0, 1, …, n-1)`, including the empty tuple when `results` is
-  empty. Any supplied sequence whose length differs from `results` raises
+  sequence `(0, 1, …, n-1)`, including the empty tuple when `results` is empty.
+  Any supplied sequence whose length differs from `results` raises
   `ValueError`; an explicit empty tuple paired with non-empty `results` is
   therefore rejected rather than backfilled.
 - A supplied sequence must also satisfy entry-level constraints, in addition
   to matching the length of `results`: each entry must be an exact `int`
   (`bool` is rejected, raising `TypeError`), non-negative, and strictly
-  ascending (and therefore unique); violations raise `ValueError`. Entries
-  are *not* bounded above by `len(results)` — after fail-fast compaction a
-  surviving command's original submission index can exceed the compacted
-  result length, so direct construction must permit values greater than or
-  equal to `len(results)`.
+  ascending (and therefore unique); violations raise `ValueError`. Entries are
+  *not* bounded above by `len(results)` — after fail-fast compaction a
+  surviving command's original submission index can exceed the compacted result
+  length, so direct construction must permit values greater than or equal to
+  `len(results)`.
 
 ## Performance extensions (optional Rust)
 

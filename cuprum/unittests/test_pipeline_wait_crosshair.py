@@ -82,6 +82,11 @@ def _symbolic_state(stage_count: int) -> _PipelineWaitState:
     The task fields stay empty because neither `record_completion` nor
     `should_terminate_others` consults them, which keeps asyncio out of the
     symbolic model entirely.
+
+    Returns
+    -------
+    _PipelineWaitState
+        Minimal state suitable for symbolic completion transitions.
     """
     return _PipelineWaitState(
         wait_tasks=[],
@@ -124,6 +129,11 @@ def _latches_first_failure(
     order is *completion* order: ``first_completion`` settles before
     ``second_completion``. Grouping the pair keeps the two values that describe
     one event together rather than spreading them across parallel arguments.
+
+    Returns
+    -------
+    bool
+        Whether the first completion owns the latched failure index.
     """
     first_idx, first_exit = first_completion
     second_idx, second_exit = second_completion

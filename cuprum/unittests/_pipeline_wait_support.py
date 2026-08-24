@@ -38,6 +38,12 @@ async def _still_running() -> int:
     The fail-fast path asks the wait tasks which stages are still running, so a
     stage whose completion has not been applied has to read as pending rather
     than be missing from the list.
+
+    Returns
+    -------
+    int
+        This coroutine never completes normally; its result type matches a
+        process wait task.
     """
     never: asyncio.Future[int] = asyncio.get_running_loop().create_future()
     return await never
@@ -60,6 +66,11 @@ def make_stage_observations(
     is merged last for the same reason the real builder merges them last: a
     caller may shadow ``pipeline_stage_index``. Supplying it is how a test
     pulls the tag apart from the index the coordinator acted on.
+
+    Returns
+    -------
+    tuple[_StageObservation, ...]
+        One observation for each pipeline stage.
     """
     builder = sh.make(ECHO)
     execution_hooks = _ExecutionHooks(
@@ -100,6 +111,11 @@ def make_wait_state(
     When ``observations`` is given, the runtime report reads its correlation
     token directly from the matching stage rather than retaining a duplicate
     tuple for every pipeline.
+
+    Returns
+    -------
+    _PipelineWaitState
+        Wait state with one bookkeeping slot per stage.
     """
     return _PipelineWaitState(
         wait_tasks=[],
@@ -126,6 +142,11 @@ def record_terminations(
     ``terminated_count`` is what the stub reports back as the number of stages
     it stopped, standing in for the count the real helper derives from the
     still-running stages.
+
+    Returns
+    -------
+    list[tuple[int, float]]
+        Recorded ``(failure_index, cancel_grace)`` termination requests.
     """
     terminations: list[tuple[int, float]] = []
 
@@ -182,6 +203,11 @@ def advancing_clock(monkeypatch: pytest.MonkeyPatch) -> AdvancingClock:
     shift the next stage's recorded end time.
 
     Patches the same narrow seam as `pin_clock`, for the same reason.
+
+    Returns
+    -------
+    AdvancingClock
+        Clock whose reading can be changed between completions.
     """
     clock = AdvancingClock()
     monkeypatch.setattr(_pipeline_wait, "perf_counter", clock)

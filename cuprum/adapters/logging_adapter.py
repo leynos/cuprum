@@ -154,9 +154,11 @@ def _build_extra(event: ExecEvent) -> dict[str, object]:
         extra["cuprum_tags"] = dict(event.tags)
     return extra
 
+
 def _format_duration(duration_s: float | None) -> str:
     """Render an elapsed time for a log message, or ``unknown`` when absent."""
     return "unknown" if duration_s is None else f"{duration_s:.6f}"
+
 
 def _format_exit_message(event: ExecEvent) -> str:
     """Render the message for a completed subprocess."""
@@ -166,12 +168,18 @@ def _format_exit_message(event: ExecEvent) -> str:
         f"duration_s={_format_duration(event.duration_s)}"
     )
 
+
 def _format_fail_fast_message(event: ExecEvent) -> str:
     """Render the message for a pipeline's fail-fast decision.
 
     Rendered explicitly because the generic unhandled-phase message reports
     only the program, which is the one part of this event that says nothing:
     the point of the record is which stage of how many failed, and how.
+
+    Returns
+    -------
+    str
+        Human-readable fail-fast message containing the decision fields.
     """
     return (
         f"cuprum.pipeline_fail_fast program={event.program} "

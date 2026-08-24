@@ -262,12 +262,12 @@ tracing backend.  Hook scheduling and hook failures use the
 `cuprum._observability` logger with structured `extra` fields such as
 `cuprum_phase`, `cuprum_program`, `cuprum_error_type`, and
 `cuprum_scheduled_task_count`.  Stream early-close decisions use debug-level
-records on the `cuprum._streams_pump` logger and include `cuprum_discarded_bytes`
-when upstream bytes are drained after the downstream writer has closed.
-Suppressed writer cleanup failures remain debug-level diagnostics with
-`cuprum_operation` and `cuprum_error_type`, because they are expected during
-already-closed pipe teardown.  User-facing metrics and spans remain the
-responsibility of observe-hook adapters such as `MetricsHook` and
+records on the `cuprum._streams_pump` logger and include
+`cuprum_discarded_bytes` when upstream bytes are drained after the downstream
+writer has closed. Suppressed writer cleanup failures remain debug-level
+diagnostics with `cuprum_operation` and `cuprum_error_type`, because they are
+expected during already-closed pipe teardown.  User-facing metrics and spans
+remain the responsibility of observe-hook adapters such as `MetricsHook` and
 `TracingHook`, which consume `ExecEvent` values without coupling core execution
 to a telemetry vendor.
 
@@ -426,7 +426,6 @@ interpreter whose opcode set the tracer cannot handle
 (`crosshair.tracers.TraceException`, as with the `CALL_KW` gap on early Python
 3.15 betas, issue `#109`); every other failure is re-raised. Supported
 interpreters therefore confirm the contracts rather than skipping them.
-
 
 ### `_pipeline_wait` completion command/query seam
 
@@ -878,9 +877,9 @@ package from the dev dependency group.
 
 ### Extracted module boundaries
 
-Several implementation modules were split out of larger files to keep each
-seam small and single-purpose. `cuprum/context/_policy.py` is described above;
-the subprocess module boundaries (`cuprum/_subprocess_execution.py`,
+Several implementation modules were split out of larger files to keep each seam
+small and single-purpose. `cuprum/context/_policy.py` is described above; the
+subprocess module boundaries (`cuprum/_subprocess_execution.py`,
 `cuprum/_subprocess_stdin.py`, `cuprum/_subprocess_timeout.py`) and concurrent
 execution are covered in [Cuprum design](cuprum-design.md) §8.1.5 (with
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md)) and §8.3.1
@@ -910,9 +909,9 @@ Benchmarks (`benchmarks/`):
   discovery and downloads. Reuse it for benchmark GitHub transfers; keep
   general-purpose HTTP concerns outside this private module.
 - `benchmarks/ratchet_ratio_extraction.py` — extracts within-run Rust/Python
-  ratio maps and validates that baseline and candidate comparison groups
-  match. `benchmarks/ratchet_rust_performance.py` owns report-value
-  construction; this module owns ratio extraction and ratio-map validation.
+  ratio maps and validates that baseline and candidate comparison groups match.
+  `benchmarks/ratchet_rust_performance.py` owns report-value construction; this
+  module owns ratio extraction and ratio-map validation.
 - `benchmarks/_tee_profile_worker_backend.py` — backend selection for the tee
   hot-path profiling worker (`_EnvBackendSelector` and its supporting state).
 
@@ -1204,11 +1203,11 @@ It holds `_BACKEND_LOCK` across the complete `repeat_count` loop, serializing
 concurrent benchmark workers for the full worker workload, including every
 `run_sync` subprocess execution. Consequently, workers that require different
 or process-local stream backend selection cannot execute their repeat loops in
-parallel, which limits their aggregate throughput.
-It is intentionally not re-entrant: a thread-local guard detects nested entry
-on the same thread, logs the rejected backend and thread identifier, and
-raises `ReentrantBackendSelectorError` (a `RuntimeError` subclass, retained
-for backward compatibility) before mutating backend state.
+parallel, which limits their aggregate throughput. It is intentionally not
+re-entrant: a thread-local guard detects nested entry on the same thread, logs
+the rejected backend and thread identifier, and raises
+`ReentrantBackendSelectorError` (a `RuntimeError` subclass, retained for
+backward compatibility) before mutating backend state.
 
 ### Selector observability metrics
 
@@ -2162,15 +2161,14 @@ gate also runs the helper's Python 3.13 tests with at least 90% line coverage.
 The cache refresh in `scripts/typos_rollout_refresh.py` fetches the shared
 dictionary only over HTTPS and rejects any redirect that would downgrade the
 connection to plain HTTP: a dedicated `_HttpsOnlyRedirectHandler` refuses the
-redirect before urllib reissues the request, so a compromised or
-misconfigured upstream cannot silently serve the dictionary in cleartext.
-Refresh degradations — a rejected HTTPS-downgrade redirect, falling back to a
-stale cache after a failed refresh, or reusing the cache in offline mode —
-are counted in a bounded, fixed-key counter and reported through structured
+redirect before urllib reissues the request, so a compromised or misconfigured
+upstream cannot silently serve the dictionary in cleartext. Refresh
+degradations — a rejected HTTPS-downgrade redirect, falling back to a stale
+cache after a failed refresh, or reusing the cache in offline mode — are
+counted in a bounded, fixed-key counter and reported through structured
 `logging` warnings (or info, for the offline case). Those log records never
 include the request URL; they carry only the event name and non-sensitive
-context such as the rejected redirect's scheme or the triggering error's
-type.
+context such as the rejected redirect's scheme or the triggering error's type.
 
 Ruff must be invoked through the project virtual environment, not as a floating
 host tool. The `RUFF` variable expands to `$(UV_RUN_ENV) uv run ruff`, and the
@@ -2325,14 +2323,14 @@ family:
   public surface is suppressed.
 - **Test scaffolding (`per-file-ignore`).** `ASYNC109` and `ASYNC240` are
   ignored through `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` for
-  exactly two modules — `cuprum/unittests/test_observe_stdin_early_close.py`
-  and `tests/behaviour/_execution_runtime_support.py`. Their async scaffolding
+  exactly two modules — `cuprum/unittests/test_observe_stdin_early_close.py` and
+  `tests/behaviour/_execution_runtime_support.py`. Their async scaffolding
   polls a PID file with asyncio-only helpers, so a `timeout` parameter and
-  blocking `pathlib` calls are acceptable there; the async-native path
-  libraries (`trio.Path` / `anyio.Path`) that `ASYNC240` recommends are not in
-  use. Naming the two paths rather than globbing `**/test_*.py` stops
-  unrelated and future async tests inheriting the exemption silently. The
-  rationale is recorded next to the ignore in `pyproject.toml`.
+  blocking `pathlib` calls are acceptable there; the async-native path libraries
+  (`trio.Path` / `anyio.Path`) that `ASYNC240` recommends are not in use.
+  Naming the two paths rather than globbing `**/test_*.py` stops unrelated and
+  future async tests inheriting the exemption silently. The rationale is
+  recorded next to the ignore in `pyproject.toml`.
 
 When changing either suppression, keep the `pyproject.toml` comments and this
 section in step.
@@ -2362,15 +2360,14 @@ recurring judgement call: a multi-line docstring on a value-returning function
 must carry a `Returns` section, so there are exactly two legal shapes — a
 one-line summary, or a multi-line docstring with the required sections. An
 explanatory paragraph cannot be kept while dropping `Returns`. When a private
-helper's rationale is worth keeping but the structured sections would be
-noise, the established pattern is to collapse the docstring to one line and
-move the rationale to an inline `#` comment immediately above the relevant
-code.
+helper's rationale is worth keeping but the structured sections would be noise,
+the established pattern is to collapse the docstring to one line and move the
+rationale to an inline `#` comment immediately above the relevant code.
 
-When an exception merely propagates from a callee rather than being raised by
-a literal `raise` in the function's own body, documenting it trips `DOC502`.
-The house convention is a scoped suppression on the docstring's closing line,
-with a justification naming where the exception comes from:
+When an exception merely propagates from a callee rather than being raised by a
+literal `raise` in the function's own body, documenting it trips `DOC502`. The
+house convention is a scoped suppression on the docstring's closing line, with
+a justification naming where the exception comes from:
 
 ```python
     """Run the command.
@@ -2802,9 +2799,9 @@ guarded by regression tests in `cuprum/unittests/test_subprocess_timeout.py`.
 Neither wait helper terminates unconditionally, and neither drains.
 `_wait_for_exit_code` terminates the process only when the wait is cancelled —
 which is also how an `asyncio.timeout` expiry arrives. A successful wait
-completes when `_await_process_exit` obtains either the normal
-`process.wait()` result or an already-published `process.returncode` when the
-asyncio waiter is stranded, leaving the process alone in both cases.
+completes when `_await_process_exit` obtains either the normal `process.wait()`
+result or an already-published `process.returncode` when the asyncio waiter is
+stranded, leaving the process alone in both cases.
 `_wait_for_exit_code_within_timeout` terminates on its non-positive fast path
 before any wait begins; when a positive timeout expires it instead cancels
 `_wait_for_exit_code`, which terminates the running process.
@@ -2818,13 +2815,13 @@ All three subprocess exit-wait paths use `_await_process_exit` from
 `cuprum/_process_exit.py`: the single-command wait in `_wait_for_exit_code`,
 the per-stage waits created by `_PipelineWaitState.from_processes`, and the
 standalone teardown wait used by `_terminate_process` for timeout or
-cancellation cleanup. Fail-fast pipeline teardown awaits the existing
-per-stage wait tasks and therefore inherits the same protection. The helper
-first accepts an already-published `process.returncode`; otherwise it races
-`process.wait()` against a bounded exponential-backoff poll of that return
-code, starting at 0.01 seconds and capped at 1.0 second, and cancels the
-losing task. This closes the asyncio lost-wakeup race where `returncode`
-has been published but the waiter remains pending. Keep the regression in
+cancellation cleanup. Fail-fast pipeline teardown awaits the existing per-stage
+wait tasks and therefore inherits the same protection. The helper first accepts
+an already-published `process.returncode`; otherwise it races `process.wait()`
+against a bounded exponential-backoff poll of that return code, starting at
+0.01 seconds and capped at 1.0 second, and cancels the losing task. This closes
+the asyncio lost-wakeup race where `returncode` has been published but the
+waiter remains pending. Keep the regression in
 `cuprum/unittests/test_process_exit.py` aligned with this contract.
 
 ### Pipeline timeout and teardown

@@ -87,10 +87,10 @@ failure preserved, grouping after-hook and task failures into a
 """
 if typ.TYPE_CHECKING:
     import asyncio
+
     from cuprum.context import CuprumContext
     from cuprum.sh import CommandResult, PipelineResult, SafeCmd
-__all__ = [
-]
+__all__ = []
 _MIN_PIPELINE_STAGES = 2
 _PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
 """Internal pipeline execution coordination and fail-fast semantics.

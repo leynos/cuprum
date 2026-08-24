@@ -36,6 +36,11 @@ def fail_fast_events() -> tuple[ExecEvent, ...]:
     or reordered sequence. `run_failing_pipeline` pays a settling delay to
     reach the fail-fast decision reliably; being module-scoped, that delay is
     paid once.
+
+    Returns
+    -------
+    tuple[ExecEvent, ...]
+        Events observed during the failing pipeline run.
     """
     return run_failing_pipeline()
 
@@ -47,6 +52,11 @@ def _stage_of(event: ExecEvent) -> int:
     execution tags of its own; a caller that does may shadow the key. What the
     event reports when it is shadowed is pinned in
     `test_pipeline_fail_fast_tag_shadowing.py`.
+
+    Returns
+    -------
+    int
+        Pipeline stage index recorded in the event tags.
     """
     return typ.cast("int", event.tags["pipeline_stage_index"])
 

@@ -125,6 +125,11 @@ class _PipelineWaitState:
         Absent under the same conditions as `exec_id`, and additionally
         harmless: with no observation there is no hook set to publish the
         fail-fast event to.
+
+        Returns
+        -------
+        _StageObservation | None
+            The observation for ``stage_index``, or ``None`` when it is absent.
         """
         if stage_index < len(self.observations):
             return self.observations[stage_index]
@@ -150,6 +155,11 @@ class _PipelineWaitState:
         do so. All I/O — reading the clock and terminating stages — stays
         with the caller, which separately checks whether a stage remains to
         terminate.
+
+        Returns
+        -------
+        bool
+            Whether this completion is a first failure on a non-final stage.
 
         Examples
         --------
@@ -197,6 +207,12 @@ class _PipelineWaitState:
         sibling is still running is the caller's separate
         `_has_stages_to_terminate` check. A batch whose stages all settled
         together answers ``True`` here and still terminates nothing.
+
+        Returns
+        -------
+        bool
+            Whether the completion is the latched first failure and is not the
+            final stage.
 
         Examples
         --------

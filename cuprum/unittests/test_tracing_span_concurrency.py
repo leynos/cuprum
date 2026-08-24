@@ -73,6 +73,8 @@ def _exit(hook: TracingHook, exec_id: ExecId) -> None:
             },
         )
     )
+
+
 def _run_full_lifecycle(hook: TracingHook, exec_id: ExecId) -> None:
     """Drive a full start/stdout/exit sequence for one execution."""
     _start(hook, exec_id)

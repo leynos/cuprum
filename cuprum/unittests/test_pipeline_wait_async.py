@@ -123,6 +123,11 @@ class TestProcessCompletedTask:
         so the call order *is* the completion order. The clock advances by ten
         per completion, so each stage's ``ended_at`` is distinguishable rather
         than a single pinned value every slot would match.
+
+        Returns
+        -------
+        tuple[_PipelineWaitState, list[tuple[int, float]]]
+            The driven state and recorded termination requests.
         """
         terminations = record_terminations(monkeypatch)
         clock = advancing_clock(monkeypatch)
