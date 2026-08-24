@@ -58,7 +58,7 @@ class _InvalidDictionaryCase:
     match: str
 
 
-def test_rollout_scripts_support_python_312(script_directory: Path) -> None:
+def test_rollout_scripts_support_python_313(script_directory: Path) -> None:
     """Every rollout script parses with the declared minimum Python version."""
     rollout_scripts = tuple(script_directory.glob("*.py"))
     assert rollout_scripts, "the rollout script directory must contain Python files"
@@ -66,7 +66,7 @@ def test_rollout_scripts_support_python_312(script_directory: Path) -> None:
         ast.parse(
             script.read_text(encoding="utf-8"),
             filename=str(script),
-            feature_version=(3, 12),
+            feature_version=(3, 13),
         )
 
 
