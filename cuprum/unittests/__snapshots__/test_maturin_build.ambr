@@ -110,6 +110,7 @@
       'cuprum/unittests/test_fixture_generation.py',
       'cuprum/unittests/test_folded_ranking_property.py',
       'cuprum/unittests/test_folded_summary.py',
+      'cuprum/unittests/test_github_http.py',
       'cuprum/unittests/test_line_splitting.py',
       'cuprum/unittests/test_logging_adapter.py',
       'cuprum/unittests/test_logging_adapter_properties.py',

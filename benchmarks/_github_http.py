@@ -19,6 +19,7 @@ if typ.TYPE_CHECKING:
 _REQUEST_TIMEOUT_SECONDS = 10.0
 _ARCHIVE_READ_CHUNK_BYTES = 64 * 1024
 _MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+_MAX_JSON_RESPONSE_BYTES = 1 * 1024 * 1024
 _RETRY_DELAYS_SECONDS = (0.5, 1.0)
 _HTTP_TOO_MANY_REQUESTS = 429
 _HTTP_SERVER_ERROR_MIN = 500
@@ -169,7 +170,18 @@ def _load_json_response(*, url: str, token: str) -> cabc.Mapping[str, object]:
             request,
             timeout=_REQUEST_TIMEOUT_SECONDS,
         ) as response:
-            payload = json.load(response)
+            chunks: list[bytes] = []
+            response_size = 0
+            while chunk := response.read(_ARCHIVE_READ_CHUNK_BYTES):
+                response_size += len(chunk)
+                if response_size > _MAX_JSON_RESPONSE_BYTES:
+                    msg = (
+                        f"JSON response from {url} exceeds "
+                        f"{_MAX_JSON_RESPONSE_BYTES} bytes"
+                    )
+                    raise ValueError(msg)
+                chunks.append(chunk)
+            payload = json.loads(b"".join(chunks))
         return _require_mapping(payload, name=f"response from {url}")
 
     return _with_retry(_open_json_response, description=f"load JSON from {url}")

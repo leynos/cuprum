@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import http.client
 import io
 import math
 import typing as typ
@@ -151,6 +150,10 @@ def test_load_json_response_retries_transient_urlopen_failures(
     class _Response:
         """Minimal stub of an HTTP response context manager."""
 
+        def __init__(self) -> None:
+            """Track whether the canned JSON bytes were returned."""
+            self._has_returned = False
+
         def __enter__(self) -> _Response:
             """Return the stub response for use as a context manager."""
             return self
@@ -163,9 +166,12 @@ def test_load_json_response_retries_transient_urlopen_failures(
         ) -> None:
             """Exit the context manager without suppressing exceptions."""
 
-        @staticmethod
-        def read() -> bytes:
-            """Return canned JSON bytes for the workflow-runs response."""
+        def read(self, size: int) -> bytes:
+            """Return canned JSON bytes once, then signal EOF."""
+            assert size > 0, "JSON reads should request a bounded chunk"
+            if self._has_returned:
+                return b""
+            self._has_returned = True
             return b'{"workflow_runs": []}'
 
     attempts = 0
@@ -224,29 +230,6 @@ def test_with_retry_returns_after_transient_failures(
     assert result == "done", "retry should return the successful operation result"
     assert operation.call_count == 3, "retry should make exactly three operation calls"
     assert delays == [0.5, 1.0], "retry should use both configured delays in order"
-
-
-def test_with_retry_raises_non_transient_http_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A non-transient HTTP status should fail without sleeping."""
-    error = urllib.error.HTTPError(
-        "https://example.invalid",
-        404,
-        "missing",
-        http.client.HTTPMessage(),
-        None,
-    )
-    operation = mock.Mock(side_effect=error)
-    delays: list[float] = []
-    monkeypatch.setattr("benchmarks._github_http.time.sleep", delays.append)
-
-    with pytest.raises(urllib.error.HTTPError) as raised:
-        _with_retry(operation, description="test")
-
-    assert raised.value is error, "retry should propagate the non-transient error"
-    assert operation.call_count == 1, "non-transient errors should stop after one call"
-    assert delays == [], "non-transient errors should not schedule a retry delay"
 
 
 def test_with_retry_raises_final_transient_failure(
