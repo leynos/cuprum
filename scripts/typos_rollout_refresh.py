@@ -75,7 +75,12 @@ def reset_degradations() -> None:
 
     Exists so tests own the counter's starting state explicitly instead of
     asserting on deltas against whatever earlier tests left behind.
-    """
+
+    Returns
+    -------
+    None
+        The counters are reset in place.
+    """  # noqa: DOC202 - the None return is documented deliberately
     with _DEGRADATIONS_LOCK:
         _REFRESH_DEGRADATIONS.update(dict.fromkeys(_DEGRADATION_REASONS, 0))
 

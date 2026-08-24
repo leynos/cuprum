@@ -2552,8 +2552,9 @@ which is also how an `asyncio.timeout` expiry arrives. A successful wait
 completes when `_await_process_exit` obtains either the normal
 `process.wait()` result or an already-published `process.returncode` when the
 asyncio waiter is stranded, leaving the process alone in both cases.
-`_wait_for_exit_code_within_timeout` terminates only on its non-positive fast
-path, before any wait begins.
+`_wait_for_exit_code_within_timeout` terminates on its non-positive fast path
+before any wait begins; when a positive timeout expires it instead cancels
+`_wait_for_exit_code`, which terminates the running process.
 
 Draining is the caller's job either way: after termination it drains the stream
 consumers exactly once via `_drain_stream_consumers` (see the stdin-injection
