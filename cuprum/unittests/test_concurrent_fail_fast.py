@@ -29,7 +29,6 @@ from cuprum.concurrent import (
 from cuprum.unittests import strategies as cuprum_st
 from tests.helpers.catalogue import python_catalogue
 
-
 """Unit tests for fail-fast cancellation and collect-all failure mapping.
 These cover both execution modes end to end: collect-all running every
 command despite failures, fail-fast cancelling pending commands, and the

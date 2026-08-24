@@ -17,12 +17,12 @@ from cuprum import (
     ECHO,
     LS,
     ExecEvent,
+    ExecutionContext,
     ForbiddenProgramError,
     ScopeConfig,
     observe,
     scoped,
     sh,
-    ExecutionContext,
 )
 from cuprum.concurrent import (
     ConcurrentConfig,
@@ -30,10 +30,8 @@ from cuprum.concurrent import (
     run_concurrent,
     run_concurrent_sync,
 )
-from tests.helpers.catalogue import python_catalogue
-
-
 from cuprum.sh import CommandResult, RunOutputOptions, SafeCmd
+from tests.helpers.catalogue import python_catalogue
 
 """Unit tests for normal concurrent execution and concurrency limits.
 These cover the happy path of ``run_concurrent``/``run_concurrent_sync``:
@@ -145,6 +143,8 @@ def test_repeated_short_lived_captured_commands_complete() -> None:
                 f"iteration={iteration}, expected=5, "
                 f"actual={len(command_result.stdout or '')}"
             )
+
+
 class TestConcurrentExecution:
     """Verify concurrent execution results and argument handling."""
 

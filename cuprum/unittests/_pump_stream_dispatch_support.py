@@ -132,21 +132,21 @@ def _make_blocking_fd_spy(
 
     def _spy(reader_fd: int, writer_fd: int) -> int:
         """Assert both descriptors are blocking, then record the call."""
-        assert _pipeline_streams.os.get_blocking(reader_fd), (  # noqa: S101 - test spy validates the dispatched reader FD
+        assert _pipeline_streams.os.get_blocking(reader_fd), (
             "expected reader FD to be switched to blocking mode"
         )
-        assert _pipeline_streams.os.get_blocking(writer_fd), (  # noqa: S101 - test spy validates the dispatched writer FD
+        assert _pipeline_streams.os.get_blocking(writer_fd), (
             "expected writer FD to be switched to blocking mode"
         )
-        assert reader_fd == expected_reader_fd, (  # noqa: S101 - test spy validates reader-FD dispatch
+        assert reader_fd == expected_reader_fd, (
             "expected Rust path to use extracted reader FD"
         )
         # The native pump consumes its writer descriptor, so it must be handed
         # a duplicate rather than the descriptor asyncio's transport owns.
-        assert writer_fd != expected_writer_fd, (  # noqa: S101 - test spy validates writer-FD ownership
+        assert writer_fd != expected_writer_fd, (
             "expected Rust path to receive a duplicate, not the transport FD"
         )
-        assert (  # noqa: S101 - test spy validates the duplicate targets the same pipe
+        assert (
             _pipeline_streams.os.fstat(writer_fd).st_ino
             == _pipeline_streams.os.fstat(expected_writer_fd).st_ino
         ), "expected the duplicate to refer to the same pipe as the writer FD"
