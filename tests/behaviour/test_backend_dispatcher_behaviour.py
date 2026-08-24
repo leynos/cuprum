@@ -80,7 +80,13 @@ def given_env_forced(monkeypatch: pytest.MonkeyPatch, backend: str) -> None:
     target_fixture="resolved_backend",
 )
 def when_resolve_backend() -> StreamBackend:
-    """Invoke the dispatcher."""
+    """Invoke the dispatcher.
+
+    Returns
+    -------
+    StreamBackend
+        The resolved stream backend.
+    """
     return get_stream_backend()
 
 
@@ -89,7 +95,14 @@ def when_resolve_backend() -> StreamBackend:
     target_fixture="resolve_error",
 )
 def when_attempt_resolve_backend() -> BaseException | None:
-    """Invoke the dispatcher and capture any exception."""
+    """Invoke the dispatcher and capture an ImportError or ValueError.
+
+    Returns
+    -------
+    BaseException | None
+        The captured ``ImportError`` or ``ValueError``, or ``None`` if
+        resolution succeeded.
+    """
     try:
         get_stream_backend()
     except (ImportError, ValueError) as exc:

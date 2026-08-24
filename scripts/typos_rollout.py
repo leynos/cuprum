@@ -1,4 +1,12 @@
-"""Refresh and render shared en-GB-oxendict ``typos`` configuration."""
+"""Render shared en-GB-oxendict ``typos`` configuration.
+
+This module owns the rendering step and re-exports the public rollout API so
+callers keep a single entry point. The supporting concerns live in dedicated
+modules to keep each file focused: ``typos_rollout_dictionary`` models and
+parses the shared dictionary, ``typos_rollout_refresh`` refreshes the untracked
+cache from a local or HTTPS authority, and ``typos_rollout_cache`` provides the
+cache types and atomic writes.
+"""
 
 from __future__ import annotations
 
@@ -67,7 +75,12 @@ def render_typos_config(dictionary: Dictionary) -> str:
     str
         Newline-terminated TOML validated with :func:`tomllib.loads` before
         it is returned.
-    """
+
+    Raises
+    ------
+    tomllib.TOMLDecodeError
+        If the rendered document fails the ``tomllib.loads`` parse check.
+    """  # noqa: DOC502 - TOMLDecodeError propagates from tomllib.loads
     lines = [
         "# Generated from the shared en-GB-oxendict dictionary.",
         "# Regenerate with scripts/generate_typos_config.py; do not edit by hand.",
@@ -100,9 +113,12 @@ def write_config(path: pathlib.Path, dictionary: Dictionary) -> None:
     dictionary : Dictionary
         Shared spelling policy to render and validate before writing.
 
-    Returns
-    -------
-    None
-        The validated configuration is atomically published at *path*.
-    """
+    Raises
+    ------
+    tomllib.TOMLDecodeError
+        If the rendered document fails the ``tomllib.loads`` parse check
+        performed by ``render_typos_config``.
+    OSError
+        If the atomic write to *path* fails.
+    """  # noqa: DOC502 - render and write errors propagate from the callees
     _atomic_write(path, render_typos_config(dictionary).encode())

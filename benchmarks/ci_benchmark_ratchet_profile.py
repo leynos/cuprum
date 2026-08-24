@@ -27,7 +27,31 @@ _SUPPORTED_BACKENDS = ("python", "rust")
 
 
 def load_plan_payload(full_plan_path: pth.Path) -> cabc.Mapping[str, object]:
-    """Load and validate the dry-run benchmark plan payload."""
+    """Load and validate the dry-run benchmark plan payload.
+
+    Parameters
+    ----------
+    full_plan_path : pathlib.Path
+        Filesystem path to the dry-run benchmark plan JSON to load and
+        validate.
+
+    Returns
+    -------
+    collections.abc.Mapping[str, object]
+        The validated plan payload mapping.
+
+    Raises
+    ------
+    OSError
+        If ``full_plan_path`` cannot be read.
+    json.JSONDecodeError
+        If the file does not contain valid JSON.
+    TypeError
+        If the payload or its ``scenarios``/``command`` entries are not of
+        the required structural type.
+    ValueError
+        If the scenario count does not match the scenario command count.
+    """  # noqa: DOC502 - OSError, JSONDecodeError, and TypeError propagate from the readers and validators
     payload = json.loads(full_plan_path.read_text(encoding="utf-8"))
     full_payload = _require_mapping(payload, name=f"plan payload from {full_plan_path}")
     scenarios = _require_list(full_payload.get("scenarios"), name="scenarios")
@@ -79,7 +103,30 @@ def _select_scenario(
 def select_ci_ratchet_scenarios(
     full_payload: cabc.Mapping[str, object],
 ) -> list[tuple[cabc.Mapping[str, object], str]]:
-    """Return the benchmark scenarios retained by the CI ratchet profile."""
+    """Return the benchmark scenarios retained by the CI ratchet profile.
+
+    Parameters
+    ----------
+    full_payload : collections.abc.Mapping[str, object]
+        The full benchmark plan payload to filter down to the CI
+        ratchet scenarios.
+
+    Returns
+    -------
+    list[tuple[collections.abc.Mapping[str, object], str]]
+        The selected scenarios paired with their commands, sorted by
+        payload size, callback usage, and backend.
+
+    Raises
+    ------
+    TypeError
+        If ``scenarios``/``command`` or a selected scenario's fields are not
+        of the required structural type.
+    ValueError
+        If the scenario and command sequences are of unequal length (strict
+        zip), a scenario field fails validation, or no scenarios are
+        selected or the selection omits Rust scenarios.
+    """  # noqa: DOC502 - TypeError and the zip/field ValueErrors propagate from the validators
     scenarios = _require_list(full_payload.get("scenarios"), name="scenarios")
     plan_command = _require_list(full_payload.get("command"), name="command")
     scenario_commands = plan_command[_HYPERFINE_PREFIX_ARGUMENT_COUNT:]
@@ -124,7 +171,29 @@ def build_hyperfine_command(
     instead of the raw worker command string. The raw worker commands are
     preserved, in order, after all naming options so the ratchet can pair each
     result with its positionally matched scenario.
-    """
+
+    Parameters
+    ----------
+    throughput_path : pathlib.Path
+        Output path for the hyperfine throughput JSON the command will
+        write.
+    selected : collections.abc.Sequence[
+        tuple[collections.abc.Mapping[str, object], str]
+    ]
+        The selected scenarios paired with their worker commands.
+
+    Returns
+    -------
+    list[str]
+        The hyperfine command line for the selected scenarios.
+
+    Raises
+    ------
+    TypeError
+        If a selected scenario's ``name`` is not a string.
+    ValueError
+        If a selected scenario's ``name`` is empty or whitespace-only.
+    """  # noqa: DOC502 - propagates from _require_non_empty_string
     return [
         "hyperfine",
         "--export-json",
@@ -193,7 +262,35 @@ def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
 
 
 def main(argv: cabc.Sequence[str] | None = None) -> int:
-    """Run the CI benchmark ratchet profile helper."""
+    """Run the CI benchmark ratchet profile helper.
+
+    Parameters
+    ----------
+    argv : collections.abc.Sequence[str] | None
+        Optional CLI argument sequence; when ``None`` the process
+        arguments are parsed.
+
+    Returns
+    -------
+    int
+        The process exit code (``0`` on success).
+
+    Raises
+    ------
+    SystemExit
+        If ``argv`` is invalid and ``_parse_args`` reports a usage error.
+    subprocess.CalledProcessError
+        If the hyperfine benchmark command exits non-zero.
+    OSError
+        If a plan file cannot be read or the filtered plan cannot be written.
+    json.JSONDecodeError
+        If a plan file does not contain valid JSON.
+    TypeError
+        If a plan payload fails structural validation.
+    ValueError
+        If plan loading, scenario selection, or writing the filtered plan
+        rejects the payload.
+    """  # noqa: DOC502 - propagate from arg parsing, loader, selection, writer, subprocess
     args = _parse_args(argv)
     full_payload = load_plan_payload(args.full_plan)
     selected = select_ci_ratchet_scenarios(full_payload)

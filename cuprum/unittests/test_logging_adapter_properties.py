@@ -67,6 +67,11 @@ def _capturing_logger(name: str) -> tuple[logging.Logger, _CollectingHandler]:
     debug and info records — a real behaviour of the hook (it checks
     ``isEnabledFor`` before building anything), but not the one under test
     here.
+
+    Returns
+    -------
+    tuple[logging.Logger, _CollectingHandler]
+        The configured logger and its attached collecting handler.
     """
     logger = logging.getLogger(name)
     logger.handlers.clear()
@@ -215,15 +220,18 @@ def test_each_phase_logs_at_its_configured_level(
     event: ExecEvent,
     levels: LogLevels,
 ) -> None:
-    """Every known phase logs at its own configured level.
+    """Phases with a configured level use it; others fall back to ``DEBUG``.
+
+    ``plan``, ``start``, ``stdout``, ``stderr``, and ``exit`` are mapped to
+    ``levels`` and must log at their configured level. ``stdin`` and
+    ``stdin_error`` are known phases that have no entry in the mapping, and
+    any unknown phases must fall back to ``logging.DEBUG`` rather than raise
+    — phases are part of the event contract and may grow, and a logging hook
+    is the wrong place to discover that.
 
     The expected level is derived here independently rather than by accepting
     any configured value: a permissive check passes even if a phase is dropped
     from the map entirely and silently falls back to ``DEBUG``.
-
-    An unknown phase must fall back rather than raise — phases are part of the
-    event contract and may grow, and a logging hook is the wrong place to
-    discover that.
     """
     logger, handler = _capturing_logger("cuprum.test.levels")
     structured_logging_hook(logger=logger, levels=levels)(event)

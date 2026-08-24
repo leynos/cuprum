@@ -75,7 +75,22 @@ def _validate_iteration_count(
     name: str,
     min_value: int,
 ) -> int:
-    """Validate a single hyperfine iteration count against its bounds."""
+    """Validate a single hyperfine iteration count against its bounds.
+
+    Returns
+    -------
+    int
+        The validated iteration count.
+
+    Raises
+    ------
+    TypeError
+        If ``value`` is not an integer or is a boolean. Inherited from
+        ``_validate_int(value, name=...)``.
+    ValueError
+        If the count is below ``min_value`` or above
+        ``_MAX_HYPERFINE_ITERATIONS``.
+    """  # noqa: DOC502 - TypeError is an inherited contract from _validate_int
     validated = _validate_int(value, name=name)
     if validated < min_value:
         msg = f"{name} must be >= {min_value}, got {validated}"
@@ -87,7 +102,21 @@ def _validate_iteration_count(
 
 
 def _validate_minimum_int(value: object, *, name: str, min_value: int) -> int:
-    """Validate one integer count against a lower bound."""
+    """Validate one integer count against a lower bound.
+
+    Returns
+    -------
+    int
+        The validated integer count.
+
+    Raises
+    ------
+    TypeError
+        If ``value`` is not an integer or is a boolean. Inherited from
+        ``_validate_int(value, name=...)``.
+    ValueError
+        If the count is below ``min_value``.
+    """  # noqa: DOC502 - TypeError is an inherited contract from _validate_int
     validated = _validate_int(value, name=name)
     if validated < min_value:
         msg = f"{name} must be >= {min_value}, got {validated}"
@@ -102,7 +131,21 @@ def _validate_hyperfine_iterations(*, warmup: object, runs: object) -> None:
 
 
 def _validate_payload_bytes(value: object) -> int:
-    """Validate that scenario payload size is a positive integer."""
+    """Validate that scenario payload size is a positive integer.
+
+    Returns
+    -------
+    int
+        The validated payload size in bytes.
+
+    Raises
+    ------
+    TypeError
+        If ``value`` is not an integer or is a boolean. Inherited from
+        ``_validate_int(value, name=...)``.
+    ValueError
+        If ``value`` is less than or equal to zero.
+    """  # noqa: DOC502 - TypeError is an inherited contract from _validate_int
     payload_bytes = _validate_int(value, name="payload_bytes")
     if payload_bytes <= 0:
         msg = f"payload_bytes must be > 0, got {payload_bytes}"
@@ -111,7 +154,21 @@ def _validate_payload_bytes(value: object) -> int:
 
 
 def _validate_stages(value: object) -> int:
-    """Validate that scenario stage count meets the minimum threshold."""
+    """Validate that scenario stage count meets the minimum threshold.
+
+    Returns
+    -------
+    int
+        The validated stage count.
+
+    Raises
+    ------
+    TypeError
+        If ``value`` is not an integer or is a boolean. Inherited from
+        ``_validate_int(value, name=...)``.
+    ValueError
+        If the stage count is below ``_MIN_PIPELINE_STAGES``.
+    """  # noqa: DOC502 - TypeError is an inherited contract from _validate_int
     stages = _validate_int(value, name="stages")
     if stages < _MIN_PIPELINE_STAGES:
         msg = f"stages must be >= {_MIN_PIPELINE_STAGES}, got {stages}"

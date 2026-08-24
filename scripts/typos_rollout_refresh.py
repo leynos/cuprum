@@ -81,7 +81,13 @@ def reset_degradations() -> None:
 
 
 def degradation_snapshot() -> dict[str, int]:
-    """Return a consistent copy of the degradation counters."""
+    """Return a consistent copy of the degradation counters.
+
+    Returns
+    -------
+    dict[str, int]
+        A snapshot mapping each degradation reason to its current count.
+    """
     with _DEGRADATIONS_LOCK:
         return dict(_REFRESH_DEGRADATIONS)
 
@@ -407,7 +413,7 @@ def refresh_base(
         If the refreshed dictionary source is not valid TOML.
     urllib.error.URLError
         If the HTTP refresh path fails and no stale cache is available.
-    """
+    """  # noqa: DOC502 - refresh and parse errors propagate from the callees
     if offline:
         if not _valid_cache(cache):
             message = f"no cached shared dictionary at {cache}"

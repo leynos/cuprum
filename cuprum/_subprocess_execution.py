@@ -38,12 +38,7 @@ if typ.TYPE_CHECKING:
 def _cancel_pending_consumers(
     consumers: tuple[asyncio.Task[str | None], ...],
 ) -> None:
-    """Cancel each consumer task that has not already completed.
-
-    Finished readers keep their captured output; only tasks still blocked
-    after process termination (or on cancellation) are cancelled, so cleanup
-    cannot hang on a reader wedged on a pipe that never reached EOF.
-    """
+    """Cancel each consumer task that has not already completed."""
     for task in consumers:
         if not task.done():
             task.cancel()
@@ -67,6 +62,17 @@ async def _wait_for_exit_code(
     ``asyncio.timeout`` block re-raises expiry as :class:`TimeoutError` once the
     teardown re-raises, while a genuine external cancellation propagates
     unchanged.
+
+    Returns
+    -------
+    tuple[int, float]
+        The process exit code and the ``perf_counter`` timestamp of exit.
+
+    Raises
+    ------
+    asyncio.CancelledError
+        If the wait is cancelled, whether by a caller's deadline expiring or
+        by an external cancellation. The process is terminated first.
     """
     try:
         exit_code = await _await_process_exit(process)
@@ -89,6 +95,12 @@ async def _drain_stream_consumers(
     A consumer that failed or was cancelled maps to ``None`` so a broken reader
     cannot mask the surrounding failure. Draining here exactly once keeps the
     timeout and cancellation paths from reconciling the same tasks twice.
+
+    Returns
+    -------
+    tuple[str | None, str | None]
+        The decoded stdout and stderr text, each ``None`` when its consumer
+        failed or was cancelled.
     """
     _cancel_pending_consumers(consumers)
     stdout_result, stderr_result = await asyncio.gather(
@@ -118,6 +130,18 @@ async def _wait_for_exit_code_within_timeout(
     Stream consumers belong to the caller, which drains them exactly once via
     :func:`_drain_stream_consumers`; terminating the process here lets those
     consumers reach EOF during that drain.
+
+    Returns
+    -------
+    tuple[int, float]
+        The process exit code and the ``perf_counter`` timestamp of exit,
+        as produced by :func:`_wait_for_exit_code`.
+
+    Raises
+    ------
+    TimeoutError
+        If ``execution.timeout`` is non-positive, denoting an
+        already-elapsed deadline; the process is terminated first.
     """
     timeout = execution.timeout
     if timeout is not None and timeout <= 0:

@@ -22,12 +22,35 @@ class TextBlackhole(io.TextIOBase):
 
     @typ.override
     def writable(self) -> bool:
-        """Return that this stream accepts writes."""
+        """Return that this stream accepts writes.
+
+        Returns
+        -------
+        bool
+            Always ``True``; the sink accepts writes.
+        """
         return True
 
     @typ.override
     def write(self, s: str) -> int:
-        """Discard text and report the accepted character count."""
+        """Discard text and report the accepted character count.
+
+        Parameters
+        ----------
+        s : str
+            The text to accept and discard; a non-``str`` value raises
+            ``TypeError``.
+
+        Returns
+        -------
+        int
+            The number of characters accepted.
+
+        Raises
+        ------
+        TypeError
+            If ``s`` is not a ``str``.
+        """
         if not isinstance(s, str):
             msg = f"expected str, got {type(s).__name__}"
             raise TypeError(msg)
@@ -142,9 +165,9 @@ def open_sink(
     errors:
         Error-handling scheme forwarded to the underlying stream.
 
-    Returns
-    -------
-    Iterator[IO[str]]
+    Yields
+    ------
+    IO[str]
         Context-managed writable text stream; resources are released on exit.
     """
     if kind == "devnull":

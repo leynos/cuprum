@@ -130,7 +130,13 @@ def test_scoped_restores_context_after_block() -> None:
 
 
 def test_scoped_restores_on_exception() -> None:
-    """scoped(ScopeConfig()) restores context even when exception is raised."""
+    """scoped(ScopeConfig()) restores context even when exception is raised.
+
+    Raises
+    ------
+    ValueError
+        Raised deliberately inside the scope to exercise restoration.
+    """
     original = current_context()
     message = "test"
     with (

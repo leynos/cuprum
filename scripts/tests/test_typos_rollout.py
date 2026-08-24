@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import dataclasses as dc
 import logging
+import re
 import tomllib
 import typing as typ
 import urllib.error
@@ -58,15 +59,48 @@ class _InvalidDictionaryCase:
     match: str
 
 
-def test_rollout_scripts_support_python_313(script_directory: Path) -> None:
-    """Every rollout script parses with the declared minimum Python version."""
+# The package baseline from ``pyproject.toml``. A helper script may raise its
+# own floor with a PEP 723 script block; anything without one is held here.
+_PACKAGE_BASELINE = (3, 12)
+_PEP723_BLOCK = re.compile(
+    r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$"
+)
+_MINIMUM_VERSION = re.compile(r">=\s*(\d+)\.(\d+)")
+
+
+def _declared_baseline(source: str) -> tuple[int, int]:
+    """Return a script's own Python floor, or the package baseline."""
+    for match in _PEP723_BLOCK.finditer(source):
+        if match.group("type") != "script":
+            continue
+        content = "".join(
+            line[2:] if line.startswith("# ") else line[1:]
+            for line in match.group("content").splitlines(keepends=True)
+        )
+        requires = tomllib.loads(content).get("requires-python")
+        if isinstance(requires, str) and (found := _MINIMUM_VERSION.search(requires)):
+            return (int(found.group(1)), int(found.group(2)))
+    return _PACKAGE_BASELINE
+
+
+def test_rollout_scripts_parse_at_their_declared_baseline(
+    script_directory: Path,
+) -> None:
+    """Every rollout script parses at the Python floor it is held to.
+
+    Scripts without a PEP 723 block must stay on the package baseline; one that
+    declares its own ``requires-python`` is parsed at that version instead, so
+    raising a script's floor is a deliberate, visible act rather than a silent
+    consequence of the grammar the test happens to use.
+    """
     rollout_scripts = tuple(script_directory.glob("*.py"))
     assert rollout_scripts, "the rollout script directory must contain Python files"
     for script in rollout_scripts:
+        source = script.read_text(encoding="utf-8")
         ast.parse(
-            script.read_text(encoding="utf-8"),
+            source,
             filename=str(script),
-            feature_version=(3, 13),
+            feature_version=_declared_baseline(source),
         )
 
 
@@ -125,7 +159,7 @@ def test_https_failure_reuses_valid_tracked_config(
     tracked_config.write_text('[default]\nlocale = "en-gb"\n', encoding="utf-8")
 
     def unavailable(*_args: object, **_kwargs: object) -> None:
-        """Model an unavailable HTTPS authority."""
+        """Model an unavailable HTTPS authority that always raises ``URLError``."""
         message = "offline"
         raise urllib.error.URLError(message)
 

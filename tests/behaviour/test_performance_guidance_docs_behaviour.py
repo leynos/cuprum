@@ -22,7 +22,13 @@ def test_users_can_find_backend_selection_guidance() -> None:
     target_fixture="performance_guidance_section",
 )
 def given_performance_guidance_section() -> str:
-    """Load the performance-guidance section from the users' guide."""
+    """Load the performance-guidance section from the users' guide.
+
+    Returns
+    -------
+    str
+        The extracted backend-selection guidance section.
+    """
     guide_path = Path(__file__).resolve().parents[2] / "docs/users-guide.md"
     guide = guide_path.read_text(encoding="utf-8")
     return extract_markdown_subsection(guide, heading="Choosing a stream backend")
@@ -35,7 +41,19 @@ def given_performance_guidance_section() -> str:
 def when_read_backend_selection_guidance(
     performance_guidance_section: str,
 ) -> str:
-    """Return the section text as the read guidance."""
+    """Return the section text as the read guidance.
+
+    Parameters
+    ----------
+    performance_guidance_section : str
+        The performance-guidance section text loaded by the prior step;
+        passed through unchanged rather than mutated.
+
+    Returns
+    -------
+    str
+        The guidance section text passed through unchanged.
+    """
     return performance_guidance_section
 
 

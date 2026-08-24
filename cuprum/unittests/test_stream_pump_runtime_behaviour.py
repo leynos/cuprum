@@ -25,13 +25,13 @@ class _StubPumpReader:
     """Stub stream reader yielding queued chunks then EOF."""
 
     def __init__(self, chunks: list[bytes], *, delay_s: float = 0.0) -> None:
-        """Initialize the stub with queued chunks."""
+        """Initialize the stub with queued chunks and a per-read delay."""
         self._chunks = list(chunks)
         self._delay_s = delay_s
         self.read_calls = 0
 
     async def read(self, _: int) -> bytes:
-        """Return the next queued chunk, or empty bytes at EOF."""
+        """Return the next queued chunk after a delay, or empty bytes at EOF."""
         self.read_calls += 1
         await asyncio.sleep(self._delay_s)
         if not self._chunks:
@@ -70,7 +70,7 @@ class _StubPumpWriter:
         self._fail_on_drain_call = fail_on_drain_call
 
     def write(self, chunk: bytes) -> None:
-        """Accept a chunk like ``asyncio.StreamWriter.write``."""
+        """Buffer the chunk and record the write call."""
         self.write_calls += 1
         self.data.extend(chunk)
 
@@ -82,7 +82,7 @@ class _StubPumpWriter:
             raise BrokenPipeError
 
     def write_eof(self) -> None:
-        """Accept EOF signalling like ``asyncio.StreamWriter.write_eof``."""
+        """Record that end-of-file was signalled to the writer."""
         self.write_eof_calls += 1
 
     def close(self) -> None:

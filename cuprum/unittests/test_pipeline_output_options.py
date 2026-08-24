@@ -38,7 +38,19 @@ def _execute_sync(pipeline: Pipeline, kwargs: dict[str, typ.Any]) -> PipelineRes
 def pipeline_execution_strategy(
     request: pytest.FixtureRequest,
 ) -> tuple[str, PipelineExecuteFn]:
-    """Provide Pipeline execution strategies for run() and run_sync()."""
+    """Provide Pipeline execution strategies for run() and run_sync().
+
+    Parameters
+    ----------
+    request : pytest.FixtureRequest
+        Fixture request whose ``param`` selects the asynchronous or
+        synchronous execution strategy.
+
+    Returns
+    -------
+    tuple[str, PipelineExecuteFn]
+        The strategy label and its execution callable.
+    """
     if request.param == "async":
         return ("async", _execute_async)
     return ("sync", _execute_sync)
@@ -226,7 +238,19 @@ def test_pipeline_stdio_policy_streams_intermediate_stdout_end_to_end(
     expected_stdout: str | None,
     expected_stderr: str | None,
 ) -> None:
-    """Pipeline execution streams intermediate stdout and applies final capture."""
+    """Pipeline execution streams intermediate stdout and applies final capture.
+
+    Parameters
+    ----------
+    capture : bool
+        Whether the final stage's stdio should be captured.
+    expected_stdout : str | None
+        The expected final stdout, or ``None`` when ``capture`` is ``False``
+        and stdout is not captured.
+    expected_stderr : str | None
+        The expected final stderr, or ``None`` when ``capture`` is ``False``
+        and stderr is not captured.
+    """
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
 

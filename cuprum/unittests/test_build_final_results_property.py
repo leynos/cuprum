@@ -39,7 +39,18 @@ _load_crosshair_hypothesis()
 
 @st.composite
 def command_results(draw: st.DrawFn) -> CommandResult:
-    """Build compact ``CommandResult`` instances for reducer properties."""
+    """Build compact ``CommandResult`` instances for reducer properties.
+
+    Parameters
+    ----------
+    draw : st.DrawFn
+        Hypothesis composite draw callable used to sample field values.
+
+    Returns
+    -------
+    CommandResult
+        A drawn result with compact program, argv and output fields.
+    """
     return CommandResult(
         program=Program(draw(st.text(min_size=1, max_size=_MAX_TEXT_SIZE))),
         argv=draw(
@@ -62,7 +73,18 @@ def command_results(draw: st.DrawFn) -> CommandResult:
 
 @st.composite
 def partial_results_lists(draw: st.DrawFn) -> list[CommandResult | None]:
-    """Build partial result lists with completed and cancelled entries."""
+    """Build partial result lists with completed and cancelled entries.
+
+    Parameters
+    ----------
+    draw : st.DrawFn
+        Hypothesis composite draw callable used to sample field values.
+
+    Returns
+    -------
+    list[CommandResult | None]
+        A drawn list mixing completed results and cancelled (None) entries.
+    """
     return draw(
         st.lists(
             st.one_of(st.none(), command_results()),

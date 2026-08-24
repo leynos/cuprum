@@ -128,14 +128,6 @@ def tar_create(
     SafeCmd
         Safe command wrapper for the curated ``tar`` program and generated
         argv.
-
-    Raises
-    ------
-    ValueError
-        If ``sources`` is empty, or if any path is relative while relative
-        paths are not allowed.
-    TypeError
-        If ``sources`` is a bare string or ``Path`` instead of a sequence.
     """
     argv = _tar_create_argv(archive, sources, options or TarCreateOptions())
     return sh.make(TAR)(*argv)
@@ -180,11 +172,6 @@ def tar_extract(
     SafeCmd
         Safe command wrapper for the curated ``tar`` program and generated
         argv.
-
-    Raises
-    ------
-    ValueError
-        If any path is relative while ``allow_relative`` is false.
     """
     argv = _tar_extract_argv(archive, destination, allow_relative=allow_relative)
     return sh.make(TAR)(*argv)

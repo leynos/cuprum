@@ -47,7 +47,13 @@ def _execute_sync(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
 
 @pytest.fixture(params=["async", "sync"], ids=["run()", "run_sync()"])
 def execution_strategy(request: pytest.FixtureRequest) -> tuple[str, ExecuteFn]:
-    """Provide parametrised execution strategies for run() and run_sync()."""
+    """Provide parameterized execution strategies for run() and run_sync().
+
+    Returns
+    -------
+    tuple[str, ExecuteFn]
+        The strategy label and its execution callable.
+    """
     if request.param == "async":
         return ("async", _execute_async)
     return ("sync", _execute_sync)
@@ -55,7 +61,13 @@ def execution_strategy(request: pytest.FixtureRequest) -> tuple[str, ExecuteFn]:
 
 @pytest.fixture
 def python_builder() -> cabc.Callable[..., SafeCmd]:
-    """Provide a SafeCmd builder for the current Python interpreter."""
+    """Provide a SafeCmd builder for the current Python interpreter.
+
+    Returns
+    -------
+    collections.abc.Callable[..., SafeCmd]
+        A builder that creates SafeCmd instances for the running interpreter.
+    """
     return build_python_builder()
 
 
@@ -398,6 +410,11 @@ def _timeout_sync(
     call and there is nothing left to inspect. The leak assertion has its teeth
     in the ``run()`` variant; here the surviving-child assertion carries the
     cleanup contract.
+
+    Returns
+    -------
+    tuple[TimeoutExpired, set[asyncio.Task[object]]]
+        The raised timeout and an always-empty task set.
     """
     with pytest.raises(TimeoutExpired) as exc_info:
         cmd.run_sync(**kwargs)

@@ -160,7 +160,11 @@ def test_folded_summary_rejects_invalid_limits(
     error_type: type[Exception],
     fragment: str,
 ) -> None:
-    """Folded summary API rejects non-positive and non-integer limits."""
+    """Folded summary API rejects non-positive and non-integer limits.
+
+    A non-positive but valid integer raises ``ValueError`` while a non-integer
+    such as ``bool`` raises ``TypeError``.
+    """
     folded = tmp_path / "stacks.folded"
     folded.write_text("root;leaf 1\n")
 

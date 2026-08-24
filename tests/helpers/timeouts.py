@@ -50,6 +50,11 @@ def child_argv(marker: Path) -> tuple[str, str, str]:
 
     ``marker`` is written once both streams have been flushed, so a caller can
     wait on it to know the child is running rather than sleeping arbitrarily.
+
+    Returns
+    -------
+    tuple[str, str, str]
+        ``-c``, the child's source, and the marker path as a string.
     """
     return ("-c", _CHILD_SOURCE, str(marker))
 
@@ -72,6 +77,11 @@ def stubborn_child_argv(marker: Path) -> tuple[str, str, str]:
     Writing ``marker`` after the handler is installed lets a caller wait for
     the child to be genuinely immune before triggering teardown, rather than
     racing the interpreter's start-up.
+
+    Returns
+    -------
+    tuple[str, str, str]
+        ``-c``, the child's source, and the marker path as a string.
     """
     return ("-c", _STUBBORN_SOURCE, str(marker))
 
@@ -87,6 +97,12 @@ def process_is_running(pid: int) -> bool:
     ``_terminate_process`` awaits ``process.wait()`` before the failure
     propagates, so a reaped child is already gone once the caller regains
     control and this reports ``False`` without any polling.
+
+    Returns
+    -------
+    bool
+        ``True`` if ``pid`` exists (even if not owned by the caller),
+        ``False`` if it has already been reaped.
     """
     try:
         os.kill(pid, 0)
@@ -114,6 +130,12 @@ def pending_tasks() -> set[asyncio.Task[object]]:
     single precise element type exists. Callers only count what is left here
     and never read a result, so ``object`` is the narrowest sound annotation;
     the cast records that deliberately rather than widening to ``Any``.
+
+    Returns
+    -------
+    set[asyncio.Task[object]]
+        Every task on the running loop that is neither the caller nor
+        already done.
     """
     current = asyncio.current_task()
     tasks = typ.cast("set[asyncio.Task[object]]", asyncio.all_tasks())

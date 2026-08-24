@@ -46,7 +46,13 @@ def _execute_sync(cmd: SafeCmd, kwargs: dict[str, typ.Any]) -> CommandResult:
 
 @pytest.fixture(params=["async", "sync"], ids=["run()", "run_sync()"])
 def execution_strategy(request: pytest.FixtureRequest) -> tuple[str, ExecuteFn]:
-    """Provide async and sync execution strategies for parameterised tests."""
+    """Provide async and sync execution strategies for parameterized tests.
+
+    Returns
+    -------
+    tuple[str, ExecuteFn]
+        The strategy label and its execution callable.
+    """
     if request.param == "async":
         return ("async", _execute_async)
     return ("sync", _execute_sync)
@@ -54,7 +60,13 @@ def execution_strategy(request: pytest.FixtureRequest) -> tuple[str, ExecuteFn]:
 
 @pytest.fixture
 def python_builder() -> cabc.Callable[..., SafeCmd]:
-    """Provide a SafeCmd builder for the current Python interpreter."""
+    """Provide a SafeCmd builder for the current Python interpreter.
+
+    Returns
+    -------
+    collections.abc.Callable[..., SafeCmd]
+        A builder that creates SafeCmd instances for the running interpreter.
+    """
     return build_python_builder()
 
 
@@ -311,7 +323,7 @@ def test_cuprum_context_with_env_overlay_is_immutable_proxy() -> None:
 
 
 def test_env_restores_on_exception() -> None:
-    """``env(...)`` restores the previous context even when an exception is raised."""
+    """``env(...)`` restores the previous context when a raised error is caught."""
     # The ValueError is raised deliberately inside the ``env`` block and caught
     # by ``pytest.raises``, so it never escapes this test.
     original = current_context()

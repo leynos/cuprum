@@ -24,7 +24,26 @@ class IncompatibleBenchmarkProfileError(ValueError):
 
 
 def require_worker_iterations(payload: cabc.Mapping[str, object]) -> int:
-    """Return the benchmark worker iteration count from a dry-run plan."""
+    """Return the benchmark worker iteration count from a dry-run plan.
+
+    Parameters
+    ----------
+    payload : collections.abc.Mapping[str, object]
+        The dry-run benchmark plan mapping from which the worker
+        iteration count is read.
+
+    Returns
+    -------
+    int
+        The validated worker iteration count.
+
+    Raises
+    ------
+    TypeError
+        If ``worker_iterations`` is a boolean or not an integer.
+    ValueError
+        If ``worker_iterations`` is less than one.
+    """
     value = payload.get("worker_iterations")
     if isinstance(value, bool) or not isinstance(value, int):
         msg = "worker_iterations must be an int"
@@ -71,7 +90,24 @@ def validate_matching_profiles(
     baseline_plan: cabc.Mapping[str, object],
     candidate_plan: cabc.Mapping[str, object],
 ) -> None:
-    """Validate that benchmark profile metadata matches across both plans."""
+    """Validate that benchmark profile metadata matches across both plans.
+
+    Parameters
+    ----------
+    baseline_plan : collections.abc.Mapping[str, object]
+        The baseline dry-run plan payload whose profile metadata is
+        compared.
+    candidate_plan : collections.abc.Mapping[str, object]
+        The candidate dry-run plan payload whose profile metadata must
+        match the baseline.
+
+    Raises
+    ------
+    IncompatibleBenchmarkProfileError
+        If either plan is missing its profile metadata or that metadata is
+        malformed, or if the profile versions or worker iteration counts
+        differ between the baseline and candidate plans.
+    """
     baseline_profile = _require_profile_metadata(baseline_plan, context_name="baseline")
     candidate_profile = _require_profile_metadata(
         candidate_plan, context_name="candidate"

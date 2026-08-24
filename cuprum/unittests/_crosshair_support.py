@@ -11,7 +11,8 @@ The import-time ``try``/``except`` itself stays in each consuming module,
 because it binds that module's own CrossHair names. Only the classification and
 reporting are shared, which is what the consumers would otherwise duplicate.
 
-Consumers: `test_line_splitting.py`, `test_pipeline_wait_crosshair.py`.
+Consumers: `test_line_splitting.py`,
+`test_subprocess_timeout_reducers_crosshair.py`.
 """
 
 from __future__ import annotations
@@ -31,13 +32,7 @@ type CrossHairSymbols = tuple[str, typ.Any, typ.Any, typ.Any, typ.Any]
 
 
 def _crosshair_probe_failure_reason(error: BaseException) -> str:
-    """Return a skip reason for expected probe failures and raise the rest.
-
-    Expected unavailability is a missing CrossHair dependency (``ImportError``)
-    or tracer incompatibility, which surfaces as a ``TraceException``-named
-    ``BaseException``. Control-flow exceptions and anything else are re-raised
-    so an unexpected CrossHair break is never downgraded to a skip.
-    """
+    """Return a skip reason for expected probe failures and raise the rest."""
     # Expected unavailability is a missing CrossHair dependency
     # (``ImportError``) or tracer incompatibility, which surfaces as a
     # ``TraceException``-named ``BaseException``. Control-flow exceptions and
@@ -54,12 +49,7 @@ def _crosshair_probe_failure_reason(error: BaseException) -> str:
 
 
 def _crosshair_unavailable_symbols(error: BaseException) -> CrossHairSymbols:
-    """Return fallback CrossHair symbols for an expected probe failure.
-
-    The four ``None`` bindings stand in for ``AnalysisOptionSet``,
-    ``AnalysisKind``, ``MessageType``, and ``check_states`` so a consuming
-    module can skip its symbolic tests instead of failing collection.
-    """
+    """Return fallback CrossHair symbols for an expected probe failure."""
     # The four ``None`` bindings stand in for ``AnalysisOptionSet``,
     # ``AnalysisKind``, ``MessageType``, and ``check_states`` so a consuming
     # module can skip its symbolic tests instead of failing collection.

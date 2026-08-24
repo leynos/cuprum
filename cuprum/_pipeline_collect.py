@@ -73,6 +73,12 @@ async def _await_pipeline_wait_result(
     ``pipe_tasks`` belongs to the caller: a non-positive deadline cancels
     ``_wait_for_pipeline`` before the ``finally`` that would reconcile them,
     so the caller reconciles them instead (see the developers' guide).
+
+    Returns
+    -------
+    _PipelineWaitResult
+        The result of waiting on the pipeline's stage processes, as
+        produced by ``_wait_for_pipeline``.
     """
     wait_timeout: float | None = None
     if timeout_deadline is not None:
@@ -127,11 +133,7 @@ async def _collect_pipeline_inputs(
         timeout_deadline = time.monotonic() + timeout
 
     pipe_tasks = _create_pipe_tasks(spawn.processes)
-    # ``no-else-raise`` treats the ``else`` as removable because the handler
-    # raises, but here it is load-bearing: it keeps the output gathering out of
-    # the ``try`` so ``except TimeoutError`` covers only the wait, and a timeout
-    # raised while gathering is not misreported as a pipeline timeout.
-    try:  # pylint: disable=no-else-raise
+    try:
         wait_result = await _await_pipeline_wait_result(
             spawn,
             config,
@@ -151,10 +153,14 @@ async def _collect_pipeline_inputs(
             capture=config.capture,
         )
         raise _build_timeout_expired_error(parts, timeout, outputs) from exc
-    else:
-        stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)
-        return _PipelineStageResultInputs(
-            wait_result=wait_result,
-            stderr_by_stage=stderr_by_stage,
-            final_stdout=final_stdout,
-        )
+
+    # Gathering sits after the ``try`` so ``except TimeoutError`` covers only
+    # the wait: a timeout raised while gathering is a different failure and must
+    # not be reported as a pipeline timeout. Every branch of the handler raises,
+    # so this is reached only on success.
+    stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)
+    return _PipelineStageResultInputs(
+        wait_result=wait_result,
+        stderr_by_stage=stderr_by_stage,
+        final_stdout=final_stdout,
+    )

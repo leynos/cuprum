@@ -206,7 +206,23 @@ def select_latest_artifact_download_url(
     artifacts_payload_by_run: cabc.Mapping[int, cabc.Mapping[str, object]],
     artifact_name: str,
 ) -> str | None:
-    """Return the latest non-expired artifact download URL, if available."""
+    """Return the latest non-expired artifact download URL, if available.
+
+    Parameters
+    ----------
+    workflow_runs_payload : cabc.Mapping[str, object]
+        The GitHub Actions workflow-runs API payload to search.
+    artifacts_payload_by_run : cabc.Mapping[int, cabc.Mapping[str, object]]
+        Artifact-listing payloads indexed by their workflow run ID.
+    artifact_name : str
+        Name of the artifact to match within each run's artifacts.
+
+    Returns
+    -------
+    str | None
+        The download URL from the newest run with a live matching artifact,
+        or ``None`` when none is found.
+    """
     workflow_runs = _require_list(
         workflow_runs_payload.get("workflow_runs"),
         name="workflow_runs",
@@ -228,7 +244,7 @@ def select_latest_artifact_download_url(
 
 
 def _artifact_member_path(*, output_dir: pth.Path, archive_name: str) -> pth.Path:
-    """Return the normalized extraction path for an archive member."""
+    """Return the normalised extraction path for an archive member."""
     destination = (output_dir / archive_name).resolve()
     output_root = output_dir.resolve()
     if destination != output_root and output_root not in destination.parents:
@@ -242,7 +258,20 @@ def extract_artifact_archive(
     archive_bytes: bytes,
     output_dir: pth.Path,
 ) -> tuple[pth.Path, ...]:
-    """Extract a downloaded artifact zip into *output_dir* safely."""
+    """Extract a downloaded artifact zip into *output_dir* safely.
+
+    Parameters
+    ----------
+    archive_bytes : bytes
+        Raw bytes of the downloaded artifact ZIP archive.
+    output_dir : pathlib.Path
+        Destination directory into which archive members are extracted.
+
+    Returns
+    -------
+    tuple[pathlib.Path, ...]
+        The paths of the files written during extraction.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     extracted_paths: list[pth.Path] = []
     with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
@@ -265,7 +294,22 @@ def find_latest_artifact_download_url(
     query: ArtifactQuery,
     token: str,
 ) -> str | None:
-    """Query GitHub Actions and return the latest matching artifact URL."""
+    """Query GitHub Actions and return the latest matching artifact URL.
+
+    Parameters
+    ----------
+    query : ArtifactQuery
+        The artifact lookup describing the repository, workflow, branch,
+        event, artifact name, and API base URL.
+    token : str
+        GitHub authentication token sent with the API requests.
+
+    Returns
+    -------
+    str | None
+        The download URL for the latest matching artifact, or ``None`` when
+        none is available.
+    """
     encoded_repository = urllib.parse.quote(query.repository, safe="/")
     encoded_workflow = urllib.parse.quote(query.workflow, safe="")
     params = urllib.parse.urlencode({
@@ -347,7 +391,24 @@ def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
 
 
 def main(argv: cabc.Sequence[str] | None = None) -> int:
-    """Run the baseline artifact fetch CLI."""
+    """Run the baseline artifact fetch CLI.
+
+    Parameters
+    ----------
+    argv : cabc.Sequence[str] | None
+        Optional CLI argument sequence; when ``None`` the process
+        arguments are used.
+
+    Returns
+    -------
+    int
+        ``0`` on success, or the not-found exit code when no baseline exists.
+
+    Raises
+    ------
+    SystemExit
+        If the configured token environment variable is unset or empty.
+    """
     args = _parse_args(argv)
     token = os.environ.get(args.token_env, "").strip()
     if not token:

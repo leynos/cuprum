@@ -321,6 +321,21 @@ async def _make_consumer(kind: str, text: str) -> str | None:
     ``completed`` and ``failing`` yield once before settling: a task the loop
     has not scheduled yet is indistinguishable from a blocked one, and the
     drain cancels both.
+
+    Returns
+    -------
+    str | None
+        ``text``, once the ``completed`` consumer has yielded. The
+        ``pending`` consumer never returns; it awaits an event that is
+        never set.
+
+    Raises
+    ------
+    _ConsumerFailureError
+        If ``kind`` is ``"failing"``, after yielding once.
+    ValueError
+        If ``kind`` is none of ``"completed"``, ``"pending"``, or
+        ``"failing"``.
     """
     if kind == "completed":
         await asyncio.sleep(0)

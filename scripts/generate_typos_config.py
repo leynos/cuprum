@@ -29,7 +29,29 @@ _logger = logging.getLogger(__name__)
 
 
 def dictionary_from_cache(repository: Path = REPOSITORY_ROOT) -> rollout.Dictionary:
-    """Load the cached shared base merged with local repository policy."""
+    """Load the cached shared base merged with local repository policy.
+
+    Parameters
+    ----------
+    repository : Path
+        Repository containing the cached shared dictionary and optional local
+        overlay. Defaults to the repository root.
+
+    Returns
+    -------
+    rollout.Dictionary
+        The shared base dictionary overlaid with any local policy.
+
+    Raises
+    ------
+    OSError
+        If the cached dictionary or local overlay file cannot be read.
+    UnicodeDecodeError
+        If a dictionary file is not valid UTF-8.
+    ValueError, TypeError, tomllib.TOMLDecodeError
+        If a dictionary file fails validation, or the local overlay defines a
+        correction that conflicts with the shared base.
+    """  # noqa: DOC502 - load/merge errors propagate from the rollout callees
     dictionary = rollout.load_dictionary(repository / ".typos-oxendict-base.toml")
     local_overlay = repository / "typos.local.toml"
     if local_overlay.exists():
@@ -41,7 +63,30 @@ def dictionary_from_cache(repository: Path = REPOSITORY_ROOT) -> rollout.Diction
 
 
 def render_config(repository: Path = REPOSITORY_ROOT) -> str:
-    """Render deterministic configuration from the populated local cache."""
+    """Render deterministic configuration from the populated local cache.
+
+    Parameters
+    ----------
+    repository : Path
+        Repository containing the populated cache and optional local overlay.
+        Defaults to the repository root.
+
+    Returns
+    -------
+    str
+        The rendered ``typos.toml`` configuration text.
+
+    Raises
+    ------
+    OSError
+        If the cached dictionary or local overlay file cannot be read.
+    UnicodeDecodeError
+        If a dictionary file is not valid UTF-8.
+    ValueError, TypeError, tomllib.TOMLDecodeError
+        If a dictionary file fails validation, the local overlay conflicts
+        with the shared base, or the rendered document fails the TOML parse
+        check.
+    """  # noqa: DOC502 - load/merge/render errors propagate from the callees
     return rollout.render_typos_config(dictionary_from_cache(repository))
 
 
@@ -75,7 +120,42 @@ def main(
     source: str | Path = DEFAULT_BASE_URL,
     offline: bool = False,
 ) -> rollout.RefreshResult:
-    """Refresh the shared base cache and write the merged configuration."""
+    """Refresh the shared base cache and write the merged configuration.
+
+    Parameters
+    ----------
+    output : Path | None
+        Destination for the generated configuration. Defaults to
+        ``repository / "typos.toml"``.
+    repository : Path
+        Repository containing the cache, local overlay, and default output.
+    source : str | Path
+        Authoritative shared dictionary source, as a local path or HTTPS URL.
+    offline : bool
+        When True, require an existing valid cache and skip network refresh.
+
+    Returns
+    -------
+    rollout.RefreshResult
+        The refresh outcome, or a tracked-config fallback when the source is
+        unreachable but a valid tracked configuration is already present.
+
+    Raises
+    ------
+    OSError
+        If the cache cannot be refreshed and no tracked fallback is usable.
+    urllib.error.URLError
+        If the source cannot be reached and no tracked fallback is usable.
+    ValueError
+        If the shared dictionary source cannot be parsed while loading or
+        merging.
+    TypeError
+        If the shared dictionary source is not a mapping while loading or
+        merging.
+    tomllib.TOMLDecodeError
+        If the shared dictionary source or the rendered configuration is
+        not valid TOML.
+    """  # noqa: DOC502 - load, merge, and render errors propagate from the callees
     destination = output if output is not None else repository / "typos.toml"
     try:
         result = rollout.refresh_base(

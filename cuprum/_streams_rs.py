@@ -77,15 +77,12 @@ def rust_pump_stream(
     int
         The number of bytes successfully written.
 
-    Raises
-    ------
-    ImportError
-        If the Rust backend native module cannot be imported.
-    ValueError
-        If ``buffer_size`` is not a positive integer or exceeds the 1 GiB
-        maximum.
-    OSError
-        If an I/O error occurs while pumping bytes.
+    Notes
+    -----
+    Failures propagate unchanged from the Rust extension rather than being
+    raised here: ``ImportError`` if the native module cannot be imported,
+    ``ValueError`` if ``buffer_size`` is not a positive integer or exceeds the
+    1 GiB maximum, and ``OSError`` if an I/O error occurs while pumping bytes.
     """
     native = _load_native()
     return int(
@@ -107,15 +104,6 @@ def rust_consume_stream(
     This helper always decodes UTF-8 and replaces invalid sequences with the
     Unicode replacement character.
 
-    Notes
-    -----
-    Implemented but not yet integrated. No production code path routes a
-    consume through this function; the pump side has a
-    ``_pump_stream_dispatch`` counterpart, but consume dispatch is
-    deferred, evidence-gated work (ADR-002, Phase 2). The function is
-    exercised directly by tests and remains available for downstream
-    experimentation.
-
     Parameters
     ----------
     reader_fd : int
@@ -129,15 +117,19 @@ def rust_consume_stream(
     str
         Decoded output from the stream.
 
-    Raises
-    ------
-    ImportError
-        If the Rust backend native module cannot be imported.
-    ValueError
-        If ``buffer_size`` is not a positive integer or exceeds the 1 GiB
-        maximum.
-    OSError
-        If an I/O error occurs while reading.
+    Notes
+    -----
+    Implemented but not yet integrated. No production code path routes a
+    consume through this function; the pump side has a
+    ``_pump_stream_dispatch`` counterpart, but consume dispatch is
+    deferred, evidence-gated work (ADR-002, Phase 2). The function is
+    exercised directly by tests and remains available for downstream
+    experimentation.
+
+    Failures propagate unchanged from the Rust extension rather than being
+    raised here: ``ImportError`` if the native module cannot be imported,
+    ``ValueError`` if ``buffer_size`` is not a positive integer or exceeds the
+    1 GiB maximum, and ``OSError`` if an I/O error occurs while reading.
     """
     native = _load_native()
     return typ.cast(

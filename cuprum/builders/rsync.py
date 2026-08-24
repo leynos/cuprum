@@ -75,12 +75,6 @@ def rsync_sync(
     SafeCmd
         Safe command wrapper for the curated ``rsync`` program and generated
         argv.
-
-    Raises
-    ------
-    ValueError
-        If ``source`` or ``destination`` is relative while relative paths are
-        not allowed.
     """
     argv = _rsync_argv(source, destination, options or RsyncOptions())
     return sh.make(RSYNC)(*argv)

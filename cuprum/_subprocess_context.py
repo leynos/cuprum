@@ -39,20 +39,7 @@ def _current_context() -> CuprumContext:
 
 
 def _cwd_arg(cwd: str | Path | None) -> str | None:
-    """Return the ``cwd`` argument for ``asyncio.create_subprocess_exec``.
-
-    Canonical conversion shared by the single-command and pipeline spawn
-    sites so the optional working directory is rendered identically in both
-    paths. A ``Path`` argument is rendered via ``str`` exactly as a string
-    argument is; see ``test_cwd_arg_conversion`` for the exhaustive cases.
-
-    Example
-    -------
-    >>> _cwd_arg(None) is None
-    True
-    >>> _cwd_arg("/srv/data")
-    '/srv/data'
-    """
+    """Return the ``cwd`` argument for ``asyncio.create_subprocess_exec``."""
     return str(cwd) if cwd is not None else None
 
 

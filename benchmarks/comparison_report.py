@@ -41,7 +41,19 @@ def _ratchet_passed_status(report: cabc.Mapping[str, object]) -> RatchetStatus:
 
 
 def load_ratchet_report(path: pth.Path) -> RatchetStatus:
-    """Load the Rust regression ratchet report and summarize its status."""
+    """Load the Rust regression ratchet report and summarize its status.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Filesystem path to the ratchet-report JSON file to load.
+
+    Returns
+    -------
+    RatchetStatus
+        The ratchet status: ``skipped`` when no comparison was performed or no
+        baseline was available, otherwise the passed or failed status.
+    """
     payload = json.loads(path.read_text(encoding="utf-8"))
     report = _require_mapping(payload, name=f"ratchet report from {path}")
 
@@ -59,7 +71,21 @@ def render_summary_markdown(
     report: BenchmarkComparisonReport,
     ratchet_status: RatchetStatus,
 ) -> str:
-    """Render workflow-summary Markdown for the comparison report."""
+    """Render workflow-summary Markdown for the comparison report.
+
+    Parameters
+    ----------
+    report : BenchmarkComparisonReport
+        Comparison data whose rows and summary populate the rendered table.
+    ratchet_status : RatchetStatus
+        Workflow ratchet status rendered as the report's ratchet detail line.
+
+    Returns
+    -------
+    str
+        A Markdown document with a heading, the ratchet detail, and a table of
+        per-scenario Python and Rust means, speed-up, and faster backend.
+    """
     lines = [
         "## Python vs Rust benchmark comparison",
         "",

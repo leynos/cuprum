@@ -37,7 +37,13 @@ def test_users_guide_includes_troubleshooting_guidance() -> None:
     target_fixture="prerequisites_section",
 )
 def given_build_prerequisites_section() -> str:
-    """Load the build prerequisites section from the users' guide."""
+    """Load the build prerequisites section from the users' guide.
+
+    Returns
+    -------
+    str
+        The Markdown text of the build prerequisites subsection.
+    """
     guide = read_users_guide()
     return extract_markdown_subsection(guide, heading=BUILD_PREREQUISITES_HEADING)
 
@@ -47,7 +53,13 @@ def given_build_prerequisites_section() -> str:
     target_fixture="troubleshooting_section",
 )
 def given_troubleshooting_section() -> str:
-    """Load the troubleshooting section from the users' guide."""
+    """Load the troubleshooting section from the users' guide.
+
+    Returns
+    -------
+    str
+        The Markdown text of the troubleshooting subsection.
+    """
     guide = read_users_guide()
     return extract_markdown_subsection(guide, heading=TROUBLESHOOTING_HEADING)
 
@@ -60,7 +72,18 @@ def given_troubleshooting_section() -> str:
     target_fixture="read_prerequisites",
 )
 def when_read_build_prerequisites(prerequisites_section: str) -> str:
-    """Return the section text as the read prerequisites."""
+    """Return the section text as the read prerequisites.
+
+    Parameters
+    ----------
+    prerequisites_section : str
+        The build-prerequisites section extracted from the guide.
+
+    Returns
+    -------
+    str
+        The prerequisites section text.
+    """
     return prerequisites_section
 
 
@@ -69,7 +92,18 @@ def when_read_build_prerequisites(prerequisites_section: str) -> str:
     target_fixture="read_troubleshooting",
 )
 def when_read_troubleshooting_guidance(troubleshooting_section: str) -> str:
-    """Return the section text as the read troubleshooting guidance."""
+    """Return the section text as the read troubleshooting guidance.
+
+    Parameters
+    ----------
+    troubleshooting_section : str
+        The troubleshooting section extracted from the guide.
+
+    Returns
+    -------
+    str
+        The troubleshooting section text.
+    """
     return troubleshooting_section
 
 

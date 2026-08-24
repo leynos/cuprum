@@ -196,6 +196,11 @@ def main() -> int:
     int
         Process exit code; 0 on success, non-zero on worker or configuration
         failure.
+
+    Raises
+    ------
+    ValueError
+        If the parsed subcommand is not recognised.
     """
     args = _base_parser().parse_args()
     config = _config_from_args(args)

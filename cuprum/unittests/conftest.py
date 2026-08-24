@@ -34,7 +34,24 @@ _VOLATILE_KEYS: frozenset[str] = frozenset({
 
 
 def redact(obj: object, keys: frozenset[str] = _VOLATILE_KEYS) -> object:
-    """Recursively replace the values of nominated keys with '<redacted>'."""
+    """Recursively replace the values of nominated keys with '<redacted>'.
+
+    Parameters
+    ----------
+    obj : object
+        The recursively traversed value; only dictionaries and lists are
+        copied recursively, while non-container values are returned
+        unchanged.
+    keys : frozenset[str]
+        Dictionary-key names whose associated values are replaced with
+        ``"<redacted>"``; defaults to ``_VOLATILE_KEYS``.
+
+    Returns
+    -------
+    object
+        A recursively copied dictionary or list with nominated keys redacted,
+        or the original non-container value unchanged.
+    """
     if isinstance(obj, dict):
         return {
             k: "<redacted>" if k in keys else redact(v, keys) for k, v in obj.items()

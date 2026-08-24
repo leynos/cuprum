@@ -155,7 +155,13 @@ def test_emit_exec_event_wraps_cancellation_and_preserves_tasks() -> None:
             completed.append(True)
 
         def cancelling_hook(_event: ExecEvent) -> None:
-            """Raise cancellation after the earlier hook is scheduled."""
+            """Raise cancellation after the earlier hook is scheduled.
+
+            Raises
+            ------
+            CancelledError
+                Always, to simulate hook cancellation.
+            """
             raise asyncio.CancelledError
 
         with pytest.raises(_ExecEventEmissionError) as exc_info:
@@ -183,12 +189,24 @@ def test_stage_observation_preserves_scheduled_tasks_when_later_hook_fails(
         pending_tasks: list[asyncio.Task[None]] = []
 
         async def async_hook(_event: ExecEvent) -> None:
-            """Raise from an async hook that was scheduled before failure."""
+            """Raise from an async hook that was scheduled before failure.
+
+            Raises
+            ------
+            _AsyncObserveHookError
+                Always, after yielding control once.
+            """
             await asyncio.sleep(0)
             raise _AsyncObserveHookError
 
         def failing_hook(_event: ExecEvent) -> None:
-            """Raise synchronously after the async hook schedules work."""
+            """Raise synchronously after the async hook schedules work.
+
+            Raises
+            ------
+            _SyncObserveHookError
+                Always, to fail the synchronous hook.
+            """
             raise _SyncObserveHookError
 
         observation = _StageObservation(
@@ -246,7 +264,13 @@ def test_stage_observation_preserves_tasks_after_base_exception() -> None:
             completed.append(True)
 
         def failing_hook(_event: ExecEvent) -> None:
-            """Raise a non-cancellation base exception after scheduling work."""
+            """Raise a non-cancellation base exception after scheduling work.
+
+            Raises
+            ------
+            _FatalObserveHookError
+                Always, to simulate a fatal hook failure.
+            """
             raise _FatalObserveHookError
 
         observation = _StageObservation(
@@ -291,7 +315,13 @@ class _RecordingWriter:
         self.chunks.append(chunk)
 
     async def drain(self) -> None:
-        """Drain, optionally simulating a broken downstream pipe."""
+        """Drain, optionally simulating a broken downstream pipe.
+
+        Raises
+        ------
+        BrokenPipeError
+            When configured to simulate a broken downstream pipe.
+        """
         if self._fail:
             raise BrokenPipeError
 
@@ -348,7 +378,13 @@ def test_write_to_stream_writer_reports_outcome(
     """Writes report downstream state without closing the writer."""
 
     async def run() -> _WriteOutcome:
-        """Write one chunk to a configurable writer."""
+        """Write one chunk to a configurable writer.
+
+        Returns
+        -------
+        _WriteOutcome
+            The outcome reported by the stream-writer helper.
+        """
         writer = _RecordingWriter(fail=fail)
         outcome = await _write_to_stream_writer(typ.cast("typ.Any", writer), b"payload")
         assert writer.chunks == [b"payload"], "writer should receive the payload chunk"

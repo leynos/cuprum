@@ -1,13 +1,16 @@
 """Internal stream-handling utilities for subprocess I/O.
 
-The pure-Python home for consuming a subprocess's stdout/stderr and pumping one
-pipeline stage's stdout into the next stage's stdin. ``_consume_stream`` and the
-shared ``_drain`` loop decode bytes, optionally tee each chunk to a sink, capture
-the text, and emit decoded lines; ``_pump_stream``/``_relay_chunks`` copy chunks
-between stages with ``writer.drain()`` backpressure, draining to EOF without a
-writer and best-effort under a bounded timeout after an early close so upstream
-stages never block. Used by the pipeline and single-command execution layers, it
-mirrors the optional Rust backend ``cuprum._streams_rs``. Callers own any writer.
+The pure-Python home for consuming a subprocess's stdout/stderr.
+``_consume_stream`` and the shared ``_drain`` loop decode bytes, optionally tee
+each chunk to a sink, capture the text, and emit decoded lines. The writer side
+that pumps one pipeline stage's stdout into the next stage's stdin lives in
+``cuprum._streams_pump`` and is re-exported here (``_pump_stream``,
+``_close_stream_writer``, ``_write_to_stream_writer``, ``_WriteOutcome``,
+``_drain_stream_reader_bounded``) so importers of this module keep working
+unchanged. Used by the pipeline and single-command execution layers, it mirrors
+the optional Rust backend ``cuprum._streams_rs``. ``_pump_stream`` closes any
+supplied writer once relay completes or when no reader is supplied, so callers
+must not reuse the writer afterwards.
 """
 
 from __future__ import annotations
@@ -60,19 +63,15 @@ async def _drain(
     *,
     on_chunk: cabc.Callable[[bytes], None] | None = None,
 ) -> str | None:
-    """Run the canonical read/echo/buffer loop over *stream*.
-
-    This is the single source of truth for the consume mechanics shared by
-    :func:`_consume_stream_without_lines` and
-    :func:`_consume_stream_with_lines`: read in ``_READ_SIZE`` chunks, extend
-    the capture buffer when capturing, echo each chunk to the configured sink
-    when echoing, then hand the chunk to ``on_chunk`` for variant-specific
-    processing (for example incremental line decoding). Fixes to the loop must
-    be made here so the capture path and the line-emitting path cannot drift.
-
-    Returns the captured text decoded with the configured encoding/errors, or
-    ``None`` when capture is disabled.
-    """
+    """Run the canonical read/echo/buffer loop over *stream*."""
+    # This is the single source of truth for the consume mechanics shared by
+    # :func:`_consume_stream_without_lines` and
+    # :func:`_consume_stream_with_lines`: read in ``_READ_SIZE`` chunks, extend
+    # the capture buffer when capturing, echo each chunk to the configured
+    # sink when echoing, then hand the chunk to ``on_chunk`` for
+    # variant-specific processing (for example incremental line decoding).
+    # Fixes to the loop must be made here so the capture path and the
+    # line-emitting path cannot drift.
     buffer = bytearray() if config.capture_output else None
     echo_decoder = _echo_decoder(config)
     while True:
