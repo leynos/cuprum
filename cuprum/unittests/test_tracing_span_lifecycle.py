@@ -1,19 +1,23 @@
 """Span-lifecycle and attribute-contract tests for ``TracingHook``.
 
-These tests cover the execution-keyed span bookkeeping for issue #122:
-lifecycle events are correlated by ``ExecEvent.exec_id``, so a recycled
-PID cannot cross one execution's events onto another execution's span,
-and the documented span-attribute contract must stay in lockstep with
-the attributes the hook can actually emit. They live in their own module
-(rather than in ``test_adapters.py``) because they exercise the hook's
-internal lifecycle directly instead of the adapter behaviour observed
-through command execution.
+A span is opened by ``start`` and closed by ``exit``. These tests cover what
+happens in between, and what happens when that closing event never comes: the
+ancillary ``stdin_error`` / ``timeout`` / ``teardown_error`` phases record a
+span event and deliberately leave the span open; a ``teardown_error`` arriving
+after ``exit`` finds no entry and is dropped; and an execution that never
+emits ``exit`` at all is bounded by the registry's least-recently-active
+eviction rather than leaking an entry for the life of the hook.
 
-Events are built with the shared :func:`_make_exec_event` factory; each
-call passes its ``pid``, ``exec_id``, and phase-specific fields through
-``overrides``. Pass distinct ``exec_id`` tokens for distinct executions
-(even when they share a ``pid``), reuse one token across an execution's
-phases, and pass ``exec_id=None`` to model a legacy event.
+The documented span-attribute contract is checked here too, so the prose and
+the attributes the hook can actually emit cannot drift apart.
+
+The ``exec_id`` correlation rules — that a recycled PID must not cross one
+execution's events onto another execution's span — live in
+``test_tracing_exec_id_correlation``.
+
+Events are built with the shared :func:`_make_exec_event` factory; each call
+passes its ``pid``, ``exec_id``, and phase-specific fields through
+``overrides``.
 """
 
 from __future__ import annotations
@@ -21,13 +25,19 @@ from __future__ import annotations
 import typing as typ
 from pathlib import Path
 
-from cuprum.adapters.tracing_adapter import InMemorySpan, InMemoryTracer, TracingHook
+import pytest
+
+from cuprum.adapters.tracing_adapter import (
+    _MAX_ACTIVE_SPANS,
+    InMemoryTracer,
+    TracingHook,
+)
 from cuprum.events import ExecEvent, new_exec_id
 from cuprum.program import Program
 from cuprum.unittests._adapter_test_support import _make_exec_event
 
 if typ.TYPE_CHECKING:
-    import pytest
+    from cuprum.events import ExecId, ExecPhase
 
 # Single source of truth for the span-attribute contract documented on
 # ``TracingHook``. Both the documentation check and the emitted-attribute
@@ -47,9 +57,6 @@ DOCUMENTED_SPAN_ATTRIBUTES: frozenset[str] = frozenset(
     },
 )
 
-# A single recycled PID shared by two distinct executions A and B.
-_SHARED_PID = 1234
-
 
 def _users_guide_text() -> str:
     """Return the users' guide markdown for documentation-contract checks."""
@@ -60,250 +67,229 @@ def _users_guide_text() -> str:
 class TestTracingSpanLifecycle:
     """Span-lifecycle and attribute-contract tests for ``TracingHook``."""
 
-    def test_recycled_pid_output_attaches_by_exec_id_not_pid(self) -> None:
-        """Delayed output for A never lands on B, despite the shared PID.
+    @staticmethod
+    def _cat_overrides(exec_id: ExecId, pid: int = 4321) -> dict[str, object]:
+        """Return the identifying overrides for a traced ``cat`` execution.
 
-        A and B run on the same recycled PID. A's exit is missed, then A emits a
-        late ``stdout``; keying by ``exec_id`` routes it to A, never to B.
+        The span-lifecycle tests care about which execution an event belongs
+        to, not what it ran, so they all share one program and argv and vary
+        only the correlation token and pid.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-        exec_a = new_exec_id()
-        exec_b = new_exec_id()
+        return {"program": "cat", "argv": ("cat",), "pid": pid, "exec_id": exec_id}
 
-        hook(
-            _make_exec_event(
-                phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_a}
-            )
-        )
-        span_a = tracer.spans[0]
-        hook(
-            _make_exec_event(
-                phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_b}
-            )
-        )
-        span_b = tracer.spans[1]
-
-        # Out-of-order output: A's delayed line arrives after B started.
-        hook(
-            _make_exec_event(
-                phase="stdout",
-                overrides={"pid": _SHARED_PID, "exec_id": exec_a, "line": "from-A"},
-            )
-        )
-        hook(
-            _make_exec_event(
-                phase="stdout",
-                overrides={"pid": _SHARED_PID, "exec_id": exec_b, "line": "from-B"},
-            )
-        )
-
-        assert span_a.events == [("cuprum.stdout", {"line": "from-A"})], (
-            "A's delayed output must attach to A's span"
-        )
-        assert span_b.events == [("cuprum.stdout", {"line": "from-B"})], (
-            "B's span must only receive B's output, never A's delayed line"
-        )
-
-    def test_recycled_pid_exit_closes_correct_execution(self) -> None:
-        """A delayed exit for A closes A and never touches B.
-
-        B, still open on the recycled PID, retains its status until its own exit.
-        """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-        exec_a = new_exec_id()
-        exec_b = new_exec_id()
-
-        hook(
-            _make_exec_event(
-                phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_a}
-            )
-        )
-        span_a = tracer.spans[0]
-        hook(
-            _make_exec_event(
-                phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_b}
-            )
-        )
-        span_b = tracer.spans[1]
-
-        # A's delayed, failing exit arrives after B recycled the PID.
-        hook(
-            _make_exec_event(
-                phase="exit",
-                overrides={
-                    "pid": _SHARED_PID,
-                    "exec_id": exec_a,
-                    "exit_code": 3,
-                    "duration_s": 0.2,
+    @pytest.mark.parametrize(
+        ("phase", "extra_fields", "expected_attributes"),
+        [
+            pytest.param(
+                "stdin_error",
+                {
+                    "operation": "write",
+                    "error_type": "OSError",
+                    "note": "OSError: broken pipe",
                 },
-            )
-        )
-
-        assert span_a.ended is True, "A's delayed exit must close A"
-        assert span_a.status_ok is False, "A must close with its own failing status"
-        assert span_b.ended is False, "A's exit must not close B"
-        assert span_b.status_ok is None, "A's exit must not change B's status"
-
-        # B exits cleanly and closes its own span.
-        hook(
-            _make_exec_event(
-                phase="exit",
-                overrides={
-                    "pid": _SHARED_PID,
-                    "exec_id": exec_b,
-                    "exit_code": 0,
-                    "duration_s": 0.1,
+                {"operation": "write", "error_type": "OSError"},
+                id="stdin_error",
+            ),
+            pytest.param(
+                "timeout",
+                {
+                    "operation": "wait",
+                    "error_type": "TimeoutError",
+                    "timeout_s": 1.5,
+                    "timeout_mode": "elapsed_deadline",
                 },
-            )
-        )
-        assert span_b.ended is True, "B's exit must close B"
-        assert span_b.status_ok is True, "B must retain its own clean status"
-
-    def test_recycled_pid_normal_flow_for_second_execution(self) -> None:
-        """B's own output and exit still attach to and close B's span.
-
-        Even with A left open on the shared PID, the ordinary path for B is
-        unaffected.
-        """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-        exec_a = new_exec_id()
-        exec_b = new_exec_id()
-
-        # A left open.
-        hook(
-            _make_exec_event(
-                phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_a}
-            )
-        )
-        hook(
-            _make_exec_event(
-                phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_b}
-            )
-        )
-        span_b = tracer.spans[1]
-
-        hook(
-            _make_exec_event(
-                phase="stdout",
-                overrides={
-                    "pid": _SHARED_PID,
-                    "exec_id": exec_b,
-                    "line": "hello-from-B",
+                {
+                    "operation": "wait",
+                    "error_type": "TimeoutError",
+                    "timeout_s": 1.5,
+                    "timeout_mode": "elapsed_deadline",
                 },
-            )
-        )
-        hook(
-            _make_exec_event(
-                phase="exit",
-                overrides={
-                    "pid": _SHARED_PID,
-                    "exec_id": exec_b,
-                    "exit_code": 0,
-                    "duration_s": 0.1,
+                id="timeout",
+            ),
+            pytest.param(
+                "teardown_error",
+                {
+                    "operation": "drain",
+                    "error_type": "ValueError",
+                    "note": "consumer drain failed: ValueError",
                 },
-            )
-        )
-
-        assert span_b.events == [("cuprum.stdout", {"line": "hello-from-B"})], (
-            "B's output must attach to B's span"
-        )
-        assert span_b.ended is True, "B's exit must close B's span"
-        assert span_b.status_ok is True, "B's clean exit must mark its span ok"
-
-    def test_legacy_events_without_exec_id_are_ignored(self) -> None:
-        """Legacy PID-only events are ignored and cannot disturb a tracked span.
-
-        This locks in the documented policy: without a correlation token an event
-        is ambiguous, so the hook drops it rather than attach output/exit to the
-        most recent span for the same PID.
-        """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-        exec_b = new_exec_id()
-
-        # A live, correlated execution B on the PID.
-        hook(
-            _make_exec_event(
-                phase="start", overrides={"pid": _SHARED_PID, "exec_id": exec_b}
-            )
-        )
-        span_b = tracer.spans[0]
-
-        # Legacy events on the same PID (no exec_id) must all be dropped.
-        hook(
-            _make_exec_event(
-                phase="start", overrides={"pid": _SHARED_PID, "exec_id": None}
-            )
-        )
-        hook(
-            _make_exec_event(
-                phase="stdout",
-                overrides={"pid": _SHARED_PID, "exec_id": None, "line": "legacy"},
-            )
-        )
-        hook(
-            _make_exec_event(
-                phase="exit",
-                overrides={
-                    "pid": _SHARED_PID,
-                    "exec_id": None,
-                    "exit_code": 0,
-                    "duration_s": 0.1,
-                },
-            )
-        )
-
-        assert len(tracer.spans) == 1, "a legacy start must not create a span"
-        assert span_b.events == [], "legacy output must not attach to B"
-        assert span_b.ended is False, "legacy exit must not close B"
-        assert span_b.status_ok is None, "legacy exit must not change B's status"
-
-    def test_duplicate_exec_id_start_ends_prior_span(
+                {"operation": "drain", "error_type": "ValueError"},
+                id="teardown_error",
+            ),
+        ],
+    )
+    def test_records_ancillary_event_without_ending_span(
         self,
-        monkeypatch: pytest.MonkeyPatch,
+        phase: str,
+        extra_fields: dict[str, object],
+        expected_attributes: dict[str, object],
     ) -> None:
-        """A repeated exec_id ends the prior span after installing the new one.
+        """Ancillary phases become span events and leave the span open.
 
-        Distinct executions carry distinct tokens, so this only guards a malformed
-        stream that repeats a token. The replacement is installed under the lock,
-        then the detached prior span is failed and ended outside the lock, so the
-        exec_id→span mapping already points at the replacement by the time the
-        prior span is ended and never exposes a missing entry.
+        ``stdin_error``, ``timeout``, and ``teardown_error`` are all diagnostics
+        that accompany rather than conclude an execution, so each must be
+        recorded as a ``cuprum.<phase>`` span event carrying the stable
+        attributes in ``expected_attributes`` — ``operation`` and
+        ``error_type`` for every phase, plus ``timeout_s`` / ``timeout_mode``
+        for ``timeout`` — while the span stays open for the subsequent
+        ``exit``.
         """
         tracer = InMemoryTracer()
         hook = TracingHook(tracer)
+
         exec_id = new_exec_id()
-        hook(_make_exec_event(phase="start", overrides={"pid": 42, "exec_id": exec_id}))
-        stale = tracer.spans[0]
-
-        observed: dict[str, object] = {}
-        real_end = InMemorySpan.end
-
-        def recording_end(span: InMemorySpan) -> None:
-            """Capture the hook's mapping at the moment the prior span ends."""
-            if span is stale:
-                observed["mapping_during_end"] = hook._active_spans.get(exec_id)
-                observed["status_during_end"] = span.status_ok
-            real_end(span)
-
-        monkeypatch.setattr(InMemorySpan, "end", recording_end)
-
-        hook(_make_exec_event(phase="start", overrides={"pid": 42, "exec_id": exec_id}))
-
-        current = tracer.spans[1]
-        assert observed["mapping_during_end"] is current, (
-            "the replacement must be installed before the detached prior span "
-            "is ended outside the lock"
+        base = self._cat_overrides(exec_id)
+        hook(_make_exec_event(phase="start", overrides=base))
+        hook(
+            _make_exec_event(
+                phase=typ.cast("ExecPhase", phase),
+                overrides={**base, **extra_fields},
+            ),
         )
-        assert observed["status_during_end"] is False, (
-            "the prior span must be marked failed before it is ended"
+
+        span = tracer.spans[0]
+        event_name = f"cuprum.{phase}"
+        attrs = next(
+            (attrs for name, attrs in span.events if name == event_name),
+            None,
         )
-        assert stale.ended is True, "the prior span must be ended"
-        assert hook._active_spans[exec_id] is current, (
-            "the replacement span must remain installed after the prior span ends"
+        assert attrs is not None, (
+            f"the tracing hook should surface {phase} as a {event_name} span event, "
+            f"but recorded {[name for name, _ in span.events]}"
+        )
+        for key, want in expected_attributes.items():
+            assert attrs.get(key) == want, (
+                f"the {phase} span event should carry {key}={want!r}, "
+                f"got {attrs.get(key)!r}"
+            )
+        assert span.ended is False, (
+            f"an ancillary {phase} event must not end the execution span"
+        )
+
+    def test_teardown_error_after_exit_is_dropped(self) -> None:
+        """A late ``teardown_error`` must not disturb a concluded execution.
+
+        The drain runs after the process has been reaped, so its failure can be
+        reported once ``exit`` has already closed the span. The hook keys on
+        ``exec_id``, and ``exit`` removes the entry, so the late event finds no
+        open span and is dropped rather than reopening or re-ending one.
+        """
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+
+        exec_id = new_exec_id()
+        base = self._cat_overrides(exec_id)
+        hook(_make_exec_event(phase="start", overrides=base))
+        hook(
+            _make_exec_event(
+                phase="exit",
+                overrides={**base, "exit_code": 0, "duration_s": 0.5},
+            ),
+        )
+        hook(
+            _make_exec_event(
+                phase="teardown_error",
+                overrides={**base, "operation": "drain", "error_type": "ValueError"},
+            ),
+        )
+
+        span = tracer.spans[0]
+        assert span.ended is True, "the exit event must still have closed the span"
+        assert not any(name == "cuprum.teardown_error" for name, _ in span.events), (
+            "a teardown_error arriving after exit must not be recorded on the "
+            f"closed span, got {[name for name, _ in span.events]}"
+        )
+
+    def test_abandoned_spans_are_evicted_once_the_registry_fills(self) -> None:
+        """An execution that never emits ``exit`` must not accumulate forever.
+
+        Cleanup also runs on external cancellation and on a stdin-writer
+        failure, and on those paths the original exception propagates with no
+        ``exit`` — so a ``teardown_error`` can be the last event an execution
+        emits. Those spans have nothing left to close them, so the registry is
+        bounded and evicts the oldest, ending it as failed.
+        """
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+
+        abandoned = new_exec_id()
+        abandoned_overrides = self._cat_overrides(abandoned, pid=1)
+        hook(_make_exec_event(phase="start", overrides=abandoned_overrides))
+        hook(
+            _make_exec_event(
+                phase="teardown_error",
+                overrides={
+                    **abandoned_overrides,
+                    "operation": "drain",
+                    "error_type": "ValueError",
+                },
+            ),
+        )
+        assert tracer.spans[0].ended is False, (
+            "the abandoned span should still be open before the registry fills"
+        )
+
+        for index in range(_MAX_ACTIVE_SPANS):
+            hook(
+                _make_exec_event(
+                    phase="start",
+                    overrides=self._cat_overrides(new_exec_id(), pid=index + 2),
+                ),
+            )
+
+        assert tracer.spans[0].ended is True, (
+            "the oldest abandoned span must be ended once the cap is exceeded, "
+            "otherwise a run that never emits exit leaks one entry per execution"
+        )
+        assert len(hook._active_spans) == _MAX_ACTIVE_SPANS, (
+            f"the registry must stay bounded, got {len(hook._active_spans)}"
+        )
+
+    def test_eviction_spares_the_span_that_is_still_active(self) -> None:
+        """A span still receiving events outlives one that went quiet earlier.
+
+        Eviction order is recency of activity, not of arrival. Were it arrival
+        order, the execution that started first would be finalized as failed
+        even while it was demonstrably still producing output, and its real
+        ``exit`` would then find nothing to close.
+        """
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer, record_output=True)
+
+        busy, quiet = new_exec_id(), new_exec_id()
+        hook(
+            _make_exec_event(phase="start", overrides=self._cat_overrides(busy, pid=1))
+        )
+        busy_span = tracer.spans[0]
+        hook(
+            _make_exec_event(phase="start", overrides=self._cat_overrides(quiet, pid=2))
+        )
+        quiet_span = tracer.spans[1]
+
+        # The older execution is the one still doing work.
+        hook(
+            _make_exec_event(
+                phase="stdout",
+                overrides={**self._cat_overrides(busy, pid=1), "line": "still here"},
+            ),
+        )
+
+        # One short of the cap, so exactly one of the two above is evicted and
+        # the assertions below can say which.
+        for index in range(_MAX_ACTIVE_SPANS - 1):
+            hook(
+                _make_exec_event(
+                    phase="start",
+                    overrides=self._cat_overrides(new_exec_id(), pid=index + 3),
+                ),
+            )
+
+        assert quiet_span.ended is True, (
+            "the execution that went quiet is the one that should be evicted"
+        )
+        assert busy_span.ended is False, (
+            "an execution that was still emitting events must not be finalized "
+            "ahead of one that fell silent earlier"
         )
 
     def test_emitted_attributes_match_documented_contract(self) -> None:

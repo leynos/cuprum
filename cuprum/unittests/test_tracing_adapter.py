@@ -11,7 +11,6 @@ import pytest
 
 from cuprum import sh
 from cuprum.adapters.tracing_adapter import (
-    _MAX_ACTIVE_SPANS,
     InMemorySpan,
     InMemoryTracer,
     TracingHook,
@@ -27,21 +26,11 @@ from cuprum.unittests._adapter_test_support import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.events import ExecId, ExecPhase
+    from cuprum.events import ExecPhase
 
 
 class TestTracingHook:
     """Tests for TracingHook and InMemoryTracer."""
-
-    @staticmethod
-    def _cat_overrides(exec_id: ExecId, pid: int = 4321) -> dict[str, object]:
-        """Return the identifying overrides for a traced ``cat`` execution.
-
-        The span-lifecycle tests care about which execution an event belongs
-        to, not what it ran, so they all share one program and argv and vary
-        only the correlation token and pid.
-        """
-        return {"program": "cat", "argv": ("cat",), "pid": pid, "exec_id": exec_id}
 
     def _run_traced_command(
         self,
@@ -153,221 +142,6 @@ print('stderr-line', file=sys.stderr)""",
         )
         assert stdout_event.get("line") == "stdout-line", (
             "test_records_output_events should preserve stdout line text"
-        )
-
-    @pytest.mark.parametrize(
-        ("phase", "extra_fields", "expected_attributes"),
-        [
-            pytest.param(
-                "stdin_error",
-                {
-                    "operation": "write",
-                    "error_type": "OSError",
-                    "note": "OSError: broken pipe",
-                },
-                {"operation": "write", "error_type": "OSError"},
-                id="stdin_error",
-            ),
-            pytest.param(
-                "timeout",
-                {
-                    "operation": "wait",
-                    "error_type": "TimeoutError",
-                    "timeout_s": 1.5,
-                    "timeout_mode": "elapsed_deadline",
-                },
-                {
-                    "operation": "wait",
-                    "error_type": "TimeoutError",
-                    "timeout_s": 1.5,
-                    "timeout_mode": "elapsed_deadline",
-                },
-                id="timeout",
-            ),
-            pytest.param(
-                "teardown_error",
-                {
-                    "operation": "drain",
-                    "error_type": "ValueError",
-                    "note": "consumer drain failed: ValueError",
-                },
-                {"operation": "drain", "error_type": "ValueError"},
-                id="teardown_error",
-            ),
-        ],
-    )
-    def test_records_ancillary_event_without_ending_span(
-        self,
-        phase: str,
-        extra_fields: dict[str, object],
-        expected_attributes: dict[str, object],
-    ) -> None:
-        """Ancillary phases become span events and leave the span open.
-
-        ``stdin_error``, ``timeout``, and ``teardown_error`` are all diagnostics
-        that accompany rather than conclude an execution, so each must be
-        recorded as a ``cuprum.<phase>`` span event carrying the stable
-        attributes in ``expected_attributes`` — ``operation`` and
-        ``error_type`` for every phase, plus ``timeout_s`` / ``timeout_mode``
-        for ``timeout`` — while the span stays open for the subsequent
-        ``exit``.
-        """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-
-        exec_id = new_exec_id()
-        base = self._cat_overrides(exec_id)
-        hook(_make_exec_event(phase="start", overrides=base))
-        hook(
-            _make_exec_event(
-                phase=typ.cast("ExecPhase", phase),
-                overrides={**base, **extra_fields},
-            ),
-        )
-
-        span = tracer.spans[0]
-        event_name = f"cuprum.{phase}"
-        attrs = next(
-            (attrs for name, attrs in span.events if name == event_name),
-            None,
-        )
-        assert attrs is not None, (
-            f"the tracing hook should surface {phase} as a {event_name} span event, "
-            f"but recorded {[name for name, _ in span.events]}"
-        )
-        for key, want in expected_attributes.items():
-            assert attrs.get(key) == want, (
-                f"the {phase} span event should carry {key}={want!r}, "
-                f"got {attrs.get(key)!r}"
-            )
-        assert span.ended is False, (
-            f"an ancillary {phase} event must not end the execution span"
-        )
-
-    def test_teardown_error_after_exit_is_dropped(self) -> None:
-        """A late ``teardown_error`` must not disturb a concluded execution.
-
-        The drain runs after the process has been reaped, so its failure can be
-        reported once ``exit`` has already closed the span. The hook keys on
-        ``exec_id``, and ``exit`` removes the entry, so the late event finds no
-        open span and is dropped rather than reopening or re-ending one.
-        """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-
-        exec_id = new_exec_id()
-        base = self._cat_overrides(exec_id)
-        hook(_make_exec_event(phase="start", overrides=base))
-        hook(
-            _make_exec_event(
-                phase="exit",
-                overrides={**base, "exit_code": 0, "duration_s": 0.5},
-            ),
-        )
-        hook(
-            _make_exec_event(
-                phase="teardown_error",
-                overrides={**base, "operation": "drain", "error_type": "ValueError"},
-            ),
-        )
-
-        span = tracer.spans[0]
-        assert span.ended is True, "the exit event must still have closed the span"
-        assert not any(name == "cuprum.teardown_error" for name, _ in span.events), (
-            "a teardown_error arriving after exit must not be recorded on the "
-            f"closed span, got {[name for name, _ in span.events]}"
-        )
-
-    def test_abandoned_spans_are_evicted_once_the_registry_fills(self) -> None:
-        """An execution that never emits ``exit`` must not accumulate forever.
-
-        Cleanup also runs on external cancellation and on a stdin-writer
-        failure, and on those paths the original exception propagates with no
-        ``exit`` — so a ``teardown_error`` can be the last event an execution
-        emits. Those spans have nothing left to close them, so the registry is
-        bounded and evicts the oldest, ending it as failed.
-        """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-
-        abandoned = new_exec_id()
-        abandoned_overrides = self._cat_overrides(abandoned, pid=1)
-        hook(_make_exec_event(phase="start", overrides=abandoned_overrides))
-        hook(
-            _make_exec_event(
-                phase="teardown_error",
-                overrides={
-                    **abandoned_overrides,
-                    "operation": "drain",
-                    "error_type": "ValueError",
-                },
-            ),
-        )
-        assert tracer.spans[0].ended is False, (
-            "the abandoned span should still be open before the registry fills"
-        )
-
-        for index in range(_MAX_ACTIVE_SPANS):
-            hook(
-                _make_exec_event(
-                    phase="start",
-                    overrides=self._cat_overrides(new_exec_id(), pid=index + 2),
-                ),
-            )
-
-        assert tracer.spans[0].ended is True, (
-            "the oldest abandoned span must be ended once the cap is exceeded, "
-            "otherwise a run that never emits exit leaks one entry per execution"
-        )
-        assert len(hook._active_spans) == _MAX_ACTIVE_SPANS, (
-            f"the registry must stay bounded, got {len(hook._active_spans)}"
-        )
-
-    def test_eviction_spares_the_span_that_is_still_active(self) -> None:
-        """A span still receiving events outlives one that went quiet earlier.
-
-        Eviction order is recency of activity, not of arrival. Were it arrival
-        order, the execution that started first would be finalized as failed
-        even while it was demonstrably still producing output, and its real
-        ``exit`` would then find nothing to close.
-        """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer, record_output=True)
-
-        busy, quiet = new_exec_id(), new_exec_id()
-        hook(
-            _make_exec_event(phase="start", overrides=self._cat_overrides(busy, pid=1))
-        )
-        busy_span = tracer.spans[0]
-        hook(
-            _make_exec_event(phase="start", overrides=self._cat_overrides(quiet, pid=2))
-        )
-        quiet_span = tracer.spans[1]
-
-        # The older execution is the one still doing work.
-        hook(
-            _make_exec_event(
-                phase="stdout",
-                overrides={**self._cat_overrides(busy, pid=1), "line": "still here"},
-            ),
-        )
-
-        # One short of the cap, so exactly one of the two above is evicted and
-        # the assertions below can say which.
-        for index in range(_MAX_ACTIVE_SPANS - 1):
-            hook(
-                _make_exec_event(
-                    phase="start",
-                    overrides=self._cat_overrides(new_exec_id(), pid=index + 3),
-                ),
-            )
-
-        assert quiet_span.ended is True, (
-            "the execution that went quiet is the one that should be evicted"
-        )
-        assert busy_span.ended is False, (
-            "an execution that was still emitting events must not be finalized "
-            "ahead of one that fell silent earlier"
         )
 
     def test_disables_output_recording(self) -> None:
@@ -506,36 +280,6 @@ sys.stdout.write(data.upper())""",
             raise errors[0]
         assert [span.name for span in tracer.spans] == ["after"], (
             "post-reset span creation should survive the atomic clear"
-        )
-
-    def test_events_without_exec_id_are_ignored(self) -> None:
-        """Legacy events lacking an exec_id are ignored (uncorrelatable).
-
-        Without a correlation token the hook cannot know which execution an
-        event belongs to, so it declines to trace it rather than risk
-        attaching output/exit to an unrelated PID's span.
-        """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-
-        base = {"program": "echo", "argv": ("echo", "hello"), "pid": 4321}
-        # A full lifecycle, but every event predates the correlation token.
-        hook(_make_exec_event(phase="start", overrides={**base, "exec_id": None}))
-        hook(
-            _make_exec_event(
-                phase="stdout",
-                overrides={**base, "exec_id": None, "line": "hello"},
-            ),
-        )
-        hook(
-            _make_exec_event(
-                phase="exit",
-                overrides={**base, "exec_id": None, "exit_code": 0, "duration_s": 0.1},
-            ),
-        )
-
-        assert tracer.spans == [], (
-            "events without an exec_id must not create or affect any span"
         )
 
     def test_make_exec_event_forwards_all_overrides(self) -> None:
