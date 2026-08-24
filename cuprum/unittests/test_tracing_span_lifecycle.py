@@ -74,6 +74,11 @@ class TestTracingSpanLifecycle:
         The span-lifecycle tests care about which execution an event belongs
         to, not what it ran, so they all share one program and argv and vary
         only the correlation token and pid.
+
+        Returns
+        -------
+        dict[str, object]
+            Overrides naming the program, argv, pid, and correlation token.
         """
         return {"program": "cat", "argv": ("cat",), "pid": pid, "exec_id": exec_id}
 

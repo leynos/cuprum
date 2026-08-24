@@ -190,6 +190,11 @@ async def _run_spawned_pipeline(
     emits each stage's terminal ``exit`` before draining the observe tasks.
     Anything else — a cancellation, most often — still has live stream tasks,
     which is why it goes through :func:`_reconcile_pipeline_run_failure`.
+
+    Returns
+    -------
+    PipelineResult
+        The assembled stage results and the index of the first failing stage.
     """
     observations = observers.observations
     pending_tasks = observers.pending_tasks

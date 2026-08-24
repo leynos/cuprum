@@ -214,6 +214,12 @@ async def _reconcile_run_tasks(
     :func:`_shielded_cleanup` and know both finish: draining first would leave
     a writer blocked on a pipe nobody is reading, and shielding them separately
     would let a cancellation landing between the two strand the consumers.
+
+    Returns
+    -------
+    tuple[str | None, str | None]
+        The decoded stdout and stderr text, as produced by
+        :func:`_drain_stream_consumers`.
     """
     await _cancel_stdin_writer(stdin_task)
     return await _drain_stream_consumers(consumers, pid=pid, observation=observation)

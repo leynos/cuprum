@@ -189,6 +189,12 @@ async def _drain_tasks_during_cleanup(
     Shared by the pipeline and single-command cleanup paths. ``message`` is
     required rather than defaulted so a caller cannot silently inherit another
     path's finalization label.
+
+    Raises
+    ------
+    BaseExceptionGroup
+        When a drained task fails, pairing that failure with ``active_error``
+        under ``message`` so cleanup never masks the error that triggered it.
     """
     try:
         await _wait_for_exec_hook_tasks(pending_tasks)

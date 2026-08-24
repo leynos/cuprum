@@ -332,6 +332,11 @@ def _split_timeout_section(section: str) -> tuple[str, str]:
     The teardown record is introduced by the sentence naming
     ``subprocess_teardown_drain_failed``; everything before it describes the
     expiry record.
+
+    Returns
+    -------
+    tuple[str, str]
+        The expiry description and the teardown description, in that order.
     """
     marker = section.index(_TEARDOWN_MARKER)
     return section[:marker], section[marker:]
@@ -343,6 +348,11 @@ def _binds_operation(text: str, value: str) -> bool:
     Tolerates the line wrapping the guide applies between the field name and
     its value, and the two renderings the guide uses — a ``field``: ``value``
     bullet and a ``field`` (``value``) clause.
+
+    Returns
+    -------
+    bool
+        ``True`` when the field and value are bound to one another.
     """
     pattern = rf"`cuprum_operation`\s*[:(]\s*`\"{re.escape(value)}\"`"
     return re.search(pattern, text) is not None

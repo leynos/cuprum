@@ -66,6 +66,11 @@ def _capture_timeout_records(level: int) -> cabc.Iterator[list[logging.LogRecord
     Hypothesis does not reset function-scoped fixtures between examples, so
     ``caplog`` would accumulate across them; this attaches and detaches its own
     handler for each call instead.
+
+    Yields
+    ------
+    list[logging.LogRecord]
+        The records captured while the context is active.
     """
     records: list[logging.LogRecord] = []
     logger = logging.getLogger(_TIMEOUT_LOGGER)

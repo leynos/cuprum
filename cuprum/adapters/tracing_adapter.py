@@ -259,6 +259,12 @@ class TracingHook:
         because executions that never emit ``exit`` accumulate, and a registry
         that rejected newcomers instead would stop tracing *every* subsequent
         execution once the leaked ones filled it.
+
+        Returns
+        -------
+        list[Span]
+            The detached spans, for the caller to end outside the lock. Empty
+            when the registry is within its cap.
         """
         if len(self._active_spans) <= _MAX_ACTIVE_SPANS:
             return []

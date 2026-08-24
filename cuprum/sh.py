@@ -417,6 +417,12 @@ async def _execute_with_hooks(
     the drain, but the *awaiting* coroutine resumes immediately, so the run
     would propagate its ``CancelledError`` while the hook tasks were still
     settling — leaking exactly the tasks the drain exists to reconcile.
+
+    Returns
+    -------
+    CommandResult
+        The completed command's result, once every after-hook has run and the
+        observe-hook tasks have drained.
     """
     try:
         result = await _execute_subprocess(execution)

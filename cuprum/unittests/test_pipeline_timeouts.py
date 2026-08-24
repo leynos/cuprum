@@ -45,6 +45,38 @@ if typ.TYPE_CHECKING:
 
 _PIPELINE_STAGES = 2
 
+# Long enough that the immune child reaches ``signal.signal`` before the
+# deadline reaps it, and short enough to keep the test quick.
+_STAGE_TIMEOUT = 1.0
+_CANCEL_GRACE = 1.0
+
+
+async def _poll_until(
+    predicate: cabc.Callable[[], bool],
+    message: str,
+    *,
+    seconds: float = 10.0,
+) -> None:
+    """Yield until ``predicate`` holds, failing rather than hanging.
+
+    Parameters
+    ----------
+    predicate:
+        Readiness check, polled until it returns true.
+    message:
+        Failure message reported if ``seconds`` elapses first.
+    seconds:
+        How long to wait before failing.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    # ASYNC110: the readiness signal is a file written by another process,
+    # which no asyncio.Event can observe. Polling it is the coordination.
+    while not predicate():
+        if loop.time() > deadline:
+            pytest.fail(message)
+        await asyncio.sleep(0.01)
+
 
 # -- Public-boundary timeout contract -----------------------------------------
 #
@@ -178,6 +210,11 @@ class _SigtermImmuneProcess:
         Entry is announced so a test can place a cancellation *inside* the
         grace-period wait: ``terminate()`` has already returned by this point,
         so the escalation to ``SIGKILL`` is the only thing still outstanding.
+
+        Returns
+        -------
+        int
+            The recorded exit code, or ``0`` when none was set.
         """
         self.grace_started.set()
         await self._exited.wait()
@@ -300,18 +337,28 @@ def test_pipeline_run_cancelled_during_grace_still_reaps_stages(
 
     async def run_case() -> None:
         """Time out, then cancel while the grace period is still running."""
-        ctx = ExecutionContext(cancel_grace=1.0)
+        ctx = ExecutionContext(cancel_grace=_CANCEL_GRACE)
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
         task = asyncio.create_task(
             pipeline.run(
-                timeout=0.05, output=RunOutputOptions(capture=False), context=ctx
+                timeout=_STAGE_TIMEOUT,
+                output=RunOutputOptions(capture=False),
+                context=ctx,
             )
         )
-        # ASYNC110: the readiness signal is a file written by another process,
-        # which no asyncio.Event can observe. Polling it is the coordination,
-        # and it is bounded by the child writing the marker at start-up.
-        while not marker.exists():  # noqa: ASYNC110
-            await asyncio.sleep(0.01)
-        await asyncio.sleep(0.15)
+        # The deadline has to outlast interpreter start-up. A ``SIGTERM``
+        # arriving before the child reaches ``signal.signal`` kills it outright,
+        # so it never writes the marker and never becomes the immune stage this
+        # test is about — and the wait below would then never finish.
+        await _poll_until(
+            marker.exists, "the immune first stage never signalled readiness"
+        )
+        # Teardown waits out ``cancel_grace`` after the deadline expires, and
+        # the cancellation belongs inside that window. There is no event to
+        # wait on: the ``timeout`` events are not emitted until teardown has
+        # already finished, so this is timed from the deadline itself.
+        await asyncio.sleep(max(0.0, started_at + _STAGE_TIMEOUT + 0.2 - loop.time()))
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task

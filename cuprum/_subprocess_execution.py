@@ -217,6 +217,11 @@ async def _run_subprocess_without_streams(
     is shielded, so a cancellation arriving while it runs cannot abandon it. An
     unexpected stdin-writer failure after the process exits normally propagates
     unchanged.
+
+    Returns
+    -------
+    tuple[int, float]
+        The process exit code and the ``perf_counter`` timestamp of exit.
     """
     stdin_task = _spawn_stdin_writer(
         process, execution.stdin_data, execution.observation

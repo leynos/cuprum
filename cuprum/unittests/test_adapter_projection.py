@@ -249,6 +249,12 @@ class TestAdapterProjection:
 
         A span must be open for the ancillary event to attach to, so a ``start``
         sharing its ``exec_id`` is fed first.
+
+        Returns
+        -------
+        dict[str, object] | None
+            The span event's name and attributes, or ``None`` for a phase that
+            records no ancillary event.
         """
         operation = _ANCILLARY_PHASES.get(event.phase)
         if operation is None:
