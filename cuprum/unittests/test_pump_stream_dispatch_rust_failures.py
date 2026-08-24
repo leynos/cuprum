@@ -32,6 +32,68 @@ class _DrainBaseException(BaseException):
     """Sentinel error used to verify non-``Exception`` drain cleanup."""
 
 
+def _install_recording_native_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    call_order: list[str],
+    close_writer: mock.AsyncMock,
+) -> None:
+    """Install native-pump failure doubles that record cleanup ordering."""
+
+    def pause_reader(
+        reader: asyncio.StreamReader,
+    ) -> cabc.Callable[[], None]:
+        """Record the pause and provide its matching resume callback."""
+        del reader
+        call_order.append("pause")
+        return lambda: call_order.append("resume")
+
+    async def drain_reader(
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter | None,
+    ) -> None:
+        """Record buffer draining without writing stream data."""
+        del reader, writer
+        call_order.append("drain")
+        await asyncio.sleep(0)
+
+    def fail_rust_pump(reader_fd: int, writer_fd: int) -> None:
+        """Consume the duplicate descriptor before surfacing a pump error."""
+        del reader_fd
+        os.close(writer_fd)
+        raise RuntimeError(_NATIVE_FAILURE_MESSAGE)
+
+    original_restore = _pipeline_streams._restore_stream_fd_blocking
+
+    def restore_stream_fd_blocking(
+        *,
+        reader_fd: int,
+        writer_fd: int,
+        reader_was_blocking: bool,
+        writer_was_blocking: bool,
+    ) -> None:
+        """Record restoration while restoring the real descriptor modes."""
+        call_order.append("restore")
+        original_restore(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+            reader_was_blocking=reader_was_blocking,
+            writer_was_blocking=writer_was_blocking,
+        )
+
+    monkeypatch.setattr(_pipeline_streams, "_pause_reader_transport", pause_reader)
+    monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", drain_reader)
+    monkeypatch.setattr(
+        _pipeline_streams,
+        "_restore_stream_fd_blocking",
+        restore_stream_fd_blocking,
+    )
+    monkeypatch.setattr(_pipeline_streams, "_close_stream_writer", close_writer)
+
+    import cuprum._streams_rs as streams_rs
+
+    monkeypatch.setattr(streams_rs, "rust_pump_stream", fail_rust_pump)
+
+
 class TestRustPumpFailures:
     """Regression tests for Rust-pump cleanup paths."""
 
@@ -86,60 +148,7 @@ class TestRustPumpFailures:
         _ = self
         call_order: list[str] = []
         close_writer = mock.AsyncMock()
-
-        def pause_reader(
-            reader: asyncio.StreamReader,
-        ) -> cabc.Callable[[], None]:
-            """Record the pause and provide its matching resume callback."""
-            del reader
-            call_order.append("pause")
-            return lambda: call_order.append("resume")
-
-        async def drain_reader(
-            reader: asyncio.StreamReader,
-            writer: asyncio.StreamWriter | None,
-        ) -> None:
-            """Record buffer draining without writing stream data."""
-            del reader, writer
-            call_order.append("drain")
-            await asyncio.sleep(0)
-
-        def fail_rust_pump(reader_fd: int, writer_fd: int) -> None:
-            """Consume the duplicate descriptor before surfacing a pump error."""
-            del reader_fd
-            os.close(writer_fd)
-            raise RuntimeError(_NATIVE_FAILURE_MESSAGE)
-
-        monkeypatch.setattr(_pipeline_streams, "_pause_reader_transport", pause_reader)
-        monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", drain_reader)
-        original_restore = _pipeline_streams._restore_stream_fd_blocking
-
-        def restore_stream_fd_blocking(
-            *,
-            reader_fd: int,
-            writer_fd: int,
-            reader_was_blocking: bool,
-            writer_was_blocking: bool,
-        ) -> None:
-            """Record restoration while restoring the real descriptor modes."""
-            call_order.append("restore")
-            original_restore(
-                reader_fd=reader_fd,
-                writer_fd=writer_fd,
-                reader_was_blocking=reader_was_blocking,
-                writer_was_blocking=writer_was_blocking,
-            )
-
-        monkeypatch.setattr(
-            _pipeline_streams,
-            "_restore_stream_fd_blocking",
-            restore_stream_fd_blocking,
-        )
-        monkeypatch.setattr(_pipeline_streams, "_close_stream_writer", close_writer)
-
-        import cuprum._streams_rs as streams_rs
-
-        monkeypatch.setattr(streams_rs, "rust_pump_stream", fail_rust_pump)
+        _install_recording_native_failure(monkeypatch, call_order, close_writer)
 
         with _nonblocking_pipe_pair() as (
             read_fd,
