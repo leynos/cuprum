@@ -61,6 +61,7 @@ from cuprum._pipeline_wait_records import (
     _emit_fail_fast_event,
     _log_completion_event,
 )
+from cuprum._process_exit import _await_process_exit
 from cuprum._process_lifecycle import (
     _cleanup_pipeline_on_error,
     _has_stages_to_terminate,
@@ -104,7 +105,9 @@ class _PipelineWaitState:
         stages: _StageWaitContext,
     ) -> _PipelineWaitState:
         """Create wait state with one wait task per pipeline process."""
-        wait_tasks = [asyncio.create_task(process.wait()) for process in processes]
+        wait_tasks = [
+            asyncio.create_task(_await_process_exit(process)) for process in processes
+        ]
         return cls(
             wait_tasks=wait_tasks,
             task_to_index={task: idx for idx, task in enumerate(wait_tasks)},

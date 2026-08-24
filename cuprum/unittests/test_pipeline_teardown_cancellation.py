@@ -223,11 +223,14 @@ def test_pipeline_run_cancelled_during_grace_still_reaps_stages(
         ctx = ExecutionContext(cancel_grace=1.0)
         task = asyncio.create_task(
             pipeline.run(
-                timeout=0.05, output=RunOutputOptions(capture=False), context=ctx
+                timeout=2.0, output=RunOutputOptions(capture=False), context=ctx
             )
         )
         await _wait_for_marker(marker)
-        await asyncio.sleep(0.15)
+        # The timeout begins when the pipeline starts, so leave enough room for
+        # Python to install and announce the child handler before entering the
+        # timeout teardown's grace period.
+        await asyncio.sleep(2.15)
         task.cancel()
         # The run is cancelled mid-teardown, so the shielded teardown re-raises
         # CancelledError. Should the cancellation instead arrive after teardown

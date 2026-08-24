@@ -75,7 +75,6 @@ from cuprum.adapters._support import (
     _prefixed,
     _project_tag,
 )
-from cuprum.adapters._tracing_protocols import Span, Tracer
 from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
 
 if typ.TYPE_CHECKING:

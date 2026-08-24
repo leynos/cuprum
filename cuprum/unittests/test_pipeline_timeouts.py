@@ -57,6 +57,29 @@ type PipelineTimeoutRunFn = cabc.Callable[
 ]
 
 
+"""Pipeline timeout boundary and post-timeout teardown.
+Kept apart from ``test_pipeline`` so that module stays about composition and
+streaming: these exercise a different concern — what a caller sees when a
+deadline expires, and what survives when the caller cancels mid-teardown.
+The public-boundary cases have single-command counterparts in
+``test_safe_cmd_run``; the property-level invariants live in
+``test_subprocess_timeout_properties``.
+"""
+if typ.TYPE_CHECKING:
+    from pathlib import Path
+    from cuprum.events import ExecEvent
+_PIPELINE_STAGES = 2
+# Long enough that the immune child reaches ``signal.signal`` before the
+# deadline reaps it, and short enough to keep the test quick.
+# -- Public-boundary timeout contract -----------------------------------------
+#
+# The single-command counterparts live in ``test_safe_cmd_run``. A pipeline
+# enforces one deadline for the whole run rather than one per stage, so these
+# additionally pin that every stage is reaped, not just the one that timed out.
+type PipelineTimeoutRunFn = cabc.Callable[
+]
+
+
 def _pipeline_timeout_async(
     pipeline: Pipeline, kwargs: _RunKwargs
 ) -> tuple[TimeoutExpired, set[asyncio.Task[object]]]:

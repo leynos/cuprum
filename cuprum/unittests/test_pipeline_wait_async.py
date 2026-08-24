@@ -187,6 +187,7 @@ class _SettledProcess:
     def __init__(self, exit_code: int) -> None:
         """Store the exit code this stand-in reports."""
         self._exit_code = exit_code
+        self.returncode: int | None = None
 
     async def wait(self) -> int:
         """Return the configured exit code without yielding to real I/O."""

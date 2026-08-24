@@ -42,6 +42,7 @@ def _start(hook: TracingHook, exec_id: ExecId) -> None:
     """Dispatch a ``start`` event for ``exec_id`` on the shared PID."""
     hook(_make_exec_event(phase="start", overrides={"pid": _PID, "exec_id": exec_id}))
 
+
 def _fail_fast(hook: TracingHook, exec_id: ExecId) -> None:
     """Dispatch a ``pipeline_fail_fast`` decision for ``exec_id``."""
     hook(
@@ -57,6 +58,7 @@ def _fail_fast(hook: TracingHook, exec_id: ExecId) -> None:
             },
         )
     )
+
 
 def _exit(hook: TracingHook, exec_id: ExecId) -> None:
     """Dispatch a clean ``exit`` for ``exec_id``."""

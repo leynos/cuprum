@@ -296,6 +296,7 @@ async def _terminate_timed_out_stages(
     """
     await _terminate_all_shielded(processes, cancel_grace)
 
+
 def _has_stages_to_terminate(
     failure_index: int,
     wait_tasks: cabc.Sequence[asyncio.Task[int]],

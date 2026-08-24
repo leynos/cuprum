@@ -14,6 +14,7 @@ from cuprum._process_exit import (
 )
 from cuprum._testing import (
     _PipelineWaitResult,
+    _StageWaitContext,
     _wait_for_pipeline,
 )
 
@@ -169,7 +170,7 @@ async def _exercise_wait_for_pipeline(
         typ.cast("list[asyncio.subprocess.Process]", processes),
         pipe_tasks=[],
         cancel_grace=0.01,
-        started_at=[0.0, 0.0, 0.0],
+        stages=_StageWaitContext(started_at=(0.0, 0.0, 0.0)),
     )
 
     return processes[0], processes[1], processes[2], result
@@ -205,7 +206,7 @@ async def _run_stranded_pipeline_wait(
         typ.cast("list[asyncio.subprocess.Process]", processes),
         pipe_tasks=[],
         cancel_grace=0.01,
-        started_at=[0.0] * len(processes),
+        stages=_StageWaitContext(started_at=(0.0,) * len(processes)),
     )
     return _StrandedPipelineWaitCase(
         result=result,
