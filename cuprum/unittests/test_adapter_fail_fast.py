@@ -55,7 +55,8 @@ def _fail_fast_event(
         "duration_s": 0.25,
         "stage_index": 1,
         "stage_count": 4,
-        "tags": {"project": "pipe"},
+        "tags": {},
+        "project": "pipe",
     }
     values.update(overrides or {})
     return _make_exec_event(phase="pipeline_fail_fast", overrides=values)
@@ -110,7 +111,7 @@ class TestMetricsFailFast:
         """
         collector = _LabelRecordingCollector()
         hook = MetricsHook(collector)
-        event = _fail_fast_event()
+        event = _fail_fast_event(overrides={"tags": {"project": "untrusted"}})
 
         hook(event)
 

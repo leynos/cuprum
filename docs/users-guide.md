@@ -260,15 +260,17 @@ completion order — whether or not that failure went on to trigger fail-fast
 termination — but not why the other stages ended when they did. When the first
 non-final failure still has stages to stop, the wait path publishes one
 `pipeline_fail_fast` `ExecEvent` to the registered observe hooks immediately
-before termination begins. The wait path also emits WARNING records from
-`_pipeline_wait_records.py`: `pipeline_stage_first_failure` when the first
-failure is latched, `pipeline_fail_fast_termination` before termination starts,
-and `pipeline_fail_fast_terminated` with the termination outcome. The latter
-two records occur only when there are stages to terminate; the first-failure
-record still documents a final-stage, single-stage, or already-settled
-non-final failure. The `pipeline_fail_fast` observe event is separate from
-these direct records; metrics, tracing, and structured logging hooks project
-the event without requiring log parsing.
+before termination begins. The wait path also reports three canonical
+completion records through the optional pipeline-wait reporter:
+`pipeline_stage_first_failure` when the first failure is latched,
+`pipeline_fail_fast_termination` before termination starts, and
+`pipeline_fail_fast_terminated` with the termination outcome. The structured
+logging adapter renders these as WARNING records when it is registered. The
+latter two records occur only when there are stages to terminate; the
+first-failure record still documents a final-stage, single-stage, or
+already-settled non-final failure. The `pipeline_fail_fast` observe event is
+separate from these records; metrics, tracing, and structured logging hooks
+project the event without requiring log parsing.
 
 The event carries the failing stage's index, pipeline width, exit code,
 duration, and execution token. It is sanitized: `argv` is empty, `cwd` and
@@ -297,10 +299,10 @@ absent is the termination decision because there was nothing left to terminate.
 Only the first failure counts, since later non-zero exits are usually the
 consequences of the fail-fast decision.
 
-Which stage is reported follows the order the stages actually finished in. When
-two stages finish too close together for that order to be observed — because
-they settled in the same underlying wait batch — the earlier stage in the
-pipeline is reported instead, so the reported stage is the upstream cause
+The reported stage follows the order in which the stages actually finished.
+When two stages finish too close together for that order to be observed —
+because they settled in the same underlying wait batch — the earlier stage in
+the pipeline is reported instead, so the reported stage is the upstream cause
 rather than a downstream stage it took down with it. That tie-break only
 applies within such a batch: across batches, whichever stage genuinely finished
 first is the one reported.
@@ -399,6 +401,14 @@ passing them together with `output` raises `ValueError`.
 If the awaiting task is cancelled while a command is running, Cuprum sends
 `SIGTERM` to the subprocess, waits for a short grace period, and then escalates
 to `SIGKILL` to ensure the child process is cleaned up.
+
+
+### Cancellation during teardown
+
+Timeout and fail-fast teardown survives repeated caller cancellation. Cuprum
+keeps the teardown task alive through `SIGTERM`, the grace period, `SIGKILL`,
+and process reaping, then re-raises the first cancellation. Later cancellation
+requests do not interrupt escalation.
 
 ### Direct stdin input
 

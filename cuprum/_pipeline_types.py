@@ -34,6 +34,19 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import SafeCmd
 
 
+@typ.runtime_checkable
+class _PipelineWaitReporter(typ.Protocol):
+    """Port for an adapter that renders pipeline-wait completion records."""
+
+    def report_pipeline_wait(
+        self,
+        message: str,
+        args: tuple[object, ...],
+        extra: cabc.Mapping[str, object],
+    ) -> None:
+        """Render one pipeline-wait completion record."""
+
+
 @dc.dataclass(frozen=True, slots=True)
 class _ExecutionHooks:
     """Hooks resolved from the active context for a single command."""
@@ -98,6 +111,7 @@ class _StageObservation:
             exit_code=details.exit_code,
             duration_s=details.duration_s,
             tags=self.tags,
+            project=self.cmd.project.name,
             note=details.note,
             byte_count=details.byte_count,
             operation=details.operation,
@@ -126,6 +140,7 @@ class _StageObservation:
             exit_code=details.exit_code,
             duration_s=details.duration_s,
             tags=types.MappingProxyType({}),
+            project=self.cmd.project.name,
             note=None,
             byte_count=None,
             operation=None,
@@ -137,6 +152,17 @@ class _StageObservation:
             stage_count=details.stage_count,
         )
         self._emit_event(event)
+
+    def report_pipeline_wait(
+        self,
+        message: str,
+        args: tuple[object, ...],
+        extra: cabc.Mapping[str, object],
+    ) -> None:
+        """Route a completion record through installed adapter ports."""
+        for hook in self.hooks.observe_hooks:
+            if isinstance(hook, _PipelineWaitReporter):
+                hook.report_pipeline_wait(message, args, extra)
 
     def _emit_event(self, event: ExecEvent) -> None:
         """Dispatch one event and retain scheduled observe-hook tasks."""

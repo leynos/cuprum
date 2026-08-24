@@ -366,7 +366,12 @@ class MetricsHook:
         # high-cardinality fields (pid, argv, lines) are excluded by design.
         return {
             "program": str(event.program) or "unknown",
-            "project": _project_tag(event) or "unknown",
+            "project": (
+                event.project
+                if event.phase == "pipeline_fail_fast"
+                else _project_tag(event)
+            )
+            or "unknown",
         }
 
 

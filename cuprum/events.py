@@ -118,6 +118,10 @@ class ExecEvent:
     tags:
         Arbitrary, JSON-like metadata associated with this execution. Empty on
         the sanitized ``pipeline_fail_fast`` decision event.
+    project:
+        Trusted project name configured for the command. Unlike ``tags``, this
+        value is not caller supplied and therefore remains available on the
+        sanitized ``pipeline_fail_fast`` decision event.
     note:
         Optional human-readable diagnostic string for ancillary events
         such as ``stdin_error``.
@@ -175,6 +179,7 @@ class ExecEvent:
     exit_code: int | None
     duration_s: float | None
     tags: cabc.Mapping[str, object]
+    project: str | None = None
     note: str | None = None
     byte_count: int | None = None
     operation: str | None = None

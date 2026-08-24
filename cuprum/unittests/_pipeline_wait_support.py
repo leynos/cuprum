@@ -20,6 +20,7 @@ from cuprum._pipeline_wait import _PipelineWaitState
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    import logging
 
     import pytest
 
@@ -30,6 +31,11 @@ async def immediate(exit_code: int) -> int:
     """Return ``exit_code`` after a yield, standing in for ``Process.wait()``."""
     await asyncio.sleep(0)
     return exit_code
+
+
+def record_actions(records: cabc.Sequence[logging.LogRecord]) -> list[str]:
+    """Return the pipeline-wait action from each captured log record."""
+    return [str(vars(record)["cuprum_action"]) for record in records]
 
 
 async def _still_running() -> int:
@@ -216,7 +222,7 @@ def advancing_clock(monkeypatch: pytest.MonkeyPatch) -> AdvancingClock:
 
 def apply_completions(
     state: _PipelineWaitState,
-    completions: list[tuple[int, int]],
+    completions: cabc.Sequence[tuple[int, int]],
     *,
     before_each: cabc.Callable[[int], None] | None = None,
 ) -> None:

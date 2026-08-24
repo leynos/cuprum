@@ -1,10 +1,9 @@
 """Concurrency regressions for the ``TracingHook`` span lifecycle.
 
-``TracingHook`` holds its lifecycle lock only across the active-span map, never
-across a ``Span`` callback: an arbitrary ``Span`` may block on I/O in
-``set_status``/``end``, and holding the lock across that would serialize every
-other execution's handlers. Both tests here park a ``Span.end`` and assert what
-must still happen while it is parked.
+``TracingHook`` holds its lifecycle lock only across the active-span map. Each
+active execution has a separate lock around its ``Span`` callbacks, so an exit
+cannot close one span between lookup and ``add_event`` while callbacks for
+unrelated executions remain unblocked.
 
 - ``_handle_start`` swaps the mapping under the lock and marks and ends the
   *detached* stale span outside it, so an unrelated execution's whole lifecycle
@@ -18,6 +17,7 @@ must still happen while it is parked.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import threading
 import typing as typ
 
@@ -36,6 +36,15 @@ if typ.TYPE_CHECKING:
 # duplicate-token execution from the unrelated one.
 _PID = 4242
 _TIMEOUT_S = 5.0
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _BlockedSpanEvent:
+    """Controls a paused span event callback and records its state."""
+
+    entered: threading.Event
+    release: threading.Event
+    was_open: list[bool]
 
 
 def _start(hook: TracingHook, exec_id: ExecId) -> None:
@@ -115,6 +124,41 @@ def _block_span_end(
 
     monkeypatch.setattr(InMemorySpan, "end", blocking_end)
     return entered, release
+
+
+def _block_span_event(
+    monkeypatch: pytest.MonkeyPatch,
+    target_span: InMemorySpan,
+) -> _BlockedSpanEvent:
+    """Make one ``add_event()`` wait and record whether its span was open."""
+    entered = threading.Event()
+    release = threading.Event()
+    was_open: list[bool] = []
+    real_add_event = InMemorySpan.add_event
+
+    def blocking_add_event(
+        span: InMemorySpan,
+        name: str,
+        attributes: dict[str, object],
+    ) -> None:
+        """Pause only the target span's fail-fast event callback."""
+        if span is target_span and name == "cuprum.pipeline_fail_fast":
+            entered.set()
+            assert release.wait(timeout=_TIMEOUT_S), "blocked event never released"
+            was_open.append(not span.ended)
+        real_add_event(span, name, attributes)
+
+    monkeypatch.setattr(InMemorySpan, "add_event", blocking_add_event)
+    return _BlockedSpanEvent(entered, release, was_open)
+
+
+def _wait_for_span_detachment(hook: TracingHook, exec_id: ExecId) -> bool:
+    """Wait briefly for ``exec_id`` to leave the active-span mapping."""
+    for _ in range(500):
+        if exec_id not in hook._active_spans:
+            return True
+        threading.Event().wait(0.01)
+    return False
 
 
 class TestTracingSpanConcurrency:
@@ -266,4 +310,47 @@ class TestTracingSpanConcurrency:
         ], (
             "the fail-fast decision must land on its own stage's span, "
             f"found {failing_span.events!r}"
+        )
+
+    def test_a_fail_fast_finishes_before_its_own_exit(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A held fail-fast callback keeps only its own span open and ordered."""
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+        failing = new_exec_id()
+        unrelated = new_exec_id()
+        _start(hook, failing)
+        _start(hook, unrelated)
+        failing_span, unrelated_span = tracer.spans
+        blocked_event = _block_span_event(monkeypatch, failing_span)
+
+        fail_fast_thread = _spawn(lambda: _fail_fast(hook, failing))
+        assert blocked_event.entered.wait(timeout=_TIMEOUT_S), (
+            "the target fail-fast callback must reach the blocked add_event"
+        )
+
+        exit_thread = _spawn(lambda: _exit(hook, failing))
+        assert _wait_for_span_detachment(hook, failing), (
+            "the exit handler must detach the active span"
+        )
+
+        unrelated_thread = _spawn(lambda: _fail_fast(hook, unrelated))
+        unrelated_thread.join(timeout=_TIMEOUT_S)
+        assert not unrelated_thread.is_alive(), (
+            "a target span's paused callback must not block an unrelated span"
+        )
+
+        blocked_event.release.set()
+        fail_fast_thread.join(timeout=_TIMEOUT_S)
+        exit_thread.join(timeout=_TIMEOUT_S)
+        assert not fail_fast_thread.is_alive(), "the fail-fast callback must finish"
+        assert not exit_thread.is_alive(), "the exit must finish after fail-fast"
+        assert blocked_event.was_open == [True], (
+            "the fail-fast callback must complete before its span is ended"
+        )
+        assert failing_span.ended is True, "the target exit must end its span"
+        assert unrelated_span.events[0][0] == "cuprum.pipeline_fail_fast", (
+            "the unrelated fail-fast callback must remain independently live"
         )

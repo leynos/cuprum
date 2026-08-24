@@ -65,6 +65,7 @@ Example with OpenTelemetry::
 from __future__ import annotations
 
 import collections
+import dataclasses as dc
 import threading
 import typing as typ
 
@@ -94,6 +95,15 @@ _SPAN_FIELDS = ("line", "operation", "error_type", "note", "timeout_s", "timeout
 # executions is likely to evict a live span; see ``_evict_overflow_locked``
 # for what the ordering does and does not promise.
 _MAX_ACTIVE_SPANS = 1024
+
+
+@dc.dataclass(slots=True)
+class _ActiveSpan:
+    """One open span and the lock that serializes its callbacks."""
+
+    span: Span
+    lock: threading.Lock = dc.field(default_factory=threading.Lock)
+    is_closed: bool = False
 
 
 class TracingHook:
@@ -154,7 +164,13 @@ class TracingHook:
 
     """
 
-    __slots__ = ("_active_spans", "_lock", "_record_output", "_tracer")
+    __slots__ = (
+        "_active_spans",
+        "_lock",
+        "_record_output",
+        "_span_states",
+        "_tracer",
+    )
 
     def __init__(self, tracer: Tracer, *, record_output: bool = True) -> None:
         """Initialize the tracing hook with a tracer."""
@@ -164,6 +180,7 @@ class TracingHook:
             collections.OrderedDict()
         )
         self._lock = threading.Lock()
+        self._span_states: dict[ExecId, _ActiveSpan] = {}
 
     def __call__(self, event: ExecEvent) -> None:
         """Process an execution event and update tracing."""
@@ -217,15 +234,16 @@ class TracingHook:
         # taking the lock so unrelated handlers are not blocked on it.
         attributes = self._build_attributes(event)
         span_name = f"cuprum.exec {event.program}"
-        span = self._tracer.start_span(span_name, attributes)
+        active_span = _ActiveSpan(self._tracer.start_span(span_name, attributes))
 
         with self._lock:
             # Swap atomically: capture any span already mapped to this exec_id
             # and install the replacement in a single critical section, so a
             # concurrent handler for the same token sees either the old span or
             # the replacement, never a missing/partial entry.
-            stale = self._active_spans.get(exec_id)
-            self._active_spans[exec_id] = span
+            stale = self._span_states.get(exec_id)
+            self._active_spans[exec_id] = active_span.span
+            self._span_states[exec_id] = active_span
             abandoned = self._evict_overflow_locked()
             # Read the size here rather than after the lock: another handler
             # may register or end a span in between, and the record would then
@@ -237,8 +255,7 @@ class TracingHook:
         for span_to_close in abandoned:
             # Detached from the map, so exactly one handler ends each. Ended
             # outside the lock for the same reason as the stale span below.
-            span_to_close.set_status(ok=False)
-            span_to_close.end()
+            self._close_span(span_to_close, ok=False)
 
         if stale is not None:
             # Duplicated/reused exec_id: the prior span is now detached from the
@@ -246,10 +263,9 @@ class TracingHook:
             # lock — a production Span may block on I/O in set_status()/end(),
             # and holding the lifecycle lock across that would serialise every
             # other execution's handler.
-            stale.set_status(ok=False)
-            stale.end()
+            self._close_span(stale, ok=False)
 
-    def _evict_overflow_locked(self) -> list[Span]:
+    def _evict_overflow_locked(self) -> list[_ActiveSpan]:
         """Detach the least recently active spans once the cap is exceeded.
 
         Must be called with ``self._lock`` held. Returns the detached spans so
@@ -270,7 +286,7 @@ class TracingHook:
 
         Returns
         -------
-        list[Span]
+        list[_ActiveSpan]
             The detached spans, for the caller to end outside the lock. Empty
             when the registry is within its cap.
         """
@@ -280,7 +296,11 @@ class TracingHook:
         # ``popitem(last=False)`` takes the front — the least recently active
         # end — without materialising the other thousand-odd keys the way a
         # ``list(...)`` slice would.
-        return [self._active_spans.popitem(last=False)[1] for _ in range(overflow)]
+        abandoned: list[_ActiveSpan] = []
+        for _ in range(overflow):
+            exec_id, _ = self._active_spans.popitem(last=False)
+            abandoned.append(self._span_states.pop(exec_id))
+        return abandoned
 
     def _record_span_event(self, event: ExecEvent) -> None:
         """Record ``event``'s diagnostic fields as a span event, keyed by exec_id."""
@@ -289,13 +309,13 @@ class TracingHook:
             return
 
         with self._lock:
-            span = self._active_spans.get(exec_id)
-            if span is not None:
+            active = self._span_states.get(exec_id)
+            if active is not None:
                 # Activity is what keeps a span off the eviction end of the
                 # registry; see _evict_overflow_locked.
                 self._active_spans.move_to_end(exec_id)
 
-        if span is None:
+        if active is None:
             return
 
         # The span is left open and unmarked. An ``exit`` event closes it when
@@ -309,7 +329,9 @@ class TracingHook:
             value = getattr(event, field)
             if value is not None:
                 event_attrs[field] = value
-        span.add_event(f"cuprum.{event.phase}", event_attrs)
+        with active.lock:
+            if not active.is_closed:
+                active.span.add_event(f"cuprum.{event.phase}", event_attrs)
 
     def _handle_exit(self, event: ExecEvent) -> None:
         """End the span for command execution, correlated by ``exec_id``."""
@@ -318,24 +340,29 @@ class TracingHook:
             return
 
         with self._lock:
-            span = self._active_spans.pop(exec_id, None)
+            self._active_spans.pop(exec_id, None)
+            active = self._span_states.pop(exec_id, None)
 
-        if span is None:
+        if active is None:
             return
 
-        if event.exit_code is not None:
-            span.set_attribute("cuprum.exit_code", event.exit_code)
-        if event.duration_s is not None:
-            span.set_attribute("cuprum.duration_s", event.duration_s)
+        with active.lock:
+            if active.is_closed:
+                return
+            active.is_closed = True
+            if event.exit_code is not None:
+                active.span.set_attribute("cuprum.exit_code", event.exit_code)
+            if event.duration_s is not None:
+                active.span.set_attribute("cuprum.duration_s", event.duration_s)
 
-        ok = event.exit_code == 0 if event.exit_code is not None else True
-        span.set_status(ok=ok)
-        span.end()
+            ok = event.exit_code == 0 if event.exit_code is not None else True
+            active.span.set_status(ok=ok)
+            active.span.end()
 
     def _record_fail_fast(self, event: ExecEvent) -> None:
         """Note a pipeline fail-fast decision on the failing stage's span."""
-        span = self._lookup_span(event)
-        if span is None:
+        active = self._lookup_active_span(event)
+        if active is None:
             return
 
         attrs: dict[str, object] = {}
@@ -343,15 +370,27 @@ class TracingHook:
             value = getattr(event, field)
             if value is not None:
                 attrs[field] = value
-        span.add_event("cuprum.pipeline_fail_fast", attrs)
+        with active.lock:
+            if not active.is_closed:
+                active.span.add_event("cuprum.pipeline_fail_fast", attrs)
 
-    def _lookup_span(self, event: ExecEvent) -> Span | None:
-        """Return the open span for ``event``, when its token can be found."""
+    def _lookup_active_span(self, event: ExecEvent) -> _ActiveSpan | None:
+        """Return the active span state for ``event``, when its token is known."""
         exec_id = event.exec_id
         if exec_id is None:
             return None
         with self._lock:
-            return self._active_spans.get(exec_id)
+            return self._span_states.get(exec_id)
+
+    @staticmethod
+    def _close_span(active: _ActiveSpan, *, ok: bool) -> None:
+        """End an active span exactly once without holding the registry lock."""
+        with active.lock:
+            if active.is_closed:
+                return
+            active.is_closed = True
+            active.span.set_status(ok=ok)
+            active.span.end()
 
     @staticmethod
     def _build_attributes(event: ExecEvent) -> dict[str, object]:

@@ -81,7 +81,7 @@ def test_await_process_exit_backs_off_while_waiter_is_stranded(
                 process.returncode = 0
             await original_sleep(0)
 
-        monkeypatch.setattr("cuprum._process_exit.asyncio.sleep", record_sleep)
+        monkeypatch.setattr("cuprum._process_exit.sleep", record_sleep)
         exit_code = await _await_process_exit(
             typ.cast("asyncio.subprocess.Process", process)
         )

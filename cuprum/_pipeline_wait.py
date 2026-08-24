@@ -59,7 +59,7 @@ from cuprum._pipeline_wait_records import (
     _completion_log_fields,
     _CompletionLogFields,
     _emit_fail_fast_event,
-    _log_completion_event,
+    _report_completion_event,
 )
 from cuprum._process_exit import _await_process_exit
 from cuprum._process_lifecycle import (
@@ -247,7 +247,9 @@ async def _terminate_and_report(
     fields: _CompletionLogFields,
 ) -> None:
     """Terminate remaining stages and record the teardown outcome."""
-    _log_completion_event(
+    observation = state.observation(fields.stage_index)
+    _report_completion_event(
+        observation,
         "pipeline_fail_fast_termination",
         "terminating other pipeline stages after stage %d exited %d",
         fields,
@@ -259,7 +261,8 @@ async def _terminate_and_report(
         fields.stage_index,
         cancel_grace=cancel_grace,
     )
-    _log_completion_event(
+    _report_completion_event(
+        observation,
         "pipeline_fail_fast_terminated",
         "terminated other pipeline stages after stage %d exited %d",
         fields,
@@ -303,8 +306,10 @@ async def _process_completed_task(
         return
 
     fields = _completion_log_fields(state, idx, exit_code, ended_at)
+    observation = state.observation(idx)
     if latched_first_failure:
-        _log_completion_event(
+        _report_completion_event(
+            observation,
             "pipeline_stage_first_failure",
             "pipeline stage %d exited %d, latching first failure",
             fields,
@@ -313,7 +318,7 @@ async def _process_completed_task(
         return
     # Published before termination is requested, so a consumer learns the
     # decision even if the teardown then blocks on a stage that will not die.
-    _emit_fail_fast_event(state.observation(idx), fields)
+    _emit_fail_fast_event(observation, fields)
     await _terminate_and_report(state, processes, cancel_grace, fields)
 
 

@@ -120,9 +120,10 @@ class TestFailFastEventEmission:
             event.stage_count,
             event.exit_code,
             event.duration_s,
-        ) == (1, 4, 7, 12.5), (
+            event.project,
+        ) == (1, 4, 7, 12.5, driven.observations[1].cmd.project.name), (
             "the event must report the failing stage's position, the pipeline "
-            f"width, its exit code, and its elapsed time, found {event!r}"
+            f"width, its exit code, elapsed time, and trusted project, found {event!r}"
         )
 
     def test_the_event_reuses_the_failing_stage_token(

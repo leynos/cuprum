@@ -68,7 +68,43 @@ class LogLevels:
     exit_level: int = logging.INFO
     fail_fast_level: int = logging.WARNING
 
+class _StructuredLoggingHook:
+    """Render execution events and pipeline-wait records through one logger."""
 
+    __slots__ = ("_levels", "_logger")
+
+    def __init__(self, logger: logging.Logger, levels: LogLevels) -> None:
+        """Initialize the adapter with its logger and level policy."""
+        self._logger = logger
+        self._levels = levels
+
+    def __call__(self, event: ExecEvent) -> None:
+        """Log ``event`` at the level configured for its phase."""
+        level = self._level_for(event.phase)
+        if not self._logger.isEnabledFor(level):
+            return
+        self._logger.log(level, _format_message(event), extra=_build_extra(event))
+
+    def report_pipeline_wait(
+        self,
+        message: str,
+        args: tuple[object, ...],
+        extra: cabc.Mapping[str, object],
+    ) -> None:
+        """Render one core pipeline-wait record at WARNING level."""
+        if self._logger.isEnabledFor(logging.WARNING):
+            self._logger.warning(message, *args, extra=dict(extra))
+
+    def _level_for(self, phase: str) -> int:
+        """Return the configured logging level for ``phase``."""
+        return {
+            "plan": self._levels.plan_level,
+            "start": self._levels.start_level,
+            "stdout": self._levels.output_level,
+            "stderr": self._levels.output_level,
+            "exit": self._levels.exit_level,
+            "pipeline_fail_fast": self._levels.fail_fast_level,
+        }.get(phase, logging.DEBUG)
 def structured_logging_hook(
     *,
     logger: logging.Logger | None = None,
@@ -113,29 +149,10 @@ def structured_logging_hook(
     not emit the full tags mapping.
 
     """
-    log = logger or logging.getLogger(_DEFAULT_LOGGER_NAME)
-    lvls = levels or LogLevels()
-
-    level_map: dict[str, int] = {
-        "plan": lvls.plan_level,
-        "start": lvls.start_level,
-        "stdout": lvls.output_level,
-        "stderr": lvls.output_level,
-        "exit": lvls.exit_level,
-        "pipeline_fail_fast": lvls.fail_fast_level,
-    }
-
-    def hook(event: ExecEvent) -> None:
-        """Log ``event`` at the level configured for its phase."""
-        level = level_map.get(event.phase, logging.DEBUG)
-        if not log.isEnabledFor(level):
-            return
-
-        extra = _build_extra(event)
-        message = _format_message(event)
-        log.log(level, message, extra=extra)
-
-    return hook
+    return _StructuredLoggingHook(
+        logger or logging.getLogger(_DEFAULT_LOGGER_NAME),
+        levels or LogLevels(),
+    )
 
 
 def _build_extra(event: ExecEvent) -> dict[str, object]:

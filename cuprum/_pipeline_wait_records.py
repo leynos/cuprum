@@ -10,7 +10,6 @@ to change accidentally.
 from __future__ import annotations
 
 import dataclasses as dc
-import logging
 import typing as typ
 
 from cuprum._pipeline_types import _EventDetails
@@ -18,9 +17,6 @@ from cuprum._pipeline_types import _EventDetails
 if typ.TYPE_CHECKING:
     from cuprum._pipeline_types import _StageObservation
     from cuprum._pipeline_wait import _PipelineWaitState
-
-
-_LOGGER = logging.getLogger("cuprum._pipeline_wait")
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -70,18 +66,20 @@ def _observation_exec_id(observation: _StageObservation | None) -> str | None:
     return None if observation is None else str(observation.exec_id)
 
 
-def _log_completion_event(
+def _report_completion_event(
+    observation: _StageObservation | None,
     action: str,
     message: str,
     fields: _CompletionLogFields,
     **extra_fields: object,
 ) -> None:
-    """Emit one structured pipeline-wait WARNING with stable ``cuprum_`` keys."""
-    _LOGGER.warning(
+    """Route one pipeline-wait record through an installed adapter port."""
+    if observation is None:
+        return
+    observation.report_pipeline_wait(
         message,
-        fields.stage_index,
-        fields.exit_code,
-        extra={
+        (fields.stage_index, fields.exit_code),
+        {
             "cuprum_action": action,
             "cuprum_stage_index": fields.stage_index,
             "cuprum_stage_count": fields.stage_count,

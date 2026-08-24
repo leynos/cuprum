@@ -201,7 +201,7 @@ async def _run_stranded_pipeline_wait(
     """Run a three-stage pipeline whose process waiters remain stranded."""
     processes = [_StrandedPipelineWaitProcess(pid=index) for index in range(3)]
     recorder = _PollingRecorder(processes, asyncio.sleep)
-    monkeypatch.setattr("cuprum._process_exit.asyncio.sleep", recorder)
+    monkeypatch.setattr("cuprum._process_exit.sleep", recorder)
     result = await _wait_for_pipeline(
         typ.cast("list[asyncio.subprocess.Process]", processes),
         pipe_tasks=[],

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from asyncio import sleep
 
 _PROCESS_EXIT_INITIAL_POLL_INTERVAL = 0.01
 _PROCESS_EXIT_MAX_POLL_INTERVAL = 1.0
@@ -19,7 +20,7 @@ async def _await_process_exit(process: asyncio.subprocess.Process) -> int:
         # ASYNC110: Process exposes no completion event, so its published
         # return code is the only non-blocking recovery signal for a lost wake-up.
         while process.returncode is None:
-            await asyncio.sleep(interval)
+            await sleep(interval)
             interval = min(interval * 2, _PROCESS_EXIT_MAX_POLL_INTERVAL)
         return process.returncode
 

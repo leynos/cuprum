@@ -79,6 +79,7 @@ def _events(draw: st.DrawFn) -> ExecEvent:
                 max_size=3,
             ),
         ),
+        project=draw(st.none() | st.text(max_size=20)),
         stage_index=draw(st.none() | st.integers(min_value=0, max_value=7)),
         stage_count=draw(st.none() | st.integers(min_value=1, max_value=8)),
     )
@@ -217,7 +218,11 @@ class TestAdapterProjection:
         assert labels["program"] == str(event.program), (
             "metrics labels must stringify the event program when it is present"
         )
-        project = event.tags.get("project")
+        project = (
+            event.project
+            if event.phase == "pipeline_fail_fast"
+            else event.tags.get("project")
+        )
         expected_project = str(project) if project is not None else ""
         assert labels["project"] == (expected_project or "unknown"), (
             "metrics labels must stringify a non-empty project tag and fall back "
@@ -248,6 +253,7 @@ class TestAdapterProjection:
                 "pipeline_stage_index": 0,
                 "pipeline_stages": 2,
             },
+            project="proj",
             operation=_ANCILLARY_PHASES.get(phase),
             error_type="TimeoutError"
             if is_timeout
