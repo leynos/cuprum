@@ -9,7 +9,7 @@ from unittest import mock
 
 import pytest
 
-from benchmarks._github_http import _with_retry
+from benchmarks._github_http import _ArtifactArchiveRedirectHandler, _with_retry
 from benchmarks.fetch_main_benchmark_baseline import _load_json_response
 
 
@@ -55,9 +55,16 @@ def test_load_json_response_rejects_oversized_response(
             del request, timeout
             return _Response()
 
+    received_handler: urllib.request.BaseHandler | None = None
+
+    def build_opener(handler: urllib.request.BaseHandler) -> _Opener:
+        """Capture the installed redirect handler and return the stub opener."""
+        nonlocal received_handler
+        received_handler = handler
+        return _Opener()
+
     monkeypatch.setattr(
-        "benchmarks._github_http.urllib.request.build_opener",
-        lambda *_: _Opener(),
+        "benchmarks._github_http.urllib.request.build_opener", build_opener
     )
     monkeypatch.setattr("benchmarks._github_http._MAX_JSON_RESPONSE_BYTES", 4)
 
@@ -66,6 +73,10 @@ def test_load_json_response_rejects_oversized_response(
             url="https://example.invalid/workflow-runs",
             token="".join(("tok", "en")),
         )
+
+    assert isinstance(received_handler, _ArtifactArchiveRedirectHandler), (
+        "JSON loading must install the archive-safe redirect handler"
+    )
 
 
 @pytest.mark.parametrize("status", [429, 500, 599])

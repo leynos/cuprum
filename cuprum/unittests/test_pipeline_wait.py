@@ -180,11 +180,14 @@ def test_wait_for_pipeline_accepts_published_returncode() -> None:
     process = _PublishedExitPipelineProcess(pid=1, exit_code=0)
 
     result = asyncio.run(
-        _wait_for_pipeline(
-            typ.cast("list[asyncio.subprocess.Process]", [process]),
-            pipe_tasks=[],
-            cancel_grace=0.01,
-            started_at=[0.0],
+        asyncio.wait_for(
+            _wait_for_pipeline(
+                typ.cast("list[asyncio.subprocess.Process]", [process]),
+                pipe_tasks=[],
+                cancel_grace=0.01,
+                started_at=[0.0],
+            ),
+            timeout=0.5,
         ),
     )
 
@@ -353,5 +356,10 @@ def test_wait_for_pipeline_polls_stranded_waiters_independently(
 ) -> None:
     """Published exit codes complete each pipeline stage's stranded waiter."""
     _assert_stranded_pipeline_wait(
-        asyncio.run(_run_stranded_pipeline_wait(monkeypatch))
+        asyncio.run(
+            asyncio.wait_for(
+                _run_stranded_pipeline_wait(monkeypatch),
+                timeout=0.5,
+            )
+        )
     )

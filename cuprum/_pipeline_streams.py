@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses as dc
+import functools
 import os
 import typing as typ
 
@@ -191,6 +192,17 @@ def _resume_reader_transport(
         resume_reader()
 
 
+def _close_rust_writer_fd(
+    completed: object,
+    *,
+    writer_fd: int,
+) -> None:
+    """Close a native-pump writer descriptor after its worker has settled."""
+    del completed
+    with contextlib.suppress(OSError):
+        os.close(writer_fd)
+
+
 async def _run_rust_pump_with_blocking_fds(
     *,
     reader_fd: int,
@@ -205,7 +217,20 @@ async def _run_rust_pump_with_blocking_fds(
         # Rust consumes this duplicate; asyncio keeps the transport descriptor.
         rust_writer_fd = os.dup(writer_fd)
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, rust_pump_stream, reader_fd, rust_writer_fd)
+        try:
+            native_pump = loop.run_in_executor(
+                None,
+                rust_pump_stream,
+                reader_fd,
+                rust_writer_fd,
+            )
+        except BaseException:
+            _close_rust_writer_fd(None, writer_fd=rust_writer_fd)
+            raise
+        native_pump.add_done_callback(
+            functools.partial(_close_rust_writer_fd, writer_fd=rust_writer_fd)
+        )
+        await asyncio.shield(native_pump)
     finally:
         _restore_stream_fd_blocking(
             reader_fd=reader_fd,

@@ -11,7 +11,6 @@ Example:
 from __future__ import annotations
 
 import dataclasses as dc
-import threading
 import typing as typ
 from types import MappingProxyType
 
@@ -121,8 +120,9 @@ class ProgramCatalogue:
         self._projects = self._index_projects(projects)
         self._program_to_project = self._index_programs(self._projects)
         self._allowlist = frozenset(self._program_to_project)
-        self._visible_settings_cache: cabc.Mapping[str, ProjectSettings] | None = None
-        self._visible_settings_lock = threading.Lock()
+        self._visible_settings_cache: cabc.Mapping[str, ProjectSettings] = (
+            MappingProxyType(self._projects)
+        )
 
     @property
     def allowlist(self) -> frozenset[Program]:
@@ -197,15 +197,17 @@ class ProgramCatalogue:
         -------
         Mapping[str, ProjectSettings]
             A cached read-only mapping of project name to its settings.
+
+        Raises
+        ------
+        TypeError
+            If an internal invariant replaces the cached read-only view.
         """
-        settings = self._visible_settings_cache
-        if settings is None:
-            with self._visible_settings_lock:
-                settings = self._visible_settings_cache
-                if settings is None:
-                    settings = MappingProxyType(self._projects)
-                    self._visible_settings_cache = settings
-        return settings
+        settings_view = self._visible_settings_cache
+        if not isinstance(settings_view, MappingProxyType):
+            msg = "visible settings cache must remain a read-only mapping proxy"
+            raise TypeError(msg)
+        return settings_view
 
     @staticmethod
     def _index_projects(

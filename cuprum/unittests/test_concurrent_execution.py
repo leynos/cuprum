@@ -33,34 +33,6 @@ from cuprum.concurrent import (
 from cuprum.sh import CommandResult, RunOutputOptions, SafeCmd
 from tests.helpers.catalogue import python_catalogue
 
-"""Unit tests for normal concurrent execution and concurrency limits.
-These cover the happy path of ``run_concurrent``/``run_concurrent_sync``:
-result shape and ordering, sync/async parity, the timing behaviour of the
-concurrency limit, and argument and allowlist rejection before execution.
-"""
-"""Unit tests for normal concurrent execution and concurrency limits.
-These cover the happy path of ``run_concurrent``/``run_concurrent_sync``:
-result shape and ordering, sync/async parity, the timing behaviour of the
-concurrency limit, and argument and allowlist rejection before execution.
-"""
-
-
-"""Unit tests for normal concurrent execution and concurrency limits.
-These cover the happy path of ``run_concurrent``/``run_concurrent_sync``:
-result shape and ordering, sync/async parity, the timing behaviour of the
-concurrency limit, and argument and allowlist rejection before execution.
-"""
-"""Unit tests for normal concurrent execution and concurrency limits.
-These cover the happy path of ``run_concurrent``/``run_concurrent_sync``:
-result shape and ordering, sync/async parity, the timing behaviour of the
-concurrency limit, and argument and allowlist rejection before execution.
-"""
-"""Unit tests for normal concurrent execution and concurrency limits.
-These cover the happy path of ``run_concurrent``/``run_concurrent_sync``:
-result shape and ordering, sync/async parity, the timing behaviour of the
-concurrency limit, and argument and allowlist rejection before execution.
-"""
-
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class _TimingExpectation:

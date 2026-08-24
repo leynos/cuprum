@@ -146,58 +146,27 @@ def test_load_json_response_retries_transient_urlopen_failures(
     """Transient transport failures should be retried with a bounded loop."""
     temporary_outage = "temporary outage"
     auth_token = "".join(("tok", "en"))
-
-    class _Response:
-        """Minimal stub of an HTTP response context manager."""
-
-        def __init__(self) -> None:
-            """Track whether the canned JSON bytes were returned."""
-            self._has_returned = False
-
-        def __enter__(self) -> _Response:
-            """Return the stub response for use as a context manager."""
-            return self
-
-        def __exit__(
-            self,
-            exc_type: object,
-            exc: object,
-            traceback: object,
-        ) -> None:
-            """Exit the context manager without suppressing exceptions."""
-
-        def read(self, size: int) -> bytes:
-            """Return canned JSON bytes once, then signal EOF."""
-            assert size > 0, "JSON reads should request a bounded chunk"
-            if self._has_returned:
-                return b""
-            self._has_returned = True
-            return b'{"workflow_runs": []}'
-
-    attempts = 0
-    timeouts: list[float] = []
-
-    def fake_open(request: object, *, timeout: float) -> _Response:
-        """Fail twice then return the stub response, recording timeouts.
-
-        Raises
-        ------
-        urllib.error.URLError
-            On the first two calls, to exercise the retry loop.
-        """  # noqa: DOC201 - summary states the return; Raises documents the retry
-        nonlocal attempts
-        del request
-        attempts += 1
-        timeouts.append(timeout)
-        if attempts < 3:
-            raise urllib.error.URLError(temporary_outage)
-        return _Response()
-
+    response = mock.MagicMock()
+    response.__enter__.return_value = response
+    response.read.side_effect = [b'{"workflow_runs": []}', b""]
     opener = mock.Mock()
-    opener.open.side_effect = fake_open
+    opener.open.side_effect = [
+        urllib.error.URLError(temporary_outage),
+        urllib.error.URLError(temporary_outage),
+        response,
+    ]
+    handlers: list[urllib.request.BaseHandler] = []
+
+    def fake_build_opener(
+        handler: urllib.request.BaseHandler,
+    ) -> mock.Mock:
+        """Capture the configured redirect handler and return the stub opener."""
+        handlers.append(handler)
+        return opener
+
     monkeypatch.setattr(
         "benchmarks._github_http.urllib.request.build_opener",
-        lambda *_: opener,
+        fake_build_opener,
     )
     monkeypatch.setattr("benchmarks._github_http.time.sleep", lambda _: None)
 
@@ -207,8 +176,16 @@ def test_load_json_response_retries_transient_urlopen_failures(
     )
 
     assert payload == {"workflow_runs": []}
-    assert attempts == 3
-    assert timeouts == [10.0, 10.0, 10.0]
+    assert opener.open.call_count == 3
+    assert [call.kwargs["timeout"] for call in opener.open.call_args_list] == [
+        10.0,
+        10.0,
+        10.0,
+    ]
+    assert len(handlers) == 1, "JSON loading should build exactly one opener"
+    assert isinstance(handlers[0], _ArtifactArchiveRedirectHandler), (
+        "JSON loading must install the archive-safe redirect handler"
+    )
 
 
 def test_with_retry_returns_after_transient_failures(

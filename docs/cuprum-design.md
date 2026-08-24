@@ -577,7 +577,6 @@ classDiagram
     class sh_module {
         +_stringify_arg(value: object) str
         +_serialize_kwargs(kwargs: dict~str,object~) tuple~str,...~
-        +_coerce_argv(args: tuple~object,...~, kwargs: dict~str,object~) tuple~str,...~
         +build_argv(*args: object, **kwargs: object) tuple~str,...~
         +make(program: Program, catalogue: ProgramCatalogue) SafeCmdBuilder
     }

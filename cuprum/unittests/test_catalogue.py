@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import threading
 
 import pytest
 
@@ -67,11 +68,15 @@ def test_visible_settings_surface_project_metadata() -> None:
 def test_visible_settings_concurrent_first_access_reuses_view() -> None:
     """Concurrent first access should publish one read-only view instance."""
     catalogue = ProgramCatalogue(projects=DEFAULT_CATALOGUE.visible_settings().values())
+    barrier = threading.Barrier(8)
+
+    def access_visible_settings(_: int) -> object:
+        """Synchronize one worker before reading the catalogue view."""
+        barrier.wait()
+        return catalogue.visible_settings()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        settings = tuple(
-            executor.map(lambda _: catalogue.visible_settings(), range(32))
-        )
+        settings = tuple(executor.map(access_visible_settings, range(8)))
 
     assert all(view is settings[0] for view in settings), (
         "concurrent first access should return one shared mapping proxy"
