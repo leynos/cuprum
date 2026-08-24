@@ -90,11 +90,14 @@ class ExecEvent:
     program:
         The allowlisted program that is executing.
     argv:
-        Full argv including program name as the first element.
+        Full argv including program name as the first element. Empty for the
+        sanitized ``pipeline_fail_fast`` decision event.
     cwd:
-        Working directory for the subprocess, when set.
+        Working directory for the subprocess, when set. Absent from the
+        sanitized ``pipeline_fail_fast`` decision event.
     env:
-        Environment overlay provided for this execution, when set.
+        Environment overlay provided for this execution, when set. Absent from
+        the sanitized ``pipeline_fail_fast`` decision event.
     pid:
         Process identifier for the running subprocess (populated for every
         phase except ``plan``, which fires before the subprocess is
@@ -113,7 +116,8 @@ class ExecEvent:
         ``pipeline_fail_fast`` this is how long the failing stage ran before
         its completion was observed.
     tags:
-        Arbitrary, JSON-like metadata associated with this execution.
+        Arbitrary, JSON-like metadata associated with this execution. Empty on
+        the sanitized ``pipeline_fail_fast`` decision event.
     note:
         Optional human-readable diagnostic string for ancillary events
         such as ``stdin_error``.

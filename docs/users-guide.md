@@ -235,14 +235,15 @@ Notes:
   deprecated and emit a `DeprecationWarning`.
 - `RunOutputOptions(echo=True)` echoes the final stage stdout and all stage
   stderr streams to their configured sinks.
-- Pipelines fail fast on the *first* non-final stage to exit non-zero: that
-  stage terminates every other still-running stage — upstream producers as well
-  as downstream consumers, not only the stages after the failure. Not every
-  non-zero exit terminates anything. A failing **final** stage, and any
-  single-stage pipeline, terminate nothing, because nothing is left to stop;
-  and only the first failure counts, since the later ones are usually its
-  consequences. The failing stage is available via `result.failure` /
-  `result.failure_index`.
+- Pipelines fail fast on the *first* non-final stage to exit non-zero when at
+  least one other stage remains running: that stage terminates every other
+  still-running stage — upstream producers as well as downstream consumers,
+  not only the stages after the failure. A failing **final** stage or any
+  single-stage pipeline does not request fail-fast termination by policy. A
+  non-final failure whose potential targets have already settled likewise has
+  no targets to terminate. Only the first failure counts, since later
+  non-zero exits are usually its consequences. The failing stage is available
+  via `result.failure` / `result.failure_index`.
 - When a downstream writer closes early, Cuprum drains the upstream reader
   until EOF or a short timeout elapses, even on a stalled upstream, so
   discarded input stays bounded. On the Rust backend that drain is reported —
@@ -259,16 +260,25 @@ completion order — whether or not that failure went on to trigger fail-fast
 termination — but not why the other stages ended when they did. When the first
 non-final failure still has stages to stop, the wait path publishes one
 `pipeline_fail_fast` `ExecEvent` to the registered observe hooks immediately
-before termination begins. There are no direct completion records on the wait
-logger, and no separate record after termination returns.
+before termination begins. The wait path also emits WARNING records from
+`_pipeline_wait_records.py`: `pipeline_stage_first_failure` when the first
+failure is latched, `pipeline_fail_fast_termination` before termination starts,
+and `pipeline_fail_fast_terminated` with the termination outcome. The latter
+two records occur only when there are stages to terminate; the first-failure
+record still documents a final-stage, single-stage, or already-settled
+non-final failure. The `pipeline_fail_fast` observe event is separate from
+these direct records; metrics, tracing, and structured logging hooks project
+the event without requiring log parsing.
 
 The event carries the failing stage's index, pipeline width, exit code,
-duration, and execution token. The metrics and tracing adapters consume the
-same event, so they do not need to parse log text. The metrics adapter labels
-`cuprum_pipeline_fail_fast_total` with `program` and `project` alone; the
-execution token remains event and trace detail rather than a metric label. It
-also distinguishes concurrent pipelines whose stage indices would otherwise
-look identical.
+duration, and execution token. It is sanitized: `argv` is empty, `cwd` and
+`env` are `None`, and `tags` is empty; only the program, typed decision fields,
+and `ExecEvent.exec_id` remain. All projections consume this same sanitized
+event, so they do not need to parse log text. The metrics adapter labels
+`cuprum_pipeline_fail_fast_total` with `program` and `project` alone; `project`
+falls back to `unknown` because caller tags are absent, and the execution token
+remains event and trace detail rather than a metric label. It also distinguishes
+concurrent pipelines whose stage indices would otherwise look identical.
 
 `structured_logging_hook()` consumes the event at `LogLevels.fail_fast_level`,
 which defaults to `logging.WARNING`. Once that hook is registered, no extra
@@ -965,9 +975,10 @@ unique per execution and would give the series unbounded cardinality; the
 others would multiply series for no aggregate a dashboard needs. Those fields
 remain on the `pipeline_fail_fast` event itself and on the trace span, which is
 where per-incident detail belongs. A counter spike therefore cannot be joined
-to a span through the metric: read the `cuprum_exec_id` off the matching
-`pipeline_fail_fast` event, then use that token to find the individual stage
-spans behind the spike.
+to a span through the metric: when reading the observe event, use
+`ExecEvent.exec_id`; when reading its matching structured log record, use
+`cuprum_exec_id`. Both fields carry the same existing execution token, which
+you can then use to find the individual stage spans behind the spike.
 
 To integrate with a real metrics library like `prometheus_client`, implement the
 `MetricsCollector` protocol:

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
+import types
 import typing as typ
+from pathlib import Path
 
 import pytest
 
-from cuprum import _pipeline_wait
+from cuprum import ECHO, _pipeline_wait, sh
 from cuprum.unittests._pipeline_wait_support import (
     apply_completions,
     make_stage_observations,
@@ -146,6 +148,63 @@ class TestFailFastEventEmission:
         assert event.exec_id == expected, (
             f"the event must carry stage 1's own token {expected!r}, "
             f"found {event.exec_id!r}"
+        )
+
+    def test_the_event_excludes_execution_secrets(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Decision telemetry cannot expose argv, environment, paths, or tags."""
+        confidential_marker = "fail-fast-sensitive-value"
+        events: list[ExecEvent] = []
+        observations = make_stage_observations(
+            3,
+            (events.append,),
+            tag_overrides={"token": confidential_marker},
+        )
+        observations = (
+            dc.replace(
+                observations[0],
+                cmd=sh.make(ECHO)(f"--token={confidential_marker}"),
+                cwd=Path(f"/private/{confidential_marker}"),
+                env_overlay=types.MappingProxyType({"TOKEN": confidential_marker}),
+            ),
+            *observations[1:],
+        )
+        record_terminations(monkeypatch)
+        pin_clock(monkeypatch, 12.5)
+        state = make_wait_state(3, observations=observations)
+
+        apply_completions(state, [(0, 4)])
+
+        (event,) = _fail_fast_events(_Driven(tuple(events), observations, ()))
+        assert (event.argv, event.cwd, event.env, dict(event.tags)) == (
+            (),
+            None,
+            None,
+            {},
+        )
+        assert confidential_marker not in repr(event), (
+            "the emitted fail-fast event must not retain execution secrets"
+        )
+
+    def test_a_backwards_clock_clamps_the_event_duration_to_zero(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A completion earlier than its start cannot report a negative duration."""
+        events: list[ExecEvent] = []
+        observations = make_stage_observations(3, (events.append,))
+        record_terminations(monkeypatch)
+        pin_clock(monkeypatch, 12.5)
+        state = make_wait_state(3, observations=observations)
+        state.started_at[0] = 13.0
+
+        apply_completions(state, [(0, 4)])
+
+        (event,) = _fail_fast_events(_Driven(tuple(events), observations, ()))
+        assert event.duration_s == 0.0, (
+            f"backwards clock readings must clamp to zero, found {event.duration_s!r}"
         )
 
     @pytest.mark.parametrize(

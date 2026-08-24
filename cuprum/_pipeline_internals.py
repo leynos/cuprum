@@ -315,7 +315,6 @@ async def _run_pipeline(
             stdout_task=stdout_task,
             stages=_StageWaitContext(
                 started_at=tuple(started_at),
-                exec_ids=tuple(str(obs.exec_id) for obs in observations),
                 observations=observations,
             ),
         )

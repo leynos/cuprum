@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import time
+import types
 import typing as typ
 
 from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
@@ -107,6 +108,38 @@ class _StageObservation:
             stage_index=details.stage_index,
             stage_count=details.stage_count,
         )
+        self._emit_event(event)
+
+    def emit_fail_fast(self, details: _EventDetails) -> None:
+        """Emit the sanitized fail-fast decision event."""
+        if not self.hooks.observe_hooks:
+            return
+        event = ExecEvent(
+            phase="pipeline_fail_fast",
+            program=self.cmd.program,
+            argv=(),
+            cwd=None,
+            env=None,
+            pid=details.pid,
+            timestamp=time.time(),
+            line=None,
+            exit_code=details.exit_code,
+            duration_s=details.duration_s,
+            tags=types.MappingProxyType({}),
+            note=None,
+            byte_count=None,
+            operation=None,
+            error_type=None,
+            timeout_s=None,
+            timeout_mode=None,
+            exec_id=self.exec_id,
+            stage_index=details.stage_index,
+            stage_count=details.stage_count,
+        )
+        self._emit_event(event)
+
+    def _emit_event(self, event: ExecEvent) -> None:
+        """Dispatch one event and retain scheduled observe-hook tasks."""
         try:
             scheduled_tasks = _emit_exec_event(self.hooks.observe_hooks, event)
         except _ExecEventEmissionError as exc:
@@ -132,14 +165,14 @@ class _StageWaitContext:
     rather than aliasing it, which is what stops its live bookkeeping writing
     back through this supposedly frozen record.
 
-    ``started_at`` is what stage durations are measured from. ``exec_ids``
-    renders each stage's ``_StageObservation.exec_id``, so the wait path can
-    label its records with the same correlation token the observe hooks
-    publish without depending on the observations themselves.
+    ``started_at`` is what stage durations are measured from. ``observations``
+    provides the wait path with the hook set and stage execution token for the
+    fail-fast report. It remains optional so transition tests and the symbolic
+    model can construct a context without observability state.
     """
 
     started_at: tuple[float, ...]
-    exec_ids: tuple[str, ...]
+    observations: tuple[_StageObservation, ...] = ()
 
 
 @dc.dataclass(frozen=True, slots=True)

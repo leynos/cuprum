@@ -43,16 +43,6 @@ async def _still_running() -> int:
     return await never
 
 
-def stage_exec_id(stage_index: int) -> str:
-    """Return the deterministic correlation token this scaffolding uses.
-
-    Real tokens are UUIDs minted per stage. These stand in for them so records
-    can be asserted on and snapshotted exactly, while still proving each stage
-    reports its *own* token rather than a shared or hard-coded one.
-    """
-    return f"exec-{stage_index}"
-
-
 def make_stage_observations(
     stage_count: int,
     hooks: tuple[ExecHook, ...],
@@ -107,25 +97,16 @@ def make_wait_state(
     The pure ``record_completion`` transition touches only the exit-code,
     timing, and failure-index bookkeeping, so the task fields are left empty:
     no event loop or subprocess is required to exercise completion ordering.
-    Correlation tokens are supplied because the runtime event reads them.
-
-    When ``observations`` is given the tokens are derived from it exactly as
-    ``cuprum._pipeline_internals`` derives them, so a test can assert that the
-    token on the fail-fast event comes from the matching stage rather than a
-    hard-coded value.
+    When ``observations`` is given, the runtime report reads its correlation
+    token directly from the matching stage rather than retaining a duplicate
+    tuple for every pipeline.
     """
-    exec_ids = (
-        tuple(str(obs.exec_id) for obs in observations)
-        if observations
-        else tuple(stage_exec_id(idx) for idx in range(stage_count))
-    )
     return _PipelineWaitState(
         wait_tasks=[],
         task_to_index={},
         exit_codes=[None] * stage_count,
         started_at=[0.0] * stage_count,
         ended_at=[None] * stage_count,
-        exec_ids=exec_ids,
         observations=observations,
     )
 

@@ -1350,9 +1350,16 @@ The token is the existing per-stage `ExecId` the observe hooks already publish,
 so a fail-fast record joins to that stage's span and lifecycle events without a
 new identifier. Cuprum has no pipeline-level correlation id, and fail-fast is
 not the place to mint one: that would change the `ExecEvent` contract every
-adapter reads. Nor does fail-fast emit a metric or a trace event, because the
-library emits neither on its own — both would require a new observability
-surface rather than a use of an existing one.
+adapter reads.
+
+When the same decision has targets to terminate, the wait path also publishes a
+sanitized `pipeline_fail_fast` `ExecEvent` before termination begins. It retains
+the program, typed decision fields, and `exec_id`, but has an empty `argv` and
+tags, with no `cwd` or environment overlay. Registered adapters project that
+event independently: `MetricsHook` increments
+`cuprum_pipeline_fail_fast_total`, `TracingHook` adds a
+`cuprum.pipeline_fail_fast` span event, and `structured_logging_hook()` renders
+it at `LogLevels.fail_fast_level`.
 
 The record payload lives in `cuprum/_pipeline_wait_records.py`, apart from the
 decision that fires it, so the published field contract and the verified

@@ -8,10 +8,9 @@ namespace — which is precisely why the fail-fast decision travels on the typed
 ``stage_index`` and ``stage_count`` fields of the event instead.
 
 Every other module in this suite keeps tag and typed field in lock-step, so an
-implementation that read the tag would pass all of them. These are the tests
-that pull the two apart: both levels assert the typed fields carry the
-coordinator's reckoning *and* that the caller's tag arrives unaltered, so a
-run that silently dropped the shadowing tag could not pass them vacuously.
+implementation that read the tag would pass all of them. These tests pull the
+two apart: the typed fields carry the coordinator's reckoning while the
+sanitized fail-fast event deliberately drops caller metadata.
 """
 
 from __future__ import annotations
@@ -82,22 +81,13 @@ def test_a_real_run_reports_the_coordinators_stage_not_the_tag(
     )
 
 
-def test_the_caller_tag_still_reaches_the_hooks_unaltered(
+def test_the_fail_fast_event_drops_caller_tags(
     shadowed_fail_fast_event: ExecEvent,
 ) -> None:
-    """Shadowing is honoured in the tags, which is what makes the pairing work.
-
-    Without this, the test above could pass on a run where the caller's tags
-    never arrived at all, and would prove nothing about shadowing.
-    """
-    tags = shadowed_fail_fast_event.tags
-
-    assert tags["pipeline_stage_index"] == _SHADOWED_INDEX, (
-        "the caller's tag must be published as given, "
-        f"found {tags['pipeline_stage_index']!r}"
-    )
-    assert tags["pipeline_stages"] == _SHADOWED_INDEX, (
-        f"the caller's width tag must be published as given, found {tags!r}"
+    """Caller metadata cannot enter the decision event's hook payload."""
+    assert shadowed_fail_fast_event.tags == {}, (
+        "the sanitized fail-fast event must omit caller tags, found "
+        f"{shadowed_fail_fast_event.tags!r}"
     )
 
 
@@ -128,7 +118,6 @@ def test_the_emission_seam_ignores_a_shadowing_tag(
         "the event must report the completed stage and the real pipeline width, "
         f"found {(event.stage_index, event.stage_count)!r}"
     )
-    assert event.tags["pipeline_stage_index"] == _SHADOWED_INDEX, (
-        "the shadowing tag must survive on the event, "
-        f"found {event.tags['pipeline_stage_index']!r}"
+    assert event.tags == {}, (
+        f"the sanitized event must omit the shadowing tag, found {event.tags!r}"
     )

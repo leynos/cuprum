@@ -257,7 +257,6 @@ class TestSimultaneousCompletions:
                 cancel_grace=0.25,
                 stages=_StageWaitContext(
                     started_at=(0.0,) * len(exit_codes),
-                    exec_ids=tuple(str(obs.exec_id) for obs in observations),
                     observations=observations,
                 ),
             )
@@ -335,9 +334,10 @@ class TestSimultaneousCompletions:
         assert run.result.failure_index == 0, (
             f"the failure must still latch, found {run.result.failure_index!r}"
         )
-        assert run.records == (), (
-            "a fully settled batch has no termination to report, so direct log "
-            f"records must be absent, found {run.records!r}"
+        actions = [str(vars(record)["cuprum_action"]) for record in run.records]
+        assert actions == ["pipeline_stage_first_failure"], (
+            "a fully settled batch must record the latch but no teardown, "
+            f"found {actions!r}"
         )
         assert run.terminations == (), (
             f"no termination may be requested, found {run.terminations!r}"

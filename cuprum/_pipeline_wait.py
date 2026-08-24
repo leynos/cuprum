@@ -57,7 +57,9 @@ from cuprum._pipeline_streams import (
 )
 from cuprum._pipeline_wait_records import (
     _completion_log_fields,
+    _CompletionLogFields,
     _emit_fail_fast_event,
+    _log_completion_event,
 )
 from cuprum._process_lifecycle import (
     _cleanup_pipeline_on_error,
@@ -89,11 +91,9 @@ class _PipelineWaitState:
     started_at: list[float]
     ended_at: list[float | None]
     failure_index: int | None = None
-    # Reporting only: the completion transition never reads either of these,
-    # which is why both default to empty and the symbolic model leaves them so.
-    # ``exec_ids`` labels the log records; ``observations`` is what the
-    # fail-fast ``ExecEvent`` is published through.
-    exec_ids: tuple[str, ...] = ()
+    # Reporting only: the completion transition never reads this, which is why
+    # it defaults to empty and the symbolic model leaves it so. Observations
+    # provide the existing stage token and publish the fail-fast ``ExecEvent``.
     observations: tuple[_StageObservation, ...] = ()
 
     @classmethod
@@ -113,20 +113,8 @@ class _PipelineWaitState:
             # `stages` is meant to stay the immutable snapshot it declares.
             started_at=list(stages.started_at),
             ended_at=[None] * len(processes),
-            exec_ids=stages.exec_ids,
             observations=stages.observations,
         )
-
-    def exec_id(self, stage_index: int) -> str | None:
-        """Return a stage's correlation token, or ``None`` when unknown.
-
-        Absent only when the state was built without observation context, as
-        the symbolic model and the transition-level tests do; a pipeline run
-        through `_wait_for_pipeline` always supplies one token per stage.
-        """
-        if stage_index < len(self.exec_ids):
-            return self.exec_ids[stage_index]
-        return None
 
     def observation(self, stage_index: int) -> _StageObservation | None:
         """Return a stage's observation, or ``None`` when there is none.
@@ -236,15 +224,28 @@ class _PipelineWaitState:
 async def _terminate_and_report(
     state: _PipelineWaitState,
     processes: list[asyncio.subprocess.Process],
-    failure_index: int,
     cancel_grace: float,
+    fields: _CompletionLogFields,
 ) -> None:
-    """Terminate every other still-running stage after fail-fast is published."""
-    await _terminate_pipeline_remaining_stages(
+    """Terminate remaining stages and record the teardown outcome."""
+    _log_completion_event(
+        "pipeline_fail_fast_termination",
+        "terminating other pipeline stages after stage %d exited %d",
+        fields,
+    )
+    started = perf_counter()
+    terminated = await _terminate_pipeline_remaining_stages(
         processes,
         state.wait_tasks,
-        failure_index,
+        fields.stage_index,
         cancel_grace=cancel_grace,
+    )
+    _log_completion_event(
+        "pipeline_fail_fast_terminated",
+        "terminated other pipeline stages after stage %d exited %d",
+        fields,
+        cuprum_terminated_stage_count=terminated,
+        cuprum_termination_duration_s=max(0.0, perf_counter() - started),
     )
 
 
@@ -258,14 +259,16 @@ async def _process_completed_task(
 
     This is where the runtime concerns live: reading the clock, invoking the
     pure transition, checking for a live termination target, and publishing the
-    domain-neutral event that makes fail-fast observable. The transition stays
+    records and event that make fail-fast observable. The transition stays
     side-effect-free so it can be verified symbolically.
     """
     idx = state.task_to_index[task]
     exit_code = task.result()
     ended_at = perf_counter()
 
+    had_failure = state.failure_index is not None
     request_termination = state.record_completion(idx, exit_code, ended_at=ended_at)
+    latched_first_failure = not had_failure and state.failure_index == idx
 
     # The query says whether this completion *is* the trigger; the wait tasks
     # say whether the decision still has a subject. A batch handled in stage
@@ -277,14 +280,22 @@ async def _process_completed_task(
         state.wait_tasks,
     )
 
-    if not terminate_others:
+    if not (latched_first_failure or terminate_others):
         return
 
     fields = _completion_log_fields(state, idx, exit_code, ended_at)
+    if latched_first_failure:
+        _log_completion_event(
+            "pipeline_stage_first_failure",
+            "pipeline stage %d exited %d, latching first failure",
+            fields,
+        )
+    if not terminate_others:
+        return
     # Published before termination is requested, so a consumer learns the
     # decision even if the teardown then blocks on a stage that will not die.
     _emit_fail_fast_event(state.observation(idx), fields)
-    await _terminate_and_report(state, processes, idx, cancel_grace)
+    await _terminate_and_report(state, processes, cancel_grace, fields)
 
 
 async def _finalize_pipeline_wait(
