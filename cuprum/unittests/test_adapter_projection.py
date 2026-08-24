@@ -150,6 +150,13 @@ class TestAdapterProjection:
             Generated event with optional fields independently present or absent.
         """
         canonical = {key for key, _ in _event_common_fields(event, lambda field: field)}
+        self._assert_logging_projection(event, canonical)
+        self._assert_tracing_projection(event, canonical)
+        self._assert_metrics_labels(event)
+
+    @staticmethod
+    def _assert_logging_projection(event: ExecEvent, canonical: set[str]) -> None:
+        """Assert the logging projection preserves its canonical fields."""
         expected_log_fields = (
             canonical - {"argv"} if event.phase == "pipeline_fail_fast" else canonical
         )
@@ -178,6 +185,9 @@ class TestAdapterProjection:
                 "logging extras must preserve the event tag mapping"
             )
 
+    @staticmethod
+    def _assert_tracing_projection(event: ExecEvent, canonical: set[str]) -> None:
+        """Assert the tracing projection preserves its canonical fields."""
         attr_keys = {
             key.removeprefix("cuprum.")
             for key in TracingHook._build_attributes(event)
@@ -196,6 +206,9 @@ class TestAdapterProjection:
             event.argv
         ), "tracing attributes must render argv as a list"
 
+    @staticmethod
+    def _assert_metrics_labels(event: ExecEvent) -> None:
+        """Assert metrics retain only their low-cardinality labels."""
         labels = MetricsHook._extract_labels(event)
         assert set(labels) == {"program", "project"}, (
             "metrics labels must stay limited to the low-cardinality program and "
