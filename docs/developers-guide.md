@@ -1461,6 +1461,17 @@ exit modes, and at most three repeated borrows — rather than for all
 executions. Active verification tracking, including whether Verus adds anything
 beyond the Kani model once that model is complete, lives in issue `#89`.
 
+### Python-side native pump descriptor lifetime
+
+`_run_rust_pump` keeps the asyncio transport's writer descriptor in Python's
+ownership. It gives `rust_pump_stream` a duplicate instead, because the native
+pump consumes and closes the descriptor it receives. The duplicate remains
+owned by the executor future until its worker settles, including native-load
+failure and cancellation of the awaiting task; only then is it closed. The
+reader transport remains paused, and the original descriptor modes are
+restored, until that same completion boundary. This prevents cancellation
+cleanup from racing with native I/O on a descriptor that is still in use.
+
 ## Rust splice-loop and drain contract
 
 The Linux zero-copy path in `rust/cuprum-rust/src/splice.rs` follows one

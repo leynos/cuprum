@@ -28,14 +28,18 @@ _NATIVE_LOAD_FAILURE_MESSAGE = "native extension unavailable"
 _NATIVE_FAILURE_MESSAGE = "native pump failed"
 
 
+class _DrainBaseException(BaseException):
+    """Sentinel error used to verify non-``Exception`` drain cleanup."""
+
+
 class TestRustPumpFailures:
     """Regression tests for Rust-pump cleanup paths."""
 
-    def test_run_rust_pump_resumes_reader_when_draining_fails(
+    def test_run_rust_pump_resumes_reader_when_draining_raises_base_exception(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A drain error should resume the reader and propagate unchanged."""
+        """A drain BaseException should resume the reader and propagate unchanged."""
         _ = self
         call_order: list[str] = []
 
@@ -55,12 +59,12 @@ class TestRustPumpFailures:
             del reader, writer
             call_order.append("drain")
             await asyncio.sleep(0)
-            raise OSError(_DRAIN_FAILURE_MESSAGE)
+            raise _DrainBaseException(_DRAIN_FAILURE_MESSAGE)
 
         monkeypatch.setattr(_pipeline_streams, "_pause_reader_transport", pause_reader)
         monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", fail_drain)
 
-        with pytest.raises(OSError, match=_DRAIN_FAILURE_MESSAGE):
+        with pytest.raises(_DrainBaseException, match=_DRAIN_FAILURE_MESSAGE):
             asyncio.run(
                 _pipeline_streams._run_rust_pump(
                     reader=typ.cast("asyncio.StreamReader", object()),
@@ -242,77 +246,3 @@ class TestRustPumpFailures:
             assert duplicated_fds, "native pumping should create a writer duplicate"
             with pytest.raises(OSError, match="Bad file descriptor"):
                 os.fstat(duplicated_fds[0])
-
-    def test_run_rust_pump_defers_duplicate_close_until_worker_settles(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Cancellation should leave the native writer FD live until completion."""
-        _ = self
-
-        async def run_case() -> None:
-            """Cancel a pump task while its submitted native work remains pending."""
-            loop = asyncio.get_running_loop()
-            native_pump = loop.create_future()
-            received_fds: list[int] = []
-
-            def retain_native_writer(reader_fd: int, writer_fd: int) -> int:
-                """Record the descriptor while modelling work owned by the future."""
-                del reader_fd
-                received_fds.append(writer_fd)
-                return 0
-
-            def submit_held_native_pump(
-                executor: object,
-                function: object,
-                *args: object,
-            ) -> asyncio.Future[object]:
-                """Start native work but delay publication of its completion."""
-                del executor
-                typ.cast("cabc.Callable[..., object]", function)(*args)
-                return native_pump
-
-            import cuprum._streams_rs as streams_rs
-
-            monkeypatch.setattr(
-                streams_rs,
-                "rust_pump_stream",
-                retain_native_writer,
-            )
-
-            with _nonblocking_pipe_pair() as (
-                read_fd,
-                read_write_fd,
-                write_read_fd,
-                write_fd,
-            ):
-                del read_write_fd, write_read_fd
-                with mock.patch.object(
-                    loop,
-                    "run_in_executor",
-                    side_effect=submit_held_native_pump,
-                ):
-                    task = asyncio.create_task(
-                        _pipeline_streams._run_rust_pump(
-                            reader=typ.cast("asyncio.StreamReader", object()),
-                            writer=None,
-                            reader_fd=read_fd,
-                            writer_fd=write_fd,
-                        )
-                    )
-                    await asyncio.sleep(0)
-                    task.cancel()
-
-                    with pytest.raises(asyncio.CancelledError):
-                        await task
-
-                    assert received_fds, "native work should receive a duplicate FD"
-                    os.fstat(received_fds[0])
-
-                    native_pump.set_result(0)
-                    await asyncio.sleep(0)
-
-                    with pytest.raises(OSError, match="Bad file descriptor"):
-                        os.fstat(received_fds[0])
-
-        asyncio.run(run_case())

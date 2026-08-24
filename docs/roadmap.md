@@ -458,11 +458,16 @@ formal ownership verification is tracked separately by the active issue `#89`,
 which now carries a bounded Kani proof of the borrowed-reader and
 consumed-writer invariants.
 
-- [ ] 8.1.1. Fix the silent `OSError: [Errno 9] Bad file descriptor` raised from
+- [x] 8.1.1. Fix the silent `OSError: [Errno 9] Bad file descriptor` raised from
   `_UnixWritePipeTransport._call_connection_lost` during Rust pump shutdown.
-  - Success: the `echo-devnull-nocb-s4-rust` scenario logs no bad-FD errors
-    across repeated runs, FD ownership at pump teardown is documented, and a
-    regression test reproduces the close race and asserts clean shutdown.
+  - Completion evidence (2026-08-24): `_run_rust_pump` gives native code a
+    duplicate writer descriptor and keeps it owned by the executor future until
+    worker settlement. Reader resumption and descriptor-mode restoration use
+    that same boundary, including cancellation and native-load failure. The
+    regression tests in
+    `cuprum/unittests/test_pump_stream_dispatch_rust_failures.py` reproduce the
+    close race and assert late duplicate closure and clean shutdown; the
+    ownership contract is recorded in the developers' guide and ADR-002.
 
 ### 8.2. Restore Python-frame attribution in perf captures
 

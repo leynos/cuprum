@@ -2293,6 +2293,14 @@ Error propagation from Rust to Python uses standard exception mechanisms. The
 Rust extension raises `OSError` for I/O failures, matching the behaviour of
 Python's built-in I/O operations.
 
+The Python pipeline keeps ownership of the writer descriptor held by the
+asyncio transport. `_run_rust_pump` passes `rust_pump_stream` a duplicate and
+retains that duplicate through the executor future's settlement. Restoration
+of the original descriptor modes and reader transport resumption are tied to
+that settlement, so cancellation of the awaiting task cannot close or reuse a
+descriptor while native I/O is still running. The duplicate is closed after
+the worker settles, including a native-load failure.
+
 ### 13.7 Linux splice() Optimization
 
 On Linux, the Rust extension can use the `splice()` system call for zero-copy
