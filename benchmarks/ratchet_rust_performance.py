@@ -71,12 +71,13 @@ def load_plan(path: pth.Path) -> dict[str, object]:
     Raises
     ------
     IncompatibleBenchmarkProfileError
-        If the plan's ``worker_iterations`` field is invalid.
+        If the plan's ``benchmark_profile_version`` is missing or
+        incompatible, or if its ``worker_iterations`` field is invalid.
     OSError
         If ``path`` cannot be read.
     TypeError
-        If the plan's ``scenarios`` field or an entry within it has the
-        wrong type.
+        If the parsed JSON root is not a mapping, or if the plan's
+        ``scenarios`` field or an entry within it has the wrong type.
     ValueError
         If a scenario's ``name`` or ``backend`` field is missing or empty.
     json.JSONDecodeError
@@ -127,8 +128,8 @@ def load_throughput(path: pth.Path) -> dict[str, object]:
     OSError
         If ``path`` cannot be read.
     TypeError
-        If the payload's ``results`` field or an entry within it has the
-        wrong type.
+        If the parsed JSON root is not a mapping, or if the payload's
+        ``results`` field or an entry within it has the wrong type.
     ValueError
         If a result's ``mean`` field is missing or not a positive float.
     json.JSONDecodeError

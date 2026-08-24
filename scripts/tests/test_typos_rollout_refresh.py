@@ -398,7 +398,7 @@ class _OversizedResponse:
 
     def read(self, limit: int | None = None) -> bytes:
         """Return an oversized body, honouring any byte limit."""
-        assert limit is not None
+        assert limit is not None, "the oversized-response test requires a byte limit"
         return b"x" * limit
 
     def __enter__(self) -> _OversizedResponse:

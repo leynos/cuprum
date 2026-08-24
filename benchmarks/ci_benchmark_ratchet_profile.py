@@ -186,7 +186,14 @@ def build_hyperfine_command(
     -------
     list[str]
         The hyperfine command line for the selected scenarios.
-    """
+
+    Raises
+    ------
+    TypeError
+        If a selected scenario's ``name`` is not a string.
+    ValueError
+        If a selected scenario's ``name`` is empty or whitespace-only.
+    """  # noqa: DOC502 - propagates from _require_non_empty_string
     return [
         "hyperfine",
         "--export-json",
@@ -270,6 +277,8 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
 
     Raises
     ------
+    SystemExit
+        If ``argv`` is invalid and ``_parse_args`` reports a usage error.
     subprocess.CalledProcessError
         If the hyperfine benchmark command exits non-zero.
     OSError
@@ -279,8 +288,9 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
     TypeError
         If a plan payload fails structural validation.
     ValueError
-        If plan loading or scenario selection rejects the payload.
-    """  # noqa: DOC502 - all listed errors propagate from the loader, selection, and subprocess calls
+        If plan loading, scenario selection, or writing the filtered plan
+        rejects the payload.
+    """  # noqa: DOC502 - propagate from arg parsing, loader, selection, writer, subprocess
     args = _parse_args(argv)
     full_payload = load_plan_payload(args.full_plan)
     selected = select_ci_ratchet_scenarios(full_payload)
