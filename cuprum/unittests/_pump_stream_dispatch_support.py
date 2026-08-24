@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import typing as typ
+from unittest import mock
 
 import pytest
 
@@ -139,10 +141,18 @@ def _make_blocking_fd_spy(
         assert reader_fd == expected_reader_fd, (  # noqa: S101 - test spy validates reader-FD dispatch
             "expected Rust path to use extracted reader FD"
         )
-        assert writer_fd == expected_writer_fd, (  # noqa: S101 - test spy validates writer-FD dispatch
-            "expected Rust path to use extracted writer FD"
+        # The native pump consumes its writer descriptor, so it must be handed
+        # a duplicate rather than the descriptor asyncio's transport owns.
+        assert writer_fd != expected_writer_fd, (  # noqa: S101 - test spy validates writer-FD ownership
+            "expected Rust path to receive a duplicate, not the transport FD"
         )
+        assert (  # noqa: S101 - test spy validates the duplicate targets the same pipe
+            _pipeline_streams.os.fstat(writer_fd).st_ino
+            == _pipeline_streams.os.fstat(expected_writer_fd).st_ino
+        ), "expected the duplicate to refer to the same pipe as the writer FD"
         calls["rust_pump"] += 1
+        # Model Rust's ownership: the duplicate is closed by the native pump.
+        _pipeline_streams.os.close(writer_fd)
         return 0
 
     return _spy
@@ -157,3 +167,102 @@ async def _fake_python_fallback(
     del reader, writer
     await asyncio.sleep(0)
     calls["python_pump"] += 1
+
+
+async def _run_with_inline_executor_returning(
+    awaitable: cabc.Awaitable[object],
+) -> object:
+    """Run mocked native work inline and return the awaited result.
+
+    Submitted callables run immediately on the loop rather than in a thread,
+    so a test double never spawns an unrelated thread pool.
+
+    Parameters
+    ----------
+    awaitable : cabc.Awaitable[object]
+        The coroutine to run with the executor patched.
+
+    Returns
+    -------
+    object
+        Whatever the awaited coroutine produced.
+    """
+    loop = asyncio.get_running_loop()
+
+    def run_inline(
+        executor: object,
+        function: cabc.Callable[..., object],
+        *args: object,
+    ) -> asyncio.Future[object]:
+        """Execute a submitted test double and publish its result immediately."""
+        del executor
+        future = loop.create_future()
+        future.set_result(function(*args))
+        return future
+
+    with mock.patch.object(loop, "run_in_executor", side_effect=run_inline):
+        return await awaitable
+
+
+async def _run_with_inline_executor(awaitable: cabc.Awaitable[object]) -> None:
+    """Run mocked native work without creating an unrelated thread pool.
+
+    Parameters
+    ----------
+    awaitable : cabc.Awaitable[object]
+        The coroutine to run with the executor patched.
+    """
+    await _run_with_inline_executor_returning(awaitable)
+
+
+def install_closing_rust_pump(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    """Patch the native pump to consume the writer FD, as Rust does.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace ``rust_pump_stream``.
+
+    Returns
+    -------
+    dict[str, int]
+        Populated with ``writer_fd``, the descriptor the pump received.
+    """
+    received: dict[str, int] = {}
+
+    def closing_rust_pump(reader_fd: int, writer_fd: int) -> int:
+        """Record the writer descriptor and close it, mirroring ``OwnedFd``."""
+        del reader_fd
+        received["writer_fd"] = writer_fd
+        os.close(writer_fd)
+        return 0
+
+    import cuprum._streams_rs as streams_rs
+
+    monkeypatch.setattr(streams_rs, "rust_pump_stream", closing_rust_pump)
+    return received
+
+
+def bypass_reader_drain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip the pause/drain step so a test can isolate FD ownership.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace the pause and drain helpers.
+    """
+    monkeypatch.setattr(
+        _pipeline_streams,
+        "_pause_reader_transport",
+        lambda reader: None,
+    )
+
+    async def _no_drain(
+        reader: asyncio.StreamReader | None,
+        writer: asyncio.StreamWriter | None,
+    ) -> None:
+        """Stand in for the drain step without consuming anything."""
+        del reader, writer
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", _no_drain)
