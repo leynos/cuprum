@@ -225,7 +225,7 @@ class TracingHook:
         Must be called with ``self._lock`` held. Returns the detached spans so
         the caller can end them outside the lock — an arbitrary ``Span`` may
         block on I/O in ``set_status``/``end``, and holding the lifecycle lock
-        across that would serialise every other execution's handler.
+        across that would serialize every other execution's handler.
 
         Order is recency of activity, not of arrival: ``_record_span_event``
         moves a span to the back whenever one of its events lands, so a
@@ -248,7 +248,7 @@ class TracingHook:
             return []
         overflow = len(self._active_spans) - _MAX_ACTIVE_SPANS
         # ``popitem(last=False)`` takes the front — the least recently active
-        # end — without materialising the other thousand-odd keys the way a
+        # end — without materializing the other thousand-odd keys the way a
         # ``list(...)`` slice would.
         abandoned: list[_ActiveSpan] = []
         for _ in range(overflow):
