@@ -28,7 +28,7 @@ dev = [
     "pytest<9.2",
     "pytest-benchmark",
     "pytest-bdd",
-    "ruff==0.14.7",
+    "ruff==0.16.3",
     "pyright",
     "pytest-timeout",
     "pytest-xdist",
