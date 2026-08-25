@@ -126,7 +126,7 @@ class TestTracingSpanLifecycle:
     )
     def test_records_ancillary_event_without_ending_span(
         self,
-        phase: str,
+        phase: ExecPhase,
         extra_fields: dict[str, object],
         expected_attributes: dict[str, object],
     ) -> None:
@@ -148,7 +148,7 @@ class TestTracingSpanLifecycle:
         hook(_make_exec_event(phase="start", overrides=base))
         hook(
             _make_exec_event(
-                phase=typ.cast("ExecPhase", phase),
+                phase=phase,
                 overrides={**base, **extra_fields},
             ),
         )

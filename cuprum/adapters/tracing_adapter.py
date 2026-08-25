@@ -226,11 +226,13 @@ class TracingHook:
             stale = self._active_spans.get(exec_id)
             self._active_spans[exec_id] = span
             abandoned = self._evict_overflow_locked()
+            # Read the size here rather than after the lock: another handler
+            # may register or end a span in between, and the record would then
+            # report a total that never accompanied this eviction.
+            active = len(self._active_spans)
 
         if abandoned:
-            _log_span_eviction(
-                "tracing", evicted=len(abandoned), active=len(self._active_spans)
-            )
+            _log_span_eviction("tracing", evicted=len(abandoned), active=active)
         for span_to_close in abandoned:
             # Detached from the map, so exactly one handler ends each. Ended
             # outside the lock for the same reason as the stale span below.

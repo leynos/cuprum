@@ -56,242 +56,251 @@ class _CleanupGate:
 # -- The primitive ------------------------------------------------------------
 
 
-def test_shielded_cleanup_holds_the_caller_until_cleanup_finishes() -> None:
-    """The awaiting coroutine must not unwind while cleanup is still running.
+class TestShieldedCleanupPrimitive:
+    """Behaviour of ``_shielded_cleanup`` itself."""
 
-    This is the property a bare ``await asyncio.shield(coro)`` fails to
-    provide: the shielded coroutine survives, but the awaiting task resumes at
-    once, so the run propagates its cancellation alongside live cleanup.
-    """
+    def test_shielded_cleanup_holds_the_caller_until_cleanup_finishes(self) -> None:
+        """The awaiting coroutine must not unwind while cleanup is still running.
 
-    async def run_case() -> None:
-        """Cancel mid-cleanup and check the waiter stays put until released."""
-        gate = _CleanupGate()
-        task = asyncio.create_task(_shielded_cleanup(gate.run()))
-        await gate.entered.wait()
+        This is the property a bare ``await asyncio.shield(coro)`` fails to
+        provide: the shielded coroutine survives, but the awaiting task resumes at
+        once, so the run propagates its cancellation alongside live cleanup.
+        """
 
-        task.cancel()
-        # Give the cancellation every chance to land and be acted on. If the
-        # waiter were going to abandon cleanup, it would have done so by now.
-        for _ in range(8):
-            await asyncio.sleep(0)
-        assert not task.done(), (
-            "the caller unwound while cleanup was still running; cleanup's "
-            "tasks would outlive the run"
-        )
-        assert not gate.completed, "the gate should still be held at this point"
+        async def run_case() -> None:
+            """Cancel mid-cleanup and check the waiter stays put until released."""
+            gate = _CleanupGate()
+            task = asyncio.create_task(_shielded_cleanup(gate.run()))
+            await gate.entered.wait()
 
-        gate.release.set()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert gate.completed, "cleanup must have run to completion"
-
-    asyncio.run(run_case())
-
-
-def test_shielded_cleanup_survives_repeated_cancellation() -> None:
-    """Repeated cancellation must not cut the cleanup task short.
-
-    Cancelling a task propagates to whatever future it is awaiting, so a
-    handler that re-awaited the cleanup task unshielded would cancel the
-    cleanup itself on the second interruption.
-    """
-
-    async def run_case() -> None:
-        """Cancel three times while cleanup is gated, then release it."""
-        gate = _CleanupGate()
-        task = asyncio.create_task(_shielded_cleanup(gate.run()))
-        await gate.entered.wait()
-
-        for _ in range(3):
             task.cancel()
-            for _ in range(4):
+            # Give the cancellation every chance to land and be acted on. If the
+            # waiter were going to abandon cleanup, it would have done so by now.
+            for _ in range(8):
                 await asyncio.sleep(0)
             assert not task.done(), (
-                "a cancellation abandoned the cleanup task before it finished"
+                "the caller unwound while cleanup was still running; cleanup's "
+                "tasks would outlive the run"
+            )
+            assert not gate.completed, "the gate should still be held at this point"
+
+            gate.release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert gate.completed, "cleanup must have run to completion"
+
+        asyncio.run(run_case())
+
+    def test_shielded_cleanup_survives_repeated_cancellation(self) -> None:
+        """Repeated cancellation must not cut the cleanup task short.
+
+        Cancelling a task propagates to whatever future it is awaiting, so a
+        handler that re-awaited the cleanup task unshielded would cancel the
+        cleanup itself on the second interruption.
+        """
+
+        async def run_case() -> None:
+            """Cancel three times while cleanup is gated, then release it."""
+            gate = _CleanupGate()
+            task = asyncio.create_task(_shielded_cleanup(gate.run()))
+            await gate.entered.wait()
+
+            for _ in range(3):
+                task.cancel()
+                for _ in range(4):
+                    await asyncio.sleep(0)
+                assert not task.done(), (
+                    "a cancellation abandoned the cleanup task before it finished"
+                )
+
+            gate.release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert gate.completed, (
+                "cleanup must complete however many cancellations arrive"
             )
 
-        gate.release.set()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert gate.completed, "cleanup must complete however many cancellations arrive"
+        asyncio.run(run_case())
 
-    asyncio.run(run_case())
+    def test_shielded_cleanup_propagates_failure_when_not_cancelled(self) -> None:
+        """An uncancelled caller still sees the cleanup's own failure.
 
+        Callers that must absorb a cleanup failure say so themselves — the
+        teardown path passes ``return_exceptions=True`` — so the primitive must not
+        swallow anything on their behalf.
+        """
 
-def test_shielded_cleanup_propagates_failure_when_not_cancelled() -> None:
-    """An uncancelled caller still sees the cleanup's own failure.
+        async def run_case() -> None:
+            """Await a cleanup that raises and check the error is not swallowed."""
 
-    Callers that must absorb a cleanup failure say so themselves — the
-    teardown path passes ``return_exceptions=True`` — so the primitive must not
-    swallow anything on their behalf.
-    """
+            async def failing() -> None:
+                """Fail the way a broken cleanup step would."""
+                await asyncio.sleep(0)
+                msg = "cleanup boom"
+                raise RuntimeError(msg)
 
-    async def run_case() -> None:
-        """Await a cleanup that raises and check the error is not swallowed."""
+            with pytest.raises(RuntimeError, match="cleanup boom"):
+                await _shielded_cleanup(failing())
 
-        async def failing() -> None:
-            """Fail the way a broken cleanup step would."""
-            await asyncio.sleep(0)
-            msg = "cleanup boom"
-            raise RuntimeError(msg)
+        asyncio.run(run_case())
 
-        with pytest.raises(RuntimeError, match="cleanup boom"):
-            await _shielded_cleanup(failing())
+    def test_shielded_cleanup_returns_the_cleanup_result(self) -> None:
+        """The value cleanup produced reaches the caller unchanged."""
 
-    asyncio.run(run_case())
+        async def run_case() -> None:
+            """Await an ungated cleanup and check its return value."""
+            gate = _CleanupGate()
+            gate.release.set()
+            result = await _shielded_cleanup(gate.run())
+            assert result == "cleaned", (
+                "the cleanup's return value must reach the caller unchanged, got "
+                f"{result!r}"
+            )
 
-
-def test_shielded_cleanup_returns_the_cleanup_result() -> None:
-    """The value cleanup produced reaches the caller unchanged."""
-
-    async def run_case() -> None:
-        """Await an ungated cleanup and check its return value."""
-        gate = _CleanupGate()
-        gate.release.set()
-        result = await _shielded_cleanup(gate.run())
-        assert result == "cleaned", (
-            "the cleanup's return value must reach the caller unchanged, got "
-            f"{result!r}"
-        )
-
-    asyncio.run(run_case())
+        asyncio.run(run_case())
 
 
 # -- The single-command run ---------------------------------------------------
 
 
-def test_streamed_run_drains_its_tasks_before_cancellation_propagates(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A cancelled streamed run reconciles every task it owns first.
+class TestSingleCommandRun:
+    """A cancelled single-command run reconciles the tasks it owns."""
 
-    The drain is monkeypatched at its boundary so the cancellation is delivered
-    at a known point — after reconciliation has begun — rather than at whatever
-    moment a sleep happened to pick.
-    """
-    from cuprum import _subprocess_wait
+    def test_streamed_run_drains_its_tasks_before_cancellation_propagates(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A cancelled streamed run reconciles every task it owns first.
 
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-    cmd = python("-c", "import time; time.sleep(30)")
+        The drain is monkeypatched at its boundary so the cancellation is delivered
+        at a known point — after reconciliation has begun — rather than at whatever
+        moment a sleep happened to pick.
+        """
+        from cuprum import _subprocess_wait
 
-    gate = _CleanupGate()
-    real_drain = _subprocess_wait._drain_stream_consumers
-    observed: dict[str, tuple[asyncio.Task[str | None], ...]] = {}
+        catalogue, python_program = python_catalogue()
+        python = sh.make(python_program, catalogue=catalogue)
+        cmd = python("-c", "import time; time.sleep(30)")
 
-    # Mirrors _drain_stream_consumers exactly — the fixed-length consumer pair
-    # and both keyword-only arguments — so the stand-in needs no type
-    # suppression to forward its call on.
-    async def gated_drain(
-        consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-        *,
-        pid: int | None = None,
-        observation: _StageObservation | None = None,
-    ) -> tuple[str | None, str | None]:
-        """Announce that the drain started, wait to be released, then drain."""
-        observed["consumers"] = consumers
-        gate.entered.set()
-        await gate.release.wait()
-        return await real_drain(consumers, pid=pid, observation=observation)
+        gate = _CleanupGate()
+        real_drain = _subprocess_wait._drain_stream_consumers
+        observed: dict[str, tuple[asyncio.Task[str | None], ...]] = {}
 
-    monkeypatch.setattr(_subprocess_wait, "_drain_stream_consumers", gated_drain)
+        # Mirrors _drain_stream_consumers exactly — the fixed-length consumer pair
+        # and both keyword-only arguments — so the stand-in needs no type
+        # suppression to forward its call on.
+        async def gated_drain(
+            consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+            *,
+            pid: int | None = None,
+            observation: _StageObservation | None = None,
+        ) -> tuple[str | None, str | None]:
+            """Announce that the drain started, wait to be released, then drain."""
+            observed["consumers"] = consumers
+            gate.entered.set()
+            await gate.release.wait()
+            return await real_drain(consumers, pid=pid, observation=observation)
 
-    async def run_case() -> None:
-        """Cancel the run once its drain is under way, then release it."""
-        task = asyncio.create_task(cmd.run(timeout=0.2))
-        await gate.entered.wait()
+        monkeypatch.setattr(_subprocess_wait, "_drain_stream_consumers", gated_drain)
 
-        task.cancel()
-        for _ in range(8):
-            await asyncio.sleep(0)
-        assert not task.done(), (
-            "the run unwound while its consumers were still being drained"
-        )
+        async def run_case() -> None:
+            """Cancel the run once its drain is under way, then release it."""
+            task = asyncio.create_task(cmd.run(timeout=0.2))
+            await gate.entered.wait()
 
-        gate.release.set()
-        # Narrow deliberately: the shield holds the cancellation off until
-        # cleanup finishes and then re-raises it, so that is the only outcome
-        # expected. Suppressing BaseException would let a TimeoutExpired — or
-        # anything else escaping the run — pass for the cancellation this test
-        # is about, and the assertions below would then pass on the wrong path.
-        with contextlib.suppress(asyncio.CancelledError, BaseExceptionGroup):
-            await task
-
-        for consumer in observed["consumers"]:
-            assert consumer.done(), (
-                "every stream consumer the run owned must be settled before "
-                "the cancellation propagates"
+            task.cancel()
+            for _ in range(8):
+                await asyncio.sleep(0)
+            assert not task.done(), (
+                "the run unwound while its consumers were still being drained"
             )
-        assert not pending_tasks(), f"the run left tasks pending: {pending_tasks()}"
 
-    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        asyncio.run(run_case())
+            gate.release.set()
+            # Narrow deliberately: the shield holds the cancellation off until
+            # cleanup finishes and then re-raises it, so that is the only outcome
+            # expected. Suppressing BaseException would let a TimeoutExpired — or
+            # anything else escaping the run — pass for the cancellation this test
+            # is about, and the assertions below would then pass on the wrong path.
+            with contextlib.suppress(asyncio.CancelledError, BaseExceptionGroup):
+                await task
+
+            for consumer in observed["consumers"]:
+                assert consumer.done(), (
+                    "every stream consumer the run owned must be settled before "
+                    "the cancellation propagates"
+                )
+            assert not pending_tasks(), f"the run left tasks pending: {pending_tasks()}"
+
+        with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+            asyncio.run(run_case())
 
 
 # -- Background observe-hook tasks --------------------------------------------
 
 
-def test_cancellation_during_hook_drain_leaves_no_hook_task_pending() -> None:
-    """A cancellation landing on the hook drain must still settle the hooks.
+class TestObserveHookDrain:
+    """Cancellation must not strand background observe-hook tasks."""
 
-    The observe-hook tasks are scheduled by the runner and owned by it, so
-    returning from the drain early strands one task per pending hook.
-    """
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-    cmd = python("-c", "print('hi')")
+    def test_cancellation_during_hook_drain_leaves_no_hook_task_pending(self) -> None:
+        """A cancellation landing on the hook drain must still settle the hooks.
 
-    gate = _CleanupGate()
-    started: list[str] = []
+        The observe-hook tasks are scheduled by the runner and owned by it, so
+        returning from the drain early strands one task per pending hook.
+        """
+        catalogue, python_program = python_catalogue()
+        python = sh.make(python_program, catalogue=catalogue)
+        cmd = python("-c", "print('hi')")
 
-    def blocking_hook(ev: ExecEvent) -> cabc.Awaitable[None] | None:
-        """Block the ``exit`` phase's hook task until the gate is released."""
-        if ev.phase != "exit":
-            return None
+        gate = _CleanupGate()
+        started: list[str] = []
 
-        async def wait_for_gate() -> None:
-            """Hold the hook task open until released."""
-            started.append("exit")
-            gate.entered.set()
-            await gate.release.wait()
-            gate.completed = True
+        def blocking_hook(ev: ExecEvent) -> cabc.Awaitable[None] | None:
+            """Block the ``exit`` phase's hook task until the gate is released."""
+            if ev.phase != "exit":
+                return None
 
-        return wait_for_gate()
+            async def wait_for_gate() -> None:
+                """Hold the hook task open until released."""
+                started.append("exit")
+                gate.entered.set()
+                await gate.release.wait()
+                gate.completed = True
 
-    async def run_case() -> None:
-        """Cancel while the exit hook's task is still in flight."""
-        task = asyncio.create_task(cmd.run())
-        await gate.entered.wait()
+            return wait_for_gate()
 
-        task.cancel()
-        for _ in range(8):
-            await asyncio.sleep(0)
-        assert not task.done(), (
-            "the run unwound while an observe-hook task was still in flight"
-        )
+        async def run_case() -> None:
+            """Cancel while the exit hook's task is still in flight."""
+            task = asyncio.create_task(cmd.run())
+            await gate.entered.wait()
 
-        gate.release.set()
-        # Narrow deliberately: the shield holds the cancellation off until
-        # cleanup finishes and then re-raises it, so that is the only outcome
-        # expected. Suppressing BaseException would let a TimeoutExpired — or
-        # anything else escaping the run — pass for the cancellation this test
-        # is about, and the assertions below would then pass on the wrong path.
-        with contextlib.suppress(asyncio.CancelledError, BaseExceptionGroup):
-            await task
+            task.cancel()
+            for _ in range(8):
+                await asyncio.sleep(0)
+            assert not task.done(), (
+                "the run unwound while an observe-hook task was still in flight"
+            )
 
-        assert gate.completed, "the hook task must have been allowed to finish"
-        assert not pending_tasks(), (
-            f"the run left observe-hook tasks pending: {pending_tasks()}"
-        )
+            gate.release.set()
+            # Narrow deliberately: the shield holds the cancellation off until
+            # cleanup finishes and then re-raises it, so that is the only outcome
+            # expected. Suppressing BaseException would let a TimeoutExpired — or
+            # anything else escaping the run — pass for the cancellation this test
+            # is about, and the assertions below would then pass on the wrong path.
+            with contextlib.suppress(asyncio.CancelledError, BaseExceptionGroup):
+                await task
 
-    with (
-        scoped(ScopeConfig(allowlist=frozenset([python_program]))),
-        sh.observe(blocking_hook),
-    ):
-        asyncio.run(run_case())
+            assert gate.completed, "the hook task must have been allowed to finish"
+            assert not pending_tasks(), (
+                f"the run left observe-hook tasks pending: {pending_tasks()}"
+            )
 
-    assert started == ["exit"], "the gated hook must have run exactly once"
+        with (
+            scoped(ScopeConfig(allowlist=frozenset([python_program]))),
+            sh.observe(blocking_hook),
+        ):
+            asyncio.run(run_case())
+
+        assert started == ["exit"], "the gated hook must have run exactly once"
 
 
 # -- The success path ---------------------------------------------------------
@@ -301,56 +310,60 @@ class _ConsumerBoomError(RuntimeError):
     """Raised by a stream-consumer double that fails while the run succeeds."""
 
 
-def test_failing_consumer_settles_its_sibling_before_propagating(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A consumer failure must not leave the other consumer running.
+class TestSuccessPath:
+    """Reconciliation on the path where the run itself succeeds."""
 
-    The success path gathers both consumers. Without ``return_exceptions`` the
-    first failure re-raises immediately and the sibling is never cancelled, so
-    a reader blocked on a pipe outlives the run it belonged to — the same leak
-    the timeout and cancellation paths reconcile against.
-    """
-    from cuprum import _subprocess_execution
+    def test_failing_consumer_settles_its_sibling_before_propagating(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A consumer failure must not leave the other consumer running.
 
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-    cmd = python("-c", "print('hi')")
+        The success path gathers both consumers. Without ``return_exceptions`` the
+        first failure re-raises immediately and the sibling is never cancelled, so
+        a reader blocked on a pipe outlives the run it belonged to — the same leak
+        the timeout and cancellation paths reconcile against.
+        """
+        from cuprum import _subprocess_execution
 
-    spawned: dict[str, asyncio.Task[str | None]] = {}
+        catalogue, python_program = python_catalogue()
+        python = sh.make(python_program, catalogue=catalogue)
+        cmd = python("-c", "print('hi')")
 
-    def failing_consumers(
-        *_args: object, **_kwargs: object
-    ) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
-        """Return one consumer that fails and one that blocks indefinitely."""
+        spawned: dict[str, asyncio.Task[str | None]] = {}
 
-        async def boom() -> str | None:
-            """Fail the way a broken reader would."""
-            await asyncio.sleep(0)
-            raise _ConsumerBoomError
+        def failing_consumers(
+            *_args: object, **_kwargs: object
+        ) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
+            """Return one consumer that fails and one that blocks indefinitely."""
 
-        async def blocked() -> str | None:
-            """Block as a reader wedged on a pipe that never reaches EOF."""
-            await asyncio.Event().wait()
-            return None
+            async def boom() -> str | None:
+                """Fail the way a broken reader would."""
+                await asyncio.sleep(0)
+                raise _ConsumerBoomError
 
-        spawned["boom"] = asyncio.create_task(boom())
-        spawned["blocked"] = asyncio.create_task(blocked())
-        return spawned["boom"], spawned["blocked"]
+            async def blocked() -> str | None:
+                """Block as a reader wedged on a pipe that never reaches EOF."""
+                await asyncio.Event().wait()
+                return None
 
-    monkeypatch.setattr(
-        _subprocess_execution, "_spawn_stream_consumers", failing_consumers
-    )
+            spawned["boom"] = asyncio.create_task(boom())
+            spawned["blocked"] = asyncio.create_task(blocked())
+            return spawned["boom"], spawned["blocked"]
 
-    async def run_case() -> None:
-        """Run to completion and inspect what the consumer failure left behind."""
-        with pytest.raises(_ConsumerBoomError):
-            await cmd.run()
-
-        assert spawned["blocked"].done(), (
-            "the surviving consumer was left running after its sibling failed"
+        monkeypatch.setattr(
+            _subprocess_execution, "_spawn_stream_consumers", failing_consumers
         )
-        assert not pending_tasks(), f"the run left tasks pending: {pending_tasks()}"
 
-    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        asyncio.run(run_case())
+        async def run_case() -> None:
+            """Run to completion and inspect what the consumer failure left behind."""
+            with pytest.raises(_ConsumerBoomError):
+                await cmd.run()
+
+            assert spawned["blocked"].done(), (
+                "the surviving consumer was left running after its sibling failed"
+            )
+            assert not pending_tasks(), f"the run left tasks pending: {pending_tasks()}"
+
+        with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+            asyncio.run(run_case())

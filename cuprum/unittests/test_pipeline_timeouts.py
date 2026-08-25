@@ -510,6 +510,62 @@ def test_zero_timeout_reconciles_pipe_tasks() -> None:
                 os.kill(pid, signal.SIGKILL)
 
 
+def test_collector_holds_its_cancellation_until_reconciliation_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_collect_pipeline_inputs`` must not unwind mid-reconciliation.
+
+    Driven through the collector itself rather than the primitive, with the
+    reconciliation gated at its boundary so the cancellation is delivered while
+    the ``finally`` is genuinely in flight. Unshielded, the cancellation would
+    reach the gated coroutine and the collector would unwind immediately,
+    leaving the pumps it owns with nobody to await them.
+    """
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    gate = asyncio.Event()
+    entered = asyncio.Event()
+    reconciled = False
+
+    real_reconcile = _pipeline_collect._reconcile_pipe_tasks
+
+    async def gated_reconcile(pipe_tasks: list[asyncio.Task[None]]) -> None:
+        """Announce entry, block until released, then reconcile for real."""
+        nonlocal reconciled
+        entered.set()
+        await gate.wait()
+        await real_reconcile(pipe_tasks)
+        reconciled = True
+
+    monkeypatch.setattr(_pipeline_collect, "_reconcile_pipe_tasks", gated_reconcile)
+
+    pipeline = python("-c", "print('a')") | python("-c", "import sys; sys.stdin.read()")
+
+    async def run_case() -> None:
+        """Cancel the collector while its reconciliation is gated."""
+        task = asyncio.create_task(pipeline.run(output=RunOutputOptions(capture=False)))
+        await entered.wait()
+
+        assert task.cancel(), "the cancellation must reach a live collector"
+        for _ in range(8):
+            await asyncio.sleep(0)
+        assert not task.done(), (
+            "the collector unwound while its reconciliation was still running, "
+            "so the pumps it owns would be left with nobody to await them"
+        )
+
+        gate.set()
+        with contextlib.suppress(asyncio.CancelledError, BaseExceptionGroup):
+            await task
+        assert reconciled, "the reconciliation must have run to completion"
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([python_program]))),
+        sh.observe(lambda _event: None),
+    ):
+        asyncio.run(run_case())
+
+
 def test_pipe_task_reconciliation_survives_repeated_cancellation() -> None:
     """Repeated cancellation must not abandon the inter-stage pumps.
 
@@ -518,10 +574,11 @@ def test_pipe_task_reconciliation_survives_repeated_cancellation() -> None:
     many cancellations arrive, no pump is left running once the cancellation
     propagates, because nothing downstream would await it.
 
-    The reconciliation is additionally shielded, matching every other cleanup
-    path here. That shield is defensive rather than load-bearing: ``gather``
-    with ``return_exceptions`` awaits its children even when the gather itself
-    is cancelled, so this test passes with or without it.
+    This holds with or without the shield, because ``gather`` with
+    ``return_exceptions`` awaits its children even when the gather itself is
+    cancelled. What the shield buys is covered by
+    :func:`test_collector_holds_its_cancellation_until_reconciliation_finishes`,
+    which gates the reconciliation so the collector is caught mid-``finally``.
     """
 
     async def run_case() -> None:

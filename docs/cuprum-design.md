@@ -1490,9 +1490,16 @@ design decisions guide these adapters:
   and are ignored: no span is created for such a `start`, and their `stdout`/
   `stderr`/`exit` events are dropped rather than guessed from PID.
 - Output lines can optionally be recorded as span events (controlled by
-  `record_output` parameter).
+  `record_output` parameter). `stdin_error`, `timeout`, and `teardown_error`
+  are also recorded as span events, unconditionally, without ending the span.
 - Span status is set based on exit code (OK for 0, ERROR otherwise).
 - Pipeline stages create separate spans with `pipeline_stage_index` attribute.
+- The active-span registry is bounded (1024 entries) and evicts by recency of
+  activity rather than arrival order, because not every execution reaches
+  `exit` (cancellation and stdin-writer failures can leave a span open
+  indefinitely otherwise). Each eviction is logged at `WARNING` with counts
+  only, since an evicted span is ended as failed while its execution may
+  still be running.
 
 **Structured logging adapter specifics:**
 

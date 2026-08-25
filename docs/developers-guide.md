@@ -524,11 +524,11 @@ synchronization of its own.
 **Phase dispatch.** `TracingHook.__call__` matches every `ExecEvent.phase` in a
 single `match`, and each phase falls into exactly one of four categories: span
 lifecycle (`start` opens a span, `exit` ends it), span event (`stdout`,
-`stderr`, and `stdin_error` record a `cuprum.<phase>` event on the already-open
-span), deliberately ignored (`plan` and `stdin` carry no tracing semantics), or
-unhandled (the `case _` logs via `_log_unhandled_phase` instead of failing
-silently or raising). A new phase should be slotted into this policy rather
-than given an ad-hoc side path.
+`stderr`, `stdin_error`, `timeout`, and `teardown_error` record a
+`cuprum.<phase>` event on the already-open span), deliberately ignored (`plan`
+and `stdin` carry no tracing semantics), or unhandled (the `case _` logs via
+`_log_unhandled_phase` instead of failing silently or raising). A new phase
+should be slotted into this policy rather than given an ad-hoc side path.
 
 **State model.** `TracingHook` keeps `_active_spans`, a dictionary keyed by
 `ExecEvent.exec_id` (the per-execution correlation token), guarded by an
@@ -541,19 +541,27 @@ internal `threading.Lock`:
   the lock, so an arbitrary `Span` that blocks on I/O in `set_status()`/`end()`
   cannot stall other executions' handlers; each replaced span is still ended
   exactly once because it is already unreachable via the map.
-- **stdout/stderr/stdin_error** all route through the single
-  `_record_span_event` helper: it looks up the span for the event's `exec_id`
-  under the lock, then, outside the lock, copies whichever of the `line`,
-  `operation`, `error_type`, and `note` fields are set on the event onto a
-  `cuprum.<phase>` span event (for example `cuprum.stdout` or
-  `cuprum.stdin_error`). New event-recording phases should extend this shared
-  field set rather than add a bespoke per-phase method. The helper never sets
-  the span status or ends the span — only `exit` does that — so a `stdin_error`
-  (the child process may legitimately ignore its stdin) is recorded as a
-  diagnostic without failing or closing the execution span. `stdout`/`stderr`
-  recording is gated by the hook's `record_output` flag; `stdin_error` is
-  recorded unconditionally, so a stdin-write failure stays diagnosable even
-  when line-by-line output recording is switched off.
+- **stdout/stderr/stdin_error/timeout/teardown_error** all route through the
+  single `_record_span_event` helper: it looks up the span for the event's
+  `exec_id` under the lock — moving it to the most-recently-active end of the
+  registry as it does so, see "Bounded span registry" below — then, outside
+  the lock, copies whichever of the `line`, `operation`, `error_type`, `note`,
+  `timeout_s`, and `timeout_mode` fields are set on the event onto a
+  `cuprum.<phase>` span event (for example `cuprum.stdout`, `cuprum.timeout`,
+  or `cuprum.teardown_error`). New event-recording phases should extend this
+  shared field set rather than add a bespoke per-phase method. The helper
+  never sets the span status or ends the span — only `exit` does that — so
+  `stdin_error` (the child process may legitimately ignore its stdin),
+  `timeout`, and `teardown_error` are all recorded as diagnostics without
+  failing or closing the execution span. `stdout`/`stderr` recording is gated
+  by the hook's `record_output` flag; the other three are recorded
+  unconditionally, so a stdin-write failure, a timeout, or a teardown failure
+  stays diagnosable even when line-by-line output recording is switched off.
+  Because `teardown_error` can be an execution's last event — cleanup also
+  runs on external cancellation and on a stdin-writer failure, and on those
+  paths the original exception propagates with no `exit` — a span opened by
+  `start` can otherwise be left open indefinitely; that is what the bounded
+  registry below exists to contain.
 - **exit** removes (pops) the span for the event's `exec_id` under the lock,
   then sets the exit attributes and status and ends the span outside the lock.
 
@@ -562,12 +570,40 @@ output/exit from an earlier execution, from attaching to a later execution's
 span. `pid` is retained only as the `cuprum.pid` span attribute for
 observability.
 
+**Bounded span registry.** `_active_spans` is capped at `_MAX_ACTIVE_SPANS`
+(1024) because not every execution reaches `exit`: as noted above, cleanup
+also runs on external cancellation and on a stdin-writer failure, and on those
+paths the original exception propagates with no `exit`, so a `teardown_error`
+can be an execution's last event. Without a cap, those entries would
+accumulate for the lifetime of the hook. `_active_spans` is a
+`collections.OrderedDict`, and `_record_span_event` calls `move_to_end`
+whenever one of a span's events lands, so ordering reflects recency of
+*activity*, not of arrival — a long-running execution that is still producing
+output is not evicted ahead of one that fell silent. This is a heuristic, not
+a guarantee: a live but silent execution can still be evicted. When the cap
+is exceeded, `_evict_overflow_locked` detaches the overflow from the front of
+the registry with `popitem(last=False)`; each evicted span is then marked
+failed (`set_status(ok=False)`) and ended *outside* the lifecycle lock, for
+the same reason the stale-span replacement in `start` is — an arbitrary
+`Span` may block on I/O in those calls, and holding the lock across them
+would serialize every other execution's handler.
+
+Every eviction batch is reported once via `_log_span_eviction`
+(`cuprum/adapters/_support.py`), which logs a `WARNING` on the
+`cuprum.adapters` logger with message `span_registry_overflow` and structured
+extras `cuprum_adapter`, `cuprum_spans_evicted`, and `cuprum_spans_active`.
+Only counts are recorded — no span attributes (which carry command payloads)
+and no execution tokens (which are unbounded in cardinality). `WARNING`
+rather than `DEBUG` because an evicted span is ended as failed while its
+execution may still be running: the trace it would have carried is lost, and
+without a signal that loss is undiagnosable.
+
 **Legacy or manual events.** An event whose `exec_id` is `None` (a legacy or
 hand-constructed event) cannot be correlated, so it is ignored rather than
-guessed from PID: a `start` without an `exec_id` creates no span, and `stdout`/
-`stderr`/`stdin_error`/`exit` without one are dropped. Every event Cuprum
-itself emits carries an `exec_id`, so this only affects hand-built event
-streams.
+guessed from PID: a `start` without an `exec_id` creates no span, and
+`stdout`/`stderr`/`stdin_error`/`timeout`/`teardown_error`/`exit` without one
+are dropped. Every event Cuprum itself emits carries an `exec_id`, so this
+only affects hand-built event streams.
 
 ## Canonical `_TokenRegistration` handle base
 
