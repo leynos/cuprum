@@ -274,11 +274,15 @@ class TestLoggingFailFast:
         hook = structured_logging_hook()
         caplog.set_level(logging.DEBUG, logger="cuprum.exec")
 
-        hook(_fail_fast_event())
+        event = _fail_fast_event()
+        hook(event)
 
         fields = vars(caplog.records[0])
         assert (fields["cuprum_stage_index"], fields["cuprum_stage_count"]) == (1, 4), (
             "the log extras must project the stage position and pipeline width"
+        )
+        assert fields["cuprum_exec_id"] == event.exec_id, (
+            "the log extras must preserve the execution correlation token"
         )
 
     def test_the_level_is_configurable(

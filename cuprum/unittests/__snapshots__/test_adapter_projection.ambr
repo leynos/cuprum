@@ -44,6 +44,7 @@
     'logging_extra': dict({
       'cuprum_cwd': '<cwd>',
       'cuprum_duration_s': '<duration_s>',
+      'cuprum_exec_id': None,
       'cuprum_exit_code': 3,
       'cuprum_phase': 'pipeline_fail_fast',
       'cuprum_program': 'echo',

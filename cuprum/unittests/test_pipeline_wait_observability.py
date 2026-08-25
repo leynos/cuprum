@@ -23,6 +23,7 @@ if typ.TYPE_CHECKING:
 class _CompletionRecordFields(typ.TypedDict):
     """Structured extras present on every pipeline-wait completion record."""
 
+    cuprum_action: str
     cuprum_stage_index: int
     cuprum_stage_count: int
     cuprum_exit_code: int
@@ -69,14 +70,22 @@ class TestCompletionObservability:
         expected_exec_id = str(observations[0].exec_id)
         for record in action_records:
             fields = typ.cast("_CompletionRecordFields", vars(record))
+            action = fields["cuprum_action"]
             assert (
                 fields["cuprum_stage_index"],
                 fields["cuprum_stage_count"],
                 fields["cuprum_exit_code"],
                 fields["cuprum_duration_s"],
                 fields["cuprum_exec_id"],
-            ) == (0, 3, 4, 12.5, expected_exec_id)
+            ) == (0, 3, 4, 12.5, expected_exec_id), (
+                f"{action!r} must preserve the shared completion fields"
+            )
         outcome = action_records[-1]
         outcome_fields = typ.cast("_TerminationOutcomeFields", vars(outcome))
-        assert outcome_fields["cuprum_terminated_stage_count"] == 2
-        assert outcome_fields["cuprum_termination_duration_s"] >= 0.0
+        action = outcome_fields["cuprum_action"]
+        assert outcome_fields["cuprum_terminated_stage_count"] == 2, (
+            f"{action!r} must report the terminated-stage count"
+        )
+        assert outcome_fields["cuprum_termination_duration_s"] >= 0.0, (
+            f"{action!r} must report a non-negative termination duration"
+        )

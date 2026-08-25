@@ -346,8 +346,12 @@ class TestPipelineTerminationOutcomes:
         assert outcomes == (True, False), (
             "the selected target that settled before teardown must report false"
         )
-        assert scenario.confirmed_process.terminate_calls == 1
-        assert scenario.late_process.terminate_calls == 0
+        assert scenario.confirmed_process.terminate_calls == 1, (
+            "the confirmed target must receive one termination request"
+        )
+        assert scenario.late_process.terminate_calls == 0, (
+            "the target that settles before teardown must not be terminated"
+        )
         assert scenario.order == [
             "pipeline_fail_fast_termination",
             "confirmed-termination",
@@ -361,7 +365,9 @@ class TestPipelineTerminationOutcomes:
         assert not outcome_fields & termination_record.keys(), (
             "the termination-start record must not gain outcome-only fields"
         )
-        assert outcome_record["cuprum_terminated_stage_count"] == 1
+        assert outcome_record["cuprum_terminated_stage_count"] == 1, (
+            "only the target whose teardown confirms exit may be counted"
+        )
         duration = outcome_record["cuprum_termination_duration_s"]
-        assert isinstance(duration, float)
-        assert duration >= 0.0
+        assert isinstance(duration, float), "termination duration must be a float"
+        assert duration >= 0.0, "termination duration must be non-negative"

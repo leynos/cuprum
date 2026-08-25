@@ -276,10 +276,10 @@ tracing, and `structured_logging_hook()` project that event through the
 configurable event adapter channel without requiring log parsing.
 
 The event carries the failing stage's index, pipeline width, exit code,
-duration, and execution token. It is sanitized: `argv` is empty, `cwd` and
-`env` are `None`, and `tags` is empty; only the program, trusted configured
-project, typed decision fields,
-and `ExecEvent.exec_id` remain. All projections consume this same sanitized
+duration, and execution token. It is sanitized by removing caller-controlled
+`argv`, `cwd`, `env`, and `tags`; it retains the runtime fields `program`,
+`pid`, `timestamp`, trusted configured project, typed decision fields, and
+`ExecEvent.exec_id`. All projections consume this same sanitized
 event, so they do not need to parse log text. The metrics adapter labels
 `cuprum_pipeline_fail_fast_total` with `program` and `project` alone; `project`
 comes from the trusted configured project and falls back to `unknown` only when
@@ -993,7 +993,7 @@ where per-incident detail belongs. A counter spike therefore cannot be joined
 to a span through the metric: when reading the observe event, use
 `ExecEvent.exec_id`; when reading its matching structured log record, use
 `cuprum_exec_id`. Both fields carry the same existing execution token, which
-you can then use to find the individual stage spans behind the spike.
+identifies the individual stage spans behind the spike.
 
 To integrate with a real metrics library like `prometheus_client`, implement the
 `MetricsCollector` protocol:

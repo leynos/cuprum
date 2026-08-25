@@ -159,7 +159,9 @@ class TestAdapterProjection:
     def _assert_logging_projection(event: ExecEvent, canonical: set[str]) -> None:
         """Assert the logging projection preserves its canonical fields."""
         expected_log_fields = (
-            canonical - {"argv"} if event.phase == "pipeline_fail_fast" else canonical
+            (canonical - {"argv"}) | {"exec_id"}
+            if event.phase == "pipeline_fail_fast"
+            else canonical
         )
 
         extra_keys = {
@@ -172,6 +174,9 @@ class TestAdapterProjection:
             "removing their backend prefix"
         )
         if event.phase == "pipeline_fail_fast":
+            assert _build_extra(event)["cuprum_exec_id"] == event.exec_id, (
+                "fail-fast extras must preserve the execution correlation token"
+            )
             assert "cuprum_argv" not in _build_extra(event), (
                 "fail-fast extras must omit the raw argument vector"
             )

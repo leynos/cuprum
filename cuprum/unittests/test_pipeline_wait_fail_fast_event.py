@@ -179,12 +179,13 @@ class TestFailFastEventEmission:
         apply_completions(state, [(0, 4)])
 
         (event,) = _fail_fast_events(_Driven(tuple(events), observations, ()))
-        assert (event.argv, event.cwd, event.env, dict(event.tags)) == (
-            (),
-            None,
-            None,
-            {},
-        )
+        for field, value, expected in (
+            ("argv", event.argv, ()),
+            ("cwd", event.cwd, None),
+            ("env", event.env, None),
+            ("tags", dict(event.tags), {}),
+        ):
+            assert value == expected, f"sanitized event leaked {field}: {event!r}"
         assert confidential_marker not in repr(event), (
             "the emitted fail-fast event must not retain execution secrets"
         )

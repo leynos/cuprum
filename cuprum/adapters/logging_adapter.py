@@ -169,6 +169,7 @@ def _build_extra(event: ExecEvent) -> dict[str, object]:
         extra.update(
             (name, value) for name, value in common_fields if name != "cuprum_argv"
         )
+        extra["cuprum_exec_id"] = event.exec_id
     else:
         extra.update(common_fields)
         extra["cuprum_tags"] = dict(event.tags)
