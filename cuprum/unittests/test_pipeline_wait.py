@@ -186,7 +186,7 @@ def test_wait_for_pipeline_accepts_published_returncode() -> None:
                 typ.cast("list[asyncio.subprocess.Process]", [process]),
                 pipe_tasks=[],
                 cancel_grace=0.01,
-                started_at=[0.0],
+                stages=_StageWaitContext(started_at=(0.0,)),
             ),
             timeout=0.5,
         ),
@@ -315,12 +315,12 @@ class _FailFastScenario:
         pytest.param(
             _FailFastScenario(
                 exit_codes=(0, 0, 5),
-                ready_stages=frozenset([2]),
+                ready_stages=frozenset([0, 1, 2]),
                 expected_failure_index=2,
-                expected_exit_codes=(-15, -15, 5),
-                terminated_stages=frozenset([0, 1]),
+                expected_exit_codes=(0, 0, 5),
+                terminated_stages=frozenset(),
             ),
-            id="last-stage-failure-terminates-upstream",
+            id="last-stage-failure-does-not-terminate",
         ),
     ],
 )
@@ -329,8 +329,8 @@ def test_wait_for_pipeline_fail_fast_scenarios(
 ) -> None:
     """Validate fail-fast termination behaviour across different failure scenarios.
 
-    Tests that:
-    - Any failed stage terminates every other still-running stage
+    A non-final failure terminates every other still-running stage, whereas a
+    final-stage failure never requests fail-fast termination.
     """
     p0, p1, p2, result = asyncio.run(
         _exercise_wait_for_pipeline(

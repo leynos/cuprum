@@ -407,7 +407,6 @@ If the awaiting task is cancelled while a command is running, Cuprum sends
 `SIGTERM` to the subprocess, waits for a short grace period, and then escalates
 to `SIGKILL` to ensure the child process is cleaned up.
 
-
 ### Cancellation during teardown
 
 Timeout and fail-fast teardown survives repeated caller cancellation. Cuprum

@@ -282,7 +282,7 @@ def then_pipeline_exposes_stage_metadata_on_fail_fast_failure(
 def then_pipeline_exposes_stage_metadata_on_final_stage_failure(
     pipeline_result: PipelineResult,
 ) -> None:
-    """Stage results surface the failing final stage while still reporting metadata."""
+    """Final-stage failures report their result without fail-fast termination."""
     assert len(pipeline_result.stages) == 3, "Expected len(pipeline_result.stages) == 3"
     assert pipeline_result.ok is False, "Expected pipeline_result.ok is False"
     assert pipeline_result.failure is pipeline_result.stages[-1], (
@@ -291,11 +291,11 @@ def then_pipeline_exposes_stage_metadata_on_final_stage_failure(
     assert pipeline_result.failure_index == len(pipeline_result.stages) - 1, (
         "Expected pipeline_result.failure_index == len(pipeline_result.stages) - 1"
     )
-    assert pipeline_result.stages[0].exit_code == -15, (
-        "Expected final-stage failure to terminate stage 0"
+    assert pipeline_result.stages[0].exit_code == 0, (
+        "Expected final-stage failure not to terminate stage 0"
     )
-    assert pipeline_result.stages[1].exit_code == -15, (
-        "Expected final-stage failure to terminate stage 1"
+    assert pipeline_result.stages[1].exit_code == 0, (
+        "Expected final-stage failure not to terminate stage 1"
     )
     assert pipeline_result.stages[2].exit_code != 0, (
         "Expected pipeline_result.stages[2].exit_code != 0"

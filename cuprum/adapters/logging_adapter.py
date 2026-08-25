@@ -68,6 +68,7 @@ class LogLevels:
     exit_level: int = logging.INFO
     fail_fast_level: int = logging.WARNING
 
+
 class _StructuredLoggingHook:
     """Render execution events and pipeline-wait records through one logger."""
 
@@ -105,6 +106,8 @@ class _StructuredLoggingHook:
             "exit": self._levels.exit_level,
             "pipeline_fail_fast": self._levels.fail_fast_level,
         }.get(phase, logging.DEBUG)
+
+
 def structured_logging_hook(
     *,
     logger: logging.Logger | None = None,
@@ -205,6 +208,8 @@ def _format_fail_fast_message(event: ExecEvent) -> str:
         f"exit_code={event.exit_code} "
         f"duration_s={_format_duration(event.duration_s)}"
     )
+
+
 def _format_message(event: ExecEvent) -> str:
     """Format a human-readable log message for the event."""
     program = event.program
