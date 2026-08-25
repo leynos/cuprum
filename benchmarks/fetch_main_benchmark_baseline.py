@@ -27,51 +27,7 @@ GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_TOKEN_ENV_VAR = "GITHUB_TOKEN"  # noqa: S105 - env var name, not a credential
 MAIN_BASELINE_NOT_FOUND_EXIT_CODE = 3
 
-
-import json
-import time
-import urllib.error
-import urllib.request
-
-r"""Download the latest successful `main` benchmark baseline artefact.
-Purpose
--------
-The benchmark ratchet compares a pull request's benchmark results against the
-newest baseline that `main` produced. This module finds and retrieves that
-baseline: it queries the GitHub Actions REST API for the most recent successful
-workflow run on the target branch, selects the named artefact attached to that
-run, downloads the archive, and extracts its files into an output directory.
-Continuous-integration boundary
--------------------------------
-The `benchmark-ratchet` job in `.github/workflows/ci.yml` is the only caller.
-That job runs this script before the benchmarks themselves, then feeds the
-extracted files to the ratchet comparison. Exit code 0 means a baseline was
-extracted; `MAIN_BASELINE_NOT_FOUND_EXIT_CODE` (3) means no successful `main`
-run has published the artefact yet, which the job treats as a bootstrap case
-rather than a failure; any other non-zero exit is a genuine error and stops the
-job. Authentication uses the token named by `--token-env`, defaulting to
-`GITHUB_TOKEN`, which the workflow supplies from `github.token`.
-Usage
------
-Run the module directly, naming the repository, workflow, artefact, and
-destination:
-    uv run python benchmarks/fetch_main_benchmark_baseline.py \
-        --repository owner/name \
-        --workflow ci.yml \
-        --artifact-name benchmark-ratchet-main-baseline \
-        --output-dir /tmp/main-baseline
-`--branch`, `--event`, and `--token-env` narrow the run search and select the
-credential; run with `--help` for their defaults.
-"""
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-# The CLI description is deliberately separate from ``__doc__``: the module
-# docstring documents the script for readers, while ``--help`` stays a single
-# stable line.
 _CLI_DESCRIPTION = "Download the latest successful `main` benchmark baseline artefact."
-GITHUB_API_BASE_URL = "https://api.github.com"
-GITHUB_TOKEN_ENV_VAR = "GITHUB_TOKEN"  # noqa: S105 - env var name, not a credential
-MAIN_BASELINE_NOT_FOUND_EXIT_CODE = 3
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -288,6 +244,7 @@ def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--artifact-name",
+        dest="artefact_name",
         required=True,
         help="Artefact name to download from the latest successful run.",
     )

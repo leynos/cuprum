@@ -18,7 +18,6 @@ failure preserved, grouping after-hook and task failures into a
 
 from __future__ import annotations
 
-import time
 import typing as typ
 from pathlib import Path
 
@@ -74,10 +73,6 @@ _MIN_PIPELINE_STAGES = 2
 _PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
 
 
-import asyncio
-import sys
-from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
-
 """Internal pipeline execution coordination and fail-fast semantics.
 This module is the private machinery behind ``cuprum.sh``'s
 ``Pipeline.run``/``run_sync``. It ties together allowlist enforcement
@@ -103,6 +98,48 @@ This module is the private machinery behind ``cuprum.sh``'s
 ``Pipeline.run``/``run_sync``. It ties together allowlist enforcement
 completion waiting with optional timeouts, and per-stage
 ``CommandResult`` assembly. It exists chiefly to centralise
+finalization: when a stage fails or an after-hook raises, pending
+observe-hook tasks must still be drained and every independent
+failure preserved, grouping after-hook and task failures into a
+``cuprum._observability``, and
+``cuprum.context``, and is invoked by ``cuprum.sh`` and
+``cuprum._subprocess_execution``/``_process_lifecycle``.
+"""
+if typ.TYPE_CHECKING:
+    import asyncio
+    from cuprum.context import CuprumContext
+    from cuprum.sh import CommandResult, PipelineResult, SafeCmd
+__all__ = [
+]
+_MIN_PIPELINE_STAGES = 2
+_PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
+"""Internal pipeline execution coordination and fail-fast semantics.
+This module is the private machinery behind ``cuprum.sh``'s
+``Pipeline.run``/``run_sync``. It ties together allowlist enforcement
+completion waiting with optional timeouts, and per-stage
+``CommandResult`` assembly. It exists chiefly to centralize
+finalization: when a stage fails or an after-hook raises, pending
+observe-hook tasks must still be drained and every independent
+failure preserved, grouping after-hook and task failures into a
+``cuprum._observability``, and
+``cuprum.context``, and is invoked by ``cuprum.sh`` and
+``cuprum._subprocess_execution``/``_process_lifecycle``.
+"""
+if typ.TYPE_CHECKING:
+    import asyncio
+    from cuprum.context import CuprumContext
+    from cuprum.sh import CommandResult, PipelineResult, SafeCmd
+__all__ = [
+]
+_MIN_PIPELINE_STAGES = 2
+_PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
+
+
+"""Internal pipeline execution coordination and fail-fast semantics.
+This module is the private machinery behind ``cuprum.sh``'s
+``Pipeline.run``/``run_sync``. It ties together allowlist enforcement
+completion waiting with optional timeouts, and per-stage
+``CommandResult`` assembly. It exists chiefly to centralize
 finalization: when a stage fails or an after-hook raises, pending
 observe-hook tasks must still be drained and every independent
 failure preserved, grouping after-hook and task failures into a

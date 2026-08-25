@@ -120,6 +120,7 @@ def _parse_metadata(raw_metadata: str) -> WheelMetadata:
         "classifiers": sorted(headers.get("Classifier", [])),
     }
 
+
 def _normalize_wheel_entry(name: str) -> str:
     """Normalize platform/version wheel entry names to stable placeholders."""
     if _EXTENSION_MODULE_RE.match(name):
@@ -130,16 +131,8 @@ def _normalize_wheel_entry(name: str) -> str:
         if name.endswith(suffix):
             return normalized
     return name
-def _normalize_wheel_entry(name: str) -> str:
-    """Normalize platform/version wheel entry names to stable placeholders."""
-    if _EXTENSION_MODULE_RE.match(name):
-        return "cuprum/_rust_backend_native.cpython-<platform>.so"
-    if "/sboms/" in name:
-        return "cuprum-<version>.dist-info/sboms/<sbom>.cyclonedx.json"
-    for suffix, normalized in _DIST_INFO_SUFFIXES.items():
-        if name.endswith(suffix):
-            return normalized
-    return name
+
+
 def _locate_dist_info_wheel(entry_names: list[str]) -> str:
     """Return the .dist-info/WHEEL entry name from a wheel archive's namelist."""
     wheel_name = next(

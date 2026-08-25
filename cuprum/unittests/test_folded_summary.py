@@ -45,6 +45,8 @@ def _summarize_folded(
         summary["top_inclusive_frames"],
     )
     return summary, top_leaf, top_inclusive, summary_path
+
+
 @pytest.mark.parametrize(
     ("content", "description"),
     [
@@ -362,29 +364,3 @@ def test_inclusive_counts_deduplicate_within_each_stack(
         frame = entry["frame"]
         assert isinstance(frame, str)
         assert entry["inclusive_samples"] == expected[frame]
-
-def _summarize_folded(
-    tmp_path: pth.Path,
-    content: str,
-) -> tuple[
-    dict[str, object],
-    list[dict[str, object]],
-    list[dict[str, object]],
-    pth.Path,
-]:
-    """Write a folded file, run summarize_folded_file, and return parsed results."""
-    folded = tmp_path / "stacks.folded"
-    folded.write_text(content)
-    summary_path = tmp_path / "summary.json"
-    summary = summarize_folded_file(
-        folded,
-        output=summary_path,
-        limit=5,
-        example_limit=2,
-    )
-    top_leaf = typ.cast("list[dict[str, object]]", summary["top_leaf_frames"])
-    top_inclusive = typ.cast(
-        "list[dict[str, object]]",
-        summary["top_inclusive_frames"],
-    )
-    return summary, top_leaf, top_inclusive, summary_path

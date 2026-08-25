@@ -243,7 +243,10 @@ def test_spelling_gate_detects_plain_british_spelling(
         (".md", "Use `--artifact-name` to organize output.\n"),
         (".md", _spelling_fixture("Call `organi", "se` on the upstream handle.\n")),
         (".md", _spelling_fixture("```text\norgani", "se\n```\n")),
-        (".py", 'url = "https://api.github.test/actions/runs/1/artifacts?per_page=1"\n'),
+        (
+            ".py",
+            'url = "https://api.github.test/actions/runs/1/artifacts?per_page=1"\n',
+        ),
         (".rs", 'const KEY: &str = "artifacts";\n'),
         (".py", 'mappings["organise"] = "organize"\n'),
         (".py", 'correction = ("teh", "the")\n'),
@@ -450,9 +453,7 @@ def test_render_and_write_are_deterministic_valid_toml(
     assert rendered_config["type"]["markdown"]["extend-ignore-re"] == [
         r"`[^`\n]+`",
         r"(?s)```.*?```",
-    ], (
-        "code-span and fenced-block patterns must be Markdown-only"
-    )
+    ], "code-span and fenced-block patterns must be Markdown-only"
     assert list(output.parent.glob(".typos.toml.*")) == [], (
         "the atomic write must leave no temporary files behind"
     )

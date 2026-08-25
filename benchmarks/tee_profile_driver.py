@@ -200,7 +200,7 @@ def main() -> int:
     Raises
     ------
     ValueError
-        If the parsed subcommand is not recognised.
+        If the parsed subcommand is not recognized.
     """
     args = _base_parser().parse_args()
     config = _config_from_args(args)

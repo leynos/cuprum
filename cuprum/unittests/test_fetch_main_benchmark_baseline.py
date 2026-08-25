@@ -139,6 +139,7 @@ def test_extract_artefact_archive_rejects_path_traversal(tmp_path: pth.Path) -> 
             output_dir=tmp_path,
         )
 
+
 def test_load_json_response_retries_transient_urlopen_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
