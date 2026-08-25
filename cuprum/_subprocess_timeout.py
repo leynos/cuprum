@@ -11,14 +11,13 @@ import dataclasses as dc
 import time
 import typing as typ
 
-from cuprum._pipeline_internals import _EventDetails
-from cuprum._pipeline_types import _ExecutionInvariantError
+from cuprum._pipeline_types import _EventDetails, _ExecutionInvariantError
 from cuprum._subprocess_context import _sh_module
 
 if typ.TYPE_CHECKING:
     import asyncio
 
-    from cuprum._pipeline_internals import _StageObservation
+    from cuprum._pipeline_types import _StageObservation
     from cuprum._subprocess_execution import _SubprocessExecution
 
 

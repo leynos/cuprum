@@ -15,7 +15,7 @@ import time
 import typing as typ
 
 from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
-from cuprum.events import ExecEvent, new_exec_id
+from cuprum.events import ExecEvent, ExecPhase, TimeoutMode, new_exec_id
 
 
 class _ExecutionInvariantError(RuntimeError):
@@ -54,6 +54,8 @@ class _EventDetails:
     byte_count: int | None = None
     operation: str | None = None
     error_type: str | None = None
+    timeout_s: float | None = None
+    timeout_mode: TimeoutMode | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -73,15 +75,7 @@ class _StageObservation:
 
     def emit(
         self,
-        phase: typ.Literal[
-            "plan",
-            "start",
-            "stdout",
-            "stderr",
-            "exit",
-            "stdin",
-            "stdin_error",
-        ],
+        phase: ExecPhase,
         details: _EventDetails,
     ) -> None:
         """Emit an observe event for ``phase`` when observe hooks are set."""
@@ -103,6 +97,8 @@ class _StageObservation:
             byte_count=details.byte_count,
             operation=details.operation,
             error_type=details.error_type,
+            timeout_s=details.timeout_s,
+            timeout_mode=details.timeout_mode,
             exec_id=self.exec_id,
         )
         try:
@@ -120,6 +116,19 @@ class _PipelineStageResultInputs:
     wait_result: _PipelineWaitResult
     stderr_by_stage: tuple[str | None, ...]
     final_stdout: str | None
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _PipelineObservers:
+    """Per-stage observations and the observe-hook tasks they schedule.
+
+    The tasks live alongside the observations because every stage shares one
+    list: :meth:`_StageObservation.emit` appends to it, and the runner drains
+    that single collection on the way out however the pipeline ends.
+    """
+
+    observations: tuple[_StageObservation, ...]
+    pending_tasks: list[asyncio.Task[None]]
 
 
 @dc.dataclass(frozen=True, slots=True)

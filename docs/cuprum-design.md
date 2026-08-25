@@ -774,9 +774,12 @@ Internally, command execution can be described in terms of events:
 - `stdin` – bytes written to the child's standard input, with a byte count;
 - `stdin_error` – a standard-input write or close failed, with the failing
   operation and the raised error's type;
+- `timeout` – a run exceeded its deadline;
+- `teardown_error` – a stream consumer drained with an unexpected error
+  during cleanup;
 - `exit` – process finished, with exit code and duration.
 
-These seven phases are the whole of `ExecPhase`; there is no other value a
+These nine phases are the whole of `ExecPhase`; there is no other value a
 hook can receive.
 
 These events are surfaced to user code via hooks. A typical hook signature
@@ -786,7 +789,8 @@ might be:
 @dataclass
 class ExecEvent:
     phase: Literal[
-        "plan", "start", "stdout", "stderr", "exit", "stdin", "stdin_error"
+        "plan", "start", "stdout", "stderr", "exit", "stdin", "stdin_error",
+        "timeout", "teardown_error"
     ]
     program: Program | None
     argv: tuple[str, ...]
@@ -986,9 +990,11 @@ The structured event stream (`ExecEvent`) is exposed via `sh.observe()` and
 implemented with the following decisions:
 
 - **Event phases:** Cuprum emits `plan`, `start`, `stdout`, `stderr`, `stdin`,
-  `stdin_error`, and `exit` phases for both single commands and pipeline
-  stages — the full `ExecPhase` set. Pipeline stage events are tagged with a
-  stage index and stage count.
+  `stdin_error`, `exit`, `timeout`, and `teardown_error` phases for both
+  single commands and pipeline stages — the full `ExecPhase` set. `timeout`
+  and `teardown_error` are ancillary diagnostics rather than lifecycle
+  phases. Pipeline stage events are tagged with a stage index and stage
+  count.
 - **Correlation:** every event for one execution carries the same
   `ExecEvent.exec_id`, a stable token minted once per execution (per pipeline
   stage for pipelines). Consumers that track per-execution state — such as the
@@ -1164,6 +1170,21 @@ preserving the `SafeCmd.run()` execution contract:
 - `cuprum/_subprocess_timeout.py` owns timeout data and translation to the
   public `TimeoutExpired` error, plus exit-event helpers shared with normal
   completion.
+- `cuprum/_subprocess_wait.py` owns the rules for *ending* a run: applying the
+  deadline, terminating the process (through `_terminate_all_shielded`, so a
+  caller cancelling during the grace period cannot skip the `SIGKILL`
+  escalation), and draining the stream consumers exactly once. Split out of
+  `_subprocess_execution` so that module stays about orchestration — spawning,
+  wiring streams, assembling the result.
+- `cuprum/_timeout_reporting.py` owns the two channels a timeout or teardown
+  failure is reported on — the structured `cuprum.timeout` log record and
+  the `timeout` / `teardown_error` observe events — and the `_report_*`
+  helpers that pair them so the channels cannot drift. It is a separate
+  module because the surface is shared: both the single-command wait path
+  and the pipeline deadline path report through it, and the pipeline caller
+  cannot import `_subprocess_timeout` without closing an import cycle.
+- `cuprum/_subprocess_context.py` owns small shared context helpers
+  (`_cwd_arg`, `_sh_module`) used across the subprocess modules.
 
 The runner composes the specialized modules; neither specialized module owns
 public command APIs or creates subprocesses. This separation keeps the timeout
@@ -1204,6 +1225,14 @@ layer; it does not perform execution logic. `_pipeline_internals` re-exports
 selected `_pipeline_collect` helpers for backwards compatibility, not those
 types. Do not reintroduce the combined
 `_run_before_hooks` responsibility in `_pipeline_types`.
+
+`cuprum._pipeline_results` owns per-stage *reporting*, split out of
+`_pipeline_internals` so that module stays about *running* a pipeline: the
+terminal `exit` event a stage owes its observers (`_emit_timeout_exit_events`)
+and the `CommandResult` assembly alongside it
+(`_build_pipeline_stage_results`). `_pipeline_internals` calls into
+`_pipeline_results` on both the success and the timeout paths, so a stage
+never reports a `timeout` and then falls silent.
 
 Error propagation policy (to be finalized, but roughly):
 
@@ -1461,9 +1490,16 @@ design decisions guide these adapters:
   and are ignored: no span is created for such a `start`, and their `stdout`/
   `stderr`/`exit` events are dropped rather than guessed from PID.
 - Output lines can optionally be recorded as span events (controlled by
-  `record_output` parameter).
+  `record_output` parameter). `stdin_error`, `timeout`, and `teardown_error`
+  are also recorded as span events, unconditionally, without ending the span.
 - Span status is set based on exit code (OK for 0, ERROR otherwise).
 - Pipeline stages create separate spans with `pipeline_stage_index` attribute.
+- The active-span registry is bounded (1024 entries) and evicts by recency of
+  activity rather than arrival order, because not every execution reaches
+  `exit` (cancellation and stdin-writer failures can leave a span open
+  indefinitely otherwise). Each eviction is logged at `WARNING` with counts
+  only, since an evicted span is ended as failed while its execution may
+  still be running.
 
 **Structured logging adapter specifics:**
 
@@ -1482,14 +1518,15 @@ design decisions guide these adapters:
   property-tested without a collector at all.
 - Labels are resolved only when the reducer yields at least one operation, so a
   `plan` event — which records nothing — never projects labels off the event.
-- The reducer is total over `ExecPhase` — all seven phases (`plan`, `start`,
-  `stdout`, `stderr`, `stdin`, `stdin_error`, `exit`) have an arm — and
-  fail-closed beyond it: any other phase raises `_UnhandledMetricsPhaseError`
-  rather than being silently ignored. That is deliberate, and its cost is
-  worth stating plainly. A hook exception is not swallowed, so adding a value
-  to `ExecPhase` without adding an arm here would raise for every caller that
-  has already registered `MetricsHook`. A new phase therefore cannot reach
-  metrics without a decision in this reducer. The structured logging adapter
+- The reducer is total over `ExecPhase` — all nine phases (`plan`, `start`,
+  `stdout`, `stderr`, `exit`, `stdin`, `stdin_error`, `timeout`,
+  `teardown_error`) have an arm — and fail-closed beyond it: any other phase
+  raises `_UnhandledMetricsPhaseError` rather than being silently ignored.
+  That is deliberate, and its cost is worth stating plainly. A hook exception
+  is not swallowed, so adding a value to `ExecPhase` without adding an arm
+  here would raise for every caller that has already registered
+  `MetricsHook`. A new phase therefore cannot reach metrics without a
+  decision in this reducer. The structured logging adapter
   is fail-open by contrast, formatting an unrecognized phase generically.
 
 For screen readers: The following sequence diagram shows how one execution

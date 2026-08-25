@@ -19,12 +19,13 @@ from cuprum import (
     sh,
 )
 from cuprum._observability import (
+    _drain_tasks_during_cleanup,
     _emit_exec_event,
     _ExecEventEmissionError,
     _wait_for_exec_hook_tasks,
 )
 from cuprum._pipeline_internals import (
-    _drain_tasks_during_cleanup,
+    _PIPELINE_FINALIZATION_ERROR,
     _finalize_pipeline_execution,
 )
 from cuprum._pipeline_types import _EventDetails, _ExecutionHooks, _StageObservation
@@ -236,8 +237,16 @@ def test_pipeline_cleanup_drain_failure_preserves_active_error() -> None:
         timeout_error = sh.TimeoutExpired(cmd=("echo",), timeout=0.2)
 
         with pytest.raises(BaseExceptionGroup) as exc_info:
-            await _drain_tasks_during_cleanup(pending_tasks, timeout_error)
+            await _drain_tasks_during_cleanup(
+                pending_tasks,
+                timeout_error,
+                message=_PIPELINE_FINALIZATION_ERROR,
+            )
 
+        assert exc_info.value.message == _PIPELINE_FINALIZATION_ERROR, (
+            "cleanup should label the group with the finalization message it was "
+            f"given, got {exc_info.value.message!r}"
+        )
         assert exc_info.value.exceptions[0] is timeout_error, (
             "cleanup should preserve the active error, not replace it with the drain "
             "failure"

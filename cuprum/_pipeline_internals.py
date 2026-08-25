@@ -23,6 +23,7 @@ from pathlib import Path
 
 from cuprum._observability import (
     _base_stage_tags,
+    _drain_tasks_during_cleanup,
     _merge_tags,
     _resolve_env_overlay,
     _wait_for_exec_hook_tasks,
@@ -34,6 +35,10 @@ from cuprum._pipeline_collect import (
     _gather_pipeline_outputs,
     _sh_module,
 )
+from cuprum._pipeline_results import (
+    _build_pipeline_stage_results,
+    _emit_timeout_exit_events,
+)
 from cuprum._pipeline_streams import (
     _cancel_stream_tasks,
     _PipelineRunConfig,
@@ -41,11 +46,12 @@ from cuprum._pipeline_streams import (
 from cuprum._pipeline_types import (
     _EventDetails,
     _ExecutionHooks,
+    _PipelineObservers,
     _PipelineSpawnResult,
-    _PipelineStageResultInputs,
     _StageObservation,
 )
-from cuprum._process_lifecycle import _spawn_pipeline_processes
+from cuprum._process_lifecycle import _shielded_cleanup, _spawn_pipeline_processes
+from cuprum._timeout_reporting import _report_pipeline_timeout_expiry
 from cuprum.context import current_context
 
 if typ.TYPE_CHECKING:
@@ -123,75 +129,118 @@ def _emit_plan_events_and_run_before_hooks(
             hook(obs.cmd)
 
 
-def _build_pipeline_stage_results(
-    parts: tuple[SafeCmd, ...],
-    observations: tuple[_StageObservation, ...],
-    *,
-    processes: list[asyncio.subprocess.Process],
-    inputs: _PipelineStageResultInputs,
-) -> list[CommandResult]:
-    """Emit exit events and assemble a command result per pipeline stage."""
-    sh = _sh_module()
-    stage_results: list[CommandResult] = []
-    for idx, obs in enumerate(observations):
-        process = processes[idx]
-        ended_at = inputs.wait_result.ended_at[idx]
-        duration_s = (
-            None
-            if ended_at is None
-            else max(0.0, ended_at - inputs.wait_result.started_at[idx])
-        )
-        obs.emit(
-            "exit",
-            _EventDetails(
-                pid=process.pid,
-                exit_code=inputs.wait_result.exit_codes[idx],
-                duration_s=duration_s,
-            ),
-        )
-        stage_results.append(
-            sh.CommandResult(
-                program=obs.cmd.program,
-                argv=obs.cmd.argv,
-                exit_code=inputs.wait_result.exit_codes[idx],
-                pid=process.pid if process.pid is not None else -1,
-                stdout=inputs.final_stdout if idx == len(parts) - 1 else None,
-                stderr=inputs.stderr_by_stage[idx],
-            ),
-        )
-    return stage_results
-
-
-async def _drain_tasks_during_cleanup(
-    pending_tasks: list[asyncio.Task[None]],
-    active_error: BaseException,
-) -> None:
-    """Drain observe tasks in cleanup, aggregating a failure with ``active_error``."""
-    try:
-        await _wait_for_exec_hook_tasks(pending_tasks)
-    # Catch every task failure, including non-Exception BaseExceptions, so
-    # cleanup cannot mask the error that triggered it.
-    except BaseException as task_error:  # noqa: BLE001
-        raise BaseExceptionGroup(
-            _PIPELINE_FINALIZATION_ERROR,
-            (active_error, task_error),
-        ) from None
-
-
 async def _finalize_pipeline_execution(
     parts: tuple[SafeCmd, ...],
     observations: tuple[_StageObservation, ...],
     stage_results: list[CommandResult],
     pending_tasks: list[asyncio.Task[None]],
 ) -> None:
-    """Run after hooks for every stage and drain pending observe tasks."""
+    """Run after hooks for every stage and drain pending observe tasks.
+
+    Both drains are shielded. The pipeline owns these observe-hook tasks, so a
+    cancellation landing while finalization waits on them must not return
+    before they have settled — that would leak a task per pending hook.
+    """
     hooks_by_stage = tuple(obs.hooks for obs in observations)
     try:
         _run_pipeline_after_hooks(parts, hooks_by_stage, stage_results)
     except BaseException as after_hook_error:
-        await _drain_tasks_during_cleanup(pending_tasks, after_hook_error)
+        await _shielded_cleanup(
+            _drain_tasks_during_cleanup(
+                pending_tasks, after_hook_error, message=_PIPELINE_FINALIZATION_ERROR
+            )
+        )
         raise
-    await _wait_for_exec_hook_tasks(pending_tasks)
+    await _shielded_cleanup(_wait_for_exec_hook_tasks(pending_tasks))
+
+
+async def _reconcile_pipeline_run_failure(
+    spawn: _PipelineSpawnResult,
+    pending_tasks: list[asyncio.Task[None]],
+    run_error: BaseException,
+) -> None:
+    """Cancel the stream tasks and drain the observe tasks after a run failure.
+
+    Kept as one coroutine so the caller can shield both halves together: the
+    stream tasks and the observe-hook tasks are all owned by the pipeline, and
+    a cancellation arriving between two separately shielded steps would leave
+    the second set pending.
+    """
+    await _cancel_stream_tasks(spawn.stderr_tasks, spawn.stdout_task)
+    await _drain_tasks_during_cleanup(
+        pending_tasks, run_error, message=_PIPELINE_FINALIZATION_ERROR
+    )
+
+
+async def _run_spawned_pipeline(
+    parts: tuple[SafeCmd, ...],
+    config: _PipelineRunConfig,
+    spawn: _PipelineSpawnResult,
+    observers: _PipelineObservers,
+) -> PipelineResult:
+    """Drive a spawned pipeline to a result, reconciling whatever ends it.
+
+    Split from :func:`_run_pipeline`, which keeps the pre-spawn half. The
+    stages are running by the time this is entered, so every exit path owes
+    them teardown; keeping those paths together is what makes the set
+    reviewable.
+
+    The two failure branches stay distinct because they owe different debts. A
+    deadline has already terminated the stages, so it reports the expiry and
+    emits each stage's terminal ``exit`` before draining the observe tasks.
+    Anything else — a cancellation, most often — still has live stream tasks,
+    which is why it goes through :func:`_reconcile_pipeline_run_failure`.
+
+    Returns
+    -------
+    PipelineResult
+        The assembled stage results and the index of the first failing stage.
+    """
+    observations = observers.observations
+    pending_tasks = observers.pending_tasks
+    try:
+        inputs = await _collect_pipeline_inputs(
+            parts,
+            spawn,
+            config,
+        )
+    except _sh_module().TimeoutExpired as timeout_error:
+        _report_pipeline_timeout_expiry(
+            observations,
+            spawn.processes,
+            configured_timeout=config.timeout,
+        )
+        _emit_timeout_exit_events(observations, spawn)
+        await _shielded_cleanup(
+            _drain_tasks_during_cleanup(
+                pending_tasks, timeout_error, message=_PIPELINE_FINALIZATION_ERROR
+            )
+        )
+        raise
+    except BaseException as run_error:
+        # One shielded unit: shielding the two separately would let a
+        # cancellation landing between them abandon the observe-hook drain.
+        await _shielded_cleanup(
+            _reconcile_pipeline_run_failure(spawn, pending_tasks, run_error)
+        )
+        raise
+    stage_results = _build_pipeline_stage_results(
+        parts,
+        observations,
+        processes=spawn.processes,
+        inputs=inputs,
+    )
+    await _finalize_pipeline_execution(
+        parts,
+        observations,
+        stage_results,
+        pending_tasks,
+    )
+
+    return _sh_module().PipelineResult(
+        stages=tuple(stage_results),
+        failure_index=inputs.wait_result.failure_index,
+    )
 
 
 async def _run_pipeline(
@@ -224,37 +273,17 @@ async def _run_pipeline(
             started_at=started_at,
         )
     except BaseException as spawn_error:
-        await _drain_tasks_during_cleanup(pending_tasks, spawn_error)
-        raise
-    try:
-        inputs = await _collect_pipeline_inputs(
-            parts,
-            spawn,
-            config,
+        await _shielded_cleanup(
+            _drain_tasks_during_cleanup(
+                pending_tasks, spawn_error, message=_PIPELINE_FINALIZATION_ERROR
+            )
         )
-    except _sh_module().TimeoutExpired as timeout_error:
-        await _drain_tasks_during_cleanup(pending_tasks, timeout_error)
         raise
-    except BaseException as run_error:
-        await _cancel_stream_tasks(spawn.stderr_tasks, spawn.stdout_task)
-        await _drain_tasks_during_cleanup(pending_tasks, run_error)
-        raise
-    stage_results = _build_pipeline_stage_results(
+    return await _run_spawned_pipeline(
         parts,
-        observations,
-        processes=spawn.processes,
-        inputs=inputs,
-    )
-    await _finalize_pipeline_execution(
-        parts,
-        observations,
-        stage_results,
-        pending_tasks,
-    )
-
-    return _sh_module().PipelineResult(
-        stages=tuple(stage_results),
-        failure_index=inputs.wait_result.failure_index,
+        config,
+        spawn,
+        _PipelineObservers(observations, pending_tasks),
     )
 
 

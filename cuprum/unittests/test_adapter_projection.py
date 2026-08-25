@@ -14,6 +14,7 @@ is now the single source of truth (#114); these tests pin its contract:
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 from pathlib import Path
 
@@ -25,7 +26,8 @@ from cuprum.adapters._support import _event_common_fields
 from cuprum.adapters.logging_adapter import _build_extra
 from cuprum.adapters.metrics_adapter import MetricsHook
 from cuprum.adapters.tracing_adapter import TracingHook
-from cuprum.events import ExecEvent, ExecPhase
+from cuprum.adapters.tracing_memory import InMemoryTracer
+from cuprum.events import ExecEvent, ExecPhase, new_exec_id
 from cuprum.program import Program
 
 if typ.TYPE_CHECKING:
@@ -34,6 +36,14 @@ if typ.TYPE_CHECKING:
 _OPTIONAL_FIELDS = ("pid", "cwd", "exit_code", "duration_s", "line")
 _PHASES = typ.get_args(ExecPhase.__value__)
 _REDACTED_FIELDS = frozenset({"pid", "duration_s", "cwd"})
+# Ancillary diagnostic phases and the ``operation`` each reports. These are the
+# phases whose structured fields travel as a span event rather than as span
+# attributes.
+_ANCILLARY_PHASES = {
+    "stdin_error": "write",
+    "timeout": "wait",
+    "teardown_error": "drain",
+}
 
 
 @st.composite
@@ -185,6 +195,8 @@ class TestAdapterProjection:
         """Build a deterministic, fully populated event for *phase*."""
         is_exit = phase == "exit"
         is_output = phase in {"stdout", "stderr"}
+        is_timeout = phase == "timeout"
+        ancillary = phase in _ANCILLARY_PHASES
         return ExecEvent(
             phase=typ.cast("ExecPhase", phase),
             program=Program("echo"),
@@ -201,6 +213,15 @@ class TestAdapterProjection:
                 "pipeline_stage_index": 0,
                 "pipeline_stages": 2,
             },
+            operation=_ANCILLARY_PHASES.get(phase),
+            error_type="TimeoutError"
+            if is_timeout
+            else ("ValueError" if ancillary else None),
+            note="consumer drain failed: ValueError"
+            if phase == "teardown_error"
+            else None,
+            timeout_s=1.5 if is_timeout else None,
+            timeout_mode="elapsed_deadline" if is_timeout else None,
         )
 
     @staticmethod
@@ -214,6 +235,67 @@ class TestAdapterProjection:
             else:
                 redacted[key] = value
         return redacted
+
+    @staticmethod
+    def _span_event_projection(event: ExecEvent) -> dict[str, object] | None:
+        """Return the span event an ancillary phase records, or ``None``.
+
+        ``_build_extra`` and ``_build_attributes`` both project through
+        ``_event_common_fields``, which carries only the lifecycle fields — so
+        neither can pin ``operation``/``error_type``/``timeout_s``/
+        ``timeout_mode``. Tracing surfaces those through ``span.add_event``
+        instead, and this is the projection that locks them: an adapter that
+        dropped a field would change this snapshot.
+
+        A span must be open for the ancillary event to attach to, so a ``start``
+        sharing its ``exec_id`` is fed first.
+
+        Returns
+        -------
+        dict[str, object] | None
+            The span event's name and attributes, or ``None`` for a phase that
+            records no ancillary event.
+        """
+        operation = _ANCILLARY_PHASES.get(event.phase)
+        if operation is None:
+            return None
+        exec_id = new_exec_id()
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+        started = TestAdapterProjection._representative_event("start")
+        hook(dc.replace(started, exec_id=exec_id))
+        hook(dc.replace(event, exec_id=exec_id))
+        name, attributes = tracer.spans[0].events[-1]
+        return {"name": name, **attributes}
+
+    @pytest.mark.parametrize("timeout_s", [0.0, -1.5])
+    def test_non_positive_expiry_projects_both_timeout_fields(
+        self, timeout_s: float
+    ) -> None:
+        """A non-positive deadline carries its own mode *and* its own timeout.
+
+        The snapshots above fix the elapsed-deadline case, where ``timeout_s``
+        is a truthy 1.5. This pins the other mode, whose configured timeout is
+        ``0`` or negative: the projection includes a field when it is not
+        ``None``, so a regression to a falsy test would silently drop
+        ``timeout_s=0.0`` and leave a consumer unable to tell an immediate
+        expiry's configured deadline from an unset one.
+        """
+        event = dc.replace(
+            self._representative_event("timeout"),
+            timeout_mode="non_positive_immediate",
+            timeout_s=timeout_s,
+        )
+        attributes = self._span_event_projection(event)
+        assert attributes is not None, "the timeout phase must project a span event"
+        assert attributes.get("timeout_mode") == "non_positive_immediate", (
+            "an immediate expiry must be distinguishable from an elapsed "
+            f"deadline, got {attributes.get('timeout_mode')!r}"
+        )
+        assert attributes.get("timeout_s") == pytest.approx(timeout_s), (
+            "the configured non-positive timeout must survive the projection, "
+            f"got {attributes.get('timeout_s')!r}"
+        )
 
     @pytest.mark.parametrize("phase", _PHASES)
     def test_projection_snapshots_lock_the_wire_contract(
@@ -233,6 +315,7 @@ class TestAdapterProjection:
             "logging_extra": self._redact(_build_extra(event)),
             "tracing_attributes": self._redact(TracingHook._build_attributes(event)),
             "metrics_labels": self._redact(dict(MetricsHook._extract_labels(event))),
+            "tracing_span_event": self._span_event_projection(event),
         }
         assert projections == snapshot, (
             "per-phase adapter projections must match the redacted wire-contract "

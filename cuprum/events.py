@@ -25,6 +25,8 @@ type ExecPhase = typ.Literal[
     "exit",
     "stdin",
     "stdin_error",
+    "timeout",
+    "teardown_error",
 ]
 
 # A stable, per-execution correlation token. It is minted once when an
@@ -33,6 +35,13 @@ type ExecPhase = typ.Literal[
 # consumers can correlate the events of a single execution even when the
 # operating system recycles a process identifier across executions.
 ExecId = typ.NewType("ExecId", uuid.UUID)
+
+# The stable ``timeout_mode`` values, shared by the ``timeout`` observe event
+# and the ``cuprum.timeout`` log records so a consumer keying on either sees
+# the same two strings. ``elapsed_deadline`` is a positive wall-clock deadline
+# that ran out; ``non_positive_immediate`` is a ``timeout <= 0`` that expired
+# at once, without ever awaiting the process.
+type TimeoutMode = typ.Literal["elapsed_deadline", "non_positive_immediate"]
 
 
 def new_exec_id() -> ExecId:
@@ -55,7 +64,21 @@ class ExecEvent:
     Attributes
     ----------
     phase:
-        Event phase. See :data:`~cuprum.events.ExecPhase`.
+        Event phase. See :data:`~cuprum.events.ExecPhase`. Both ``timeout`` and
+        ``teardown_error`` are ancillary diagnostics that never displace a
+        lifecycle phase, but they differ in what is guaranteed to follow them.
+
+        ``timeout`` marks a run that exceeded its deadline, and is emitted
+        before the existing ``exit`` event and the public ``TimeoutExpired``,
+        both of which are preserved.
+
+        ``teardown_error`` marks a stream consumer that drained with an
+        unexpected error during cleanup, and carries no such ordering
+        guarantee. Cleanup also runs on external cancellation and on an
+        unexpected stdin-writer failure, and on those paths the original
+        exception propagates unchanged: no ``exit`` event follows and no
+        ``TimeoutExpired`` is raised, so a ``teardown_error`` may be the last
+        event a consumer sees for that execution.
     program:
         The allowlisted program that is executing.
     argv:
@@ -65,8 +88,9 @@ class ExecEvent:
     env:
         Environment overlay provided for this execution, when set.
     pid:
-        Process identifier for the running subprocess (available for ``start``
-        and ``exit`` phases).
+        Process identifier for the running subprocess (populated for every
+        phase except ``plan``, which fires before the subprocess is
+        spawned).
     timestamp:
         Wall-clock timestamp (seconds since epoch) when the phase occurred.
     line:
@@ -85,11 +109,15 @@ class ExecEvent:
     byte_count:
         Number of bytes written for byte-counted phases such as ``stdin``.
     operation:
-        For failure events such as ``stdin_error``, the pipe operation that
-        failed (for example ``write`` or ``close``).
+        For failure and lifecycle events, the operation involved. For
+        ``stdin_error`` this is the pipe operation that failed (for example
+        ``write`` or ``close``); for ``timeout`` it is ``wait``; for
+        ``teardown_error`` it is ``drain``.
     error_type:
-        For failure events such as ``stdin_error``, the class name of the
-        raised exception (for example ``OSError``).
+        For failure events such as ``stdin_error``, ``timeout``, and
+        ``teardown_error``, the class name of the raised exception (for example
+        ``OSError``, ``TimeoutError``). For ``teardown_error`` this is the
+        comma-joined class names of the consumer drain failures.
     exec_id:
         Stable per-execution correlation token, minted once per execution and
         shared by every lifecycle event for that execution. It is the reliable
@@ -97,6 +125,21 @@ class ExecEvent:
         (``pid``) can be recycled by the operating system across executions.
         ``None`` for legacy or manually constructed events that predate the
         token; such events cannot be safely correlated by consumers.
+    timeout_s:
+        For the ``timeout`` phase, the configured wall-clock timeout in seconds
+        that was exceeded. ``None`` for other phases.
+    timeout_mode:
+        For the ``timeout`` phase, the reason the deadline expired:
+        ``"elapsed_deadline"`` when a positive wall-clock deadline elapsed, or
+        ``"non_positive_immediate"`` when a non-positive (``timeout <= 0``)
+        deadline expired immediately without awaiting the process. ``None`` for
+        other phases.
+
+    New optional fields are appended after ``exec_id`` rather than inserted
+    beside the field they relate to. Inserting one ahead of ``exec_id`` would
+    silently rebind a positional argument in existing caller code, handing the
+    correlation token to the new field and leaving ``exec_id=None`` — which
+    consumers such as ``TracingHook`` treat as uncorrelatable and drop.
 
     """
 
@@ -116,9 +159,20 @@ class ExecEvent:
     operation: str | None = None
     error_type: str | None = None
     exec_id: ExecId | None = None
+    # Appended after exec_id to keep its positional slot stable; see the note
+    # in the class docstring.
+    timeout_s: float | None = None
+    timeout_mode: TimeoutMode | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]
 
 
-__all__ = ["ExecEvent", "ExecHook", "ExecId", "ExecPhase", "new_exec_id"]
+__all__ = [
+    "ExecEvent",
+    "ExecHook",
+    "ExecId",
+    "ExecPhase",
+    "TimeoutMode",
+    "new_exec_id",
+]

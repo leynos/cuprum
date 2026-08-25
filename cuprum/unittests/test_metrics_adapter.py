@@ -158,6 +158,54 @@ print('err1', file=sys.stderr)""",
             f"{phase} events should update only {metric_name}"
         )
 
+    @pytest.mark.parametrize(
+        ("phase", "extra_kwargs", "metric_name"),
+        [
+            (
+                "timeout",
+                {
+                    "operation": "wait",
+                    "timeout_s": 1.5,
+                    "timeout_mode": "elapsed_deadline",
+                },
+                "cuprum_timeouts_total",
+            ),
+            (
+                "teardown_error",
+                {"operation": "drain", "error_type": "ValueError"},
+                "cuprum_teardown_errors_total",
+            ),
+        ],
+    )
+    def test_counts_timeout_metrics(
+        self,
+        phase: str,
+        extra_kwargs: dict[str, object],
+        metric_name: str,
+    ) -> None:
+        """Hook counts timeout expiries and teardown drain failures."""
+        metrics = InMemoryMetrics()
+        hook = MetricsHook(metrics)
+
+        hook(
+            _make_exec_event(
+                phase=typ.cast("ExecPhase", phase),
+                overrides={
+                    "pid": 321,
+                    "tags": {"project": "timeout-metrics"},
+                    **extra_kwargs,
+                },
+            )
+        )
+
+        assert metrics.counters == {metric_name: 1.0}, (
+            f"{phase} events should update only {metric_name}"
+        )
+        assert metrics.histograms == {}, (
+            f"{phase} is a counter-only ancillary phase and must not observe a "
+            f"histogram, got {metrics.histograms!r}"
+        )
+
     def test_factory_function_returns_hook(self) -> None:
         """metrics_hook() factory returns a valid ExecHook."""
         metrics = InMemoryMetrics()

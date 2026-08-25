@@ -32,7 +32,10 @@ from cuprum._pipeline_types import (
     _PipelineStageResultInputs,
 )
 from cuprum._pipeline_wait import _wait_for_pipeline
-from cuprum._process_lifecycle import _terminate_timed_out_stages
+from cuprum._process_lifecycle import (
+    _shielded_cleanup,
+    _terminate_timed_out_stages,
+)
 
 if typ.TYPE_CHECKING:
     import types
@@ -153,6 +156,19 @@ async def _collect_pipeline_inputs(
             capture=config.capture,
         )
         raise _build_timeout_expired_error(parts, timeout, outputs) from exc
+    finally:
+        # The inter-stage pumps are owned here, so every exit reconciles them:
+        # success, the deadline path, caller cancellation, and the non-positive
+        # deadline that cancels _wait_for_pipeline before its own finally can
+        # run. The timeout branch above still reconciles explicitly, because
+        # the pumps must reach EOF after the stages are terminated but *before*
+        # the outputs are gathered; _reconcile_pipe_tasks is safe to run twice,
+        # so this is a no-op once that has happened. Shielded because the
+        # reconciliation is itself a gather: a cancellation landing on it would
+        # cancel the pumps without waiting for them to settle, leaving the
+        # tasks this function owns running detached with nobody left to await
+        # them.
+        await _shielded_cleanup(_reconcile_pipe_tasks(pipe_tasks))
 
     # Gathering sits after the ``try`` so ``except TimeoutError`` covers only
     # the wait: a timeout raised while gathering is a different failure and must

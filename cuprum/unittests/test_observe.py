@@ -375,3 +375,103 @@ def test_write_stdin_observes_error_events(
     assert expected_note in caplog.text, (
         "stdin failure should be logged with the exception recorded in its traceback"
     )
+
+
+# -- Timeout observe events (deterministic via the non-positive fast path) ----
+
+
+def _sleep_command() -> tuple[sh.SafeCmd, ProgramCatalogue]:
+    """Build a long-sleeping Python command and its allowlist catalogue."""
+    build, catalogue = _python_builder()
+    return build("-c", "import time; time.sleep(30)"), catalogue
+
+
+def test_observe_emits_timeout_event_on_immediate_expiry() -> None:
+    """``timeout=0`` emits a ``timeout`` event and still raises ``TimeoutExpired``.
+
+    The non-positive fast path never awaits the process, so this is deterministic
+    with no timing control. The immediate-expiry event carries the stable timeout
+    fields, the existing ``start``/``exit`` events are preserved, and the public
+    ``TimeoutExpired`` mapping is unchanged.
+    """
+    cmd, catalogue = _sleep_command()
+    events: list[ExecEvent] = []
+
+    def hook(ev: ExecEvent) -> None:
+        """Record an emitted execution event."""
+        events.append(ev)
+
+    with (
+        scoped(ScopeConfig(allowlist=catalogue.allowlist)),
+        sh.observe(hook),
+        pytest.raises(sh.TimeoutExpired),
+    ):
+        cmd.run_sync(timeout=0)
+
+    phases = [ev.phase for ev in events]
+    assert "start" in phases, f"start event must be preserved, got {phases}"
+    assert "exit" in phases, f"exit event must be preserved, got {phases}"
+
+    timeout_events = [ev for ev in events if ev.phase == "timeout"]
+    assert len(timeout_events) == 1, (
+        f"expected exactly one timeout event, got phases {phases}"
+    )
+    # Order, not just membership: the ancillary timeout event must land between
+    # the preserved start and exit events, so a regression that emitted it after
+    # exit (or dropped the ordering entirely) fails here.
+    assert phases.index("start") < phases.index("timeout"), (
+        f"start must precede the timeout event, got phases {phases}"
+    )
+    assert phases.index("timeout") < phases.index("exit"), (
+        f"the timeout event must precede exit, got phases {phases}"
+    )
+    timeout_event = timeout_events[0]
+    assert timeout_event.timeout_mode == "non_positive_immediate", (
+        "the immediate fast path must tag the event "
+        f"timeout_mode='non_positive_immediate', got "
+        f"{timeout_event.timeout_mode!r}"
+    )
+    assert timeout_event.timeout_s == 0, (
+        f"the timeout event must carry the configured timeout_s=0, "
+        f"got {timeout_event.timeout_s!r}"
+    )
+    assert timeout_event.operation == "wait", (
+        f"the timeout event must carry operation='wait', "
+        f"got {timeout_event.operation!r}"
+    )
+    assert timeout_event.error_type == "TimeoutError", (
+        f"the timeout event must carry error_type='TimeoutError', "
+        f"got {timeout_event.error_type!r}"
+    )
+    assert timeout_event.pid is not None, (
+        "the timeout event must carry the pid of the timed-out subprocess"
+    )
+
+
+class _ObserveHookError(Exception):
+    """Raised by a deliberately failing observe hook in these tests.
+
+    Named rather than a bare ``RuntimeError`` so the assertion cannot pass on
+    an unrelated runtime failure from the machinery under test.
+    """
+
+
+def test_observe_hook_failure_on_timeout_does_not_mask_timeout_expired() -> None:
+    """An observe hook raising on the timeout event cannot replace TimeoutExpired.
+
+    The ``timeout`` event is emitted best-effort, so a hook failure there is
+    swallowed and the public ``TimeoutExpired`` still propagates.
+    """
+    cmd, catalogue = _sleep_command()
+
+    def hook(ev: ExecEvent) -> None:
+        """Fail only on the timeout event, mimicking a broken telemetry hook."""
+        if ev.phase == "timeout":
+            raise _ObserveHookError
+
+    with (
+        scoped(ScopeConfig(allowlist=catalogue.allowlist)),
+        sh.observe(hook),
+        pytest.raises(sh.TimeoutExpired),
+    ):
+        cmd.run_sync(timeout=0)

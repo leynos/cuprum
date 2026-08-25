@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
-from cuprum._subprocess_execution import _wait_for_exit_code
+from cuprum._subprocess_wait import _wait_for_exit_code
 from cuprum.sh import ExecutionContext
 
 

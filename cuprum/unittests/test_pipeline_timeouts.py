@@ -22,7 +22,9 @@ from unittest import mock
 import pytest
 
 from cuprum import ScopeConfig, TimeoutExpired, _pipeline_collect, scoped, sh
+from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
 from cuprum._process_lifecycle import (
+    _shielded_cleanup,
     _terminate_pipeline_remaining_stages,
     _terminate_timed_out_stages,
 )
@@ -38,13 +40,44 @@ from tests.helpers.timeouts import (
 )
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     from pathlib import Path
 
     from cuprum.events import ExecEvent
 
 
 _PIPELINE_STAGES = 2
+
+# Long enough that the immune child reaches ``signal.signal`` before the
+# deadline reaps it, and short enough to keep the test quick.
+_STAGE_TIMEOUT = 1.0
+_CANCEL_GRACE = 1.0
+
+
+async def _poll_until(
+    predicate: cabc.Callable[[], bool],
+    message: str,
+    *,
+    seconds: float = 10.0,
+) -> None:
+    """Yield until ``predicate`` holds, failing rather than hanging.
+
+    Parameters
+    ----------
+    predicate:
+        Readiness check, polled until it returns true.
+    message:
+        Failure message reported if ``seconds`` elapses first.
+    seconds:
+        How long to wait before failing.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    # ASYNC110: the readiness signal is a file written by another process,
+    # which no asyncio.Event can observe. Polling it is the coordination.
+    while not predicate():
+        if loop.time() > deadline:
+            pytest.fail(message)
+        await asyncio.sleep(0.01)
 
 
 # -- Public-boundary timeout contract -----------------------------------------
@@ -169,16 +202,30 @@ class _SigtermImmuneProcess:
         self.pid = 9101
         self.terminated = False
         self.killed = False
+        self.terminate_signalled = asyncio.Event()
+        self.grace_started = asyncio.Event()
         self._exited = asyncio.Event()
 
     async def wait(self) -> int:
-        """Block until ``kill()`` records an exit code."""
+        """Block until ``kill()`` records an exit code.
+
+        Entry is announced so a test can place a cancellation *inside* the
+        grace-period wait: ``terminate()`` has already returned by this point,
+        so the escalation to ``SIGKILL`` is the only thing still outstanding.
+
+        Returns
+        -------
+        int
+            The recorded exit code, or ``0`` when none was set.
+        """
+        self.grace_started.set()
         await self._exited.wait()
         return self.returncode if self.returncode is not None else 0
 
     def terminate(self) -> None:
         """Record the signal without exiting, as a SIGTERM-immune child would."""
         self.terminated = True
+        self.terminate_signalled.set()
 
     def kill(self) -> None:
         """Record the escalation and exit."""
@@ -223,6 +270,55 @@ def test_timeout_teardown_completes_despite_caller_cancellation() -> None:
     asyncio.run(run_case())
 
 
+def test_timeout_teardown_survives_repeated_cancellation() -> None:
+    """A second cancellation during the grace period must not strand a stage.
+
+    Cancelling a task propagates to whatever future it is awaiting, so a
+    further ``cancel()`` landing while teardown is being waited out would
+    cancel the teardown itself and skip the ``SIGKILL`` escalation. The wait is
+    therefore retried under a shield until it completes, however many
+    cancellations arrive.
+    """
+
+    async def run_case() -> None:
+        """Cancel twice inside the grace window and inspect the stage."""
+        process = _SigtermImmuneProcess()
+        task = asyncio.create_task(
+            _terminate_timed_out_stages(
+                [typ.cast("asyncio.subprocess.Process", process)], 0.2
+            )
+        )
+        # Block until teardown is actually waiting out the grace period, so
+        # both cancellations land inside it rather than before the initial
+        # signal was even delivered.
+        await process.grace_started.wait()
+
+        assert task.cancel(), "the first cancellation must reach a live teardown"
+        # One scheduler pass delivers that cancellation; the retry loop then
+        # re-parks on the shield within the same pass. The count is not what
+        # the test rests on — the assertion below is: `cancel()` returns False
+        # once a task has finished, so a second cancellation that is accepted
+        # proves the first did not end the teardown early.
+        await asyncio.sleep(0)
+        assert task.cancel(), (
+            "the teardown completed on the first cancellation, so the retry "
+            "path this test exists to cover was never exercised"
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert process.killed, (
+            "the SIGKILL escalation must complete even when a second "
+            "cancellation lands during the grace-period wait"
+        )
+        assert process.returncode == -9, (
+            f"the stage must be reaped, got returncode={process.returncode!r}"
+        )
+
+    asyncio.run(run_case())
+
+
 def test_pipeline_run_cancelled_during_grace_still_reaps_stages(
     tmp_path: Path,
 ) -> None:
@@ -243,18 +339,34 @@ def test_pipeline_run_cancelled_during_grace_still_reaps_stages(
 
     async def run_case() -> None:
         """Time out, then cancel while the grace period is still running."""
-        ctx = ExecutionContext(cancel_grace=1.0)
+        ctx = ExecutionContext(cancel_grace=_CANCEL_GRACE)
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
         task = asyncio.create_task(
             pipeline.run(
-                timeout=0.05, output=RunOutputOptions(capture=False), context=ctx
+                timeout=_STAGE_TIMEOUT,
+                output=RunOutputOptions(capture=False),
+                context=ctx,
             )
         )
-        # ASYNC110: the readiness signal is a file written by another process,
-        # which no asyncio.Event can observe. Polling it is the coordination,
-        # and it is bounded by the child writing the marker at start-up.
-        while not marker.exists():  # noqa: ASYNC110
-            await asyncio.sleep(0.01)
-        await asyncio.sleep(0.15)
+        # The deadline has to outlast interpreter start-up. A ``SIGTERM``
+        # arriving before the child reaches ``signal.signal`` kills it outright,
+        # so it never writes the marker and never becomes the immune stage this
+        # test is about — and the wait below would then never finish.
+        await _poll_until(
+            marker.exists, "the immune first stage never signalled readiness"
+        )
+        # Teardown waits out ``cancel_grace`` after the deadline expires, and
+        # the cancellation belongs inside that window. There is no event to
+        # wait on: the ``timeout`` events are not emitted until teardown has
+        # already finished, so this is timed from the deadline itself.
+        delay = started_at + _STAGE_TIMEOUT + 0.2 - loop.time()
+        assert delay > 0, (
+            "the deadline elapsed before the child signalled readiness, so the "
+            "cancellation below would land after the grace window instead of "
+            f"inside it and quietly stop covering it (delay={delay!r})"
+        )
+        await asyncio.sleep(delay)
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
@@ -396,3 +508,108 @@ def test_zero_timeout_reconciles_pipe_tasks() -> None:
         for pid in started_pids(events):
             with contextlib.suppress(ProcessLookupError):
                 os.kill(pid, signal.SIGKILL)
+
+
+def test_collector_holds_its_cancellation_until_reconciliation_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_collect_pipeline_inputs`` must not unwind mid-reconciliation.
+
+    Driven through the collector itself rather than the primitive, with the
+    reconciliation gated at its boundary so the cancellation is delivered while
+    the ``finally`` is genuinely in flight. Unshielded, the cancellation would
+    reach the gated coroutine and the collector would unwind immediately,
+    leaving the pumps it owns with nobody to await them.
+    """
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    gate = asyncio.Event()
+    entered = asyncio.Event()
+    reconciled = False
+
+    real_reconcile = _pipeline_collect._reconcile_pipe_tasks
+
+    async def gated_reconcile(pipe_tasks: list[asyncio.Task[None]]) -> None:
+        """Announce entry, block until released, then reconcile for real."""
+        nonlocal reconciled
+        entered.set()
+        await gate.wait()
+        await real_reconcile(pipe_tasks)
+        reconciled = True
+
+    monkeypatch.setattr(_pipeline_collect, "_reconcile_pipe_tasks", gated_reconcile)
+
+    pipeline = python("-c", "print('a')") | python("-c", "import sys; sys.stdin.read()")
+
+    async def run_case() -> None:
+        """Cancel the collector while its reconciliation is gated."""
+        task = asyncio.create_task(pipeline.run(output=RunOutputOptions(capture=False)))
+        await entered.wait()
+
+        assert task.cancel(), "the cancellation must reach a live collector"
+        for _ in range(8):
+            await asyncio.sleep(0)
+        assert not task.done(), (
+            "the collector unwound while its reconciliation was still running, "
+            "so the pumps it owns would be left with nobody to await them"
+        )
+
+        gate.set()
+        with contextlib.suppress(asyncio.CancelledError, BaseExceptionGroup):
+            await task
+        assert reconciled, "the reconciliation must have run to completion"
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([python_program]))),
+        sh.observe(lambda _event: None),
+    ):
+        asyncio.run(run_case())
+
+
+def test_pipe_task_reconciliation_survives_repeated_cancellation() -> None:
+    """Repeated cancellation must not abandon the inter-stage pumps.
+
+    ``_reconcile_pipe_tasks`` cancels each pump and then gathers them. The
+    invariant that matters to the pipeline is the one asserted below: however
+    many cancellations arrive, no pump is left running once the cancellation
+    propagates, because nothing downstream would await it.
+
+    This holds with or without the shield, because ``gather`` with
+    ``return_exceptions`` awaits its children even when the gather itself is
+    cancelled. What the shield buys is covered by
+    :func:`test_collector_holds_its_cancellation_until_reconciliation_finishes`,
+    which gates the reconciliation so the collector is caught mid-``finally``.
+    """
+
+    async def run_case() -> None:
+        """Cancel twice while the pumps are still settling, then inspect them."""
+        released = asyncio.Event()
+
+        async def stubborn_pump() -> None:
+            """Absorb cancellation until released, as a pump mid-write would."""
+            while not released.is_set():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await released.wait()
+
+        pipe_tasks = [asyncio.create_task(stubborn_pump()) for _ in range(2)]
+        # One scheduler pass parks each pump, so the reconciliation's cancel
+        # lands on a running task rather than one the loop has not started.
+        await asyncio.sleep(0)
+
+        task = asyncio.create_task(_shielded_cleanup(_reconcile_pipe_tasks(pipe_tasks)))
+        await asyncio.sleep(0)
+
+        for _ in range(2):
+            assert task.cancel(), "the cancellation must reach a live reconciliation"
+            await asyncio.sleep(0)
+
+        released.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        for index, pipe_task in enumerate(pipe_tasks):
+            assert pipe_task.done(), (
+                f"pump {index} was left running after the cancellation propagated"
+            )
+
+    asyncio.run(run_case())

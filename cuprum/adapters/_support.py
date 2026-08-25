@@ -75,6 +75,37 @@ def _log_unhandled_phase(adapter: str, phase: str) -> None:
     )
 
 
+def _log_span_eviction(adapter: str, *, evicted: int, active: int) -> None:
+    """Report spans dropped because the active-span registry was full.
+
+    An evicted span is ended as failed while its execution may still be
+    running, so the trace it would have carried is lost. That is a silent
+    failure without a signal, hence ``WARNING`` rather than ``DEBUG``. Only
+    counts are recorded: span attributes carry command payloads, and the
+    execution tokens are unbounded in cardinality.
+
+    Parameters
+    ----------
+    adapter:
+        Adapter reporting the eviction, for the message and the log field.
+    evicted:
+        How many spans were detached and ended by this eviction.
+    active:
+        How many spans remain registered afterwards.
+    """
+    _LOGGER.warning(
+        "span_registry_overflow adapter=%s evicted=%s active=%s",
+        adapter,
+        evicted,
+        active,
+        extra={
+            "cuprum_adapter": adapter,
+            "cuprum_spans_evicted": evicted,
+            "cuprum_spans_active": active,
+        },
+    )
+
+
 @dc.dataclass(slots=True)
 class _LockedStore:
     """Base for thread-safe in-memory reference collectors.
@@ -110,6 +141,7 @@ class _LockedStore:
 __all__ = [
     "_LockedStore",
     "_event_common_fields",
+    "_log_span_eviction",
     "_log_unhandled_phase",
     "_prefixed",
     "_project_tag",

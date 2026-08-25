@@ -64,11 +64,13 @@ Example with OpenTelemetry::
 
 from __future__ import annotations
 
+import collections
 import threading
 import typing as typ
 
 from cuprum.adapters._support import (
     _event_common_fields,
+    _log_span_eviction,
     _log_unhandled_phase,
     _prefixed,
     _project_tag,
@@ -78,6 +80,21 @@ from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
 
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook, ExecId
+
+
+# Ancillary span-event fields; the timeout pair distinguishes expiry modes.
+_SPAN_FIELDS = ("line", "operation", "error_type", "note", "timeout_s", "timeout_mode")
+
+# An execution's span is ended by its ``exit`` event, but not every execution
+# emits one: cleanup also runs on external cancellation and on an unexpected
+# stdin-writer failure, and on those paths the original exception propagates
+# without an ``exit`` (see the ``ExecEvent.phase`` docstring, which documents
+# ``teardown_error`` as possibly the last event a consumer sees). Without a
+# bound, every such execution would leave an entry behind for the lifetime of
+# the hook. The cap is generous enough that no realistic burst of concurrent
+# executions is likely to evict a live span; see ``_evict_overflow_locked``
+# for what the ordering does and does not promise.
+_MAX_ACTIVE_SPANS = 1024
 
 
 class TracingHook:
@@ -144,7 +161,9 @@ class TracingHook:
         """Initialize the tracing hook with a tracer."""
         self._tracer = tracer
         self._record_output = record_output
-        self._active_spans: dict[ExecId, Span] = {}
+        self._active_spans: collections.OrderedDict[ExecId, Span] = (
+            collections.OrderedDict()
+        )
         self._lock = threading.Lock()
 
     def __call__(self, event: ExecEvent) -> None:
@@ -157,7 +176,7 @@ class TracingHook:
             case "stdout" | "stderr":
                 if self._record_output:
                     self._record_span_event(event)
-            case "stdin_error":
+            case "stdin_error" | "timeout" | "teardown_error":
                 self._record_span_event(event)
             case "exit":
                 self._handle_exit(event)
@@ -206,6 +225,19 @@ class TracingHook:
             # the replacement, never a missing/partial entry.
             stale = self._active_spans.get(exec_id)
             self._active_spans[exec_id] = span
+            abandoned = self._evict_overflow_locked()
+            # Read the size here rather than after the lock: another handler
+            # may register or end a span in between, and the record would then
+            # report a total that never accompanied this eviction.
+            active = len(self._active_spans)
+
+        if abandoned:
+            _log_span_eviction("tracing", evicted=len(abandoned), active=active)
+        for span_to_close in abandoned:
+            # Detached from the map, so exactly one handler ends each. Ended
+            # outside the lock for the same reason as the stale span below.
+            span_to_close.set_status(ok=False)
+            span_to_close.end()
 
         if stale is not None:
             # Duplicated/reused exec_id: the prior span is now detached from the
@@ -216,6 +248,39 @@ class TracingHook:
             stale.set_status(ok=False)
             stale.end()
 
+    def _evict_overflow_locked(self) -> list[Span]:
+        """Detach the least recently active spans once the cap is exceeded.
+
+        Must be called with ``self._lock`` held. Returns the detached spans so
+        the caller can end them outside the lock — an arbitrary ``Span`` may
+        block on I/O in ``set_status``/``end``, and holding the lifecycle lock
+        across that would serialise every other execution's handler.
+
+        Order is recency of activity, not of arrival: ``_record_span_event``
+        moves a span to the back whenever one of its events lands, so a
+        long-running execution that is still producing output is not evicted
+        ahead of a short one that went quiet. That is a heuristic, not a
+        guarantee — a live but silent execution can still be evicted, and its
+        span is then ended as failed while the process runs on. Evicting is
+        nonetheless preferred to refusing to register new spans: the cap exists
+        because executions that never emit ``exit`` accumulate, and a registry
+        that rejected newcomers instead would stop tracing *every* subsequent
+        execution once the leaked ones filled it.
+
+        Returns
+        -------
+        list[Span]
+            The detached spans, for the caller to end outside the lock. Empty
+            when the registry is within its cap.
+        """
+        if len(self._active_spans) <= _MAX_ACTIVE_SPANS:
+            return []
+        overflow = len(self._active_spans) - _MAX_ACTIVE_SPANS
+        # ``popitem(last=False)`` takes the front — the least recently active
+        # end — without materialising the other thousand-odd keys the way a
+        # ``list(...)`` slice would.
+        return [self._active_spans.popitem(last=False)[1] for _ in range(overflow)]
+
     def _record_span_event(self, event: ExecEvent) -> None:
         """Record ``event``'s diagnostic fields as a span event, keyed by exec_id."""
         exec_id = event.exec_id
@@ -224,14 +289,22 @@ class TracingHook:
 
         with self._lock:
             span = self._active_spans.get(exec_id)
+            if span is not None:
+                # Activity is what keeps a span off the eviction end of the
+                # registry; see _evict_overflow_locked.
+                self._active_spans.move_to_end(exec_id)
 
         if span is None:
             return
 
-        # ``line`` for stdout/stderr; ``operation``/``error_type``/``note`` for
-        # the non-fatal stdin_error path. The span is left open and unmarked.
+        # The span is left open and unmarked. An ``exit`` event closes it when
+        # one arrives; ``teardown_error`` carries no such guarantee, so a span
+        # left open here is bounded by ``_evict_overflow_locked`` instead. An
+        # ancillary event arriving after ``exit`` finds no entry and is dropped
+        # by the ``span is None`` guard above rather than touching an ended
+        # span.
         event_attrs: dict[str, object] = {}
-        for field in ("line", "operation", "error_type", "note"):
+        for field in _SPAN_FIELDS:
             value = getattr(event, field)
             if value is not None:
                 event_attrs[field] = value

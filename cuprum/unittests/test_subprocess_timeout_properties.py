@@ -23,7 +23,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from cuprum._subprocess_execution import (
+from cuprum._subprocess_wait import (
     _drain_stream_consumers,
     _wait_for_exit_code_within_timeout,
 )
@@ -408,9 +408,9 @@ class TestConsumerDrainProperties:
         asyncio.run(run_case())
 
     @settings(deadline=None, max_examples=_EXAMPLES)
-    @given(stdout_kind=_CONSUMER_KINDS, stderr_kind=_CONSUMER_KINDS)
+    @given(failing_slot=st.sampled_from((0, 1)), other_kind=_CONSUMER_KINDS)
     def test_drain_absorbs_failures_without_replacing_primary_error(
-        self, stdout_kind: str, stderr_kind: str
+        self, failing_slot: int, other_kind: str
     ) -> None:
         """A failing consumer cannot displace the error being cleaned up after.
 
@@ -418,14 +418,28 @@ class TestConsumerDrainProperties:
         it must absorb consumer failures rather than raise its own. Draining inside
         an active ``TimeoutError`` handler asserts exactly that: the original error
         is what leaves the block.
+
+        One slot is always ``failing`` and is awaited to completion first. Drawing
+        both kinds freely would let the property pass without a consumer ever
+        raising, and the drain cancels its consumers synchronously before it
+        awaits them, so a failing task that has not yet run is torn down as a
+        plain cancellation and never reaches its ``raise``.
         """
+        kinds = [other_kind, other_kind]
+        kinds[failing_slot] = "failing"
 
         async def run_case() -> None:
-            """Drain failing consumers while a TimeoutError is propagating."""
+            """Drain a genuinely failed consumer while a TimeoutError propagates."""
             consumers = (
-                asyncio.create_task(_make_consumer(stdout_kind, "out")),
-                asyncio.create_task(_make_consumer(stderr_kind, "err")),
+                asyncio.create_task(_make_consumer(kinds[0], "out")),
+                asyncio.create_task(_make_consumer(kinds[1], "err")),
             )
+            failing = consumers[failing_slot]
+            await asyncio.gather(failing, return_exceptions=True)
+            assert isinstance(failing.exception(), _ConsumerFailureError), (
+                "the drain must be handed a consumer that has already failed"
+            )
+
             primary = TimeoutError("primary")
             with pytest.raises(TimeoutError) as exc_info:
                 await _drain_while_raising(primary, consumers)
