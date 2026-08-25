@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import builtins
 import importlib
+import re
 import sys
 import types
 import typing as typ
@@ -185,10 +186,15 @@ def test_warn_crosshair_unavailable_emits_runtime_warning() -> None:
     """Warning helper reports the CrossHair fallback reason."""
     reason = "CrossHair unavailable: TraceException: unsupported opcode"
 
-    with pytest.warns(RuntimeWarning) as warning_info:
+    with pytest.warns(RuntimeWarning, match=re.escape(reason)) as warning_info:
         _warn_crosshair_unavailable(reason)
 
-    message = str(warning_info[0].message)
+    warning = next(
+        (item for item in warning_info if reason in str(item.message)),
+        None,
+    )
+    assert warning is not None, "warning capture should contain the fallback reason"
+    message = str(warning.message)
     assert reason in message, "warning includes failure reason"
     assert f"Python {sys.version_info.major}.{sys.version_info.minor}." in message, (
         "warning includes Python version"
@@ -201,10 +207,15 @@ def test_warn_crosshair_unavailable_reports_opcode_context() -> None:
     """Tracer fallback warning names opcode compatibility context."""
     reason = "CrossHair unavailable: TraceException: CALL_KW"
 
-    with pytest.warns(RuntimeWarning) as warning_info:
+    with pytest.warns(RuntimeWarning, match=re.escape(reason)) as warning_info:
         _warn_crosshair_unavailable(reason)
 
-    message = str(warning_info[0].message)
+    warning = next(
+        (item for item in warning_info if reason in str(item.message)),
+        None,
+    )
+    assert warning is not None, "warning capture should contain the fallback reason"
+    message = str(warning.message)
     assert reason in message, "warning includes failure reason"
     assert "opcode compatibility" in message, "warning includes opcode context"
     assert "interpreter opcode set" in message, "warning names interpreter opcode set"
