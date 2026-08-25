@@ -23,6 +23,13 @@ if typ.TYPE_CHECKING:
 type AllowlistResults = dict[str, tuple[bool, bool]]
 
 
+class ThreadAllowlistResults(typ.TypedDict):
+    """Store each logical thread's allowlist checks."""
+
+    thread1: tuple[bool, bool]
+    thread2: tuple[bool, bool]
+
+
 def build_before_hook_context(call_order: list[int]) -> CuprumContext:
     """Build a context whose before hooks append their index in order.
 
@@ -98,7 +105,7 @@ def build_after_hook_context(call_order: list[int]) -> CuprumContext:
 
 def run_threaded_allowlist_checks(
     thread_setup: dict[str, frozenset[Program]],
-) -> AllowlistResults:
+) -> ThreadAllowlistResults:
     """Run two threads that each scope and check their allowlist.
 
     Parameters
@@ -108,7 +115,7 @@ def run_threaded_allowlist_checks(
 
     Returns
     -------
-    dict[str, tuple[bool, bool]]
+    ThreadAllowlistResults
         Each thread's ``(echo_allowed, ls_allowed)`` result by name.
     """
     # The barrier holds both threads inside their own ``scoped`` block at the
@@ -118,6 +125,7 @@ def run_threaded_allowlist_checks(
     barrier = threading.Barrier(2, timeout=5.0)
 
     def thread_worker(programs: frozenset[Program]) -> tuple[bool, bool]:
+        """Check both programs within this worker's scoped allowlist."""
         with scoped(ScopeConfig(allowlist=programs)):
             barrier.wait()
             ctx = current_context()
@@ -125,10 +133,14 @@ def run_threaded_allowlist_checks(
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         futures = {
-            name: executor.submit(thread_worker, programs)
-            for name, programs in thread_setup.items()
+            "thread1": executor.submit(thread_worker, thread_setup["thread1"]),
+            "thread2": executor.submit(thread_worker, thread_setup["thread2"]),
         }
-        return {name: future.result() for name, future in futures.items()}
+        results: ThreadAllowlistResults = {
+            "thread1": futures["thread1"].result(),
+            "thread2": futures["thread2"].result(),
+        }
+    return results
 
 
 def run_async_allowlist_checks(
