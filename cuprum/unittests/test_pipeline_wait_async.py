@@ -127,6 +127,61 @@ def _make_termination_scenario() -> _TerminationScenario:
     )
 
 
+async def _run_late_settled_termination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[tuple[bool, ...], _TerminationScenario]:
+    """Run the selected-target late-settlement termination race."""
+    scenario = _make_termination_scenario()
+    fields = _completion_log_fields(scenario.state, 0, 4, 12.5)
+    outcomes: list[tuple[bool, ...]] = []
+    select_targets = _process_lifecycle._stages_to_terminate
+    terminate_stages = _pipeline_wait._terminate_pipeline_remaining_stages
+
+    def settle_after_selection(
+        failure_index: int,
+        done: list[bool],
+    ) -> list[int]:
+        """Settle the second target after its selection snapshot."""
+        targets = select_targets(failure_index, done)
+        scenario.late_waiter.set_result(0)
+        return targets
+
+    async def capture_outcomes(
+        processes: list[asyncio.subprocess.Process],
+        wait_tasks: list[asyncio.Task[int]],
+        failure_index: int,
+        *,
+        cancel_grace: float,
+    ) -> tuple[bool, ...]:
+        """Run the real teardown and retain each selected target outcome."""
+        result = await terminate_stages(
+            processes,
+            wait_tasks,
+            failure_index,
+            cancel_grace=cancel_grace,
+        )
+        outcomes.append(result)
+        return result
+
+    monkeypatch.setattr(
+        _process_lifecycle,
+        "_stages_to_terminate",
+        settle_after_selection,
+    )
+    monkeypatch.setattr(
+        _pipeline_wait,
+        "_terminate_pipeline_remaining_stages",
+        capture_outcomes,
+    )
+    await _pipeline_wait._terminate_and_report(
+        scenario.state,
+        scenario.processes,
+        0.25,
+        fields,
+    )
+    return outcomes[0], scenario
+
+
 class TestProcessCompletedTask:
     """Async integration tests for the ``_process_completed_task`` boundary.
 
@@ -286,60 +341,7 @@ class TestPipelineTerminationOutcomes:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Only a selected target that completes teardown counts as terminated."""
-
-        async def run_case() -> tuple[tuple[bool, ...], _TerminationScenario]:
-            """Select targets, settle one, then run the real report path."""
-            scenario = _make_termination_scenario()
-            fields = _completion_log_fields(scenario.state, 0, 4, 12.5)
-            outcomes: list[tuple[bool, ...]] = []
-            select_targets = _process_lifecycle._stages_to_terminate
-            terminate_stages = _pipeline_wait._terminate_pipeline_remaining_stages
-
-            def settle_after_selection(
-                failure_index: int,
-                done: list[bool],
-            ) -> list[int]:
-                """Settle the second target after its selection snapshot."""
-                targets = select_targets(failure_index, done)
-                scenario.late_waiter.set_result(0)
-                return targets
-
-            async def capture_outcomes(
-                processes: list[asyncio.subprocess.Process],
-                wait_tasks: list[asyncio.Task[int]],
-                failure_index: int,
-                *,
-                cancel_grace: float,
-            ) -> tuple[bool, ...]:
-                """Run the real teardown and retain each selected target outcome."""
-                result = await terminate_stages(
-                    processes,
-                    wait_tasks,
-                    failure_index,
-                    cancel_grace=cancel_grace,
-                )
-                outcomes.append(result)
-                return result
-
-            monkeypatch.setattr(
-                _process_lifecycle,
-                "_stages_to_terminate",
-                settle_after_selection,
-            )
-            monkeypatch.setattr(
-                _pipeline_wait,
-                "_terminate_pipeline_remaining_stages",
-                capture_outcomes,
-            )
-            await _pipeline_wait._terminate_and_report(
-                scenario.state,
-                scenario.processes,
-                0.25,
-                fields,
-            )
-            return outcomes[0], scenario
-
-        outcomes, scenario = asyncio.run(run_case())
+        outcomes, scenario = asyncio.run(_run_late_settled_termination(monkeypatch))
 
         assert outcomes == (True, False), (
             "the selected target that settled before teardown must report false"
