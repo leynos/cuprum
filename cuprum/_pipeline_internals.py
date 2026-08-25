@@ -4,7 +4,7 @@ This module is the private machinery behind ``cuprum.sh``'s
 ``Pipeline.run``/``run_sync``. It ties together allowlist enforcement
 and hook collection, stage process spawning, inter-stage pipe wiring,
 completion waiting with optional timeouts, and per-stage
-``CommandResult`` assembly. It exists chiefly to centralise
+``CommandResult`` assembly. It exists chiefly to centralize
 finalization: when a stage fails or an after-hook raises, pending
 observe-hook tasks must still be drained and every independent
 failure preserved, grouping after-hook and task failures into a

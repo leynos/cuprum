@@ -32,8 +32,6 @@
   `cuprum.context.ExecHook` re-export has been removed; only the import path
   changes, not the hook signature or registration behaviour.
 
-### Added
-
 - **Timeout and teardown telemetry:** Emit `timeout` and `teardown_error`
   `ExecEvent` phases. `timeout` carries `operation="wait"`, `error_type`,
   `timeout_s` (the configured timeout), and `timeout_mode`, which

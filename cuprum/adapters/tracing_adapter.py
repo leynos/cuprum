@@ -86,15 +86,9 @@ if typ.TYPE_CHECKING:
 # Ancillary span-event fields; the timeout pair distinguishes expiry modes.
 _SPAN_FIELDS = ("line", "operation", "error_type", "note", "timeout_s", "timeout_mode")
 
-# An execution's span is ended by its ``exit`` event, but not every execution
-# emits one: cleanup also runs on external cancellation and on an unexpected
-# stdin-writer failure, and on those paths the original exception propagates
-# without an ``exit`` (see the ``ExecEvent.phase`` docstring, which documents
-# ``teardown_error`` as possibly the last event a consumer sees). Without a
-# bound, every such execution would leave an entry behind for the lifetime of
-# the hook. The cap is generous enough that no realistic burst of concurrent
-# executions is likely to evict a live span; see ``_evict_overflow_locked``
-# for what the ordering does and does not promise.
+# ``teardown_error`` can be the last event, so without a bound it could retain a
+# span for the hook's lifetime. See ``_evict_overflow_locked`` for the ordering
+# guarantee.
 _MAX_ACTIVE_SPANS = 1024
 
 
@@ -108,40 +102,13 @@ class _ActiveSpan:
 
 
 class TracingHook:
-    """Observe hook that creates OpenTelemetry-style traces.
+    """Project correlated execution events onto backend spans.
 
-    The hook creates a span for each command execution, starting at the
-    ``start`` event and ending at the ``exit`` event. Output lines and a
-    pipeline's fail-fast decision are recorded as span events.
-
-    Span attributes include:
-
-    - ``cuprum.program``: The program being executed
-    - ``cuprum.argv``: Full argument vector
-    - ``cuprum.pid``: Process ID (when available)
-    - ``cuprum.cwd``: Working directory (when set)
-    - ``cuprum.exit_code``: Exit code (set on exit)
-    - ``cuprum.duration_s``: Duration in seconds (set on exit)
-    - ``cuprum.project``: Project name from tags (when present)
-    - ``cuprum.pipeline_stage_index``: Pipeline stage index (when present)
-    - ``cuprum.pipeline_stages``: Total pipeline stage count (when present)
-
-    Correlation
-    -----------
-    Active spans are keyed by :attr:`~cuprum.events.ExecEvent.exec_id`, the
-    stable per-execution token Cuprum mints once per execution and repeats on
-    every lifecycle event. This is what lets ``stdout``/``stderr``/``exit``
-    events find their span even when the operating system recycles a process
-    identifier: two executions that share a PID have distinct ``exec_id``
-    values, so their events never cross. The PID is still recorded as the
-    ``cuprum.pid`` span attribute for observability, but it is not used to
-    correlate events.
-
-    Legacy or manually constructed events that carry no ``exec_id`` (``None``)
-    cannot be correlated safely, so the hook deliberately ignores them rather
-    than risk attaching output or exit to an unrelated execution's span. A
-    ``start`` without an ``exec_id`` creates no span; a ``stdout``/``stderr``/
-    ``pipeline_fail_fast``/``exit`` without one is dropped.
+    Events without ``exec_id`` are ignored rather than correlated by a PID.
+    Attributes include ``cuprum.program``, ``cuprum.argv``, ``cuprum.pid``,
+    ``cuprum.cwd``, ``cuprum.exit_code``, ``cuprum.duration_s``,
+    ``cuprum.project``, ``cuprum.pipeline_stage_index``, and
+    ``cuprum.pipeline_stages``.
 
     Parameters
     ----------
@@ -149,20 +116,6 @@ class TracingHook:
         A :class:`Tracer` implementation for the target backend.
     record_output:
         If True, record stdout/stderr lines as span events. Default True.
-
-    Example
-    -------
-    ::
-
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-
-        with sh.observe(hook):
-            cmd.run_sync()
-
-        assert len(tracer.spans) == 1
-        assert tracer.spans[0].attributes["cuprum.program"] == "echo"
-
     """
 
     __slots__ = (

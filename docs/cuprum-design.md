@@ -1305,7 +1305,6 @@ processes: it excludes the failed stage, which owns its own exit, and any stage
 whose wait task has already settled. Cleanup is therefore idempotent — a second
 pass over settled stages selects nothing.
 
-
 #### Completion ordering seam
 
 Deciding *which* completion triggers that termination is separated from the

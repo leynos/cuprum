@@ -457,6 +457,24 @@ running process (or every pipeline stage), waits for it to actually exit —
 honouring `cancel_grace` and escalating to `SIGKILL` if needed — drains the
 stream consumers, and then raises `TimeoutExpired`.
 
+**Timeout diagnostics.** Every expiry writes a structured `WARNING` record to
+the `cuprum.timeout` logger, even when no observe hook is registered. The
+`subprocess_timeout_expired pid=… timeout=… mode=…` record carries:
+
+- `cuprum_operation`: `"wait"`
+- `cuprum_pid`: the subprocess PID (`None` when no process was spawned)
+- `cuprum_timeout_s`: the configured timeout in seconds
+- `cuprum_timeout_mode`: `"elapsed_deadline"` or `"non_positive_immediate"`
+- `cuprum_error_type`: `"TimeoutError"`
+
+If cleanup fails to drain a stream consumer, an `ERROR`
+`subprocess_teardown_drain_failed pid=… errors=…` record carries
+`cuprum_operation` (`"drain"`), `cuprum_teardown_outcome` (`"drain_error"`),
+`cuprum_pid`, and `cuprum_error_type` with the comma-joined failure classes.
+The failure is absorbed so it cannot displace `TimeoutExpired` or
+`CancelledError`. Logging is best-effort; the same values are emitted as
+`timeout` and `teardown_error` events, so the channels cannot disagree.
+
 Timeout resolution order:
 
 - Explicit `timeout` argument on `run()` / `run_sync` when not `None`.
@@ -486,6 +504,11 @@ with scoped(ScopeConfig(timeout=3.0)):
 
 Pipeline timeouts apply to the entire pipeline run; partial output is surfaced
 using the same capture rules as successful runs.
+
+A pipeline enforces its deadline once for the whole run, but reports it per
+stage: each stage gets a `timeout` event, a `cuprum.timeout` record with its
+`pid`, and one `cuprum_timeouts_total` increment. The fields and `timeout_mode`
+values match the single-command case.
 
 ### Synchronous execution
 
@@ -739,6 +762,10 @@ hooks receive `ExecEvent` values describing:
 - `start` — subprocess spawned (pid available).
 - `stdout` / `stderr` — decoded output emitted as lines.
 - `exit` — subprocess finished (exit code and duration).
+- `timeout` — the run exceeded its deadline (ancillary; emitted before the
+  preserved `exit` event and the public `TimeoutExpired`).
+- `teardown_error` — a stream consumer drained with an unexpected error during
+  cleanup (ancillary; the error is absorbed to preserve the primary exception).
 - `pipeline_fail_fast` — a pipeline is being torn down early because a
   non-final stage was the first to fail. Emitted at most once per pipeline,
   before every other still-running stage — upstream producers and downstream
@@ -754,6 +781,18 @@ hooks receive `ExecEvent` values describing:
 
 Hooks can be used for structured logging, metrics, or tracing without coupling
 Cuprum to a specific telemetry library.
+
+The `timeout` event carries `operation` (`"wait"`), `pid`, `timeout_s`,
+`error_type` (`"TimeoutError"`), and `timeout_mode`: `"elapsed_deadline"` for
+a positive elapsed deadline or `"non_positive_immediate"` for a non-positive
+deadline that expires without awaiting the process. The `teardown_error` event
+carries `operation` (`"drain"`), `pid`, and `error_type`, the comma-joined
+classes raised while cancelling and draining stream consumers. It fires at most
+once per execution and excludes expected `CancelledError` failures.
+
+These ancillary events preserve the public outcome: `start` and `exit` are
+unchanged, and synchronous hook failures handling `timeout` or `teardown_error`
+are suppressed rather than masking `TimeoutExpired` or `CancelledError`.
 
 Each event carries a stable `exec_id` correlation token: every lifecycle event
 for one execution — a single command, or one stage of a pipeline — shares the
@@ -981,11 +1020,18 @@ The hook collects:
 - `cuprum_stderr_lines_total`: Counter of stderr lines emitted
 - `cuprum_stdin_bytes_total`: Counter of successful stdin bytes written
 - `cuprum_stdin_errors_total`: Counter of stdin writer failures
+- `cuprum_timeouts_total`: Counter of subprocess timeout expiries
+- `cuprum_teardown_errors_total`: Counter of stream-consumer drain failures
+  during cleanup
 - `cuprum_pipeline_fail_fast_total`: Counter incremented once per pipeline torn
   down early because a non-final stage was the first to fail
 
 All metrics include `program` and `project` labels, and only those. Missing,
 empty, or explicit `None` project tags fall back to `unknown`.
+
+`cuprum_timeouts_total` counts both modes; use the `timeout` event's
+`timeout_mode`, or the `cuprum.timeout` record, to distinguish an elapsed
+deadline from an immediate non-positive expiry.
 
 `cuprum_pipeline_fail_fast_total` in particular does **not** use `exec_id`,
 stage index, exit code, command arguments, or paths as labels. `exec_id` is
@@ -1067,6 +1113,14 @@ The hook creates spans with these attributes:
 
 Output lines (stdout/stderr) are recorded as span events when
 `record_output=True` (the default).
+
+**Ancillary span events.** `stdin_error`, `timeout`, and `teardown_error` are
+recorded as `cuprum.<phase>` events on the execution's open span. They leave it
+neither ended nor marked; a later `exit` closes it normally. `timeout` is
+always followed by `exit`, while `teardown_error` may be the final event.
+Ancillary events carry their set `line`, `operation`, `error_type`, `note`,
+`timeout_s`, and `timeout_mode` fields, and correlate by `exec_id`; an event
+without a matching open span is dropped.
 
 **Correlation note:** the hook correlates an execution's `start`, `stdout`,
 `stderr`, and `exit` events by `ExecEvent.exec_id`, a stable token minted once
