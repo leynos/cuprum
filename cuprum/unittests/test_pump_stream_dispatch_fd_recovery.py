@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import os
 import typing as typ
 
@@ -30,14 +31,21 @@ pytestmark = pytest.mark.usefixtures("clear_backend_caches")
 _WRITER_TOGGLE_VALUE_ERROR = "writer toggle value invalid"
 
 
+@dc.dataclass(slots=True)
+class _ValueErrorRecoveryScenario:
+    """Store inputs for the writer-blocking recovery test doubles."""
+
+    reader: asyncio.StreamReader
+    writer: asyncio.StreamWriter
+    read_fd: int
+    write_fd: int
+    resume_calls: list[str]
+    calls: PumpCallCounts
+
+
 def _install_value_error_recovery_doubles(
     monkeypatch: pytest.MonkeyPatch,
-    reader: asyncio.StreamReader,
-    writer: asyncio.StreamWriter,
-    read_fd: int,
-    write_fd: int,
-    resume_calls: list[str],
-    calls: PumpCallCounts,
+    scenario: _ValueErrorRecoveryScenario,
 ) -> None:
     """Install the test doubles for writer-blocking recovery."""
 
@@ -49,7 +57,7 @@ def _install_value_error_recovery_doubles(
 
         def resume_reader() -> None:
             """Record reader transport recovery after fallback."""
-            resume_calls.append("resume")
+            scenario.resume_calls.append("resume")
 
         return resume_reader
 
@@ -65,10 +73,10 @@ def _install_value_error_recovery_doubles(
 
     def fail_writer_toggle(fd: int, is_blocking: object) -> None:
         """Change the reader mode then reject the writer mode change."""
-        if fd == read_fd and is_blocking is True:
+        if fd == scenario.read_fd and is_blocking is True:
             original_set_blocking(fd, bool(is_blocking))
             return
-        if fd == write_fd and is_blocking is True:
+        if fd == scenario.write_fd and is_blocking is True:
             raise ValueError(_WRITER_TOGGLE_VALUE_ERROR)
         original_set_blocking(fd, bool(is_blocking))
 
@@ -77,14 +85,16 @@ def _install_value_error_recovery_doubles(
     monkeypatch.setattr(
         _pipeline_streams,
         "_extract_stream_fd",
-        lambda stream: read_fd if stream is reader else write_fd,
+        lambda stream: (
+            scenario.read_fd if stream is scenario.reader else scenario.write_fd
+        ),
     )
     monkeypatch.setattr(_pipeline_streams.os, "set_blocking", fail_writer_toggle)
     configure_pump_stream_dispatch_for_testing(
         python_pump=lambda fallback_reader, fallback_writer: _fake_python_fallback(
             fallback_reader,
             fallback_writer,
-            calls,
+            scenario.calls,
         )
     )
 
@@ -112,14 +122,17 @@ class TestPumpStreamFdRecovery:
             del read_write_fd, write_read_fd
             reader = typ.cast("asyncio.StreamReader", object())
             writer = typ.cast("asyncio.StreamWriter", object())
+            scenario = _ValueErrorRecoveryScenario(
+                reader=reader,
+                writer=writer,
+                read_fd=read_fd,
+                write_fd=write_fd,
+                resume_calls=resume_calls,
+                calls=calls,
+            )
             _install_value_error_recovery_doubles(
                 monkeypatch,
-                reader,
-                writer,
-                read_fd,
-                write_fd,
-                resume_calls,
-                calls,
+                scenario,
             )
 
             asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
