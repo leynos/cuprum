@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses as dc
 import gc
 import logging
 import os
@@ -39,6 +40,16 @@ class _RecordingGuard:
         self.events.append("restored")
 
 
+@dc.dataclass
+class _MidTransferContext:
+    """Coordination objects shared by a cancellation-transfer test."""
+
+    events: list[str]
+    worker_started: threading.Event
+    worker_finished: threading.Event
+    release: threading.Event
+
+
 def _install_fake_pump(
     monkeypatch: pytest.MonkeyPatch,
     pump: cabc.Callable[[int, int], int],
@@ -50,10 +61,7 @@ def _install_fake_pump(
 
 
 async def _cancel_mid_transfer(
-    events: list[str],
-    worker_started: threading.Event,
-    worker_finished: threading.Event,
-    release: threading.Event,
+    context: _MidTransferContext,
     *,
     cancellations: int = 1,
 ) -> None:
@@ -65,14 +73,14 @@ async def _cancel_mid_transfer(
             writer_fd=writer_fd,
             blocking_mode_guard=typ.cast(
                 "_pipeline_stream_fds._BlockingModeGuard",
-                _RecordingGuard(events),
+                _RecordingGuard(context.events),
             ),
             resume_reader=None,
         )
         task = asyncio.create_task(
             _pipeline_streams._run_rust_pump_with_blocking_fds(state=state)
         )
-        started = await asyncio.to_thread(worker_started.wait, 5.0)
+        started = await asyncio.to_thread(context.worker_started.wait, 5.0)
         assert started, (
             "the pump worker did not start within 5s, so cancellation would "
             "not be mid-transfer"
@@ -82,9 +90,9 @@ async def _cancel_mid_transfer(
             await asyncio.sleep(0.05)
         with pytest.raises(asyncio.CancelledError):
             await task
-        events.append("released")
-        release.set()
-        await asyncio.to_thread(worker_finished.wait, 5.0)
+        context.events.append("released")
+        context.release.set()
+        await asyncio.to_thread(context.worker_finished.wait, 5.0)
         await asyncio.sleep(0)
     finally:
         with contextlib.suppress(OSError):
@@ -114,6 +122,12 @@ def test_cancellation_restores_descriptors_only_after_worker_returns(
     release = threading.Event()
     worker_started = threading.Event()
     worker_finished = threading.Event()
+    context = _MidTransferContext(
+        events=events,
+        worker_started=worker_started,
+        worker_finished=worker_finished,
+        release=release,
+    )
 
     release_waits: list[bool] = []
 
@@ -129,10 +143,7 @@ def test_cancellation_restores_descriptors_only_after_worker_returns(
     _install_fake_pump(monkeypatch, blocking_pump)
     asyncio.run(
         _cancel_mid_transfer(
-            events,
-            worker_started,
-            worker_finished,
-            release,
+            context,
             cancellations=cancellations,
         )
     )
@@ -168,6 +179,12 @@ def test_a_failing_pump_on_a_cancelled_hop_reports_the_cancellation(
     release = threading.Event()
     worker_started = threading.Event()
     worker_finished = threading.Event()
+    context = _MidTransferContext(
+        events=events,
+        worker_started=worker_started,
+        worker_finished=worker_finished,
+        release=release,
+    )
 
     release_waits: list[bool] = []
 
@@ -190,10 +207,7 @@ def test_a_failing_pump_on_a_cancelled_hop_reports_the_cancellation(
         # CancelledError, not OSError: _cancel_mid_transfer asserts it.
         asyncio.run(
             _cancel_mid_transfer(
-                events,
-                worker_started,
-                worker_finished,
-                release,
+                context,
             )
         )
         # Force collection of the executor future while capture is still live.
