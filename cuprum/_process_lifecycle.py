@@ -1,4 +1,24 @@
-"""Process lifecycle management for pipeline execution."""
+"""Process termination and the shared cancellation-safe cleanup primitive.
+
+Termination sends SIGTERM, waits out a grace period, then escalates to
+SIGKILL and reaps the exit, whether for one process
+(``_terminate_process``, ``_terminate_process_with_wait``) or a whole
+pipeline (``_spawn_pipeline_processes``, ``_cleanup_spawned_processes``,
+``_cleanup_pipeline_on_error``, ``_terminate_timed_out_stages``,
+``_terminate_pipeline_remaining_stages``).
+
+``_shielded_cleanup`` underlies all of that: it is the cancellation-safe
+primitive shared by the pipeline paths (``_pipeline_internals``,
+``_pipeline_collect``) and the single-command subprocess paths
+(``_subprocess_execution``, ``_subprocess_wait``,
+``sh._execute_with_hooks``). A bare ``asyncio.shield`` is not enough on
+its own: it stops cancellation reaching the inner coroutine, but the
+awaiting coroutine resumes immediately, so a caller's
+``CancelledError`` propagates while cleanup is still running.
+``_shielded_cleanup`` instead retries the wait under a shield until the
+owned task is done, absorbing however many cancellations arrive before
+re-raising.
+"""
 
 from __future__ import annotations
 

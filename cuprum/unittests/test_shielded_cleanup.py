@@ -32,6 +32,7 @@ from tests.helpers.timeouts import pending_tasks
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._pipeline_types import _StageObservation
     from cuprum.events import ExecEvent
 
 
@@ -179,15 +180,20 @@ def test_streamed_run_drains_its_tasks_before_cancellation_propagates(
     real_drain = _subprocess_wait._drain_stream_consumers
     observed: dict[str, tuple[asyncio.Task[str | None], ...]] = {}
 
+    # Mirrors _drain_stream_consumers exactly — the fixed-length consumer pair
+    # and both keyword-only arguments — so the stand-in needs no type
+    # suppression to forward its call on.
     async def gated_drain(
-        consumers: tuple[asyncio.Task[str | None], ...],
-        **kwargs: object,
+        consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+        *,
+        pid: int | None = None,
+        observation: _StageObservation | None = None,
     ) -> tuple[str | None, str | None]:
         """Announce that the drain started, wait to be released, then drain."""
         observed["consumers"] = consumers
         gate.entered.set()
         await gate.release.wait()
-        return await real_drain(consumers, **kwargs)  # type: ignore[arg-type]
+        return await real_drain(consumers, pid=pid, observation=observation)
 
     monkeypatch.setattr(_subprocess_wait, "_drain_stream_consumers", gated_drain)
 
@@ -204,7 +210,12 @@ def test_streamed_run_drains_its_tasks_before_cancellation_propagates(
         )
 
         gate.release.set()
-        with contextlib.suppress(BaseException):
+        # Narrow deliberately: the shield holds the cancellation off until
+        # cleanup finishes and then re-raises it, so that is the only outcome
+        # expected. Suppressing BaseException would let a TimeoutExpired — or
+        # anything else escaping the run — pass for the cancellation this test
+        # is about, and the assertions below would then pass on the wrong path.
+        with contextlib.suppress(asyncio.CancelledError, BaseExceptionGroup):
             await task
 
         for consumer in observed["consumers"]:
@@ -261,7 +272,12 @@ def test_cancellation_during_hook_drain_leaves_no_hook_task_pending() -> None:
         )
 
         gate.release.set()
-        with contextlib.suppress(BaseException):
+        # Narrow deliberately: the shield holds the cancellation off until
+        # cleanup finishes and then re-raises it, so that is the only outcome
+        # expected. Suppressing BaseException would let a TimeoutExpired — or
+        # anything else escaping the run — pass for the cancellation this test
+        # is about, and the assertions below would then pass on the wrong path.
+        with contextlib.suppress(asyncio.CancelledError, BaseExceptionGroup):
             await task
 
         assert gate.completed, "the hook task must have been allowed to finish"
@@ -276,3 +292,65 @@ def test_cancellation_during_hook_drain_leaves_no_hook_task_pending() -> None:
         asyncio.run(run_case())
 
     assert started == ["exit"], "the gated hook must have run exactly once"
+
+
+# -- The success path ---------------------------------------------------------
+
+
+class _ConsumerBoomError(RuntimeError):
+    """Raised by a stream-consumer double that fails while the run succeeds."""
+
+
+def test_failing_consumer_settles_its_sibling_before_propagating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A consumer failure must not leave the other consumer running.
+
+    The success path gathers both consumers. Without ``return_exceptions`` the
+    first failure re-raises immediately and the sibling is never cancelled, so
+    a reader blocked on a pipe outlives the run it belonged to — the same leak
+    the timeout and cancellation paths reconcile against.
+    """
+    from cuprum import _subprocess_execution
+
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    cmd = python("-c", "print('hi')")
+
+    spawned: dict[str, asyncio.Task[str | None]] = {}
+
+    def failing_consumers(
+        *_args: object, **_kwargs: object
+    ) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
+        """Return one consumer that fails and one that blocks indefinitely."""
+
+        async def boom() -> str | None:
+            """Fail the way a broken reader would."""
+            await asyncio.sleep(0)
+            raise _ConsumerBoomError
+
+        async def blocked() -> str | None:
+            """Block as a reader wedged on a pipe that never reaches EOF."""
+            await asyncio.Event().wait()
+            return None
+
+        spawned["boom"] = asyncio.create_task(boom())
+        spawned["blocked"] = asyncio.create_task(blocked())
+        return spawned["boom"], spawned["blocked"]
+
+    monkeypatch.setattr(
+        _subprocess_execution, "_spawn_stream_consumers", failing_consumers
+    )
+
+    async def run_case() -> None:
+        """Run to completion and inspect what the consumer failure left behind."""
+        with pytest.raises(_ConsumerBoomError):
+            await cmd.run()
+
+        assert spawned["blocked"].done(), (
+            "the surviving consumer was left running after its sibling failed"
+        )
+        assert not pending_tasks(), f"the run left tasks pending: {pending_tasks()}"
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        asyncio.run(run_case())

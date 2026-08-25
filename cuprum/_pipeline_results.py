@@ -16,6 +16,7 @@ import contextlib
 import time
 import typing as typ
 
+from cuprum._pipeline_collect import _sh_module
 from cuprum._pipeline_types import _EventDetails
 
 if typ.TYPE_CHECKING:
@@ -81,8 +82,6 @@ def _build_pipeline_stage_results(
     inputs: _PipelineStageResultInputs,
 ) -> list[CommandResult]:
     """Emit exit events and assemble a command result per pipeline stage."""
-    from cuprum._pipeline_internals import _sh_module
-
     sh = _sh_module()
     stage_results: list[CommandResult] = []
     for idx, obs in enumerate(observations):

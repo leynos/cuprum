@@ -198,7 +198,20 @@ async def _run_subprocess_with_streams(
                 )
             )
             raise
-    stdout_text, stderr_text = await asyncio.gather(*consumers)
+    try:
+        stdout_text, stderr_text = await asyncio.gather(*consumers)
+    except BaseException:
+        # `gather` re-raises the first failure and leaves its sibling running,
+        # so a reader wedged on a pipe would outlive the run it belonged to.
+        # Reconcile it the way every other exit path does, then re-raise: the
+        # drain absorbs what it finds, which is right while another error is
+        # propagating — and here the consumer failure *is* that error.
+        await _shielded_cleanup(
+            _drain_stream_consumers(
+                consumers, pid=pid, observation=execution.observation
+            )
+        )
+        raise
     return exit_code, exited_at, stdout_text, stderr_text
 
 

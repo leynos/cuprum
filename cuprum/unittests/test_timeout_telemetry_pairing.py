@@ -143,10 +143,10 @@ def test_teardown_drain_reports_agree_across_channels(
 ) -> None:
     """The teardown log record and observe event carry the same failure facts.
 
-    ``operation`` deliberately differs between the channels (the log names the
-    ``teardown`` stage, the event names the ``drain`` operation), so the shared
-    facts are the pid and the comma-joined error classes; both must be built
-    from one join rather than computed twice.
+    Both channels name the same ``drain`` operation, so a consumer correlating
+    a log record with its event is not left reconciling two spellings of one
+    thing. The pid and the comma-joined error classes are shared too, and the
+    join must be built once rather than computed twice per channel.
     """
     observation = _RecordingObservation()
 
@@ -173,6 +173,14 @@ def test_teardown_drain_reports_agree_across_channels(
     assert fields["cuprum_error_type"] == details.error_type, (
         f"both channels must report the same joined error classes, got log "
         f"{fields['cuprum_error_type']!r} and event {details.error_type!r}"
+    )
+    assert fields["cuprum_operation"] == details.operation, (
+        f"both channels must name the same operation, got log "
+        f"{fields['cuprum_operation']!r} and event {details.operation!r}"
+    )
+    assert details.operation == "drain", (
+        f"the teardown channels must both name the drain operation, got "
+        f"{details.operation!r}"
     )
     assert details.error_type == ",".join(error_types), (
         f"the joined error classes must preserve the reported order, got "

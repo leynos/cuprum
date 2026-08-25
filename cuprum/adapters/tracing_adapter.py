@@ -70,6 +70,7 @@ import typing as typ
 
 from cuprum.adapters._support import (
     _event_common_fields,
+    _log_span_eviction,
     _log_unhandled_phase,
     _prefixed,
     _project_tag,
@@ -226,6 +227,10 @@ class TracingHook:
             self._active_spans[exec_id] = span
             abandoned = self._evict_overflow_locked()
 
+        if abandoned:
+            _log_span_eviction(
+                "tracing", evicted=len(abandoned), active=len(self._active_spans)
+            )
         for span_to_close in abandoned:
             # Detached from the map, so exactly one handler ends each. Ended
             # outside the lock for the same reason as the stale span below.
@@ -269,10 +274,10 @@ class TracingHook:
         if len(self._active_spans) <= _MAX_ACTIVE_SPANS:
             return []
         overflow = len(self._active_spans) - _MAX_ACTIVE_SPANS
-        return [
-            self._active_spans.pop(stale_id)
-            for stale_id in list(self._active_spans)[:overflow]
-        ]
+        # ``popitem(last=False)`` takes the front — the least recently active
+        # end — without materialising the other thousand-odd keys the way a
+        # ``list(...)`` slice would.
+        return [self._active_spans.popitem(last=False)[1] for _ in range(overflow)]
 
     def _record_span_event(self, event: ExecEvent) -> None:
         """Record ``event``'s diagnostic fields as a span event, keyed by exec_id."""

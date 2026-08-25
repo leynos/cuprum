@@ -1170,6 +1170,12 @@ preserving the `SafeCmd.run()` execution contract:
 - `cuprum/_subprocess_timeout.py` owns timeout data and translation to the
   public `TimeoutExpired` error, plus exit-event helpers shared with normal
   completion.
+- `cuprum/_subprocess_wait.py` owns the rules for *ending* a run: applying the
+  deadline, terminating the process (through `_terminate_all_shielded`, so a
+  caller cancelling during the grace period cannot skip the `SIGKILL`
+  escalation), and draining the stream consumers exactly once. Split out of
+  `_subprocess_execution` so that module stays about orchestration — spawning,
+  wiring streams, assembling the result.
 - `cuprum/_timeout_reporting.py` owns the two channels a timeout or teardown
   failure is reported on — the structured `cuprum.timeout` log record and
   the `timeout` / `teardown_error` observe events — and the `_report_*`
@@ -1219,6 +1225,14 @@ layer; it does not perform execution logic. `_pipeline_internals` re-exports
 selected `_pipeline_collect` helpers for backwards compatibility, not those
 types. Do not reintroduce the combined
 `_run_before_hooks` responsibility in `_pipeline_types`.
+
+`cuprum._pipeline_results` owns per-stage *reporting*, split out of
+`_pipeline_internals` so that module stays about *running* a pipeline: the
+terminal `exit` event a stage owes its observers (`_emit_timeout_exit_events`)
+and the `CommandResult` assembly alongside it
+(`_build_pipeline_stage_results`). `_pipeline_internals` calls into
+`_pipeline_results` on both the success and the timeout paths, so a stage
+never reports a `timeout` and then falls silent.
 
 Error propagation policy (to be finalized, but roughly):
 

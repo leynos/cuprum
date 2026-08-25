@@ -285,7 +285,7 @@ projected only when the reducer yields at least one operation, so a `plan`
 event never touches `event.program` or the project tag. And the reducer is
 total over `ExecPhase` — all nine phases (`plan`, `start`, `stdout`,
 `stderr`, `exit`, `stdin`, `stdin_error`, `timeout`, `teardown_error`) have
-an arm, with `plan`, `stdin` and `exit` handled directly and the remaining
+an arm, with `plan`, `stdin`, and `exit` handled directly and the remaining
 six routed through `_PHASE_COUNTERS` — and fail-closed beyond it: any other
 phase raises `_UnhandledMetricsPhaseError` rather than being silently
 dropped. That is deliberate, and its cost is worth stating plainly. A
@@ -2573,15 +2573,36 @@ not obscure the documented ambiguity error.
 ## Subprocess execution module boundaries
 
 The subprocess execution implementation is split by lifecycle concern across
-`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stdin.py`, and
-`cuprum/_subprocess_timeout.py`. See [Cuprum design](cuprum-design.md) §8.1.5
-and [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the
-accepted rationale and compatibility constraints.
+`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stdin.py`,
+`cuprum/_subprocess_timeout.py`, and `cuprum/_subprocess_wait.py`. See
+[Cuprum design](cuprum-design.md) §8.1.5 and
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the accepted
+rationale and compatibility constraints.
 
 Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; timeout or exit-event policy belongs in
-`_subprocess_timeout`; and orchestration that coordinates them belongs in
+`_subprocess_timeout`; the rules for *ending* a run — applying the deadline,
+terminating the process, and draining the stream consumers exactly once —
+belong in `_subprocess_wait`; and orchestration that coordinates them —
+spawning, wiring streams, and assembling the result — belongs in
 `_subprocess_execution`.
+
+`cuprum/_subprocess_wait.py` holds `_wait_for_exit_code`,
+`_wait_for_exit_code_within_timeout`, `_drain_stream_consumers`,
+`_cancel_pending_consumers`, and `_reconcile_run_tasks` (see the wait-path
+detail below). It was split out of `_subprocess_execution` so that module
+stays about orchestration; termination routes through
+`_terminate_all_shielded` (`cuprum/_process_lifecycle.py`), so a caller
+cancelling during the grace period cannot skip the `SIGKILL` escalation.
+
+The pipeline side has an analogous split. `cuprum/_pipeline_results.py` owns
+per-stage *reporting*: the terminal `exit` event a stage owes its observers
+(`_emit_timeout_exit_events`) and the `CommandResult` assembly alongside it
+(`_build_pipeline_stage_results`). It was split out of
+`cuprum/_pipeline_internals.py`, which keeps that module about *running* a
+pipeline — spawning, waiting, and cleanup. `_pipeline_internals` calls into
+`_pipeline_results` to emit each stage's `exit` event and assemble its result,
+on both the success and the timeout paths.
 
 The subprocess wait path uses caller-owned deadlines: `asyncio.timeout()` was
 adopted in place of `asyncio.wait_for()`, so the deadline is applied by the

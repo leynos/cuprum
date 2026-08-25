@@ -22,7 +22,9 @@ from unittest import mock
 import pytest
 
 from cuprum import ScopeConfig, TimeoutExpired, _pipeline_collect, scoped, sh
+from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
 from cuprum._process_lifecycle import (
+    _shielded_cleanup,
     _terminate_pipeline_remaining_stages,
     _terminate_timed_out_stages,
 )
@@ -358,7 +360,13 @@ def test_pipeline_run_cancelled_during_grace_still_reaps_stages(
         # the cancellation belongs inside that window. There is no event to
         # wait on: the ``timeout`` events are not emitted until teardown has
         # already finished, so this is timed from the deadline itself.
-        await asyncio.sleep(max(0.0, started_at + _STAGE_TIMEOUT + 0.2 - loop.time()))
+        delay = started_at + _STAGE_TIMEOUT + 0.2 - loop.time()
+        assert delay > 0, (
+            "the deadline elapsed before the child signalled readiness, so the "
+            "cancellation below would land after the grace window instead of "
+            f"inside it and quietly stop covering it (delay={delay!r})"
+        )
+        await asyncio.sleep(delay)
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
@@ -500,3 +508,51 @@ def test_zero_timeout_reconciles_pipe_tasks() -> None:
         for pid in started_pids(events):
             with contextlib.suppress(ProcessLookupError):
                 os.kill(pid, signal.SIGKILL)
+
+
+def test_pipe_task_reconciliation_survives_repeated_cancellation() -> None:
+    """Repeated cancellation must not abandon the inter-stage pumps.
+
+    ``_reconcile_pipe_tasks`` cancels each pump and then gathers them. The
+    invariant that matters to the pipeline is the one asserted below: however
+    many cancellations arrive, no pump is left running once the cancellation
+    propagates, because nothing downstream would await it.
+
+    The reconciliation is additionally shielded, matching every other cleanup
+    path here. That shield is defensive rather than load-bearing: ``gather``
+    with ``return_exceptions`` awaits its children even when the gather itself
+    is cancelled, so this test passes with or without it.
+    """
+
+    async def run_case() -> None:
+        """Cancel twice while the pumps are still settling, then inspect them."""
+        released = asyncio.Event()
+
+        async def stubborn_pump() -> None:
+            """Absorb cancellation until released, as a pump mid-write would."""
+            while not released.is_set():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await released.wait()
+
+        pipe_tasks = [asyncio.create_task(stubborn_pump()) for _ in range(2)]
+        # One scheduler pass parks each pump, so the reconciliation's cancel
+        # lands on a running task rather than one the loop has not started.
+        await asyncio.sleep(0)
+
+        task = asyncio.create_task(_shielded_cleanup(_reconcile_pipe_tasks(pipe_tasks)))
+        await asyncio.sleep(0)
+
+        for _ in range(2):
+            assert task.cancel(), "the cancellation must reach a live reconciliation"
+            await asyncio.sleep(0)
+
+        released.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        for index, pipe_task in enumerate(pipe_tasks):
+            assert pipe_task.done(), (
+                f"pump {index} was left running after the cancellation propagated"
+            )
+
+    asyncio.run(run_case())

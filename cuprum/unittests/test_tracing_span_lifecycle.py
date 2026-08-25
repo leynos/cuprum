@@ -22,6 +22,7 @@ passes its ``pid``, ``exec_id``, and phase-specific fields through
 
 from __future__ import annotations
 
+import logging
 import typing as typ
 from pathlib import Path
 
@@ -249,6 +250,33 @@ class TestTracingSpanLifecycle:
         assert len(hook._active_spans) == _MAX_ACTIVE_SPANS, (
             f"the registry must stay bounded, got {len(hook._active_spans)}"
         )
+
+    def test_eviction_is_reported(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Dropping a span must not be silent.
+
+        An evicted span is ended as failed while its execution may still be
+        running, so its trace is lost — and without a signal that loss is
+        undiagnosable: the trace is simply missing and nothing says why.
+        """
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+
+        with caplog.at_level(logging.WARNING, logger="cuprum.adapters"):
+            for index in range(_MAX_ACTIVE_SPANS + 1):
+                hook(
+                    _make_exec_event(
+                        phase="start",
+                        overrides=self._cat_overrides(new_exec_id(), pid=index + 1),
+                    ),
+                )
+
+        overflow = [r for r in caplog.records if "span_registry_overflow" in r.msg]
+        assert len(overflow) == 1, f"one eviction, one record; got {caplog.records}"
+        counts = vars(overflow[0])
+        assert (counts["cuprum_spans_evicted"], counts["cuprum_spans_active"]) == (
+            1,
+            _MAX_ACTIVE_SPANS,
+        ), f"the record must count what was dropped and what remains, got {counts}"
 
     def test_eviction_spares_the_span_that_is_still_active(self) -> None:
         """A span still receiving events outlives one that went quiet earlier.

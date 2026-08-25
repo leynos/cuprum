@@ -48,7 +48,11 @@ def _prepare_pipeline_config(
     context: ExecutionContext | None,
 ) -> _PipelineRunConfig:
     """Normalise runtime options for pipeline execution."""
-    from cuprum._pipeline_internals import _sh_module
+    # Deferred, unlike the module-scope import in ``_pipeline_results``: this
+    # module is imported by ``_pipeline_streams``, which ``_pipeline_collect``
+    # imports, so hoisting the import would close the cycle rather than avoid
+    # it.
+    from cuprum._pipeline_collect import _sh_module
 
     sh = _sh_module()
     ctx = context or sh.ExecutionContext()
