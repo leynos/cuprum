@@ -1,6 +1,6 @@
 """Pinned boundary cases for the completion transition.
 
-`test_pipeline_wait_state_machine.py` generalises these over random completion
+`test_pipeline_wait_state_machine.py` generalizes these over random completion
 orders; the cases here fix the specific orderings whose behaviour is easiest to
 get wrong — a lower-indexed stage failing *after* a higher-indexed one, and a
 failing final stage that has nothing left to terminate.

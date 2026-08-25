@@ -96,9 +96,13 @@ _PROPERTY_SETTINGS: settings = settings(
 def _normalize_line_endings(text: str) -> str:
     """Normalize recognized line endings to line-feed characters."""
     return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _rebuild_normalized_text(lines: list[str], remainder: str) -> str:
     """Rebuild text from split output using normalized line endings."""
     return "".join(f"{line}\n" for line in lines) + remainder
+
+
 def _line_ending_suffix(line: str) -> str:
     """Return the single trailing line-ending sequence, if present."""
     if line.endswith("\r\n"):
@@ -109,18 +113,15 @@ def _line_ending_suffix(line: str) -> str:
         return "\r"
     return ""
 
+
 def _split_preserves_normalized_text(text: str) -> bool:
     """Return whether split output accounts for all input text."""
     lines, remainder = _split_complete_lines(text)
     return len(_normalize_line_endings(text)) == (
         sum(len(line) + 1 for line in lines) + len(remainder)
     )
-def _split_preserves_normalized_text(text: str) -> bool:
-    """Return whether split output accounts for all input text."""
-    lines, remainder = _split_complete_lines(text)
-    return len(_normalize_line_endings(text)) == (
-        sum(len(line) + 1 for line in lines) + len(remainder)
-    )
+
+
 class _UnexpectedProbeFailure(BaseException):
     """Test double for unexpected CrossHair probe failures."""
 
@@ -629,11 +630,3 @@ def test_crosshair_contracts(contract: cabc.Callable[..., None]) -> None:
             per_condition_timeout=60,
         ),
     )
-
-def _normalize_line_endings(text: str) -> str:
-    """Normalize recognized line endings to line-feed characters."""
-    return text.replace("\r\n", "\n").replace("\r", "\n")
-
-def _rebuild_normalized_text(lines: list[str], remainder: str) -> str:
-    """Rebuild text from split output using normalized line endings."""
-    return "".join(f"{line}\n" for line in lines) + remainder

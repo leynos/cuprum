@@ -114,6 +114,7 @@ def _with_retry[T](
                     exc.close()
             time.sleep(retry_delay)
 
+
 class _ArtefactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Strip GitHub-only headers when following cross-origin archive redirects."""
 
@@ -152,44 +153,8 @@ class _ArtefactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
             return None
         self._strip_cross_origin_headers(req, redirected_request)
         return redirected_request
-class _ArtefactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Strip GitHub-only headers when following cross-origin archive redirects."""
 
-    @staticmethod
-    def _strip_cross_origin_headers(
-        req: urllib.request.Request,
-        redirected_request: urllib.request.Request,
-    ) -> None:
-        """Strip sensitive headers when a redirect crosses host boundaries."""
-        source_parts = urllib.parse.urlsplit(req.full_url)
-        destination_parts = urllib.parse.urlsplit(redirected_request.full_url)
-        source_origin = (source_parts.scheme, source_parts.netloc)
-        destination_origin = (destination_parts.scheme, destination_parts.netloc)
-        if source_origin == destination_origin:
-            return
-        for header in _GITHUB_REDIRECT_HEADERS_TO_STRIP:
-            redirected_request.remove_header(header)
 
-    @typ.override
-    def redirect_request(
-        self,
-        req: urllib.request.Request,
-        *args: object,
-        **kwargs: object,
-    ) -> urllib.request.Request | None:
-        fp, code, msg, headers, newurl = _redirect_request_arguments(args, kwargs)
-        redirected_request = super().redirect_request(
-            req,
-            fp,
-            code,
-            msg,
-            headers,
-            newurl,
-        )
-        if redirected_request is None:
-            return None
-        self._strip_cross_origin_headers(req, redirected_request)
-        return redirected_request
 def _load_json_response(*, url: str, token: str) -> cabc.Mapping[str, object]:
     """Load a GitHub API JSON response."""
     _require_https_url(url)

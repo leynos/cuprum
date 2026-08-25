@@ -57,7 +57,7 @@ def shadowed_fail_fast_event() -> ExecEvent:
     Returns
     -------
     ExecEvent
-        The sanitised fail-fast event from the pipeline run.
+        The sanitized fail-fast event from the pipeline run.
     """
     events = run_failing_pipeline(ExecutionContext(tags=_SHADOWING_TAGS))
     fail_fast = phase(events, _FAIL_FAST_PHASE)
