@@ -194,8 +194,8 @@ def given_final_stage_failure_pipeline() -> _ScenarioPipeline:
     """
     _, python_program = python_catalogue()
     return _make_test_pipeline(
-        (python_program, ("-c", "import sys; sys.exit(0)")),
-        (python_program, ("-c", "import sys; sys.exit(0)")),
+        (python_program, ("-c", "import time; time.sleep(2)")),
+        (python_program, ("-c", "import time; time.sleep(2)")),
         (python_program, ("-c", "import sys; sys.exit(5)")),
     )
 
@@ -233,15 +233,21 @@ def when_run_pipeline_async(pipeline_under_test: _ScenarioPipeline) -> PipelineR
 @then("the pipeline output is transformed")
 def then_pipeline_output_transformed(pipeline_result: PipelineResult) -> None:
     """Return transformed stdout from the final stage."""
-    assert pipeline_result.stdout == "BEHAVIOUR"
+    assert pipeline_result.stdout == "BEHAVIOUR", (
+        'Expected pipeline_result.stdout == "BEHAVIOUR"'
+    )
 
 
 @then("the pipeline exposes per stage exit metadata")
 def then_pipeline_exposes_stage_metadata(pipeline_result: PipelineResult) -> None:
     """Stage results include exit codes and process identifiers."""
-    assert len(pipeline_result.stages) == 2
-    assert all(stage.exit_code == 0 for stage in pipeline_result.stages)
-    assert all(stage.pid > 0 for stage in pipeline_result.stages)
+    assert len(pipeline_result.stages) == 2, "Expected len(pipeline_result.stages) == 2"
+    assert all(stage.exit_code == 0 for stage in pipeline_result.stages), (
+        "Expected all(stage.exit_code == 0 for stage in pipeline_result.stages)"
+    )
+    assert all(stage.pid > 0 for stage in pipeline_result.stages), (
+        "Expected all(stage.pid > 0 for stage in pipeline_result.stages)"
+    )
 
 
 @then("the pipeline exposes per stage exit metadata when a stage fails fast")
@@ -249,17 +255,27 @@ def then_pipeline_exposes_stage_metadata_on_fail_fast_failure(
     pipeline_result: PipelineResult,
 ) -> None:
     """Stage results reflect fail-fast termination and surface the failure."""
-    assert len(pipeline_result.stages) == 3
-    assert pipeline_result.ok is False
-    assert pipeline_result.failure is not None
-    assert pipeline_result.failure.exit_code != 0
-    assert pipeline_result.failure_index is not None
-    assert pipeline_result.failure_index < len(pipeline_result.stages) - 1
+    assert len(pipeline_result.stages) == 3, "Expected len(pipeline_result.stages) == 3"
+    assert pipeline_result.ok is False, "Expected pipeline_result.ok is False"
+    assert pipeline_result.failure is not None, (
+        "Expected pipeline_result.failure is not None"
+    )
+    assert pipeline_result.failure.exit_code != 0, (
+        "Expected pipeline_result.failure.exit_code != 0"
+    )
+    assert pipeline_result.failure_index is not None, (
+        "Expected pipeline_result.failure_index is not None"
+    )
+    assert pipeline_result.failure_index < len(pipeline_result.stages) - 1, (
+        "Expected pipeline_result.failure_index < len(pipeline_result.stages) - 1"
+    )
     assert all(
         stage.exit_code != 0
         for stage in pipeline_result.stages[pipeline_result.failure_index + 1 :]
+    ), "Expectation failed in then_pipeline_exposes_stage_metadata_on_fail_fast_failure"
+    assert all(stage.pid > 0 for stage in pipeline_result.stages), (
+        "Expected all(stage.pid > 0 for stage in pipeline_result.stages)"
     )
-    assert all(stage.pid > 0 for stage in pipeline_result.stages)
 
 
 @then("the pipeline exposes per stage exit metadata when the final stage fails")
@@ -267,11 +283,23 @@ def then_pipeline_exposes_stage_metadata_on_final_stage_failure(
     pipeline_result: PipelineResult,
 ) -> None:
     """Stage results surface the failing final stage while still reporting metadata."""
-    assert len(pipeline_result.stages) == 3
-    assert pipeline_result.ok is False
-    assert pipeline_result.failure is pipeline_result.stages[-1]
-    assert pipeline_result.failure_index == len(pipeline_result.stages) - 1
-    assert pipeline_result.stages[0].exit_code == 0
-    assert pipeline_result.stages[1].exit_code == 0
-    assert pipeline_result.stages[2].exit_code != 0
-    assert all(stage.pid > 0 for stage in pipeline_result.stages)
+    assert len(pipeline_result.stages) == 3, "Expected len(pipeline_result.stages) == 3"
+    assert pipeline_result.ok is False, "Expected pipeline_result.ok is False"
+    assert pipeline_result.failure is pipeline_result.stages[-1], (
+        "Expected pipeline_result.failure is pipeline_result.stages[-1]"
+    )
+    assert pipeline_result.failure_index == len(pipeline_result.stages) - 1, (
+        "Expected pipeline_result.failure_index == len(pipeline_result.stages) - 1"
+    )
+    assert pipeline_result.stages[0].exit_code == -15, (
+        "Expected final-stage failure to terminate stage 0"
+    )
+    assert pipeline_result.stages[1].exit_code == -15, (
+        "Expected final-stage failure to terminate stage 1"
+    )
+    assert pipeline_result.stages[2].exit_code != 0, (
+        "Expected pipeline_result.stages[2].exit_code != 0"
+    )
+    assert all(stage.pid > 0 for stage in pipeline_result.stages), (
+        "Expected all(stage.pid > 0 for stage in pipeline_result.stages)"
+    )

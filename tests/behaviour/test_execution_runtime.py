@@ -40,6 +40,15 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+class _ExecutionRuntimeState(typ.TypedDict, total=False):
+    """State shared by execution-runtime behaviour scenario steps."""
+
+    timeout_error: TimeoutExpired
+    timeout_value: float
+    pid: int
+    cleanup_context: str
+
+
 @scenario(
     "../features/execution_runtime.feature",
     "Run captures output by default",
@@ -89,12 +98,12 @@ def test_run_passes_direct_stdin_input() -> None:
 
 
 @pytest.fixture
-def behaviour_state() -> dict[str, object]:
+def behaviour_state() -> _ExecutionRuntimeState:
     """Shared mutable state for behaviour scenarios.
 
     Returns
     -------
-    dict[str, object]
+    _ExecutionRuntimeState
         An empty dictionary for scenario steps to share state through.
     """
     return {}
@@ -177,17 +186,19 @@ def when_run_command_with_direct_stdin(stdin_reader_command: SafeCmd) -> Command
 @then("the command result contains captured output")
 def then_command_result_has_output(run_result: CommandResult) -> None:
     """Validate captured stdout/stderr and exit code."""
-    assert run_result.exit_code == 0
-    assert run_result.stdout == "behaviour"
-    assert not run_result.stderr
+    assert run_result.exit_code == 0, "Expected run_result.exit_code == 0"
+    assert run_result.stdout == "behaviour", 'Expected run_result.stdout == "behaviour"'
+    assert not run_result.stderr, "Expected not run_result.stderr"
 
 
 @then("the command result contains the stdin text")
 def then_command_result_has_stdin_text(run_result: CommandResult) -> None:
     """Validate captured stdout from direct stdin input."""
-    assert run_result.exit_code == 0
-    assert run_result.stdout == "behaviour stdin\n"
-    assert not run_result.stderr
+    assert run_result.exit_code == 0, "Expected run_result.exit_code == 0"
+    assert run_result.stdout == "behaviour stdin\n", (
+        'Expected run_result.stdout == "behaviour stdin\\n"'
+    )
+    assert not run_result.stderr, "Expected not run_result.stderr"
 
 
 @given(
@@ -211,7 +222,7 @@ def given_long_running_command(tmp_path: Path) -> WorkerCommand:
 
 @when("I cancel the command after it starts")
 def when_cancel_command(
-    behaviour_state: dict[str, object],
+    behaviour_state: _ExecutionRuntimeState,
     long_running_command: WorkerCommand,
 ) -> None:
     """Cancel the running command and record the child PID."""
@@ -224,7 +235,7 @@ def when_cancel_command(
 
 @when("I run the command with a timeout")
 def when_run_command_with_timeout(
-    behaviour_state: dict[str, object],
+    behaviour_state: _ExecutionRuntimeState,
     long_running_command: WorkerCommand,
 ) -> None:
     """Run a command with a timeout and record the error and PID."""
@@ -248,7 +259,7 @@ def when_run_command_with_timeout(
 
 @when("I run the command with an already-elapsed timeout")
 def when_run_command_with_non_positive_timeout(
-    behaviour_state: dict[str, object],
+    behaviour_state: _ExecutionRuntimeState,
     long_running_command: WorkerCommand,
 ) -> None:
     """Run with an already-elapsed deadline and record the error and PID.
@@ -283,20 +294,22 @@ def when_run_command_with_non_positive_timeout(
 
 
 @then("the subprocess stops cleanly")
-def then_subprocess_stops_cleanly(behaviour_state: dict[str, object]) -> None:
+def then_subprocess_stops_cleanly(behaviour_state: _ExecutionRuntimeState) -> None:
     """Assert the subprocess has been terminated after cleanup."""
-    pid = typ.cast("int", behaviour_state["pid"])
-    context = typ.cast("str", behaviour_state.get("cleanup_context", "cancellation"))
+    pid = behaviour_state["pid"]
+    context = behaviour_state.get("cleanup_context", "cancellation")
     _wait_for_process_death(pid, seconds=5.0, context=context)
 
 
 @then("a timeout error is raised")
-def then_timeout_error_is_raised(behaviour_state: dict[str, object]) -> None:
+def then_timeout_error_is_raised(behaviour_state: _ExecutionRuntimeState) -> None:
     """Assert that a TimeoutExpired error is raised with expected settings."""
-    error = typ.cast("TimeoutExpired", behaviour_state["timeout_error"])
-    timeout_value = typ.cast("float", behaviour_state["timeout_value"])
-    assert isinstance(error, TimeoutExpired)
-    assert error.timeout == timeout_value
+    error = behaviour_state["timeout_error"]
+    timeout_value = behaviour_state["timeout_value"]
+    assert isinstance(error, TimeoutExpired), (
+        "Expected isinstance(error, TimeoutExpired)"
+    )
+    assert error.timeout == timeout_value, "Expected error.timeout == timeout_value"
 
 
 @scenario(
@@ -328,7 +341,7 @@ def given_non_cooperative_command(tmp_path: Path) -> WorkerCommand:
 
 @when("I cancel the command with a short grace period")
 def when_cancel_non_cooperative(
-    behaviour_state: dict[str, object],
+    behaviour_state: _ExecutionRuntimeState,
     non_cooperative_command: WorkerCommand,
 ) -> None:
     """Cancel a non-cooperative command and record its PID."""
@@ -341,10 +354,10 @@ def when_cancel_non_cooperative(
 
 @then("the subprocess is killed after escalation")
 def then_subprocess_killed_after_escalation(
-    behaviour_state: dict[str, object],
+    behaviour_state: _ExecutionRuntimeState,
 ) -> None:
     """Assert that a stubborn subprocess is eventually killed."""
-    pid = typ.cast("int", behaviour_state["pid"])
+    pid = behaviour_state["pid"]
     _wait_for_process_death(
         pid,
         seconds=5.0,

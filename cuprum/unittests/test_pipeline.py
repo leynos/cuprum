@@ -256,7 +256,16 @@ def test_pipeline_run_sync_failure_semantics(
     assert len(result.stages) == len(stage_codes)
 
     for idx, expected_code in enumerate(stage_codes):
-        assert result.stages[idx].exit_code == expected_code
+        exit_code = result.stages[idx].exit_code
+        if expect_failure_index is not None and idx < expect_failure_index:
+            assert exit_code in {expected_code, -15}, (
+                "an upstream stage must either complete before fail-fast or be "
+                "terminated by it"
+            )
+            continue
+        assert exit_code == expected_code, (
+            f"stage {idx} must retain its expected exit code after fail-fast"
+        )
 
     if expect_failure_index is not None:
         assert result.failure is result.stages[expect_failure_index]

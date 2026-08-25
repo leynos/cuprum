@@ -12,6 +12,7 @@ from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scop
 _logger = logging.getLogger(__name__)
 
 _MIN_PIPELINE_STAGES = 2
+_MAX_ITERATIONS = 1000
 
 
 def _validate_iterations_range(iterations: int) -> None:
@@ -19,8 +20,8 @@ def _validate_iterations_range(iterations: int) -> None:
     if iterations < 1:
         msg = f"iterations must be >= 1, got {iterations}"
         raise ValueError(msg)
-    if iterations > 1000:  # noqa: PLR2004
-        msg = f"iterations must be <= 1000, got {iterations}"
+    if iterations > _MAX_ITERATIONS:
+        msg = f"iterations must be <= {_MAX_ITERATIONS}, got {iterations}"
         raise ValueError(msg)
 
 

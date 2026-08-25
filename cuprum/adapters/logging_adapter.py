@@ -206,13 +206,15 @@ class JsonLoggingFormatter(logging.Formatter):
 
 def _json_serializable(value: object) -> object:
     """Ensure a value is JSON-serializable."""
-    if isinstance(value, cabc.Mapping):
-        return {str(k): _json_serializable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_serializable(v) for v in value]
-    if isinstance(value, (str, int, float, bool, type(None))):
-        return value
-    return str(value)
+    match value:
+        case cabc.Mapping():
+            return {str(k): _json_serializable(v) for k, v in value.items()}
+        case list() | tuple():
+            return [_json_serializable(v) for v in value]
+        case str() | int() | float() | bool() | None:
+            return value
+        case _:
+            return str(value)
 
 
 __all__ = [

@@ -16,7 +16,10 @@ import typing as typ
 
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_exit import _await_process_exit
-from cuprum._process_lifecycle import _merge_env, _terminate_process
+from cuprum._process_lifecycle import (
+    _merge_env,
+    _terminate_process,
+)
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer

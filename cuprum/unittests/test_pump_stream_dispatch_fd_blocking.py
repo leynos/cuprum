@@ -240,8 +240,7 @@ class TestPumpStreamDispatch:
                         True,  # noqa: FBT003  # mirrors os API here
                     )
                     return
-                # The writer toggle now targets a duplicate of ``write_fd``,
-                # so match on "not the reader" rather than a fixed number.
+                # Match on the writer role rather than a fixed descriptor.
                 if fd != read_fd and blocking is True:
                     raise OSError(_WRITER_TOGGLE_FAILURE)
                 original_set_blocking(fd, bool(blocking))

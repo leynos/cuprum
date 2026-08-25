@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses as dc
+import functools
 import os
 import typing as typ
 
@@ -29,6 +30,14 @@ from cuprum._pipeline_config import (
 )
 from cuprum._pipeline_stage_streams import (
     _create_stage_capture_tasks as _create_stage_capture_tasks,
+)
+from cuprum._pipeline_stream_fds import (
+    _close_rust_writer_fd,
+    _extract_stream_fd,
+    _pause_reader_transport,
+    _restore_stream_fd_blocking,
+    _resume_reader_transport,
+    _set_stream_fds_blocking,
 )
 from cuprum._pipeline_stream_results import (
     _cancel_stream_tasks as _cancel_stream_tasks,
@@ -69,6 +78,17 @@ class _PumpStreamDispatchTestHooks:
     ) = None
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _RustPumpState:
+    """Capture transport-owned state that native pumping must restore."""
+
+    reader_fd: int
+    writer_fd: int
+    reader_was_blocking: bool
+    writer_was_blocking: bool
+    resume_reader: cabc.Callable[[], None] | None
+
+
 _PUMP_STREAM_DISPATCH_TEST_HOOKS = _PumpStreamDispatchTestHooks()
 
 
@@ -94,91 +114,78 @@ def configure_pump_stream_dispatch_for_testing(
 
 def reset_pump_stream_dispatch_for_testing() -> None:
     """Reset ``_pump_stream_dispatch`` test hooks to defaults."""
-    configure_pump_stream_dispatch_for_testing()
+    _PUMP_STREAM_DISPATCH_TEST_HOOKS.force_fd_extraction_failure = False
+    _PUMP_STREAM_DISPATCH_TEST_HOOKS.on_rust_fd_path_attempt = None
+    _PUMP_STREAM_DISPATCH_TEST_HOOKS.python_pump = None
 
 
-def _fd_from_transport(transport: object | None) -> int | None:
-    """Extract a raw FD via ``transport.get_extra_info('pipe').fileno()``."""
-    get_extra = getattr(transport, "get_extra_info", None)
-    if get_extra is None:
-        return None
-    pipe: object | None = get_extra("pipe")
-    fileno = getattr(pipe, "fileno", None) if pipe is not None else None
-    if fileno is None:
-        return None
-    try:
-        return int(fileno())
-    except (OSError, ValueError, TypeError, AttributeError):
-        return None
+def _restore_rust_pump_state(state: _RustPumpState) -> None:
+    """Restore pipe state before returning reader transport control to asyncio."""
+    _restore_stream_fd_blocking(
+        reader_fd=state.reader_fd,
+        writer_fd=state.writer_fd,
+        reader_was_blocking=state.reader_was_blocking,
+        writer_was_blocking=state.writer_was_blocking,
+    )
+    _resume_reader_transport(state.resume_reader)
 
 
-def _extract_stream_fd(
-    stream: asyncio.StreamReader | asyncio.StreamWriter | None,
-) -> int | None:
-    """Extract a raw FD from an asyncio stream via its transport."""
-    if stream is None:
-        return None
-    transport = getattr(stream, "transport", None)
-    if transport is None:
-        transport = getattr(stream, "_transport", None)
-    return _fd_from_transport(transport)
-
-
-def _pause_reader_transport(
-    reader: asyncio.StreamReader,
-) -> cabc.Callable[[], None] | None:
-    """Pause reader transport callbacks while Rust pump owns the raw FD."""
-    transport = getattr(reader, "transport", None)
-    if transport is None:
-        transport = getattr(reader, "_transport", None)
-    pause_reading = getattr(transport, "pause_reading", None)
-    resume_reading = getattr(transport, "resume_reading", None)
-    if not callable(pause_reading) or not callable(resume_reading):
-        return None
-    try:
-        pause_reading()
-    except (RuntimeError, OSError):
-        return None
-
-    def _resume() -> None:
-        """Resume the paused reader transport, ignoring teardown errors."""
-        with contextlib.suppress(RuntimeError, OSError):
-            resume_reading()
-
-    return _resume
-
-
-def _set_stream_fds_blocking(*, reader_fd: int, writer_fd: int) -> tuple[bool, bool]:
-    """Switch pipe FDs to blocking mode and return their prior state."""
-    reader_was_blocking = os.get_blocking(reader_fd)
-    writer_was_blocking = os.get_blocking(writer_fd)
-    reader_changed = False
-    try:
-        if not reader_was_blocking:
-            os.set_blocking(reader_fd, True)
-            reader_changed = True
-        if not writer_was_blocking:
-            os.set_blocking(writer_fd, True)
-    except OSError:
-        if reader_changed:
-            with contextlib.suppress(OSError, ValueError):
-                os.set_blocking(reader_fd, reader_was_blocking)
-        raise
-    return reader_was_blocking, writer_was_blocking
-
-
-def _restore_stream_fd_blocking(
+def _complete_rust_pump(
+    completed: asyncio.Future[object],
     *,
-    reader_fd: int,
-    writer_fd: int,
-    reader_was_blocking: bool,
-    writer_was_blocking: bool,
+    cleanup_complete: asyncio.Future[None],
+    rust_writer_fd: int,
+    state: _RustPumpState,
 ) -> None:
-    """Restore pipe FD blocking mode captured before Rust pumping."""
-    with contextlib.suppress(OSError, ValueError):
-        os.set_blocking(reader_fd, reader_was_blocking)
-    with contextlib.suppress(OSError, ValueError):
-        os.set_blocking(writer_fd, writer_was_blocking)
+    """Release native-pump resources after its executor worker settles."""
+    try:
+        if not completed.cancelled():
+            completed.exception()
+    finally:
+        _close_rust_writer_fd(rust_writer_fd)
+        _restore_rust_pump_state(state)
+        if not cleanup_complete.done():
+            cleanup_complete.set_result(None)
+
+
+async def _run_rust_pump_with_blocking_fds(
+    *,
+    state: _RustPumpState,
+) -> None:
+    """Run the native pump while its executor future owns cleanup."""
+    from cuprum._streams_rs import rust_pump_stream
+
+    # Rust consumes this duplicate; asyncio keeps the transport descriptor.
+    rust_writer_fd = os.dup(state.writer_fd)
+    loop = asyncio.get_running_loop()
+    cleanup_complete = loop.create_future()
+    try:
+        native_pump = loop.run_in_executor(
+            None,
+            rust_pump_stream,
+            state.reader_fd,
+            rust_writer_fd,
+        )
+    except BaseException:
+        _close_rust_writer_fd(rust_writer_fd)
+        _restore_rust_pump_state(state)
+        raise
+    native_pump.add_done_callback(
+        functools.partial(
+            _complete_rust_pump,
+            cleanup_complete=cleanup_complete,
+            rust_writer_fd=rust_writer_fd,
+            state=state,
+        )
+    )
+    try:
+        await asyncio.shield(native_pump)
+    except asyncio.CancelledError:
+        raise
+    except BaseException:
+        await asyncio.shield(cleanup_complete)
+        raise
+    await asyncio.shield(cleanup_complete)
 
 
 async def _run_rust_pump(
@@ -188,79 +195,37 @@ async def _run_rust_pump(
     reader_fd: int,
     writer_fd: int,
 ) -> bool:
-    """Run the Rust pump for one pipe hop; return ``True`` when handled.
-
-    ``rust_pump_stream`` consumes the writer descriptor it is given and closes
-    it on return, which is how it signals EOF downstream. asyncio owns the
-    transport's own descriptor and closes it through the transport, so the two
-    cannot be the same descriptor: handing the transport's descriptor to Rust
-    closes it behind asyncio's back and every later transport operation fails
-    with ``EBADF``. Rust is therefore given a duplicate, and asyncio keeps sole
-    ownership of the descriptor its transport holds.
-
-    Returns
-    -------
-    bool
-        ``True`` when the native pump handled the hop, ``False`` when the
-        caller should fall back to the Python pump.
-    """
+    """Run the Rust pump while the executor future owns native cleanup."""
     # Flush any bytes asyncio already buffered in the StreamReader
     # before the Rust pump takes over the raw file descriptor.
     resume_reader = _pause_reader_transport(reader)
     try:
         await _drain_reader_buffer(reader, writer)
-    except Exception:
-        if resume_reader is not None:
-            resume_reader()
+    except BaseException:
+        _resume_reader_transport(resume_reader)
         raise
-
-    from cuprum._streams_rs import rust_pump_stream
-
-    try:
-        # Rust consumes this duplicate; the original stays asyncio's to close.
-        rust_writer_fd = os.dup(writer_fd)
-    except OSError:
-        if resume_reader is not None:
-            resume_reader()
-        return False
 
     try:
         reader_was_blocking, writer_was_blocking = _set_stream_fds_blocking(
             reader_fd=reader_fd,
-            writer_fd=rust_writer_fd,
+            writer_fd=writer_fd,
         )
-    except OSError:
-        with contextlib.suppress(OSError):
-            os.close(rust_writer_fd)
-        if resume_reader is not None:
-            resume_reader()
+    except (OSError, ValueError):
+        _resume_reader_transport(resume_reader)
         return False
 
-    loop = asyncio.get_running_loop()
-    try:
-        # Ownership of ``rust_writer_fd`` passes to Rust here: it closes the
-        # duplicate on return, so Python must not close it again.
-        await loop.run_in_executor(
-            None,
-            rust_pump_stream,
-            reader_fd,
-            rust_writer_fd,
-        )
-    finally:
-        # Restore through the original descriptor. The duplicate may already be
-        # closed by Rust, and blocking mode lives on the shared open file
-        # description, so the original restores the same state.
-        _restore_stream_fd_blocking(
-            reader_fd=reader_fd,
-            writer_fd=writer_fd,
-            reader_was_blocking=reader_was_blocking,
-            writer_was_blocking=writer_was_blocking,
-        )
-        if resume_reader is not None:
-            resume_reader()
+    state = _RustPumpState(
+        reader_fd=reader_fd,
+        writer_fd=writer_fd,
+        reader_was_blocking=reader_was_blocking,
+        writer_was_blocking=writer_was_blocking,
+        resume_reader=resume_reader,
+    )
+    await _run_rust_pump_with_blocking_fds(state=state)
     # Rust closed only its duplicate, so the transport descriptor is still
     # valid: close it through asyncio to signal EOF downstream.
-    await _close_stream_writer(writer)
+    with contextlib.suppress(OSError):
+        await _close_stream_writer(writer)
     return True
 
 

@@ -25,7 +25,7 @@ import sys
 import sysconfig
 from pathlib import Path
 
-from tests.helpers import maturin_wheel as _maturin_wheel
+from tests.helpers.maturin_wheel import wheel_build_snapshot as wheel_build_snapshot
 
 
 class MaturinBuildError(subprocess.CalledProcessError):
@@ -196,8 +196,3 @@ def build_native_wheel_artifact(root: Path, out_dir: Path) -> Path:
         msg = f"Expected exactly one wheel in {out_dir}, found {wheels!r}"
         raise AssertionError(msg)
     return wheels[0]
-
-
-# The wheel-artifact snapshot helpers live in a sibling module to keep this
-# module focused; re-exported here so existing import sites keep working.
-wheel_build_snapshot = _maturin_wheel.wheel_build_snapshot

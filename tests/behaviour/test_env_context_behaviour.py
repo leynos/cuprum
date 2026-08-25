@@ -87,7 +87,9 @@ def then_subprocess_prints_scope_value(
     behaviour_state: dict[str, object],
 ) -> None:
     """Assert the overlay variable reached the subprocess."""
-    assert behaviour_state["stdout"] == "scope-value"
+    assert behaviour_state["stdout"] == "scope-value", (
+        'Expected behaviour_state["stdout"] == "scope-value"'
+    )
 
 
 @when(
@@ -119,4 +121,6 @@ def then_subprocess_prints_live_value(
     behaviour_state: dict[str, object],
 ) -> None:
     """Assert the live ``os.environ`` mutation reached the subprocess."""
-    assert behaviour_state["stdout"] == "live-after-enter"
+    assert behaviour_state["stdout"] == "live-after-enter", (
+        'Expected behaviour_state["stdout"] == "live-after-enter"'
+    )

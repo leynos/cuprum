@@ -65,5 +65,9 @@ def when_run_safe_command(
 def then_start_and_exit_logged(behaviour_state: dict[str, object]) -> None:
     """Verify start and exit entries appear in the captured logs."""
     logs = typ.cast("list[str]", behaviour_state["logs"])
-    assert any("cuprum.start" in msg for msg in logs)
-    assert any("cuprum.exit" in msg for msg in logs)
+    assert any("cuprum.start" in msg for msg in logs), (
+        'Expected any("cuprum.start" in msg for msg in logs)'
+    )
+    assert any("cuprum.exit" in msg for msg in logs), (
+        'Expected any("cuprum.exit" in msg for msg in logs)'
+    )

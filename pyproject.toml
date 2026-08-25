@@ -17,6 +17,7 @@ Repository = "https://github.com/leynos/cuprum"
 [dependency-groups]
 dev = [
     "crosshair-tool",
+    "df12-python-lints @ git+https://github.com/leynos/df12-python-lints.git@755b26f5792f71b37f3a9e656aef714ed98b2c3b",
     "hypothesis",
     "hypothesis-crosshair",
     "interrogate",
@@ -122,6 +123,7 @@ extend-ignore = [
 "cuprum/unittests/test_observe_stdin_early_close.py" = ["ASYNC109", "ASYNC240"]
 "tests/behaviour/_execution_runtime_support.py" = ["ASYNC109", "ASYNC240"]
 "cuprum/unittests/*_test_helpers.py" = ["S101", "PLR0913", "PLR0917", "PLR2004", "PLR6301"]
+"cuprum/unittests/*_support.py" = ["S101", "PLR0913", "PLR0917", "PLR2004", "PLR6301"]
 "tests/steps/*.py" = ["S101", "PLR0913", "PLR0917", "PLR2004", "PLR6301"]
 
 [tool.ruff.lint.flake8-import-conventions]
@@ -207,6 +209,8 @@ max-bool-expr = 2
 max-locals = 10
 
 [tool.pylint.main]
+# Activate rules whose behaviour depends on Cuprum's supported Python baseline.
+py-version = "3.12"
 # Expand directory targets like tests even when they are not packages.
 recursive = true
 # Match the project file-size ceiling enforced during review.

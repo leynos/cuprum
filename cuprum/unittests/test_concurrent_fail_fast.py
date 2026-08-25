@@ -29,6 +29,13 @@ from cuprum.concurrent import (
 from cuprum.unittests import strategies as cuprum_st
 from tests.helpers.catalogue import python_catalogue
 
+"""Unit tests for fail-fast cancellation and collect-all failure mapping.
+These cover both execution modes end to end: collect-all running every
+command despite failures, fail-fast cancelling pending commands, and the
+submission-index mapping that keeps failures traceable when results are
+compacted.
+"""
+
 
 def _run_sleeper_then_failure(exit_code: int) -> tuple[ConcurrentResult, float]:
     """Run a cancelled sleeper alongside a command failing with *exit_code*.

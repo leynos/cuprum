@@ -87,9 +87,9 @@ def then_observe_sees_output_events(behaviour_state: dict[str, object]) -> None:
     events = typ.cast("list[ExecEvent]", behaviour_state["events"])
     stdout_lines = {ev.line for ev in events if ev.phase == "stdout"}
     stderr_lines = {ev.line for ev in events if ev.phase == "stderr"}
-    assert "out1" in stdout_lines
-    assert "out2" in stdout_lines
-    assert "err1" in stderr_lines
+    assert "out1" in stdout_lines, 'Expected "out1" in stdout_lines'
+    assert "out2" in stdout_lines, 'Expected "out2" in stdout_lines'
+    assert "err1" in stderr_lines, 'Expected "err1" in stderr_lines'
 
 
 @then("the observe hook sees timing and tag metadata")
@@ -99,12 +99,12 @@ def then_observe_sees_timing_and_tags(behaviour_state: dict[str, object]) -> Non
     start = next(ev for ev in events if ev.phase == "start")
     exit_ = next(ev for ev in events if ev.phase == "exit")
 
-    assert start.pid is not None
-    assert start.pid > 0
-    assert exit_.exit_code == 0
-    assert exit_.duration_s is not None
-    assert exit_.duration_s >= 0.0
+    assert start.pid is not None, "Expected start.pid is not None"
+    assert start.pid > 0, "Expected start.pid > 0"
+    assert exit_.exit_code == 0, "Expected exit_.exit_code == 0"
+    assert exit_.duration_s is not None, "Expected exit_.duration_s is not None"
+    assert exit_.duration_s >= 0.0, "Expected exit_.duration_s >= 0.0"
 
     for ev in (start, exit_):
-        assert ev.tags["run_id"] == "bdd"
-        assert "project" in ev.tags
+        assert ev.tags["run_id"] == "bdd", 'Expected ev.tags["run_id"] == "bdd"'
+        assert "project" in ev.tags, 'Expected "project" in ev.tags'

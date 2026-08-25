@@ -43,6 +43,14 @@ def _require_bool(value: object, *, name: str) -> bool:
     return value
 
 
+def _require_int(value: object, *, name: str) -> int:
+    """Validate and return an integer value."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        msg = f"{name} must be an integer"
+        raise TypeError(msg)
+    return value
+
+
 def _check_float_bound(
     validated: float,
     *,

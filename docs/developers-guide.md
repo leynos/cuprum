@@ -31,6 +31,10 @@ User callers should use `cuprum.is_rust_available()`, which delegates to
 `_check_rust_available()`, so the public answer and dispatch resolver cannot
 diverge within a process.
 
+The public helper raises `TypeError` with the message `Rust availability
+resolver must return bool` if the canonical resolver returns a non-boolean
+value.
+
 Issue `#128` is resolved in this path: the public helper and backend dispatch
 now share the same cached resolver.
 
@@ -716,6 +720,10 @@ Runtime (`cuprum/`):
 
 Benchmarks (`benchmarks/`):
 
+- `benchmarks/_github_http.py` — authenticated GitHub request construction,
+  bounded retries, and cross-origin redirect policy for benchmark baseline
+  discovery and downloads. Reuse it for benchmark GitHub transfers; keep
+  general-purpose HTTP concerns outside this private module.
 - `benchmarks/ratchet_ratio_extraction.py` — extracts within-run Rust/Python
   ratio maps and validates that baseline and candidate comparison groups
   match. `benchmarks/ratchet_rust_performance.py` owns report-value
@@ -1453,6 +1461,17 @@ exit modes, and at most three repeated borrows — rather than for all
 executions. Active verification tracking, including whether Verus adds anything
 beyond the Kani model once that model is complete, lives in issue `#89`.
 
+### Python-side native pump descriptor lifetime
+
+`_run_rust_pump` keeps the asyncio transport's writer descriptor in Python's
+ownership. It gives `rust_pump_stream` a duplicate instead, because the native
+pump consumes and closes the descriptor it receives. The duplicate remains
+owned by the executor future until its worker settles, including native-load
+failure and cancellation of the awaiting task; only then is it closed. The
+reader transport remains paused, and the original descriptor modes are
+restored, until that same completion boundary. This prevents cancellation
+cleanup from racing with native I/O on a descriptor that is still in use.
+
 ## Rust splice-loop and drain contract
 
 The Linux zero-copy path in `rust/cuprum-rust/src/splice.rs` follows one
@@ -1875,12 +1894,14 @@ requires that surface.
 
 ## Python linting
 
-Cuprum uses a three-tier Python lint gate. Ruff is the first tier and remains
+Cuprum uses a five-stage Python lint gate. Ruff is the first stage and remains
 the fast, broad lint pass for formatting-adjacent checks, import order,
 docstring *style*, security checks, naming, complexity, and Ruff's native
-Pylint-derived rules. `interrogate` is the second tier and enforces docstring
-*presence* at 100 per cent across the `cuprum` package. Pylint is the third
-tier and runs through the `leynos/pylint-pypy-shim` package under PyPy.
+Pylint-derived rules. `interrogate` is the second stage and enforces docstring
+*presence* at 100 per cent across the `cuprum` package. Built-in Pylint checks
+run third through the `leynos/pylint-pypy-shim` package under PyPy. The pinned
+`df12-python-lints` plugin runs fourth under CPython 3.14, and `ambrleaks`
+scans Syrupy snapshots fifth under the same interpreter.
 
 The decisions are recorded in
 [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md) and
@@ -1900,6 +1921,11 @@ The short version is:
 - `$(PYLINT)` pins Pylint itself with
   `--with 'pylint==$(PYLINT_VERSION)'` because the shim revision and Pylint
   package version are separate sources of lint behaviour.
+- `$(DF12_PYLINT)` enables every message shipped by
+  `df12-python-lints` v0.1.0 under CPython 3.14 while retaining Cuprum's
+  `py-version = "3.12"` semantic baseline.
+- `$(AMBRLEAKS)` scans `cuprum/unittests` and `tests`; exact deterministic
+  fixture values that resemble secrets belong in `ambrleaks.toml`.
 
 ### Docstring structure
 
@@ -1926,10 +1952,14 @@ make lint
 2. `$(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum`
 3. The PyPy-backed `pylint-pypy` command stored in `$(PYLINT)`, with
    `$(PYLINT_TARGETS)` appended.
+4. The CPython 3.14 `df12-python-lints` pass stored in `$(DF12_PYLINT)`, over
+   the same targets.
+5. The CPython 3.14 `ambrleaks` scanner over both Syrupy snapshot roots.
 
-Each tier must pass before the next runs. When investigating a lint failure,
-fix the Ruff findings first, then the `interrogate` gaps, then rerun
-`make lint` to reach the Pylint tier.
+Each stage must pass before the next runs. When investigating a lint failure,
+fix findings in execution order, then rerun `make lint` to reach the next
+stage. Do not disable df12 messages to absorb existing findings; repair the
+assertion, alias, suppression rationale, or dispatch structure instead.
 
 ### Spelling policy
 
@@ -1981,19 +2011,27 @@ The root `Makefile` exposes the following lint-related variables:
 
 <!-- markdownlint-disable MD013 -->
 
-| Variable               | Default                                                                      | Purpose                                                                    |
-| ---------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `VENV_TOOLS`           | `pytest ruff`                                                                | Tools that must resolve through `uv run` from the locked virtualenv.       |
-| `RUFF`                 | `$(UV_RUN_ENV) uv run ruff`                                                  | Locked Ruff command used by `fmt`, `check-fmt`, and `lint`.                |
-| `PYLINT_PYTHON`        | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.         |
-| `PYLINT_TARGETS`       | `benchmarks conftest.py cuprum tests`                                        | Directories and files passed to `pylint-pypy`.                             |
-| `PYLINT_PYPY_SHIM_REF` | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                              |
-| `PYLINT_PYPY_SHIM`     | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                      |
-| `PYLINT_VERSION`       | `4.0.5`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.         |
-| `PYLINT`               | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                       |
-| `LOCAL_TOOL_ENV`       | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools. |
-| `UV_ENV`               | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                  |
-| `UV_RUN_ENV`           | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment for locked `uv run` commands such as `$(RUFF)`.         |
+Table: Lint-related Makefile variables and their defaults.
+
+| Variable                | Default                                                                      | Purpose                                                                    |
+| ----------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `VENV_TOOLS`            | `pytest ruff`                                                                | Tools that must resolve through `uv run` from the locked virtualenv.       |
+| `RUFF`                  | `$(UV_RUN_ENV) uv run ruff`                                                  | Locked Ruff command used by `fmt`, `check-fmt`, and `lint`.                |
+| `PYLINT_PYTHON`         | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.         |
+| `PYLINT_TARGETS`        | `benchmarks conftest.py cuprum tests`                                        | Directories and files passed to `pylint-pypy`.                             |
+| `PYLINT_PYPY_SHIM_REF`  | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                              |
+| `PYLINT_PYPY_SHIM`      | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                      |
+| `PYLINT_VERSION`        | `4.0.7`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.         |
+| `PYLINT_CACHE`          | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                         |
+| `PYLINT`                | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                       |
+| `DF12_PYTHON_LINTS_REF` | `755b26f5792f71b37f3a9e656aef714ed98b2c3b`                                   | Immutable v0.1.0 revision locked for DF12 lint tooling.                    |
+| `DF12_PYTHON`           | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                      |
+| `DF12_PYLINT_MESSAGES`  | All v0.1.0 message IDs                                                       | Explicit allowlist for the df12 Pylint pass.                               |
+| `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                   |
+| `AMBRLEAKS`             | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                  |
+| `LOCAL_TOOL_ENV`        | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools. |
+| `UV_ENV`                | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                  |
+| `UV_RUN_ENV`            | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment for locked `uv run` commands such as `$(RUFF)`.         |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -2006,7 +2044,10 @@ PYLINT_TARGETS=cuprum/sh.py make lint
 
 Do not change `PYLINT_PYPY_SHIM_REF` casually. Updating the pinned shim
 revision changes the lint runtime and must be reviewed like any other toolchain
-update.
+update. Update the `df12-python-lints` development dependency and
+`DF12_PYTHON_LINTS_REF` together so the Pylint plugin and standalone scanner
+remain on the same immutable revision. When adopting a new release, resolve its
+tag to a commit before updating both pins.
 
 ### Episodic lint policy
 
@@ -2020,6 +2061,8 @@ a separate house style. The imported policy consists of:
 - A focused Pylint configuration that disables all messages by default, then
   enables only the selected messages that complement Ruff.
 - A PyPy-backed Pylint invocation through the pinned shim repository.
+- Every `df12-python-lints` v0.1.0 message, executed under CPython 3.14.
+- `ambrleaks` coverage for both in-package and behavioural Syrupy snapshots.
 
 This means new code should prefer:
 
@@ -2065,6 +2108,10 @@ The canonical lint configuration lives in `pyproject.toml`:
   [Docstring consistency gate](#docstring-consistency-gate) below.
 - `[tool.pylint.main]`, `[tool.pylint.design]`, and
   `[tool.pylint."messages control"]` configure the second-tier Pylint pass.
+- `[dependency-groups].dev` pins the df12 plugin used by the CPython 3.14 pass
+  to the same immutable revision as the standalone scanner.
+- `ambrleaks.toml` contains narrow value allowlists for deterministic public
+  fixture data that matches a scanner pattern.
 
 When changing lint policy, update both `pyproject.toml` and this guide. If the
 change alters the architecture of the lint gate, update
