@@ -10,11 +10,14 @@ to change accidentally.
 from __future__ import annotations
 
 import dataclasses as dc
+import types
 import typing as typ
 
 from cuprum._pipeline_types import _EventDetails
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum._pipeline_types import _StageObservation
     from cuprum._pipeline_wait import _PipelineWaitState
 
@@ -28,6 +31,17 @@ class _CompletionLogFields:
     exit_code: int
     duration_s: float
     exec_id: str | None
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _CompletionReport:
+    """One pipeline-wait record's action, message, and optional fields."""
+
+    action: str
+    message: str
+    extra_fields: cabc.Mapping[str, object] = dc.field(
+        default_factory=lambda: types.MappingProxyType({}),
+    )
 
 
 def _completion_log_fields(
@@ -68,25 +82,23 @@ def _observation_exec_id(observation: _StageObservation | None) -> str | None:
 
 def _report_completion_event(
     observation: _StageObservation | None,
-    action: str,
-    message: str,
     fields: _CompletionLogFields,
-    **extra_fields: object,
+    report: _CompletionReport,
 ) -> None:
     """Route one pipeline-wait record through an installed adapter port."""
     if observation is None:
         return
     observation.report_pipeline_wait(
-        message,
+        report.message,
         (fields.stage_index, fields.exit_code),
         {
-            "cuprum_action": action,
+            "cuprum_action": report.action,
             "cuprum_stage_index": fields.stage_index,
             "cuprum_stage_count": fields.stage_count,
             "cuprum_exit_code": fields.exit_code,
             "cuprum_duration_s": fields.duration_s,
             "cuprum_exec_id": fields.exec_id,
-            **extra_fields,
+            **report.extra_fields,
         },
     )
 

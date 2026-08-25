@@ -190,7 +190,7 @@ class TestProcessCompletedTask:
         assert state.exit_codes[1] == 0, "the zero exit must be recorded"
         assert state.ended_at[1] == 12.5, "the end time must still be stamped"
         assert state.failure_index is None, "a success must not latch a failure"
-        assert terminations == [], "a successful stage must not terminate others"
+        assert not terminations, "a successful stage must not terminate others"
 
     def test_failing_final_stage_records_without_terminating(
         self,
@@ -205,7 +205,7 @@ class TestProcessCompletedTask:
         )
 
         assert state.failure_index == 2, "the final stage must still latch"
-        assert terminations == [], "a failing final stage must not request termination"
+        assert not terminations, "a failing final stage must not request termination"
 
     @staticmethod
     def _run_completions(
@@ -351,4 +351,15 @@ class TestPipelineTerminationOutcomes:
             "confirmed-termination",
             "pipeline_fail_fast_terminated",
         ], "the completion record must follow confirmed termination processing"
-        assert scenario.reporter.records[-1]["cuprum_terminated_stage_count"] == 1
+        termination_record, outcome_record = scenario.reporter.records
+        outcome_fields = {
+            "cuprum_terminated_stage_count",
+            "cuprum_termination_duration_s",
+        }
+        assert not outcome_fields & termination_record.keys(), (
+            "the termination-start record must not gain outcome-only fields"
+        )
+        assert outcome_record["cuprum_terminated_stage_count"] == 1
+        duration = outcome_record["cuprum_termination_duration_s"]
+        assert isinstance(duration, float)
+        assert duration >= 0.0

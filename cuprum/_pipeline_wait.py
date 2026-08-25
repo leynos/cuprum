@@ -58,6 +58,7 @@ from cuprum._pipeline_streams import (
 from cuprum._pipeline_wait_records import (
     _completion_log_fields,
     _CompletionLogFields,
+    _CompletionReport,
     _emit_fail_fast_event,
     _report_completion_event,
 )
@@ -250,9 +251,11 @@ async def _terminate_and_report(
     observation = state.observation(fields.stage_index)
     _report_completion_event(
         observation,
-        "pipeline_fail_fast_termination",
-        "terminating other pipeline stages after stage %d exited %d",
         fields,
+        _CompletionReport(
+            action="pipeline_fail_fast_termination",
+            message="terminating other pipeline stages after stage %d exited %d",
+        ),
     )
     started = perf_counter()
     termination_outcomes = await _terminate_pipeline_remaining_stages(
@@ -263,11 +266,15 @@ async def _terminate_and_report(
     )
     _report_completion_event(
         observation,
-        "pipeline_fail_fast_terminated",
-        "terminated other pipeline stages after stage %d exited %d",
         fields,
-        cuprum_terminated_stage_count=sum(termination_outcomes),
-        cuprum_termination_duration_s=max(0.0, perf_counter() - started),
+        _CompletionReport(
+            action="pipeline_fail_fast_terminated",
+            message="terminated other pipeline stages after stage %d exited %d",
+            extra_fields={
+                "cuprum_terminated_stage_count": sum(termination_outcomes),
+                "cuprum_termination_duration_s": max(0.0, perf_counter() - started),
+            },
+        ),
     )
 
 
@@ -310,9 +317,11 @@ async def _process_completed_task(
     if latched_first_failure:
         _report_completion_event(
             observation,
-            "pipeline_stage_first_failure",
-            "pipeline stage %d exited %d, latching first failure",
             fields,
+            _CompletionReport(
+                action="pipeline_stage_first_failure",
+                message="pipeline stage %d exited %d, latching first failure",
+            ),
         )
     if not terminate_others:
         return
