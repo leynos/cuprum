@@ -516,10 +516,9 @@ retrieves a future's outcome, so when a hop is cancelled
 any error it carried under a `cuprum_action` of
 `rust_pump_failed_after_cancel`, with the traceback attached via `exc_info`.
 The caller is told about the cancellation it asked for; without this record the
-pump's own error would resurface at collection time as an unretrieved-exception
-warning, detached from the hop that caused it.
+pump's own error would resurface when the future is garbage-collected as an
+unretrieved-exception warning, detached from the hop that caused it.
 `cuprum/unittests/test_pipeline_streams_cancellation.py` pins the field.
-
 
 #### Counting those records
 

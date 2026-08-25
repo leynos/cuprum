@@ -47,6 +47,8 @@ class _FakeTransport:
     def resume_reading(self) -> None:
         """Record a resume."""
         self.resume_calls += 1
+
+
 def _raise_boom() -> None:
     """Raise a deterministic error from inside a paused-reader block."""
     msg = "boom"
@@ -74,6 +76,7 @@ def test_paused_reader_always_resumes_a_pausable_transport(
         "a completed pause must be resumed exactly once, on every exit path"
     )
 
+
 async def _hold_the_pause_until_cancelled(
     reader: asyncio.StreamReader,
     entered: asyncio.Event,
@@ -82,6 +85,7 @@ async def _hold_the_pause_until_cancelled(
     with _paused_reader(reader):
         entered.set()
         await asyncio.Event().wait()
+
 
 async def _cancel_a_held_pause(reader: asyncio.StreamReader) -> None:
     """Cancel a task parked inside ``_paused_reader`` and re-raise its outcome."""
@@ -94,6 +98,7 @@ async def _cancel_a_held_pause(reader: asyncio.StreamReader) -> None:
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
 
 def test_paused_reader_resumes_when_the_block_is_cancelled() -> None:
     """A task cancelled inside the block still resumes, and stays cancelled.
@@ -112,6 +117,8 @@ def test_paused_reader_resumes_when_the_block_is_cancelled() -> None:
     assert transport.resume_calls == 1, (
         "a pause held across a cancelled await must still be resumed exactly once"
     )
+
+
 class _ResumeOnlyTransport:
     """A transport offering ``resume_reading`` but no ``pause_reading``.
 
@@ -142,6 +149,8 @@ def test_paused_reader_skips_resume_when_pause_unavailable() -> None:
         assert pause.may_hand_off is True, (
             "with no callbacks to race, the descriptor hand-off is safe"
         )
+
+
 def test_paused_reader_declines_an_unresumable_transport() -> None:
     """A pausable transport with no resume hook declines the hand-off, unpaused.
 
@@ -162,6 +171,8 @@ def test_paused_reader_declines_an_unresumable_transport() -> None:
     assert transport.pause_calls == 0, (
         "a pause that could never be undone must not be applied"
     )
+
+
 def test_paused_reader_undoes_a_half_applied_pause() -> None:
     """A pause that raises is corrected once, at the failure site."""
     transport = _FakeTransport(pause_raises=True)
@@ -180,6 +191,8 @@ def test_paused_reader_undoes_a_half_applied_pause() -> None:
     assert transport.resume_calls == 1, (
         "a pause that raised must be undone, in case it half-applied"
     )
+
+
 @pytest.mark.parametrize("fault_error", [OSError, ValueError])
 def test_run_rust_pump_falls_back_and_resumes_when_blocking_fails(
     monkeypatch: pytest.MonkeyPatch,
@@ -248,6 +261,8 @@ def test_run_rust_pump_falls_back_and_resumes_when_blocking_fails(
 
     assert handled is False, "a blocking-toggle failure must fall back to Python"
     assert resume_calls["count"] == 1, "the reader must be resumed on fallback"
+
+
 def test_pump_over_raw_fds_falls_back_when_pause_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

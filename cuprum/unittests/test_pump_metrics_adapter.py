@@ -302,12 +302,14 @@ def test_a_decline_without_a_reason_falls_back_to_a_bounded_label() -> None:
         f"a missing reason must degrade to a fixed label, found {labels}"
     )
 
+
 class _ChattyReason:
     """A ``reason`` stand-in whose ``str()`` differs on every instance."""
 
     def __str__(self) -> str:
         """Return a value no two instances share."""
         return f"session-{id(self):x}"
+
 
 def test_a_decline_carrying_a_non_enum_reason_is_still_bounded() -> None:
     """An off-enum ``reason`` degrades to the fixed label, not to ``str()``.

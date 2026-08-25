@@ -240,8 +240,13 @@ async def _emit_under_own_hook(
 ) -> tuple[PumpHook, ...]:
     """Register ``hook``, emit ``event`` while a sibling task is registered too.
 
-    Returns the hooks visible from inside the registration, so the caller can
-    check what this task's context saw rather than only what its hook received.
+    The caller can check what this task's context saw rather than only what its
+    hook received.
+
+    Returns
+    -------
+    tuple[PumpHook, ...]
+        The hooks visible inside this task's registration.
     """
     with observe_pump(hook):
         # Both registrations are live at once before either emits. A registry

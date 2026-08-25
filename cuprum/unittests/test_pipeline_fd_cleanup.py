@@ -51,6 +51,11 @@ def _upper_pipeline() -> tuple[Pipeline, frozenset[Program]]:
 
     Three stages give two inter-stage hops, so a descriptor mishandled on
     either side of a hop shows up in the count.
+
+    Returns
+    -------
+    tuple[Pipeline, frozenset[Program]]
+        The pipeline under test and its permitted programs.
     """
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)

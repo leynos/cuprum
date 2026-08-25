@@ -15,7 +15,6 @@ responsible for moving and collecting bytes once those streams exist.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses as dc
 import functools
 import logging
@@ -67,9 +66,6 @@ if typ.TYPE_CHECKING:
 
 
 _LOGGER = logging.getLogger(__name__)
-
-
-_RustPumpDeclineReason = RustPumpDeclineReason
 
 
 def _log_rust_pump_declined(reason: RustPumpDeclineReason) -> None:
@@ -251,8 +247,7 @@ async def _pump_over_raw_fds(
     reader_pause = _pause_reader_transport(reader)
     if not reader_pause.may_hand_off:
         _log_rust_pump_declined(
-            reader_pause.decline_reason
-            or _RustPumpDeclineReason.READER_PAUSE_FAILED,
+            reader_pause.decline_reason or RustPumpDeclineReason.READER_PAUSE_FAILED,
         )
         return False
     try:
@@ -268,7 +263,7 @@ async def _pump_over_raw_fds(
         )
     except (OSError, ValueError):
         _resume_reader_transport(reader_pause.resume)
-        _log_rust_pump_declined(_RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
+        _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
         return False
 
     state = _RustPumpState(
@@ -332,7 +327,7 @@ async def _try_rust_pump(
     writer_fd = _extract_stream_fd(writer)
 
     if reader_fd is None or writer_fd is None:
-        _log_rust_pump_declined(_RustPumpDeclineReason.RAW_FD_UNAVAILABLE)
+        _log_rust_pump_declined(RustPumpDeclineReason.RAW_FD_UNAVAILABLE)
         return False
 
     return await _run_rust_pump(

@@ -79,6 +79,11 @@ def _phase_labels(event: PumpEvent) -> dict[str, str]:
     metric label — one series per value, which is the unbounded cardinality this
     label set exists to rule out. Type checking cannot close that hole for a
     caller who is not type checked.
+
+    Returns
+    -------
+    dict[str, str]
+        The fixed labels allowed for the event's metric series.
     """
     if event.phase != "declined":
         return {}

@@ -1,11 +1,12 @@
 """Unit tests for cuprum public exports."""
+
 from __future__ import annotations
 
 import dataclasses as dc
 
+import cuprum as c
 from cuprum import context, pump_events, pump_observation
 from cuprum.events import ExecHook, new_exec_id
-import cuprum as c
 
 
 def test_public_exports_are_available() -> None:

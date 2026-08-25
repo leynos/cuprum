@@ -19,12 +19,13 @@ import types
 import typing as typ
 
 from cuprum import _pipeline_stream_fds, _pipeline_streams
-from cuprum.pump_events import RustPumpDeclineReason
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     import pytest
+
+    from cuprum.pump_events import RustPumpDeclineReason
 
 
 class RecordingCollector:
@@ -67,6 +68,7 @@ def fail_engage(**_kwargs: object) -> object:
     msg = "blocking mode is unavailable for this descriptor pair"
     raise OSError(msg)
 
+
 def fail_engage_with_value_error(**_kwargs: object) -> object:
     """Refuse the descriptors with ``ValueError`` rather than ``OSError``.
 
@@ -76,9 +78,16 @@ def fail_engage_with_value_error(**_kwargs: object) -> object:
     module treats it as a possible outcome of the same call; the two halves of
     that lifecycle have to agree, or a ``ValueError`` would escape the decline
     seam and crash a hop the fallback could have carried.
+
+    Raises
+    ------
+    ValueError
+        Always, to model a blocking-mode refusal.
     """
     msg = "I/O operation on closed file"
     raise ValueError(msg)
+
+
 @contextlib.contextmanager
 def owned_fds() -> cabc.Iterator[tuple[int, int]]:
     """Yield a private pipe's descriptors, closing both on exit.
@@ -90,6 +99,11 @@ def owned_fds() -> cabc.Iterator[tuple[int, int]]:
     an ``fcntl`` on the test runner's own stdout and stderr, and the damage
     surfaces far from here. Descriptors this helper owns make the same mistake
     harmless.
+
+    Yields
+    ------
+    tuple[int, int]
+        Reader and writer descriptors for a private pipe.
     """
     reader_fd, writer_fd = os.pipe()
     try:
@@ -136,6 +150,8 @@ class TransportOnlyReader:
     def __init__(self, transport: object) -> None:
         """Wrap ``transport`` as the reader's public transport."""
         self.transport = transport
+
+
 def allow_pause(monkeypatch: pytest.MonkeyPatch, *, may_hand_off: bool) -> None:
     """Force the reader-pause seam to the given hand-off verdict."""
     monkeypatch.setattr(
@@ -156,6 +172,7 @@ def decline_on_pause_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     allow_pause(monkeypatch, may_hand_off=False)
     run_raw_fd_pump()
 
+
 def _decline_on_blocking_refusal(
     monkeypatch: pytest.MonkeyPatch,
     engage: cabc.Callable[..., object],
@@ -174,13 +191,18 @@ def _decline_on_blocking_refusal(
         "a blocking-mode refusal must decline the fast path and fall back to "
         f"the Python pump, found handled={handled!r}"
     )
+
+
 def decline_on_blocking_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """Route a hop whose descriptors cannot be made blocking."""
     _decline_on_blocking_refusal(monkeypatch, fail_engage)
 
+
 def decline_on_blocking_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """Route a hop whose blocking toggle refuses with ``ValueError``."""
     _decline_on_blocking_refusal(monkeypatch, fail_engage_with_value_error)
+
+
 def run_raw_fd_pump() -> bool:
     """Drive ``_pump_over_raw_fds`` over a pipe this helper owns."""
     reader = typ.cast("asyncio.StreamReader", object())
@@ -208,6 +230,11 @@ def hand_off_successfully(monkeypatch: pytest.MonkeyPatch) -> bool:
     Every seam the decline paths exercise is made to succeed, so the hop
     reaches the pump and returns without a decline. This is the negative
     control: whatever a declined hop records, this must not.
+
+    Returns
+    -------
+    bool
+        Whether the raw-descriptor pump handled the transfer.
     """
     allow_pause(monkeypatch, may_hand_off=True)
     monkeypatch.setattr(
@@ -218,6 +245,7 @@ def hand_off_successfully(monkeypatch: pytest.MonkeyPatch) -> bool:
     install_fake_pump(monkeypatch, lambda _reader_fd, _writer_fd: 0)
     return run_raw_fd_pump()
 
+
 class _FakeStreamsModule(types.ModuleType):
     """A ``cuprum._streams_rs`` stand-in declaring the pump entry point.
 
@@ -227,6 +255,8 @@ class _FakeStreamsModule(types.ModuleType):
     """
 
     rust_pump_stream: cabc.Callable[[int, int], int]
+
+
 def install_fake_pump(
     monkeypatch: pytest.MonkeyPatch,
     pump: cabc.Callable[[int, int], int],
@@ -262,7 +292,9 @@ async def _drive_cancelled_pump(
     state = _pipeline_streams._RustPumpState(
         reader_fd=reader_fd,
         writer_fd=writer_fd,
-        blocking_mode_guard=typ.cast("_pipeline_stream_fds._BlockingModeGuard", _NoopGuard()),
+        blocking_mode_guard=typ.cast(
+            "_pipeline_stream_fds._BlockingModeGuard", _NoopGuard()
+        ),
         resume_reader=None,
     )
     task = asyncio.create_task(

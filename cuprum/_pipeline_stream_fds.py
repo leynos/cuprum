@@ -34,6 +34,11 @@ def _fd_from_transport(transport: object | None) -> int | None:
     outside the ``try`` below. Nothing upstream catches that —
     ``_extract_stream_fd`` calls straight through — so it would surface as a
     crash where the contract is to decline the fast path and return ``None``.
+
+    Returns
+    -------
+    int | None
+        The underlying descriptor, or ``None`` when it cannot be obtained.
     """
     get_extra = getattr(transport, "get_extra_info", None)
     if not callable(get_extra):
@@ -75,7 +80,7 @@ class _ReaderPause:
 
     def __init__(
         self,
-        may_hand_off: bool | None = None,
+        may_hand_off: object = None,
         resume: cabc.Callable[[], None] | None = None,
         decline_reason: RustPumpDeclineReason | None = None,
     ) -> None:
@@ -83,7 +88,7 @@ class _ReaderPause:
         object.__setattr__(
             self,
             "may_hand_off",
-            decline_reason is None if may_hand_off is None else may_hand_off,
+            decline_reason is None if may_hand_off is None else bool(may_hand_off),
         )
         object.__setattr__(self, "resume", resume)
         object.__setattr__(self, "decline_reason", decline_reason)
@@ -198,6 +203,11 @@ def _paused_reader(reader: asyncio.StreamReader) -> cabc.Iterator[_ReaderPause]:
     An unsupported or unresumable transport is never paused, and a failed pause
     is corrected at the failure site, so this scope resumes only a completed
     pause.
+
+    Yields
+    ------
+    _ReaderPause
+        The outcome describing whether the raw-descriptor hand-off is safe.
     """
     pause = _pause_reader_transport(reader)
     try:
@@ -218,6 +228,7 @@ def _close_rust_writer_fd(writer_fd: int) -> None:
     """Close a native-pump writer descriptor after its worker has settled."""
     with contextlib.suppress(OSError):
         os.close(writer_fd)
+
 
 @contextlib.contextmanager
 def _suppressed_teardown_failure(
