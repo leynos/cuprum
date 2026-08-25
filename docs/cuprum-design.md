@@ -780,10 +780,13 @@ Internally, command execution can be described in terms of events:
 - `timeout` – a run exceeded its deadline;
 - `teardown_error` – a stream consumer drained with an unexpected error
   during cleanup;
+- `pipeline_fail_fast` – a pipeline coordinator decision, emitted before it
+  terminates remaining running stages after the first qualifying failure;
 - `exit` – process finished, with exit code and duration.
 
-These nine phases are the whole of `ExecPhase`; there is no other value a
-hook can receive.
+These are the ten declared `ExecPhase` values. Hooks must still handle
+unrecognized runtime values defensively: manually constructed or future events
+may carry a value such as `unheard-of`.
 
 These events are surfaced to user code via hooks. A typical hook signature
 might be:
@@ -793,7 +796,7 @@ might be:
 class ExecEvent:
     phase: Literal[
         "plan", "start", "stdout", "stderr", "exit", "stdin", "stdin_error",
-        "timeout", "teardown_error"
+        "timeout", "teardown_error", "pipeline_fail_fast"
     ]
     program: Program | None
     argv: tuple[str, ...]
@@ -806,6 +809,9 @@ class ExecEvent:
     duration_s: float | None
     tags: Mapping[str, object]
     exec_id: ExecId | None  # stable per-execution correlation token
+    project: str | None  # trusted configured project for metrics projection
+    stage_index: int | None  # pipeline_fail_fast: failing stage's position
+    stage_count: int | None  # pipeline_fail_fast: pipeline width
 
 
 ExecHook = Callable[[ExecEvent], None | Awaitable[None]]

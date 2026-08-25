@@ -101,7 +101,7 @@ class TestFailFastEventEmission:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Stage position, pipeline width, exit code, and elapsed time travel with it.
+        """Stage position, timing, pipeline width, and exit code travel with it.
 
         Stage index alone cannot be read without the width — stage 1 of 2 is
         the final stage and stage 1 of 4 is not — and without the exit code a
@@ -120,10 +120,11 @@ class TestFailFastEventEmission:
             event.stage_count,
             event.exit_code,
             event.duration_s,
+            event.timestamp,
             event.project,
-        ) == (1, 4, 7, 12.5, driven.observations[1].cmd.project.name), (
+        ) == (1, 4, 7, 12.5, 12.5, driven.observations[1].cmd.project.name), (
             "the event must report the failing stage's position, the pipeline "
-            f"width, its exit code, elapsed time, and trusted project, found {event!r}"
+            f"width, its exit code, timing, and trusted project, found {event!r}"
         )
 
     def test_the_event_reuses_the_failing_stage_token(

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import typing as typ
 
 import pytest
@@ -220,6 +221,7 @@ def test_stage_observation_preserves_scheduled_tasks_when_later_hook_fails(
             cwd=None,
             env_overlay=None,
             pending_tasks=pending_tasks,
+            wall_clock=time.time,
         )
 
         with (
@@ -284,6 +286,7 @@ def test_stage_observation_preserves_tasks_after_base_exception() -> None:
             cwd=None,
             env_overlay=None,
             pending_tasks=pending_tasks,
+            wall_clock=time.time,
         )
 
         with pytest.raises(_FatalObserveHookError):

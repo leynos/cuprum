@@ -33,6 +33,11 @@ async def immediate(exit_code: int) -> int:
     return exit_code
 
 
+def _test_wall_clock() -> float:
+    """Return the deterministic timestamp for test observation events."""
+    return 12.5
+
+
 def record_actions(records: cabc.Sequence[logging.LogRecord]) -> list[str]:
     """Return the pipeline-wait action from each captured log record."""
     return [str(vars(record)["cuprum_action"]) for record in records]
@@ -99,6 +104,7 @@ def make_stage_observations(
             cwd=None,
             env_overlay=None,
             pending_tasks=[],
+            wall_clock=_test_wall_clock,
         )
         for idx in range(stage_count)
     )

@@ -72,12 +72,19 @@ class LogLevels:
 class _StructuredLoggingHook:
     """Render execution events and pipeline-wait records through one logger."""
 
-    __slots__ = ("_levels", "_logger")
+    __slots__ = ("_level_by_phase", "_logger")
 
     def __init__(self, logger: logging.Logger, levels: LogLevels) -> None:
         """Initialize the adapter with its logger and level policy."""
         self._logger = logger
-        self._levels = levels
+        self._level_by_phase = {
+            "plan": levels.plan_level,
+            "start": levels.start_level,
+            "stdout": levels.output_level,
+            "stderr": levels.output_level,
+            "exit": levels.exit_level,
+            "pipeline_fail_fast": levels.fail_fast_level,
+        }
 
     def __call__(self, event: ExecEvent) -> None:
         """Log ``event`` at the level configured for its phase."""
@@ -98,14 +105,7 @@ class _StructuredLoggingHook:
 
     def _level_for(self, phase: str) -> int:
         """Return the configured logging level for ``phase``."""
-        return {
-            "plan": self._levels.plan_level,
-            "start": self._levels.start_level,
-            "stdout": self._levels.output_level,
-            "stderr": self._levels.output_level,
-            "exit": self._levels.exit_level,
-            "pipeline_fail_fast": self._levels.fail_fast_level,
-        }.get(phase, logging.DEBUG)
+        return self._level_by_phase.get(phase, logging.DEBUG)
 
 
 def structured_logging_hook(

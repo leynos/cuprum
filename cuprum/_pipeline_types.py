@@ -11,7 +11,6 @@ them for backwards compatibility.
 from __future__ import annotations
 
 import dataclasses as dc
-import time
 import types
 import typing as typ
 
@@ -86,6 +85,7 @@ class _StageObservation:
     cwd: Path | None
     env_overlay: cabc.Mapping[str, str] | None
     pending_tasks: list[asyncio.Task[None]]
+    wall_clock: cabc.Callable[[], float]
     # Minted once per stage observation so every lifecycle event this object
     # emits shares one correlation token, distinguishing this execution from
     # any other that happens to reuse the same PID.
@@ -106,7 +106,7 @@ class _StageObservation:
             cwd=self.cwd,
             env=self.env_overlay,
             pid=details.pid,
-            timestamp=time.time(),
+            timestamp=self.wall_clock(),
             line=details.line,
             exit_code=details.exit_code,
             duration_s=details.duration_s,
@@ -135,7 +135,7 @@ class _StageObservation:
             cwd=None,
             env=None,
             pid=details.pid,
-            timestamp=time.time(),
+            timestamp=self.wall_clock(),
             line=None,
             exit_code=details.exit_code,
             duration_s=details.duration_s,

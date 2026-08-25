@@ -264,11 +264,14 @@ before termination begins. The wait path also reports three fixed completion
 records through the optional pipeline-wait reporter:
 `pipeline_stage_first_failure` when the first failure is latched,
 `pipeline_fail_fast_termination` before termination starts, and
-`pipeline_fail_fast_terminated` with the termination outcome. The structured
-logging adapter renders these canonical wait records at WARNING. The latter
-two records occur only when there are stages to terminate; the first-failure
-record still documents a final-stage, single-stage, or already-settled
-non-final failure. The closing record's
+`pipeline_fail_fast_terminated` with the termination outcome.
+The optional pipeline-wait reporter emits these canonical wait records at a
+fixed WARNING level on `cuprum._pipeline_wait`.
+`structured_logging_hook()` separately renders the `pipeline_fail_fast`
+`ExecEvent` at `LogLevels.fail_fast_level`. The latter two records occur only
+when there are stages to terminate; the first-failure record still documents a
+final-stage, single-stage, or already-settled non-final failure. The closing
+record's
 `cuprum_terminated_stage_count` counts only confirmed process terminations, so
 a stage that settles after termination selection is excluded. The
 `pipeline_fail_fast` observe event is separate from these records; metrics,
