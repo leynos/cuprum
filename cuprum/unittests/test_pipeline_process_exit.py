@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
+from cuprum._pipeline_types import _StageWaitContext
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
 from cuprum._process_exit import (
     _PROCESS_EXIT_INITIAL_POLL_INTERVAL,
@@ -107,13 +108,13 @@ def test_wait_for_pipeline_recovers_lost_wakeup_before_fail_fast_cleanup(
                 processes[1].returncode = 7
             await original_sleep(0)
 
-        monkeypatch.setattr("cuprum._process_exit.asyncio.sleep", record_sleep)
+        monkeypatch.setattr("cuprum._process_exit.sleep", record_sleep)
         result = await asyncio.wait_for(
             _wait_for_pipeline(
                 typ.cast("list[asyncio.subprocess.Process]", processes),
                 pipe_tasks=[],
                 cancel_grace=1.0,
-                started_at=[0.0, 0.0, 0.0],
+                stages=_StageWaitContext(started_at=(0.0, 0.0, 0.0)),
             ),
             timeout=10,
         )

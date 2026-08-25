@@ -69,7 +69,7 @@ def _emit_timeout_exit_events(
                     exit_code=(
                         process.returncode if process.returncode is not None else -1
                     ),
-                    duration_s=max(0.0, ended_at - spawn.started_at[idx]),
+                    duration_s=max(0.0, ended_at - spawn.stages.started_at[idx]),
                 ),
             )
 

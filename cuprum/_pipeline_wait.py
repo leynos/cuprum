@@ -1,21 +1,76 @@
-"""Pipeline waiting logic with fail-fast semantics."""
+"""Await a pipeline's stages and decide which completion triggers fail-fast.
+
+The fail-fast decision is split from the asyncio machinery that observes it, so
+the ordering rules can be verified without processes or a clock.
+``_PipelineWaitState`` carries the bookkeeping and exposes the decision as a
+command and a query, per the project's command/query segregation rule:
+
+- ``record_completion`` stamps a stage's exit code and injected end time, and
+  latches the first non-zero exit **in completion order** as ``failure_index``.
+  Completion order decides, not stage order. Stages that complete together are
+  the one case order cannot separate: ``asyncio.wait`` hands back an unordered
+  set, so ``_wait_for_pipeline`` feeds a batch through in stage order, making
+  the earliest stage — the upstream one that caused the rest — the reported
+  failure rather than whichever the set yielded first.
+- ``should_terminate_others`` reports, without mutating anything, whether that
+  completion should stop every other still-running stage.
+
+``_process_completed_task`` is the only place the two are joined: it reads the
+clock, applies the command, publishes the fail-fast report — the structured log
+records and the ``pipeline_fail_fast`` observe event — and acts on the query.
+Keeping the I/O there leaves the ordering rules as a pure transition that
+Hypothesis and CrossHair drive directly.
+
+It also decides the one thing the ordering rules cannot see: whether the
+teardown has a subject. ``should_terminate_others`` reasons from stage
+positions, so it still says ``True`` for a failure whose siblings have all
+already exited — as they have when a pipeline settles in one ``asyncio.wait``
+batch. Nothing is then announced but the first-failure record, which reports a
+latch that happened either way.
+
+Work that belongs to neighbouring modules rather than here: terminating and
+cleaning up processes lives in ``cuprum._process_lifecycle``
+(``_terminate_pipeline_remaining_stages``, ``_cleanup_pipeline_on_error``),
+collecting the inter-stage pipe task outcomes lives in
+``cuprum._pipeline_streams`` (``_collect_pipe_results``,
+``_surface_unexpected_pipe_failures``), and the shape of what the fail-fast
+path publishes lives in ``cuprum._pipeline_wait_records``. This module owns
+only the waiting, the ordering decision, and when each report fires.
+
+The monotonic clock is bound here as a module-level ``perf_counter`` rather
+than reached through the ``time`` module. That gives the tests a seam of their
+own: pinning the clock replaces this module's attribute, where reaching through
+``time`` would have left them monkeypatching ``time.perf_counter`` itself and
+so changing the clock every other module in the process reads.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import time
 import typing as typ
+from time import perf_counter
 
 from cuprum._pipeline_streams import (
     _collect_pipe_results,
     _surface_unexpected_pipe_failures,
 )
+from cuprum._pipeline_wait_records import (
+    _completion_log_fields,
+    _CompletionLogFields,
+    _CompletionReport,
+    _emit_fail_fast_event,
+    _report_completion_event,
+)
 from cuprum._process_exit import _await_process_exit
 from cuprum._process_lifecycle import (
     _cleanup_pipeline_on_error,
+    _has_stages_to_terminate,
     _terminate_pipeline_remaining_stages,
 )
+
+if typ.TYPE_CHECKING:
+    from cuprum._pipeline_types import _StageObservation, _StageWaitContext
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -38,13 +93,17 @@ class _PipelineWaitState:
     started_at: list[float]
     ended_at: list[float | None]
     failure_index: int | None = None
+    # Reporting only: the completion transition never reads this, which is why
+    # it defaults to empty and the symbolic model leaves it so. Observations
+    # provide the existing stage token and publish the fail-fast ``ExecEvent``.
+    observations: tuple[_StageObservation, ...] = ()
 
     @classmethod
     def from_processes(
         cls,
         processes: list[asyncio.subprocess.Process],
         *,
-        started_at: list[float],
+        stages: _StageWaitContext,
     ) -> _PipelineWaitState:
         """Create wait state with one wait task per pipeline process."""
         wait_tasks = [
@@ -54,9 +113,169 @@ class _PipelineWaitState:
             wait_tasks=wait_tasks,
             task_to_index={task: idx for idx, task in enumerate(wait_tasks)},
             exit_codes=[None] * len(processes),
-            started_at=started_at,
+            # Copied, not aliased: this state stamps its own bookkeeping, and
+            # `stages` is meant to stay the immutable snapshot it declares.
+            started_at=list(stages.started_at),
             ended_at=[None] * len(processes),
+            observations=stages.observations,
         )
+
+    def observation(self, stage_index: int) -> _StageObservation | None:
+        """Return a stage's observation, or ``None`` when there is none.
+
+        Absent under the same conditions as `exec_id`, and additionally
+        harmless: with no observation there is no hook set to publish the
+        fail-fast event to.
+
+        Returns
+        -------
+        _StageObservation | None
+            The observation for ``stage_index``, or ``None`` when it is absent.
+        """
+        if stage_index < len(self.observations):
+            return self.observations[stage_index]
+        return None
+
+    def record_completion(
+        self,
+        completed_idx: int,
+        exit_code: int,
+        *,
+        ended_at: float,
+    ) -> bool:
+        """Record a stage's completion (command).
+
+        This is the pure completion-ordering transition behind
+        [`_process_completed_task`][cuprum._pipeline_wait._process_completed_task]:
+        it stamps the completed stage's exit code and end time (the clock is
+        injected as ``ended_at`` so the transition is deterministic) and latches
+        the *first* non-zero exit — in completion order — as ``failure_index``.
+
+        It returns whether this completion newly requests fail-fast
+        termination: only a newly latched failure from a non-final stage can
+        do so. All I/O — reading the clock and terminating stages — stays
+        with the caller, which separately checks whether a stage remains to
+        terminate.
+
+        Returns
+        -------
+        bool
+            Whether this completion is a first failure on a non-final stage.
+
+        Examples
+        --------
+        The first non-zero exit *in completion order* latches, even when a
+        lower-indexed stage fails later::
+
+            state = _PipelineWaitState(
+                wait_tasks=[],
+                task_to_index={},
+                exit_codes=[None] * 3,
+                started_at=[0.0] * 3,
+                ended_at=[None] * 3,
+            )
+            state.record_completion(2, 0, ended_at=1.0)
+            state.record_completion(0, 1, ended_at=2.0)
+            state.record_completion(1, 7, ended_at=3.0)
+
+            assert state.failure_index == 0
+            assert state.exit_codes == [1, 7, 0]
+            assert state.ended_at == [2.0, 3.0, 1.0]
+
+        """
+        is_first_failure = self.failure_index is None and exit_code != 0
+        self.exit_codes[completed_idx] = exit_code
+        self.ended_at[completed_idx] = ended_at
+        if is_first_failure:
+            self.failure_index = completed_idx
+        return is_first_failure and completed_idx != len(self.exit_codes) - 1
+
+    def should_terminate_others(self, completed_idx: int) -> bool:
+        """Report whether completing ``completed_idx`` should fail the pipeline fast.
+
+        This is the query half of the transition: it inspects state without
+        changing it, so it is safe to call repeatedly and in any order after
+        [`record_completion`][cuprum._pipeline_wait._PipelineWaitState.record_completion]
+        has stamped the completion.
+
+        It answers ``True`` exactly when ``completed_idx`` is the latched first
+        failure *and* is not the final stage. A failing final stage has nothing
+        left to stop, so it never triggers termination. When it does answer
+        ``True`` the caller terminates every *other* still-running stage — both
+        upstream and downstream — not merely the ones after the failure.
+
+        It reasons about ordering alone, so it needs no wait tasks; whether a
+        sibling is still running is the caller's separate
+        `_has_stages_to_terminate` check. A batch whose stages all settled
+        together answers ``True`` here and still terminates nothing.
+
+        Returns
+        -------
+        bool
+            Whether the completion is the latched first failure and is not the
+            final stage.
+
+        Examples
+        --------
+        ::
+
+            state = _PipelineWaitState(
+                wait_tasks=[],
+                task_to_index={},
+                exit_codes=[None] * 3,
+                started_at=[0.0] * 3,
+                ended_at=[None] * 3,
+            )
+
+            state.record_completion(0, 1, ended_at=1.0)
+            assert state.should_terminate_others(0) is True
+
+            # A later failure is not the latched first one.
+            state.record_completion(1, 1, ended_at=2.0)
+            assert state.should_terminate_others(1) is False
+
+        """
+        return (
+            self.failure_index == completed_idx
+            and completed_idx != len(self.exit_codes) - 1
+        )
+
+
+async def _terminate_and_report(
+    state: _PipelineWaitState,
+    processes: list[asyncio.subprocess.Process],
+    cancel_grace: float,
+    fields: _CompletionLogFields,
+) -> None:
+    """Terminate remaining stages and record the teardown outcome."""
+    observation = state.observation(fields.stage_index)
+    _report_completion_event(
+        observation,
+        fields,
+        _CompletionReport(
+            action="pipeline_fail_fast_termination",
+            message="terminating other pipeline stages after stage %d exited %d",
+        ),
+    )
+    started = perf_counter()
+    termination_outcomes = await _terminate_pipeline_remaining_stages(
+        processes,
+        state.wait_tasks,
+        fields.stage_index,
+        cancel_grace=cancel_grace,
+    )
+    _report_completion_event(
+        observation,
+        fields,
+        _CompletionReport(
+            action="pipeline_fail_fast_terminated",
+            message="terminated other pipeline stages after stage %d exited %d",
+            extra_fields={
+                "cuprum_terminated_stage_count": sum(termination_outcomes),
+                "cuprum_termination_duration_s": max(0.0, perf_counter() - started),
+            },
+        ),
+    )
 
 
 async def _process_completed_task(
@@ -65,19 +284,51 @@ async def _process_completed_task(
     processes: list[asyncio.subprocess.Process],
     cancel_grace: float,
 ) -> None:
-    """Process a completed wait task, terminating remaining stages on failure."""
+    """Process a completed wait task, terminating other stages on failure.
+
+    This is where the runtime concerns live: reading the clock, invoking the
+    pure transition, checking for a live termination target, and publishing the
+    records and event that make fail-fast observable. The transition stays
+    side-effect-free so it can be verified symbolically.
+    """
     idx = state.task_to_index[task]
     exit_code = task.result()
-    state.exit_codes[idx] = exit_code
-    state.ended_at[idx] = time.perf_counter()
-    if state.failure_index is None and exit_code != 0:
-        state.failure_index = idx
-        await _terminate_pipeline_remaining_stages(
-            processes,
-            state.wait_tasks,
-            idx,
-            cancel_grace=cancel_grace,
+    ended_at = perf_counter()
+
+    had_failure = state.failure_index is not None
+    request_termination = state.record_completion(idx, exit_code, ended_at=ended_at)
+    latched_first_failure = not had_failure and state.failure_index == idx
+
+    # The query says whether this completion *is* the trigger; the wait tasks
+    # say whether the decision still has a subject. A batch handled in stage
+    # order can reach an upstream failure after every sibling has exited, and
+    # announcing a teardown of nothing would report a termination that never
+    # happened and count a fail-fast the operator cannot act on.
+    terminate_others = request_termination and _has_stages_to_terminate(
+        idx,
+        state.wait_tasks,
+    )
+
+    if not (latched_first_failure or terminate_others):
+        return
+
+    fields = _completion_log_fields(state, idx, exit_code, ended_at)
+    observation = state.observation(idx)
+    if latched_first_failure:
+        _report_completion_event(
+            observation,
+            fields,
+            _CompletionReport(
+                action="pipeline_stage_first_failure",
+                message="pipeline stage %d exited %d, latching first failure",
+            ),
         )
+    if not terminate_others:
+        return
+    # Published before termination is requested, so a consumer learns the
+    # decision even if the teardown then blocks on a stage that will not die.
+    _emit_fail_fast_event(observation, fields)
+    await _terminate_and_report(state, processes, cancel_grace, fields)
 
 
 async def _finalize_pipeline_wait(
@@ -98,10 +349,10 @@ async def _wait_for_pipeline(
     *,
     pipe_tasks: list[asyncio.Task[None]],
     cancel_grace: float,
-    started_at: list[float],
+    stages: _StageWaitContext,
 ) -> _PipelineWaitResult:
     """Wait for pipeline completion, ensuring subprocess cleanup on cancellation."""
-    state = _PipelineWaitState.from_processes(processes, started_at=started_at)
+    state = _PipelineWaitState.from_processes(processes, stages=stages)
 
     caught: BaseException | None = None
     pipe_results: list[object] | None = None
@@ -113,7 +364,13 @@ async def _wait_for_pipeline(
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
-            for wait_task in done:
+            # `asyncio.wait` returns an unordered set, so stages that land in
+            # the same batch have no completion order left to observe; taking
+            # them as they fall out of the set would make `failure_index`
+            # depend on set iteration. Break the tie by stage index: in a
+            # pipeline an upstream failure is what causes the downstream ones
+            # it triggers, so the earliest stage is the one worth reporting.
+            for wait_task in sorted(done, key=lambda task: state.task_to_index[task]):
                 await _process_completed_task(
                     typ.cast("asyncio.Task[int]", wait_task),
                     state,

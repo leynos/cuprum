@@ -104,6 +104,7 @@ def test_with_retry_retries_transient_http_statuses(
     assert result == "done", "transient HTTP failures should eventually return"
     assert operation.call_count == 3, "transient HTTP failures should be retried twice"
     assert delays == [0.5, 1.0], "transient HTTP failures should use both delays"
+    assert all(error.closed for error in errors), "handled HTTP errors should close"
 
 
 @pytest.mark.parametrize("status", [404, 499, 600])
@@ -128,4 +129,5 @@ def test_with_retry_raises_non_transient_http_error(
 
     assert raised.value is error, "retry should propagate the non-transient error"
     assert operation.call_count == 1, "non-transient errors should stop after one call"
-    assert delays == [], "non-transient errors should not schedule a retry delay"
+    assert not delays, "non-transient errors should not schedule a retry delay"
+    assert error.closed, "re-raised HTTP errors should close before propagation"

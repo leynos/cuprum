@@ -65,9 +65,10 @@ Focus: Provide pipeline execution, richer events, and concurrency helpers.
 - [x] 2.1.1. Implement `Pipeline` composition via the `|` operator with
   streaming between stages and backpressure handling; expose exit metadata per
   stage.
-- [x] 2.1.2. Define and implement failure policy (fail fast, terminate
-  downstream, surface failing stage) and cover with tests for early, middle,
-  and late stage errors.
+- [x] 2.1.2. Define and implement failure policy (fail fast, terminate every
+  other still-running stage, surface the stage that failed first in completion
+  order — ties within one `asyncio.wait` batch broken by ascending stage index)
+  and cover with tests for early-, middle-, and late-stage errors.
 
 ### 2.2. Structured events and telemetry
 

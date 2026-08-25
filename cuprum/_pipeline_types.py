@@ -11,7 +11,7 @@ them for backwards compatibility.
 from __future__ import annotations
 
 import dataclasses as dc
-import time
+import types
 import typing as typ
 
 from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
@@ -31,6 +31,19 @@ if typ.TYPE_CHECKING:
     from cuprum.context import AfterHook, BeforeHook
     from cuprum.events import ExecHook, ExecId
     from cuprum.sh import SafeCmd
+
+
+@typ.runtime_checkable
+class _PipelineWaitReporter(typ.Protocol):
+    """Port for an adapter that renders pipeline-wait completion records."""
+
+    def report_pipeline_wait(
+        self,
+        message: str,
+        args: tuple[object, ...],
+        extra: cabc.Mapping[str, object],
+    ) -> None:
+        """Render one pipeline-wait completion record."""
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -56,6 +69,10 @@ class _EventDetails:
     error_type: str | None = None
     timeout_s: float | None = None
     timeout_mode: TimeoutMode | None = None
+    # Only the pipeline fail-fast decision sets these; a stage's own lifecycle
+    # events carry its position in ``tags`` instead.
+    stage_index: int | None = None
+    stage_count: int | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -68,6 +85,7 @@ class _StageObservation:
     cwd: Path | None
     env_overlay: cabc.Mapping[str, str] | None
     pending_tasks: list[asyncio.Task[None]]
+    wall_clock: cabc.Callable[[], float]
     # Minted once per stage observation so every lifecycle event this object
     # emits shares one correlation token, distinguishing this execution from
     # any other that happens to reuse the same PID.
@@ -88,11 +106,12 @@ class _StageObservation:
             cwd=self.cwd,
             env=self.env_overlay,
             pid=details.pid,
-            timestamp=time.time(),
+            timestamp=self.wall_clock(),
             line=details.line,
             exit_code=details.exit_code,
             duration_s=details.duration_s,
             tags=self.tags,
+            project=self.cmd.project.name,
             note=details.note,
             byte_count=details.byte_count,
             operation=details.operation,
@@ -100,7 +119,53 @@ class _StageObservation:
             timeout_s=details.timeout_s,
             timeout_mode=details.timeout_mode,
             exec_id=self.exec_id,
+            stage_index=details.stage_index,
+            stage_count=details.stage_count,
         )
+        self._emit_event(event)
+
+    def emit_fail_fast(self, details: _EventDetails) -> None:
+        """Emit the sanitized fail-fast decision event."""
+        if not self.hooks.observe_hooks:
+            return
+        event = ExecEvent(
+            phase="pipeline_fail_fast",
+            program=self.cmd.program,
+            argv=(),
+            cwd=None,
+            env=None,
+            pid=details.pid,
+            timestamp=self.wall_clock(),
+            line=None,
+            exit_code=details.exit_code,
+            duration_s=details.duration_s,
+            tags=types.MappingProxyType({}),
+            project=self.cmd.project.name,
+            note=None,
+            byte_count=None,
+            operation=None,
+            error_type=None,
+            timeout_s=None,
+            timeout_mode=None,
+            exec_id=self.exec_id,
+            stage_index=details.stage_index,
+            stage_count=details.stage_count,
+        )
+        self._emit_event(event)
+
+    def report_pipeline_wait(
+        self,
+        message: str,
+        args: tuple[object, ...],
+        extra: cabc.Mapping[str, object],
+    ) -> None:
+        """Route a completion record through installed adapter ports."""
+        for hook in self.hooks.observe_hooks:
+            if isinstance(hook, _PipelineWaitReporter):
+                hook.report_pipeline_wait(message, args, extra)
+
+    def _emit_event(self, event: ExecEvent) -> None:
+        """Dispatch one event and retain scheduled observe-hook tasks."""
         try:
             scheduled_tasks = _emit_exec_event(self.hooks.observe_hooks, event)
         except _ExecEventEmissionError as exc:
@@ -116,6 +181,25 @@ class _PipelineStageResultInputs:
     wait_result: _PipelineWaitResult
     stderr_by_stage: tuple[str | None, ...]
     final_stdout: str | None
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _StageWaitContext:
+    """Per-stage data the wait path reads, all indexed by stage.
+
+    Every field is immutable, so the context stays a snapshot the wait path can
+    only read. ``_PipelineWaitState`` copies ``started_at`` into its own list
+    rather than aliasing it, which is what stops its live bookkeeping writing
+    back through this supposedly frozen record.
+
+    ``started_at`` is what stage durations are measured from. ``observations``
+    provides the wait path with the hook set and stage execution token for the
+    fail-fast report. It remains optional so transition tests and the symbolic
+    model can construct a context without observability state.
+    """
+
+    started_at: tuple[float, ...]
+    observations: tuple[_StageObservation, ...] = ()
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -138,7 +222,7 @@ class _PipelineSpawnResult:
     processes: list[asyncio.subprocess.Process]
     stderr_tasks: list[asyncio.Task[str | None] | None]
     stdout_task: asyncio.Task[str | None] | None
-    started_at: list[float]
+    stages: _StageWaitContext
 
 
 @dc.dataclass(frozen=True, slots=True)

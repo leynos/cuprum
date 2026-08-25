@@ -53,6 +53,12 @@ class LogLevels:
         Log level for ``stdout``/``stderr`` events. Default DEBUG.
     exit_level:
         Log level for ``exit`` events (process completed). Default INFO.
+    fail_fast_level:
+        Log level for ``pipeline_fail_fast`` events (a pipeline is being torn
+        down because a non-final stage failed first). Default WARNING: unlike
+        the other phases this reports an abnormal outcome, and it would
+        otherwise fall through to the unhandled-phase default of DEBUG and be
+        invisible in a normal configuration.
 
     """
 
@@ -60,6 +66,46 @@ class LogLevels:
     start_level: int = logging.INFO
     output_level: int = logging.DEBUG
     exit_level: int = logging.INFO
+    fail_fast_level: int = logging.WARNING
+
+
+class _StructuredLoggingHook:
+    """Render execution events and pipeline-wait records through one logger."""
+
+    __slots__ = ("_level_by_phase", "_logger")
+
+    def __init__(self, logger: logging.Logger, levels: LogLevels) -> None:
+        """Initialize the adapter with its logger and level policy."""
+        self._logger = logger
+        self._level_by_phase = {
+            "plan": levels.plan_level,
+            "start": levels.start_level,
+            "stdout": levels.output_level,
+            "stderr": levels.output_level,
+            "exit": levels.exit_level,
+            "pipeline_fail_fast": levels.fail_fast_level,
+        }
+
+    def __call__(self, event: ExecEvent) -> None:
+        """Log ``event`` at the level configured for its phase."""
+        level = self._level_for(event.phase)
+        if not self._logger.isEnabledFor(level):
+            return
+        self._logger.log(level, _format_message(event), extra=_build_extra(event))
+
+    def report_pipeline_wait(
+        self,
+        message: str,
+        args: tuple[object, ...],
+        extra: cabc.Mapping[str, object],
+    ) -> None:
+        """Render one core pipeline-wait record at WARNING level."""
+        if self._logger.isEnabledFor(logging.WARNING):
+            self._logger.warning(message, *args, extra=dict(extra))
+
+    def _level_for(self, phase: str) -> int:
+        """Return the configured logging level for ``phase``."""
+        return self._level_by_phase.get(phase, logging.DEBUG)
 
 
 def structured_logging_hook(
@@ -91,47 +137,78 @@ def structured_logging_hook(
 
     The hook attaches structured ``extra`` data to log records including:
 
-    - ``cuprum_phase``: Event phase (plan, start, stdout, stderr, exit)
+    - ``cuprum_phase``: Event phase (plan, start, stdout, stderr, stdin,
+      stdin_error, exit, pipeline_fail_fast)
     - ``cuprum_program``: Program being executed
     - ``cuprum_argv``: Full argument vector
     - ``cuprum_pid``: Process ID (when available)
-    - ``cuprum_exit_code``: Exit code (for exit events)
-    - ``cuprum_duration_s``: Duration in seconds (for exit events)
+    - ``cuprum_exit_code``: Exit code (for exit and pipeline_fail_fast events)
+    - ``cuprum_duration_s``: Duration in seconds (for exit and
+      pipeline_fail_fast events)
+    - ``cuprum_stage_index`` / ``cuprum_stage_count``: Position of the failing
+      stage and the pipeline width (for pipeline_fail_fast events)
 
     The adapter projects selected execution fields into log extras; it does
     not emit the full tags mapping.
 
     """
-    log = logger or logging.getLogger(_DEFAULT_LOGGER_NAME)
-    lvls = levels or LogLevels()
-
-    level_map: dict[str, int] = {
-        "plan": lvls.plan_level,
-        "start": lvls.start_level,
-        "stdout": lvls.output_level,
-        "stderr": lvls.output_level,
-        "exit": lvls.exit_level,
-    }
-
-    def hook(event: ExecEvent) -> None:
-        """Log ``event`` at the level configured for its phase."""
-        level = level_map.get(event.phase, logging.DEBUG)
-        if not log.isEnabledFor(level):
-            return
-
-        extra = _build_extra(event)
-        message = _format_message(event)
-        log.log(level, message, extra=extra)
-
-    return hook
+    return _StructuredLoggingHook(
+        logger or logging.getLogger(_DEFAULT_LOGGER_NAME),
+        levels or LogLevels(),
+    )
 
 
 def _build_extra(event: ExecEvent) -> dict[str, object]:
     """Build structured extra data for a log record."""
     extra: dict[str, object] = {"cuprum_phase": event.phase}
-    extra.update(_event_common_fields(event, _prefixed("cuprum_")))
-    extra["cuprum_tags"] = dict(event.tags)
+    common_fields = _event_common_fields(event, _prefixed("cuprum_"))
+    if event.phase == "pipeline_fail_fast":
+        # Fail-fast is warning-level by default. Its decision fields are enough
+        # to diagnose a teardown, so do not elevate arbitrary command arguments
+        # or caller tags into a channel operators commonly retain.
+        extra.update(
+            (name, value) for name, value in common_fields if name != "cuprum_argv"
+        )
+        extra["cuprum_exec_id"] = event.exec_id
+    else:
+        extra.update(common_fields)
+        extra["cuprum_tags"] = dict(event.tags)
     return extra
+
+
+def _format_duration(duration_s: float | None) -> str:
+    """Render an elapsed time for a log message, or ``unknown`` when absent."""
+    return "unknown" if duration_s is None else f"{duration_s:.6f}"
+
+
+def _format_exit_message(event: ExecEvent) -> str:
+    """Render the message for a completed subprocess."""
+    return (
+        f"cuprum.exit program={event.program} pid={event.pid} "
+        f"exit_code={event.exit_code} "
+        f"duration_s={_format_duration(event.duration_s)}"
+    )
+
+
+def _format_fail_fast_message(event: ExecEvent) -> str:
+    """Render the message for a pipeline's fail-fast decision.
+
+    Rendered explicitly because the generic unhandled-phase message reports
+    only the program, which is the one part of this event that says nothing:
+    the point of the record is which stage of how many failed, and how.
+
+    Returns
+    -------
+    str
+        Human-readable fail-fast message containing the decision fields.
+    """
+    return (
+        f"cuprum.pipeline_fail_fast program={event.program} "
+        f"stage_index={event.stage_index} "
+        f"stage_count={event.stage_count} "
+        f"exit_code={event.exit_code} "
+        f"duration_s={_format_duration(event.duration_s)}"
+    )
 
 
 def _format_message(event: ExecEvent) -> str:
@@ -142,18 +219,13 @@ def _format_message(event: ExecEvent) -> str:
             return f"cuprum.plan program={program} argv={event.argv!r}"
         case "start":
             return f"cuprum.start program={program} pid={event.pid}"
-        case "stdout":
-            return f"cuprum.stdout pid={event.pid} line={event.line!r}"
-        case "stderr":
-            return f"cuprum.stderr pid={event.pid} line={event.line!r}"
+        case "stdout" | "stderr":
+            # One rendering for both: they differ only in the phase name.
+            return f"cuprum.{event.phase} pid={event.pid} line={event.line!r}"
         case "exit":
-            duration = (
-                f"{event.duration_s:.6f}" if event.duration_s is not None else "unknown"
-            )
-            return (
-                f"cuprum.exit program={program} pid={event.pid} "
-                f"exit_code={event.exit_code} duration_s={duration}"
-            )
+            return _format_exit_message(event)
+        case "pipeline_fail_fast":
+            return _format_fail_fast_message(event)
         case _:
             return f"cuprum.{event.phase} program={program}"
 

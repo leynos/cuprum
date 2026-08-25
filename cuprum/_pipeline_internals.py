@@ -4,7 +4,7 @@ This module is the private machinery behind ``cuprum.sh``'s
 ``Pipeline.run``/``run_sync``. It ties together allowlist enforcement
 and hook collection, stage process spawning, inter-stage pipe wiring,
 completion waiting with optional timeouts, and per-stage
-``CommandResult`` assembly. It exists chiefly to centralise
+``CommandResult`` assembly. It exists chiefly to centralize
 finalization: when a stage fails or an after-hook raises, pending
 observe-hook tasks must still be drained and every independent
 failure preserved, grouping after-hook and task failures into a
@@ -18,6 +18,7 @@ failure preserved, grouping after-hook and task failures into a
 
 from __future__ import annotations
 
+import time
 import typing as typ
 from pathlib import Path
 
@@ -49,6 +50,7 @@ from cuprum._pipeline_types import (
     _PipelineObservers,
     _PipelineSpawnResult,
     _StageObservation,
+    _StageWaitContext,
 )
 from cuprum._process_lifecycle import _shielded_cleanup, _spawn_pipeline_processes
 from cuprum._timeout_reporting import _report_pipeline_timeout_expiry
@@ -114,6 +116,7 @@ def _build_pipeline_observations(
             cwd=cwd,
             env_overlay=env_overlay,
             pending_tasks=pending_tasks,
+            wall_clock=time.time,
         )
         for idx, (cmd, hooks) in enumerate(zip(parts, hooks_by_stage, strict=True))
     )
@@ -270,7 +273,10 @@ async def _run_pipeline(
             processes=processes,
             stderr_tasks=stderr_tasks,
             stdout_task=stdout_task,
-            started_at=started_at,
+            stages=_StageWaitContext(
+                started_at=tuple(started_at),
+                observations=observations,
+            ),
         )
     except BaseException as spawn_error:
         await _shielded_cleanup(

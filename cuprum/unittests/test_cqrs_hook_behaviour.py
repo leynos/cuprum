@@ -37,6 +37,15 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent
 
 
+import time
+
+"""Runtime coverage for CQRS hook and task-scheduling behaviour."""
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    from cuprum.events import ExecEvent
+
+
 class _GeneratedHookError(Exception):
     """Test exception raised by generated hook-ordering cases."""
 
@@ -79,6 +88,7 @@ async def _finalize_with_failing_after_hook(
         cwd=None,
         env_overlay=None,
         pending_tasks=pending_tasks,
+        wall_clock=time.time,
     )
     pending_tasks.append(asyncio.create_task(await_observe_task()))
     stage_result = sh.CommandResult(
@@ -344,6 +354,7 @@ def _stage_observations(
             cwd=None,
             env_overlay=None,
             pending_tasks=pending_tasks,
+            wall_clock=time.time,
         )
         for idx in range(4)
     )

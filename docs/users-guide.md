@@ -235,9 +235,15 @@ Notes:
   deprecated and emit a `DeprecationWarning`.
 - `RunOutputOptions(echo=True)` echoes the final stage stdout and all stage
   stderr streams to their configured sinks.
-- Pipelines fail fast: when a stage exits non-zero, Cuprum terminates the
-  remaining stages. The failing stage is available via `result.failure` /
-  `result.failure_index`.
+- Pipelines fail fast on the *first* non-final stage to exit non-zero when at
+  least one other stage remains running: that stage terminates every other
+  still-running stage — upstream producers as well as downstream consumers, not
+  only the stages after the failure. A failing **final** stage or any
+  single-stage pipeline does not request fail-fast termination by policy. A
+  non-final failure whose potential targets have already settled likewise has
+  no targets to terminate. Only the first failure counts, since later non-zero
+  exits are usually its consequences. The failing stage is available via
+  `result.failure` / `result.failure_index`.
 - When a downstream writer closes early, Cuprum drains the upstream reader
   until EOF or a short timeout elapses, even on a stalled upstream, so
   discarded input stays bounded. On the Rust backend that drain is reported —
@@ -246,6 +252,68 @@ Notes:
   record *that* the downstream stage stopped reading and how much it received
   first. Neither says why it stopped; read them alongside that stage's exit
   status.
+
+### Diagnosing a fail-fast pipeline
+
+`result.failure_index` reports the index of the stage that failed first, in
+completion order — whether or not that failure went on to trigger fail-fast
+termination — but not why the other stages ended when they did. When the first
+non-final failure still has stages to stop, the wait path publishes one
+`pipeline_fail_fast` `ExecEvent` to the registered observe hooks immediately
+before termination begins. The wait path also reports three fixed completion
+records through the optional pipeline-wait reporter:
+`pipeline_stage_first_failure` when the first failure is latched,
+`pipeline_fail_fast_termination` before termination starts, and
+`pipeline_fail_fast_terminated` with the termination outcome.
+The optional pipeline-wait reporter emits these canonical wait records at a
+fixed WARNING level on `cuprum._pipeline_wait`.
+`structured_logging_hook()` separately renders the `pipeline_fail_fast`
+`ExecEvent` at `LogLevels.fail_fast_level`. The latter two records occur only
+when there are stages to terminate; the first-failure record still documents a
+final-stage, single-stage, or already-settled non-final failure. The closing
+record's
+`cuprum_terminated_stage_count` counts only confirmed process terminations, so
+a stage that settles after termination selection is excluded. The
+`pipeline_fail_fast` observe event is separate from these records; metrics,
+tracing, and `structured_logging_hook()` project that event through the
+configurable event adapter channel without requiring log parsing.
+
+The event carries the failing stage's index, pipeline width, exit code,
+duration, and execution token. It is sanitized by removing caller-controlled
+`argv`, `cwd`, `env`, and `tags`; it retains the runtime fields `program`,
+`pid`, `timestamp`, trusted configured project, typed decision fields, and
+`ExecEvent.exec_id`. All projections consume this same sanitized
+event, so they do not need to parse log text. The metrics adapter labels
+`cuprum_pipeline_fail_fast_total` with `program` and `project` alone; `project`
+comes from the trusted configured project and falls back to `unknown` only when
+absent, and the execution token
+remains event and trace detail rather than a metric label. It also
+distinguishes concurrent pipelines whose stage indices would otherwise look
+identical.
+
+`structured_logging_hook()` consumes the event at `LogLevels.fail_fast_level`,
+which defaults to `logging.WARNING`. Once that hook is registered, no extra
+level configuration is needed for fail-fast records. Its fail-fast projection
+deliberately omits `argv` and arbitrary `tags`, so command-line secrets and
+user-supplied tag values do not reach the warning record. Other event phases
+retain their documented projections; see
+[Structured logging adapter](#structured-logging-adapter).
+
+The event fires only when the first non-final failure leaves at least one other
+stage running. A final-stage failure, a single-stage pipeline, and a failure
+whose sibling stages have all already exited therefore emit no event. The
+failure is still latched and reported as `failure_index` in each case; what is
+absent is the termination decision because there was nothing left to terminate.
+Only the first failure counts, since later non-zero exits are usually the
+consequences of the fail-fast decision.
+
+The reported stage follows the order in which the stages actually finished.
+When two stages finish too close together for that order to be observed —
+because they settled in the same underlying wait batch — the earlier stage in
+the pipeline is reported instead, so the reported stage is the upstream cause
+rather than a downstream stage it took down with it. That tie-break only
+applies within such a batch: across batches, whichever stage genuinely finished
+first is the one reported.
 
 ## Execution runtime
 
@@ -342,6 +410,13 @@ If the awaiting task is cancelled while a command is running, Cuprum sends
 `SIGTERM` to the subprocess, waits for a short grace period, and then escalates
 to `SIGKILL` to ensure the child process is cleaned up.
 
+### Cancellation during teardown
+
+Timeout and fail-fast teardown survives repeated caller cancellation. Cuprum
+keeps the teardown task alive through `SIGTERM`, the grace period, `SIGKILL`,
+and process reaping, then re-raises the first cancellation. Later cancellation
+requests do not interrupt escalation.
+
 ### Direct stdin input
 
 Use `StdinInput` on `run()` / `run_sync()` to feed data directly to a command's
@@ -372,21 +447,19 @@ enforced. When a timeout expires, Cuprum terminates the subprocess, waits for
 
 Any output already captured before the timeout fired is preserved on the
 exception: `exc.output` / `exc.stderr` hold the partial stdout/stderr (or
-`None` when `capture=False`), so callers can inspect what the command
-produced before it was killed.
+`None` when `capture=False`), so callers can inspect what the command produced
+before it was killed.
 
 **Non-positive timeout behaviour:** a `timeout` of `0` or a negative value is
-treated as an already-elapsed deadline, so the command expires immediately:
-it never waits for the process to exit on its own. Cuprum instead terminates
-the running process (or every pipeline stage), waits for it to actually exit —
+treated as an already-elapsed deadline, so the command expires immediately: it
+never waits for the process to exit on its own. Cuprum instead terminates the
+running process (or every pipeline stage), waits for it to actually exit —
 honouring `cancel_grace` and escalating to `SIGKILL` if needed — drains the
 stream consumers, and then raises `TimeoutExpired`.
 
-**Timeout diagnostics.** Every expiry also writes a structured `WARNING` record
-to the `cuprum.timeout` logger, so a timeout stays visible even when no observe
-hook is registered. The message is
-`subprocess_timeout_expired pid=… timeout=… mode=…`, and the record carries
-these `cuprum_*` extra fields:
+**Timeout diagnostics.** Every expiry writes a structured `WARNING` record to
+the `cuprum.timeout` logger, even when no observe hook is registered. The
+`subprocess_timeout_expired pid=… timeout=… mode=…` record carries:
 
 - `cuprum_operation`: `"wait"`
 - `cuprum_pid`: the subprocess PID (`None` when no process was spawned)
@@ -394,21 +467,13 @@ these `cuprum_*` extra fields:
 - `cuprum_timeout_mode`: `"elapsed_deadline"` or `"non_positive_immediate"`
 - `cuprum_error_type`: `"TimeoutError"`
 
-If cleanup then fails to drain a stream consumer, a second record is written at
-`ERROR` — `subprocess_teardown_drain_failed pid=… errors=…` — carrying
-`cuprum_operation` (`"drain"`, the same operation the `teardown_error`
-observe event names), `cuprum_teardown_outcome`
-(`"drain_error"`), `cuprum_pid`, and `cuprum_error_type` set to the
-comma-joined class names of the failures. The drain failure itself is absorbed
-so it cannot displace the `TimeoutExpired` (or `CancelledError`) the caller is
-waiting to catch; this record, and the `teardown_error` observe event, are how
-it stays visible.
-
-Logging is best-effort: a failure inside the logging stack is suppressed rather
-than allowed to change what the caller sees. The same facts are emitted as
-`timeout` and `teardown_error` observe events (see *Structured execution
-events* below) from one shared set of values, so the two channels cannot
-disagree.
+If cleanup fails to drain a stream consumer, an `ERROR`
+`subprocess_teardown_drain_failed pid=… errors=…` record carries
+`cuprum_operation` (`"drain"`), `cuprum_teardown_outcome` (`"drain_error"`),
+`cuprum_pid`, and `cuprum_error_type` with the comma-joined failure classes.
+The failure is absorbed so it cannot displace `TimeoutExpired` or
+`CancelledError`. Logging is best-effort; the same values are emitted as
+`timeout` and `teardown_error` events, so the channels cannot disagree.
 
 Timeout resolution order:
 
@@ -417,11 +482,11 @@ Timeout resolution order:
 - `ScopeConfig(timeout=...)` default set via `scoped()` when present.
 
 `ScopeConfig(timeout=...)` and `CuprumContext(timeout=...)` validate their
-timeouts when constructed. Values must be finite and non-negative; `None`
-means no timeout, and numeric values are stored as `float`. Negative values,
-`NaN`, and positive or negative infinity raise `ValueError`. A value too large
-to convert to `float` also raises `ValueError` rather than leaking the
-conversion `OverflowError`.
+timeouts when constructed. Values must be finite and non-negative; `None` means
+no timeout, and numeric values are stored as `float`. Negative values, `NaN`,
+and positive or negative infinity raise `ValueError`. A value too large to
+convert to `float` also raises `ValueError` rather than leaking the conversion
+`OverflowError`.
 
 Example usage:
 
@@ -437,14 +502,13 @@ with scoped(ScopeConfig(timeout=3.0)):
         print(f"timed out after {exc.timeout}s")
 ```
 
-A pipeline enforces its deadline once for the whole run rather than per stage,
-but reports it per stage like every other pipeline phase: one `timeout` observe
-event and one `cuprum.timeout` log record for each stage, each carrying that
-stage's `pid`, and one `cuprum_timeouts_total` increment per stage. The fields
-and `timeout_mode` values are identical to the single-command case.
-
 Pipeline timeouts apply to the entire pipeline run; partial output is surfaced
 using the same capture rules as successful runs.
+
+A pipeline enforces its deadline once for the whole run, but reports it per
+stage: each stage gets a `timeout` event, a `cuprum.timeout` record with its
+`pid`, and one `cuprum_timeouts_total` increment. The fields and `timeout_mode`
+values match the single-command case.
 
 ### Synchronous execution
 
@@ -702,32 +766,33 @@ hooks receive `ExecEvent` values describing:
   preserved `exit` event and the public `TimeoutExpired`).
 - `teardown_error` — a stream consumer drained with an unexpected error during
   cleanup (ancillary; the error is absorbed to preserve the primary exception).
+- `pipeline_fail_fast` — a pipeline is being torn down early because a
+  non-final stage was the first to fail. Emitted at most once per pipeline,
+  before every other still-running stage — upstream producers and downstream
+  consumers alike — is terminated, and carrying `stage_index`, `stage_count`,
+  `exit_code`, and `duration_s` for the failing stage. It is a decision rather
+  than a lifecycle phase: the failing stage's own `exit` event still follows,
+  and no stage's events are skipped or reordered because of it. Read
+  `stage_index` and `stage_count` from these typed fields rather than from the
+  event's tags: `ExecutionContext.tags` are merged last, so a caller that sets
+  its own `pipeline_stage_index` or `pipeline_stages` tag shadows the tag
+  copies, whereas the typed fields always report the stage the pipeline
+  actually acted on.
 
 Hooks can be used for structured logging, metrics, or tracing without coupling
 Cuprum to a specific telemetry library.
 
-The `timeout` event carries the stable fields `operation` (`"wait"`), `pid`,
-`timeout_s` (the configured timeout in seconds), `error_type`
-(`"TimeoutError"`), and `timeout_mode`. `timeout_mode` is `"elapsed_deadline"`
-when a positive wall-clock deadline elapses, or `"non_positive_immediate"` when
-a non-positive (`timeout <= 0`) deadline expires immediately without awaiting
-the process.
+The `timeout` event carries `operation` (`"wait"`), `pid`, `timeout_s`,
+`error_type` (`"TimeoutError"`), and `timeout_mode`: `"elapsed_deadline"` for
+a positive elapsed deadline or `"non_positive_immediate"` for a non-positive
+deadline that expires without awaiting the process. The `teardown_error` event
+carries `operation` (`"drain"`), `pid`, and `error_type`, the comma-joined
+classes raised while cancelling and draining stream consumers. It fires at most
+once per execution and excludes expected `CancelledError` failures.
 
-The `teardown_error` event carries `operation` (`"drain"`), `pid`, and
-`error_type` — the comma-joined class names of the exceptions raised while
-cancelling and draining the stream consumers. It fires at most once per
-execution, and only when a consumer fails with something other than the
-expected `CancelledError`.
-
-These ancillary events never change the public behaviour on their own: the
-`start` and `exit` events are unchanged, and a synchronous observe-hook
-failure while handling a `timeout` or `teardown_error` event is suppressed and
-cannot mask `TimeoutExpired` or `CancelledError`. A **background**
-(awaitable-returning) observe hook is different: if it fails during cleanup,
-the primary `TimeoutExpired` or `CancelledError` is raised inside a
-`BaseExceptionGroup` rather than on its own — it is preserved within the
-aggregate, not replaced, but callers that catch it directly should be
-prepared for that aggregation.
+These ancillary events preserve the public outcome: `start` and `exit` are
+unchanged, and synchronous hook failures handling `timeout` or `teardown_error`
+are suppressed rather than masking `TimeoutExpired` or `CancelledError`.
 
 Each event carries a stable `exec_id` correlation token: every lifecycle event
 for one execution — a single command, or one stage of a pipeline — shares the
@@ -738,6 +803,27 @@ Events with `exec_id=None` cannot be correlated, so correlation-consuming hooks
 
 Awaitable hook results are scheduled as `asyncio.Task` instances and awaited
 before the run completes.
+
+#### When an observe hook raises
+
+A failing observe hook fails the run. Cuprum logs the failure and then
+re-raises the hook's *own* exception type out of `run()` / `run_sync()`; it is
+never swallowed. The two hook kinds differ only in when that happens:
+
+- A **synchronous** hook raises inline, at the moment the event is emitted.
+  Emission of that event stops there, so hooks registered after it do not
+  receive that event, and the exception surfaces immediately — before the
+  subprocess is spawned, if the hook failed on `plan`. The raised exception is
+  the hook's own; Cuprum's internal wrapper appears only as its `__cause__`.
+- An **awaitable** hook raises inside its scheduled task. Every hook still
+  receives the event, and the exception surfaces when Cuprum awaits the pending
+  tasks before the run returns. When several awaitable hooks fail, only the
+  first is raised.
+
+This matters most for hooks that match exhaustively on `ExecEvent.phase` and
+reject unknown values. `pipeline_fail_fast` is a new phase, so such a hook
+raises on it — and so fails the pipeline — until it grows an arm for it. A hook
+that must never influence the run should catch its own exceptions.
 
 ```python
 from cuprum import ECHO, ExecEvent, ExecHook, ScopeConfig, scoped, sh
@@ -861,25 +947,35 @@ with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
 
 The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 
-- `cuprum_phase`: Event phase (plan, start, stdout, stderr, exit, stdin,
-  stdin_error, timeout, teardown_error)
+- `cuprum_phase`: Event phase (plan, start, stdout, stderr, stdin,
+  stdin_error, exit, pipeline_fail_fast)
 - `cuprum_program`: Program being executed
-- `cuprum_argv`: The command's argument vector, recorded verbatim (see the
-  security note below)
+- `cuprum_argv`: The command's argument vector, recorded verbatim for phases
+  that project it (see the security note below)
 - `cuprum_pid`: Process ID (when available)
-- `cuprum_exit_code`: Exit code (for exit events)
-- `cuprum_duration_s`: Duration in seconds (for exit events)
-- `cuprum_tags`: Event tags as a dictionary
+- `cuprum_exit_code`: Exit code (for exit and `pipeline_fail_fast` events)
+- `cuprum_duration_s`: Duration in seconds (for exit and `pipeline_fail_fast`
+  events)
+- `cuprum_stage_index` / `cuprum_stage_count`: Failing stage position and
+  pipeline width (for `pipeline_fail_fast` events)
+- `cuprum_tags`: Event tags as a dictionary, except for
+  `pipeline_fail_fast`, whose projection omits tags
 
-> **Security note — argument logging.** `cuprum_argv` is emitted verbatim and
-> is **not** redacted. Any secret passed on the command line — a
-> `--password=…`, an API token, a connection string — is written into the log
-> record (and into the `JsonLoggingFormatter` output) exactly as supplied. The
-> same applies to the plain-text `logging_hook()`. Prefer passing secrets via
-> the environment or files rather than as arguments; where arguments may carry
-> sensitive values, wrap `structured_logging_hook()` in a custom observe hook
-> that drops or masks `cuprum_argv` before the record reaches configured
-> handlers, and scope log destinations accordingly.
+When registered, `structured_logging_hook()` emits `pipeline_fail_fast` at
+`LogLevels.fail_fast_level`, which defaults to `logging.WARNING`. This default
+means the registered adapter needs no extra level configuration; set the field
+to change it.
+
+> **Security note — argument logging.** For phases that project it,
+> `cuprum_argv` is emitted verbatim and is **not** redacted. Any secret passed
+> on the command line — a `--password=…`, an API token, a connection string —
+> is written into that log record (and into the `JsonLoggingFormatter` output)
+> exactly as supplied. The same applies to the plain-text `logging_hook()`.
+> The `pipeline_fail_fast` projection is the exception: it omits both
+> `cuprum_argv` and `cuprum_tags`, so the fail-fast warning does not expose
+> command-line secrets or arbitrary tag values. Prefer passing secrets via the
+> environment or files rather than as arguments, and scope log destinations
+> accordingly.
 
 For JSON output suitable for log aggregation systems, use the
 `JsonLoggingFormatter`:
@@ -922,22 +1018,31 @@ The hook collects:
 - `cuprum_duration_seconds`: Histogram of execution durations
 - `cuprum_stdout_lines_total`: Counter of stdout lines emitted
 - `cuprum_stderr_lines_total`: Counter of stderr lines emitted
-- `cuprum_stdin_bytes_total`: Counter of stdin bytes written successfully
+- `cuprum_stdin_bytes_total`: Counter of successful stdin bytes written
 - `cuprum_stdin_errors_total`: Counter of stdin writer failures
 - `cuprum_timeouts_total`: Counter of subprocess timeout expiries
 - `cuprum_teardown_errors_total`: Counter of stream-consumer drain failures
   during cleanup
+- `cuprum_pipeline_fail_fast_total`: Counter incremented once per pipeline torn
+  down early because a non-final stage was the first to fail
 
-`cuprum_timeouts_total` counts both expiry modes; use the `timeout` observe
-event's `timeout_mode` field, or the `cuprum.timeout` log record, to tell an
-elapsed deadline from an immediate non-positive expiry.
+All metrics include `program` and `project` labels, and only those. Missing,
+empty, or explicit `None` project tags fall back to `unknown`.
 
-Unlike the tracing and logging adapters, the metrics hook rejects an unknown
-phase rather than ignoring it: an `ExecPhase` added without a corresponding
-metric raises, so a new phase cannot silently go uncounted.
+`cuprum_timeouts_total` counts both modes; use the `timeout` event's
+`timeout_mode`, or the `cuprum.timeout` record, to distinguish an elapsed
+deadline from an immediate non-positive expiry.
 
-All metrics include `program` and `project` labels. Missing, empty, or explicit
-`None` project tags fall back to `unknown`.
+`cuprum_pipeline_fail_fast_total` in particular does **not** use `exec_id`,
+stage index, exit code, command arguments, or paths as labels. `exec_id` is
+unique per execution and would give the series unbounded cardinality; the
+others would multiply series for no aggregate a dashboard needs. Those fields
+remain on the `pipeline_fail_fast` event itself and on the trace span, which is
+where per-incident detail belongs. A counter spike therefore cannot be joined
+to a span through the metric: when reading the observe event, use
+`ExecEvent.exec_id`; when reading its matching structured log record, use
+`cuprum_exec_id`. Both fields carry the same existing execution token, which
+identifies the individual stage spans behind the spike.
 
 To integrate with a real metrics library like `prometheus_client`, implement the
 `MetricsCollector` protocol:
@@ -1009,31 +1114,13 @@ The hook creates spans with these attributes:
 Output lines (stdout/stderr) are recorded as span events when
 `record_output=True` (the default).
 
-**Ancillary span events.** The `stdin_error`, `timeout`, and `teardown_error`
-phases are recorded as span events named `cuprum.<phase>` on the execution's
-open span, which the ancillary event leaves neither ended nor marked; an
-`exit` event, when one is emitted, closes it exactly as it would without the
-ancillary event. `timeout` is always followed by `exit`, whereas
-`teardown_error` carries no such guarantee and may be the last event a
-consumer sees for that execution — see the `ExecEvent.phase` docstring for the
-paths (external cancellation, an unexpected stdin-writer failure) on which
-cleanup runs without a following `exit`. An execution that never emits `exit`
-would otherwise leave its span open indefinitely, so `TracingHook` bounds its
-registry of open spans (`_MAX_ACTIVE_SPANS`, currently 1024) and, once that
-bound is exceeded, evicts the least recently active span and ends it as
-failed: any span event moves the span to the back of the registry, so a
-long-running execution that is still producing output is not evicted ahead of
-one that has fallen silent. This is a heuristic, not a guarantee — a live but
-silent execution can still be evicted and have its span ended as failed. An
-ancillary event arriving after `exit` finds no open span and is dropped. Each
-event carries whichever of `line`, `operation`, `error_type`, `note`,
-`timeout_s`, and `timeout_mode` are set on the
-`ExecEvent`; unset fields are omitted rather than recorded as `None`. A
-`cuprum.timeout` event therefore carries `operation`, `error_type`,
-`timeout_s`, and `timeout_mode`, which is what lets a consumer distinguish an
-elapsed deadline from an immediate non-positive expiry. Ancillary events are
-correlated by `exec_id` like every other phase, so one arriving without a
-matching open span is dropped.
+**Ancillary span events.** `stdin_error`, `timeout`, and `teardown_error` are
+recorded as `cuprum.<phase>` events on the execution's open span. They leave it
+neither ended nor marked; a later `exit` closes it normally. `timeout` is
+always followed by `exit`, while `teardown_error` may be the final event.
+Ancillary events carry their set `line`, `operation`, `error_type`, `note`,
+`timeout_s`, and `timeout_mode` fields, and correlate by `exec_id`; an event
+without a matching open span is dropped.
 
 **Correlation note:** the hook correlates an execution's `start`, `stdout`,
 `stderr`, and `exit` events by `ExecEvent.exec_id`, a stable token minted once
@@ -1043,7 +1130,17 @@ as the `cuprum.pid` attribute for observability. Events emitted by Cuprum
 always carry an `exec_id`, so ordinary usage is unaffected. Only hand-built or
 legacy events that omit `exec_id` are affected: the hook cannot correlate them,
 so it ignores them — a `start` without an `exec_id` creates no span, and
-`stdout`/`stderr`/`exit` without one are dropped.
+`stdout`/`stderr`/`stdin_error`/`pipeline_fail_fast`/`exit` without one are
+dropped.
+
+A pipeline's `pipeline_fail_fast` event is recorded as a
+`cuprum.pipeline_fail_fast` span event on the failing stage's already-open
+span, carrying `stage_index`, `stage_count`, `exit_code`, and `duration_s`. It
+is `cuprum_exec_id` that joins the record, the event, and that span: the
+decision reuses the failing stage's existing execution token rather than
+minting one of its own, so the teardown appears in the trace of the stage that
+caused it. No separate span is started, and the stage's own `exit` event still
+closes and marks the span.
 
 To integrate with OpenTelemetry, implement the `Tracer` and `Span` protocols:
 
@@ -1302,8 +1399,8 @@ ConcurrentConfig(concurrency=True)   # TypeError: concurrency must be an int, go
 ```
 
 `ConcurrentResult` is normally returned by `run_concurrent`/
-`run_concurrent_sync` rather than constructed directly, but the same
-validation applies when constructed directly in tests:
+`run_concurrent_sync` rather than constructed directly, but the same validation
+applies when constructed directly in tests:
 
 - Each entry in `failures` must be an `int` (again, `bool` is rejected),
   otherwise `TypeError` is raised.
@@ -1311,18 +1408,18 @@ validation applies when constructed directly in tests:
 - `failures` must be strictly ascending, and therefore unique; duplicate or
   descending indices raise `ValueError`.
 - `submission_indices` defaults to `None`, which backfills the identity
-  sequence `(0, 1, …, n-1)`, including the empty tuple when `results` is
-  empty. Any supplied sequence whose length differs from `results` raises
+  sequence `(0, 1, …, n-1)`, including the empty tuple when `results` is empty.
+  Any supplied sequence whose length differs from `results` raises
   `ValueError`; an explicit empty tuple paired with non-empty `results` is
   therefore rejected rather than backfilled.
 - A supplied sequence must also satisfy entry-level constraints, in addition
   to matching the length of `results`: each entry must be an exact `int`
   (`bool` is rejected, raising `TypeError`), non-negative, and strictly
-  ascending (and therefore unique); violations raise `ValueError`. Entries
-  are *not* bounded above by `len(results)` — after fail-fast compaction a
-  surviving command's original submission index can exceed the compacted
-  result length, so direct construction must permit values greater than or
-  equal to `len(results)`.
+  ascending (and therefore unique); violations raise `ValueError`. Entries are
+  *not* bounded above by `len(results)` — after fail-fast compaction a
+  surviving command's original submission index can exceed the compacted result
+  length, so direct construction must permit values greater than or equal to
+  `len(results)`.
 
 ## Performance extensions (optional Rust)
 
@@ -1424,8 +1521,8 @@ by Python itself, so it can be handled the same way:
 - `errno` is populated, so failures are told apart by number rather than by
   matching message text — which is not a stable interface.
 - `strerror` carries the system's description on its own. Rust renders a raw OS
-  error as `"Bad file descriptor (os error 9)"`; that trailing `(os error N)` is
-  removed, so the number is stated once, by Python's own `[Errno N]` prefix.
+  error as `"Bad file descriptor (os error 9)"`; that trailing `(os error N)`
+  is removed, so the number is stated once, by Python's own `[Errno N]` prefix.
 - The exception is the **subclass** the error implies, not a bare `OSError`, so
   `except BrokenPipeError:` and `except IsADirectoryError:` work as expected.
 

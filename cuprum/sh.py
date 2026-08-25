@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import collections.abc as cabc
 import dataclasses as dc
+import time
 import typing as typ
 import warnings
 from pathlib import Path
@@ -393,6 +394,7 @@ def _prepare_execution_observation(
         env_overlay=env_overlay,
         tags=tags,
         pending_tasks=tracking.pending_tasks,
+        wall_clock=time.time,
     )
 
 

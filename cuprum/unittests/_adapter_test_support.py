@@ -56,6 +56,7 @@ def _make_exec_event(
         "exit_code": None,
         "duration_s": None,
         "tags": {},
+        "project": None,
         "note": None,
         "byte_count": None,
         "operation": None,
@@ -63,6 +64,8 @@ def _make_exec_event(
         "timeout_s": None,
         "timeout_mode": None,
         "exec_id": new_exec_id(),
+        "stage_index": None,
+        "stage_count": None,
     }
     if overrides is not None:
         unknown = set(overrides) - {field.name for field in dc.fields(ExecEvent)}
@@ -82,6 +85,7 @@ def _make_exec_event(
         exit_code=typ.cast("int | None", values["exit_code"]),
         duration_s=typ.cast("float | None", values["duration_s"]),
         tags=typ.cast("cabc.Mapping[str, object]", values["tags"]),
+        project=typ.cast("str | None", values["project"]),
         note=typ.cast("str | None", values["note"]),
         byte_count=typ.cast("int | None", values["byte_count"]),
         operation=typ.cast("str | None", values["operation"]),
@@ -89,6 +93,8 @@ def _make_exec_event(
         timeout_s=typ.cast("float | None", values["timeout_s"]),
         timeout_mode=typ.cast("TimeoutMode | None", values["timeout_mode"]),
         exec_id=typ.cast("ExecId | None", values["exec_id"]),
+        stage_index=typ.cast("int | None", values["stage_index"]),
+        stage_count=typ.cast("int | None", values["stage_count"]),
     )
 
 

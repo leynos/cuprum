@@ -262,12 +262,12 @@ tracing backend.  Hook scheduling and hook failures use the
 `cuprum._observability` logger with structured `extra` fields such as
 `cuprum_phase`, `cuprum_program`, `cuprum_error_type`, and
 `cuprum_scheduled_task_count`.  Stream early-close decisions use debug-level
-records on the `cuprum._streams_pump` logger and include `cuprum_discarded_bytes`
-when upstream bytes are drained after the downstream writer has closed.
-Suppressed writer cleanup failures remain debug-level diagnostics with
-`cuprum_operation` and `cuprum_error_type`, because they are expected during
-already-closed pipe teardown.  User-facing metrics and spans remain the
-responsibility of observe-hook adapters such as `MetricsHook` and
+records on the `cuprum._streams_pump` logger and include
+`cuprum_discarded_bytes` when upstream bytes are drained after the downstream
+writer has closed. Suppressed writer cleanup failures remain debug-level
+diagnostics with `cuprum_operation` and `cuprum_error_type`, because they are
+expected during already-closed pipe teardown.  User-facing metrics and spans
+remain the responsibility of observe-hook adapters such as `MetricsHook` and
 `TracingHook`, which consume `ExecEvent` values without coupling core execution
 to a telemetry vendor.
 
@@ -427,6 +427,154 @@ interpreter whose opcode set the tracer cannot handle
 3.15 betas, issue `#109`); every other failure is re-raised. Supported
 interpreters therefore confirm the contracts rather than skipping them.
 
+### `_pipeline_wait` completion command/query seam
+
+`cuprum/_pipeline_wait.py` splits completion handling on the same
+command-query line, so the fail-fast ordering rules can be verified without
+processes or a clock.
+
+- `_PipelineWaitState.record_completion(completed_idx, exit_code, *, ended_at)`
+  is a **command**. It writes the completed stage's exit code and the injected
+  completion time into that stage's slots, and latches `failure_index` only for
+  the *first* non-zero exit in completion order — completion order, not stage
+  order, so a stage failing earlier in time wins over a lower-indexed stage
+  failing later. It stays deterministic because the caller supplies `ended_at`
+  rather than the method reading the clock.
+- `_PipelineWaitState.should_terminate_others(completed_idx)` is a
+  **side-effect-free query**. It returns `True` only for the latched first
+  failure, and `False` for a final-stage failure because no other pipeline
+  stage needs stopping. It reads state without changing it, so it is safe to
+  call repeatedly and in any order after the command has run.
+- `_process_completed_task(...)` owns the runtime concerns: it reads the clock,
+  invokes the command, emits the structured records described below, and acts
+  on the query by awaiting `_terminate_pipeline_remaining_stages`. Keep logging
+  and I/O here — moving either into the command or the query would break the
+  determinism the symbolic verification depends on.
+
+Completion order governs — except in the one case where there is no completion
+order left to observe. `asyncio.wait` hands back the settled tasks as an
+*unordered set*, so stages that land in the same batch are indistinguishable in
+time. `_wait_for_pipeline` therefore feeds each batch through
+`_process_completed_task` in ascending stage-index order:
+
+```python
+for wait_task in sorted(done, key=lambda task: state.task_to_index[task]):
+```
+
+That sort is a tie-break, not a priority. Across batches the stage that
+completed first still latches `failure_index`, exactly as
+`record_completion` describes; the sort only orders the stages *within* a
+single `asyncio.wait` batch, where the alternative is set iteration order and a
+`failure_index` that varies between runs of the same pipeline. Ascending stage
+index is the tie worth breaking towards because in a pipeline the upstream
+stage is the one whose failure causes the downstream failures it triggers, so
+the earliest stage names the cause rather than a symptom.
+
+Two consequences follow for anyone changing this seam. Removing the sort does
+not change which stage is *usually* reported, so a test that fails stages at
+distinct times will not catch its loss; only one that forces stages into a
+single batch will, which is what `TestSimultaneousCompletions` in
+`cuprum/unittests/test_pipeline_wait_async.py` exists to do. And the tie-break
+lives at the async boundary rather than in the pure transition, which is why
+`record_completion` is specified purely in terms of the order it is called in —
+the Hypothesis and CrossHair layers drive that transition directly and never
+see a batch.
+
+When that fail-fast path fires it is no longer silent. Three structured records
+are emitted through `logging.getLogger("cuprum._pipeline_wait")`, distinguished
+by a stable `cuprum_action` field and sharing `cuprum_stage_index`,
+`cuprum_stage_count`, `cuprum_exit_code`, `cuprum_duration_s` (elapsed from the
+stage's recorded start to the injected completion time), and `cuprum_exec_id`:
+
+- `pipeline_stage_first_failure` — emitted once, when a completion newly
+  latches `failure_index`.
+- `pipeline_fail_fast_termination` — emitted immediately before termination is
+  awaited.
+- `pipeline_fail_fast_terminated` — emitted once termination returns, adding
+  `cuprum_terminated_stage_count` and `cuprum_termination_duration_s`.
+
+No record is emitted for a successful exit, for a later failure once
+`failure_index` is latched, or — for the two termination records — for a
+failure with no other stage left to stop. That last case covers more than the
+final-stage and single-stage failures the ordering query rules out: a batch is
+processed in stage order, so an upstream failure can be reached after every
+sibling has already exited. `_process_completed_task` therefore asks
+`_has_stages_to_terminate`, which wraps the same `_stages_to_terminate` reducer
+the teardown selects its targets with, before publishing anything; the
+`pipeline_fail_fast` event is withheld on the same condition.
+`pipeline_stage_first_failure` is not, because the failure latched regardless.
+
+Their shape lives in `cuprum/_pipeline_wait_records.py`, separately from the
+decision that fires them, because the payload is a published contract that the
+users' guide documents while the ordering decision is a verified transition.
+That module hard-codes the logger name rather than using `__name__` for the
+same reason: operators are told to attach handlers to `cuprum._pipeline_wait`,
+so the name is part of the contract and must not follow the module the code
+happens to live in.
+
+Two of those fields exist to make a record joinable rather than merely
+descriptive:
+
+- `cuprum_exec_id` is the stage's `_StageObservation.exec_id`, the same
+  per-execution token the observe hooks publish on that stage's span and its
+  `start` and `exit` events. It reaches the wait path as
+  `_PipelineSpawnResult.exec_ids`, threaded through `_wait_for_pipeline`
+  alongside `started_at` — the established way per-stage data the wait needs is
+  supplied. It defaults to empty, and `_PipelineWaitState.exec_id` then reports
+  `None`, because the pure transition never reads it and the symbolic model
+  must not carry it.
+- `cuprum_terminated_stage_count` is what
+  `_terminate_pipeline_remaining_stages` returns. Reporting it from the helper
+  that does the terminating, rather than recomputing the selection at the call
+  site, is what keeps the count honest when the selection changes.
+
+Cuprum emits **no metric and no trace event** for fail-fast. That is
+deliberate. The library emits no metrics of its own anywhere: `MetricsHook` is
+an opt-in adapter that translates `ExecEvent`s, and its phase match is
+fail-closed, so introducing a phase for fail-fast would make the hook raise for
+every user who has already registered it. A fail-fast counter therefore needs
+either a new library-side metrics surface or a change to the `ExecPhase`
+contract, and neither belongs in the module that decides completion order.
+`cuprum_action` is a stable, low-cardinality event name, so a log-based counter
+covers the same ground until that surface exists.
+
+Three verification layers cover this seam; keep all three when changing it:
+
+```bash
+# The state machine, boundary cases, async boundary, batch ordering,
+# observability, fail-fast event, and end-to-end wiring are split into eight
+# focused modules sharing `cuprum/unittests/_pipeline_wait_support.py` scaffolding.
+uv run pytest -q \
+  cuprum/unittests/test_pipeline_wait.py \
+  cuprum/unittests/test_pipeline_wait_state_machine.py \
+  cuprum/unittests/test_pipeline_wait_examples.py \
+  cuprum/unittests/test_pipeline_wait_async.py \
+  cuprum/unittests/test_pipeline_wait_batch.py \
+  cuprum/unittests/test_pipeline_wait_observability.py \
+  cuprum/unittests/test_pipeline_wait_fail_fast_event.py \
+  cuprum/unittests/test_pipeline_fail_fast_wiring.py
+# CrossHair PEP 316 contracts over the bounded symbolic model.
+uv run pytest -q cuprum/unittests/test_pipeline_wait_crosshair.py -m crosshair
+uv run crosshair check \
+  cuprum/unittests/test_pipeline_wait_crosshair.py \
+  --analysis_kind=PEP316
+```
+
+The symbolic model in `cuprum/unittests/test_pipeline_wait_crosshair.py` is
+bounded on purpose: preconditions cap the pipeline at three stages, exit codes
+at `-2..2`, and timestamps at `0.0..4.0`, and the state is built directly with
+only the fields the pure transition reads, so no asyncio task, subprocess, or
+clock enters the symbolic space. The contracts confirm that a completion writes
+only its own slot, that the first non-zero completion latches `failure_index`
+and a later one does not replace it, that `should_terminate_others` is true
+exactly for a non-final first failure (covering the final-stage and
+single-stage cases), and that repeating the query changes nothing.
+
+That module probes CrossHair at import time through the same shared
+helpers described above, so it degrades to a skip only for a missing
+dependency or an unsupported tracer, and confirms its contracts on every
+supported interpreter.
+
 ## Canonical stream-drain loop
 
 `cuprum._streams._drain(stream, config, *, on_chunk=None)` is the single
@@ -513,8 +661,12 @@ count to Rust test commands and, through `CARGO_JOB_ENV`, to both
 
 `cuprum/adapters/tracing_adapter.py` provides `TracingHook`, an observe hook
 that turns the `ExecEvent` stream into OpenTelemetry-style spans. It depends
-only on the `Tracer` and `Span` protocols, so any backend that implements them
-can be plugged in. `cuprum/adapters/tracing_memory.py` supplies
+only on the `Tracer` and `Span` protocols from
+`cuprum.adapters.tracing_protocols`, so any backend that implements them can be
+plugged in. `tracing_adapter` re-exports `Span` and `Tracer` as its public
+integration boundary. The legacy `cuprum.adapters._tracing_protocols` module is
+a compatibility re-export only and does not define a second protocol contract.
+`cuprum/adapters/tracing_memory.py` supplies
 `InMemoryTracer` and `InMemorySpan`, the reference doubles used by tests and
 examples: `InMemoryTracer` collects spans in memory and protects its span store
 through the shared `_LockedStore` lock (its mutators, and `reset()`, run under
@@ -731,9 +883,9 @@ package from the dev dependency group.
 
 ### Extracted module boundaries
 
-Several implementation modules were split out of larger files to keep each
-seam small and single-purpose. `cuprum/context/_policy.py` is described above;
-the subprocess module boundaries (`cuprum/_subprocess_execution.py`,
+Several implementation modules were split out of larger files to keep each seam
+small and single-purpose. `cuprum/context/_policy.py` is described above; the
+subprocess module boundaries (`cuprum/_subprocess_execution.py`,
 `cuprum/_subprocess_stdin.py`, `cuprum/_subprocess_timeout.py`) and concurrent
 execution are covered in [Cuprum design](cuprum-design.md) §8.1.5 (with
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md)) and §8.3.1
@@ -741,6 +893,12 @@ respectively, and are not repeated here.
 
 Runtime (`cuprum/`):
 
+- `cuprum/_pipeline_wait_records.py` — typed completion-report payloads.
+  `_CompletionLogFields` carries shared completion fields; `_CompletionReport`
+  carries an action, message, and optional record fields; and
+  `_PipelineWaitReporter` is the optional adapter port for the three canonical
+  direct pipeline-wait WARNING records. That direct-record contract is distinct
+  from the typed `pipeline_fail_fast` `ExecEvent` contract.
 - `cuprum/_concurrent_config.py` — the `ConcurrentConfig`/`ConcurrentResult`
   dataclasses and their validation; an implementation detail of
   `cuprum.concurrent`.
@@ -753,8 +911,9 @@ Runtime (`cuprum/`):
 - `cuprum/_pipeline_stream_results.py` — pipe-result triage for pipeline
   stages.
 - `cuprum/_streams_pump.py` — the stream pump loop with backpressure.
-- `cuprum/adapters/_tracing_protocols.py` — the PEP 544 `Span`/`Tracer`
-  protocols for the tracing adapter.
+- `cuprum/adapters/tracing_protocols.py` — the canonical PEP 544 `Span`/
+  `Tracer` protocols. `tracing_adapter` re-exports both; `_tracing_protocols.py`
+  remains a compatibility re-export only.
 
 Benchmarks (`benchmarks/`):
 
@@ -763,9 +922,9 @@ Benchmarks (`benchmarks/`):
   discovery and downloads. Reuse it for benchmark GitHub transfers; keep
   general-purpose HTTP concerns outside this private module.
 - `benchmarks/ratchet_ratio_extraction.py` — extracts within-run Rust/Python
-  ratio maps and validates that baseline and candidate comparison groups
-  match. `benchmarks/ratchet_rust_performance.py` owns report-value
-  construction; this module owns ratio extraction and ratio-map validation.
+  ratio maps and validates that baseline and candidate comparison groups match.
+  `benchmarks/ratchet_rust_performance.py` owns report-value construction; this
+  module owns ratio extraction and ratio-map validation.
 - `benchmarks/_tee_profile_worker_backend.py` — backend selection for the tee
   hot-path profiling worker (`_EnvBackendSelector` and its supporting state).
 
@@ -1057,11 +1216,11 @@ It holds `_BACKEND_LOCK` across the complete `repeat_count` loop, serializing
 concurrent benchmark workers for the full worker workload, including every
 `run_sync` subprocess execution. Consequently, workers that require different
 or process-local stream backend selection cannot execute their repeat loops in
-parallel, which limits their aggregate throughput.
-It is intentionally not re-entrant: a thread-local guard detects nested entry
-on the same thread, logs the rejected backend and thread identifier, and
-raises `ReentrantBackendSelectorError` (a `RuntimeError` subclass, retained
-for backward compatibility) before mutating backend state.
+parallel, which limits their aggregate throughput. It is intentionally not
+re-entrant: a thread-local guard detects nested entry on the same thread, logs
+the rejected backend and thread identifier, and raises
+`ReentrantBackendSelectorError` (a `RuntimeError` subclass, retained for
+backward compatibility) before mutating backend state.
 
 ### Selector observability metrics
 
@@ -2015,15 +2174,14 @@ gate also runs the helper's Python 3.13 tests with at least 90% line coverage.
 The cache refresh in `scripts/typos_rollout_refresh.py` fetches the shared
 dictionary only over HTTPS and rejects any redirect that would downgrade the
 connection to plain HTTP: a dedicated `_HttpsOnlyRedirectHandler` refuses the
-redirect before urllib reissues the request, so a compromised or
-misconfigured upstream cannot silently serve the dictionary in cleartext.
-Refresh degradations — a rejected HTTPS-downgrade redirect, falling back to a
-stale cache after a failed refresh, or reusing the cache in offline mode —
-are counted in a bounded, fixed-key counter and reported through structured
+redirect before urllib reissues the request, so a compromised or misconfigured
+upstream cannot silently serve the dictionary in cleartext. Refresh
+degradations — a rejected HTTPS-downgrade redirect, falling back to a stale
+cache after a failed refresh, or reusing the cache in offline mode — are
+counted in a bounded, fixed-key counter and reported through structured
 `logging` warnings (or info, for the offline case). Those log records never
 include the request URL; they carry only the event name and non-sensitive
-context such as the rejected redirect's scheme or the triggering error's
-type.
+context such as the rejected redirect's scheme or the triggering error's type.
 
 Ruff must be invoked through the project virtual environment, not as a floating
 host tool. The `RUFF` variable expands to `$(UV_RUN_ENV) uv run ruff`, and the
@@ -2178,14 +2336,14 @@ family:
   public surface is suppressed.
 - **Test scaffolding (`per-file-ignore`).** `ASYNC109` and `ASYNC240` are
   ignored through `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` for
-  exactly two modules — `cuprum/unittests/test_observe_stdin_early_close.py`
-  and `tests/behaviour/_execution_runtime_support.py`. Their async scaffolding
+  exactly two modules — `cuprum/unittests/test_observe_stdin_early_close.py` and
+  `tests/behaviour/_execution_runtime_support.py`. Their async scaffolding
   polls a PID file with asyncio-only helpers, so a `timeout` parameter and
-  blocking `pathlib` calls are acceptable there; the async-native path
-  libraries (`trio.Path` / `anyio.Path`) that `ASYNC240` recommends are not in
-  use. Naming the two paths rather than globbing `**/test_*.py` stops
-  unrelated and future async tests inheriting the exemption silently. The
-  rationale is recorded next to the ignore in `pyproject.toml`.
+  blocking `pathlib` calls are acceptable there; the async-native path libraries
+  (`trio.Path` / `anyio.Path`) that `ASYNC240` recommends are not in use.
+  Naming the two paths rather than globbing `**/test_*.py` stops unrelated and
+  future async tests inheriting the exemption silently. The rationale is
+  recorded next to the ignore in `pyproject.toml`.
 
 When changing either suppression, keep the `pyproject.toml` comments and this
 section in step.
@@ -2215,15 +2373,14 @@ recurring judgement call: a multi-line docstring on a value-returning function
 must carry a `Returns` section, so there are exactly two legal shapes — a
 one-line summary, or a multi-line docstring with the required sections. An
 explanatory paragraph cannot be kept while dropping `Returns`. When a private
-helper's rationale is worth keeping but the structured sections would be
-noise, the established pattern is to collapse the docstring to one line and
-move the rationale to an inline `#` comment immediately above the relevant
-code.
+helper's rationale is worth keeping but the structured sections would be noise,
+the established pattern is to collapse the docstring to one line and move the
+rationale to an inline `#` comment immediately above the relevant code.
 
-When an exception merely propagates from a callee rather than being raised by
-a literal `raise` in the function's own body, documenting it trips `DOC502`.
-The house convention is a scoped suppression on the docstring's closing line,
-with a justification naming where the exception comes from:
+When an exception merely propagates from a callee rather than being raised by a
+literal `raise` in the function's own body, documenting it trips `DOC502`. The
+house convention is a scoped suppression on the docstring's closing line, with
+a justification naming where the exception comes from:
 
 ```python
     """Run the command.
@@ -2655,9 +2812,9 @@ guarded by regression tests in `cuprum/unittests/test_subprocess_timeout.py`.
 Neither wait helper terminates unconditionally, and neither drains.
 `_wait_for_exit_code` terminates the process only when the wait is cancelled —
 which is also how an `asyncio.timeout` expiry arrives. A successful wait
-completes when `_await_process_exit` obtains either the normal
-`process.wait()` result or an already-published `process.returncode` when the
-asyncio waiter is stranded, leaving the process alone in both cases.
+completes when `_await_process_exit` obtains either the normal `process.wait()`
+result or an already-published `process.returncode` when the asyncio waiter is
+stranded, leaving the process alone in both cases.
 `_wait_for_exit_code_within_timeout` terminates on its non-positive fast path
 before any wait begins; when a positive timeout expires it instead cancels
 `_wait_for_exit_code`, which terminates the running process.
@@ -2671,13 +2828,13 @@ All three subprocess exit-wait paths use `_await_process_exit` from
 `cuprum/_process_exit.py`: the single-command wait in `_wait_for_exit_code`,
 the per-stage waits created by `_PipelineWaitState.from_processes`, and the
 standalone teardown wait used by `_terminate_process` for timeout or
-cancellation cleanup. Fail-fast pipeline teardown awaits the existing
-per-stage wait tasks and therefore inherits the same protection. The helper
-first accepts an already-published `process.returncode`; otherwise it races
-`process.wait()` against a bounded exponential-backoff poll of that return
-code, starting at 0.01 seconds and capped at 1.0 second, and cancels the
-losing task. This closes the asyncio lost-wakeup race where `returncode`
-has been published but the waiter remains pending. Keep the regression in
+cancellation cleanup. Fail-fast pipeline teardown awaits the existing per-stage
+wait tasks and therefore inherits the same protection. The helper first accepts
+an already-published `process.returncode`; otherwise it races `process.wait()`
+against a bounded exponential-backoff poll of that return code, starting at
+0.01 seconds and capped at 1.0 second, and cancels the losing task. This closes
+the asyncio lost-wakeup race where `returncode` has been published but the
+waiter remains pending. Keep the regression in
 `cuprum/unittests/test_process_exit.py` aligned with this contract.
 
 ### Pipeline timeout and teardown
@@ -2696,7 +2853,11 @@ a producer stage that is still running.
 runs the terminations in an owned, `asyncio.shield`ed task and holds off a
 caller's cancellation until they finish before re-raising it. Without that
 shielding, a cancellation landing in the grace-period wait would skip the
-`SIGKILL` escalation and leave a `SIGTERM`-immune stage running.
+`SIGKILL` escalation and leave a `SIGTERM`-immune stage running. A shield
+covers only the one `await` it wraps, so the wait is resumed behind a fresh
+shield after each cancellation rather than re-awaited bare: only the
+teardown's own completion ends the loop, and the first cancellation is
+re-raised so the caller still sees exactly one.
 `_terminate_all_shielded` also backs `_cleanup_spawned_processes` and
 `_cleanup_pipeline_on_error`, and the fail-fast route in
 `_terminate_pipeline_remaining_stages` uses the shared

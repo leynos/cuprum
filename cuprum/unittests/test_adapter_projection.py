@@ -33,7 +33,15 @@ from cuprum.program import Program
 if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
-_OPTIONAL_FIELDS = ("pid", "cwd", "exit_code", "duration_s", "line")
+_OPTIONAL_FIELDS = (
+    "pid",
+    "cwd",
+    "exit_code",
+    "duration_s",
+    "stage_index",
+    "stage_count",
+    "line",
+)
 _PHASES = typ.get_args(ExecPhase.__value__)
 _REDACTED_FIELDS = frozenset({"pid", "duration_s", "cwd"})
 # Ancillary diagnostic phases and the ``operation`` each reports. These are the
@@ -71,6 +79,9 @@ def _events(draw: st.DrawFn) -> ExecEvent:
                 max_size=3,
             ),
         ),
+        project=draw(st.none() | st.text(max_size=20)),
+        stage_index=draw(st.none() | st.integers(min_value=0, max_value=7)),
+        stage_count=draw(st.none() | st.integers(min_value=1, max_value=8)),
     )
 
 
@@ -140,23 +151,49 @@ class TestAdapterProjection:
             Generated event with optional fields independently present or absent.
         """
         canonical = {key for key, _ in _event_common_fields(event, lambda field: field)}
+        self._assert_logging_projection(event, canonical)
+        self._assert_tracing_projection(event, canonical)
+        self._assert_metrics_labels(event)
+
+    @staticmethod
+    def _assert_logging_projection(event: ExecEvent, canonical: set[str]) -> None:
+        """Assert the logging projection preserves its canonical fields."""
+        expected_log_fields = (
+            (canonical - {"argv"}) | {"exec_id"}
+            if event.phase == "pipeline_fail_fast"
+            else canonical
+        )
 
         extra_keys = {
             key.removeprefix("cuprum_")
             for key in _build_extra(event)
             if key not in {"cuprum_phase", "cuprum_tags"}
         }
-        assert extra_keys == canonical, (
+        assert extra_keys == expected_log_fields, (
             "logging extras must expose exactly the canonical common fields after "
             "removing their backend prefix"
         )
-        assert _build_extra(event)["cuprum_argv"] == event.argv, (
-            "logging extras must preserve argv as a tuple"
-        )
-        assert _build_extra(event)["cuprum_tags"] == dict(event.tags), (
-            "logging extras must preserve the event tag mapping"
-        )
+        if event.phase == "pipeline_fail_fast":
+            assert _build_extra(event)["cuprum_exec_id"] == event.exec_id, (
+                "fail-fast extras must preserve the execution correlation token"
+            )
+            assert "cuprum_argv" not in _build_extra(event), (
+                "fail-fast extras must omit the raw argument vector"
+            )
+            assert "cuprum_tags" not in _build_extra(event), (
+                "fail-fast extras must omit arbitrary event tags"
+            )
+        else:
+            assert _build_extra(event)["cuprum_argv"] == event.argv, (
+                "logging extras must preserve argv as a tuple"
+            )
+            assert _build_extra(event)["cuprum_tags"] == dict(event.tags), (
+                "logging extras must preserve the event tag mapping"
+            )
 
+    @staticmethod
+    def _assert_tracing_projection(event: ExecEvent, canonical: set[str]) -> None:
+        """Assert the tracing projection preserves its canonical fields."""
         attr_keys = {
             key.removeprefix("cuprum.")
             for key in TracingHook._build_attributes(event)
@@ -175,6 +212,9 @@ class TestAdapterProjection:
             event.argv
         ), "tracing attributes must render argv as a list"
 
+    @staticmethod
+    def _assert_metrics_labels(event: ExecEvent) -> None:
+        """Assert metrics retain only their low-cardinality labels."""
         labels = MetricsHook._extract_labels(event)
         assert set(labels) == {"program", "project"}, (
             "metrics labels must stay limited to the low-cardinality program and "
@@ -183,7 +223,11 @@ class TestAdapterProjection:
         assert labels["program"] == str(event.program), (
             "metrics labels must stringify the event program when it is present"
         )
-        project = event.tags.get("project")
+        project = (
+            event.project
+            if event.phase == "pipeline_fail_fast"
+            else event.tags.get("project")
+        )
         expected_project = str(project) if project is not None else ""
         assert labels["project"] == (expected_project or "unknown"), (
             "metrics labels must stringify a non-empty project tag and fall back "
@@ -196,6 +240,7 @@ class TestAdapterProjection:
         is_exit = phase == "exit"
         is_output = phase in {"stdout", "stderr"}
         is_timeout = phase == "timeout"
+        is_fail_fast = phase == "pipeline_fail_fast"
         ancillary = phase in _ANCILLARY_PHASES
         return ExecEvent(
             phase=typ.cast("ExecPhase", phase),
@@ -203,16 +248,17 @@ class TestAdapterProjection:
             argv=("echo", "hello"),
             cwd=Path("/srv/work"),
             env=None,
-            pid=None if phase == "plan" else 4321,
+            pid=None if phase in {"plan", "pipeline_fail_fast"} else 4321,
             timestamp=0.0,
             line="a line" if is_output else None,
-            exit_code=0 if is_exit else None,
-            duration_s=0.125 if is_exit else None,
+            exit_code=0 if is_exit else 3 if is_fail_fast else None,
+            duration_s=0.125 if is_exit or is_fail_fast else None,
             tags={
                 "project": "proj",
                 "pipeline_stage_index": 0,
                 "pipeline_stages": 2,
             },
+            project="proj",
             operation=_ANCILLARY_PHASES.get(phase),
             error_type="TimeoutError"
             if is_timeout
@@ -222,6 +268,8 @@ class TestAdapterProjection:
             else None,
             timeout_s=1.5 if is_timeout else None,
             timeout_mode="elapsed_deadline" if is_timeout else None,
+            stage_index=0 if is_fail_fast else None,
+            stage_count=2 if is_fail_fast else None,
         )
 
     @staticmethod

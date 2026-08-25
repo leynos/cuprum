@@ -90,7 +90,7 @@ async def _await_pipeline_wait_result(
         spawn.processes,
         pipe_tasks=pipe_tasks,
         cancel_grace=config.ctx.cancel_grace,
-        started_at=spawn.started_at,
+        stages=spawn.stages,
     )
     if wait_timeout is None:
         return await pipeline_wait

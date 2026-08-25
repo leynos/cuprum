@@ -107,7 +107,12 @@ def _with_retry[T](
         try:
             return operation()
         except (urllib.error.HTTPError, urllib.error.URLError) as exc:
-            time.sleep(_retry_delay_or_raise(exc, delay))
+            try:
+                retry_delay = _retry_delay_or_raise(exc, delay)
+            finally:
+                if isinstance(exc, urllib.error.HTTPError):
+                    exc.close()
+            time.sleep(retry_delay)
 
 
 class _ArtifactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):

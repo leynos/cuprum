@@ -210,6 +210,7 @@ _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
     "stdin_error": "cuprum_stdin_errors_total",
     "timeout": "cuprum_timeouts_total",
     "teardown_error": "cuprum_teardown_errors_total",
+    "pipeline_fail_fast": "cuprum_pipeline_fail_fast_total",
 })
 
 
@@ -268,6 +269,8 @@ class MetricsHook:
     - ``cuprum_stdin_errors_total``: Counter of stdin writer failures
     - ``cuprum_timeouts_total``: Counter of subprocess and pipeline expiries
     - ``cuprum_teardown_errors_total``: Counter of consumer drain failures
+    - ``cuprum_pipeline_fail_fast_total``: Counter of pipelines terminated
+      early after their first non-final stage failure
 
     All metrics include ``program`` and ``project`` labels.
 
@@ -363,7 +366,12 @@ class MetricsHook:
         # high-cardinality fields (pid, argv, lines) are excluded by design.
         return {
             "program": str(event.program) or "unknown",
-            "project": _project_tag(event) or "unknown",
+            "project": (
+                event.project
+                if event.phase == "pipeline_fail_fast"
+                else _project_tag(event)
+            )
+            or "unknown",
         }
 
 
