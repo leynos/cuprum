@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import collections.abc as cabc
 import dataclasses as dc
+import time
 import typing as typ
 import warnings
 from pathlib import Path
@@ -56,27 +57,6 @@ type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 type _EnvMapping = cabc.Mapping[str, str] | None
 type _CwdType = str | Path | None
 
-_DEFAULT_CANCEL_GRACE = 0.5
-# Names the aggregate raised when draining observe-hook tasks fails while a
-# single-command execution is already unwinding.
-_COMMAND_FINALIZATION_ERROR = "command finalization failed"
-_DEFAULT_ENCODING = "utf-8"
-_DEFAULT_ERROR_HANDLING = "replace"
-
-
-import time
-
-"""Safe command construction and execution facade for curated programs.
-This module focuses on the typed core: building ``SafeCmd`` instances from
-curated ``Program`` values and providing a minimal async runtime for executing
-them with predictable semantics.
-"""
-# Program must be imported at runtime rather than under TYPE_CHECKING
-# because test modules instantiate CommandResult with Program values directly.
-type _ArgValue = str | int | float | bool | Path
-type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
-type _EnvMapping = cabc.Mapping[str, str] | None
-type _CwdType = str | Path | None
 _DEFAULT_CANCEL_GRACE = 0.5
 # Names the aggregate raised when draining observe-hook tasks fails while a
 # single-command execution is already unwinding.

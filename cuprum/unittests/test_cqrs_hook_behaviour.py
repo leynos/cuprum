@@ -42,6 +42,7 @@ import time
 """Runtime coverage for CQRS hook and task-scheduling behaviour."""
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
     from cuprum.events import ExecEvent
 
 

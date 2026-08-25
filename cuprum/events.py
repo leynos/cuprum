@@ -179,12 +179,12 @@ class ExecEvent:
     exit_code: int | None
     duration_s: float | None
     tags: cabc.Mapping[str, object]
-    project: str | None = None
     note: str | None = None
     byte_count: int | None = None
     operation: str | None = None
     error_type: str | None = None
     exec_id: ExecId | None = None
+    project: str | None = None
     # Appended after exec_id to keep its positional slot stable; see the note
     # in the class docstring.
     timeout_s: float | None = None

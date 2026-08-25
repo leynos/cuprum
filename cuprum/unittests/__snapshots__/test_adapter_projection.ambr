@@ -70,6 +70,7 @@
       'cuprum.stage_count': 2,
       'cuprum.stage_index': 0,
     }),
+    'tracing_span_event': None,
   })
 # ---
 # name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[plan]

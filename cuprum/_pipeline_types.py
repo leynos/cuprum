@@ -182,6 +182,7 @@ class _PipelineStageResultInputs:
     stderr_by_stage: tuple[str | None, ...]
     final_stdout: str | None
 
+
 @dc.dataclass(frozen=True, slots=True)
 class _StageWaitContext:
     """Per-stage data the wait path reads, all indexed by stage.

@@ -77,6 +77,7 @@ from cuprum.adapters._support import (
     _project_tag,
 )
 from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
+from cuprum.adapters.tracing_protocols import Span, Tracer
 
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook, ExecId

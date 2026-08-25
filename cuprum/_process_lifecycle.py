@@ -310,6 +310,11 @@ def _has_stages_to_terminate(
     Asks the same reducer `_terminate_pipeline_remaining_stages` picks its
     targets with, so a caller that announces the decision before requesting the
     teardown cannot disagree with it about whether a stage was left running.
+
+    Returns
+    -------
+    bool
+        Whether at least one stage remains to terminate.
     """
     return bool(
         _stages_to_terminate(
@@ -317,6 +322,8 @@ def _has_stages_to_terminate(
             [wait_task.done() for wait_task in wait_tasks],
         ),
     )
+
+
 async def _terminate_pipeline_remaining_stages(
     processes: list[asyncio.subprocess.Process],
     wait_tasks: list[asyncio.Task[int]],
@@ -331,9 +338,12 @@ async def _terminate_pipeline_remaining_stages(
     hanging on long-running producers/consumers when downstream work is no
     longer meaningful.
 
-    Returns one outcome for each selected termination target. ``True`` means
-    the process accepted termination and its waiter completed; ``False`` means
-    it had already settled or could not be signalled.
+    Returns
+    -------
+    tuple[bool, ...]
+        One outcome for each selected termination target. ``True`` means the
+        process accepted termination and its waiter completed; ``False`` means
+        it had already settled or could not be signalled.
     """
     targets = set(
         _stages_to_terminate(
