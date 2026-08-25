@@ -64,23 +64,24 @@ async def _terminate_process_with_wait(
     grace_period: float,
     is_done: cabc.Callable[[], bool],
     wait_for_exit: cabc.Callable[[], cabc.Awaitable[int]],
-) -> None:
-    """Terminate a process, awaiting completion via the provided waiter."""
+) -> bool:
+    """Terminate a process and report whether its waiter completed."""
     grace_period = max(0.0, grace_period)
     if is_done():
-        return
+        return False
     try:
         process.terminate()
     except (ProcessLookupError, OSError):
-        return
+        return False
     try:
         await asyncio.wait_for(wait_for_exit(), grace_period)
     except asyncio.TimeoutError:  # noqa: UP041 - explicit asyncio timeout needed
         try:
             process.kill()
         except (ProcessLookupError, OSError):
-            return
+            return False
         await wait_for_exit()
+    return True
 
 
 async def _shielded_cleanup[T](cleanup: cabc.Awaitable[T]) -> T:
@@ -102,9 +103,12 @@ async def _shielded_cleanup[T](cleanup: cabc.Awaitable[T]) -> T:
 
 async def _await_teardown_shielded(
     teardowns: cabc.Iterable[cabc.Awaitable[object]],
-) -> None:
-    """Complete teardown before re-raising any caller cancellation."""
-    await _shielded_cleanup(asyncio.gather(*teardowns, return_exceptions=True))
+) -> tuple[object, ...]:
+    """Complete teardown and return its outcomes after caller cancellation."""
+    outcomes = await _shielded_cleanup(
+        asyncio.gather(*teardowns, return_exceptions=True)
+    )
+    return tuple(outcomes)
 
 
 async def _terminate_all_shielded(
@@ -248,9 +252,9 @@ async def _terminate_process_via_wait_task(
     process: asyncio.subprocess.Process,
     wait_task: asyncio.Task[int],
     grace_period: float,
-) -> None:
-    """Terminate a process, awaiting the provided wait task for completion."""
-    await _terminate_process_with_wait(
+) -> bool:
+    """Terminate a process and report whether its provided waiter completed."""
+    return await _terminate_process_with_wait(
         process,
         grace_period=grace_period,
         is_done=wait_task.done,
@@ -319,7 +323,7 @@ async def _terminate_pipeline_remaining_stages(
     failure_index: int,
     *,
     cancel_grace: float,
-) -> int:
+) -> tuple[bool, ...]:
     """Terminate all still-running stages after a stage fails.
 
     Once a stage exits non-zero, Cuprum applies fail-fast semantics by
@@ -327,10 +331,9 @@ async def _terminate_pipeline_remaining_stages(
     hanging on long-running producers/consumers when downstream work is no
     longer meaningful.
 
-    Returns the number of stages that were still running and so were
-    terminated. The caller reports that count, which is how an operator tells
-    a teardown that stopped stages from one that found them all already
-    settled and had nothing to do.
+    Returns one outcome for each selected termination target. ``True`` means
+    the process accepted termination and its waiter completed; ``False`` means
+    it had already settled or could not be signalled.
     """
     targets = set(
         _stages_to_terminate(
@@ -347,6 +350,7 @@ async def _terminate_pipeline_remaining_stages(
         )
         if idx in targets
     ]
-    if termination_tasks:
-        await _await_teardown_shielded(termination_tasks)
-    return len(termination_tasks)
+    if not termination_tasks:
+        return ()
+    outcomes = await _await_teardown_shielded(termination_tasks)
+    return tuple(outcome is True for outcome in outcomes)

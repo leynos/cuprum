@@ -260,25 +260,30 @@ completion order — whether or not that failure went on to trigger fail-fast
 termination — but not why the other stages ended when they did. When the first
 non-final failure still has stages to stop, the wait path publishes one
 `pipeline_fail_fast` `ExecEvent` to the registered observe hooks immediately
-before termination begins. The wait path also reports three canonical
-completion records through the optional pipeline-wait reporter:
+before termination begins. The wait path also reports three fixed completion
+records through the optional pipeline-wait reporter:
 `pipeline_stage_first_failure` when the first failure is latched,
 `pipeline_fail_fast_termination` before termination starts, and
 `pipeline_fail_fast_terminated` with the termination outcome. The structured
-logging adapter renders these as WARNING records when it is registered. The
-latter two records occur only when there are stages to terminate; the
-first-failure record still documents a final-stage, single-stage, or
-already-settled non-final failure. The `pipeline_fail_fast` observe event is
-separate from these records; metrics, tracing, and structured logging hooks
-project the event without requiring log parsing.
+logging adapter renders these canonical wait records at WARNING. The latter
+two records occur only when there are stages to terminate; the first-failure
+record still documents a final-stage, single-stage, or already-settled
+non-final failure. The closing record's
+`cuprum_terminated_stage_count` counts only confirmed process terminations, so
+a stage that settles after termination selection is excluded. The
+`pipeline_fail_fast` observe event is separate from these records; metrics,
+tracing, and `structured_logging_hook()` project that event through the
+configurable event adapter channel without requiring log parsing.
 
 The event carries the failing stage's index, pipeline width, exit code,
 duration, and execution token. It is sanitized: `argv` is empty, `cwd` and
-`env` are `None`, and `tags` is empty; only the program, typed decision fields,
+`env` are `None`, and `tags` is empty; only the program, trusted configured
+project, typed decision fields,
 and `ExecEvent.exec_id` remain. All projections consume this same sanitized
 event, so they do not need to parse log text. The metrics adapter labels
 `cuprum_pipeline_fail_fast_total` with `program` and `project` alone; `project`
-falls back to `unknown` because caller tags are absent, and the execution token
+comes from the trusted configured project and falls back to `unknown` only when
+absent, and the execution token
 remains event and trace detail rather than a metric label. It also
 distinguishes concurrent pipelines whose stage indices would otherwise look
 identical.

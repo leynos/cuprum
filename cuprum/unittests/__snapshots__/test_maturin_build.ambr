@@ -148,6 +148,7 @@
       'cuprum/unittests/test_pipeline_timeouts.py',
       'cuprum/unittests/test_pipeline_wait.py',
       'cuprum/unittests/test_pipeline_wait_async.py',
+      'cuprum/unittests/test_pipeline_wait_batch.py',
       'cuprum/unittests/test_pipeline_wait_crosshair.py',
       'cuprum/unittests/test_pipeline_wait_examples.py',
       'cuprum/unittests/test_pipeline_wait_fail_fast_event.py',

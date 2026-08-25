@@ -541,14 +541,15 @@ covers the same ground until that surface exists.
 Three verification layers cover this seam; keep all three when changing it:
 
 ```bash
-# The state machine, boundary cases, async boundary, observability, fail-fast
-# event, and end-to-end wiring are split into seven focused modules sharing
-# `cuprum/unittests/_pipeline_wait_support.py` scaffolding.
+# The state machine, boundary cases, async boundary, batch ordering,
+# observability, fail-fast event, and end-to-end wiring are split into eight
+# focused modules sharing `cuprum/unittests/_pipeline_wait_support.py` scaffolding.
 uv run pytest -q \
   cuprum/unittests/test_pipeline_wait.py \
   cuprum/unittests/test_pipeline_wait_state_machine.py \
   cuprum/unittests/test_pipeline_wait_examples.py \
   cuprum/unittests/test_pipeline_wait_async.py \
+  cuprum/unittests/test_pipeline_wait_batch.py \
   cuprum/unittests/test_pipeline_wait_observability.py \
   cuprum/unittests/test_pipeline_wait_fail_fast_event.py \
   cuprum/unittests/test_pipeline_fail_fast_wiring.py

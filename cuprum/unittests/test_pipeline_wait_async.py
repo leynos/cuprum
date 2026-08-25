@@ -9,27 +9,122 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import logging
 import typing as typ
 
-from cuprum import _pipeline_wait
-from cuprum._pipeline_types import _StageWaitContext
-from cuprum.adapters.logging_adapter import structured_logging_hook
+from cuprum import _pipeline_wait, _process_lifecycle
+from cuprum._pipeline_wait_records import _completion_log_fields
 from cuprum.unittests._pipeline_wait_support import (
     advancing_clock,
     apply_completions,
     make_stage_observations,
     make_wait_state,
     pin_clock,
-    record_actions,
     record_terminations,
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     import pytest
 
-    from cuprum._pipeline_wait import _PipelineWaitResult, _PipelineWaitState
-    from cuprum.events import ExecEvent
+    from cuprum._pipeline_wait import _PipelineWaitState
+
+
+class _TerminationProcess:
+    """Process double that confirms termination by completing its wait future."""
+
+    def __init__(self, waiter: asyncio.Future[int], order: list[str]) -> None:
+        """Keep the wait future and shared event order for this process."""
+        self._waiter = waiter
+        self._order = order
+        self.terminate_calls = 0
+        self.kill_calls = 0
+
+    def terminate(self) -> None:
+        """Record termination and publish the synthetic process exit."""
+        self.terminate_calls += 1
+        self._order.append("confirmed-termination")
+        if not self._waiter.done():
+            self._waiter.set_result(-15)
+
+    def kill(self) -> None:
+        """Record an unexpected escalation in this immediate-exit double."""
+        self.kill_calls += 1
+
+
+class _CompletionReporter:
+    """Capture pipeline-wait records in their publication order."""
+
+    def __init__(self, order: list[str]) -> None:
+        """Keep the shared order and captured record extras."""
+        self._order = order
+        self.records: list[dict[str, object]] = []
+
+    def __call__(self, event: object) -> None:
+        """Accept observe events without changing this record-only test."""
+        del event
+
+    def report_pipeline_wait(
+        self,
+        message: str,
+        args: tuple[object, ...],
+        extra: cabc.Mapping[str, object],
+    ) -> None:
+        """Record a pipeline-wait action through the adapter port."""
+        del message, args
+        action = str(extra["cuprum_action"])
+        self._order.append(action)
+        self.records.append(dict(extra))
+
+
+@dc.dataclass(slots=True)
+class _TerminationScenario:
+    """Fixture state for one fail-fast teardown outcome test."""
+
+    state: _PipelineWaitState
+    processes: list[asyncio.subprocess.Process]
+    late_waiter: asyncio.Future[int]
+    confirmed_process: _TerminationProcess
+    late_process: _TerminationProcess
+    reporter: _CompletionReporter
+    order: list[str]
+
+
+def _make_termination_scenario() -> _TerminationScenario:
+    """Create selected, confirmed, and late-settling teardown targets."""
+    loop = asyncio.get_running_loop()
+    failed_waiter = loop.create_future()
+    confirmed_waiter = loop.create_future()
+    late_waiter = loop.create_future()
+    failed_waiter.set_result(4)
+    order: list[str] = []
+    confirmed_process = _TerminationProcess(confirmed_waiter, order)
+    late_process = _TerminationProcess(late_waiter, order)
+    reporter = _CompletionReporter(order)
+    state = make_wait_state(
+        3,
+        observations=make_stage_observations(3, (reporter,)),
+    )
+    state.wait_tasks = typ.cast(
+        "list[asyncio.Task[int]]",
+        [failed_waiter, confirmed_waiter, late_waiter],
+    )
+    return _TerminationScenario(
+        state=state,
+        processes=typ.cast(
+            "list[asyncio.subprocess.Process]",
+            [
+                _TerminationProcess(failed_waiter, order),
+                confirmed_process,
+                late_process,
+            ],
+        ),
+        late_waiter=late_waiter,
+        confirmed_process=confirmed_process,
+        late_process=late_process,
+        reporter=reporter,
+        order=order,
+    )
 
 
 class TestProcessCompletedTask:
@@ -183,185 +278,77 @@ class TestProcessCompletedTask:
         )
 
 
-class _SettledProcess:
-    """A process stand-in whose ``wait`` returns immediately.
+class TestPipelineTerminationOutcomes:
+    """Async-boundary tests for verified pipeline termination outcomes."""
 
-    ``_wait_for_pipeline`` only ever calls ``wait`` on the processes it is
-    given, so this is enough to put every stage into a single
-    ``asyncio.wait`` batch — the case where completion order runs out.
-    """
-
-    def __init__(self, exit_code: int) -> None:
-        """Store the exit code this stand-in reports."""
-        self._exit_code = exit_code
-        self.returncode: int | None = None
-
-    async def wait(self) -> int:
-        """Return the configured exit code without yielding to real I/O."""
-        return self._exit_code
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _BatchRun:
-    """Everything one all-at-once pipeline wait produced."""
-
-    processed: tuple[int, ...]
-    result: _PipelineWaitResult
-    terminations: tuple[tuple[int, float], ...]
-    events: tuple[ExecEvent, ...]
-    records: tuple[logging.LogRecord, ...]
-
-
-class TestSimultaneousCompletions:
-    """Stages completing in one batch resolve by stage order, not set order.
-
-    ``asyncio.wait`` returns an unordered set, so when several stages settle
-    together there is no completion order left to observe. Reporting whichever
-    the set happened to yield first would make ``failure_index`` — and the
-    structured record naming the failing stage — vary between runs on
-    identical input.
-    """
-
-    @staticmethod
-    def _run(
+    def test_late_settled_target_is_excluded_from_the_reported_count(
+        self,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-        exit_codes: list[int],
-    ) -> _BatchRun:
-        """Settle every stage at once, returning everything the wait published."""
-        terminations = record_terminations(monkeypatch)
-        pin_clock(monkeypatch, 12.5)
+    ) -> None:
+        """Only a selected target that completes teardown counts as terminated."""
 
-        events: list[ExecEvent] = []
-        observations = make_stage_observations(
-            len(exit_codes),
-            (
-                events.append,
-                structured_logging_hook(
-                    logger=logging.getLogger(_pipeline_wait.__name__)
-                ),
-            ),
-        )
+        async def run_case() -> tuple[tuple[bool, ...], _TerminationScenario]:
+            """Select targets, settle one, then run the real report path."""
+            scenario = _make_termination_scenario()
+            fields = _completion_log_fields(scenario.state, 0, 4, 12.5)
+            outcomes: list[tuple[bool, ...]] = []
+            select_targets = _process_lifecycle._stages_to_terminate
+            terminate_stages = _pipeline_wait._terminate_pipeline_remaining_stages
 
-        processed: list[int] = []
-        process_completed = _pipeline_wait._process_completed_task
+            def settle_after_selection(
+                failure_index: int,
+                done: list[bool],
+            ) -> list[int]:
+                """Settle the second target after its selection snapshot."""
+                targets = select_targets(failure_index, done)
+                scenario.late_waiter.set_result(0)
+                return targets
 
-        async def recording(
-            task: asyncio.Task[int],
-            state: _PipelineWaitState,
-            processes: list[asyncio.subprocess.Process],
-            cancel_grace: float,
-        ) -> None:
-            """Note which stage is being processed, then do the real work."""
-            processed.append(state.task_to_index[task])
-            await process_completed(task, state, processes, cancel_grace)
+            async def capture_outcomes(
+                processes: list[asyncio.subprocess.Process],
+                wait_tasks: list[asyncio.Task[int]],
+                failure_index: int,
+                *,
+                cancel_grace: float,
+            ) -> tuple[bool, ...]:
+                """Run the real teardown and retain each selected target outcome."""
+                result = await terminate_stages(
+                    processes,
+                    wait_tasks,
+                    failure_index,
+                    cancel_grace=cancel_grace,
+                )
+                outcomes.append(result)
+                return result
 
-        monkeypatch.setattr(_pipeline_wait, "_process_completed_task", recording)
-
-        # `_wait_for_pipeline` only ever calls `wait` on these, so the
-        # stand-ins satisfy the part of the protocol that is actually used.
-        processes = typ.cast(
-            "list[asyncio.subprocess.Process]",
-            [_SettledProcess(code) for code in exit_codes],
-        )
-
-        async def drive() -> _PipelineWaitResult:
-            """Await the whole pipeline with every stage already settled."""
-            return await _pipeline_wait._wait_for_pipeline(
-                processes,
-                pipe_tasks=[],
-                cancel_grace=0.25,
-                stages=_StageWaitContext(
-                    started_at=(0.0,) * len(exit_codes),
-                    observations=observations,
-                ),
+            monkeypatch.setattr(
+                _process_lifecycle,
+                "_stages_to_terminate",
+                settle_after_selection,
             )
+            monkeypatch.setattr(
+                _pipeline_wait,
+                "_terminate_pipeline_remaining_stages",
+                capture_outcomes,
+            )
+            await _pipeline_wait._terminate_and_report(
+                scenario.state,
+                scenario.processes,
+                0.25,
+                fields,
+            )
+            return outcomes[0], scenario
 
-        with caplog.at_level(logging.WARNING, logger=_pipeline_wait.__name__):
-            result = asyncio.run(drive())
+        outcomes, scenario = asyncio.run(run_case())
 
-        # Snapshot the mutable collectors here: the run is over, so the tuples
-        # cannot drift from what it published.
-        return _BatchRun(
-            processed=tuple(processed),
-            result=result,
-            terminations=tuple(terminations),
-            events=tuple(events),
-            records=tuple(caplog.records),
+        assert outcomes == (True, False), (
+            "the selected target that settled before teardown must report false"
         )
-
-    def test_a_batch_is_processed_in_stage_order(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """Every stage in one batch is handled lowest index first."""
-        processed = self._run(
-            monkeypatch,
-            caplog,
-            [1, 1, 1, 1, 1, 1, 1, 1],
-        ).processed
-
-        assert list(processed) == sorted(processed), (
-            f"a batch must be processed in stage order, found {processed!r}"
-        )
-        assert processed == tuple(range(8)), (
-            f"every stage must be processed exactly once, found {processed!r}"
-        )
-
-    def test_the_earliest_failing_stage_latches(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """The upstream failure is reported, not whichever the set yielded.
-
-        Stages 2 and 5 both fail in the same batch. Stage 2 is upstream, so it
-        is the one that caused stage 5's failure and the one an operator needs
-        named.
-        """
-        result = self._run(monkeypatch, caplog, [0, 0, 3, 0, 0, 7, 0]).result
-
-        assert result.failure_index == 2, (
-            f"the earliest failing stage must latch, found {result.failure_index!r}"
-        )
-
-    def test_a_fully_settled_batch_announces_no_teardown(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """A failure whose siblings have all already exited terminates nothing.
-
-        Every stage settles into one ``asyncio.wait`` batch, and the batch is
-        processed in stage order, so by the time stage 0's failure is handled
-        stages 1 and 2 have exited on their own. ``should_terminate_others``
-        still answers ``True`` — it reasons about stage positions, not about
-        which processes are alive — so without the runtime check the pipeline
-        would log a teardown it never performed, publish a
-        ``pipeline_fail_fast`` event, and increment
-        ``cuprum_pipeline_fail_fast_total`` for a decision with no subject. The
-        closing record would then report
-        ``cuprum_terminated_stage_count`` of zero, contradicting the record
-        that opened it.
-
-        The latch itself is unaffected: the failure happened, ``failure_index``
-        reports it, and the first-failure record is what tells an operator
-        which stage it was.
-        """
-        run = self._run(monkeypatch, caplog, [4, 0, 0])
-
-        assert run.result.failure_index == 0, (
-            f"the failure must still latch, found {run.result.failure_index!r}"
-        )
-        actions = record_actions(run.records)
-        assert actions == ["pipeline_stage_first_failure"], (
-            "a fully settled batch must record the latch but no teardown, "
-            f"found {actions!r}"
-        )
-        assert run.terminations == (), (
-            f"no termination may be requested, found {run.terminations!r}"
-        )
-        assert run.events == (), (
-            f"no fail-fast event may be published, found {run.events!r}"
-        )
+        assert scenario.confirmed_process.terminate_calls == 1
+        assert scenario.late_process.terminate_calls == 0
+        assert scenario.order == [
+            "pipeline_fail_fast_termination",
+            "confirmed-termination",
+            "pipeline_fail_fast_terminated",
+        ], "the completion record must follow confirmed termination processing"
+        assert scenario.reporter.records[-1]["cuprum_terminated_stage_count"] == 1

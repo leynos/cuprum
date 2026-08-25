@@ -255,7 +255,7 @@ async def _terminate_and_report(
         fields,
     )
     started = perf_counter()
-    terminated = await _terminate_pipeline_remaining_stages(
+    termination_outcomes = await _terminate_pipeline_remaining_stages(
         processes,
         state.wait_tasks,
         fields.stage_index,
@@ -266,7 +266,7 @@ async def _terminate_and_report(
         "pipeline_fail_fast_terminated",
         "terminated other pipeline stages after stage %d exited %d",
         fields,
-        cuprum_terminated_stage_count=terminated,
+        cuprum_terminated_stage_count=sum(termination_outcomes),
         cuprum_termination_duration_s=max(0.0, perf_counter() - started),
     )
 

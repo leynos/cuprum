@@ -145,9 +145,9 @@ def record_terminations(
     processes while still proving termination was requested — and requested
     exactly once per fail-fast, which a silent stub could not show.
 
-    ``terminated_count`` is what the stub reports back as the number of stages
-    it stopped, standing in for the count the real helper derives from the
-    still-running stages.
+    ``terminated_count`` controls how many verified outcomes the stub returns,
+    standing in for the count the real helper derives after selected stages
+    finish teardown.
 
     Returns
     -------
@@ -162,12 +162,12 @@ def record_terminations(
         failure_index: int,
         *,
         cancel_grace: float,
-    ) -> int:
+    ) -> tuple[bool, ...]:
         """Record the termination request instead of signalling processes."""
         del processes, wait_tasks
         await asyncio.sleep(0)
         terminations.append((failure_index, cancel_grace))
-        return terminated_count
+        return (True,) * terminated_count
 
     monkeypatch.setattr(
         _pipeline_wait,

@@ -1261,9 +1261,10 @@ termination selects which stages to stop.
 task's completion state to the pure `_stages_to_terminate` reducer, which
 returns the list of stage indices to terminate. For each selected index the
 caller schedules `_terminate_process_via_wait_task` with `asyncio.create_task`,
-then awaits the scheduled tasks together using `asyncio.gather`. When the
-reducer selects no stages — every other stage has already settled — no tasks
-are created and no gather occurs.
+then awaits the scheduled tasks together using `asyncio.gather`. It returns one
+outcome per selected target, and the fail-fast caller counts only outcomes that
+verify process exit. When the reducer selects no stages — every other stage has
+already settled — no tasks are created and no gather occurs.
 
 Figure 5: Fail-fast termination selection via the `_stages_to_terminate`
 reducer
@@ -1286,7 +1287,8 @@ sequenceDiagram
             asyncio_create_task->>_terminate_process_via_wait_task: process, wait_task, cancel_grace
         end
         _terminate_pipeline_remaining_stages->>asyncio_gather: termination_tasks
-        asyncio_gather-->>Caller: termination completed
+        asyncio_gather-->>_terminate_pipeline_remaining_stages: termination outcomes
+        _terminate_pipeline_remaining_stages-->>Caller: per-target outcomes
     else targets is empty
         _terminate_pipeline_remaining_stages-->>Caller: return without gathering
     end
