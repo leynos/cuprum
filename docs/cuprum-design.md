@@ -2502,7 +2502,6 @@ that settlement, so cancellation of the awaiting task cannot close or reuse a
 descriptor while native I/O is still running. The duplicate is closed after
 the worker settles, including a native-load failure.
 
-
 #### Raw descriptor lifecycle
 
 Handing a descriptor to the Rust pump means taking it back from asyncio for the

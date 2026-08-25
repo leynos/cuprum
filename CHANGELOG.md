@@ -38,18 +38,6 @@
 - **`cuprum_rust_pump_failed_after_cancel_total`:** Incremented once,
   unlabelled, per Rust-pump worker failure recovered after its hop was
   cancelled.
-### Breaking changes
-
-- **New `ExecPhase` value (breaking for fail-closed hooks):** `ExecPhase` gains
-  `pipeline_fail_fast`. Observe hooks that match exhaustively on phase and
-  reject unknown values will raise on it until updated, and Cuprum re-raises
-  observe-hook failures rather than swallowing them. Cuprum's own adapters are
-  updated in the same change; third-party hooks written the same fail-closed
-  way need an explicit arm.
-- **`ExecHook` import path (breaking):** Import `ExecHook` from top-level
-  `cuprum` or its definition site, `cuprum.events`. The former
-  `cuprum.context.ExecHook` re-export has been removed; only the import path
-  changes, not the hook signature or registration behaviour.
 
 - **Timeout and teardown telemetry:** Emit `timeout` and `teardown_error`
   `ExecEvent` phases. `timeout` carries `operation="wait"`, `error_type`,
@@ -69,6 +57,19 @@
   `"non_positive_immediate"`), and `ExecEvent.timeout_mode` is now annotated
   with it instead of a bare `str`
   ([#271](https://github.com/leynos/cuprum/pull/271)).
+
+### Breaking changes
+
+- **New `ExecPhase` value (breaking for fail-closed hooks):** `ExecPhase` gains
+  `pipeline_fail_fast`. Observe hooks that match exhaustively on phase and
+  reject unknown values will raise on it until updated, and Cuprum re-raises
+  observe-hook failures rather than swallowing them. Cuprum's own adapters are
+  updated in the same change; third-party hooks written the same fail-closed
+  way need an explicit arm.
+- **`ExecHook` import path (breaking):** Import `ExecHook` from top-level
+  `cuprum` or its definition site, `cuprum.events`. The former
+  `cuprum.context.ExecHook` re-export has been removed; only the import path
+  changes, not the hook signature or registration behaviour.
 
 ### Changed
 

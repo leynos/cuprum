@@ -1595,7 +1595,6 @@ itself succeeded.
 Both the `splice` fast path and the read/write fallback emit the event
 identically, so the message does not depend on which path handled the transfer.
 
-
 ### Why a hop fell back to Python
 
 Selecting the `rust` backend does not guarantee every inter-stage hop takes it.
@@ -1639,7 +1638,6 @@ Such a failure is recorded on the same logger under a `cuprum_action` of
 `rust_pump_failed_after_cancel`, with the original traceback attached, so it
 stays diagnosable instead of vanishing behind the cancellation. It sits at
 `DEBUG` too, so the logger adjustment above reveals it.
-
 
 ### A teardown step that failed and was ignored
 

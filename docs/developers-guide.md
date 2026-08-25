@@ -473,7 +473,6 @@ this hand-off belong here, but the seams are not a general-purpose descriptor
 utility. Anything serving a different caller should be designed against that
 caller's real requirements instead of widening these.
 
-
 #### Observing a declined hand-off
 
 Each of those partial failures ends the same way: the hop falls back to the
