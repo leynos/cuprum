@@ -2186,7 +2186,9 @@ make skylos-allow SYMBOL=handler REASON="Loaded by plugin registry"
 ```
 
 The target requires both values and stores the reason in Skylos's documented
-allow list. Never use a broad or unreasoned exception.
+allow list. Updates are serialized with `flock` using the ignored
+`.skylos-whitelist.lock` file by default; override `SKYLOS_WHITELIST_LOCK` for
+an alternate lock path. Never use a broad or unreasoned exception.
 
 The Skylos Makefile contract is parsed by the pinned `makeutil` executable in
 `test_skylos_lint_contract.py`; `make test` verifies that the parser is
@@ -2273,9 +2275,11 @@ Table: Lint-related Makefile variables and their defaults.
 | `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                   |
 | `AMBRLEAKS`             | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                  |
 | `SKYLOS_VERSION`        | `4.33.2`                                                                     | Pinned standalone Skylos release.                                          |
+| `SKYLOS_CLI`            | Derived command                                                              | Python 3.14 Skylos command without scan options.                           |
 | `SKYLOS`                | Derived command                                                              | Skylos command using the reviewed `pyproject.toml` configuration.          |
 | `SKYLOS_PRODUCTION_TARGETS` | `cuprum`                                                                  | Production paths passed to Skylos.                                         |
 | `SKYLOS_EXCLUDE_FOLDERS` | `cuprum/unittests`                                                         | Test-only paths excluded from the production scan.                          |
+| `SKYLOS_WHITELIST_LOCK` | `.skylos-whitelist.lock`                                                     | Lock file serializing `skylos-allow` updates.                              |
 | `LOCAL_TOOL_ENV`        | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools. |
 | `UV_ENV`                | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                  |
 | `UV_RUN_ENV`            | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment for locked `uv run` commands such as `$(RUFF)`.         |

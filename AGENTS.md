@@ -96,6 +96,8 @@
     entry-point rule cannot describe the boundary may a named allow-list
     exception be added with
     `make skylos-allow SYMBOL=handler REASON="Loaded by plugin registry"`.
+    The target serializes allow-list updates with its ignored lock file, so
+    concurrent invocations do not overwrite one another.
   - **Formatting:** Adheres to formatting standards (`make check-fmt`; use
     `make fmt` to apply fixes).
   - **Typechecking:** Passes type checking (`make typecheck`).

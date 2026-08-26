@@ -156,7 +156,9 @@ excludes test folders, and uses the strict gate configuration in
 that Skylos parses the project's supported syntax with the intended `ast`
 implementation. This addendum supersedes the original two-tier count and any
 statement that `make lint` runs only Ruff and Pylint; ADR-004 remains the
-decision record for the `interrogate` gate.
+decision record for the `interrogate` gate. The `skylos-allow` target uses an
+ignored lock file and `flock` to serialize its read-modify-write update, so
+concurrent false-positive recordings remain intact.
 
 [ADR-004: Interrogate docstring-coverage gate]:
   adr-004-interrogate-docstring-gate.md
