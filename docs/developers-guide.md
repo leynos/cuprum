@@ -3093,7 +3093,9 @@ make skylos-allow SYMBOL=handler REASON="Loaded by plugin registry"
 ```
 
 The target requires both values and stores the reason in Skylos's documented
-allow list. Never use a broad or unreasoned exception.
+allow list. Updates are serialized with `flock` using the ignored
+`.skylos-whitelist.lock` file by default; override `SKYLOS_WHITELIST_LOCK` for
+an alternate lock path. Never use a broad or unreasoned exception.
 
 The Skylos Makefile contract is parsed by the pinned `makeutil` executable in
 `test_skylos_lint_contract.py`; `make test` verifies that the parser is
@@ -3207,6 +3209,7 @@ Table: Lint-related Makefile variables and their defaults.
 | `SKYLOS`                | Derived command                                                              | Skylos command using the reviewed `pyproject.toml` configuration.                                                           |
 | `SKYLOS_PRODUCTION_TARGETS` | `cuprum`                                                                 | Production paths passed to Skylos.                                                                                           |
 | `SKYLOS_EXCLUDE_FOLDERS` | `cuprum/unittests`                                                         | Test-only paths excluded from the production scan.                                                                           |
+| `SKYLOS_WHITELIST_LOCK` | `.skylos-whitelist.lock`                                                   | Lock file serializing `skylos-allow` updates.                                                                                |
 | `LOCAL_TOOL_ENV`        | POSIX: derived `PATH`; Windows: empty                                        | On POSIX, adds local binary directories before invoking tools; on `Windows_NT`, preserves the PATH `setup-uv` configured.   |
 | `UV_ENV`                | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                                                                   |
 | `UV_RUN_ENV`            | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment prefix for locked `uv run` commands and the pinned `uv tool run` commands used by `$(RUFF)` and `$(TY)`. |
