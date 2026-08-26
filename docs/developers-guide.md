@@ -2185,7 +2185,9 @@ verified false positive, record a named exception with:
 make skylos-allow SYMBOL=handler REASON="Loaded by plugin registry"
 ```
 
-The target requires both values and stores the reason in Skylos's documented
+The target requires both values and rejects empty or whitespace-only
+`SYMBOL` and `REASON` values. Use `SYMBOL` rather than `NAME` because WSL may
+inject `NAME` with the hostname. It stores the reason in Skylos's documented
 allow list. Updates are serialized with `flock` using the ignored
 `.skylos-whitelist.lock` file by default; override `SKYLOS_WHITELIST_LOCK` for
 an alternate lock path. Never use a broad or unreasoned exception.

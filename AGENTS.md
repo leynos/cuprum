@@ -96,6 +96,9 @@
     entry-point rule cannot describe the boundary may a named allow-list
     exception be added with
     `make skylos-allow SYMBOL=handler REASON="Loaded by plugin registry"`.
+    Both `SYMBOL` and `REASON` are required and reject empty or
+    whitespace-only values. Use `SYMBOL` rather than `NAME` because WSL may
+    inject `NAME` with the hostname.
     The target serializes allow-list updates with its ignored lock file, so
     concurrent invocations do not overwrite one another.
   - **Formatting:** Adheres to formatting standards (`make check-fmt`; use
