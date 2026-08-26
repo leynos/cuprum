@@ -47,6 +47,7 @@ nosetests.xml
 coverage.xml
 *.cover
 *.py,cover
+.skylos-whitelist.lock
 .hypothesis/
 .pytest_cache/
 cover/

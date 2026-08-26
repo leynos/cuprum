@@ -146,6 +146,7 @@ SKYLOS_CLI = $(UV_RUN_ENV) uv tool run --python 3.14 --from 'skylos==$(SKYLOS_VE
 SKYLOS = $(SKYLOS_CLI) --config-file pyproject.toml
 SKYLOS_PRODUCTION_TARGETS ?= cuprum
 SKYLOS_EXCLUDE_FOLDERS ?= cuprum/unittests
+SKYLOS_WHITELIST_LOCK ?= .skylos-whitelist.lock
 # `git ls-files` covers tracked files and nonignored untracked files without
 # traversing ignored paths. The shell filter keeps only regular non-symlink
 # files, and prefixes a leading dash so the linter cannot parse it as an option.
@@ -262,7 +263,7 @@ skylos-allow: export SKYLOS_REASON = $(value REASON)
 skylos-allow: ## Document one named Skylos exception, not an entry point
 	@test -n "$${SKYLOS_SYMBOL}" || { printf "Error: SYMBOL is required for a named whitelist exception\\n" >&2; exit 2; }
 	@test -n "$${SKYLOS_REASON}" || { printf "Error: REASON is required for a named whitelist exception\\n" >&2; exit 2; }
-	$(SKYLOS_CLI) whitelist "$${SKYLOS_SYMBOL}" --reason "$${SKYLOS_REASON}"
+	flock "$(SKYLOS_WHITELIST_LOCK)" env $(SKYLOS_CLI) whitelist "$${SKYLOS_SYMBOL}" --reason "$${SKYLOS_REASON}"
 
 github-actions-lint: $(YAMLLINT) $(ACTIONLINT) ## Validate GitHub Actions workflows
 	$(YAMLLINT) --strict --config-file .yamllint.yml .github/workflows
