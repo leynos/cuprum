@@ -34,7 +34,7 @@ open each document.
 - [ADR-002: Additional Rust components](adr-002-additional-rust-components.md) -
   accepted decision for extending Rust coverage beyond the initial stream
   backend.
-- [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md) -
+- [ADR-003: Four-tier Python lint architecture][adr-003] -
   accepted decision for Ruff and PyPy-backed Pylint, with an addendum covering
   the later `interrogate` and Skylos lint tiers.
 - [ADR-004: Interrogate docstring-coverage gate][adr-004] - accepted decision
@@ -67,6 +67,7 @@ open each document.
   interleaved measurement that selected the Python stream read size for roadmap
   item 5.1.1.
 
+[adr-003]: adr-003-two-tier-python-linting.md
 [adr-004]: adr-004-interrogate-docstring-gate.md
 [adr-005]: adr-005-unified-rust-availability-probe.md
 [adr-006]: adr-006-context-package-split.md
