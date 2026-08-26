@@ -1,5 +1,4 @@
 """Tests for the shared dictionary model, merging, and config rendering."""
-
 from __future__ import annotations
 
 import ast
@@ -252,14 +251,16 @@ def test_merge_rejects_conflicting_corrections(
 def test_local_policy_preserves_inline_code_exemption(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
     tmp_path: Path,
+    dictionary_text: cabc.Callable[..., str],
+    script_directory: Path,
 ) -> None:
     """The generated config retains the repository's inline-code policy."""
     _, _, generator = rollout_modules
     (tmp_path / ".typos-oxendict-base.toml").write_text(
-        _dictionary_text(), encoding="utf-8"
+        dictionary_text(), encoding="utf-8"
     )
     (tmp_path / "typos.local.toml").write_text(
-        (SCRIPT_DIRECTORY.parent / "typos.local.toml").read_text(encoding="utf-8"),
+        (script_directory.parent / "typos.local.toml").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
 
@@ -268,6 +269,8 @@ def test_local_policy_preserves_inline_code_exemption(
     assert "`[^`\\n]+`" in config["default"]["extend-ignore-re"], (
         "repository inline-code exemption must survive generated configuration"
     )
+
+
 def test_render_and_write_are_deterministic_valid_toml(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
     tmp_path: Path,

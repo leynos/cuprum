@@ -94,6 +94,7 @@ SKYLOS_CLI = $(UV_RUN_ENV) uv tool run --python 3.14 --from 'skylos==$(SKYLOS_VE
 SKYLOS = $(SKYLOS_CLI) --config-file pyproject.toml
 SKYLOS_PRODUCTION_TARGETS ?= cuprum
 SKYLOS_EXCLUDE_FOLDERS ?= cuprum/unittests
+SKYLOS_WHITELIST_LOCK ?= .skylos-whitelist.lock
 
 .PHONY: help all clean build build-release lint python-lint rust-lint \
         lint-windows fmt check-fmt \
@@ -186,7 +187,7 @@ skylos-allow: export SKYLOS_REASON = $(value REASON)
 skylos-allow: ## Document one named Skylos exception, not an entry point
 	@test -n "$${SKYLOS_SYMBOL}" || { printf "Error: SYMBOL is required for a named whitelist exception\\n" >&2; exit 2; }
 	@test -n "$${SKYLOS_REASON}" || { printf "Error: REASON is required for a named whitelist exception\\n" >&2; exit 2; }
-	$(SKYLOS_CLI) whitelist "$${SKYLOS_SYMBOL}" --reason "$${SKYLOS_REASON}"
+	flock "$(SKYLOS_WHITELIST_LOCK)" env $(SKYLOS_CLI) whitelist "$${SKYLOS_SYMBOL}" --reason "$${SKYLOS_REASON}"
 
 lint-windows: ## Lint the Rust extension's Windows cfg branches (cross-target)
 	@if ! rustup target list --installed | grep -qx '$(WINDOWS_TARGET)'; then \

@@ -178,6 +178,7 @@
       'cuprum/unittests/test_shielded_cleanup.py',
       'cuprum/unittests/test_sinks.py',
       'cuprum/unittests/test_skylos_lint_contract.py',
+      'cuprum/unittests/test_skylos_whitelist_boundary.py',
       'cuprum/unittests/test_stage_observation_builder.py',
       'cuprum/unittests/test_stage_stream_fds.py',
       'cuprum/unittests/test_stdin_property_based.py',

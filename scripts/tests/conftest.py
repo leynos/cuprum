@@ -18,30 +18,37 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import types
 
+    class _GeneratorModule(typ.Protocol):
+        """Describe the generator API used by the local-policy contract."""
+
+        def render_config(self, repository: Path) -> str:
+            """Render the generated spelling configuration for `repository`."""
+
 SCRIPT_DIRECTORY = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(name="rollout_modules")
 def rollout_modules_fixture(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[types.ModuleType, types.ModuleType, types.ModuleType]:
+) -> tuple[types.ModuleType, types.ModuleType, _GeneratorModule]:
     """Import the scripts through the top-level module path used at runtime.
 
     Returns
     -------
-    tuple[types.ModuleType, types.ModuleType, types.ModuleType]
+    tuple[types.ModuleType, types.ModuleType, _GeneratorModule]
         The ``cache``, ``rollout``, and ``generator`` modules, in that order.
     """
     monkeypatch.syspath_prepend(str(SCRIPT_DIRECTORY))
     names = ("typos_rollout_cache", "typos_rollout", "generate_typos_config")
     importlib.invalidate_caches()
-    cache, rollout, generator = (importlib.import_module(name) for name in names)
+    cache, rollout, generator_module = (importlib.import_module(name) for name in names)
+    generator = typ.cast("_GeneratorModule", generator_module)
     return cache, rollout, generator
 
 
 @pytest.fixture(name="refresh_module")
 def refresh_module_fixture(
-    rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
+    rollout_modules: tuple[types.ModuleType, types.ModuleType, _GeneratorModule],
 ) -> types.ModuleType:
     """Import the cache-refresh module through the runtime module path.
 

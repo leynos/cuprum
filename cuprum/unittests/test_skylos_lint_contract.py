@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess  # noqa: S404 - contract test invokes the pinned parser.
 import tomllib
 import typing as typ
@@ -133,6 +134,13 @@ def _recipe_tokens(target: str) -> tuple[tuple[str, ...], ...]:
     )
 
 
+def _make_executable() -> str:
+    """Return the absolute path to the required Make executable."""
+    executable = shutil.which("make")
+    assert executable is not None, "Skylos Make boundary tests require make"
+    return executable
+
+
 def _sole_workflow_step(
     job_name: str,
     step_name: str,
@@ -165,8 +173,8 @@ def _run_skylos_allow(*arguments: str) -> subprocess.CompletedProcess[str]:
     environment = {**os.environ, "NAME": "wsl-hostname"}
     environment.pop("REASON", None)
     environment.pop("SYMBOL", None)
-    return subprocess.run(  # noqa: S603 - fixed Make target and arguments.
-        ("make", "skylos-allow", *arguments),
+    return subprocess.run(  # noqa: S603 - resolved Make target and arguments.
+        (_make_executable(), "skylos-allow", *arguments),
         capture_output=True,
         check=False,
         cwd=repo_root(),
@@ -187,6 +195,13 @@ def _assert_makeutil_installation(command: object, *, contract: str) -> None:
 
 def test_lint_recipe_runs_the_production_dead_code_gate() -> None:
     """`make lint` must scan production code with Skylos's strict gate."""
+    test_prerequisites = _text_sequence(
+        _sole_recipe_rule("test").get("prerequisites"),
+        subject="test target prerequisites",
+    )
+    assert "makeutil" in test_prerequisites, (
+        "Make test prerequisite contract must require makeutil"
+    )
     assert _variable_tokens("SKYLOS_VERSION") == ("4.33.2",), (
         "Skylos version contract must pin 4.33.2"
     )
@@ -236,29 +251,40 @@ def test_whitelist_target_uses_skylos_subcommand_contract() -> None:
         "--config-file",
         "pyproject.toml",
     ), "Skylos scan command contract must add only the configuration file"
+    assert _variable_tokens("SKYLOS_WHITELIST_LOCK") == (".skylos-whitelist.lock",), (
+        "Skylos whitelist contract must use a repository-local lock"
+    )
 
     whitelist_commands = [
         command
         for command in _recipe_tokens("skylos-allow")
-        if command[:1] == ("$(SKYLOS_CLI)",)
+        if command[:4] == ("flock", "$(SKYLOS_WHITELIST_LOCK)", "env", "$(SKYLOS_CLI)")
     ]
     assert whitelist_commands == [
         (
+            "flock",
+            "$(SKYLOS_WHITELIST_LOCK)",
+            "env",
             "$(SKYLOS_CLI)",
             "whitelist",
             "$${SKYLOS_SYMBOL}",
             "--reason",
             "$${SKYLOS_REASON}",
         )
-    ], "Skylos whitelist command contract must dispatch before --reason"
+    ], "Skylos whitelist command contract must lock and dispatch before --reason"
 
 
 def test_skylos_allow_requires_symbol_and_reason() -> None:
     """The whitelist target must reject incomplete input without running Skylos."""
     for arguments, expected_error in (
         ((), "Error: SYMBOL is required for a named whitelist exception"),
+        (("SYMBOL=   ",), "Error: SYMBOL is required for a named whitelist exception"),
         (
             ("SYMBOL=handler",),
+            "Error: REASON is required for a named whitelist exception",
+        ),
+        (
+            ("SYMBOL=handler", "REASON=   "),
             "Error: REASON is required for a named whitelist exception",
         ),
     ):
@@ -274,9 +300,9 @@ def test_skylos_allow_requires_symbol_and_reason() -> None:
 
 def test_skylos_allow_dry_run_preserves_the_whitelist_command_contract() -> None:
     """A valid dry run must reveal the command without writing a whitelist entry."""
-    completed = subprocess.run(
+    completed = subprocess.run(  # noqa: S603 - resolved Make target and arguments.
         (
-            "make",
+            _make_executable(),
             "--dry-run",
             "skylos-allow",
             "SYMBOL=handler",
@@ -349,6 +375,7 @@ def test_ci_runs_the_lint_target_and_installs_makeutil() -> None:
     )
 
     for workflow_path, job_name in (
+        (".github/workflows/ci.yml", "typecheck-test"),
         (".github/workflows/ci.yml", "coverage"),
         (".github/workflows/coverage-main.yml", "coverage-upload"),
     ):
@@ -357,15 +384,16 @@ def test_ci_runs_the_lint_target_and_installs_makeutil() -> None:
             coverage_job.get("env"), subject=f"{workflow_path} Makeutil environment"
         )
         assert environment.get("MAKEUTIL_REVISION") == _MAKEUTIL_REVISION, (
-            f"{workflow_path} coverage Makeutil revision contract must stay pinned"
+            f"{workflow_path} {job_name} Makeutil revision contract must stay pinned"
         )
         assert environment.get("MAKEUTIL_TOOLCHAIN") == _MAKEUTIL_TOOLCHAIN, (
-            f"{workflow_path} coverage Makeutil toolchain contract must stay pinned"
+            f"{workflow_path} {job_name} Makeutil toolchain contract must stay pinned"
         )
-        coverage_parser_step = _sole_workflow_step(
-            job_name, "Install Makefile parser", workflow_path=workflow_path
-        )
-        _assert_makeutil_installation(
-            coverage_parser_step.get("run"),
-            contract=f"{workflow_path} coverage Makeutil-install contract",
-        )
+        if job_name != "typecheck-test":
+            coverage_parser_step = _sole_workflow_step(
+                job_name, "Install Makefile parser", workflow_path=workflow_path
+            )
+            _assert_makeutil_installation(
+                coverage_parser_step.get("run"),
+                contract=f"{workflow_path} coverage Makeutil-install contract",
+            )
