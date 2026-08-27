@@ -451,8 +451,8 @@ def test_render_and_write_are_deterministic_valid_toml(
         "the Markdown type must be scoped to *.md"
     )
     assert rendered_config["type"]["markdown"]["extend-ignore-re"] == [
-        r"`[^`\n]+`",
         r"(?s)```.*?```",
+        r"`[^`\n]+`",
     ], "code-span and fenced-block patterns must be Markdown-only"
     assert list(output.parent.glob(".typos.toml.*")) == [], (
         "the atomic write must leave no temporary files behind"

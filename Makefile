@@ -209,6 +209,7 @@ spelling-helper-test: build spelling-config ## Validate the shared spelling-poli
 		--with pytest-cov==7.0.0 \
 		python -m pytest scripts/tests/test_typos_rollout.py \
 		scripts/tests/test_typos_rollout_properties.py \
+		scripts/tests/test_typos_rollout_render_properties.py \
 		scripts/tests/test_typos_rollout_refresh.py \
 		--cov=generate_typos_config --cov=typos_rollout \
 		--cov=typos_rollout_cache --cov=typos_rollout_dictionary \

@@ -83,21 +83,25 @@ def render_typos_config(dictionary: Dictionary) -> str:
         If the rendered document fails the ``tomllib.loads`` parse check.
     """  # noqa: DOC502 - TOMLDecodeError propagates from tomllib.loads
     global_patterns = tuple(
-        pattern
-        for pattern in dictionary.ignore_patterns
-        if pattern not in _MARKDOWN_IGNORE_PATTERNS
+        sorted(
+            pattern
+            for pattern in dictionary.ignore_patterns
+            if pattern not in _MARKDOWN_IGNORE_PATTERNS
+        )
     )
     markdown_patterns = tuple(
-        pattern
-        for pattern in dictionary.ignore_patterns
-        if pattern in _MARKDOWN_IGNORE_PATTERNS
+        sorted(
+            pattern
+            for pattern in dictionary.ignore_patterns
+            if pattern in _MARKDOWN_IGNORE_PATTERNS
+        )
     )
     lines = [
         "# Generated from the shared en-GB-oxendict dictionary.",
         "# Regenerate with scripts/generate_typos_config.py; do not edit by hand.",
         "",
         "[files]",
-        *_render_array("extend-exclude", dictionary.excluded_files),
+        *_render_array("extend-exclude", tuple(sorted(dictionary.excluded_files))),
         "",
         "[default]",
         'locale = "en-gb"',
