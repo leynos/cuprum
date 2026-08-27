@@ -43,6 +43,54 @@ _MAKEUTIL_INSTALL_TOKENS: typ.Final = (
     "--force",
     "makeutil",
 )
+_SKYLOS_VERSION_TOKENS: typ.Final = ("4.33.2",)
+_SKYLOS_PRODUCTION_TARGET_TOKENS: typ.Final = ("cuprum",)
+_SKYLOS_EXCLUSION_TOKENS: typ.Final = ("cuprum/unittests",)
+_SKYLOS_CLI_TOKENS: typ.Final = (
+    "$(UV_RUN_ENV)",
+    "uv",
+    "tool",
+    "run",
+    "--python",
+    "3.14",
+    "--from",
+    "skylos==$(SKYLOS_VERSION)",
+    "skylos",
+)
+_SKYLOS_SCAN_TOKENS: typ.Final = (
+    "$(SKYLOS_CLI)",
+    "--config-file",
+    "pyproject.toml",
+)
+_SKYLOS_DEAD_CODE_ARGUMENTS: typ.Final = (
+    "--exclude",
+    "$(SKYLOS_EXCLUDE_FOLDERS)",
+    "--category",
+    "dead_code",
+    "--gate",
+    "--format",
+    "concise",
+    "--no-upload",
+    "--no-provenance",
+    "--no-grep-verify",
+)
+_SKYLOS_LINT_TOKENS: typ.Final = (
+    "$(SKYLOS)",
+    "$(SKYLOS_PRODUCTION_TARGETS)",
+    *_SKYLOS_DEAD_CODE_ARGUMENTS,
+)
+_SKYLOS_WHITELIST_TOKENS: typ.Final = (
+    "flock",
+    "$(SKYLOS_WHITELIST_LOCK)",
+    "env",
+    "$(SKYLOS_CLI)",
+    "whitelist",
+    "$${SKYLOS_SYMBOL}",
+    "--reason",
+    "$${SKYLOS_REASON}",
+)
+_SKYLOS_WHITELIST_LOCK_TOKENS: typ.Final = (".skylos-whitelist.lock",)
+_DOCUMENTED_WHITELIST_NAMES: typ.Final = frozenset()
 _RUNTIME_PARAMETER_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum.adapters.metrics_adapter.InMemoryMetrics.inc_counter.labels",
     "cuprum.adapters.metrics_adapter.InMemoryMetrics.observe_histogram.labels",
@@ -165,6 +213,23 @@ def _workflow_job(workflow_path: str, job_name: str) -> dict[str, object]:
     return _mapping(jobs.get(job_name), subject=f"{workflow_path} job {job_name!r}")
 
 
+def _skylos_configuration() -> dict[str, object]:
+    """Load the repository's Skylos configuration."""
+    with (repo_root() / "pyproject.toml").open("rb") as configuration_file:
+        configuration = tomllib.load(configuration_file)
+    tool = _mapping(configuration.get("tool"), subject="tool configuration")
+    return _mapping(tool.get("skylos"), subject="Skylos configuration")
+
+
+def _documented_whitelist_names(skylos: dict[str, object]) -> frozenset[str]:
+    """Return the documented Skylos whitelist names, if configured."""
+    whitelist = _mapping(skylos.get("whitelist", {}), subject="Skylos whitelist")
+    documented = _mapping(
+        whitelist.get("documented", {}), subject="Skylos whitelist entries"
+    )
+    return frozenset(documented)
+
+
 def _assert_makeutil_installation(command: object, *, contract: str) -> None:
     """Assert that `command` installs the pinned Makeutil parser."""
     assert isinstance(command, str), (
@@ -184,13 +249,14 @@ def test_lint_recipe_runs_the_production_dead_code_gate() -> None:
     assert "makeutil" in test_prerequisites, (
         "Make test prerequisite contract must require makeutil"
     )
-    assert _variable_tokens("SKYLOS_VERSION") == ("4.33.2",), (
+    assert _variable_tokens("SKYLOS_VERSION") == _SKYLOS_VERSION_TOKENS, (
         "Skylos version contract must pin 4.33.2"
     )
-    assert _variable_tokens("SKYLOS_PRODUCTION_TARGETS") == ("cuprum",), (
-        "Skylos production-target contract must scan cuprum"
-    )
-    assert _variable_tokens("SKYLOS_EXCLUDE_FOLDERS") == ("cuprum/unittests",), (
+    assert (
+        _variable_tokens("SKYLOS_PRODUCTION_TARGETS")
+        == _SKYLOS_PRODUCTION_TARGET_TOKENS
+    ), "Skylos production-target contract must scan cuprum"
+    assert _variable_tokens("SKYLOS_EXCLUDE_FOLDERS") == _SKYLOS_EXCLUSION_TOKENS, (
         "Skylos exclusion contract must omit unit tests"
     )
     lint_prerequisites = _text_sequence(
@@ -203,25 +269,12 @@ def test_lint_recipe_runs_the_production_dead_code_gate() -> None:
     skylos_commands = [
         command
         for command in _recipe_tokens("python-lint")
-        if command[:1] == ("$(SKYLOS)",)
+        if command[:1] == _SKYLOS_LINT_TOKENS[:1]
     ]
 
-    assert skylos_commands == [
-        (
-            "$(SKYLOS)",
-            "$(SKYLOS_PRODUCTION_TARGETS)",
-            "--exclude",
-            "$(SKYLOS_EXCLUDE_FOLDERS)",
-            "--category",
-            "dead_code",
-            "--gate",
-            "--format",
-            "concise",
-            "--no-upload",
-            "--no-provenance",
-            "--no-grep-verify",
-        )
-    ], "Skylos lint command contract must scan production dead code strictly"
+    assert skylos_commands == [_SKYLOS_LINT_TOKENS], (
+        "Skylos lint command contract must scan production dead code strictly"
+    )
 
 
 def test_spelling_helper_runs_each_rollout_regression_module() -> None:
@@ -245,58 +298,38 @@ def test_spelling_helper_runs_each_rollout_regression_module() -> None:
 
 def test_whitelist_target_uses_skylos_subcommand_contract() -> None:
     """`skylos whitelist` must precede the name and have no scan options."""
-    assert _variable_tokens("SKYLOS_CLI") == (
-        "$(UV_RUN_ENV)",
-        "uv",
-        "tool",
-        "run",
-        "--python",
-        "3.14",
-        "--from",
-        "skylos==$(SKYLOS_VERSION)",
-        "skylos",
-    ), "Skylos CLI contract must pin Python 3.14 and its tool release"
-    assert _variable_tokens("SKYLOS") == (
-        "$(SKYLOS_CLI)",
-        "--config-file",
-        "pyproject.toml",
-    ), "Skylos scan command contract must add only the configuration file"
-    assert _variable_tokens("SKYLOS_WHITELIST_LOCK") == (".skylos-whitelist.lock",), (
+    assert _variable_tokens("SKYLOS_CLI") == _SKYLOS_CLI_TOKENS, (
+        "Skylos CLI contract must pin Python 3.14 and its tool release"
+    )
+    assert _variable_tokens("SKYLOS") == _SKYLOS_SCAN_TOKENS, (
+        "Skylos scan command contract must add only the configuration file"
+    )
+    assert _variable_tokens("SKYLOS_WHITELIST_LOCK") == _SKYLOS_WHITELIST_LOCK_TOKENS, (
         "Skylos whitelist contract must use a repository-local lock"
     )
 
     whitelist_commands = [
         command
         for command in _recipe_tokens("skylos-allow")
-        if command[:4] == ("flock", "$(SKYLOS_WHITELIST_LOCK)", "env", "$(SKYLOS_CLI)")
+        if command[:4] == _SKYLOS_WHITELIST_TOKENS[:4]
     ]
-    assert whitelist_commands == [
-        (
-            "flock",
-            "$(SKYLOS_WHITELIST_LOCK)",
-            "env",
-            "$(SKYLOS_CLI)",
-            "whitelist",
-            "$${SKYLOS_SYMBOL}",
-            "--reason",
-            "$${SKYLOS_REASON}",
-        )
-    ], "Skylos whitelist command contract must lock and dispatch before --reason"
+    assert whitelist_commands == [_SKYLOS_WHITELIST_TOKENS], (
+        "Skylos whitelist command contract must lock and dispatch before --reason"
+    )
 
 
 def test_skylos_configuration_models_implicit_runtime_callers() -> None:
     """Each current false positive must be a typed, explained entry point."""
-    with (repo_root() / "pyproject.toml").open("rb") as configuration_file:
-        configuration = tomllib.load(configuration_file)
-
-    tool = _mapping(configuration.get("tool"), subject="tool configuration")
-    skylos = _mapping(tool.get("skylos"), subject="Skylos configuration")
+    skylos = _skylos_configuration()
     gate = _mapping(skylos.get("gate"), subject="Skylos gate configuration")
     assert gate.get("strict") is True, (
         "Skylos gate configuration must enable strict mode"
     )
     dead_code = _mapping(
         skylos.get("dead_code"), subject="Skylos dead-code configuration"
+    )
+    assert _documented_whitelist_names(skylos) == _DOCUMENTED_WHITELIST_NAMES, (
+        "Skylos documented-whitelist contract must preserve reviewed exceptions"
     )
     entry_points = _objects(dead_code.get("entrypoints"), subject="Skylos entry points")
 
