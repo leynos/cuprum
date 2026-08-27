@@ -428,7 +428,6 @@ interpreter whose opcode set the tracer cannot handle
 3.15 betas, issue `#109`); every other failure is re-raised. Supported
 interpreters therefore confirm the contracts rather than skipping them.
 
-
 ### Pipeline stream module boundaries
 
 Pipeline byte movement is split so each module has one reason to change:

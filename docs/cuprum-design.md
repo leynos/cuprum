@@ -826,7 +826,6 @@ The concrete shape is an implementation detail, but the design assumes:
 - Events can be consumed synchronously or asynchronously.
 - Hooks may choose to ignore most phases and only act on `start`/`exit`.
 
-
 #### Rust-pump routing events
 
 Rust-pump declines and failures recovered after cancellation are routing facts,
