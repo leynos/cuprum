@@ -2101,7 +2101,7 @@ run third through the `leynos/pylint-pypy-shim` package under PyPy. The pinned
 scans Syrupy snapshots fifth under the same interpreter.
 
 The decisions are recorded in
-[ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md) and
+[ADR-003: Python lint architecture](adr-003-two-tier-python-linting.md) and
 [ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md).
 The short version is:
 
@@ -2164,7 +2164,6 @@ Each stage must pass before the next runs. When investigating a lint failure,
 fix findings in execution order, then rerun `make lint` to reach the next
 stage. Do not disable df12 messages to absorb existing findings; repair the
 assertion, alias, suppression rationale, or dispatch structure instead.
-
 
 ### Skylos dead-code policy
 
@@ -2260,31 +2259,31 @@ The root `Makefile` exposes the following lint-related variables:
 
 Table: Lint-related Makefile variables and their defaults.
 
-| Variable                | Default                                                                      | Purpose                                                                    |
-| ----------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `VENV_TOOLS`            | `pytest ruff`                                                                | Tools that must resolve through `uv run` from the locked virtualenv.       |
-| `RUFF`                  | `$(UV_RUN_ENV) uv run ruff`                                                  | Locked Ruff command used by `fmt`, `check-fmt`, and `lint`.                |
-| `PYLINT_PYTHON`         | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.         |
-| `PYLINT_TARGETS`        | `benchmarks conftest.py cuprum tests`                                        | Directories and files passed to `pylint-pypy`.                             |
-| `PYLINT_PYPY_SHIM_REF`  | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                              |
-| `PYLINT_PYPY_SHIM`      | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                      |
-| `PYLINT_VERSION`        | `4.0.7`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.         |
-| `PYLINT_CACHE`          | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                         |
-| `PYLINT`                | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                       |
-| `DF12_PYTHON_LINTS_REF` | `755b26f5792f71b37f3a9e656aef714ed98b2c3b`                                   | Immutable v0.1.0 revision locked for DF12 lint tooling.                    |
-| `DF12_PYTHON`           | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                      |
-| `DF12_PYLINT_MESSAGES`  | All v0.1.0 message IDs                                                       | Explicit allowlist for the df12 Pylint pass.                               |
-| `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                   |
-| `AMBRLEAKS`             | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                  |
-| `SKYLOS_VERSION`        | `4.33.2`                                                                     | Pinned standalone Skylos release.                                          |
-| `SKYLOS_CLI`            | Derived command                                                              | Python 3.14 Skylos command without scan options.                           |
-| `SKYLOS`                | Derived command                                                              | Skylos command using the reviewed `pyproject.toml` configuration.          |
-| `SKYLOS_PRODUCTION_TARGETS` | `cuprum`                                                                  | Production paths passed to Skylos.                                         |
-| `SKYLOS_EXCLUDE_FOLDERS` | `cuprum/unittests`                                                         | Test-only paths excluded from the production scan.                          |
-| `SKYLOS_WHITELIST_LOCK` | `.skylos-whitelist.lock`                                                     | Lock file serializing `skylos-allow` updates.                              |
-| `LOCAL_TOOL_ENV`        | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools. |
-| `UV_ENV`                | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                  |
-| `UV_RUN_ENV`            | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment for locked `uv run` commands such as `$(RUFF)`.         |
+| Variable                    | Default                                                                      | Purpose                                                                    |
+| --------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `VENV_TOOLS`                | `pytest ruff`                                                                | Tools that must resolve through `uv run` from the locked virtualenv.       |
+| `RUFF`                      | `$(UV_RUN_ENV) uv run ruff`                                                  | Locked Ruff command used by `fmt`, `check-fmt`, and `lint`.                |
+| `PYLINT_PYTHON`             | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.         |
+| `PYLINT_TARGETS`            | `benchmarks conftest.py cuprum tests`                                        | Directories and files passed to `pylint-pypy`.                             |
+| `PYLINT_PYPY_SHIM_REF`      | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                              |
+| `PYLINT_PYPY_SHIM`          | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                      |
+| `PYLINT_VERSION`            | `4.0.7`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.         |
+| `PYLINT_CACHE`              | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                         |
+| `PYLINT`                    | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                       |
+| `DF12_PYTHON_LINTS_REF`     | `755b26f5792f71b37f3a9e656aef714ed98b2c3b`                                   | Immutable v0.1.0 revision locked for DF12 lint tooling.                    |
+| `DF12_PYTHON`               | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                      |
+| `DF12_PYLINT_MESSAGES`      | All v0.1.0 message IDs                                                       | Explicit allowlist for the df12 Pylint pass.                               |
+| `DF12_PYLINT`               | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                   |
+| `AMBRLEAKS`                 | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                  |
+| `SKYLOS_VERSION`            | `4.33.2`                                                                     | Pinned standalone Skylos release.                                          |
+| `SKYLOS_CLI`                | Derived command                                                              | Python 3.14 Skylos command without scan options.                           |
+| `SKYLOS`                    | Derived command                                                              | Skylos command using the reviewed `pyproject.toml` configuration.          |
+| `SKYLOS_PRODUCTION_TARGETS` | `cuprum`                                                                     | Production paths passed to Skylos.                                         |
+| `SKYLOS_EXCLUDE_FOLDERS`    | `cuprum/unittests`                                                           | Test-only paths excluded from the production scan.                         |
+| `SKYLOS_WHITELIST_LOCK`     | `.skylos-whitelist.lock`                                                     | Lock file serializing `skylos-allow` updates.                              |
+| `LOCAL_TOOL_ENV`            | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools. |
+| `UV_ENV`                    | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                  |
+| `UV_RUN_ENV`                | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment for locked `uv run` commands such as `$(RUFF)`.         |
 
 <!-- markdownlint-enable MD013 -->
 

@@ -89,6 +89,53 @@ def _run_whitelist(
     )
 
 
+def _run_required_argument_check(*arguments: str) -> subprocess.CompletedProcess[str]:
+    """Run the whitelist target with `NAME` set but no valid Skylos CLI."""
+    environment = {**os.environ, "NAME": "wsl-hostname"}
+    environment.pop("REASON", None)
+    environment.pop("SYMBOL", None)
+    for argument in arguments:
+        name, value = argument.split("=", maxsplit=1)
+        environment[name] = value
+    return subprocess.run(  # noqa: S603 - resolved Make target and arguments.
+        (_make_executable(), "skylos-allow"),
+        capture_output=True,
+        check=False,
+        cwd=repo_root(),
+        env=environment,
+        text=True,
+    )
+
+
+def test_whitelist_requires_non_whitespace_symbol_and_reason() -> None:
+    """The whitelist target must reject incomplete input before invoking Skylos."""
+    for arguments, expected_error in (
+        ((), "Error: SYMBOL is required for a named whitelist exception"),
+        (("SYMBOL=   ",), "Error: SYMBOL is required for a named whitelist exception"),
+        (("SYMBOL=\t",), "Error: SYMBOL is required for a named whitelist exception"),
+        (
+            ("SYMBOL=handler",),
+            "Error: REASON is required for a named whitelist exception",
+        ),
+        (
+            ("SYMBOL=handler", "REASON=   "),
+            "Error: REASON is required for a named whitelist exception",
+        ),
+        (
+            ("SYMBOL=handler", "REASON=\t"),
+            "Error: REASON is required for a named whitelist exception",
+        ),
+    ):
+        completed = _run_required_argument_check(*arguments)
+
+        assert completed.returncode == 2, (
+            "Skylos whitelist boundary must reject missing required arguments"
+        )
+        assert expected_error in completed.stderr, (
+            "Skylos whitelist boundary must name the missing required argument"
+        )
+
+
 @settings(
     max_examples=25,
     deadline=None,

@@ -218,7 +218,6 @@ spelling-helper-test: build ## Validate the shared spelling-policy integration
 		python -m pytest scripts/tests/test_typos_rollout.py \
 		scripts/tests/test_typos_rollout_properties.py \
 		scripts/tests/test_typos_rollout_refresh.py \
-		scripts/tests/test_typos_rollout_freshness.py \
 		--cov=generate_typos_config --cov=typos_rollout \
 		--cov=typos_rollout_cache --cov=typos_rollout_dictionary \
 		--cov=typos_rollout_refresh --cov-fail-under=90

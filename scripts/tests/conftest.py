@@ -24,6 +24,7 @@ if typ.TYPE_CHECKING:
         def render_config(self, repository: Path) -> str:
             """Render the generated spelling configuration for `repository`."""
 
+
 SCRIPT_DIRECTORY = Path(__file__).resolve().parents[1]
 
 

@@ -29,9 +29,9 @@ open each document.
 - [ADR-002: Additional Rust components](adr-002-additional-rust-components.md) -
   accepted decision for extending Rust coverage beyond the initial stream
   backend.
-- [ADR-003: Four-tier Python lint architecture][adr-003] -
+- [ADR-003: Six-stage Python lint architecture][adr-003] -
   accepted decision for Ruff and PyPy-backed Pylint, with an addendum covering
-  the later `interrogate` and Skylos lint tiers.
+  the later `interrogate`, DF12, Ambrleaks, and Skylos lint stages.
 - [ADR-004: Interrogate docstring-coverage gate][adr-004] - accepted decision
   to enforce 100% docstring coverage through `interrogate`.
 - [ADR-005: Unified Rust availability probe][adr-005] - accepted decision to

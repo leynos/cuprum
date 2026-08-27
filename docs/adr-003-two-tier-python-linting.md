@@ -137,8 +137,7 @@ The canonical policy lives in `pyproject.toml`:
   shim.
 - Toolchain updates must consider both Ruff and the shim-backed Pylint tier.
 
-
-## Addendum — 2026-08-23: Skylos production dead-code tier
+## Addendum — 2026-08-23: Skylos production dead-code stage
 
 The original two-tier decision remains the foundation for Ruff and the
 PyPy-backed Pylint checks. [ADR-004: Interrogate docstring-coverage gate]
@@ -148,9 +147,11 @@ lint order is now:
 1. Ruff — fast, broad lint rules and docstring style.
 2. `interrogate` — 100 per cent docstring presence.
 3. PyPy-backed Pylint — focused selected messages.
-4. Skylos — strict production dead-code detection.
+4. `df12-python-lints` — shared Pylint rules under CPython 3.14.
+5. `ambrleaks` — snapshot-secret scanning under CPython 3.14.
+6. Skylos — strict production dead-code detection.
 
-Skylos is a blocking fourth tier in `make lint`. It scans production targets,
+Skylos is a blocking sixth stage in `make lint`. It scans production targets,
 excludes test folders, and uses the strict gate configuration in
 `pyproject.toml`. Its standalone tool environment is pinned to Python 3.14 so
 that Skylos parses the project's supported syntax with the intended `ast`

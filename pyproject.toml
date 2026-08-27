@@ -400,6 +400,14 @@ full_name = [
     "cuprum.adapters.metrics_adapter.InMemoryMetrics.observe_histogram.labels",
 ]
 reason = "InMemoryMetrics preserves the MetricsCollector protocol signature while intentionally discarding labels."
+
+[[tool.skylos.dead_code.entrypoints]]
+type = "method"
+full_name = [
+    "cuprum.adapters.logging_adapter._StructuredLoggingHook.report_pipeline_wait",
+]
+reason = "Called structurally through _PipelineWaitReporter by _StageObservation.report_pipeline_wait."
+
 [build-system]
 requires = ["uv_build>=0.9.18,<0.13.0"]
 build-backend = "uv_build"

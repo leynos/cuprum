@@ -1,4 +1,5 @@
 """Tests for the shared dictionary model, merging, and config rendering."""
+
 from __future__ import annotations
 
 import ast
@@ -247,6 +248,7 @@ def test_merge_rejects_conflicting_corrections(
 
     with pytest.raises(ValueError, match="conflicting correction"):
         rollout.merge_dictionaries(base, local)
+
 
 def test_local_policy_preserves_inline_code_exemption(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
