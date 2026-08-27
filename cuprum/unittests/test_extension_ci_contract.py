@@ -121,6 +121,18 @@ def test_the_ci_job_builds_the_extension_before_running_the_gated_tests() -> Non
     )
 
 
+def test_only_boundary_jobs_build_the_extension() -> None:
+    """Only jobs isolated from the full suite may install the extension."""
+    builders = {
+        job_name for job_name, script in _run_scripts() if "make develop" in script
+    }
+
+    assert builders == {"benchmark-ratchet", "extension-tests"}, (
+        "only the isolated extension and benchmark jobs may run `make develop`; "
+        f"found {builders}"
+    )
+
+
 def test_the_benchmark_job_builds_through_the_develop_target() -> None:
     """`benchmark-ratchet` must reach an optimized build via `make develop`.
 
