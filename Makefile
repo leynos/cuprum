@@ -46,10 +46,12 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
 # close race in issue #124 and aborts the interpreter. One definition here,
 # consumed by both the extension-tests CI job and the documented local command.
 EXTENSION_TEST_TARGETS ?= cuprum/unittests/test_rust_streams.py \
+  cuprum/unittests/test_rust_consume_stream.py \
   cuprum/unittests/test_rust_streams_boundary_property.py \
   cuprum/unittests/test_rust_extension.py \
   cuprum/unittests/test_rust_splice.py \
   cuprum/unittests/test_rust_errno.py \
+  cuprum/unittests/test_rust_errno_windows.py \
   cuprum/unittests/test_backend.py \
   cuprum/unittests/test_extension_requirement_guard.py \
   tests/behaviour/test_rust_streams_behaviour.py \

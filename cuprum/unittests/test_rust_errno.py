@@ -59,6 +59,11 @@ def fixture_broken_pipe_fds() -> cabc.Iterator[tuple[int, int]]:
 
     The read end is closed before the test runs, so any attempt to read it
     fails with ``EBADF`` while the write end stays valid.
+
+    Yields
+    ------
+    tuple[int, int]
+        The closed read descriptor and the open write descriptor.
     """
     read_fd, write_fd = os.pipe()
     os.close(read_fd)
@@ -93,10 +98,6 @@ def test_pump_error_reports_a_branchable_errno(
         The compiled Rust streams extension module.
     broken_pipe_fds : tuple[int, int]
         A closed read descriptor and an open write descriptor.
-
-    Returns
-    -------
-    None
 
     Notes
     -----
@@ -134,10 +135,6 @@ def test_consume_error_reports_a_branchable_errno(
     broken_pipe_fds : tuple[int, int]
         A closed read descriptor and an open write descriptor.
 
-    Returns
-    -------
-    None
-
     Notes
     -----
     This pins the conversion contract: the exact POSIX number, which is why it
@@ -171,10 +168,6 @@ def test_the_exception_subclass_follows_the_errno(
     directory_fd : int
         A descriptor open on a directory, which cannot be read.
 
-    Returns
-    -------
-    None
-
     Notes
     -----
     Reading a directory yields `EISDIR`, whose Python subclass is
@@ -203,10 +196,6 @@ def test_the_message_states_the_error_number_once(
         The compiled Rust streams extension module.
     broken_pipe_fds : tuple[int, int]
         A closed read descriptor and an open write descriptor.
-
-    Returns
-    -------
-    None
 
     Notes
     -----

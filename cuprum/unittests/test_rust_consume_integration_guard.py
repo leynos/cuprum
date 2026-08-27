@@ -55,13 +55,18 @@ def _module_references_symbol(path: pathlib.Path, symbol: str) -> bool:
 
 def _node_references_symbol(node: ast.AST, symbol: str) -> bool:
     """Return whether an AST node references *symbol* as a Python symbol."""
-    if isinstance(node, ast.Name):
-        return node.id == symbol
-    if isinstance(node, ast.Attribute):
-        return node.attr == symbol
-    if isinstance(node, ast.alias):
-        return symbol in {node.name, node.asname}
-    return False
+    match node:
+        case ast.Name(id=name) | ast.Attribute(attr=name):
+            return name == symbol
+        case ast.alias(name=name, asname=asname):
+            return symbol in {name, asname}
+        case ast.Call(
+            func=ast.Name(id="getattr"),
+            args=[_, ast.Constant(value=str() as attribute), *_],
+        ):
+            return attribute == symbol
+        case _:
+            return False
 
 
 @pytest.mark.parametrize(
@@ -71,6 +76,7 @@ def _node_references_symbol(node: ast.AST, symbol: str) -> bool:
         ("# rust_consume_stream is mentioned here.\n", "ignored"),
         ("rust_consume_stream(reader_fd)\n", "referenced"),
         ("streams.rust_consume_stream(reader_fd)\n", "referenced"),
+        ('getattr(streams, "rust_consume_stream")(reader_fd)\n', "referenced"),
         ("from cuprum._streams_rs import rust_consume_stream\n", "referenced"),
         ("if rust_consume_stream(\n", "invalid"),
     ],
@@ -92,9 +98,6 @@ def test_module_references_symbol_ignores_non_code_text(
         Whether *source* should be ignored, reported as a reference, or refuse
         to parse.
 
-    Returns
-    -------
-    None
     """
     module_path = tmp_path / "candidate.py"
     module_path.write_text(source, encoding="utf-8")
@@ -122,12 +125,7 @@ def test_module_references_symbol_ignores_non_code_text(
 
 
 def test_rust_consume_stream_docstring_not_integrated() -> None:
-    """``rust_consume_stream`` documents its deferred integration status.
-
-    Returns
-    -------
-    None
-    """
+    """``rust_consume_stream`` documents its deferred integration status."""
     from cuprum import _streams_rs
 
     docstring = _streams_rs.rust_consume_stream.__doc__ or ""
@@ -137,12 +135,7 @@ def test_rust_consume_stream_docstring_not_integrated() -> None:
 
 
 def test_rust_consume_stream_not_referenced_in_production() -> None:
-    """Production code does not route consumes through ``rust_consume_stream``.
-
-    Returns
-    -------
-    None
-    """
+    """Production code does not route consumes through ``rust_consume_stream``."""
     from cuprum import _streams_rs
 
     module_file = _streams_rs.__file__

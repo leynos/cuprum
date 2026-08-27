@@ -1997,11 +1997,11 @@ text diff rather than a boolean failure.
 
 These Rust-side cases are not the only coverage of these categories, and it is
 worth knowing why they carry the load. `TestRustConsumeStream` in
-`cuprum/unittests/test_rust_consume_stream.py` already defines Python/Rust boundary
-tests over the same four inputs — ASCII, multibyte UTF-8 split across a read
-boundary, invalid UTF-8, and an incomplete trailing sequence — and each one
-calls `rust_consume_stream` and compares the result against Python's own
-replacement decoding, `payload.decode("utf-8", errors="replace")`.
+`cuprum/unittests/test_rust_consume_stream.py` already defines Python/Rust
+boundary tests over the same four inputs — ASCII, multibyte UTF-8 split
+across a read boundary, invalid UTF-8, and an incomplete trailing sequence —
+each case calls `rust_consume_stream` and compares the result against Python's
+own replacement decoding, `payload.decode("utf-8", errors="replace")`.
 
 Those cases do now execute in CI — see [Building the extension for
 tests](#building-the-extension-for-tests) — but they did not until `#258` was

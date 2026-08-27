@@ -48,12 +48,17 @@ def _winerror_of(exc: OSError) -> int | None:
     ``OSError.winerror`` exists only on Windows, so a type check run on any
     other platform does not know the attribute. The suppression is confined to
     this one accessor rather than repeated at each use.
+
+    Returns
+    -------
+    int | None
+        The Win32 error code, when CPython attaches one to the exception.
     """
     return exc.winerror  # ty: ignore[unresolved-attribute]
 
 
-def _win32_readfile_error(handle: int) -> int:
-    """Return the Win32 code a direct ``ReadFile`` on ``handle`` reports.
+def _win32_readfile_error(fd: int) -> int:
+    """Return the Win32 code a direct ``ReadFile`` on ``fd`` reports.
 
     This is the oracle the boundary is measured against. It issues the same
     system call the extension does — a Windows stream handle is a
@@ -66,8 +71,8 @@ def _win32_readfile_error(handle: int) -> int:
 
     Parameters
     ----------
-    handle : int
-        A native ``HANDLE`` that cannot be read.
+    fd : int
+        A C runtime descriptor that cannot be read.
 
     Returns
     -------
@@ -79,6 +84,8 @@ def _win32_readfile_error(handle: int) -> int:
     >>> _win32_readfile_error(write_only_handle)  # doctest: +SKIP
     5
     """
+    msvcrt = pytest.importorskip("msvcrt", reason="Windows-only handle conversion")
+    handle = msvcrt.get_osfhandle(fd)
     kernel32 = ctypes.WinDLL(  # ty: ignore[unresolved-attribute]
         "kernel32",
         use_last_error=True,
@@ -138,17 +145,20 @@ def _win32_oracle(code: int) -> OSError:
 
 @pytest.fixture(name="write_only_handle")
 def fixture_write_only_handle(tmp_path: pathlib.Path) -> cabc.Iterator[int]:
-    """Yield a native Windows handle open for writing, which cannot be read.
+    """Yield a Windows CRT descriptor open for writing, which cannot be read.
 
-    The Windows entry points take a native ``HANDLE`` rather than a C runtime
-    descriptor, so the descriptor is converted with ``msvcrt.get_osfhandle``.
-    ``ReadFile`` on a handle opened ``GENERIC_WRITE`` fails, which is what puts
-    a Win32 code on the ``io::Error`` the conversion then has to preserve.
+    The extension owns the conversion to a native ``HANDLE``. ``ReadFile`` on
+    the resulting handle fails because it was opened ``GENERIC_WRITE``, which
+    is what puts a Win32 code on the ``io::Error`` the conversion must retain.
+
+    Yields
+    ------
+    int
+        The C runtime descriptor for the write-only file.
     """
-    msvcrt = pytest.importorskip("msvcrt", reason="Windows-only handle conversion")
     fd = os.open(tmp_path / "write-only.bin", os.O_WRONLY | os.O_CREAT)
     try:
-        yield msvcrt.get_osfhandle(fd)
+        yield fd
     finally:
         with contextlib.suppress(OSError):
             os.close(fd)
@@ -167,10 +177,6 @@ def test_windows_failures_carry_the_native_code_as_winerror(
         The compiled Rust streams extension module.
     write_only_handle : int
         A native Windows ``HANDLE`` opened for writing, which cannot be read.
-
-    Returns
-    -------
-    None
 
     Notes
     -----

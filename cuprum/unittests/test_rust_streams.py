@@ -18,12 +18,14 @@ import typing as typ
 
 import pytest
 
-from tests.helpers.stream_pipes import (
+from cuprum.unittests._rust_stream_test_support import (
     INVALID_FD_ERRNOS,
     INVALID_FD_MESSAGE_RE,
+    _safe_close,
+)
+from tests.helpers.stream_pipes import (
     _pipe_pair,
     _pump_rust_stream_payload,
-    _safe_close,
     feed_source_pipe,
 )
 
@@ -62,9 +64,6 @@ def test_rust_pump_stream_transfers_data(
     buffer_size : int | None
         Optional buffer size parameter; None uses default.
 
-    Returns
-    -------
-    None
     """
     output, transferred = _pump_rust_stream_payload(
         rust_streams, payload, buffer_size=buffer_size
@@ -86,9 +85,6 @@ def test_rust_pump_stream_raises_on_invalid_buffer(
     rust_streams : ModuleType
         The Rust streams module fixture.
 
-    Returns
-    -------
-    None
     """
     with contextlib.ExitStack() as stack:
         in_read, in_write = os.pipe()
@@ -108,9 +104,6 @@ def test_rust_pump_stream_propagates_io_errors(
     rust_streams : ModuleType
         The Rust streams module fixture.
 
-    Returns
-    -------
-    None
     """
     with contextlib.ExitStack() as stack:
         read_fd, write_fd = os.pipe()
@@ -138,9 +131,11 @@ def test_rust_pump_stream_ignores_broken_pipe(
     rust_streams : ModuleType
         The Rust streams module fixture.
 
-    Returns
-    -------
-    None
+    Raises
+    ------
+    OSError
+        Propagated when the pump encounters an unexpected I/O failure while
+        draining the broken destination.
     """
     payload = b"x" * (64 * 1024)
     with _pipe_pair() as (in_read, in_write, out_read, out_write):

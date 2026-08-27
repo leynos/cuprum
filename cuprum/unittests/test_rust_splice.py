@@ -15,11 +15,11 @@ import os
 import threading
 import typing as typ
 
+from cuprum.unittests._rust_stream_test_support import _safe_close
 from tests.helpers.stream_pipes import (
     _pipe_pair,
     _pump_rust_stream_payload,
     _read_all,
-    _safe_close,
 )
 
 if typ.TYPE_CHECKING:

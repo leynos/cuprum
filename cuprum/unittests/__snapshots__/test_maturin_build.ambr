@@ -83,6 +83,7 @@
       'cuprum/unittests/_pipeline_wait_support.py',
       'cuprum/unittests/_pump_stream_dispatch_support.py',
       'cuprum/unittests/_rust_pump_test_helpers.py',
+      'cuprum/unittests/_rust_stream_test_support.py',
       'cuprum/unittests/_tee_profile_backend_support.py',
       'cuprum/unittests/_tee_profile_concurrency_support.py',
       'cuprum/unittests/_tee_profile_signalling_lock.py',

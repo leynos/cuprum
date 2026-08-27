@@ -148,6 +148,14 @@ jobs:
       - name: Run typechecker
         run: make typecheck
 
+      - name: Build the Rust extension
+        run: make develop
+
+      - name: Verify Rust extension availability
+        run: >-
+          uv run python -c "import cuprum; assert cuprum.is_rust_available(),
+          'the Rust extension must be available before running the test suite'"
+
       - name: Run tests
         run: make test
 

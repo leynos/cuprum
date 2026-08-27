@@ -19,7 +19,7 @@ import typing as typ
 
 import pytest
 
-from tests.helpers.stream_pipes import (
+from cuprum.unittests._rust_stream_test_support import (
     INVALID_FD_ERRNOS,
     INVALID_FD_MESSAGE_RE,
     _safe_close,
@@ -109,9 +109,6 @@ class TestRustConsumeStream:
             The buffer size to consume with; ``None`` omits the argument so the
             extension applies its own default.
 
-        Returns
-        -------
-        None
         """
         output = self._consume(rust_streams, payload, buffer_size=buffer_size)
         expected = payload.decode("utf-8", errors="replace")
@@ -130,9 +127,11 @@ class TestRustConsumeStream:
         rust_streams : ModuleType
             The Rust streams module fixture.
 
-        Returns
-        -------
-        None
+        Raises
+        ------
+        OSError
+            Propagated if probing the descriptor after consumption fails for an
+            unexpected I/O reason.
         """
         with contextlib.ExitStack() as stack:
             read_fd, write_fd = os.pipe()
@@ -163,9 +162,6 @@ class TestRustConsumeStream:
         rust_streams : ModuleType
             The Rust streams module fixture.
 
-        Returns
-        -------
-        None
         """
         with contextlib.ExitStack() as stack:
             read_fd, write_fd = os.pipe()
@@ -185,10 +181,6 @@ class TestRustConsumeStream:
         ----------
         rust_streams : ModuleType
             The Rust streams module fixture.
-
-        Returns
-        -------
-        None
 
         Notes
         -----
