@@ -123,7 +123,7 @@ dev = [
 dev = [
     { name = "crosshair-tool" },
     { name = "df12-python-lints", git = "https://github.com/leynos/df12-python-lints.git?rev=755b26f5792f71b37f3a9e656aef714ed98b2c3b" },
-    { name = "hypothesis" },
+    { name = "hypothesis", specifier = ">=6.163.0,<7.0" },
     { name = "hypothesis-crosshair" },
     { name = "interrogate" },
     { name = "maturin", specifier = "==1.13.3" },

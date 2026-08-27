@@ -18,7 +18,7 @@ Repository = "https://github.com/leynos/cuprum"
 dev = [
     "crosshair-tool",
     "df12-python-lints @ git+https://github.com/leynos/df12-python-lints.git@755b26f5792f71b37f3a9e656aef714ed98b2c3b",
-    "hypothesis",
+    "hypothesis>=6.163.0,<7.0",
     "hypothesis-crosshair",
     "interrogate",
     # Constrained below pytest 9.1 until pytest-bdd supports its node-based

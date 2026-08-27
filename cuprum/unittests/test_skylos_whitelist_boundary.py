@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
-import shlex
+import os
 import shutil
+import string
 import subprocess  # noqa: S404 - boundary tests invoke a fixed Make command.
 import sys
 import tomllib
@@ -18,11 +19,16 @@ from tests.helpers.docs import repo_root
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
-_SHELL_SENSITIVE_TEXT = st.text(
-    alphabet="abcdefghijklmnopqrstuvwxyz0123456789 $;*?[]!",
-    min_size=1,
-    max_size=24,
-).filter(lambda value: bool(value.strip()) and value == value.strip())
+_SHELL_SENSITIVE_TEXT = st.builds(
+    lambda prefix, content, suffix: prefix + content + suffix,
+    st.text(alphabet=" \t", max_size=4),
+    st.text(
+        alphabet=string.ascii_letters + string.digits + "_$;|&'\"()[]{}*?!\\`",
+        min_size=1,
+        max_size=24,
+    ),
+    st.text(alphabet=" \t", max_size=4),
+)
 
 
 def _make_executable() -> str:
@@ -34,8 +40,9 @@ def _make_executable() -> str:
 
 def _write_argument_recorder(directory: Path) -> str:
     """Create a fake Skylos CLI that serializes its arguments to a file."""
-    recorder = directory / "record_skylos_arguments.py"
+    recorder = directory / "skylos-recorder"
     recorder.write_text(
+        f"#!{sys.executable}\n"
         "import json\n"
         "import sys\n"
         "from pathlib import Path\n"
@@ -44,14 +51,13 @@ def _write_argument_recorder(directory: Path) -> str:
         ")\n",
         encoding="utf-8",
     )
-    return f"{shlex.quote(sys.executable)} {shlex.quote(str(recorder))}"
+    recorder.chmod(0o755)
+    return str(recorder)
 
 
 def _whitelist_command(
     directory: Path,
     *,
-    symbol: str,
-    reason: str,
     cli: str,
 ) -> tuple[str, ...]:
     """Build the whitelist command for an isolated project directory."""
@@ -60,8 +66,6 @@ def _whitelist_command(
         "-f",
         str(repo_root() / "Makefile"),
         "skylos-allow",
-        f"SYMBOL={symbol}",
-        f"REASON={reason}",
         f"SKYLOS_CLI={cli}",
         f"SKYLOS_WHITELIST_LOCK={directory / '.skylos-whitelist.lock'}",
     )
@@ -76,10 +80,11 @@ def _run_whitelist(
 ) -> subprocess.CompletedProcess[str]:
     """Run the whitelist target against an isolated project directory."""
     return subprocess.run(  # noqa: S603 - fixed Makefile and test arguments.
-        _whitelist_command(directory, symbol=symbol, reason=reason, cli=cli),
+        _whitelist_command(directory, cli=cli),
         capture_output=True,
         check=False,
         cwd=directory,
+        env={**os.environ, "SYMBOL": symbol, "REASON": reason},
         text=True,
     )
 
@@ -122,6 +127,7 @@ def test_whitelist_lock_preserves_concurrent_documented_entries(tmp_path: Path) 
     )
     writer = tmp_path / "write_whitelist_entry.py"
     writer.write_text(
+        f"#!{sys.executable}\n"
         "from pathlib import Path\n"
         "import sys\n"
         "import time\n"
@@ -133,18 +139,21 @@ def test_whitelist_lock_preserves_concurrent_documented_entries(tmp_path: Path) 
         "path.write_text(contents + f'{symbol} = {reason!r}\\n', encoding='utf-8')\n",
         encoding="utf-8",
     )
-    cli = f"{shlex.quote(sys.executable)} {shlex.quote(str(writer))}"
+    writer.chmod(0o755)
+    cli = str(writer)
 
     first = subprocess.Popen(  # noqa: S603 - fixed Makefile and test arguments.
-        _whitelist_command(tmp_path, symbol="first", reason="first reason", cli=cli),
+        _whitelist_command(tmp_path, cli=cli),
         cwd=tmp_path,
+        env={**os.environ, "SYMBOL": "first", "REASON": "first reason"},
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
     second = subprocess.Popen(  # noqa: S603 - fixed Makefile and test arguments.
-        _whitelist_command(tmp_path, symbol="second", reason="second reason", cli=cli),
+        _whitelist_command(tmp_path, cli=cli),
         cwd=tmp_path,
+        env={**os.environ, "SYMBOL": "second", "REASON": "second reason"},
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
