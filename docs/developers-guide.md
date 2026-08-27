@@ -2420,14 +2420,18 @@ for type checking.
 
 The canonical lint configuration lives in `pyproject.toml`:
 
-- `[dependency-groups] dev` pins `ruff==0.14.7`. The pin exists so that Ruff's
+- `[dependency-groups] dev` pins `ruff==0.16.4`. The pin exists so that Ruff's
   version — and therefore its rule set and preview-rule behaviour — is
   reproducible between developer machines and CI; an unpinned Ruff could
-  silently gain or lose findings when a new release ships.
+  silently gain or lose findings when a new release ships. The same version is
+  pinned as `RUFF_VERSION` in the Makefile and in `.github/workflows/ci.yml`;
+  the pin-parity contract test in
+  `cuprum/unittests/test_toolchain_pins.py` keeps the three sites aligned
+  (alongside the matching `ty` pins) without asserting any specific version.
 - `[tool.ruff]` sets line length, preview mode, and target Python version.
-- `[tool.ruff.lint]` selects the active Ruff rule families, including `EM`
-  (require exception messages to be assigned to a variable before `raise`,
-  rather than written inline in the `raise` statement).
+- `[tool.ruff.lint]` selects the active Ruff rule families; the selection
+  mirrors the `episodic` repository's configuration, including `TD` (require
+  authors and issue links on TODO comments).
 - `[tool.ruff.lint.per-file-ignores]` records test-specific exceptions.
 - `[tool.ruff.lint.flake8-import-conventions]` and
   `[tool.ruff.lint.flake8-import-conventions.aliases]` enforce import aliases
@@ -2498,7 +2502,7 @@ match the signature it documents:
 - `DOC502` — a documented exception is not raised directly in the function
   body (it only propagates from a callee).
 
-`ruff==0.14.7` is pinned in the dev dependency group because the `DOC` rules
+`ruff==0.16.4` is pinned in the dev dependency group because the `DOC` rules
 are preview-only (`[tool.ruff]` sets `preview = true`). An unpinned Ruff could
 change which docstrings pass the gate and make it non-reproducible between
 machines and CI.
@@ -2741,6 +2745,7 @@ must not verify the specific SHA value.
 import re
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
 
 def test_uses_pinned_full_sha(caller_step):
     ref = caller_step["uses"].split("@")[-1]

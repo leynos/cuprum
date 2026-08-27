@@ -14,7 +14,7 @@ import argparse
 import json
 import logging
 import pathlib as pth
-import sys  # noqa: F401  # re-exported for compatibility importers
+import sys  # ruff: ignore[unused-import]  # re-exported for compatibility importers
 import typing as typ
 
 from benchmarks._validation import (
@@ -32,9 +32,9 @@ from benchmarks.benchmark_profile import (
     write_incompatible_profile_report,
 )
 from benchmarks.ratchet_ratio_extraction import (
-    _comparison_id_for_scenario,  # noqa: F401  # re-exported for importers
+    _comparison_id_for_scenario,  # ruff: ignore[unused-import]  # re-exported for importers
     _extract_rust_python_ratios,
-    _validate_backend,  # noqa: F401  # re-exported for importers
+    _validate_backend,  # ruff: ignore[unused-import]  # re-exported for importers
     _validate_matching_comparison_groups,
 )
 from benchmarks.ratchet_types import (
@@ -82,7 +82,7 @@ def load_plan(path: pth.Path) -> dict[str, object]:
         If a scenario's ``name`` or ``backend`` field is missing or empty.
     json.JSONDecodeError
         If ``path`` does not contain valid JSON.
-    """  # noqa: DOC502 - propagates from _load_json and the validators
+    """  # ruff: ignore[docstring-extraneous-exception] - propagates from _load_json and the validators
     _logger.debug("loading benchmark plan: path=%s", path)
     payload = _load_json(path)
     validate_profile_version(payload)
@@ -134,7 +134,7 @@ def load_throughput(path: pth.Path) -> dict[str, object]:
         If a result's ``mean`` field is missing or not a positive float.
     json.JSONDecodeError
         If ``path`` does not contain valid JSON.
-    """  # noqa: DOC502 - propagates from _load_json and the validators
+    """  # ruff: ignore[docstring-extraneous-exception] - propagates from _load_json and the validators
     payload = _load_json(path)
     results = _require_list(payload.get("results"), name="results")
 
@@ -203,7 +203,7 @@ def compare_rust_regressions(
     IncompatibleBenchmarkProfileError
         If ``validate_matching_profiles`` finds incompatible profile
         metadata between the baseline and candidate plans.
-    """  # noqa: DOC502 - all raised exceptions propagate from validator calls
+    """  # ruff: ignore[docstring-extraneous-exception] - all raised exceptions propagate from validator calls
     validated_max_regression = _require_non_negative_float(
         max_regression,
         name="max_regression",
@@ -283,7 +283,7 @@ def main() -> int:
     SystemExit
         If ``_parse_args`` rejects invalid or missing command-line
         arguments.
-    """  # noqa: DOC502 - SystemExit propagates from _parse_args via argparse
+    """  # ruff: ignore[docstring-extraneous-exception] - SystemExit propagates from _parse_args via argparse
     logging.basicConfig(
         level=logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
@@ -309,7 +309,7 @@ def main() -> int:
         _logger.info("benchmark ratchet skipped: %s", exc)
         return 0
     except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
-        _logger.error(  # noqa: TRY400  # invalid inputs are an expected CLI outcome
+        _logger.error(  # ruff: ignore[error-instead-of-exception]  # invalid inputs are an expected CLI outcome
             "benchmark ratchet failed to evaluate inputs: %s",
             exc,
         )

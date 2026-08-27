@@ -336,8 +336,8 @@ def test_degradation_counters_count_only_known_reasons(
 
 _etags = st.text(alphabet="ab", min_size=1, max_size=3).map(lambda tag: f'"{tag}"')
 _http_dates = st.datetimes(
-    min_value=dt.datetime(2020, 1, 1),  # noqa: DTZ001 - tz applied below
-    max_value=dt.datetime(2030, 1, 1),  # noqa: DTZ001 - tz applied below
+    min_value=dt.datetime(2020, 1, 1),  # ruff: ignore[call-datetime-without-tzinfo] - tz applied below
+    max_value=dt.datetime(2030, 1, 1),  # ruff: ignore[call-datetime-without-tzinfo] - tz applied below
     timezones=st.just(dt.UTC),
 ).map(email.utils.format_datetime)
 

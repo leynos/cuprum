@@ -200,7 +200,7 @@ def git_ref(value: str) -> GitRef:
     ValueError
         If ``value`` is not a valid git reference (propagated from
         ``_validate_git_ref``).
-    """  # noqa: DOC502 - ValueError propagates from _validate_git_ref
+    """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from _validate_git_ref
     if not isinstance(value, str):
         msg = f"GitRef expects str, got {type(value).__name__}"
         raise TypeError(msg)

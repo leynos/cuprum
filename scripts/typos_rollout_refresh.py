@@ -270,7 +270,7 @@ def _https_request(
         # doing ``str(exc)``, neither of which is redacted like the logs are.
         message = f"shared dictionary URL must use HTTPS, got scheme {scheme!r}"
         raise ValueError(message)
-    return urllib.request.Request(source, headers=dict(headers))  # noqa: S310 - HTTPS is required above.
+    return urllib.request.Request(source, headers=dict(headers))  # ruff: ignore[suspicious-url-open-usage] - HTTPS is required above.
 
 
 def _write_remote_cache(
@@ -413,7 +413,7 @@ def refresh_base(
         If the refreshed dictionary source is not valid TOML.
     urllib.error.URLError
         If the HTTP refresh path fails and no stale cache is available.
-    """  # noqa: DOC502 - refresh and parse errors propagate from the callees
+    """  # ruff: ignore[docstring-extraneous-exception] - refresh and parse errors propagate from the callees
     if offline:
         if not _valid_cache(cache):
             message = f"no cached shared dictionary at {cache}"

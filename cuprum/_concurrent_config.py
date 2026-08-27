@@ -118,7 +118,7 @@ def _validate_index_sequence(
     ValueError
         If an index is negative, exceeds ``upper_bound``, or the sequence is
         not strictly ascending.
-    """  # noqa: DOC502 - TypeError propagates from _validate_index_type
+    """  # ruff: ignore[docstring-extraneous-exception] - TypeError propagates from _validate_index_type
     previous = -1
     for index in indices:
         _validate_index_type(index, type_error_message=type_error_message)
@@ -159,7 +159,7 @@ def _validate_submission_index_values(submission_indices: tuple[int, ...]) -> No
         If an index is not an exact ``int`` (``bool`` is rejected).
     ValueError
         If an index is negative, or the sequence is not strictly ascending.
-    """  # noqa: DOC502 - both propagate from the shared index validator
+    """  # ruff: ignore[docstring-extraneous-exception] - both propagate from the shared index validator
     _validate_index_sequence(
         submission_indices,
         subject="submission_indices",
@@ -234,9 +234,14 @@ class ConcurrentResult:
         """Initialize a concurrent result and resolve its submission mapping."""
         object.__setattr__(self, "results", results)
         object.__setattr__(self, "failures", failures)
-        self.__post_init__(submission_indices)
+        self._validate(submission_indices)
 
-    def __post_init__(
+    # Not named ``__post_init__``: this dataclass declares ``init=False`` and
+    # hand-writes ``__init__`` (the public ``submission_indices`` keyword
+    # collides with the derived field of the same name, so an ``InitVar``
+    # cannot express it). A ``__post_init__`` taking a non-``InitVar``
+    # parameter would violate the dataclass protocol.
+    def _validate(
         self,
         submission_indices: tuple[int, ...] | None,
     ) -> None:
@@ -250,12 +255,12 @@ class ConcurrentResult:
 
     @property
     def ok(self) -> bool:
-        """Return True when all commands exited successfully."""
+        """True when all commands exited successfully."""
         return not self.failures
 
     @property
     def first_failure(self) -> CommandResult | None:
-        """Return the first failed result, or None if all succeeded."""
+        """The first failed result, or None if all succeeded."""
         if not self.failures:
             return None
         return self.results[self.failures[0]]

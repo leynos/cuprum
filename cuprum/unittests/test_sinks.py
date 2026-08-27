@@ -76,8 +76,9 @@ def test_text_blackhole_flush_is_a_noop() -> None:
 def test_text_blackhole_write_rejects_non_str() -> None:
     """TextBlackhole.write raises TypeError for non-str input."""
     bh = sinks.TextBlackhole()
+    # The cast documents the deliberately wrong-typed argument under test.
     with pytest.raises(TypeError):
-        bh.write(b"bytes")  # type: ignore[arg-type]
+        bh.write(typ.cast("str", b"bytes"))
 
 
 # ---------------------------------------------------------------------------

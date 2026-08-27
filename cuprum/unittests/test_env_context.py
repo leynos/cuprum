@@ -307,8 +307,10 @@ def test_merge_env_overlays_returns_immutable_snapshot_when_child_is_none() -> N
 
     assert merged is not None
     assert dict(merged) == {"A": "1"}
+    # Cast away the read-only static type to exercise the runtime guard the
+    # immutability contract relies on.
     with pytest.raises(TypeError):
-        merged["A"] = "mutated"  # type: ignore[index]
+        typ.cast("dict[str, str]", merged)["A"] = "mutated"
 
     parent["A"] = "still-mutating-source"
     assert merged["A"] == "1"
@@ -318,8 +320,9 @@ def test_cuprum_context_with_env_overlay_is_immutable_proxy() -> None:
     """``CuprumContext.env_overlay`` returns a read-only mapping proxy."""
     ctx = CuprumContext().with_env_overlay({"CUPRUM_TEST_PROXY": "v"})
     assert ctx.env_overlay is not None
+    # Cast away the read-only static type to exercise the runtime guard.
     with pytest.raises(TypeError):
-        ctx.env_overlay["CUPRUM_TEST_PROXY"] = "other"  # type: ignore[index]
+        typ.cast("dict[str, str]", ctx.env_overlay)["CUPRUM_TEST_PROXY"] = "other"
 
 
 def test_env_restores_on_exception() -> None:

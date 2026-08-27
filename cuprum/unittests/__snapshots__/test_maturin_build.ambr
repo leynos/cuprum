@@ -222,6 +222,7 @@
       'cuprum/unittests/test_timeout_resolution.py',
       'cuprum/unittests/test_timeout_telemetry_pairing.py',
       'cuprum/unittests/test_token_registration_stateful.py',
+      'cuprum/unittests/test_toolchain_pins.py',
       'cuprum/unittests/test_tracing_adapter.py',
       'cuprum/unittests/test_tracing_exec_id_correlation.py',
       'cuprum/unittests/test_tracing_span_concurrency.py',

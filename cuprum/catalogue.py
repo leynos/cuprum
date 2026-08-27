@@ -108,7 +108,7 @@ class ProgramEntry:
 
     @property
     def project_name(self) -> str:
-        """Return the owning project's name."""
+        """The owning project's name."""
         return self.project.name
 
 
@@ -126,7 +126,7 @@ class ProgramCatalogue:
 
     @property
     def allowlist(self) -> frozenset[Program]:
-        """Return the curated allowlist of programs."""
+        """The curated allowlist of programs."""
         return self._allowlist
 
     def is_allowed(self, program: Program | str) -> bool:
@@ -187,7 +187,7 @@ class ProgramCatalogue:
         ------
         UnknownProgramError
             If the program is not present in this catalogue.
-        """  # noqa: DOC502 - UnknownProgramError propagates from lookup
+        """  # ruff: ignore[docstring-extraneous-exception] - UnknownProgramError propagates from lookup
         return self.lookup(program).project
 
     def visible_settings(self) -> cabc.Mapping[str, ProjectSettings]:

@@ -31,7 +31,7 @@ def _generate_test_data() -> str:
     """Generate deterministic random base64 data for testing."""
     # Use a local RNG with a fixed seed so the output is identical across runs,
     # enabling reliable snapshot comparisons without affecting global state.
-    rng = random.Random(_SEED)  # noqa: S311
+    rng = random.Random(_SEED)  # ruff: ignore[suspicious-non-cryptographic-random-usage]
     lines = []
     for _ in range(_LINES):
         raw = rng.randbytes(_BYTES_PER_LINE)

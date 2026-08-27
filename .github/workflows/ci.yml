@@ -9,12 +9,20 @@ permissions:
   actions: read
   contents: read
 
+# The Makefile defaults RUFF_VERSION and TY_VERSION with `?=`, so these
+# workflow-level values are what every `make` invocation below actually
+# runs. The pin-parity contract test in
+# cuprum/unittests/test_toolchain_pins.py keeps them aligned with the
+# Makefile defaults and the pyproject.toml dev dependencies.
+env:
+  RUFF_VERSION: '0.16.4'
+  TY_VERSION: '0.0.74'
+
 jobs:
   lint-test:
     runs-on: ubuntu-latest
     env:
       MBAKE_VERSION: '1.4.6'
-      TY_VERSION: '0.0.8'
       WHITAKER_INSTALLER_VERSION: '0.2.7'
     steps:
       - name: Check out repository
@@ -31,7 +39,6 @@ jobs:
       - name: Install CLI tools
         run: |
           uv tool install "mbake==${MBAKE_VERSION}"
-          uv tool install "ty==${TY_VERSION}"
           npm install -g markdownlint-cli2
 
       - name: Install Rust toolchain

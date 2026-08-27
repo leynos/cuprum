@@ -45,7 +45,7 @@ def _convert_fd_for_platform(fd: int) -> int:
     # Use getattr to avoid cross-platform stub mismatches in type checking.
     get_osfhandle = typ.cast(
         "cabc.Callable[[int], int]",
-        getattr(msvcrt, "get_osfhandle"),  # noqa: B009  # https://github.com/leynos/cuprum/pull/29#discussion_r2743182508
+        getattr(msvcrt, "get_osfhandle"),  # ruff: ignore[get-attr-with-constant]  # https://github.com/leynos/cuprum/pull/29#discussion_r2743182508
     )
     handle = get_osfhandle(fd)
     bit_size = ctypes.sizeof(ctypes.c_void_p) * 8

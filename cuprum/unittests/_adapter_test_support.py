@@ -76,7 +76,7 @@ def _make_exec_event(
             raise ValueError(msg)
         values.update(overrides)
     return ExecEvent(
-        phase=typ.cast("ExecPhase", values["phase"]),
+        phase=values["phase"],
         program=Program(typ.cast("str", values["program"])),
         argv=typ.cast("tuple[str, ...]", values["argv"]),
         cwd=typ.cast("Path | None", values["cwd"]),
@@ -177,7 +177,7 @@ def _run_in_threads(target: cabc.Callable[[], None], *, workers: int = 4) -> Non
         """Run the target and preserve failures for the main thread."""
         try:
             target()
-        except BaseException as exc:  # noqa: BLE001 - surface worker failures.
+        except BaseException as exc:  # ruff: ignore[blind-except] - surface worker failures.
             with errors_lock:
                 errors.append(exc)
 

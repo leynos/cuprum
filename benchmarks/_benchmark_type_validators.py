@@ -90,7 +90,7 @@ def _validate_iteration_count(
     ValueError
         If the count is below ``min_value`` or above
         ``_MAX_HYPERFINE_ITERATIONS``.
-    """  # noqa: DOC502 - TypeError is an inherited contract from _validate_int
+    """  # ruff: ignore[docstring-extraneous-exception] - TypeError is an inherited contract from _validate_int
     validated = _validate_int(value, name=name)
     if validated < min_value:
         msg = f"{name} must be >= {min_value}, got {validated}"
@@ -116,7 +116,7 @@ def _validate_minimum_int(value: object, *, name: str, min_value: int) -> int:
         ``_validate_int(value, name=...)``.
     ValueError
         If the count is below ``min_value``.
-    """  # noqa: DOC502 - TypeError is an inherited contract from _validate_int
+    """  # ruff: ignore[docstring-extraneous-exception] - TypeError is an inherited contract from _validate_int
     validated = _validate_int(value, name=name)
     if validated < min_value:
         msg = f"{name} must be >= {min_value}, got {validated}"
@@ -145,7 +145,7 @@ def _validate_payload_bytes(value: object) -> int:
         ``_validate_int(value, name=...)``.
     ValueError
         If ``value`` is less than or equal to zero.
-    """  # noqa: DOC502 - TypeError is an inherited contract from _validate_int
+    """  # ruff: ignore[docstring-extraneous-exception] - TypeError is an inherited contract from _validate_int
     payload_bytes = _validate_int(value, name="payload_bytes")
     if payload_bytes <= 0:
         msg = f"payload_bytes must be > 0, got {payload_bytes}"
@@ -168,7 +168,7 @@ def _validate_stages(value: object) -> int:
         ``_validate_int(value, name=...)``.
     ValueError
         If the stage count is below ``_MIN_PIPELINE_STAGES``.
-    """  # noqa: DOC502 - TypeError is an inherited contract from _validate_int
+    """  # ruff: ignore[docstring-extraneous-exception] - TypeError is an inherited contract from _validate_int
     stages = _validate_int(value, name="stages")
     if stages < _MIN_PIPELINE_STAGES:
         msg = f"stages must be >= {_MIN_PIPELINE_STAGES}, got {stages}"

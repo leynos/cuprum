@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import importlib
 import shutil
-import subprocess  # noqa: S404 - tests invoke pinned maturin build commands.
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - tests invoke pinned maturin build commands.
 import sys
 import sysconfig
 from pathlib import Path
@@ -167,7 +167,7 @@ def build_native_wheel_artefact(root: Path, out_dir: Path) -> Path:
     OSError
         If the output directory cannot be created or inspected, or if the
         maturin subprocess cannot be started.
-    """  # noqa: DOC502 - OSError propagates from Path.mkdir and subprocess.run
+    """  # ruff: ignore[docstring-extraneous-exception] - OSError propagates from Path.mkdir and subprocess.run
     out_dir.mkdir(parents=True, exist_ok=True)
     command = [
         sys.executable,
@@ -182,7 +182,7 @@ def build_native_wheel_artefact(root: Path, out_dir: Path) -> Path:
         str(root / "rust/cuprum-rust/Cargo.toml"),
     ]
     try:
-        subprocess.run(  # noqa: S603 - trusted paths and pinned maturin
+        subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - trusted paths and pinned maturin
             command,
             check=True,
             cwd=root,

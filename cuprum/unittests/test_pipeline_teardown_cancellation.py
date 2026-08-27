@@ -192,7 +192,7 @@ async def _wait_for_marker(marker: Path, *, seconds: float = 10.0) -> None:
         # ASYNC240: the readiness signal is a file written by another process,
         # which no asyncio primitive can observe. Stat-ing it is the
         # coordination, and it is cheap enough not to stall the loop.
-        if marker.exists():  # noqa: ASYNC240
+        if marker.exists():  # ruff: ignore[blocking-path-method-in-async-function]
             return
         await asyncio.sleep(0.01)
     pytest.fail(  # pragma: no cover - defensive failure

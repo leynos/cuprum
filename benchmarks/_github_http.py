@@ -158,7 +158,7 @@ class _ArtefactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
 def _load_json_response(*, url: str, token: str) -> cabc.Mapping[str, object]:
     """Load a GitHub API JSON response."""
     _require_https_url(url)
-    request = urllib.request.Request(  # noqa: S310 - URL is selected by trusted caller
+    request = urllib.request.Request(  # ruff: ignore[suspicious-url-open-usage] - URL is selected by trusted caller
         url,
         headers={
             "Accept": "application/vnd.github+json",
@@ -195,7 +195,7 @@ def _load_json_response(*, url: str, token: str) -> cabc.Mapping[str, object]:
 def _download_bytes(*, url: str, token: str) -> bytes:
     """Download raw bytes from an authenticated URL."""
     _require_https_url(url)
-    request = urllib.request.Request(  # noqa: S310 - URL is returned by the GitHub API
+    request = urllib.request.Request(  # ruff: ignore[suspicious-url-open-usage] - URL is returned by the GitHub API
         url,
         headers={
             "Accept": "application/vnd.github+json",

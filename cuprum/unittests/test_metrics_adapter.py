@@ -354,7 +354,7 @@ print('err1', file=sys.stderr)""",
             """Run a worker and retain any failure for the main thread."""
             try:
                 target()
-            except BaseException as exc:  # noqa: BLE001 - worker failures must surface.
+            except BaseException as exc:  # ruff: ignore[blind-except] - worker failures must surface.
                 with errors_lock:
                     errors.append(exc)
 

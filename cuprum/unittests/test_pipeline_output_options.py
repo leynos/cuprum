@@ -17,6 +17,7 @@ from cuprum.sh import (
     Pipeline,
     PipelineResult,
     RunOutputOptions,
+    _DeprecatedOutputFlags,
     _resolve_pipeline_output,
 )
 from tests.helpers.catalogue import python_catalogue
@@ -130,20 +131,32 @@ _OUTPUT_OPTIONS = st.one_of(
         echo=st.booleans(),
     ),
 )
+
+
+def _as_deprecated_flags(raw: cabc.Mapping[str, bool]) -> _DeprecatedOutputFlags:
+    """Narrow a generated capture/echo mapping to the keyword TypedDict."""
+    flags = _DeprecatedOutputFlags()
+    if "capture" in raw:
+        flags["capture"] = raw["capture"]
+    if "echo" in raw:
+        flags["echo"] = raw["echo"]
+    return flags
+
+
 _DEPRECATED_FLAGS = st.fixed_dictionaries(
     {},
     optional={
         "capture": st.booleans(),
         "echo": st.booleans(),
     },
-)
+).map(_as_deprecated_flags)
 
 
 @settings(max_examples=50, deadline=None, derandomize=True)
 @given(output=_OUTPUT_OPTIONS, flags=_DEPRECATED_FLAGS)
 def test_resolve_pipeline_output_preserves_option_invariants(
     output: RunOutputOptions | None,
-    flags: dict[str, bool],
+    flags: _DeprecatedOutputFlags,
 ) -> None:
     """Pipeline output resolution preserves the finite option invariants."""
     if output is not None and flags:

@@ -2,7 +2,7 @@
 
 These exercise the dataclasses directly, without running commands: argument
 validation, the ``ok``/``first_failure`` properties, and the failure-index and
-submission-index invariants enforced in ``__post_init__``.
+submission-index invariants enforced during construction.
 """
 
 from __future__ import annotations
@@ -145,8 +145,9 @@ class TestConcurrentResult:
             CommandResult(Program("echo"), (), 0, 1, "out", ""),
             CommandResult(Program("echo"), (), 1, 2, "out", ""),
         )
-        # Two results but only one submission index: fail fast in __post_init__
-        # rather than defer to an IndexError from failure_submission_indices.
+        # Two results but only one submission index: fail fast during
+        # construction rather than defer to an IndexError from
+        # failure_submission_indices.
         with pytest.raises(ValueError, match="submission_indices length"):
             ConcurrentResult(results=results, failures=(1,), submission_indices=(0,))
 

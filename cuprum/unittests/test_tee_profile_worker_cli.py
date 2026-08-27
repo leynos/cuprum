@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import subprocess  # noqa: S404 - integration tests exercise fixed CLI commands.
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - integration tests exercise fixed CLI commands.
 import sys
 import typing as typ
 
@@ -111,7 +111,7 @@ def test_worker_cli_runs_successfully_via_subprocess(tmp_path: pth.Path) -> None
     fixture.write_text("YWJjZGVm\n")
     output = tmp_path / "result.json"
     try:
-        completed = subprocess.run(  # noqa: S603
+        completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
             [
                 sys.executable,
                 "-m",

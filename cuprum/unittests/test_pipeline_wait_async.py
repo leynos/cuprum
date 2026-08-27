@@ -11,6 +11,8 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
+import pytest
+
 from cuprum import _pipeline_wait, _process_lifecycle
 from cuprum._pipeline_wait_records import _completion_log_fields
 from cuprum.unittests._pipeline_wait_support import (
@@ -24,8 +26,6 @@ from cuprum.unittests._pipeline_wait_support import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-    import pytest
 
     from cuprum._pipeline_wait import _PipelineWaitState
 
@@ -222,7 +222,7 @@ class TestProcessCompletedTask:
         )
 
         assert state.exit_codes[0] == 4, "the task result must reach record_completion"
-        assert state.ended_at[0] == 12.5, (
+        assert state.ended_at[0] == pytest.approx(12.5), (
             "the injected perf_counter reading must be stamped as the end time"
         )
         assert state.failure_index == 0, "the failing stage must latch"
@@ -243,7 +243,9 @@ class TestProcessCompletedTask:
         )
 
         assert state.exit_codes[1] == 0, "the zero exit must be recorded"
-        assert state.ended_at[1] == 12.5, "the end time must still be stamped"
+        assert state.ended_at[1] == pytest.approx(12.5), (
+            "the end time must still be stamped"
+        )
         assert state.failure_index is None, "a success must not latch a failure"
         assert not terminations, "a successful stage must not terminate others"
 
@@ -321,10 +323,10 @@ class TestProcessCompletedTask:
         )
         assert state.exit_codes[2] == 5, "the first completion's exit must be recorded"
         assert state.exit_codes[0] == 3, "the later completion's exit must be recorded"
-        assert state.ended_at[2] == 10.0, (
+        assert state.ended_at[2] == pytest.approx(10.0), (
             f"stage 2 must carry the first clock reading, found {state.ended_at[2]!r}"
         )
-        assert state.ended_at[0] == 20.0, (
+        assert state.ended_at[0] == pytest.approx(20.0), (
             f"stage 0 must carry the second clock reading, found {state.ended_at[0]!r}"
         )
         assert terminations == [(2, 0.25)], (

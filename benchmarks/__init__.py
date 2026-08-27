@@ -1,5 +1,5 @@
 """Benchmark suite for Cuprum stream performance."""
 
+from benchmarks.errors import BenchmarkError
 
-class BenchmarkError(Exception):
-    """Base class for exceptions raised by the benchmark suite."""
+__all__ = ["BenchmarkError"]

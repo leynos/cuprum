@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import threading
-import typing  # noqa: ICN001 - This isolation test intentionally uses the direct module name.
+import typing  # ruff: ignore[unconventional-import-alias] - This isolation test intentionally uses the direct module name.
 
 from cuprum.catalogue import ECHO, LS
 from cuprum.context import (

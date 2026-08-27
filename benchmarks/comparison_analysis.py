@@ -260,7 +260,7 @@ def compare_candidate_backend_results(
         comparison identifier, or result mean fails validation; a comparison
         group contains duplicate backend entries; or a group is incomplete
         because it is missing its Python or its Rust entry.
-    """  # noqa: DOC502 - TypeError and the payload-validation ValueErrors propagate from the validators
+    """  # ruff: ignore[docstring-extraneous-exception] - TypeError and the payload-validation ValueErrors propagate from the validators
     scenarios = _require_list(plan_payload.get("scenarios"), name="scenarios")
     results = _require_list(throughput_payload.get("results"), name="results")
     if len(scenarios) != len(results):

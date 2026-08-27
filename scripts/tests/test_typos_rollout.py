@@ -348,7 +348,7 @@ def test_https_failure_reuses_valid_tracked_config(
         for record in caplog.records
         if getattr(record, "event", None) == "typos_rollout.tracked_config_fallback"
     )
-    assert fallback_record.error_type == "URLError", (
+    assert getattr(fallback_record, "error_type", None) == "URLError", (
         "the fallback warning must classify the bounded refresh error type"
     )
 

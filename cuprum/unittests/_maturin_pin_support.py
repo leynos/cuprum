@@ -117,7 +117,7 @@ def read_text(root: pth.Path, relative: str) -> str:
     >>> from tests.helpers.docs import repo_root
     >>> "maturin" in read_text(repo_root(), "pyproject.toml")
     True
-    """  # noqa: DOC502 - propagates filesystem decoding and access errors
+    """  # ruff: ignore[docstring-extraneous-exception] - propagates filesystem decoding and access errors
     return (root / relative).read_text(encoding="utf-8")
 
 
@@ -146,7 +146,7 @@ def read_expected_maturin_version(root: pth.Path) -> str:
     >>> from tests.helpers.docs import repo_root
     >>> read_expected_maturin_version(repo_root()).count(".")
     2
-    """  # noqa: DOC502 - propagates from the shared reader and pin matcher
+    """  # ruff: ignore[docstring-extraneous-exception] - propagates from the shared reader and pin matcher
     return require_pin_match(
         MATURIN_PIN_RE.search(read_text(root, "pyproject.toml")),
         "pyproject.toml",

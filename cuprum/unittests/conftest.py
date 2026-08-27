@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import typing as typ
 
-import hypothesis_crosshair_provider  # noqa: F401  # Registers CrossHair backend provider on import.
+import hypothesis_crosshair_provider  # ruff: ignore[unused-import]  # Registers CrossHair backend provider on import.
 from hypothesis import settings
 
 if typ.TYPE_CHECKING:

@@ -25,7 +25,7 @@ class _PipelineRunConfig:
 
     @property
     def capture_or_echo(self) -> bool:
-        """Return whether output must be consumed for capture or echo."""
+        """Whether output must be consumed for capture or echo."""
         return self.capture or self.echo
 
     @property

@@ -67,7 +67,7 @@ def git_checkout(
     ValueError
         If both ``create_branch`` and ``detach`` are True, or if ``ref`` is
         not a valid git reference (the latter propagated from ``git_ref``).
-    """  # noqa: DOC502 - TypeError/ValueError propagate from git_ref
+    """  # ruff: ignore[docstring-extraneous-exception] - TypeError/ValueError propagate from git_ref
     if create_branch and detach:
         msg = "create_branch and detach cannot both be True"
         raise ValueError(msg)
@@ -104,7 +104,7 @@ def git_rev_parse(ref: str) -> SafeCmd:
         If ``ref`` is not a string.
     ValueError
         If ``ref`` is not a valid git reference.
-    """  # noqa: DOC502 - TypeError/ValueError propagate from git_ref
+    """  # ruff: ignore[docstring-extraneous-exception] - TypeError/ValueError propagate from git_ref
     args = ["rev-parse", str(git_ref(ref))]
     return sh.make(GIT)(*args)
 

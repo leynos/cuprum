@@ -99,7 +99,7 @@ def parse_dictionary_text(text: str) -> Dictionary:
         wrong type.
     tomllib.TOMLDecodeError
         If *text* is not valid TOML.
-    """  # noqa: DOC502 - TOMLDecodeError and helper TypeErrors propagate
+    """  # ruff: ignore[docstring-extraneous-exception] - TOMLDecodeError and helper TypeErrors propagate
     document = tomllib.loads(text)
     schema = document.get("schema")
     if schema != SCHEMA_VERSION:
@@ -147,7 +147,7 @@ def load_dictionary(path: pathlib.Path) -> Dictionary:
         If the file is not valid UTF-8.
     ValueError, TypeError, tomllib.TOMLDecodeError
         If the document fails validation.
-    """  # noqa: DOC502 - read and parse errors propagate from the callees
+    """  # ruff: ignore[docstring-extraneous-exception] - read and parse errors propagate from the callees
     return parse_dictionary_text(path.read_text(encoding="utf-8"))
 
 
@@ -211,7 +211,7 @@ def generate_word_mappings(dictionary: Dictionary) -> dict[str, str]:
     ValueError
         If an expanded stem or explicit correction conflicts with an
         existing mapping.
-    """  # noqa: DOC502 - ValueError is raised by the nested ``add`` helper
+    """  # ruff: ignore[docstring-extraneous-exception] - ValueError is raised by the nested ``add`` helper
     mappings = {word: word for word in dictionary.accepted}
 
     def add(word: str, correction: str) -> None:

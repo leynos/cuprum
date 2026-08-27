@@ -24,7 +24,7 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import ExecutionContext
 
 
-def _sh_module() -> typ.Any:  # noqa: ANN401 — returns module, typed access via attributes
+def _sh_module() -> typ.Any:  # ruff: ignore[any-type] — returns module, typed access via attributes
     """Lazy import sh module to avoid circular imports."""
     from cuprum import sh
 

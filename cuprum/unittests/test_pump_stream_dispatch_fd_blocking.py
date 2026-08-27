@@ -237,7 +237,7 @@ class TestPumpStreamDispatch:
                 if fd == read_fd and blocking is True:
                     original_set_blocking(
                         fd,
-                        True,  # noqa: FBT003  # mirrors os API here
+                        True,  # ruff: ignore[boolean-positional-value-in-call]  # mirrors os API here
                     )
                     return
                 # Match on the writer role rather than a fixed descriptor.

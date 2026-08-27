@@ -285,7 +285,7 @@ class EnvRegistration(_TokenRegistration):
 
     @property
     def overlay(self) -> cabc.Mapping[str, str] | None:
-        """Return the immutable overlay this registration applied."""
+        """The immutable overlay this registration applied."""
         return self._overlay
 
 

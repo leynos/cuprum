@@ -30,7 +30,7 @@ import functools
 import os
 import pathlib as pth
 import re
-import subprocess  # noqa: S404 - reads the repository's own Makefile recipes.
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - reads the repository's own Makefile recipes.
 import typing as typ
 
 import pytest
@@ -112,8 +112,8 @@ def _caller_owned_names() -> frozenset[str]:
 def _make_dry_run(*goals: str) -> str:
     """Return what ``make --dry-run`` prints for `goals`, recipes expanded."""
     ignored = _caller_owned_names()
-    completed = subprocess.run(  # noqa: S603 - fixed argument vector.
-        ["make", "--dry-run", *goals],  # noqa: S607 - `make` resolved from PATH.
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argument vector.
+        ["make", "--dry-run", *goals],  # ruff: ignore[start-process-with-partial-path] - `make` resolved from PATH.
         capture_output=True,
         check=True,
         cwd=repo_root(),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import threading
+import typing as typ
 
 import pytest
 
@@ -61,8 +62,10 @@ def test_visible_settings_surface_project_metadata() -> None:
     assert project.noise_rules, "Noise rules should be populated"
     assert project.documentation_locations, "Docs links should be populated"
     assert ECHO in project.programs, "Project should enumerate its programs"
+    # Cast away the read-only static type to exercise the runtime guard on the
+    # published mapping proxy.
     with pytest.raises(TypeError):
-        settings[CORE_OPS_PROJECT] = project  # type: ignore[index]
+        typ.cast("dict[str, ProjectSettings]", settings)[CORE_OPS_PROJECT] = project
 
 
 def test_visible_settings_concurrent_first_access_reuses_view() -> None:

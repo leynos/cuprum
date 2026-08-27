@@ -372,7 +372,7 @@ async def _wait_for_pipeline(
             # it triggers, so the earliest stage is the one worth reporting.
             for wait_task in sorted(done, key=lambda task: state.task_to_index[task]):
                 await _process_completed_task(
-                    typ.cast("asyncio.Task[int]", wait_task),
+                    wait_task,
                     state,
                     processes,
                     cancel_grace,

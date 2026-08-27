@@ -21,6 +21,7 @@ The invariants checked here are:
 from __future__ import annotations
 
 import os
+import typing as typ
 
 import pytest
 from hypothesis import given, settings
@@ -103,8 +104,9 @@ def test_merge_env_overlays_result_is_immutable_proxy(
         # branch is covered by the unit tests, not the property suite.
         return
     assert merged is not None
+    # Cast away the read-only static type to exercise the runtime guard.
     with pytest.raises(TypeError):
-        merged["__cuprum_property_test__"] = "no"  # type: ignore[index]
+        typ.cast("dict[str, str]", merged)["__cuprum_property_test__"] = "no"
 
 
 @settings(max_examples=100)

@@ -37,7 +37,7 @@ _REQUESTED = st.sampled_from(list(StreamBackend))
 @given(requested=_REQUESTED, rust_available=_AVAILABILITY)
 def test_resolver_never_returns_auto(
     requested: StreamBackend,
-    rust_available: bool | None,  # noqa: FBT001 - property input, not a flag.
+    rust_available: bool | None,  # ruff: ignore[boolean-type-hint-positional-argument] - property input, not a flag.
 ) -> None:
     """The resolver always collapses to a concrete backend (never ``AUTO``)."""
     try:
@@ -52,7 +52,7 @@ def test_resolver_never_returns_auto(
 
 @given(rust_available=_AVAILABILITY)
 def test_python_is_honoured_unconditionally(
-    rust_available: bool | None,  # noqa: FBT001 - property input, not a flag.
+    rust_available: bool | None,  # ruff: ignore[boolean-type-hint-positional-argument] - property input, not a flag.
 ) -> None:
     """Requesting ``PYTHON`` always resolves to ``PYTHON``."""
     assert (
@@ -63,7 +63,7 @@ def test_python_is_honoured_unconditionally(
 
 @given(rust_available=_AVAILABILITY)
 def test_forced_rust_respects_availability(
-    rust_available: bool | None,  # noqa: FBT001 - property input, not a flag.
+    rust_available: bool | None,  # ruff: ignore[boolean-type-hint-positional-argument] - property input, not a flag.
 ) -> None:
     """Forced ``RUST`` resolves iff available, else raises ``ImportError``."""
     if rust_available:
@@ -78,7 +78,7 @@ def test_forced_rust_respects_availability(
 
 @given(rust_available=_AVAILABILITY)
 def test_auto_follows_availability(
-    rust_available: bool | None,  # noqa: FBT001 - property input, not a flag.
+    rust_available: bool | None,  # ruff: ignore[boolean-type-hint-positional-argument] - property input, not a flag.
 ) -> None:
     """``AUTO`` picks ``RUST`` iff available, otherwise ``PYTHON``."""
     resolved = _resolve_backend(StreamBackend.AUTO, rust_available=rust_available)

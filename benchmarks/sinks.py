@@ -17,8 +17,15 @@ if typ.TYPE_CHECKING:
 type SinkKind = typ.Literal["devnull", "text_blackhole", "pty_blackhole"]
 
 
-class TextBlackhole(io.TextIOBase):
-    """Text sink that accepts strings without exposing a byte buffer."""
+class TextBlackhole(io.TextIOBase, typ.IO[str]):
+    """Text sink that accepts strings without exposing a byte buffer.
+
+    ``typing.IO[str]`` is a nominal base rather than a protocol, so it is
+    listed explicitly: ``ExecutionContext.stdout_sink`` is declared as
+    ``IO[str]`` and ``io.TextIOBase`` alone is not a subtype of it.
+    ``TextIOBase`` precedes it in the MRO, so every method is served by the
+    concrete stdlib implementation.
+    """
 
     @typ.override
     def writable(self) -> bool:

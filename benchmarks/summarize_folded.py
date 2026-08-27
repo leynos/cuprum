@@ -133,7 +133,7 @@ def summarize_folded_file(
         rejected as a non-integer).
     ValueError
         If ``limit`` or ``example_limit`` is not positive.
-    """  # noqa: DOC502 - propagated from _validate_positive_int
+    """  # ruff: ignore[docstring-extraneous-exception] - propagated from _validate_positive_int
     _validate_positive_int("limit", limit)
     _validate_positive_int("example_limit", example_limit)
 

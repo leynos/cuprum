@@ -95,7 +95,7 @@ class TestMetricsFailFast:
         hook(_fail_fast_event())
         hook(_fail_fast_event())
 
-        assert metrics.counters[_FAIL_FAST_COUNTER] == 2.0, (
+        assert metrics.counters[_FAIL_FAST_COUNTER] == pytest.approx(2.0), (
             f"two fail-fast events must count two, "
             f"found {metrics.counters[_FAIL_FAST_COUNTER]!r}"
         )

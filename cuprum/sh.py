@@ -50,7 +50,7 @@ from cuprum.context import scoped as scoped
 
 # Program must be imported at runtime rather than under TYPE_CHECKING
 # because test modules instantiate CommandResult with Program values directly.
-from cuprum.program import Program  # noqa: TC001
+from cuprum.program import Program  # ruff: ignore[typing-only-first-party-import]
 
 type _ArgValue = str | int | float | bool | Path
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
@@ -143,7 +143,7 @@ class CommandResult:
 
     @property
     def ok(self) -> bool:
-        """Return True when the command exited successfully."""
+        """True when the command exited successfully."""
         return self.exit_code == 0
 
 
@@ -168,24 +168,24 @@ class PipelineResult:
 
     @property
     def final(self) -> CommandResult:
-        """Return the CommandResult for the last stage."""
+        """The CommandResult for the last stage."""
         return self.stages[-1]
 
     @property
     def failure(self) -> CommandResult | None:
-        """Return the stage that triggered fail-fast termination, when any."""
+        """The stage that triggered fail-fast termination, when any."""
         if self.failure_index is None:
             return None
         return self.stages[self.failure_index]
 
     @property
     def ok(self) -> bool:
-        """Return True when all pipeline stages exited successfully."""
+        """True when all pipeline stages exited successfully."""
         return all(stage.ok for stage in self.stages)
 
     @property
     def stdout(self) -> str | None:
-        """Return the captured stdout from the last stage, when available."""
+        """The captured stdout from the last stage, when available."""
         return self.final.stdout
 
 
@@ -227,7 +227,7 @@ class ExecutionContext:
     tags: cabc.Mapping[str, object] | None = None
 
 
-class TimeoutExpired(TimeoutError):  # noqa: N818  # match subprocess.TimeoutExpired naming.
+class TimeoutExpired(TimeoutError):  # ruff: ignore[error-suffix-on-exception-name]  # match subprocess.TimeoutExpired naming.
     """Raised when command execution exceeds the configured timeout."""
 
     def __init__(
@@ -247,7 +247,7 @@ class TimeoutExpired(TimeoutError):  # noqa: N818  # match subprocess.TimeoutExp
 
     @property
     def stdout(self) -> str | bytes | None:
-        """Return captured stdout, mirroring subprocess.TimeoutExpired.output."""
+        """Captured stdout, mirroring subprocess.TimeoutExpired.output."""
         return self.output
 
 
@@ -295,7 +295,7 @@ class StdinInput:
         UnicodeEncodeError
             If ``text`` cannot be encoded with ``ctx.encoding`` under
             ``ctx.errors`` (for example, ``errors="strict"``).
-        """  # noqa: DOC502 - UnicodeEncodeError propagates from str.encode
+        """  # ruff: ignore[docstring-extraneous-exception] - UnicodeEncodeError propagates from str.encode
         if self.text is not None:
             return self.text.encode(ctx.encoding, ctx.errors)
         return self.data
@@ -339,13 +339,13 @@ class _DeprecatedOutputFlags(typ.TypedDict, total=False):
 
 def _resolve_pipeline_output(
     output: RunOutputOptions | None,
-    flags: cabc.Mapping[str, bool],
+    flags: _DeprecatedOutputFlags,
 ) -> RunOutputOptions:
     """Resolve pipeline output options, deprecating flat ``capture``/``echo``."""
-    # ``flags`` is typed loosely as a mapping because the type checker cannot
-    # yet propagate ``Unpack[_DeprecatedOutputFlags]`` kwargs; callers keep the
-    # precise ``TypedDict`` surface. Unknown keys are rejected here to preserve
-    # that strict keyword surface.
+    # Callers forward their ``Unpack[_DeprecatedOutputFlags]`` kwargs verbatim,
+    # so the parameter keeps the precise ``TypedDict`` surface. Unknown keys
+    # can still arrive at runtime (a ``TypedDict`` is open), and are rejected
+    # here to preserve the strict keyword surface.
     unknown = set(flags) - {"capture", "echo"}
     if unknown:
         joined = ", ".join(sorted(unknown))
@@ -459,7 +459,7 @@ class SafeCmd:
 
     @property
     def argv_with_program(self) -> tuple[str, ...]:
-        """Return argv prefixed with the program name."""
+        """Argv prefixed with the program name."""
         return (str(self.program), *self.argv)
 
     def __or__(self, other: SafeCmd | Pipeline) -> Pipeline:
@@ -472,7 +472,7 @@ class SafeCmd:
         output: RunOutputOptions | None = None,
         # ASYNC109: `timeout` is public API mirroring subprocess.run(timeout=…),
         # not a callee-owned deadline; keeping it is a deliberate design choice.
-        timeout: float | None = None,  # noqa: ASYNC109
+        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
     ) -> CommandResult:
@@ -502,7 +502,7 @@ class SafeCmd:
             If *timeout* elapses before the command completes.
         UnicodeEncodeError
             If ``stdin`` text cannot be encoded with the context's encoding.
-        """  # noqa: DOC502 - all propagate from allowlist, timeout, and stdin encode
+        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and stdin encode
         out = output or RunOutputOptions()
         ctx = context or ExecutionContext()
         _enforce_allowlist(self)
@@ -562,7 +562,7 @@ class SafeCmd:
             If *timeout* elapses before the command completes.
         UnicodeEncodeError
             If ``stdin`` text cannot be encoded with the context's encoding.
-        """  # noqa: DOC502 - all propagate from allowlist, timeout, and stdin encode
+        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and stdin encode
         return asyncio.run(
             self.run(output=output, timeout=timeout, context=context, stdin=stdin),
         )
@@ -610,7 +610,7 @@ class Pipeline:
         output: RunOutputOptions | None = None,
         # ASYNC109: `timeout` is public API mirroring subprocess.run(timeout=…),
         # not a callee-owned deadline; keeping it is a deliberate design choice.
-        timeout: float | None = None,  # noqa: ASYNC109
+        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]
         context: ExecutionContext | None = None,
         **deprecated_flags: typ.Unpack[_DeprecatedOutputFlags],
     ) -> PipelineResult:
@@ -650,7 +650,7 @@ class Pipeline:
         ValueError
             If ``output`` is combined with the deprecated ``capture``/``echo``
             flags.
-        """  # noqa: DOC502 - all propagate from allowlist, timeout, and output resolver
+        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and output resolver
         out = _resolve_pipeline_output(output, deprecated_flags)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         config = _prepare_pipeline_config(
@@ -691,7 +691,7 @@ class Pipeline:
         ValueError
             If ``output`` is combined with the deprecated ``capture``/``echo``
             flags.
-        """  # noqa: DOC502 - all propagate from allowlist, timeout, and output resolver
+        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and output resolver
         # Resolve here so the DeprecationWarning points at the caller rather
         # than at the internal ``self.run`` delegation.
         out = _resolve_pipeline_output(output, deprecated_flags)
@@ -728,7 +728,7 @@ def make(
     ------
     UnknownProgramError
         If ``program`` does not exist in ``catalogue``.
-    """  # noqa: DOC502 - UnknownProgramError propagates from catalogue.lookup
+    """  # ruff: ignore[docstring-extraneous-exception] - UnknownProgramError propagates from catalogue.lookup
     entry = catalogue.lookup(program)
 
     def builder(*args: _ArgValue, **kwargs: _ArgValue) -> SafeCmd:

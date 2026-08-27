@@ -36,7 +36,7 @@ import dataclasses as dc
 # dataclass annotations (``output_path: pth.Path`` and similar) remain
 # resolvable via ``typing.get_type_hints``; the TC003 suppression keeps ruff from
 # pushing it back into a type-checking block.
-import pathlib as pth  # noqa: TC003
+import pathlib as pth  # ruff: ignore[typing-only-standard-library-import]
 import sys
 import typing as typ
 

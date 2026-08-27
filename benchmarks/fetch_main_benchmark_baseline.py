@@ -24,7 +24,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 GITHUB_API_BASE_URL = "https://api.github.com"
-GITHUB_TOKEN_ENV_VAR = "GITHUB_TOKEN"  # noqa: S105 - env var name, not a credential
+GITHUB_TOKEN_ENV_VAR = "GITHUB_TOKEN"  # ruff: ignore[hardcoded-password-string] - env var name, not a credential
 MAIN_BASELINE_NOT_FOUND_EXIT_CODE = 3
 
 _CLI_DESCRIPTION = "Download the latest successful `main` benchmark baseline artefact."

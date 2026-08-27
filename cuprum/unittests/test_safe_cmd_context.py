@@ -148,7 +148,7 @@ def test_run_invokes_after_hooks_in_lifo_order(
 
     command = sh.make(ECHO)("-n", "hooks")
     # Nest scopes so the inner after hook runs before the outer (LIFO)
-    with scoped(  # noqa: SIM117 — nested scopes required for LIFO hook ordering test
+    with scoped(  # ruff: ignore[multiple-with-statements] — nested scopes required for LIFO hook ordering test
         ScopeConfig(allowlist=frozenset([ECHO]), after_hooks=(outer_hook,))
     ):
         with scoped(ScopeConfig(after_hooks=(inner_hook,))):

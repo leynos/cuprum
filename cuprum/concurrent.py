@@ -209,7 +209,7 @@ async def run_concurrent(
     ForbiddenProgramError
         If ``current_context().check_allowed()`` rejects a command before
         task creation.
-    """  # noqa: DOC502 - ForbiddenProgramError propagates from check_allowed
+    """  # ruff: ignore[docstring-extraneous-exception] - ForbiddenProgramError propagates from check_allowed
     cfg = config or ConcurrentConfig()
 
     if not commands:

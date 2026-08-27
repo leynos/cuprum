@@ -68,7 +68,7 @@ def _run_worker_thread(
                 repeat_count=1,
             ),
         )
-    except BaseException as exc:  # noqa: BLE001 - thread failures must surface.
+    except BaseException as exc:  # ruff: ignore[blind-except] - thread failures must surface.
         with shared.result_lock:
             shared.errors.append(exc)
     else:
@@ -96,7 +96,7 @@ def _run_worker_with_selector(
         )
         with race.result_lock:
             race.results.append(result)
-    except BaseException as exc:  # noqa: BLE001 - thread failures must surface.
+    except BaseException as exc:  # ruff: ignore[blind-except] - thread failures must surface.
         with race.result_lock:
             race.errors.append(exc)
 
@@ -111,7 +111,7 @@ def _run_selector_context(
     try:
         with selector(backend):
             pass
-    except BaseException as exc:  # noqa: BLE001 - thread failures must surface.
+    except BaseException as exc:  # ruff: ignore[blind-except] - thread failures must surface.
         with result_lock:
             errors.append(exc)
 
@@ -209,7 +209,7 @@ class _BaseBackendSelector(abc.ABC):
 
     @property
     def metrics_state(self) -> _tee_profile_worker_backend._MetricsState:
-        """Return the delegate metrics state used by worker result assembly."""
+        """The delegate metrics state used by worker result assembly."""
         return self._delegate.metrics_state
 
     @abc.abstractmethod

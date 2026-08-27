@@ -141,7 +141,7 @@ def _restore_rust_pump_state(state: _RustPumpState) -> None:
 
 
 def _complete_rust_pump(
-    completed: asyncio.Future[object],
+    completed: asyncio.Future[int],
     *,
     cleanup_complete: asyncio.Future[None],
     rust_writer_fd: int,

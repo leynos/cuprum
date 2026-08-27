@@ -197,9 +197,12 @@ def test_hyperfine_config_rejects_excessive_iterations(
 
 def test_pipeline_benchmark_config_coerces_string_paths() -> None:
     """Config path fields accept strings and are normalized to ``Path``."""
+    # The fields are declared as ``pth.Path`` because that is the normalised
+    # attribute type; the casts document the str inputs the constructor
+    # deliberately coerces.
     config = PipelineBenchmarkConfig(
-        output_path="dist/benchmarks/bench.json",  # type: ignore[arg-type]
-        worker_path="benchmarks/pipeline_worker.py",  # type: ignore[arg-type]
+        output_path=typ.cast("pth.Path", "dist/benchmarks/bench.json"),
+        worker_path=typ.cast("pth.Path", "benchmarks/pipeline_worker.py"),
         scenarios=(),
         warmup=0,
         runs=1,
@@ -258,7 +261,7 @@ def test_pipeline_benchmark_config_rejects_non_pathlike_output_path() -> None:
         match=r"output_path must be a pathlib\.Path or path-like value",
     ):
         PipelineBenchmarkConfig(
-            output_path=123,  # type: ignore[arg-type]
+            output_path=typ.cast("pth.Path", 123),
             worker_path=pth.Path("benchmarks/pipeline_worker.py"),
             scenarios=(),
             warmup=0,

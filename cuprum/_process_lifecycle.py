@@ -74,7 +74,7 @@ async def _terminate_process_with_wait(
         return False
     try:
         await asyncio.wait_for(wait_for_exit(), grace_period)
-    except asyncio.TimeoutError:  # noqa: UP041 - explicit asyncio timeout needed
+    except asyncio.TimeoutError:  # ruff: ignore[timeout-error-alias] - explicit asyncio timeout needed
         try:
             process.kill()
         except (ProcessLookupError, OSError):

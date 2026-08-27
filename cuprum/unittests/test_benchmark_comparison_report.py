@@ -148,7 +148,7 @@ def test_compare_candidate_backend_results_rejects_missing_rust_pair() -> None:
         "list[object]",
         _candidate_throughput_payload()["results"],
     )
-    throughput_payload = {
+    throughput_payload: dict[str, object] = {
         "results": [throughput_results[0]],
     }
 
