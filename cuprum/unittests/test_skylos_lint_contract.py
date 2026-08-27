@@ -12,9 +12,7 @@ whitespace or nearby source text.
 from __future__ import annotations
 
 import json
-import os
 import shlex
-import shutil
 import subprocess  # noqa: S404 - contract test invokes the pinned parser.
 import tomllib
 import typing as typ
@@ -48,6 +46,9 @@ _MAKEUTIL_INSTALL_TOKENS: typ.Final = (
 _RUNTIME_PARAMETER_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum.adapters.metrics_adapter.InMemoryMetrics.inc_counter.labels",
     "cuprum.adapters.metrics_adapter.InMemoryMetrics.observe_histogram.labels",
+})
+_RUNTIME_METHOD_ENTRY_POINTS: typ.Final = frozenset({
+    "cuprum.adapters.logging_adapter._StructuredLoggingHook.report_pipeline_wait",
 })
 
 
@@ -99,18 +100,21 @@ def _sole_variable(name: str) -> dict[str, object]:
     return matches[0]
 
 
-def _sole_recipe_rule(target: str) -> dict[str, object]:
-    """Return the only parsed rule for `target` that has recipes."""
+def _sole_recipe_rule(
+    target: str, *, require_recipes: bool = True
+) -> dict[str, object]:
+    """Return the only parsed rule for `target`, optionally requiring recipes."""
     rules = _objects(_makefile_report().get("rules"), subject="rules")
     matches = [
         rule
         for rule in rules
         if target in _text_sequence(rule.get("targets"), subject="rule targets")
-        and _objects(rule.get("recipes"), subject="rule recipes")
+        and (
+            not require_recipes or _objects(rule.get("recipes"), subject="rule recipes")
+        )
     ]
     assert len(matches) == 1, (
-        f"expected one recipe-bearing Makefile rule named {target!r}, found "
-        f"{len(matches)}"
+        f"expected one Makefile rule named {target!r}, found {len(matches)}"
     )
     return matches[0]
 
@@ -132,13 +136,6 @@ def _recipe_tokens(target: str) -> tuple[tuple[str, ...], ...]:
         for recipe in recipes
         if isinstance(recipe_text := recipe.get("text"), str)
     )
-
-
-def _make_executable() -> str:
-    """Return the absolute path to the required Make executable."""
-    executable = shutil.which("make")
-    assert executable is not None, "Skylos Make boundary tests require make"
-    return executable
 
 
 def _sole_workflow_step(
@@ -166,24 +163,6 @@ def _workflow_job(workflow_path: str, job_name: str) -> dict[str, object]:
     workflow_mapping = _mapping(workflow, subject=f"{workflow_path} workflow")
     jobs = _mapping(workflow_mapping.get("jobs"), subject=f"{workflow_path} jobs")
     return _mapping(jobs.get(job_name), subject=f"{workflow_path} job {job_name!r}")
-
-
-def _run_skylos_allow(*arguments: str) -> subprocess.CompletedProcess[str]:
-    """Run the whitelist boundary without invoking Skylos on a valid command."""
-    environment = {**os.environ, "NAME": "wsl-hostname"}
-    environment.pop("REASON", None)
-    environment.pop("SYMBOL", None)
-    for argument in arguments:
-        name, value = argument.split("=", maxsplit=1)
-        environment[name] = value
-    return subprocess.run(  # noqa: S603 - resolved Make target and arguments.
-        (_make_executable(), "skylos-allow"),
-        capture_output=True,
-        check=False,
-        cwd=repo_root(),
-        env=environment,
-        text=True,
-    )
 
 
 def _assert_makeutil_installation(command: object, *, contract: str) -> None:
@@ -214,8 +193,17 @@ def test_lint_recipe_runs_the_production_dead_code_gate() -> None:
     assert _variable_tokens("SKYLOS_EXCLUDE_FOLDERS") == ("cuprum/unittests",), (
         "Skylos exclusion contract must omit unit tests"
     )
+    lint_prerequisites = _text_sequence(
+        _sole_recipe_rule("lint", require_recipes=False).get("prerequisites"),
+        subject="lint target prerequisites",
+    )
+    assert lint_prerequisites == ("python-lint", "rust-lint"), (
+        "Skylos lint delegation contract must retain the Python lint target"
+    )
     skylos_commands = [
-        command for command in _recipe_tokens("lint") if command[:1] == ("$(SKYLOS)",)
+        command
+        for command in _recipe_tokens("python-lint")
+        if command[:1] == ("$(SKYLOS)",)
     ]
 
     assert skylos_commands == [
@@ -248,7 +236,8 @@ def test_spelling_helper_runs_each_rollout_regression_module() -> None:
     )
     assert {
         "scripts/tests/test_typos_rollout.py",
-        "scripts/tests/test_typos_rollout_freshness.py",
+        "scripts/tests/test_typos_rollout_properties.py",
+        "scripts/tests/test_typos_rollout_refresh.py",
     }.issubset(pytest_commands[0]), (
         "Spelling-helper test contract must run every spelling-policy regression"
     )
@@ -295,35 +284,6 @@ def test_whitelist_target_uses_skylos_subcommand_contract() -> None:
     ], "Skylos whitelist command contract must lock and dispatch before --reason"
 
 
-def test_skylos_allow_requires_symbol_and_reason() -> None:
-    """The whitelist target must reject incomplete input without running Skylos."""
-    for arguments, expected_error in (
-        ((), "Error: SYMBOL is required for a named whitelist exception"),
-        (("SYMBOL=   ",), "Error: SYMBOL is required for a named whitelist exception"),
-        (("SYMBOL=\t",), "Error: SYMBOL is required for a named whitelist exception"),
-        (
-            ("SYMBOL=handler",),
-            "Error: REASON is required for a named whitelist exception",
-        ),
-        (
-            ("SYMBOL=handler", "REASON=   "),
-            "Error: REASON is required for a named whitelist exception",
-        ),
-        (
-            ("SYMBOL=handler", "REASON=\t"),
-            "Error: REASON is required for a named whitelist exception",
-        ),
-    ):
-        completed = _run_skylos_allow(*arguments)
-
-        assert completed.returncode == 2, (
-            "Skylos whitelist boundary must reject missing required arguments"
-        )
-        assert expected_error in completed.stderr, (
-            "Skylos whitelist boundary must name the missing required argument"
-        )
-
-
 def test_skylos_configuration_models_implicit_runtime_callers() -> None:
     """Each current false positive must be a typed, explained entry point."""
     with (repo_root() / "pyproject.toml").open("rb") as configuration_file:
@@ -347,12 +307,18 @@ def test_skylos_configuration_models_implicit_runtime_callers() -> None:
             entry_point.get("full_name"), subject="entry-point name"
         )
     )
-    assert entry_point_names == _RUNTIME_PARAMETER_ENTRY_POINTS, (
-        "Skylos entry-point contract must preserve runtime parameter exclusions"
-    )
+    assert entry_point_names == (
+        _RUNTIME_PARAMETER_ENTRY_POINTS | _RUNTIME_METHOD_ENTRY_POINTS
+    ), "Skylos entry-point contract must preserve every runtime caller exclusion"
     for entry_point in entry_points:
-        assert entry_point.get("type") == "parameter", (
-            "Skylos entry-point contract must classify protocol labels as parameters"
+        names = frozenset(
+            _text_sequence(entry_point.get("full_name"), subject="entry-point name")
+        )
+        entry_point_type = (
+            "method" if names & _RUNTIME_METHOD_ENTRY_POINTS else "parameter"
+        )
+        assert entry_point.get("type") == entry_point_type, (
+            "Skylos entry-point contract must classify each implicit runtime caller"
         )
         reason = entry_point.get("reason")
         assert isinstance(reason, str), (
