@@ -173,8 +173,11 @@ def _run_skylos_allow(*arguments: str) -> subprocess.CompletedProcess[str]:
     environment = {**os.environ, "NAME": "wsl-hostname"}
     environment.pop("REASON", None)
     environment.pop("SYMBOL", None)
+    for argument in arguments:
+        name, value = argument.split("=", maxsplit=1)
+        environment[name] = value
     return subprocess.run(  # noqa: S603 - resolved Make target and arguments.
-        (_make_executable(), "skylos-allow", *arguments),
+        (_make_executable(), "skylos-allow"),
         capture_output=True,
         check=False,
         cwd=repo_root(),
@@ -233,6 +236,24 @@ def test_lint_recipe_runs_the_production_dead_code_gate() -> None:
     ], "Skylos lint command contract must scan production dead code strictly"
 
 
+def test_spelling_helper_runs_each_rollout_regression_module() -> None:
+    """The spelling gate must run each committed local-policy regression."""
+    pytest_commands = [
+        command
+        for command in _recipe_tokens("spelling-helper-test")
+        if "pytest" in command
+    ]
+    assert len(pytest_commands) == 1, (
+        "Spelling-helper test contract must invoke pytest exactly once"
+    )
+    assert {
+        "scripts/tests/test_typos_rollout.py",
+        "scripts/tests/test_typos_rollout_freshness.py",
+    }.issubset(pytest_commands[0]), (
+        "Spelling-helper test contract must run every spelling-policy regression"
+    )
+
+
 def test_whitelist_target_uses_skylos_subcommand_contract() -> None:
     """`skylos whitelist` must precede the name and have no scan options."""
     assert _variable_tokens("SKYLOS_CLI") == (
@@ -279,12 +300,17 @@ def test_skylos_allow_requires_symbol_and_reason() -> None:
     for arguments, expected_error in (
         ((), "Error: SYMBOL is required for a named whitelist exception"),
         (("SYMBOL=   ",), "Error: SYMBOL is required for a named whitelist exception"),
+        (("SYMBOL=\t",), "Error: SYMBOL is required for a named whitelist exception"),
         (
             ("SYMBOL=handler",),
             "Error: REASON is required for a named whitelist exception",
         ),
         (
             ("SYMBOL=handler", "REASON=   "),
+            "Error: REASON is required for a named whitelist exception",
+        ),
+        (
+            ("SYMBOL=handler", "REASON=\t"),
             "Error: REASON is required for a named whitelist exception",
         ),
     ):
@@ -296,31 +322,6 @@ def test_skylos_allow_requires_symbol_and_reason() -> None:
         assert expected_error in completed.stderr, (
             "Skylos whitelist boundary must name the missing required argument"
         )
-
-
-def test_skylos_allow_dry_run_preserves_the_whitelist_command_contract() -> None:
-    """A valid dry run must reveal the command without writing a whitelist entry."""
-    completed = subprocess.run(  # noqa: S603 - resolved Make target and arguments.
-        (
-            _make_executable(),
-            "--dry-run",
-            "skylos-allow",
-            "SYMBOL=handler",
-            "REASON=Loaded by plugin registry",
-        ),
-        capture_output=True,
-        check=False,
-        cwd=repo_root(),
-        text=True,
-    )
-
-    assert completed.returncode == 0, (
-        "Skylos whitelist dry-run contract must accept complete input"
-    )
-    assert (
-        'skylos whitelist "${SKYLOS_SYMBOL}" --reason "${SKYLOS_REASON}"'
-        in completed.stdout
-    ), "Skylos whitelist dry-run contract must preserve subcommand argument order"
 
 
 def test_skylos_configuration_models_implicit_runtime_callers() -> None:

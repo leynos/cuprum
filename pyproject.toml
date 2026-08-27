@@ -20,7 +20,7 @@ dev = [
     # Use the controlled v0.3.0 release tag; keep in step with
     # DF12_PYTHON_LINTS_REF in the Makefile.
     "df12-python-lints @ git+https://github.com/leynos/df12-python-lints.git@v0.3.0",
-    "hypothesis",
+    "hypothesis>=6.163.0,<7.0",
     "hypothesis-crosshair",
     "interrogate",
     # Constrained below pytest 9.1 until pytest-bdd supports its node-based
