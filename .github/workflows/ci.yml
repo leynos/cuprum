@@ -75,7 +75,7 @@ jobs:
       - name: Check formatting
         run: make check-fmt
 
-      - name: Run lint
+      - name: Run lint, including Skylos dead-code detection
         run: make lint
 
       # The Windows wheel build compiles this arm but without `-D warnings`,
@@ -112,6 +112,9 @@ jobs:
             python-label: '3.15a'
             allow-prereleases: true
             experimental: true
+    env:
+      MAKEUTIL_REVISION: '29fc5a1634ffbaa18a773eed9dff1b2838a45d9c'
+      MAKEUTIL_TOOLCHAIN: 'nightly-2026-05-28'
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -132,6 +135,16 @@ jobs:
             --component rustfmt \
             --component clippy
           rustup default 1.85.0
+
+      - name: Install Makefile parser
+        run: |
+          rustup toolchain install "${MAKEUTIL_TOOLCHAIN}" --profile minimal
+          RUSTFLAGS="-Zpolonius=next" cargo +"${MAKEUTIL_TOOLCHAIN}" install \
+            --git https://github.com/leynos/makeutil \
+            --rev "${MAKEUTIL_REVISION}" \
+            --locked \
+            --force \
+            makeutil
 
       - name: Install cargo-nextest
         run: |
@@ -222,6 +235,8 @@ jobs:
     env:
       CARGO_HTTP_MULTIPLEXING: 'false'
       CARGO_NET_RETRY: '5'
+      MAKEUTIL_REVISION: '29fc5a1634ffbaa18a773eed9dff1b2838a45d9c'
+      MAKEUTIL_TOOLCHAIN: 'nightly-2026-05-28'
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -254,6 +269,16 @@ jobs:
           key: cargo-coverage-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: |
             cargo-coverage-${{ runner.os }}-
+
+      - name: Install Makefile parser
+        run: |
+          rustup toolchain install "${MAKEUTIL_TOOLCHAIN}" --profile minimal
+          RUSTFLAGS="-Zpolonius=next" cargo +"${MAKEUTIL_TOOLCHAIN}" install \
+            --git https://github.com/leynos/makeutil \
+            --rev "${MAKEUTIL_REVISION}" \
+            --locked \
+            --force \
+            makeutil
 
       - name: Prepare Cargo dependencies
         run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml

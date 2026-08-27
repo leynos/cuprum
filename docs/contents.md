@@ -29,10 +29,11 @@ open each document.
 - [ADR-002: Additional Rust components](adr-002-additional-rust-components.md) -
   accepted decision for extending Rust coverage beyond the initial stream
   backend.
-- [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md) -
-  accepted decision for combining Ruff with Pylint under PyPy.
+- [ADR-003: Six-stage Python lint architecture][adr-003] -
+  accepted decision for Ruff and PyPy-backed Pylint, with an addendum covering
+  the later `interrogate`, DF12, Ambrleaks, and Skylos lint stages.
 - [ADR-004: Interrogate docstring-coverage gate][adr-004] - accepted decision
-  to enforce 100% docstring coverage as a third lint tier.
+  to enforce 100% docstring coverage through `interrogate`.
 - [ADR-005: Unified Rust availability probe][adr-005] - accepted decision to
   unify Rust availability probing behind a cached dispatch resolver.
 - [ADR-006: Context package split][adr-006] - accepted decision to split
@@ -52,6 +53,7 @@ open each document.
 - [Tee hot-path profiling baseline (2026-06-12)][tee-baseline] - measured
   hotspot verdicts from the tee profiling harness, gating ADR-002 Phase 2.
 
+[adr-003]: adr-003-two-tier-python-linting.md
 [adr-004]: adr-004-interrogate-docstring-gate.md
 [adr-005]: adr-005-unified-rust-availability-probe.md
 [adr-006]: adr-006-context-package-split.md

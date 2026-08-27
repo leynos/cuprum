@@ -87,13 +87,27 @@
   - Formatting is correct and validated.
 - **For Python files:**
   - **Testing:** Passes all relevant unit and behavioural tests (`make test`).
-  - **Linting:** Passes lint checks (`make lint`).
+  - **Linting:** Passes lint checks (`make lint`), including the blocking
+    Skylos production dead-code scan. Investigate every finding and remove
+    genuine dead code. For a verified false positive, first model an implicit
+    runtime caller with a precise, typed entry-point rule in
+    `[tool.skylos.dead_code]`; use `type = "method"` for methods and include
+    the fully qualified symbol plus a caller-specific reason. Only when an
+    entry-point rule cannot describe the boundary may a named allow-list
+    exception be added with
+    `make skylos-allow SYMBOL=handler REASON="Loaded by plugin registry"`.
+    Both `SYMBOL` and `REASON` are required and reject empty or
+    whitespace-only values. Use `SYMBOL` rather than `NAME` because WSL may
+    inject `NAME` with the hostname.
+    The target serializes allow-list updates with its ignored lock file, so
+    concurrent invocations do not overwrite one another.
   - **Formatting:** Adheres to formatting standards (`make check-fmt`; use
     `make fmt` to apply fixes).
   - **Typechecking:** Passes type checking (`make typecheck`).
 - For Rust files:
   - **Testing:** Passes relevant unit and behavioural tests (`make test`).
-  - **Linting:** Passes lint checks (`make lint`).
+  - **Linting:** Passes lint checks (`make lint`), including the blocking
+    Skylos production dead-code scan.
   - **Formatting:** Adheres to formatting standards (`make check-fmt`; use
     `make fmt` to apply fixes).
 - For Markdown files (`.md` only):

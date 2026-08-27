@@ -18,7 +18,7 @@ Repository = "https://github.com/leynos/cuprum"
 dev = [
     "crosshair-tool",
     "df12-python-lints @ git+https://github.com/leynos/df12-python-lints.git@755b26f5792f71b37f3a9e656aef714ed98b2c3b",
-    "hypothesis",
+    "hypothesis>=6.163.0,<7.0",
     "hypothesis-crosshair",
     "interrogate",
     # Constrained below pytest 9.1 until pytest-bdd supports its node-based
@@ -388,6 +388,25 @@ also_copy = [
 
 [tool.uv]
 package = true
+[tool.skylos]
+
+[tool.skylos.gate]
+strict = true
+
+[[tool.skylos.dead_code.entrypoints]]
+type = "parameter"
+full_name = [
+    "cuprum.adapters.metrics_adapter.InMemoryMetrics.inc_counter.labels",
+    "cuprum.adapters.metrics_adapter.InMemoryMetrics.observe_histogram.labels",
+]
+reason = "InMemoryMetrics preserves the MetricsCollector protocol signature while intentionally discarding labels."
+
+[[tool.skylos.dead_code.entrypoints]]
+type = "method"
+full_name = [
+    "cuprum.adapters.logging_adapter._StructuredLoggingHook.report_pipeline_wait",
+]
+reason = "Called structurally through _PipelineWaitReporter by _StageObservation.report_pipeline_wait."
 
 [build-system]
 requires = ["uv_build>=0.9.18,<0.13.0"]
