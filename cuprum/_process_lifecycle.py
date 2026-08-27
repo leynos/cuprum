@@ -31,7 +31,7 @@ import time
 import typing as typ
 
 from cuprum._pipeline_stage_streams import _get_stage_stream_fds
-from cuprum._pipeline_streams import _collect_pipe_results
+from cuprum._pipeline_stream_results import _collect_pipe_results
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_exit import _await_process_exit
 from cuprum._subprocess_context import _cwd_arg
@@ -196,7 +196,7 @@ async def _spawn_pipeline_processes(
     list[float],
 ]:
     """Start subprocesses for each stage and wire up capture tasks."""
-    from cuprum._pipeline_streams import _create_stage_capture_tasks
+    from cuprum._pipeline_stage_streams import _create_stage_capture_tasks
 
     if observations is None:
         observations = _build_spawn_observations(parts, config)

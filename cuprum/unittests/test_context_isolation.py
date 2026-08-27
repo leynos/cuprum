@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import threading
-import typing  # ruff: ignore[unconventional-import-alias] - This isolation test intentionally uses the direct module name.
+import typing as typ
 
 from cuprum.catalogue import ECHO, LS
 from cuprum.context import (
@@ -14,7 +14,7 @@ from cuprum.context import (
     scoped,
 )
 
-if typing.TYPE_CHECKING:
+if typ.TYPE_CHECKING:
     from cuprum.program import Program
 
 

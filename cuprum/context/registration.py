@@ -178,11 +178,38 @@ def allow(*programs: Program) -> AllowRegistration:
     return AllowRegistration(*programs)
 
 
+def _context_with_hook(
+    ctx: CuprumContext,
+    hook: cabc.Callable[..., typ.Any],
+    hook_type: typ.Literal["before", "after", "observe"],
+) -> CuprumContext:
+    """Derive a context carrying ``hook`` registered under ``hook_type``."""
+    # The tag and the callable's signature cannot be correlated by a type
+    # checker, so this boundary is deliberately gradual; the precisely typed
+    # public factories (before, after, observe) check each shape at their own
+    # signature instead.
+    match hook_type:
+        case "before":
+            return ctx.with_before_hook(hook)
+        case "after":
+            return ctx.with_after_hook(hook)
+        case "observe":
+            return ctx.with_observe_hook(hook)
+        case _:
+            msg = f"Unsupported hook type: {hook_type}"
+            raise ValueError(msg)
+
+
 class HookRegistration(_TokenRegistration):
     """Registration handle for hooks with detach and context-manager support.
 
     The token-restoration discipline is documented on
     :class:`_TokenRegistration`.
+
+    Prefer the :func:`before`, :func:`after`, and :func:`observe` factories:
+    each pairs one hook shape with its slot, so a mismatched hook is rejected
+    at the call site. Constructing the handle directly pairs the hook and the
+    tag by hand, and only the tag itself is validated — at runtime.
     """
 
     __slots__ = ("_hook", "_hook_type")
@@ -196,18 +223,7 @@ class HookRegistration(_TokenRegistration):
         super().__init__()
         self._hook = hook
         self._hook_type = hook_type
-        ctx = current_context()
-        match hook_type:
-            case "before":
-                new_ctx = ctx.with_before_hook(typ.cast("BeforeHook", hook))
-            case "after":
-                new_ctx = ctx.with_after_hook(typ.cast("AfterHook", hook))
-            case "observe":
-                new_ctx = ctx.with_observe_hook(typ.cast("ExecHook", hook))
-            case _:
-                msg = f"Unsupported hook type: {hook_type}"
-                raise ValueError(msg)
-        self._install(new_ctx)
+        self._install(_context_with_hook(current_context(), hook, hook_type))
 
 
 def before(hook: BeforeHook) -> HookRegistration:

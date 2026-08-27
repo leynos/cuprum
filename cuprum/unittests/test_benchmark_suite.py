@@ -286,7 +286,7 @@ def test_pipeline_benchmark_config_rejects_non_pathlike_output_path() -> None:
         pytest.param(
             {
                 "name": "pipeline-typo",
-                "backend": "pythno",  # type: ignore[arg-type]
+                "backend": "pythno",
                 "payload_bytes": 1024,
                 "stages": 2,
                 "with_line_callbacks": False,
@@ -297,7 +297,7 @@ def test_pipeline_benchmark_config_rejects_non_pathlike_output_path() -> None:
         pytest.param(
             {
                 "name": "pipeline-unhashable",
-                "backend": [],  # type: ignore[arg-type]
+                "backend": [],
                 "payload_bytes": 1024,
                 "stages": 2,
                 "with_line_callbacks": False,

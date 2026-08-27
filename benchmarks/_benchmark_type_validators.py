@@ -34,6 +34,8 @@ from __future__ import annotations
 import pathlib as pth
 import typing as typ
 
+type BackendName = typ.Literal["python", "rust"]
+
 _MAX_HYPERFINE_ITERATIONS: typ.Final = 1000
 _MIN_PIPELINE_STAGES: typ.Final = 2
 _VALID_BACKENDS: typ.Final = {"python", "rust"}
@@ -176,22 +178,38 @@ def _validate_stages(value: object) -> int:
     return stages
 
 
-def _validate_backend(value: object) -> str:
-    """Validate that a scenario backend is one of the supported values."""
-    # Check ``isinstance`` first and rely on short-circuit evaluation so the
-    # membership test never receives an unhashable object (for example ``[]``
-    # or ``{}``), which would raise ``TypeError`` instead of the ``ValueError``
-    # callers expect.
-    if not isinstance(value, str) or value not in _VALID_BACKENDS:
-        msg = f"backend must be one of {sorted(_VALID_BACKENDS)}, got {value!r}"
-        raise ValueError(msg)
-    return value
+def _validate_backend(value: object) -> BackendName:
+    """Validate that a scenario backend is one of the supported values.
+
+    Returns
+    -------
+    BackendName
+        The validated backend, narrowed to the supported literals.
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is not one of the supported backend names.
+    """
+    # Literal patterns compare with ``==``, so an unhashable value (for example
+    # ``[]`` or ``{}``) still reaches the ``ValueError`` callers expect rather
+    # than raising ``TypeError`` from a set-membership test. Each branch returns
+    # its own literal, so the result is a ``BackendName`` without a cast.
+    match value:
+        case "python":
+            return "python"
+        case "rust":
+            return "rust"
+        case _:
+            msg = f"backend must be one of {sorted(_VALID_BACKENDS)}, got {value!r}"
+            raise ValueError(msg)
 
 
 __all__ = [
     "_MAX_HYPERFINE_ITERATIONS",
     "_MIN_PIPELINE_STAGES",
     "_VALID_BACKENDS",
+    "BackendName",
     "_validate_backend",
     "_validate_bool",
     "_validate_hyperfine_iterations",

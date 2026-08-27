@@ -16,8 +16,6 @@ from cuprum.program import Program
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.events import ExecId, TimeoutMode
-
 
 def _python_builder(
     *, project_name: str = "adapter-tests"
@@ -34,72 +32,55 @@ def _python_builder(
     return sh.make(python_program, catalogue=catalogue), catalogue
 
 
+#: Field defaults shared by every event built with :func:`_make_exec_event`.
+#: ``exec_id`` is deliberately left ``None`` here; the factory mints a fresh
+#: token per call so the constant cannot leak one correlation id across events.
+_DEFAULT_EXEC_EVENT: typ.Final = ExecEvent(
+    phase="start",
+    program=Program("cat"),
+    argv=("cat",),
+    cwd=None,
+    env=None,
+    pid=None,
+    timestamp=0.0,
+    line=None,
+    exit_code=None,
+    duration_s=None,
+    tags={},
+)
+
+
 def _make_exec_event(
     *,
     phase: ExecPhase,
     overrides: cabc.Mapping[str, object] | None = None,
 ) -> ExecEvent:
-    """Build an ExecEvent with sensible test defaults."""
-    # Each event carries a fresh ``exec_id`` by default, mirroring real
-    # executions. Tests that span several lifecycle phases of one execution
-    # must thread a shared ``exec_id`` override; pass ``{"exec_id": None}``
-    # to build a legacy, uncorrelated event.
-    values: dict[str, object] = {
-        "phase": phase,
-        "program": "cat",
-        "argv": ("cat",),
-        "cwd": None,
-        "env": None,
-        "pid": None,
-        "timestamp": 0.0,
-        "line": None,
-        "exit_code": None,
-        "duration_s": None,
-        "tags": {},
-        "project": None,
-        "note": None,
-        "byte_count": None,
-        "operation": None,
-        "error_type": None,
-        "timeout_s": None,
-        "timeout_mode": None,
-        "exec_id": new_exec_id(),
-        "stage_index": None,
-        "stage_count": None,
-        "eof_grace_s": None,
-        "pending_readers": None,
-    }
+    """Build an ExecEvent with sensible test defaults.
+
+    Parameters
+    ----------
+    phase : ExecPhase
+        Lifecycle phase recorded on the event.
+    overrides : cabc.Mapping[str, object] or None, optional
+        Field values replacing the shared defaults. Unknown field names raise
+        :class:`TypeError` from :func:`dataclasses.replace`.
+
+    Returns
+    -------
+    ExecEvent
+        An event built from :data:`_DEFAULT_EXEC_EVENT`.
+
+    Notes
+    -----
+    Each event carries a fresh ``exec_id`` by default, mirroring real
+    executions. Tests that span several lifecycle phases of one execution must
+    thread a shared ``exec_id`` override; pass ``{"exec_id": None}`` to build a
+    legacy, uncorrelated event.
+    """
+    changes: dict[str, object] = {"phase": phase, "exec_id": new_exec_id()}
     if overrides is not None:
-        unknown = set(overrides) - {field.name for field in dc.fields(ExecEvent)}
-        if unknown:
-            msg = f"unknown ExecEvent override fields: {sorted(unknown)!r}"
-            raise ValueError(msg)
-        values.update(overrides)
-    return ExecEvent(
-        phase=values["phase"],
-        program=Program(typ.cast("str", values["program"])),
-        argv=typ.cast("tuple[str, ...]", values["argv"]),
-        cwd=typ.cast("Path | None", values["cwd"]),
-        env=typ.cast("cabc.Mapping[str, str] | None", values["env"]),
-        pid=typ.cast("int | None", values["pid"]),
-        timestamp=typ.cast("float", values["timestamp"]),
-        line=typ.cast("str | None", values["line"]),
-        exit_code=typ.cast("int | None", values["exit_code"]),
-        duration_s=typ.cast("float | None", values["duration_s"]),
-        tags=typ.cast("cabc.Mapping[str, object]", values["tags"]),
-        project=typ.cast("str | None", values["project"]),
-        note=typ.cast("str | None", values["note"]),
-        byte_count=typ.cast("int | None", values["byte_count"]),
-        operation=typ.cast("str | None", values["operation"]),
-        error_type=typ.cast("str | None", values["error_type"]),
-        timeout_s=typ.cast("float | None", values["timeout_s"]),
-        timeout_mode=typ.cast("TimeoutMode | None", values["timeout_mode"]),
-        exec_id=typ.cast("ExecId | None", values["exec_id"]),
-        stage_index=typ.cast("int | None", values["stage_index"]),
-        stage_count=typ.cast("int | None", values["stage_count"]),
-        eof_grace_s=typ.cast("float | None", values["eof_grace_s"]),
-        pending_readers=typ.cast("int | None", values["pending_readers"]),
-    )
+        changes.update(overrides)
+    return dc.replace(_DEFAULT_EXEC_EVENT, **changes)
 
 
 class _LabelRecordingCollector:

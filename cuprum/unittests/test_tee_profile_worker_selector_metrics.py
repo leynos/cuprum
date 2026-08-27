@@ -116,34 +116,6 @@ def test_worker_clock_drives_wall_time_and_selector_lock_wait(
     )
 
 
-def test_worker_accumulates_repeat_counters(tmp_path: pth.Path) -> None:
-    """Worker output counters accumulate over repeated measured runs."""
-    fixture = tmp_path / "fixture_repeat.b64"
-    fixture.write_text("YWJjZGVm\n")
-
-    result = run_tee_profile_worker(
-        TeeProfileWorkerConfig(
-            fixture_path=fixture,
-            stages=1,
-            mode="tee",
-            sink_kind="devnull",
-            with_line_callbacks=True,
-            backend="python",
-            repeat_count=3,
-        ),
-    )
-
-    assert result["status"] == "ok", f"expected worker status ok, got {result}"
-    assert result["exit_code"] == 0, f"expected worker exit code 0, got {result}"
-    assert result["captured_output_length"] == len(fixture.read_text()) * 3, (
-        "expected captured output length to accumulate across repeats, "
-        f"got {result['captured_output_length']}"
-    )
-    assert result["stdout_line_count"] == 3, (
-        f"expected line callbacks to accumulate across repeats, got {result}"
-    )
-
-
 def test_worker_resets_prepopulated_selector_metrics(
     tmp_path: pth.Path,
 ) -> None:

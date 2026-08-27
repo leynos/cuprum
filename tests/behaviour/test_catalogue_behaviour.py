@@ -184,7 +184,7 @@ def when_request_visible_settings(
     collections.abc.Mapping[str, ProjectSettings]
         The catalogue's visible project settings.
     """
-    return catalogue.visible_settings()
+    return catalogue.visible_settings
 
 
 @when(

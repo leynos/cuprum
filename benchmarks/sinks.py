@@ -78,7 +78,10 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
     ``__enter__``. ``__exit__`` closes the slave first, which causes the
     master-side ``os.read`` in ``_drain`` to raise ``OSError`` and return,
     then waits up to five seconds for the thread to finish. No lock is needed
-    because the two threads access disjoint file descriptors.
+    because the two threads access disjoint file descriptors, and
+    ``drained_bytes`` is only safe to read after ``__exit__`` has joined the
+    drainer thread; the join is the happens-after edge that publishes the
+    drainer's writes to the caller's thread.
     """
 
     def __init__(self, *, encoding: str, errors: str) -> None:
@@ -87,6 +90,19 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
         self._master_fd: int | None = None
         self._slave: typ.IO[str] | None = None
         self._thread: threading.Thread | None = None
+        self._drained_bytes = 0
+
+    @property
+    def drained_bytes(self) -> int:
+        """Report the number of bytes consumed by the drainer thread.
+
+        Returns
+        -------
+        int
+            The total byte count read from the PTY master. Only meaningful
+            after ``__exit__`` has joined the drainer thread.
+        """
+        return self._drained_bytes
 
     def __enter__(self) -> typ.IO[str]:
         """Open the pseudo-terminal and start draining the master side."""
@@ -139,7 +155,14 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
         return None
 
     def _drain(self) -> None:
-        """Continuously read and discard bytes from the PTY master."""
+        """Continuously read and discard bytes from the PTY master.
+
+        Notes
+        -----
+        Bytes consumed here are tallied in ``self._drained_bytes`` so tests
+        can verify the drainer actually consumed written data, rather than
+        merely inferring success from the absence of a hang.
+        """
         master_fd = self._master_fd
         if master_fd is None:
             return
@@ -150,6 +173,7 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
                 return
             if not chunk:
                 return
+            self._drained_bytes += len(chunk)
 
 
 @contextlib.contextmanager

@@ -19,12 +19,11 @@ import sys
 import time
 import typing as typ
 
-from cuprum._pipeline_streams import (
-    _create_pipe_tasks,
+from cuprum._pipeline_stream_results import (
     _gather_optional_text_tasks,
-    _PipelineRunConfig,
     _reconcile_pipe_tasks,
 )
+from cuprum._pipeline_streams import _create_pipe_tasks
 from cuprum._pipeline_types import (
     _ExecutionInvariantError,
     _PipelineOutputs,
@@ -40,6 +39,7 @@ from cuprum._process_lifecycle import (
 if typ.TYPE_CHECKING:
     import types
 
+    from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum._pipeline_wait import _PipelineWaitResult
     from cuprum.sh import SafeCmd
 

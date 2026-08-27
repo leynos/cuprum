@@ -40,7 +40,7 @@ def test_default_allowlist_contains_curated_programs() -> None:
     assert GIT in DEFAULT_CATALOGUE.allowlist, "Git missing from allowlist"
     assert RSYNC in DEFAULT_CATALOGUE.allowlist, "Rsync missing from allowlist"
     assert TAR in DEFAULT_CATALOGUE.allowlist, "Tar missing from allowlist"
-    assert CORE_OPS_PROJECT in DEFAULT_CATALOGUE.visible_settings(), (
+    assert CORE_OPS_PROJECT in DEFAULT_CATALOGUE.visible_settings, (
         "Core project metadata not exposed"
     )
     assert DEFAULT_CATALOGUE.is_allowed("ls"), "String program names should pass"
@@ -54,8 +54,8 @@ def test_unknown_programs_are_blocked_by_default() -> None:
 
 def test_visible_settings_surface_project_metadata() -> None:
     """Project metadata is available to downstream services."""
-    settings = DEFAULT_CATALOGUE.visible_settings()
-    assert settings is DEFAULT_CATALOGUE.visible_settings(), (
+    settings = DEFAULT_CATALOGUE.visible_settings
+    assert settings is DEFAULT_CATALOGUE.visible_settings, (
         "Visible settings should reuse the catalogue's read-only view"
     )
     project = settings[CORE_OPS_PROJECT]
@@ -70,13 +70,13 @@ def test_visible_settings_surface_project_metadata() -> None:
 
 def test_visible_settings_concurrent_first_access_reuses_view() -> None:
     """Concurrent first access should publish one read-only view instance."""
-    catalogue = ProgramCatalogue(projects=DEFAULT_CATALOGUE.visible_settings().values())
+    catalogue = ProgramCatalogue(projects=DEFAULT_CATALOGUE.visible_settings.values())
     barrier = threading.Barrier(8)
 
     def access_visible_settings(_: int) -> object:
         """Synchronize one worker before reading the catalogue view."""
         barrier.wait()
-        return catalogue.visible_settings()
+        return catalogue.visible_settings
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         settings = tuple(executor.map(access_visible_settings, range(8)))

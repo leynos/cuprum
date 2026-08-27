@@ -334,7 +334,9 @@ sys.stdout.write(data.upper())""",
         assert event.byte_count == 7, "byte count overrides should be forwarded"
         assert event.exec_id == exec_id, "exec_id overrides should be forwarded"
 
-        with pytest.raises(ValueError, match="unknown ExecEvent override fields"):
+        # ``dataclasses.replace`` rejects unknown field names for us, so the
+        # factory needs no hand-rolled validation of its override mapping.
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
             _make_exec_event(phase="start", overrides={"unknown": None})
 
     def test_logs_unhandled_phases(self, caplog: pytest.LogCaptureFixture) -> None:

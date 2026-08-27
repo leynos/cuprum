@@ -124,13 +124,6 @@ def pending_tasks() -> set[asyncio.Task[object]]:
     A timeout must not strand stream consumers or stdin writers; anything left
     here after a run has unwound is a leak.
 
-    A run creates tasks with genuinely different result types — stream
-    consumers yield ``str | None``, the stdin writer and observe hooks yield
-    ``None`` — and ``asyncio.Task`` is invariant in that parameter, so no
-    single precise element type exists. Callers only count what is left here
-    and never read a result, so ``object`` is the narrowest sound annotation;
-    the cast records that deliberately rather than widening to ``Any``.
-
     Returns
     -------
     set[asyncio.Task[object]]
@@ -138,8 +131,9 @@ def pending_tasks() -> set[asyncio.Task[object]]:
         already done.
     """
     current = asyncio.current_task()
-    tasks = typ.cast("set[asyncio.Task[object]]", asyncio.all_tasks())
-    return {task for task in tasks if task is not current and not task.done()}
+    return {
+        task for task in asyncio.all_tasks() if task is not current and not task.done()
+    }
 
 
 def wait_for_process_death(

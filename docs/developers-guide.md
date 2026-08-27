@@ -772,8 +772,7 @@ that turns the `ExecEvent` stream into OpenTelemetry-style spans. It depends
 only on the `Tracer` and `Span` protocols from
 `cuprum.adapters.tracing_protocols`, so any backend that implements them can be
 plugged in. `tracing_adapter` re-exports `Span` and `Tracer` as its public
-integration boundary. The legacy `cuprum.adapters._tracing_protocols` module is
-a compatibility re-export only and does not define a second protocol contract.
+integration boundary.
 `cuprum/adapters/tracing_memory.py` supplies
 `InMemoryTracer` and `InMemorySpan`, the reference doubles used by tests and
 examples: `InMemoryTracer` collects spans in memory and protects its span store
@@ -1029,8 +1028,7 @@ Runtime (`cuprum/`):
   stages.
 - `cuprum/_streams_pump.py` — the stream pump loop with backpressure.
 - `cuprum/adapters/tracing_protocols.py` — the canonical PEP 544 `Span`/
-  `Tracer` protocols. `tracing_adapter` re-exports both; `_tracing_protocols.py`
-  remains a compatibility re-export only.
+  `Tracer` protocols. `tracing_adapter` re-exports both.
 
 Benchmarks (`benchmarks/`):
 
@@ -2465,13 +2463,14 @@ against callee-owned deadlines and accidental blocking I/O.
 Two suppressions are scoped as narrowly as possible rather than disabling the
 family:
 
-- **Public API (`# noqa: ASYNC109`).** `SafeCmd.run` and `Pipeline.run` keep
-  their documented `timeout` parameter, which deliberately mirrors
-  `subprocess.run(timeout=...)`. `ASYNC109` would instead have the caller own
-  the deadline through `asyncio.timeout()`, but the parameter is public,
-  documented ergonomics, so each definition carries a per-line
-  `# noqa: ASYNC109` with a rationale comment rather than dropping the
-  parameter. Internal helpers do not take a `timeout` parameter (see
+- **Public API (`# ruff: ignore[async-function-with-timeout]`).** `SafeCmd.run`
+  and `Pipeline.run` keep their documented `timeout` parameter, which
+  deliberately mirrors `subprocess.run(timeout=...)`. `ASYNC109` would instead
+  have the caller own the deadline through `asyncio.timeout()`, but the
+  parameter is public, documented ergonomics, so each definition carries a
+  per-line `# ruff: ignore[async-function-with-timeout]` with a rationale
+  comment rather than dropping the parameter. Internal helpers do not take a
+  `timeout` parameter (see
   [ADR-007](adr-007-subprocess-execution-module-boundaries.md)); only the
   public surface is suppressed.
 - **Test scaffolding (`per-file-ignore`).** `ASYNC109` and `ASYNC240` are
@@ -2505,7 +2504,11 @@ match the signature it documents:
 `ruff==0.16.4` is pinned in the dev dependency group because the `DOC` rules
 are preview-only (`[tool.ruff]` sets `preview = true`). An unpinned Ruff could
 change which docstrings pass the gate and make it non-reproducible between
-machines and CI.
+machines and CI. The rule-name suppression comment form used throughout this
+codebase (`# ruff: ignore[rule-name]`, for example
+`# ruff: ignore[docstring-extraneous-exception]`) is itself preview-only in
+Ruff 0.16, so `preview = true` and the pinned Ruff version are load-bearing
+for every suppression in this codebase, not only for the `DOC` gate.
 
 `[tool.ruff.lint.pydoclint]` sets `ignore-one-line-docstrings = true`, so a
 single-line docstring needs no structured sections at all. This drives a
@@ -2529,7 +2532,7 @@ a justification naming where the exception comes from:
     ------
     ForbiddenProgramError
         If the program is not permitted by the active context allowlist.
-    """  # noqa: DOC502 - propagates from the allowlist check
+    """  # ruff: ignore[docstring-extraneous-exception] - propagates from allowlist
 ```
 
 Use only one such suppression per docstring.

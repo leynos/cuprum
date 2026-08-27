@@ -39,7 +39,6 @@
       'cuprum/_timeout_reporting.py',
       'cuprum/adapters/__init__.py',
       'cuprum/adapters/_support.py',
-      'cuprum/adapters/_tracing_protocols.py',
       'cuprum/adapters/logging_adapter.py',
       'cuprum/adapters/metrics_adapter.py',
       'cuprum/adapters/pump_metrics.py',

@@ -14,7 +14,6 @@ import argparse
 import json
 import logging
 import pathlib as pth
-import sys  # ruff: ignore[unused-import]  # re-exported for compatibility importers
 import typing as typ
 
 from benchmarks._validation import (
@@ -32,9 +31,7 @@ from benchmarks.benchmark_profile import (
     write_incompatible_profile_report,
 )
 from benchmarks.ratchet_ratio_extraction import (
-    _comparison_id_for_scenario,  # ruff: ignore[unused-import]  # re-exported for importers
     _extract_rust_python_ratios,
-    _validate_backend,  # ruff: ignore[unused-import]  # re-exported for importers
     _validate_matching_comparison_groups,
 )
 from benchmarks.ratchet_types import (

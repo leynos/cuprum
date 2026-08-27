@@ -115,6 +115,10 @@ extend-ignore = [
     "too-many-positional-arguments",
     "magic-value-comparison",
     "no-self-use",
+    # Test parameters fed by @pytest.mark.parametrize or Hypothesis @given
+    # are data rows, not API flags; pytest's signature-based binding rules
+    # out keyword-only parameters, so the boolean-trap rule does not apply.
+    "boolean-type-hint-positional-argument",
 ]
 # ASYNC109/ASYNC240 are ignored only for the two modules whose async
 # scaffolding polls a PID/marker file with asyncio-only helpers, so a
@@ -123,6 +127,12 @@ extend-ignore = [
 # and future async tests do not silently inherit the exemption.
 "cuprum/unittests/test_observe_stdin_early_close.py" = ["async-function-with-timeout", "blocking-path-method-in-async-function"]
 "tests/behaviour/_execution_runtime_support.py" = ["async-function-with-timeout", "blocking-path-method-in-async-function"]
+# Same rationale as above: the teardown test polls a cross-process marker
+# file that no asyncio primitive can observe.
+"cuprum/unittests/test_pipeline_teardown_cancellation.py" = ["blocking-path-method-in-async-function"]
+# Test-support conftest outside the test globs: stub protocol methods need
+# instance-method shape (OpenerDirector) and asserts are test assertions.
+"scripts/tests/conftest.py" = ["assert", "no-self-use"]
 "cuprum/unittests/*_test_helpers.py" = ["assert", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
 "cuprum/unittests/*_support.py" = ["assert", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
 "tests/steps/*.py" = ["assert", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]

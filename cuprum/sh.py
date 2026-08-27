@@ -22,6 +22,7 @@ from cuprum._observability import (
     _resolve_env_overlay,
     _wait_for_exec_hook_tasks,
 )
+from cuprum._pipeline_config import _prepare_pipeline_config
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
     _collect_hooks,
@@ -31,7 +32,6 @@ from cuprum._pipeline_internals import (
     _run_pipeline,
     _StageObservation,
 )
-from cuprum._pipeline_streams import _prepare_pipeline_config
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum._subprocess_execution import (
@@ -48,9 +48,8 @@ from cuprum.context import current_context as current_context
 from cuprum.context import observe as observe
 from cuprum.context import scoped as scoped
 
-# Program must be imported at runtime rather than under TYPE_CHECKING
-# because test modules instantiate CommandResult with Program values directly.
-from cuprum.program import Program  # ruff: ignore[typing-only-first-party-import]
+if typ.TYPE_CHECKING:
+    from cuprum.program import Program
 
 type _ArgValue = str | int | float | bool | Path
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]

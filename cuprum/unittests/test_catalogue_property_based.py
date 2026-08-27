@@ -105,7 +105,7 @@ def test_catalogue_indexes_match_generated_ownership(
         assert catalogue.project_for(program) is project, (
             "project_for must agree with lookup"
         )
-    visible = catalogue.visible_settings()
+    visible = catalogue.visible_settings
     assert dict(visible) == {project.name: project for project in projects}, (
         "visible_settings must expose every project by name"
     )

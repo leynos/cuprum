@@ -32,7 +32,7 @@ Work that belongs to neighbouring modules rather than here: terminating and
 cleaning up processes lives in ``cuprum._process_lifecycle``
 (``_terminate_pipeline_remaining_stages``, ``_cleanup_pipeline_on_error``),
 collecting the inter-stage pipe task outcomes lives in
-``cuprum._pipeline_streams`` (``_collect_pipe_results``,
+``cuprum._pipeline_stream_results`` (``_collect_pipe_results``,
 ``_surface_unexpected_pipe_failures``), and the shape of what the fail-fast
 path publishes lives in ``cuprum._pipeline_wait_records``. This module owns
 only the waiting, the ordering decision, and when each report fires.
@@ -51,7 +51,7 @@ import dataclasses as dc
 import typing as typ
 from time import perf_counter
 
-from cuprum._pipeline_streams import (
+from cuprum._pipeline_stream_results import (
     _collect_pipe_results,
     _surface_unexpected_pipe_failures,
 )

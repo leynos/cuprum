@@ -22,15 +22,6 @@ import os
 import typing as typ
 
 from cuprum._backend import StreamBackend, get_stream_backend
-from cuprum._pipeline_config import (
-    _PipelineRunConfig as _PipelineRunConfig,
-)
-from cuprum._pipeline_config import (
-    _prepare_pipeline_config as _prepare_pipeline_config,
-)
-from cuprum._pipeline_stage_streams import (
-    _create_stage_capture_tasks as _create_stage_capture_tasks,
-)
 from cuprum._pipeline_stream_fds import (
     _BlockingModeGuard,
     _close_rust_writer_fd,
@@ -38,24 +29,6 @@ from cuprum._pipeline_stream_fds import (
     _pause_reader_transport,
     _resume_reader_transport,
     _suppressed_teardown_failure,
-)
-from cuprum._pipeline_stream_results import (
-    _cancel_stream_tasks as _cancel_stream_tasks,
-)
-from cuprum._pipeline_stream_results import (
-    _collect_pipe_results as _collect_pipe_results,
-)
-from cuprum._pipeline_stream_results import (
-    _flatten_stream_tasks as _flatten_stream_tasks,
-)
-from cuprum._pipeline_stream_results import (
-    _gather_optional_text_tasks as _gather_optional_text_tasks,
-)
-from cuprum._pipeline_stream_results import (
-    _reconcile_pipe_tasks as _reconcile_pipe_tasks,
-)
-from cuprum._pipeline_stream_results import (
-    _surface_unexpected_pipe_failures as _surface_unexpected_pipe_failures,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
 from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
@@ -194,6 +167,13 @@ async def _run_rust_pump_with_blocking_fds(
         await asyncio.shield(native_pump)
     except asyncio.CancelledError:
         state.was_cancelled = True
+        # Re-raise immediately without awaiting cleanup_complete: a cancelled
+        # task is expected to unwind promptly, and the native worker may
+        # still be blocked in the executor thread, so waiting here could
+        # stall cancellation indefinitely. Cleanup still happens — the
+        # done_callback registered on native_pump above runs independently
+        # of this await and restores state once the executor future
+        # settles, whenever that is.
         raise
     except BaseException:
         await asyncio.shield(cleanup_complete)

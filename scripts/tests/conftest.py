@@ -114,13 +114,13 @@ def _patch_https_opener(
     class _StubOpener:
         """Minimal stand-in for ``urllib.request.OpenerDirector``."""
 
-        def open(self, *args: object, **kwargs: object) -> object:  # ruff: ignore[no-self-use] - opener protocol requires an instance method
+        def open(self, *args: object, **kwargs: object) -> object:
             """Delegate to the supplied response factory."""
             return open_response(*args, **kwargs)
 
     def build_opener(*handlers: object) -> _StubOpener:
         """Return the stub opener once the redirect policy is confirmed."""
-        assert any(  # ruff: ignore[assert] - fixture validates HTTPS redirect policy
+        assert any(
             isinstance(handler, refresh._HttpsOnlyRedirectHandler)
             for handler in handlers
         ), "HTTPS refresh must install the HTTPS-only redirect handler"

@@ -120,7 +120,7 @@ class ProgramCatalogue:
         self._projects = self._index_projects(projects)
         self._program_to_project = self._index_programs(self._projects)
         self._allowlist = frozenset(self._program_to_project)
-        self._visible_settings_cache: cabc.Mapping[str, ProjectSettings] = (
+        self._visible_settings_cache: MappingProxyType[str, ProjectSettings] = (
             MappingProxyType(self._projects)
         )
 
@@ -190,24 +190,10 @@ class ProgramCatalogue:
         """  # ruff: ignore[docstring-extraneous-exception] - UnknownProgramError propagates from lookup
         return self.lookup(program).project
 
+    @property
     def visible_settings(self) -> cabc.Mapping[str, ProjectSettings]:
-        """Expose project metadata to downstream services.
-
-        Returns
-        -------
-        Mapping[str, ProjectSettings]
-            A cached read-only mapping of project name to its settings.
-
-        Raises
-        ------
-        TypeError
-            If an internal invariant replaces the cached read-only view.
-        """
-        settings_view = self._visible_settings_cache
-        if not isinstance(settings_view, MappingProxyType):
-            msg = "visible settings cache must remain a read-only mapping proxy"
-            raise TypeError(msg)
-        return settings_view
+        """A cached read-only mapping of project name to its settings."""
+        return self._visible_settings_cache
 
     @staticmethod
     def _index_projects(

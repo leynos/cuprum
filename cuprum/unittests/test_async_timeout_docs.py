@@ -106,7 +106,7 @@ def users_tracing_section(users_guide: str) -> str:
         "ASYNC240",
         "SafeCmd.run",
         "Pipeline.run",
-        "# noqa: ASYNC109",
+        "# ruff: ignore[async-function-with-timeout]",
         "subprocess.run(timeout=...)",
         "per-file-ignore",
         "pyproject.toml",
@@ -121,8 +121,9 @@ def test_developers_guide_documents_async_policy(
     """The developers' guide must document the Ruff ASYNC policy and suppressions.
 
     Covers why the family is selected, the narrowly scoped public-API
-    ``# noqa: ASYNC109`` suppressions on ``SafeCmd.run`` / ``Pipeline.run``, and
-    the test-scaffolding per-file-ignore for ``ASYNC109`` / ``ASYNC240``.
+    ``# ruff: ignore[async-function-with-timeout]`` suppressions on
+    ``SafeCmd.run`` / ``Pipeline.run``, and the test-scaffolding
+    per-file-ignore for ``ASYNC109`` / ``ASYNC240``.
     """
     assert term in async_policy_section, f"Missing documentation clause: '{term}'"
 

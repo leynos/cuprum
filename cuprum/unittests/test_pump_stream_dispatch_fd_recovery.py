@@ -107,7 +107,6 @@ class TestPumpStreamFdRecovery:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """ValueError during writer setup should roll back and use Python pumping."""
-        _ = self
         monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
         set_rust_availability_for_testing(is_available=True)
         resume_calls: list[str] = []

@@ -13,7 +13,7 @@ from benchmarks._validation import (
     _require_non_empty_string,
     _require_positive_float,
 )
-from benchmarks.ratchet_rust_performance import (
+from benchmarks.ratchet_ratio_extraction import (
     _comparison_id_for_scenario,
     _validate_backend,
 )

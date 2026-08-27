@@ -21,14 +21,30 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from cuprum.context import CuprumContext
-    from cuprum.sh import ExecutionContext
+    from cuprum.sh import CommandResult, ExecutionContext, TimeoutExpired
 
 
-def _sh_module() -> typ.Any:  # ruff: ignore[any-type] — returns module, typed access via attributes
+class _ShModule(typ.Protocol):
+    """Structural view of the ``cuprum.sh`` members reached lazily.
+
+    Only the two constructors below are accessed through :func:`_sh_module`
+    (``CommandResult`` in ``cuprum._subprocess_execution`` and
+    ``TimeoutExpired`` in ``cuprum._subprocess_timeout``), so naming them
+    keeps the lazy-import shim typed without reintroducing the import cycle.
+    """
+
+    CommandResult: type[CommandResult]
+    TimeoutExpired: type[TimeoutExpired]
+
+
+def _sh_module() -> _ShModule:
     """Lazy import sh module to avoid circular imports."""
     from cuprum import sh
 
-    return sh
+    # ty models module attributes as read-only, so a module object never
+    # matches a protocol structurally; the cast records the checked surface
+    # instead of widening the return type to ``Any``.
+    return typ.cast("_ShModule", sh)
 
 
 def _current_context() -> CuprumContext:

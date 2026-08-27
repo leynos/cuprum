@@ -111,7 +111,6 @@ class TestRustPumpSettlement:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Cancellation should defer restoration and resumption to completion."""
-        _ = self
         asyncio.run(_cancel_before_native_worker_settles(monkeypatch))
 
     def test_run_rust_pump_suppresses_writer_close_oserror(
@@ -119,7 +118,6 @@ class TestRustPumpSettlement:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A successful native pump should suppress writer-close I/O failures."""
-        _ = self
         close_writer = mock.AsyncMock(side_effect=OSError("writer closed"))
 
         def close_duplicate(reader_fd: int, writer_fd: int) -> int:

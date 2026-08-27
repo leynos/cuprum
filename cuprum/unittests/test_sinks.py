@@ -67,12 +67,6 @@ def test_text_blackhole_write_returns_char_count() -> None:
     assert bh.write("x" * 1000) == 1000
 
 
-def test_text_blackhole_flush_is_a_noop() -> None:
-    """TextBlackhole.flush completes without raising."""
-    bh = sinks.TextBlackhole()
-    bh.flush()  # must not raise
-
-
 def test_text_blackhole_write_rejects_non_str() -> None:
     """TextBlackhole.write raises TypeError for non-str input."""
     bh = sinks.TextBlackhole()
@@ -103,11 +97,15 @@ def test_pty_blackhole_enter_returns_writable_stream() -> None:
 )
 def test_pty_blackhole_drains_written_bytes() -> None:
     """Data written to the PtyBlackhole slave FD is consumed by the drainer."""
+    # Deliberately no newline: the PTY line discipline expands "\n" to "\r\n"
+    # on write, which would make the drained byte count platform-dependent.
+    payload = "hello from test"
     bh = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
     with bh as stream:
-        stream.write("hello from test\n")
+        stream.write(payload)
         stream.flush()
-    # If __exit__ completes without hanging the drainer consumed the data.
+    # __exit__ joins the drainer thread, so drained_bytes is safe to read here.
+    assert bh.drained_bytes == len(payload.encode("utf-8"))
 
 
 @pytest.mark.skipif(
