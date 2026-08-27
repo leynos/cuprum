@@ -1,4 +1,5 @@
 """Process termination and the shared cancellation-safe cleanup primitive.
+
 Termination sends SIGTERM, waits out a grace period, then escalates to
 SIGKILL and reaps the exit, whether for one process
 (``_terminate_process``, ``_terminate_process_with_wait``) or a whole
@@ -21,6 +22,7 @@ The pipeline waiter decides when fail-fast teardown is necessary; this module
 owns the subprocess handles and executes that decision alongside timeout and
 error cleanup.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -37,6 +39,7 @@ from cuprum.context import current_context, resolve_env
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
     from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum.sh import SafeCmd
 

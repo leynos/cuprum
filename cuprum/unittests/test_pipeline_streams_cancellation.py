@@ -164,6 +164,38 @@ def test_cancellation_restores_descriptors_only_after_worker_returns(
     )
 
 
+def _assert_cancelled_pump_failure_reported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Assert that a cancelled pump failure was retrieved and recorded."""
+    unretrieved = [
+        record.getMessage()
+        for record in caplog.records
+        if "never retrieved" in record.getMessage()
+    ]
+    assert not unretrieved, (
+        "the pump's failure must be retrieved from the future, but asyncio "
+        f"reported it as unhandled: {unretrieved}"
+    )
+    reported = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("cuprum_action") == "rust_pump_failed_after_cancel"
+    ]
+    assert len(reported) == 1, (
+        "a pump failure masked by cancellation must be recorded exactly once, "
+        f"found {len(reported)}"
+    )
+    exc_info = reported[0].exc_info
+    assert exc_info is not None, "the record must attach the pump exception"
+    assert isinstance(exc_info[1], OSError), (
+        f"the attached exception must be the pump's own, found {exc_info[1]!r}"
+    )
+    assert str(exc_info[1]) == "the pump failed while the hop was being cancelled", (
+        f"the attached exception must carry the pump's message, found {exc_info[1]!r}"
+    )
+
+
 def test_a_failing_pump_on_a_cancelled_hop_reports_the_cancellation(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -223,29 +255,4 @@ def test_a_failing_pump_on_a_cancelled_hop_reports_the_cancellation(
         f"because its 5s wait timed out; observed waits {release_waits}"
     )
     assert "restored" in events, "a failing pump must still restore the FDs"
-    unretrieved = [
-        record.getMessage()
-        for record in caplog.records
-        if "never retrieved" in record.getMessage()
-    ]
-    assert not unretrieved, (
-        "the pump's failure must be retrieved from the future, but asyncio "
-        f"reported it as unhandled: {unretrieved}"
-    )
-    reported = [
-        record
-        for record in caplog.records
-        if record.__dict__.get("cuprum_action") == "rust_pump_failed_after_cancel"
-    ]
-    assert len(reported) == 1, (
-        "a pump failure masked by cancellation must be recorded exactly once, "
-        f"found {len(reported)}"
-    )
-    exc_info = reported[0].exc_info
-    assert exc_info is not None, "the record must attach the pump exception"
-    assert isinstance(exc_info[1], OSError), (
-        f"the attached exception must be the pump's own, found {exc_info[1]!r}"
-    )
-    assert str(exc_info[1]) == "the pump failed while the hop was being cancelled", (
-        f"the attached exception must carry the pump's message, found {exc_info[1]!r}"
-    )
+    _assert_cancelled_pump_failure_reported(caplog)
