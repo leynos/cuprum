@@ -2142,11 +2142,13 @@ Table 1: modules gated on the compiled extension
 
 | Module | Covers |
 | --- | --- |
-| `test_rust_streams.py` | pump and consume entry points, including the four `TestRustConsumeStream` replacement scenarios that are the end-to-end regression coverage for `#105` |
+| `test_rust_streams.py` | the Rust-backed pump entry point |
+| `test_rust_consume_stream.py` | the Rust-backed consume entry point, including the four replacement scenarios that are the end-to-end regression coverage for `#105` and the I/O-error boundary case |
 | `test_rust_streams_boundary_property.py` | randomized payloads across the boundary |
 | `test_rust_extension.py` | extension availability and module surface |
 | `test_rust_splice.py` | the Linux `splice` fast path |
-| `test_rust_errno.py` | `OSError.errno` and subclass selection across the boundary |
+| `test_rust_errno.py` | POSIX `OSError.errno` conversion and subclass selection across the boundary |
+| `test_rust_errno_windows.py` | Windows `winerror` conversion and the `errno` and subclass values CPython derives from it |
 | `test_backend.py` | the extension-dependent backend-selection cases |
 | `test_extension_requirement_guard.py` | the fail-loud guard itself |
 | `tests/behaviour/test_rust_streams_behaviour.py` | the consumer-facing pump and consume scenarios |

@@ -61,7 +61,10 @@ def _node_references_symbol(node: ast.AST, symbol: str) -> bool:
         case ast.alias(name=name, asname=asname):
             return symbol in {name, asname}
         case ast.Call(
-            func=ast.Name(id="getattr"),
+            func=(
+                ast.Name(id="getattr")
+                | ast.Attribute(value=ast.Name(id="builtins"), attr="getattr")
+            ),
             args=[_, ast.Constant(value=str() as attribute), *_],
         ):
             return attribute == symbol
@@ -77,6 +80,10 @@ def _node_references_symbol(node: ast.AST, symbol: str) -> bool:
         ("rust_consume_stream(reader_fd)\n", "referenced"),
         ("streams.rust_consume_stream(reader_fd)\n", "referenced"),
         ('getattr(streams, "rust_consume_stream")(reader_fd)\n', "referenced"),
+        (
+            'builtins.getattr(streams, "rust_consume_stream")(reader_fd)\n',
+            "referenced",
+        ),
         ("from cuprum._streams_rs import rust_consume_stream\n", "referenced"),
         ("if rust_consume_stream(\n", "invalid"),
     ],

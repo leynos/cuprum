@@ -176,7 +176,8 @@ def test_windows_failures_carry_the_native_code_as_winerror(
     rust_streams : ModuleType
         The compiled Rust streams extension module.
     write_only_handle : int
-        A native Windows ``HANDLE`` opened for writing, which cannot be read.
+        A C runtime file descriptor returned by ``os.open``, opened for
+        writing and unable to be read.
 
     Notes
     -----

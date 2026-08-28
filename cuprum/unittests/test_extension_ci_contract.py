@@ -23,6 +23,7 @@ than assumed at the boundary.
 from __future__ import annotations
 
 import functools
+import shlex
 import typing as typ
 
 import pytest
@@ -96,11 +97,40 @@ def _run_scripts() -> cabc.Iterator[tuple[str, str]]:
                 yield job_name, script
 
 
+def _script_runs_command(script: str, command: str) -> bool:
+    """Return whether *script* executes *command* as leading shell tokens."""
+    expected = tuple(shlex.split(command))
+    separators = frozenset({"&", "&&", ";", "|", "||"})
+
+    for line in script.replace("\\\n", " ").splitlines():
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        tokens = list(lexer)
+        segment_start = 0
+
+        for index, token in enumerate([*tokens, ";"]):
+            if token not in separators:
+                continue
+            segment = tokens[segment_start:index]
+            while (
+                segment
+                and "=" in segment[0]
+                and segment[0].split("=", maxsplit=1)[0].isidentifier()
+            ):
+                segment.pop(0)
+            if tuple(segment[: len(expected)]) == expected:
+                return True
+            segment_start = index + 1
+
+    return False
+
+
 def _first_step_running(command: str, *, job_name: str) -> tuple[int, str]:
     """Return the position and script of the first step running `command`."""
     for index, step in enumerate(_job_steps(job_name)):
         script = _script_of(step)
-        if script is not None and command in script:
+        if script is not None and _script_runs_command(script, command):
             return index, script
     pytest.fail(f"no step in the {job_name!r} job runs {command!r}")
 
@@ -121,10 +151,35 @@ def test_the_ci_job_builds_the_extension_before_running_the_gated_tests() -> Non
     )
 
 
+@pytest.mark.parametrize(
+    ("script", "command", "expected"),
+    [
+        ("make develop", "make develop", True),
+        ("make develop MATURIN_DEVELOP_FLAGS=--release", "make develop", True),
+        ("TOOL=rust make develop", "make develop", True),
+        ("make " + "\\" + "\n" + "develop", "make develop", True),
+        ("# make develop", "make develop", False),
+        ('echo "make develop"', "make develop", False),
+        ("maturin develop", "maturin develop", True),
+        ("# maturin develop", "maturin develop", False),
+    ],
+)
+def test_script_runs_command_ignores_comments_and_non_commands(
+    script: str,
+    command: str,
+    *,
+    expected: bool,
+) -> None:
+    """The workflow matcher detects executable commands, not text mentions."""
+    assert _script_runs_command(script, command) is expected
+
+
 def test_only_boundary_jobs_build_the_extension() -> None:
     """Only jobs isolated from the full suite may install the extension."""
     builders = {
-        job_name for job_name, script in _run_scripts() if "make develop" in script
+        job_name
+        for job_name, script in _run_scripts()
+        if _script_runs_command(script, "make develop")
     }
 
     assert builders == {"benchmark-ratchet", "extension-tests"}, (
@@ -156,7 +211,9 @@ def test_no_ci_step_invokes_maturin_develop_directly() -> None:
     something nobody maintains.
     """
     offenders = sorted({
-        job_name for job_name, script in _run_scripts() if "maturin develop" in script
+        job_name
+        for job_name, script in _run_scripts()
+        if _script_runs_command(script, "maturin develop")
     })
 
     assert not offenders, (
