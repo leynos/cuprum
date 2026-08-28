@@ -82,7 +82,7 @@ TY_VERSION ?= 0.0.74
 TY = $(UV_RUN_ENV) uv tool run --from $(call shell_quote,ty==$(TY_VERSION)) ty
 PYTEST = $(UV_RUN_ENV) uv run pytest
 PYLINT_PYTHON ?= pypy
-PYLINT_TARGETS ?= benchmarks conftest.py cuprum tests
+PYLINT_TARGETS ?= benchmarks conftest.py cuprum scripts tests
 PYLINT_PYPY_SHIM_REF ?= 726d09f968b4d729ee4b29c71fc732e744854f3b
 PYLINT_PYPY_SHIM = git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)
 # Pin pylint itself: the shim ref is pinned but pylint is a floating
@@ -229,7 +229,9 @@ spelling-helper-test: build spelling-config ## Validate the shared spelling-poli
 		python -m pytest scripts/tests/test_typos_rollout.py \
 		scripts/tests/test_typos_rollout_properties.py \
 		scripts/tests/test_typos_rollout_render_properties.py \
+		scripts/tests/test_typos_rollout_freshness_properties.py \
 		scripts/tests/test_typos_rollout_refresh.py \
+		scripts/tests/test_typos_rollout_degradation.py \
 		--cov=generate_typos_config --cov=typos_rollout \
 		--cov=typos_rollout_cache --cov=typos_rollout_dictionary \
 		--cov=typos_rollout_refresh --cov-fail-under=90

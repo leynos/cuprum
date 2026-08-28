@@ -20,18 +20,27 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-import typos_rollout_cache
-import typos_rollout_dictionary
+from typos_rollout_cache import (
+    CacheTargets as _CacheTargets,
+)
+from typos_rollout_cache import (
+    RefreshResult,
+)
+from typos_rollout_cache import (
+    RemoteResponse as _RemoteResponse,
+)
+from typos_rollout_cache import (
+    atomic_write as _atomic_write,
+)
+from typos_rollout_dictionary import (
+    load_dictionary as _load_dictionary,
+)
+from typos_rollout_dictionary import (
+    parse_dictionary_text as _parse_dictionary_text,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-RefreshResult = typos_rollout_cache.RefreshResult
-_CacheTargets = typos_rollout_cache.CacheTargets
-_RemoteResponse = typos_rollout_cache.RemoteResponse
-_atomic_write = typos_rollout_cache.atomic_write
-_parse_dictionary_text = typos_rollout_dictionary.parse_dictionary_text
-_load_dictionary = typos_rollout_dictionary.load_dictionary
 
 # Private: an HTTP transport detail of this adapter, not part of the
 # refresh policy's public surface.
@@ -236,7 +245,7 @@ class _HttpsOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
         # ``HTTPRedirectHandler.redirect_request`` parameter types.
         redirected = super().redirect_request(  # pyright: ignore[reportArgumentType]
             req,
-            *args,  # ty: ignore[invalid-argument-type]
+            *args,  # ty: ignore[invalid-argument-type] - override widens to *args: object
             **kwargs,
         )
         if redirected is None:
