@@ -35,7 +35,6 @@ class RemoteResponse(typ.Protocol):
 
     def read(self, limit: int | None = None, /) -> bytes:
         """Read at most *limit* bytes of the response body (all when None)."""
-        ...
 
 
 def atomic_write(path: pathlib.Path, content: bytes) -> None:
