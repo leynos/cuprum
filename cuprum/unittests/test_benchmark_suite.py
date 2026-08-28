@@ -93,18 +93,6 @@ def test_render_prefixed_command_with_empty_env_returns_raw_command() -> None:
     )
 
 
-def test_hyperfine_config_rejects_negative_warmup() -> None:
-    """Warmup must be zero or positive."""
-    with pytest.raises(ValueError, match="warmup must be >= 0"):
-        HyperfineConfig(warmup=-1, runs=1)
-
-
-def test_hyperfine_config_rejects_non_positive_runs() -> None:
-    """Runs must be at least one."""
-    with pytest.raises(ValueError, match="runs must be >= 1"):
-        HyperfineConfig(warmup=0, runs=0)
-
-
 @pytest.mark.parametrize(
     ("hyperfine_bin", "error_type"),
     [
@@ -181,16 +169,18 @@ def test_pipeline_benchmark_scenario_rejects_invalid_name(
 @pytest.mark.parametrize(
     ("warmup", "runs", "fragment"),
     [
+        pytest.param(-1, 1, "warmup must be >= 0", id="warmup-negative"),
+        pytest.param(0, 0, "runs must be >= 1", id="runs-non-positive"),
         pytest.param(1001, 1, "warmup must be <= 1000", id="warmup-too-large"),
         pytest.param(0, 1001, "runs must be <= 1000", id="runs-too-large"),
     ],
 )
-def test_hyperfine_config_rejects_excessive_iterations(
+def test_hyperfine_config_rejects_invalid_iterations(
     warmup: int,
     runs: int,
     fragment: str,
 ) -> None:
-    """Hyperfine iteration counts should have a practical upper bound."""
+    """Hyperfine warmup/run counts must stay within the practical bounds."""
     with pytest.raises(ValueError, match=fragment):
         HyperfineConfig(warmup=warmup, runs=runs)
 

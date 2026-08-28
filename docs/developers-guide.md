@@ -2430,7 +2430,16 @@ The canonical lint configuration lives in `pyproject.toml`:
 - `[tool.ruff.lint]` selects the active Ruff rule families; the selection
   mirrors the `episodic` repository's configuration, including `TD` (require
   authors and issue links on TODO comments).
-- `[tool.ruff.lint.per-file-ignores]` records test-specific exceptions.
+- `[tool.ruff.lint.per-file-ignores]` records test-specific exceptions,
+  including:
+  - `boolean-type-hint-positional-argument` is ignored for `**/test_*.py`
+    because parameters bound by `@pytest.mark.parametrize` or Hypothesis
+    `@given` are data rows, not API flags, and pytest's signature-based
+    binding rules out keyword-only parameters.
+  - `scripts/tests/conftest.py` carries `assert` and `no-self-use`
+    exemptions because it is test-support code outside the test globs,
+    whose stub opener must keep the `OpenerDirector` instance-method
+    shape.
 - `[tool.ruff.lint.flake8-import-conventions]` and
   `[tool.ruff.lint.flake8-import-conventions.aliases]` enforce import aliases
   such as `typing as typ` and `collections.abc as cabc`.
@@ -2475,14 +2484,18 @@ family:
   public surface is suppressed.
 - **Test scaffolding (`per-file-ignore`).** `ASYNC109` and `ASYNC240` are
   ignored through `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` for
-  exactly two modules — `cuprum/unittests/test_observe_stdin_early_close.py` and
+  two modules — `cuprum/unittests/test_observe_stdin_early_close.py` and
   `tests/behaviour/_execution_runtime_support.py`. Their async scaffolding
   polls a PID file with asyncio-only helpers, so a `timeout` parameter and
   blocking `pathlib` calls are acceptable there; the async-native path libraries
-  (`trio.Path` / `anyio.Path`) that `ASYNC240` recommends are not in use.
-  Naming the two paths rather than globbing `**/test_*.py` stops unrelated and
-  future async tests inheriting the exemption silently. The rationale is
-  recorded next to the ignore in `pyproject.toml`.
+  (`trio.Path` / `anyio.Path`) that `ASYNC240` recommends are not in use. A
+  third module, `cuprum/unittests/test_pipeline_teardown_cancellation.py`,
+  shares only the `ASYNC240` exemption, for the same reason as the two
+  modules above: it polls a cross-process marker file that no asyncio
+  primitive can observe. Naming these paths rather than globbing
+  `**/test_*.py` stops unrelated and future async tests inheriting the
+  exemption silently. The rationale is recorded next to each ignore in
+  `pyproject.toml`.
 
 When changing either suppression, keep the `pyproject.toml` comments and this
 section in step.

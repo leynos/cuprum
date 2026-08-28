@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from benchmarks._validation import _require_non_empty_string
 
@@ -29,13 +31,13 @@ def test_require_non_empty_string_rejects_blank_str(value: str) -> None:
         _require_non_empty_string(value, name="field")
 
 
-@pytest.mark.parametrize(
-    "value",
-    ["x", "  padded  ", "name"],
-    ids=["single", "padded", "word"],
-)
+@given(value=st.text().filter(lambda candidate: bool(candidate.strip())))
 def test_require_non_empty_string_returns_value_unchanged(value: str) -> None:
-    """A non-empty string is returned unchanged, retaining surrounding space."""
-    assert _require_non_empty_string(value, name="field") == value, (
+    """Any string with non-whitespace content is returned unchanged.
+
+    The identity assertion pins that no stripping, copying, or normalisation
+    happens on the accepting path, so surrounding whitespace survives.
+    """
+    assert _require_non_empty_string(value, name="field") is value, (
         "valid input must be returned unchanged"
     )

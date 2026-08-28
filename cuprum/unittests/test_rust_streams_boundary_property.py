@@ -67,37 +67,53 @@ def _safe_close(fd: int) -> None:
         os.close(fd)
 
 
+class _BufferSizeEntryPoint(typ.Protocol):
+    """An entry point invoked purely to exercise ``buffer_size`` validation."""
+
+    def __call__(self, streams: ModuleType, *, buffer_size: int) -> object:
+        """Invoke the entry point with the supplied ``buffer_size``."""
+        ...
+
+
+def _consume_with_buffer_size(streams: ModuleType, *, buffer_size: int) -> object:
+    """Call ``rust_consume_stream`` with the supplied ``buffer_size``."""
+    return streams.rust_consume_stream(_UNUSED_FD, buffer_size=buffer_size)
+
+
+def _pump_with_buffer_size(streams: ModuleType, *, buffer_size: int) -> object:
+    """Call ``rust_pump_stream`` with the supplied ``buffer_size``."""
+    return streams.rust_pump_stream(_UNUSED_FD, _UNUSED_FD, buffer_size=buffer_size)
+
+
+# Both bounds stay inside ``i64`` so the failure is the documented buffer-size
+# rejection rather than an integer-conversion overflow.
+_OUT_OF_RANGE_BUFFER_SIZES = st.one_of(
+    st.integers(min_value=-(1 << 62), max_value=0),
+    st.integers(min_value=_MAX_BUFFER_SIZE + 1, max_value=_I64_MAX),
+)
+
+
+@pytest.mark.parametrize(
+    "entry_point",
+    [
+        pytest.param(_consume_with_buffer_size, id="consume"),
+        pytest.param(_pump_with_buffer_size, id="pump"),
+    ],
+)
 @_SUPPRESS_FIXTURE
-@given(bad_size=st.integers(min_value=-(1 << 62), max_value=0))
-def test_consume_rejects_nonpositive_buffer(
+@given(bad_size=_OUT_OF_RANGE_BUFFER_SIZES)
+def test_rejects_out_of_range_buffer(
     rust_streams: ModuleType,
+    entry_point: _BufferSizeEntryPoint,
     bad_size: int,
 ) -> None:
-    """A non-positive ``buffer_size`` raises ``ValueError`` before any read."""
+    """Both entry points reject any ``buffer_size`` outside ``1..=1 GiB``.
+
+    Validation precedes descriptor conversion, so a throwaway descriptor is
+    enough and no I/O is performed.
+    """
     with pytest.raises(ValueError, match="buffer_size"):
-        rust_streams.rust_consume_stream(_UNUSED_FD, buffer_size=bad_size)
-
-
-@_SUPPRESS_FIXTURE
-@given(bad_size=st.integers(min_value=_MAX_BUFFER_SIZE + 1, max_value=_I64_MAX))
-def test_consume_rejects_oversized_buffer(
-    rust_streams: ModuleType,
-    bad_size: int,
-) -> None:
-    """A ``buffer_size`` above the 1 GiB cap raises ``ValueError``."""
-    with pytest.raises(ValueError, match="buffer_size"):
-        rust_streams.rust_consume_stream(_UNUSED_FD, buffer_size=bad_size)
-
-
-@_SUPPRESS_FIXTURE
-@given(bad_size=st.integers(min_value=-(1 << 62), max_value=0))
-def test_pump_rejects_nonpositive_buffer(
-    rust_streams: ModuleType,
-    bad_size: int,
-) -> None:
-    """``rust_pump_stream`` rejects a non-positive ``buffer_size``."""
-    with pytest.raises(ValueError, match="buffer_size"):
-        rust_streams.rust_pump_stream(_UNUSED_FD, _UNUSED_FD, buffer_size=bad_size)
+        entry_point(rust_streams, buffer_size=bad_size)
 
 
 @_unix_only
