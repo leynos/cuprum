@@ -29,6 +29,7 @@ from cuprum._subprocess_timeout import (
 )
 from cuprum._subprocess_wait import (
     _drain_stream_consumers,
+    _DrainContext,
     _reconcile_run_tasks,
     _wait_for_exit_code_within_timeout,
 )
@@ -163,9 +164,9 @@ async def _run_subprocess_with_streams(
             _reconcile_run_tasks(
                 stdin_task,
                 consumers,
-                pid=pid,
-                observation=execution.observation,
-                capture=execution.capture,
+                _DrainContext(
+                    execution.capture, pid=pid, observation=execution.observation
+                ),
             )
         )
         _handle_stream_timeout(
@@ -185,9 +186,9 @@ async def _run_subprocess_with_streams(
             _reconcile_run_tasks(
                 stdin_task,
                 consumers,
-                pid=pid,
-                observation=execution.observation,
-                capture=False,
+                _DrainContext(
+                    capture=False, pid=pid, observation=execution.observation
+                ),
             )
         )
         raise
@@ -203,9 +204,9 @@ async def _run_subprocess_with_streams(
             await _shielded_cleanup(
                 _drain_stream_consumers(
                     consumers,
-                    pid=pid,
-                    observation=execution.observation,
-                    capture=False,
+                    _DrainContext(
+                        capture=False, pid=pid, observation=execution.observation
+                    ),
                 )
             )
             raise
@@ -220,9 +221,9 @@ async def _run_subprocess_with_streams(
         await _shielded_cleanup(
             _drain_stream_consumers(
                 consumers,
-                pid=pid,
-                observation=execution.observation,
-                capture=False,
+                _DrainContext(
+                    capture=False, pid=pid, observation=execution.observation
+                ),
             )
         )
         raise

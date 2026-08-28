@@ -138,25 +138,25 @@ rather than through a redundant execution-module re-export.
 
 ## Addendum (2026-07-28): wait-helper decomposition and timeout observability
 
-Enabling the Ruff `ASYNC` family (`ASYNC109`) prompted a follow-up refinement of
-the timeout wait path inside `_subprocess_execution`, preserving the Option B
-boundaries above.
+Enabling the Ruff `ASYNC` family (`ASYNC109`) prompted a follow-up refinement
+of the timeout wait path inside `_subprocess_execution`, preserving the Option
+B boundaries above.
 
 - **Caller-owned deadlines.** The deadline is applied with `asyncio.timeout()`
   rather than threaded through a `timeout` parameter (which `ASYNC109` flags).
-  `_wait_for_exit_code` awaits the process and terminates it on cancellation but
-  no longer takes a timeout; `_wait_for_exit_code_within_timeout` wraps it and
-  applies `execution.timeout`.
+  `_wait_for_exit_code` awaits the process and terminates it on cancellation
+  but no longer takes a timeout; `_wait_for_exit_code_within_timeout` wraps it
+  and applies `execution.timeout`.
 - **Non-positive fast path.** Because `asyncio.timeout()` only schedules its
-  cancellation for the next event-loop iteration, a fast, already-exited process
-  could race past a zero or negative deadline. A non-positive timeout is
-  therefore special-cased to expire immediately and deterministically,
+  cancellation for the next event-loop iteration, a fast, already-exited
+  process could race past a zero or negative deadline. A non-positive timeout
+  is therefore special-cased to expire immediately and deterministically,
   preserving the behaviour of the superseded `asyncio.wait_for` implementation.
 - **Terminate here, drain once there.** Both wait helpers terminate the process
   but never drain: stream consumers belong to the caller, which drains them
-  exactly once through `_drain_stream_consumers`. Terminating first is what lets
-  that single drain reach EOF, and draining in one place keeps the timeout and
-  cancellation paths from reconciling the same tasks twice.
+  exactly once through `_drain_stream_consumers`. Terminating first is what
+  lets that single drain reach EOF, and draining in one place keeps the timeout
+  and cancellation paths from reconciling the same tasks twice.
 - **Capture-aware teardown.** The capturing drain gives terminated-process
   readers a bounded EOF grace window before cancellation. A reader that remains
   pending is then cancelled, and its missing result is decoded as an empty
@@ -174,8 +174,7 @@ boundaries above.
   `TimeoutExpired`. Emission failures are swallowed so cleanup and exception
   precedence are preserved.
 
-This refinement changes no public API: `SafeCmd`, `Pipeline`,
-`TimeoutExpired`, its payload of partial captured output, and
-timeout/exception precedence are all unchanged. The telemetry above is
-additive new observable behaviour, emitted best-effort alongside, never in
-place of, those existing results.
+This refinement changes no public API: `SafeCmd`, `Pipeline`, `TimeoutExpired`,
+its payload of partial captured output, and timeout/exception precedence are
+all unchanged. The telemetry above is additive new observable behaviour,
+emitted best-effort alongside, never in place of, those existing results.

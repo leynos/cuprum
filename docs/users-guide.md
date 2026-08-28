@@ -264,14 +264,13 @@ before termination begins. The wait path also reports three fixed completion
 records through the optional pipeline-wait reporter:
 `pipeline_stage_first_failure` when the first failure is latched,
 `pipeline_fail_fast_termination` before termination starts, and
-`pipeline_fail_fast_terminated` with the termination outcome.
-The optional pipeline-wait reporter emits these canonical wait records at a
-fixed WARNING level on `cuprum._pipeline_wait`.
-`structured_logging_hook()` separately renders the `pipeline_fail_fast`
-`ExecEvent` at `LogLevels.fail_fast_level`. The latter two records occur only
-when there are stages to terminate; the first-failure record still documents a
-final-stage, single-stage, or already-settled non-final failure. The closing
-record's
+`pipeline_fail_fast_terminated` with the termination outcome. The optional
+pipeline-wait reporter emits these canonical wait records at a fixed WARNING
+level on `cuprum._pipeline_wait`. `structured_logging_hook()` separately
+renders the `pipeline_fail_fast` `ExecEvent` at `LogLevels.fail_fast_level`.
+The latter two records occur only when there are stages to terminate; the
+first-failure record still documents a final-stage, single-stage, or
+already-settled non-final failure. The closing record's
 `cuprum_terminated_stage_count` counts only confirmed process terminations, so
 a stage that settles after termination selection is excluded. The
 `pipeline_fail_fast` observe event is separate from these records; metrics,
@@ -282,14 +281,13 @@ The event carries the failing stage's index, pipeline width, exit code,
 duration, and execution token. It is sanitized by removing caller-controlled
 `argv`, `cwd`, `env`, and `tags`; it retains the runtime fields `program`,
 `pid`, `timestamp`, trusted configured project, typed decision fields, and
-`ExecEvent.exec_id`. All projections consume this same sanitized
-event, so they do not need to parse log text. The metrics adapter labels
+`ExecEvent.exec_id`. All projections consume this same sanitized event, so they
+do not need to parse log text. The metrics adapter labels
 `cuprum_pipeline_fail_fast_total` with `program` and `project` alone; `project`
 comes from the trusted configured project and falls back to `unknown` only when
-absent, and the execution token
-remains event and trace detail rather than a metric label. It also
-distinguishes concurrent pipelines whose stage indices would otherwise look
-identical.
+absent, and the execution token remains event and trace detail rather than a
+metric label. It also distinguishes concurrent pipelines whose stage indices
+would otherwise look identical.
 
 `structured_logging_hook()` consumes the event at `LogLevels.fail_fast_level`,
 which defaults to `logging.WARNING`. Once that hook is registered, no extra
@@ -792,8 +790,8 @@ Hooks can be used for structured logging, metrics, or tracing without coupling
 Cuprum to a specific telemetry library.
 
 The `timeout` event carries `operation` (`"wait"`), `pid`, `timeout_s`,
-`error_type` (`"TimeoutError"`), and `timeout_mode`: `"elapsed_deadline"` for
-a positive elapsed deadline or `"non_positive_immediate"` for a non-positive
+`error_type` (`"TimeoutError"`), and `timeout_mode`: `"elapsed_deadline"` for a
+positive elapsed deadline or `"non_positive_immediate"` for a non-positive
 deadline that expires without awaiting the process. The `teardown_error` event
 carries `operation` (`"drain"`), `pid`, and `error_type`, the comma-joined
 classes raised while cancelling and draining stream consumers. It fires at most
@@ -1403,8 +1401,8 @@ confusing failure.
 ```python
 from cuprum import ConcurrentConfig
 
-ConcurrentConfig(concurrency=0)      # ValueError: concurrency must be >= 1
-ConcurrentConfig(concurrency=True)   # TypeError: concurrency must be an int, got bool
+ConcurrentConfig(concurrency=0)  # ValueError: concurrency must be >= 1
+ConcurrentConfig(concurrency=True)  # TypeError: concurrency must be an int, got bool
 ```
 
 `ConcurrentResult` is normally returned by `run_concurrent`/
@@ -1469,8 +1467,9 @@ The helper returns `False` on pure Python installations and does not raise when
 native wheels are missing. Other native-extension import failures still surface
 so broken installations are visible.
 
-The helper raises `TypeError` with the message `Rust availability resolver must
-return bool` if the canonical backend resolver returns a non-boolean value.
+The helper raises `TypeError` with the message
+`Rust availability resolver must return bool` if the canonical backend resolver
+returns a non-boolean value.
 
 ### Rust stream pump (internal)
 

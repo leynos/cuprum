@@ -55,20 +55,34 @@ async def _make_consumer(kind: str, text: str) -> str | None:
     drain cancels both. ``partial`` is the only kind that runs production code
     rather than standing in for it, because the text a cancelled capturing
     reader keeps is precisely what that code decides.
+
+    Returns
+    -------
+    str | None
+        The completed consumer text, when one is available.
+
+    Raises
+    ------
+    _ConsumerFailureError
+        If the requested consumer fails.
+    ValueError
+        If ``kind`` is unsupported.
     """
-    if kind == "completed":
-        await asyncio.sleep(0)
-        return text
-    if kind == "pending":
-        await asyncio.Event().wait()
-        return text
-    if kind == "failing":
-        await asyncio.sleep(0)
-        raise _ConsumerFailureError
-    if kind == "partial":
-        return await _partial_capture(text)
-    msg = f"unsupported consumer kind: {kind!r}"
-    raise ValueError(msg)
+    match kind:
+        case "completed":
+            await asyncio.sleep(0)
+            return text
+        case "pending":
+            await asyncio.Event().wait()
+            return text
+        case "failing":
+            await asyncio.sleep(0)
+            raise _ConsumerFailureError
+        case "partial":
+            return await _partial_capture(text)
+        case _:
+            msg = f"unsupported consumer kind: {kind!r}"
+            raise ValueError(msg)
 
 
 _CONSUMER_KINDS = st.sampled_from(("completed", "pending", "failing"))
@@ -203,6 +217,7 @@ class TestConsumerDrainProperties:
                 asyncio.create_task(_make_consumer(stdout_kind, "out")),
                 asyncio.create_task(_make_consumer(stderr_kind, "err")),
             )
+            await asyncio.sleep(0)
             primary = TimeoutError("primary")
             with pytest.raises(TimeoutError) as exc_info:
                 await _drain_while_raising(primary, consumers)

@@ -21,7 +21,6 @@ import pytest
 
 from cuprum import Program, TimeoutExpired, sh
 from cuprum._subprocess_wait import (
-    _CAPTURE_EOF_GRACE_S,
     _drain_stream_consumers,
 )
 from cuprum.sh import RunOutputOptions
@@ -38,7 +37,6 @@ if typ.TYPE_CHECKING:
 async def _never_reaches_eof() -> str | None:
     """Block as a reader does on a pipe whose EOF never arrives."""
     await asyncio.Event().wait()
-    return None
 
 
 async def _reaches_eof_late(text: str, turns: int) -> str | None:
@@ -46,6 +44,19 @@ async def _reaches_eof_late(text: str, turns: int) -> str | None:
     for _ in range(turns):
         await asyncio.sleep(0)
     return text
+
+
+async def _skip_eof_grace(
+    _consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+) -> None:
+    """Return immediately so a test never depends on elapsed wall-clock time."""
+
+
+async def _wait_for_consumers(
+    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+) -> None:
+    """Let test consumers finish without using the production wall-clock grace."""
+    await asyncio.gather(*consumers)
 
 
 def test_capturing_drain_reports_empty_text_for_a_reader_with_no_capture() -> None:
@@ -66,6 +77,7 @@ def test_capturing_drain_reports_empty_text_for_a_reader_with_no_capture() -> No
         stdout_text, stderr_text = await _drain_stream_consumers(
             consumers,
             capture=True,
+            eof_grace_waiter=_skip_eof_grace,
         )
 
         assert stdout_text == "", (
@@ -96,6 +108,7 @@ def test_capturing_drain_waits_for_an_imminent_eof() -> None:
         stdout_text, stderr_text = await _drain_stream_consumers(
             consumers,
             capture=True,
+            eof_grace_waiter=_wait_for_consumers,
         )
 
         assert stdout_text == "out", (
@@ -120,16 +133,28 @@ def test_capturing_drain_settles_its_readers_when_cancelled_mid_grace() -> None:
 
     async def run_case() -> None:
         """Cancel a capturing drain while it waits out the grace window."""
+        grace_started = asyncio.Event()
+        grace_release = asyncio.Event()
+
+        async def wait_at_grace(
+            _consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+        ) -> None:
+            """Expose the exact grace boundary without relying on elapsed time."""
+            grace_started.set()
+            await grace_release.wait()
+
         consumers = (
             asyncio.create_task(_never_reaches_eof()),
             asyncio.create_task(_never_reaches_eof()),
         )
         drain = asyncio.create_task(
-            _drain_stream_consumers(consumers, capture=True),
+            _drain_stream_consumers(
+                consumers,
+                capture=True,
+                eof_grace_waiter=wait_at_grace,
+            ),
         )
-        # Let the drain reach the grace-period wait, well inside its window,
-        # so the cancellation lands where the readers are still pending.
-        await asyncio.sleep(_CAPTURE_EOF_GRACE_S / 5)
+        await grace_started.wait()
         assert not drain.done(), "the drain must still be inside its grace window"
         assert not any(task.done() for task in consumers), (
             "the readers must still be pending when the cancellation lands"
