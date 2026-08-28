@@ -1223,6 +1223,15 @@ preserving the `SafeCmd.run()` execution contract:
   escalation), and draining the stream consumers exactly once. Split out of
   `_subprocess_execution` so that module stays about orchestration — spawning,
   wiring streams, assembling the result.
+- `cuprum/_subprocess_drain.py` is the narrow compatibility boundary for the
+  stream-drain helpers used by focused tests and private imports. The live
+  implementation remains in `_subprocess_wait.py`; a capture-aware drain gives
+  readers a bounded `_CAPTURE_EOF_GRACE_S` window to observe EOF before
+  cancellation. Capturing drains map an absent reader result to an empty string,
+  while non-capturing drains skip the window and retain `None` for absent text.
+  This makes the timeout contract deterministic: a capturing
+  `TimeoutExpired.stdout` or `.stderr` is always text, including when no reader
+  text arrived before the bounded teardown window.
 - `cuprum/_timeout_reporting.py` owns the two channels a timeout or teardown
   failure is reported on — the structured `cuprum.timeout` log record and
   the `timeout` / `teardown_error` observe events — and the `_report_*`
