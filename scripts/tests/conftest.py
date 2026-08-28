@@ -52,8 +52,25 @@ def refresh_module_fixture(
     """
     _ = rollout_modules  # Ensures the script directory is on ``sys.path``.
     module = importlib.import_module("typos_rollout_refresh")
-    # The module is imported once per session, so its process-wide degradation
+    # The degradation module is imported once per session, so its process-wide
     # counters persist across tests unless each test starts from a known zero.
+    importlib.import_module("typos_rollout_degradation").reset_degradations()
+    return module
+
+
+@pytest.fixture(name="degradation_module")
+def degradation_module_fixture(
+    rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
+) -> types.ModuleType:
+    """Import the degradation-telemetry module through the runtime module path.
+
+    Returns
+    -------
+    types.ModuleType
+        The ``typos_rollout_degradation`` module, with counters reset.
+    """
+    _ = rollout_modules  # Ensures the script directory is on ``sys.path``.
+    module = importlib.import_module("typos_rollout_degradation")
     module.reset_degradations()
     return module
 

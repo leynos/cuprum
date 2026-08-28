@@ -56,10 +56,10 @@ def test_remote_refresh_rejects_insecure_and_invalid_content(
 
 
 def test_https_redirect_to_http_is_rejected(
-    refresh_module: types.ModuleType,
+    degradation_module: types.ModuleType,
 ) -> None:
     """A redirect that downgrades HTTPS to HTTP is refused before reissue."""
-    handler = refresh_module._HttpsOnlyRedirectHandler()
+    handler = degradation_module._HttpsOnlyRedirectHandler()
     request = urllib.request.Request("https://example.test/base.toml")
     headers = email.message.Message()
 
@@ -79,23 +79,23 @@ def test_https_redirect_to_http_is_rejected(
 
 
 def test_https_redirect_downgrade_is_logged_and_counted(
-    refresh_module: types.ModuleType,
+    degradation_module: types.ModuleType,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A refused downgrade emits a structured warning and bumps the counter."""
-    handler = refresh_module._HttpsOnlyRedirectHandler()
+    handler = degradation_module._HttpsOnlyRedirectHandler()
     request = urllib.request.Request("https://example.test/base.toml")
     headers = email.message.Message()
 
     with (
-        caplog.at_level(logging.WARNING, logger=refresh_module.__name__),
+        caplog.at_level(logging.WARNING, logger=degradation_module.__name__),
         pytest.raises(urllib.error.URLError),
     ):
         handler.redirect_request(
             request, None, 302, "Found", headers, "http://cdn.example.test/base.toml"
         )
 
-    assert refresh_module.degradation_snapshot()["https_redirect_downgrade"] == 1, (
+    assert degradation_module.degradation_snapshot()["https_redirect_downgrade"] == 1, (
         "a refused downgrade must increment the bounded degradation counter"
     )
     records = [
@@ -113,7 +113,7 @@ def test_https_redirect_downgrade_is_logged_and_counted(
 
 
 def test_degradation_counters_survive_concurrent_increments(
-    refresh_module: types.ModuleType,
+    degradation_module: types.ModuleType,
 ) -> None:
     """Concurrent degradation records are counted without losing increments.
 
@@ -127,7 +127,7 @@ def test_degradation_counters_survive_concurrent_increments(
     def record() -> None:
         barrier.wait()
         for _ in range(per_worker):
-            refresh_module._record_degradation("stale_cache")
+            degradation_module._record_degradation("stale_cache")
 
     threads = [threading.Thread(target=record, daemon=True) for _ in range(workers)]
     for thread in threads:
@@ -141,23 +141,23 @@ def test_degradation_counters_survive_concurrent_increments(
         )
 
     assert (
-        refresh_module.degradation_snapshot()["stale_cache"] == workers * per_worker
+        degradation_module.degradation_snapshot()["stale_cache"] == workers * per_worker
     ), "every concurrent increment must be counted"
 
 
 def test_degradation_reset_clears_every_counter(
-    refresh_module: types.ModuleType,
+    degradation_module: types.ModuleType,
 ) -> None:
     """The reset hook returns all counters to zero."""
-    refresh_module._record_degradation("offline_cache")
-    assert refresh_module.degradation_snapshot()["offline_cache"] == 1, (
+    degradation_module._record_degradation("offline_cache")
+    assert degradation_module.degradation_snapshot()["offline_cache"] == 1, (
         "offline cache reuse must increment its degradation counter"
     )
 
-    refresh_module.reset_degradations()
+    degradation_module.reset_degradations()
 
     assert all(
-        count == 0 for count in refresh_module.degradation_snapshot().values()
+        count == 0 for count in degradation_module.degradation_snapshot().values()
     ), "reset must zero every degradation counter"
 
 
@@ -202,7 +202,7 @@ def test_oversized_remote_body_falls_back_to_stale_cache(
 
 def test_oversized_remote_body_without_cache_raises(
     rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
-    refresh_module: types.ModuleType,
+    degradation_module: types.ModuleType,
     tmp_path: Path,
     patch_https_opener: cabc.Callable[[cabc.Callable[..., object]], None],
 ) -> None:

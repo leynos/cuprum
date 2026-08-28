@@ -38,16 +38,16 @@ _shared_settings = settings(
 )
 @_shared_settings
 def test_degradation_counters_count_only_known_reasons(
-    refresh_module: types.ModuleType,
+    degradation_module: types.ModuleType,
     reasons: list[str],
 ) -> None:
     """Counter state equals the tally of known reasons; unknowns are ignored."""
-    refresh_module.reset_degradations()
+    degradation_module.reset_degradations()
     for reason in reasons:
-        refresh_module._record_degradation(reason)
+        degradation_module._record_degradation(reason)
 
     tally = collections.Counter(reasons)
-    snapshot = refresh_module.degradation_snapshot()
+    snapshot = degradation_module.degradation_snapshot()
 
     assert set(snapshot) == {
         "https_redirect_downgrade",
@@ -58,9 +58,9 @@ def test_degradation_counters_count_only_known_reasons(
         f"counters {snapshot!r} must match the recorded tally {tally!r}"
     )
 
-    refresh_module.reset_degradations()
+    degradation_module.reset_degradations()
     assert all(
-        count == 0 for count in refresh_module.degradation_snapshot().values()
+        count == 0 for count in degradation_module.degradation_snapshot().values()
     ), "reset must return every counter to zero"
 
 
