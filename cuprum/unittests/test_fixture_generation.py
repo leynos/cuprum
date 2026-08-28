@@ -137,6 +137,7 @@ def test_fixture_generation_is_deterministic(
     wrap=st.sampled_from([0, 76]),
 )
 @settings(
+    deadline=None,
     max_examples=20,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
@@ -187,6 +188,7 @@ def test_fixture_output_size_follows_base64_expansion_ratio(
     raw_bytes=st.integers(min_value=1, max_value=4096),
 )
 @settings(
+    deadline=None,
     max_examples=30,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )

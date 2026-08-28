@@ -68,7 +68,7 @@ class TestRustConsumeStream:
         return _consume_payload(rust_streams, payload, **kwargs)
 
     # Every case here asserts the same property — the extension's output equals
-    # Python's own replacement decoding — so they are one parameterised test
+    # Python's own replacement decoding — so they are one parameterized test
     # rather than four near-identical bodies. A `buffer_size` of ``None`` omits
     # the argument, exercising the extension's default.
     @pytest.mark.parametrize(
@@ -102,7 +102,7 @@ class TestRustConsumeStream:
         rust_streams : ModuleType
             The Rust streams module fixture.
         test_id : str
-            Test case identifier for parameterisation.
+            Test case identifier for parameterization.
         payload : bytes
             The payload to consume.
         buffer_size : int | None
