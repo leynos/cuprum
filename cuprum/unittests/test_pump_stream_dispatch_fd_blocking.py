@@ -14,7 +14,7 @@ from unittest import mock
 
 import pytest
 
-from cuprum import _pipeline_streams
+from cuprum import _pipeline_stream_fds, _pipeline_streams
 from cuprum._testing import (
     configure_pump_stream_dispatch_for_testing,
     set_rust_availability_for_testing,
@@ -33,9 +33,6 @@ from cuprum.unittests._pump_stream_dispatch_support import (
     clear_backend_caches,
     install_closing_rust_pump,
 )
-
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
 
 __all__ = ["clear_backend_caches"]
 
@@ -133,7 +130,7 @@ class TestPumpStreamDispatch:
 
         def fake_pause_reader_transport(
             reader: asyncio.StreamReader,
-        ) -> cabc.Callable[[], None]:
+        ) -> _pipeline_stream_fds._ReaderPause:
             """Record a pause and return a resume callback for the reader."""
             del reader
             call_order.append("pause")
@@ -142,7 +139,10 @@ class TestPumpStreamDispatch:
                 """Record that the reader transport was resumed."""
                 call_order.append("resume")
 
-            return _resume
+            return _pipeline_stream_fds._ReaderPause(
+                may_hand_off=True,
+                resume=_resume,
+            )
 
         async def fake_drain_reader_buffer(
             reader: asyncio.StreamReader,
@@ -164,12 +164,12 @@ class TestPumpStreamDispatch:
             fake_drain_reader_buffer,
         )
         monkeypatch.setattr(
-            _pipeline_streams,
+            _pipeline_stream_fds,
             "_set_stream_fds_blocking",
             lambda **_: (True, True),
         )
         monkeypatch.setattr(
-            _pipeline_streams,
+            _pipeline_stream_fds,
             "_restore_stream_fd_blocking",
             lambda **_: call_order.append("restore"),
         )

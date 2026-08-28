@@ -9,7 +9,7 @@ from unittest import mock
 
 import pytest
 
-from cuprum import _pipeline_streams
+from cuprum import _pipeline_stream_fds, _pipeline_streams
 from cuprum.unittests._pump_stream_dispatch_support import (
     _nonblocking_pipe_pair,
     _run_with_inline_executor_returning,
@@ -59,13 +59,16 @@ class _CleanupOrder:
         """Capture the unpatched restoration function and event log."""
         self.finished = asyncio.Event()
         self.order: list[str] = []
-        self._restore = _pipeline_streams._restore_stream_fd_blocking
+        self._restore = _pipeline_stream_fds._restore_stream_fd_blocking
 
-    def pause(self, reader: asyncio.StreamReader) -> cabc.Callable[[], None]:
+    def pause(self, reader: asyncio.StreamReader) -> _pipeline_stream_fds._ReaderPause:
         """Record pausing and return a completion-owned resume callback."""
         del reader
         self.order.append("pause")
-        return self.resume
+        return _pipeline_stream_fds._ReaderPause(
+            may_hand_off=True,
+            resume=self.resume,
+        )
 
     def resume(self) -> None:
         """Record reader resumption after descriptor restoration."""
@@ -166,7 +169,7 @@ async def _cancel_before_native_worker_settles(
     monkeypatch.setattr(_pipeline_streams, "_pause_reader_transport", cleanup.pause)
     monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", cleanup.drain)
     monkeypatch.setattr(
-        _pipeline_streams, "_restore_stream_fd_blocking", cleanup.restore
+        _pipeline_stream_fds, "_restore_stream_fd_blocking", cleanup.restore
     )
 
     with _nonblocking_pipe_pair() as (

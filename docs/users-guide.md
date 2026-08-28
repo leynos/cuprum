@@ -1595,6 +1595,157 @@ itself succeeded.
 Both the `splice` fast path and the read/write fallback emit the event
 identically, so the message does not depend on which path handled the transfer.
 
+### Why a hop fell back to Python
+
+Selecting the `rust` backend does not guarantee every inter-stage hop takes it.
+Handing the raw pipe descriptors to the Rust pump can fail in ways that are not
+errors — the hop simply runs on the Python pump instead and produces the same
+result, slower. Nothing surfaces to the caller, so a deployment that has
+quietly stopped taking the fast path looks exactly like one that never had it.
+
+Each fall-back is recorded on the `cuprum._pipeline_streams` logger with a
+`cuprum_action` of `rust_pump_declined` and a `cuprum_reason`:
+
+Table 1: reasons an inter-stage hop declines the Rust pump
+
+| `cuprum_reason`             | Meaning                                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------------------- |
+| `raw_fd_unavailable`        | at least one asyncio transport exposed no raw descriptor, so there was nothing to hand over |
+| `reader_unresumable`        | the reader transport exposes `pause_reading` but not `resume_reading`, left unpaused        |
+| `reader_pause_failed`       | the reader transport could not be paused, so asyncio might still consume the descriptor     |
+| `blocking_mode_unavailable` | the descriptors could not be switched to the blocking mode the pump requires                |
+
+These sit at `DEBUG`, not `WARNING`: a fall-back is a routing decision rather
+than a fault, and on platforms where the fast path does not apply every hop
+would otherwise warn. Raise that one logger when investigating throughput:
+
+```python
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("cuprum._pipeline_streams").setLevel(logging.DEBUG)
+```
+
+`raw_fd_unavailable` on every hop usually means the streams are not real OS
+pipes. The others indicate the descriptors were found but could not be borrowed
+safely, which is worth investigating rather than accepting.
+
+### A pump failure hidden by cancellation
+
+Cancelling a pipeline while the Rust pump is mid-transfer tells the caller
+about the cancellation, not about anything that went wrong inside the pump.
+Such a failure is recorded on the same logger under a `cuprum_action` of
+`rust_pump_failed_after_cancel`, with the original traceback attached, so it
+stays diagnosable instead of vanishing behind the cancellation. It sits at
+`DEBUG` too, so the logger adjustment above reveals it.
+
+### A teardown step that failed and was ignored
+
+Handing the descriptors back is best-effort: resuming the reader transport,
+restoring the descriptors' blocking mode, and closing the writer after the pump
+has already closed it all run while the hop is unwinding, so an error there is
+suppressed rather than raised. Each suppression records a `DEBUG` event with a
+`cuprum_action` of `rust_pump_teardown_failed`, a `cuprum_site` naming the step
+— `resume`, `restore_blocking`, or `writer_close` — and the exception class and
+errno. The record carries nothing drawn from the transfer itself.
+
+`writer_close` reporting `EBADF` is routine: the Rust pump closes that
+descriptor on return, so the subsequent transport close finds it gone. The
+other two sites, and any other errno at `writer_close`, mean a descriptor was
+left in a state nothing else reports. The `resume` and `restore_blocking`
+records come from the `cuprum._pipeline_stream_fds` logger; `writer_close`
+comes from `cuprum._pipeline_streams`.
+
+### Counting pump routing decisions
+
+Aggregating debug logs answers "why did this hop fall back?" one record at a
+time. To count the same decisions instead, register a pump observer. It is a
+separate channel from `sh.observe`: pump events describe an internal routing
+decision rather than a command's lifecycle, so they are not `ExecEvent` values
+and never reach an observe hook. An `ExecEvent` consumer registered elsewhere
+in the process is unaffected.
+
+The channel counts declines and post-cancellation failures, and nothing else. A
+successful hand-off emits no event, deliberately: there is no per-hop counter
+and no total-hop counter to divide by. So these counters give the *number* of
+hops that left the fast path, not the *fraction* that stayed on it. To report
+that fraction, pair the decline counter with a hop total measured independently
+— for example, a counter of your own incremented once per inter-stage hop you
+submit.
+
+```python
+from cuprum.adapters.metrics_adapter import InMemoryMetrics
+from cuprum.adapters.pump_metrics import PumpMetricsHook
+from cuprum.pump_observation import observe_pump
+
+metrics = InMemoryMetrics()
+
+with observe_pump(PumpMetricsHook(metrics)):
+    pipeline.run_sync()
+
+print(metrics.counters)  # {'cuprum_rust_pump_declined_total': 2.0}
+```
+
+`PumpMetricsHook` takes the same `MetricsCollector` protocol as `MetricsHook`,
+so one collector can back both channels:
+
+```python
+from cuprum import sh
+from cuprum.adapters.metrics_adapter import MetricsHook
+
+with sh.observe(MetricsHook(metrics)), observe_pump(PumpMetricsHook(metrics)):
+    pipeline.run_sync()
+```
+
+Table 2: counters emitted by `PumpMetricsHook`
+
+| Counter                                      | Labels   | Incremented when                                                |
+| -------------------------------------------- | -------- | --------------------------------------------------------------- |
+| `cuprum_rust_pump_declined_total`            | `reason` | a hop fell back from the Rust pump to the Python pump           |
+| `cuprum_rust_pump_failed_after_cancel_total` | none     | a cancelled hop's Rust worker failure was consumed and recorded |
+
+The `reason` label takes exactly the values in Table 1, plus `unknown`, and
+nothing else. Table 1's values are published as the `RustPumpDeclineReason`
+enum and `unknown` as `cuprum.adapters.pump_metrics.UNKNOWN_DECLINE_REASON`, so
+a dashboard can enumerate the series it will see:
+
+```python
+from cuprum import RustPumpDeclineReason
+from cuprum.adapters.pump_metrics import UNKNOWN_DECLINE_REASON
+
+print([reason.value for reason in RustPumpDeclineReason] + [UNKNOWN_DECLINE_REASON])
+```
+
+`unknown` is a guard rather than an outcome: it is what a decline whose reason
+is not an enum member would be labelled, and no call site produces one. It is
+listed because a dashboard filtering on the enum alone would drop such a
+decline silently rather than showing it.
+
+`PumpEvent` is a public dataclass and performs no run-time validation, so a
+caller can construct one carrying any object as its `reason`. The hook
+therefore checks the value against `RustPumpDeclineReason` before labelling and
+degrades anything else to `unknown`; a hand-built event cannot widen the label
+domain.
+
+Nothing derived from a descriptor, an argument vector, or an exception reaches
+a label, so the series count is fixed. A successful hand-off increments
+nothing; success is the absence of a decline. The `DEBUG` records above are
+unchanged — the counters supplement them rather than replacing them.
+
+> **Note**
+> A pump hook that raises is reported on the `cuprum.pump_observation` logger
+> at `WARNING` with its traceback, and the hop continues. This differs from
+> `sh.observe` hooks, whose exceptions fail the command being observed. The
+> difference is deliberate: a decline is recorded on the path that falls back
+> to the Python pump and completes the hop, so a misconfigured metrics backend
+> must not be able to abort a pipe hop that would otherwise have succeeded.
+> Only `Exception` instances are reported and suppressed. Everything else
+> propagates unchanged: `SystemExit`, `KeyboardInterrupt`, and
+> `asyncio.CancelledError`. The last matters because one of the two emission
+> sites is cancellation unwinding, so a hook running there must not be able to
+> absorb the cancellation the caller asked for. Hooks must be synchronous; one
+> that returns an awaitable is reported and discarded.
+
 ### Choosing a stream backend
 
 Most users should leave backend selection on `auto`. This uses the Rust pathway

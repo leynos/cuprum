@@ -9,7 +9,7 @@ from unittest import mock
 
 import pytest
 
-from cuprum import _pipeline_streams
+from cuprum import _pipeline_stream_fds, _pipeline_streams
 from cuprum.unittests._pump_stream_dispatch_support import (
     _nonblocking_pipe_pair,
     _run_with_inline_executor,
@@ -41,11 +41,14 @@ def _install_recording_native_failure(
 
     def pause_reader(
         reader: asyncio.StreamReader,
-    ) -> cabc.Callable[[], None]:
+    ) -> _pipeline_stream_fds._ReaderPause:
         """Record the pause and provide its matching resume callback."""
         del reader
         call_order.append("pause")
-        return lambda: call_order.append("resume")
+        return _pipeline_stream_fds._ReaderPause(
+            may_hand_off=True,
+            resume=lambda: call_order.append("resume"),
+        )
 
     async def drain_reader(
         reader: asyncio.StreamReader,
@@ -62,7 +65,7 @@ def _install_recording_native_failure(
         os.close(writer_fd)
         raise RuntimeError(_NATIVE_FAILURE_MESSAGE)
 
-    original_restore = _pipeline_streams._restore_stream_fd_blocking
+    original_restore = _pipeline_stream_fds._restore_stream_fd_blocking
 
     def restore_stream_fd_blocking(
         *,
@@ -83,7 +86,7 @@ def _install_recording_native_failure(
     monkeypatch.setattr(_pipeline_streams, "_pause_reader_transport", pause_reader)
     monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", drain_reader)
     monkeypatch.setattr(
-        _pipeline_streams,
+        _pipeline_stream_fds,
         "_restore_stream_fd_blocking",
         restore_stream_fd_blocking,
     )
@@ -107,11 +110,14 @@ class TestRustPumpFailures:
 
         def pause_reader(
             reader: asyncio.StreamReader,
-        ) -> cabc.Callable[[], None]:
+        ) -> _pipeline_stream_fds._ReaderPause:
             """Record the pause and provide its matching resume callback."""
             del reader
             call_order.append("pause")
-            return lambda: call_order.append("resume")
+            return _pipeline_stream_fds._ReaderPause(
+                may_hand_off=True,
+                resume=lambda: call_order.append("resume"),
+            )
 
         async def fail_drain(
             reader: asyncio.StreamReader,

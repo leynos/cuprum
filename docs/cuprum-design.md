@@ -826,6 +826,14 @@ The concrete shape is an implementation detail, but the design assumes:
 - Events can be consumed synchronously or asynchronously.
 - Hooks may choose to ignore most phases and only act on `start`/`exit`.
 
+#### Rust-pump routing events
+
+Rust-pump declines and failures recovered after cancellation are routing facts,
+not command lifecycle phases. They are therefore represented by `PumpEvent` on
+the separate `observe_pump` channel. `RustPumpDeclineReason` bounds the only
+metric label, and `PumpMetricsHook` emits counters without extending the closed
+`ExecPhase` contract. See [ADR-008](adr-008-rust-pump-observation-channel.md).
+
 ### 7.2 Logging via `logging`
 
 A common usage pattern is to register a hook that logs events using the standard
@@ -1095,6 +1103,25 @@ Semantics (aligned with `subprocess.run` and plumbum):
   capture rules as successful runs (final stage stdout plus all stderr when
   capture is enabled).
 
+For screen readers: The following sequence diagram shows the logging hook's
+start and exit sequence around one command. The user calls `run_sync()` on a
+`SafeCmd`, which invokes the `on_start` hook. That hook first asks the logger
+whether the *exit* level is enabled — not the start level — because the only
+reason to take a timestamp now is to compute a duration for the exit record
+later; when it is enabled, the hook takes the store's lock, records
+`time.perf_counter()` against the command, and releases the lock. It then asks
+whether the start level is enabled and, if so, logs the `cuprum.start` record.
+The `SafeCmd` executes the process, then invokes the `on_exit` hook with the
+command and the resulting `CommandResult`, and only then returns that result to
+the user — `_execute_with_hooks` dispatches the after-hooks before its own
+return, so a hook cannot observe a command the caller has already been told
+about. The exit hook
+asks again whether the exit level is enabled: if it is disabled it returns
+immediately, leaving nothing to clean up because nothing was stored; if it is
+enabled it takes the lock, pops the recorded start time — removing the entry,
+so the store cannot grow without bound — releases the lock, computes
+`duration_s`, and logs the `cuprum.exit` record.
+
 Figure 3: Sequence of start/exit logging hook execution
 
 ```mermaid
@@ -1122,7 +1149,6 @@ sequenceDiagram
     end
 
     SafeCmd->>SafeCmd: execute process
-    SafeCmd-->>User: CommandResult
 
     SafeCmd->>AfterHooks: on_exit(cmd, result)
 
@@ -1137,6 +1163,8 @@ sequenceDiagram
         AfterHooks->>AfterHooks: compute duration_s
         AfterHooks->>Logger: log(exit_level, cuprum.exit ...)
     end
+
+    SafeCmd-->>User: CommandResult
 ```
 
 For screen readers: The following sequence diagram shows how a subprocess
@@ -1449,6 +1477,18 @@ concurrently with optional concurrency limits. The implementation uses
 - `failure_submission_indices`: Property mapping each failure back to its
   original submission position, uniformly across both execution modes.
 
+For screen readers: The following sequence diagram shows how `run_concurrent`
+executes several commands at once. The caller invokes `run_concurrent` with the
+commands and a config. It first validates every program against the context
+allowlist in one step, and if any is forbidden it raises a
+`ForbiddenProgramError` to the caller immediately, before anything runs.
+Otherwise each `SafeCmd` runs concurrently: it acquires the semaphore when one
+is configured, which gates how many run at once; fires its before hook;
+executes the process; fires its exit hook; records its result and status with
+the result aggregator; and releases the semaphore. Once all have finished, the
+aggregator returns the results in submission order and `run_concurrent` returns
+a `ConcurrentResult` carrying the results, the failures, and the `ok` flag.
+
 Figure 6: Concurrent execution flow with allowlist validation and semaphore
 gating
 
@@ -1482,6 +1522,19 @@ sequenceDiagram
     run_concurrent-->>Caller: ConcurrentResult<br/>(results, failures, ok)
 ```
 
+For screen readers: The following sequence diagram shows what changes when
+fail-fast mode is enabled. The caller invokes `run_concurrent` with a config
+whose `fail_fast` is true. Every command is launched as a task in a task group.
+When the first non-zero exit is detected, the group raises `_FirstFailureError`
+and cancels the tasks still pending. Tasks whose process had already spawned
+are signalled with `SIGTERM`, given a grace period, then `SIGKILL`; tasks
+cancelled before spawning simply never start. The group returns the partial
+results — the commands that *completed*; cancelled ones produced no
+`CommandResult` and are omitted — and `run_concurrent` returns a
+`ConcurrentResult` carrying those, compacted, alongside `submission_indices`
+mapping each back to its original position and the failure indices within the
+compacted tuple.
+
 Figure 7: Fail-fast mode cancellation behaviour
 
 ```mermaid
@@ -1505,8 +1558,8 @@ sequenceDiagram
         end
     end
 
-    TaskGroup-->>run_concurrent: Partial results<br/>(completed + cancelled)
-    run_concurrent-->>Caller: ConcurrentResult<br/>(partial results,<br/>failure indices)
+    TaskGroup-->>run_concurrent: Completed results only<br/>(cancelled produced none)
+    run_concurrent-->>Caller: ConcurrentResult<br/>(compacted results,<br/>submission indices,<br/>failure indices)
 ```
 
 ### 8.4 Telemetry Adapter Design Decisions
@@ -2403,27 +2456,38 @@ explicitly.
 
 The Rust extension releases the GIL during I/O operations, allowing other
 Python threads and asyncio tasks to proceed. Integration with asyncio uses
-`loop.run_in_executor()`:
+`loop.run_in_executor()`.
+
+The dispatcher itself only chooses; `_try_rust_pump` owns the whole attempt and
+reports whether it succeeded, so the caller never runs the native pump itself:
 
 ```python
 async def _pump_stream_dispatch(
     reader: asyncio.StreamReader | None,
     writer: asyncio.StreamWriter | None,
 ) -> None:
+    if reader is None:
+        await _run_python_pump(reader, writer)
+        return
+
     backend = get_stream_backend()
     if backend is StreamBackend.RUST and await _try_rust_pump(reader, writer):
-        loop = asyncio.get_running_loop()
-        reader_fd = _extract_fd(reader)
-        writer_fd = _extract_fd(writer)
-        await loop.run_in_executor(
-            None,
-            _streams_rs.rust_pump_stream,
-            reader_fd,
-            writer_fd,
-        )
-    else:
-        await _pump_stream(reader, writer)
+        return
+
+    await _run_python_pump(reader, writer)
 ```
+
+`_try_rust_pump` extracts both descriptors — declining with
+`raw_fd_unavailable` if either is missing — and hands off to `_run_rust_pump`,
+which drives `_pump_over_raw_fds` under the pause and blocking-mode lifecycle
+described below and closes the writer only once the pump has returned.
+
+The layering matters, and this example used to get it wrong. Awaiting
+`_try_rust_pump` and *then* calling `rust_pump_stream` would run the native
+pump twice, and extracting the descriptors in the dispatcher would restore
+their state before the cancellation-safe drain in `_await_rust_pump` had let
+the worker thread finish with them — which is the exact hazard that drain
+exists to prevent.
 
 Error propagation from Rust to Python uses standard exception mechanisms. The
 Rust extension raises `OSError` for I/O failures, matching the behaviour of
@@ -2436,6 +2500,57 @@ of the original descriptor modes and reader transport resumption are tied to
 that settlement, so cancellation of the awaiting task cannot close or reuse a
 descriptor while native I/O is still running. The duplicate is closed after
 the worker settles, including a native-load failure.
+
+#### Raw descriptor lifecycle
+
+Handing a descriptor to the Rust pump means taking it back from asyncio for the
+duration of the transfer, and that hand-off has several partial-failure paths:
+the descriptor may not be extractable from the transport, the reader transport
+may refuse to pause, and either descriptor may refuse to switch to blocking
+mode. `cuprum/_pipeline_stream_fds.py` owns that lifecycle behind two seams so
+each path is testable without a live pump:
+
+- `_BlockingModeGuard` — the FD-state object. `engage()` switches the reader and
+  writer to blocking mode while capturing their prior modes, rolling back a
+  partial change if the second switch fails; `restore()` returns both to the
+  captured modes. This is what stops a descriptor being left blocking after the
+  transfer.
+- `_paused_reader` — a context manager that pauses the reader transport and
+  resumes it on every exit path, including exceptions and cancellation, so a
+  resume can never be skipped. Exactly one resume fires per pause attempt, but
+  not always at block exit. A transport exposing no `pause_reading` needs none.
+  A `pause_reading()` that *raises* gets one corrective `resume_reading()`
+  immediately, at the failure site rather than at block exit, because the
+  transport may have set its paused flag before whatever raised — leaving a
+  reader nobody resumes while the Python fallback reads a descriptor nothing is
+  watching. Having already been corrected, it is not resumed again on exit. It
+  yields the pause outcome, whose `decline_reason` is `None` when the
+  descriptor may be handed to the Rust pump — a failed pause sets
+  `reader_pause_failed`, because asyncio may still be consuming the reader, and
+  the caller falls back to the Python pump rather than racing it. A transport
+  with no `pause_reading` leaves `decline_reason` `None`, since it has no
+  callbacks to suspend. A transport with `pause_reading` but no
+  `resume_reading` sets `reader_unresumable` and is never paused: the pause
+  hook shows callbacks that would race the pump, yet pausing it could never be
+  undone, and the Python fallback reads the same stream and would wait forever
+  on a reader nothing can restart.
+
+Cancellation is handled explicitly rather than implicitly. `run_in_executor`
+cannot interrupt the worker thread running the Rust pump, and that thread still
+owns both raw descriptors, so cancelling the awaiting task waits for the worker
+to return before the blocking mode is restored and the transport resumed.
+Restoring or resuming earlier would hand the descriptors back to asyncio while
+native code was still mid-transfer.
+
+The module's scope is deliberately narrow: descriptor extraction plus the pause
+and blocking-mode lifecycle for the Rust pump hand-off. Production code
+consumes it only from `cuprum/_pipeline_streams.py`; the
+`cuprum/unittests/test_pipeline_stream*` modules also import the seams
+directly, to inject the partial failures the public entry point cannot provoke.
+Its reuse policy is that new descriptor lifecycle concerns for that hand-off
+belong here rather than being inlined into the pump, but the seams are not a
+general-purpose descriptor utility — anything serving a different caller should
+be designed against that caller's real requirements instead of widening these.
 
 ### 13.7 Linux splice() Optimization
 

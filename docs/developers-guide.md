@@ -428,6 +428,114 @@ interpreter whose opcode set the tracer cannot handle
 3.15 betas, issue `#109`); every other failure is re-raised. Supported
 interpreters therefore confirm the contracts rather than skipping them.
 
+### Pipeline stream module boundaries
+
+Pipeline byte movement is split so each module has one reason to change:
+
+| Module | Owns |
+| --- | --- |
+| `_pipeline_streams.py` | Backend choice and the Python/Rust pump dispatch |
+| `_pipeline_stream_results.py` | Stream-task collection, cancellation, and outcomes |
+| `_pipeline_stream_fds.py` | Raw-descriptor hand-off for the Rust pump |
+
+### Rust pump raw-descriptor lifecycle
+
+Routing an inter-stage hop through the Rust pump means taking the raw pipe
+descriptors back from asyncio for the duration of the transfer.
+`cuprum/_pipeline_stream_fds.py` owns that hand-off, keeping its partial-failure
+paths in one place rather than inlined in the pump:
+
+- `_extract_stream_fd` pulls the raw descriptor out of an asyncio transport,
+  returning `None` when the transport does not expose one.
+- `_BlockingModeGuard` is the FD-state object. `engage()` switches both
+  descriptors to blocking mode while capturing their prior modes, rolling back
+  a partial change if the second switch fails; `restore()` returns them to the
+  captured modes. This is what stops a descriptor being left blocking.
+- `_paused_reader` is a context manager that pauses the reader transport and
+  resumes it on every exit path, including exceptions and cancellation. Only a
+  pause that took effect is resumed. It yields whether the descriptor may be
+  handed over: a *failed* pause answers `False`, because asyncio may still be
+  consuming the reader, and the caller falls back to the Python pump rather
+  than racing it. A transport exposing no pause hooks answers `True`, since
+  there are no callbacks to suspend. A transport with `pause_reading()` but no
+  `resume_reading()` answers `False`: pausing it could not be undone.
+
+Cancellation is handled explicitly. `run_in_executor` cannot interrupt the
+worker thread running the Rust pump, and that thread still owns both
+descriptors, so `_await_rust_pump` shields the executor future and drains it
+before propagating `CancelledError`. Restoring the blocking mode or resuming
+the transport any earlier would hand the descriptors back to asyncio while
+native code was still mid-transfer.
+
+The module's reuse policy is narrow: further descriptor-lifecycle concerns for
+this hand-off belong here, but the seams are not a general-purpose descriptor
+utility. Anything serving a different caller should be designed against that
+caller's real requirements instead of widening these.
+
+#### Observing a declined hand-off
+
+Each of those partial failures ends the same way: the hop falls back to the
+Python pump and completes correctly. That is the point — the fall-back is not
+an error, and nothing surfaces to the caller. It does mean a deployment that
+has quietly stopped taking the fast path is indistinguishable from one that
+never had it, which is the question an operator actually asks.
+
+`_log_rust_pump_declined` in `cuprum/_pipeline_streams.py` records each decline
+against the `cuprum._pipeline_streams` logger, following the same convention as
+the pipeline fail-fast records: a `cuprum_action` of `rust_pump_declined` plus
+a `cuprum_reason` naming the seam that refused.
+
+Table 1: `cuprum_reason` values and the seam each one reports
+
+| `cuprum_reason` | Seam that declined |
+| --- | --- |
+| `raw_fd_unavailable` | `_extract_stream_fd` found no descriptor on at least one transport |
+| `reader_pause_failed` | `pause_reading()` raised, so asyncio may still be consuming |
+| `blocking_mode_unavailable` | `_BlockingModeGuard.engage` could not switch both descriptors |
+
+These are logged at `DEBUG`, deliberately. A fall-back is a per-hop routing
+decision rather than a fault, so promoting it to a warning would make a
+correctly-working pipeline noisy on any platform where the fast path does not
+apply. To diagnose fast-path coverage, raise that one logger:
+
+```python
+import logging
+
+logging.getLogger("cuprum._pipeline_streams").setLevel(logging.DEBUG)
+```
+
+`cuprum/unittests/test_pipeline_streams_observability.py` pins each reason to
+the real code path that emits it, so a decline that stops being recorded fails
+the suite rather than going unnoticed.
+
+A pump failure can also be masked by cancellation. `asyncio.wait` never
+retrieves a future's outcome, so when a hop is cancelled
+`_report_pump_outcome_after_cancel` consumes the worker's future and records
+any error it carried under a `cuprum_action` of
+`rust_pump_failed_after_cancel`, with the traceback attached via `exc_info`.
+The caller is told about the cancellation it asked for; without this record the
+pump's own error would resurface when the future is garbage-collected as an
+unretrieved-exception warning, detached from the hop that caused it.
+`cuprum/unittests/test_pipeline_streams_cancellation.py` pins the field.
+
+#### Counting those records
+
+`PumpEvent` carries these routing decisions on a dedicated observation channel,
+separate from `ExecEvent`. This avoids adding a new `ExecPhase`, which would
+break already-registered `MetricsHook` instances that match that closed set.
+`observe_pump` registers synchronous hooks in a `ContextVar`, and
+`PumpMetricsHook` maps the events to two bounded counters:
+
+| Counter | Labels |
+| --- | --- |
+| `cuprum_rust_pump_declined_total` | `reason` |
+| `cuprum_rust_pump_failed_after_cancel_total` | none |
+
+`RustPumpDeclineReason` bounds the decline label to its three declared values.
+Observer failures are logged and do not alter the successful fallback or the
+caller's cancellation. [ADR-008](adr-008-rust-pump-observation-channel.md)
+records the decision.
+
 ### `_pipeline_wait` completion command/query seam
 
 `cuprum/_pipeline_wait.py` splits completion handling on the same

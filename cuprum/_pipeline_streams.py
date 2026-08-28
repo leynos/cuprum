@@ -15,9 +15,9 @@ responsible for moving and collecting bytes once those streams exist.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses as dc
 import functools
+import logging
 import os
 import typing as typ
 
@@ -32,12 +32,12 @@ from cuprum._pipeline_stage_streams import (
     _create_stage_capture_tasks as _create_stage_capture_tasks,
 )
 from cuprum._pipeline_stream_fds import (
+    _BlockingModeGuard,
     _close_rust_writer_fd,
     _extract_stream_fd,
     _pause_reader_transport,
-    _restore_stream_fd_blocking,
     _resume_reader_transport,
-    _set_stream_fds_blocking,
+    _suppressed_teardown_failure,
 )
 from cuprum._pipeline_stream_results import (
     _cancel_stream_tasks as _cancel_stream_tasks,
@@ -58,9 +58,24 @@ from cuprum._pipeline_stream_results import (
     _surface_unexpected_pipe_failures as _surface_unexpected_pipe_failures,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
+from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
+from cuprum.pump_observation import _emit_pump_event
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _log_rust_pump_declined(reason: RustPumpDeclineReason) -> None:
+    """Record the reason an inter-stage hop falls back to Python pumping."""
+    _LOGGER.debug(
+        "Inter-stage hop declined the Rust pump (%s); using the Python pump",
+        reason.value,
+        extra={"cuprum_action": "rust_pump_declined", "cuprum_reason": reason.value},
+    )
+    _emit_pump_event(PumpEvent(phase="declined", reason=reason))
 
 
 @dc.dataclass(slots=True)
@@ -78,15 +93,15 @@ class _PumpStreamDispatchTestHooks:
     ) = None
 
 
-@dc.dataclass(frozen=True, slots=True)
+@dc.dataclass(slots=True)
 class _RustPumpState:
     """Capture transport-owned state that native pumping must restore."""
 
     reader_fd: int
     writer_fd: int
-    reader_was_blocking: bool
-    writer_was_blocking: bool
+    blocking_mode_guard: _BlockingModeGuard
     resume_reader: cabc.Callable[[], None] | None
+    was_cancelled: bool = False
 
 
 _PUMP_STREAM_DISPATCH_TEST_HOOKS = _PumpStreamDispatchTestHooks()
@@ -121,12 +136,7 @@ def reset_pump_stream_dispatch_for_testing() -> None:
 
 def _restore_rust_pump_state(state: _RustPumpState) -> None:
     """Restore pipe state before returning reader transport control to asyncio."""
-    _restore_stream_fd_blocking(
-        reader_fd=state.reader_fd,
-        writer_fd=state.writer_fd,
-        reader_was_blocking=state.reader_was_blocking,
-        writer_was_blocking=state.writer_was_blocking,
-    )
+    state.blocking_mode_guard.restore()
     _resume_reader_transport(state.resume_reader)
 
 
@@ -140,7 +150,9 @@ def _complete_rust_pump(
     """Release native-pump resources after its executor worker settles."""
     try:
         if not completed.cancelled():
-            completed.exception()
+            error = completed.exception()
+            if state.was_cancelled and error is not None:
+                _log_rust_pump_failed_after_cancel(error)
     finally:
         _close_rust_writer_fd(rust_writer_fd)
         _restore_rust_pump_state(state)
@@ -181,11 +193,22 @@ async def _run_rust_pump_with_blocking_fds(
     try:
         await asyncio.shield(native_pump)
     except asyncio.CancelledError:
+        state.was_cancelled = True
         raise
     except BaseException:
         await asyncio.shield(cleanup_complete)
         raise
     await asyncio.shield(cleanup_complete)
+
+
+def _log_rust_pump_failed_after_cancel(error: BaseException) -> None:
+    """Record a native-pump failure masked by caller-requested cancellation."""
+    _LOGGER.debug(
+        "Rust pump failed while its hop was being cancelled",
+        exc_info=error,
+        extra={"cuprum_action": "rust_pump_failed_after_cancel"},
+    )
+    _emit_pump_event(PumpEvent(phase="failed_after_cancel"))
 
 
 async def _run_rust_pump(
@@ -196,36 +219,60 @@ async def _run_rust_pump(
     writer_fd: int,
 ) -> bool:
     """Run the Rust pump while the executor future owns native cleanup."""
+    handled = await _pump_over_raw_fds(
+        reader=reader,
+        writer=writer,
+        reader_fd=reader_fd,
+        writer_fd=writer_fd,
+    )
+    if not handled:
+        return False
+    # Rust closed only its duplicate, so the transport descriptor is still
+    # valid: close it through asyncio to signal EOF downstream.
+    with _suppressed_teardown_failure(_LOGGER, "writer_close", OSError):
+        await _close_stream_writer(writer)
+    return True
+
+
+async def _pump_over_raw_fds(
+    *,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter | None,
+    reader_fd: int,
+    writer_fd: int,
+) -> bool:
+    """Transfer a hop after acquiring the reader and descriptor hand-off."""
     # Flush any bytes asyncio already buffered in the StreamReader
     # before the Rust pump takes over the raw file descriptor.
-    resume_reader = _pause_reader_transport(reader)
+    reader_pause = _pause_reader_transport(reader)
+    if not reader_pause.may_hand_off:
+        _log_rust_pump_declined(
+            reader_pause.decline_reason or RustPumpDeclineReason.READER_PAUSE_FAILED,
+        )
+        return False
     try:
         await _drain_reader_buffer(reader, writer)
     except BaseException:
-        _resume_reader_transport(resume_reader)
+        _resume_reader_transport(reader_pause.resume)
         raise
 
     try:
-        reader_was_blocking, writer_was_blocking = _set_stream_fds_blocking(
+        blocking_mode_guard = _BlockingModeGuard.engage(
             reader_fd=reader_fd,
             writer_fd=writer_fd,
         )
     except (OSError, ValueError):
-        _resume_reader_transport(resume_reader)
+        _resume_reader_transport(reader_pause.resume)
+        _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
         return False
 
     state = _RustPumpState(
         reader_fd=reader_fd,
         writer_fd=writer_fd,
-        reader_was_blocking=reader_was_blocking,
-        writer_was_blocking=writer_was_blocking,
-        resume_reader=resume_reader,
+        blocking_mode_guard=blocking_mode_guard,
+        resume_reader=reader_pause.resume,
     )
     await _run_rust_pump_with_blocking_fds(state=state)
-    # Rust closed only its duplicate, so the transport descriptor is still
-    # valid: close it through asyncio to signal EOF downstream.
-    with contextlib.suppress(OSError):
-        await _close_stream_writer(writer)
     return True
 
 
@@ -280,6 +327,7 @@ async def _try_rust_pump(
     writer_fd = _extract_stream_fd(writer)
 
     if reader_fd is None or writer_fd is None:
+        _log_rust_pump_declined(RustPumpDeclineReason.RAW_FD_UNAVAILABLE)
         return False
 
     return await _run_rust_pump(

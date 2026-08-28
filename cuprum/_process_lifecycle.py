@@ -6,7 +6,6 @@ SIGKILL and reaps the exit, whether for one process
 pipeline (``_spawn_pipeline_processes``, ``_cleanup_spawned_processes``,
 ``_cleanup_pipeline_on_error``, ``_terminate_timed_out_stages``,
 ``_terminate_pipeline_remaining_stages``).
-
 ``_shielded_cleanup`` underlies all of that: it is the cancellation-safe
 primitive shared by the pipeline paths (``_pipeline_internals``,
 ``_pipeline_collect``) and the single-command subprocess paths
@@ -41,7 +40,7 @@ from cuprum.context import current_context, resolve_env
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum._pipeline_streams import _PipelineRunConfig
+    from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum.sh import SafeCmd
 
 

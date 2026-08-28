@@ -16,7 +16,7 @@ from unittest import mock
 
 import pytest
 
-from cuprum import _pipeline_streams
+from cuprum import _pipeline_stream_fds, _pipeline_streams
 from cuprum._testing import (
     reset_pump_stream_dispatch_for_testing,
     set_rust_availability_for_testing,
@@ -254,7 +254,7 @@ def bypass_reader_drain(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         _pipeline_streams,
         "_pause_reader_transport",
-        lambda reader: None,
+        lambda _reader: _pipeline_stream_fds._ReaderPause(may_hand_off=True),
     )
 
     async def _no_drain(

@@ -9,7 +9,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import _pipeline_streams
+from cuprum import _pipeline_stream_fds, _pipeline_streams
 from cuprum._testing import (
     configure_pump_stream_dispatch_for_testing,
     set_rust_availability_for_testing,
@@ -20,9 +20,6 @@ from cuprum.unittests._pump_stream_dispatch_support import (
     _nonblocking_pipe_pair,
     clear_backend_caches,
 )
-
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
 
 __all__ = ["clear_backend_caches"]
 
@@ -51,7 +48,7 @@ def _install_value_error_recovery_doubles(
 
     def pause_reader(
         paused_reader: asyncio.StreamReader,
-    ) -> cabc.Callable[[], None]:
+    ) -> _pipeline_stream_fds._ReaderPause:
         """Return a callback that records reader transport recovery."""
         del paused_reader
 
@@ -59,7 +56,10 @@ def _install_value_error_recovery_doubles(
             """Record reader transport recovery after fallback."""
             scenario.resume_calls.append("resume")
 
-        return resume_reader
+        return _pipeline_stream_fds._ReaderPause(
+            may_hand_off=True,
+            resume=resume_reader,
+        )
 
     async def no_drain(
         drain_reader: asyncio.StreamReader,
