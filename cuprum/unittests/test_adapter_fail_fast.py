@@ -27,17 +27,22 @@ from cuprum.adapters.metrics_adapter import (
     MetricsHook,
     _UnhandledMetricsPhaseError,
 )
-from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
 from cuprum.events import new_exec_id
 from cuprum.unittests._adapter_test_support import (
+    Metered,
+    Traced,
     _LabelRecordingCollector,
     _make_exec_event,
+    metrics_hook,
+    tracing_hook,
 )
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.events import ExecEvent, ExecId, ExecPhase
+
+__all__ = ["metrics_hook", "tracing_hook"]
 
 _FAIL_FAST_COUNTER = "cuprum_pipeline_fail_fast_total"
 _FAIL_FAST_SPAN_EVENT = "cuprum.pipeline_fail_fast"
@@ -65,15 +70,14 @@ def _fail_fast_event(
 class TestMetricsFailFast:
     """One bounded counter, and nothing that could make it unbounded."""
 
-    def test_the_counter_increments_once(self) -> None:
+    def test_the_counter_increments_once(self, metrics_hook: Metered) -> None:
         """A fail-fast event increments the fail-fast counter exactly once.
 
         A pipeline torn down early is a distinct outcome from a command that
         merely exited non-zero, so it gets its own series rather than being
         inferred from ``cuprum_failures_total``.
         """
-        metrics = InMemoryMetrics()
-        hook = MetricsHook(metrics)
+        metrics, hook = metrics_hook
 
         hook(_fail_fast_event())
 
@@ -82,15 +86,14 @@ class TestMetricsFailFast:
             f"found {metrics.counters!r}"
         )
 
-    def test_repeated_events_accumulate(self) -> None:
+    def test_repeated_events_accumulate(self, metrics_hook: Metered) -> None:
         """Two fail-fast pipelines count as two, not as one or as four.
 
         Guards the increment value itself: a counter fed the event's stage
         count or exit code instead of 1.0 would still look plausible on a
         single event.
         """
-        metrics = InMemoryMetrics()
-        hook = MetricsHook(metrics)
+        metrics, hook = metrics_hook
 
         hook(_fail_fast_event())
         hook(_fail_fast_event())
@@ -151,23 +154,30 @@ class TestTracingFailFast:
     """The decision annotates the failing stage's span, and opens none."""
 
     @staticmethod
-    def _traced(hook: TracingHook, tracer: InMemoryTracer) -> ExecId:
-        """Open a span for one execution and return its correlation token."""
+    def _traced(traced: Traced) -> ExecId:
+        """Open a span for one execution and return its correlation token.
+
+        Returns
+        -------
+        ExecId
+            The correlation token the span was opened for.
+        """
         exec_id = new_exec_id()
-        hook(_make_exec_event(phase="start", overrides={"exec_id": exec_id}))
-        assert len(tracer.spans) == 1, "the start event must open exactly one span"
+        traced.hook(_make_exec_event(phase="start", overrides={"exec_id": exec_id}))
+        assert len(traced.tracer.spans) == 1, (
+            "the start event must open exactly one span"
+        )
         return exec_id
 
-    def test_the_event_lands_on_the_matching_span(self) -> None:
+    def test_the_event_lands_on_the_matching_span(self, tracing_hook: Traced) -> None:
         """The span found by ``exec_id`` gets the event, with its fields.
 
         This is what the correlation token buys: the fail-fast decision is
         recorded on the span of the stage it is about, so a trace shows the
         teardown in context rather than as an orphan.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-        exec_id = self._traced(hook, tracer)
+        tracer, hook = tracing_hook
+        exec_id = self._traced(tracing_hook)
 
         hook(_fail_fast_event(exec_id=exec_id))
 
@@ -183,16 +193,15 @@ class TestTracingFailFast:
             "duration_s": 0.25,
         }, f"the span event must carry the decision's fields, found {attributes!r}"
 
-    def test_no_span_is_started_or_ended(self) -> None:
+    def test_no_span_is_started_or_ended(self, tracing_hook: Traced) -> None:
         """The stage's own ``exit`` event still owns the span's lifecycle.
 
         A span of its own would have no duration to report and would need a
         second key to be joined back to the stage; ending the stage's span
         early would truncate it and drop the exit status.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-        exec_id = self._traced(hook, tracer)
+        tracer, hook = tracing_hook
+        exec_id = self._traced(tracing_hook)
 
         hook(_fail_fast_event(exec_id=exec_id))
 
@@ -203,16 +212,15 @@ class TestTracingFailFast:
             "the stage's span must stay open for its own exit event to close"
         )
 
-    def test_an_uncorrelatable_event_is_dropped(self) -> None:
+    def test_an_uncorrelatable_event_is_dropped(self, tracing_hook: Traced) -> None:
         """Without a usable token the event is dropped, not misattributed.
 
         Attaching it to whichever span happened to be open would put one
         pipeline's teardown on another execution's trace, which is worse than
         losing the annotation.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
-        self._traced(hook, tracer)
+        tracer, hook = tracing_hook
+        self._traced(tracing_hook)
 
         # No token at all, then a token no open span was ever keyed by.
         for exec_id in (None, new_exec_id()):
@@ -301,6 +309,7 @@ class TestLoggingFailFast:
 
     def test_sensitive_values_stay_out_of_fail_fast_projections(
         self,
+        tracing_hook: Traced,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Warning logs, traces, and metrics retain only fail-fast decision data."""
@@ -316,8 +325,7 @@ class TestLoggingFailFast:
 
         logger_hook(event)
 
-        tracer = InMemoryTracer()
-        trace_hook = TracingHook(tracer)
+        tracer, trace_hook = tracing_hook
         trace_hook(
             _make_exec_event(phase="start", overrides={"exec_id": event.exec_id})
         )

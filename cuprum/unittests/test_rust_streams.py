@@ -17,6 +17,8 @@ import os
 import typing as typ
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from cuprum.unittests._rust_stream_test_support import (
     INVALID_FD_ERRNOS,
@@ -31,6 +33,35 @@ from tests.helpers.stream_pipes import (
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
+
+# Every example opens a pipe and buffers the whole payload before reading, so
+# payloads stay far below the host pipe capacity and the example count stays
+# modest: the module must remain well inside the 30s pytest timeout without
+# exhausting file descriptors.
+_MAX_PAYLOAD_BYTES = 4096
+_CONSUME_SETTINGS = settings(
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+    deadline=None,
+    max_examples=50,
+)
+
+# Mixing encoded text with raw byte runs yields well-formed multibyte
+# sequences, lone continuation bytes, and truncated sequences in one strategy.
+_DECODE_PAYLOADS = st.lists(
+    st.one_of(
+        st.text(max_size=8).map(lambda chunk: chunk.encode("utf-8")),
+        st.binary(max_size=8),
+    ),
+    max_size=16,
+).map(lambda chunks: b"".join(chunks)[:_MAX_PAYLOAD_BYTES])
+
+# Small buffers force multibyte sequences to straddle read boundaries; ``None``
+# exercises the default buffer size.
+_DECODE_BUFFER_SIZES = st.one_of(
+    st.none(),
+    st.integers(min_value=1, max_value=8),
+    st.integers(min_value=9, max_value=1 << 16),
+)
 
 
 @pytest.mark.parametrize(

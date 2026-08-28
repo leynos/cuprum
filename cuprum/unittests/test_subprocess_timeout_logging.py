@@ -31,6 +31,26 @@ if typ.TYPE_CHECKING:
     from cuprum._subprocess_execution import _SubprocessExecution
 
 
+"""Structured-logging tests for the subprocess timeout paths.
+Covers the ``cuprum.timeout`` log records emitted on expiry and on a teardown
+drain failure, including the guarantee that a failing logger cannot mask the
+timeout it describes. The observe-event side of the same contract lives in
+``test_subprocess_timeout_observe``.
+"""
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+    from cuprum._subprocess_execution import _SubprocessExecution
+#: (process factory, execution-context factory, timeout, expected timeout
+#: mode) for the elapsed-deadline and non-positive-immediate expiry paths.
+_TIMEOUT_CASES = [
+    pytest.param(
+        lambda: ExecutionContext(cancel_grace=0.1),
+        id="elapsed_timeout",
+    pytest.param(
+        id="non_positive_timeout",
+]
+
+
 def _assert_timeout_log_fields(
     fields: dict[str, object],
     *,
@@ -71,64 +91,40 @@ def _single_timeout_record(
     )
     return records[0]
 
-
-def test_ordinary_timeout_expiry_logs_elapsed_diagnostic(
+@pytest.mark.parametrize(
+    ("process_factory", "ctx_factory", "timeout", "mode"), _TIMEOUT_CASES
+)
+def test_timeout_expiry_logs_diagnostic(
     caplog: pytest.LogCaptureFixture,
+    process_factory: cabc.Callable[[], _TimeoutWaitProcess | _ExitedProcess],
+    ctx_factory: cabc.Callable[[], ExecutionContext],
+    timeout: float,
+    mode: str,
 ) -> None:
-    """An elapsed wall-clock deadline emits a structured ``cuprum.timeout`` warning.
+    """An elapsed or non-positive deadline logs a structured ``cuprum.timeout``.
 
     The diagnostic must carry stable ``cuprum_*`` fields keyed for observability
-    integrations, including ``mode="elapsed_deadline"`` to distinguish an
-    elapsed deadline from an immediate non-positive expiry.
+    integrations, including a ``mode`` that distinguishes an elapsed deadline
+    from an immediate non-positive expiry.
     """
 
-    async def run_case() -> None:
-        """Let a positive deadline elapse and expect a timeout."""
-        process = _TimeoutWaitProcess()
-        execution = _DeadlineExecution(
-            ctx=ExecutionContext(cancel_grace=0.1), timeout=0.05
-        )
+    async def run_case() -> int:
+        """Trigger the timeout path and return the process pid."""
+        process = process_factory()
+        execution = _DeadlineExecution(ctx=ctx_factory(), timeout=timeout)
 
         with pytest.raises(TimeoutError):
             await _wait_for_exit_code_within_timeout(
                 typ.cast("asyncio.subprocess.Process", process),
                 typ.cast("_SubprocessExecution", execution),
             )
+        return process.pid
 
     with caplog.at_level(logging.WARNING, logger=_TIMEOUT_LOGGER):
-        asyncio.run(run_case())
+        pid = asyncio.run(run_case())
 
     fields = vars(_single_timeout_record(caplog, logging.WARNING))
-    _assert_timeout_log_fields(
-        fields, mode="elapsed_deadline", pid=4321, timeout_s=0.05
-    )
-
-
-def test_non_positive_timeout_logs_immediate_diagnostic(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """The non-positive fast path is tagged ``mode="non_positive_immediate"``."""
-
-    async def run_case() -> None:
-        """Trigger the immediate fast path against an already-exited process."""
-        process = _ExitedProcess()
-        execution = _DeadlineExecution(ctx=ExecutionContext(), timeout=0)
-
-        with pytest.raises(TimeoutError):
-            await _wait_for_exit_code_within_timeout(
-                typ.cast("asyncio.subprocess.Process", process),
-                typ.cast("_SubprocessExecution", execution),
-            )
-
-    with caplog.at_level(logging.WARNING, logger=_TIMEOUT_LOGGER):
-        asyncio.run(run_case())
-
-    fields = vars(_single_timeout_record(caplog, logging.WARNING))
-    _assert_timeout_log_fields(
-        fields, mode="non_positive_immediate", pid=5678, timeout_s=0
-    )
-
-
+    _assert_timeout_log_fields(fields, mode=mode, pid=pid, timeout_s=timeout)
 def test_teardown_drain_failure_logs_diagnostic(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

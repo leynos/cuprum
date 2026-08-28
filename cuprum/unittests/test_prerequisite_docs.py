@@ -77,6 +77,9 @@ def troubleshooting_section(users_guide: str) -> str:
         "maturin",
         "cargo",
         "rustup",
+        "1.85",
+        "`maturin develop`",
+        "is_rust_available()",
     ],
 )
 def test_users_guide_build_prerequisites_mentions_tools(
@@ -88,31 +91,6 @@ def test_users_guide_build_prerequisites_mentions_tools(
     """
     assert contains_case_insensitive(prerequisites_section, term), (
         f"Missing documentation clause: '{term}'"
-    )
-
-
-def test_users_guide_build_prerequisites_mentions_version(
-    prerequisites_section: str,
-) -> None:
-    """Users' guide should specify the minimum Rust version."""
-    assert "1.85" in prerequisites_section, "Missing documentation clause: '1.85'"
-
-
-def test_users_guide_build_prerequisites_mentions_maturin_develop(
-    prerequisites_section: str,
-) -> None:
-    """Users' guide should mention the maturin develop command."""
-    assert "`maturin develop`" in prerequisites_section, (
-        "Missing documentation clause: '`maturin develop`'"
-    )
-
-
-def test_users_guide_build_prerequisites_mention_verification(
-    prerequisites_section: str,
-) -> None:
-    """Users' guide should tell readers how to verify the Rust extension."""
-    assert "is_rust_available()" in prerequisites_section, (
-        "Missing documentation clause: 'is_rust_available()'"
     )
 
 

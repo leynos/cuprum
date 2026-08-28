@@ -96,21 +96,19 @@ def test_native_module_reports_availability_when_installed() -> None:
     )
 
 
-def test_public_probe_reports_unavailable_when_backend_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "backend_available",
+    [
+        pytest.param(False, id="backend_unavailable"),
+        pytest.param(True, id="backend_available"),
+    ],
+)
+def test_public_probe_forwards_backend_availability(
+    monkeypatch: pytest.MonkeyPatch, *, backend_available: bool
 ) -> None:
-    """Public probe forwards to the backend availability check."""
-    monkeypatch.setattr(_rust_backend, "is_available", lambda: False)
-    assert c.is_rust_available() is False, (
-        "expected public probe to report unavailable when backend is unavailable"
-    )
-
-
-def test_public_probe_reports_available_when_backend_available(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Public probe forwards True from the backend availability check."""
-    monkeypatch.setattr(_rust_backend, "is_available", lambda: True)
-    assert c.is_rust_available() is True, (
-        "expected public probe to report available when backend is available"
+    """Public probe forwards the backend availability check verbatim."""
+    monkeypatch.setattr(_rust_backend, "is_available", lambda: backend_available)
+    assert c.is_rust_available() is backend_available, (
+        f"expected public probe to report {backend_available} when backend "
+        f"reports {backend_available}"
     )

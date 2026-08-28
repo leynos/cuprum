@@ -143,28 +143,28 @@ def test_load_plan_rejects_legacy_profile_metadata(tmp_path: pth.Path) -> None:
         load_plan(path)
 
 
-def test_load_plan_rejects_old_profile_version(tmp_path: pth.Path) -> None:
-    """Old benchmark profile versions are incompatible with current results."""
-    payload = _plan_payload()
-    payload["benchmark_profile_version"] = "pipeline-worker-single-run-v1"
-    path = _write_json(tmp_path=tmp_path, filename="plan.json", payload=payload)
-
-    with pytest.raises(IncompatibleBenchmarkProfileError, match="incompatible"):
-        load_plan(path)
-
-
-def test_load_plan_rejects_immediate_predecessor_profile_version(
-    tmp_path: pth.Path,
+@pytest.mark.parametrize(
+    "profile_version",
+    [
+        pytest.param("pipeline-worker-single-run-v1", id="old_profile_version"),
+        pytest.param(
+            "pipeline-worker-release-ratio-v3",
+            id="immediate_predecessor_profile_version",
+        ),
+    ],
+)
+def test_load_plan_rejects_incompatible_profile_version(
+    tmp_path: pth.Path, profile_version: str
 ) -> None:
-    """The immediate predecessor profile version is incompatible.
+    """Old and superseded benchmark profile versions are incompatible.
 
     Baselines collected under ``pipeline-worker-release-ratio-v3`` recorded raw
     worker command strings in ``results[*].command``, so the current v4 ratchet
     must reject them even though the version string differs by a single
-    revision.
+    revision from an older, unrelated version.
     """
     payload = _plan_payload()
-    payload["benchmark_profile_version"] = "pipeline-worker-release-ratio-v3"
+    payload["benchmark_profile_version"] = profile_version
     path = _write_json(tmp_path=tmp_path, filename="plan.json", payload=payload)
 
     with pytest.raises(IncompatibleBenchmarkProfileError, match="incompatible"):

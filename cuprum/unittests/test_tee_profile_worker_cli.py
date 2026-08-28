@@ -11,6 +11,7 @@ import pytest
 
 from benchmarks import tee_profile_worker
 from benchmarks.tee_profile_worker import TeeProfileWorkerConfig
+from cuprum.unittests._tee_profile_backend_support import assert_worker_result_ok
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -144,8 +145,7 @@ def test_worker_cli_runs_successfully_via_subprocess(tmp_path: pth.Path) -> None
     )
     assert output.exists(), "expected worker-result.json to be written"
     result = json.loads(output.read_text())
-    assert result["status"] == "ok", f"expected worker status ok, got {result}"
-    assert result["exit_code"] == 0, f"expected worker exit code 0, got {result}"
+    assert_worker_result_ok(result)
     assert result["reentrant_rejection_count"] == 0, (
         f"expected no reentrant rejections in a single-selector run, got {result}"
     )

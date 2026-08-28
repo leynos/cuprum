@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from cuprum import (
     ECHO,
@@ -15,8 +17,41 @@ from cuprum import (
     scoped,
     sh,
 )
-from cuprum.sh import Pipeline, PipelineResult, RunOutputOptions
+from cuprum.sh import Pipeline, PipelineResult, RunOutputOptions, SafeCmd
 from tests.helpers.catalogue import python_catalogue
+
+# A nested pair describes how the leaves are bracketed; a leaf is its index.
+type _AssociationTree = int | tuple[_AssociationTree, _AssociationTree]
+
+
+@st.composite
+def _association_trees(draw: st.DrawFn) -> tuple[int, _AssociationTree]:
+    """Generate a stage count and a random bracketing of that many stages.
+
+    Returns
+    -------
+    tuple[int, _AssociationTree]
+        The number of leaves and a binary tree over leaf indices describing
+        the order in which ``|`` is applied.
+    """
+    count = draw(st.integers(min_value=2, max_value=6))
+
+    def build(low: int, high: int) -> _AssociationTree:
+        """Bracket the half-open leaf range ``[low, high)``."""
+        if high - low == 1:
+            return low
+        split = draw(st.integers(min_value=low + 1, max_value=high - 1))
+        return (build(low, split), build(split, high))
+
+    return count, build(0, count)
+
+
+def _compose(tree: _AssociationTree, stages: list[SafeCmd]) -> SafeCmd | Pipeline:
+    """Fold ``stages`` with ``|`` following the bracketing in ``tree``."""
+    if isinstance(tree, int):
+        return stages[tree]
+    left, right = tree
+    return _compose(left, stages) | _compose(right, stages)
 
 
 def test_or_operator_composes_pipeline() -> None:
@@ -31,43 +66,28 @@ def test_or_operator_composes_pipeline() -> None:
     assert pipeline.parts == (first, second)
 
 
-def test_or_operator_composes_safe_cmd_with_pipeline() -> None:
-    """SafeCmd | Pipeline prepends the command to the pipeline."""
+@settings(max_examples=100, deadline=None)
+@given(shape=_association_trees())
+def test_or_operator_flattens_any_association(
+    shape: tuple[int, _AssociationTree],
+) -> None:
+    """``|`` flattens to source-order stages however the operands are bracketed.
+
+    Each stage carries a distinct argument, so the assertion pins the order as
+    well as the membership of ``parts``.
+    """
+    count, tree = shape
     echo = sh.make(ECHO)
-    first = echo("-n", "hello")
-    second = echo("-n", "world")
-    third = echo("-n", "!")
+    stages = [echo("-n", f"stage-{index}") for index in range(count)]
 
-    pipeline = first | (second | third)
+    pipeline = _compose(tree, stages)
 
-    assert pipeline.parts == (first, second, third)
-
-
-def test_or_operator_composes_pipeline_with_pipeline() -> None:
-    """Pipeline | Pipeline concatenates stages in order."""
-    echo = sh.make(ECHO)
-    first = echo("-n", "one")
-    second = echo("-n", "two")
-    third = echo("-n", "three")
-    fourth = echo("-n", "four")
-
-    left_pipeline = first | second
-    right_pipeline = third | fourth
-    pipeline = left_pipeline | right_pipeline
-
-    assert pipeline.parts == (first, second, third, fourth)
-
-
-def test_pipeline_can_append_stages() -> None:
-    """Pipeline | SafeCmd extends the pipeline in order."""
-    echo = sh.make(ECHO)
-    first = echo("-n", "one")
-    second = echo("-n", "two")
-    third = echo("-n", "three")
-
-    pipeline = first | second | third
-
-    assert pipeline.parts == (first, second, third)
+    assert isinstance(pipeline, Pipeline), (
+        "composing two or more stages must yield a Pipeline"
+    )
+    assert pipeline.parts == tuple(stages), (
+        "Pipeline stages must appear in source order regardless of bracketing"
+    )
 
 
 def test_pipeline_run_sync_enforces_scoped_allowlist() -> None:

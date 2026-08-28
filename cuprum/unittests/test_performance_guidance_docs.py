@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tests.helpers import extract_markdown_subsection
+from tests.helpers.docs import assert_documents
 
 
 def _repo_root() -> Path:
@@ -23,22 +24,17 @@ def test_users_guide_includes_backend_choice_guidance() -> None:
 
     section = extract_markdown_subsection(guide, heading="Choosing a stream backend")
 
-    assert "`auto`" in section, "Missing documentation clause: '`auto`'"
-    assert "`python`" in section, "Missing documentation clause: '`python`'"
-    assert "`rust`" in section, "Missing documentation clause: '`rust`'"
-    assert "before first backend resolution in the process" in section, (
-        "Missing documentation clause: 'before first backend resolution in the process'"
-    )
-    assert "inter-stage pipeline pumping" in section, (
-        "Missing documentation clause: 'inter-stage pipeline pumping'"
-    )
-    assert "stdout/stderr capture" in section, (
-        "Missing documentation clause: 'stdout/stderr capture'"
-    )
-    assert "Python pathway" in section, "Missing documentation clause: 'Python pathway'"
-    assert "`make benchmark-e2e`" in section, (
-        "Missing documentation clause: '`make benchmark-e2e`'"
-    )
+    for term in (
+        "`auto`",
+        "`python`",
+        "`rust`",
+        "before first backend resolution in the process",
+        "inter-stage pipeline pumping",
+        "stdout/stderr capture",
+        "Python pathway",
+        "`make benchmark-e2e`",
+    ):
+        assert_documents(section, term)
 
 
 def test_design_doc_matches_current_pumping_scope() -> None:

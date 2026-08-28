@@ -327,31 +327,31 @@ def test_the_develop_target_installs_pip_before_building() -> None:
     )
 
 
-def test_the_develop_target_defaults_to_a_debug_build() -> None:
-    """Builds run on every change stay unoptimized unless asked otherwise."""
-    command = _sole_line_containing(
-        _dry_run("develop"), "maturin develop", subject="develop recipe"
-    )
+@pytest.mark.parametrize(
+    ("goal_args", "expects_release_flag"),
+    [
+        pytest.param(("develop",), False, id="defaults_to_debug"),
+        pytest.param(
+            ("develop", "MATURIN_DEVELOP_FLAGS=--release"),
+            True,
+            id="forwards_release_flag",
+        ),
+    ],
+)
+def test_the_develop_target_release_flag(
+    goal_args: tuple[str, ...], *, expects_release_flag: bool
+) -> None:
+    """`develop` stays a debug build unless `MATURIN_DEVELOP_FLAGS` says so.
 
-    assert "--release" not in command, (
-        "`make develop` must default to a debug build; MATURIN_DEVELOP_FLAGS "
-        "is how a caller asks for an optimized one"
-    )
-
-
-def test_the_develop_target_forwards_the_release_flag() -> None:
-    """`MATURIN_DEVELOP_FLAGS` must reach the `maturin develop` invocation.
-
-    The benchmark ratchet shares this target instead of restating the build,
-    and it can only do that if the flag it passes actually takes effect.
+    Builds run on every change stay unoptimized unless asked otherwise. The
+    benchmark ratchet shares this target instead of restating the build, and
+    it can only do that if the flag it passes actually takes effect.
     """
     command = _sole_line_containing(
-        _dry_run("develop", "MATURIN_DEVELOP_FLAGS=--release"),
-        "maturin develop",
-        subject="develop recipe",
+        _dry_run(*goal_args), "maturin develop", subject="develop recipe"
     )
 
-    assert "--release" in command, (
-        "`make develop MATURIN_DEVELOP_FLAGS=--release` must pass --release "
-        "through to maturin, or the benchmark ratchet measures a debug build"
+    assert ("--release" in command) is expects_release_flag, (
+        f"expected --release presence to be {expects_release_flag} for "
+        f"`make {' '.join(goal_args)}`"
     )

@@ -259,26 +259,14 @@ class TracingHook:
 
     def _record_span_event(self, event: ExecEvent) -> None:
         """Record ``event``'s diagnostic fields as a span event, keyed by exec_id."""
-        exec_id = event.exec_id
-        if exec_id is None:
-            return
-
-        with self._lock:
-            active = self._span_states.get(exec_id)
-            if active is not None:
-                # Activity is what keeps a span off the eviction end of the
-                # registry; see _evict_overflow_locked.
-                self._active_spans.move_to_end(exec_id)
-
+        active = self._lookup_active_span(event, touch=True)
         if active is None:
             return
 
         # The span is left open and unmarked. An ``exit`` event closes it when
         # one arrives; ``teardown_error`` carries no such guarantee, so a span
         # left open here is bounded by ``_evict_overflow_locked`` instead. An
-        # ancillary event arriving after ``exit`` finds no entry and is dropped
-        # by the ``span is None`` guard above rather than touching an ended
-        # span.
+        # ancillary event arriving after ``exit`` finds no entry and is dropped.
         event_attrs: dict[str, object] = {}
         for field in _SPAN_FIELDS:
             value = getattr(event, field)
@@ -329,13 +317,28 @@ class TracingHook:
             if not active.is_closed:
                 active.span.add_event("cuprum.pipeline_fail_fast", attrs)
 
-    def _lookup_active_span(self, event: ExecEvent) -> _ActiveSpan | None:
-        """Return the active span state for ``event``, when its token is known."""
+    def _lookup_active_span(
+        self, event: ExecEvent, *, touch: bool = False
+    ) -> _ActiveSpan | None:
+        """Return the active span state for ``event``, when its token is known.
+
+        ``touch`` moves the span to the recently-active end of the registry, so
+        activity defers eviction; see ``_evict_overflow_locked``.
+
+        Returns
+        -------
+        _ActiveSpan or None
+            The open span for the event's token, or ``None`` when the event
+            carries no token or no span is registered for it.
+        """
         exec_id = event.exec_id
         if exec_id is None:
             return None
         with self._lock:
-            return self._span_states.get(exec_id)
+            active = self._span_states.get(exec_id)
+            if touch and active is not None:
+                self._active_spans.move_to_end(exec_id)
+            return active
 
     @staticmethod
     def _close_span(active: _ActiveSpan, *, ok: bool) -> None:

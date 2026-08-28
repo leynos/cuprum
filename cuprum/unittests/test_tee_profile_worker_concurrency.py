@@ -16,6 +16,7 @@ from benchmarks import _tee_profile_worker_backend, tee_profile_worker
 from cuprum.unittests._tee_profile_backend_support import (
     _backend_lists,
     _backend_pairs,
+    assert_worker_result_ok,
 )
 from cuprum.unittests._tee_profile_concurrency_support import (
     _EVENT_WAIT_TIMEOUT_SECONDS,
@@ -91,12 +92,8 @@ def test_concurrent_workers_preserve_backend_environment(
     assert len(recorded_results) == 2, (
         f"expected two worker results, got {recorded_results}"
     )
-    assert all(result["status"] == "ok" for result in recorded_results), (
-        f"expected all worker statuses to be ok, got {recorded_results}"
-    )
-    assert all(result["exit_code"] == 0 for result in recorded_results), (
-        f"expected all worker exit codes to be 0, got {recorded_results}"
-    )
+    for recorded_result in recorded_results:
+        assert_worker_result_ok(recorded_result)
     assert recorded_observations == ["python"], (
         f"expected first worker env to stay pinned, got {recorded_observations}"
     )

@@ -88,7 +88,7 @@ def _observe_timeout(
                 typ.cast("asyncio.subprocess.Process", process),
                 typ.cast("_SubprocessExecution", execution),
             )
-        return recorder
+        return recorder, process.pid
 
     return asyncio.run(run_case())
 

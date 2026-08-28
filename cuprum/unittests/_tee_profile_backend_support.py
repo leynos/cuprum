@@ -21,6 +21,35 @@ if typ.TYPE_CHECKING:
     from benchmarks import tee_profile_worker
 
 
+def assert_worker_result_ok(
+    result: tee_profile_worker.TeeProfileWorkerResult,
+    *,
+    expected_length: int | None = None,
+    expected_lines: int | None = None,
+) -> None:
+    """Assert a worker payload reports a clean run with the expected output.
+
+    Parameters
+    ----------
+    result : tee_profile_worker.TeeProfileWorkerResult
+        The worker payload under test.
+    expected_length : int or None, optional
+        Required ``captured_output_length``; unchecked when ``None``.
+    expected_lines : int or None, optional
+        Required ``stdout_line_count``; unchecked when ``None``.
+    """
+    assert result["status"] == "ok", f"expected worker status ok, got {result}"
+    assert result["exit_code"] == 0, f"expected worker exit code 0, got {result}"
+    if expected_length is not None:
+        assert result["captured_output_length"] == expected_length, (
+            f"expected captured output length {expected_length}, got {result}"
+        )
+    if expected_lines is not None:
+        assert result["stdout_line_count"] == expected_lines, (
+            f"expected {expected_lines} stdout line callbacks, got {result}"
+        )
+
+
 def _rust_backend_available() -> bool:
     """Report whether the Rust tee-profile backend can run in this environment."""
     return _backend._check_rust_available()

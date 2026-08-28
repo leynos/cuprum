@@ -21,7 +21,7 @@ from cuprum.sh import (
 )
 from tests.helpers.catalogue import python_builder as build_python_builder
 from tests.helpers.catalogue import python_catalogue
-from tests.helpers.execution import ExecuteFn, _RunKwargs
+from tests.helpers.execution import ExecuteFn, _RunKwargs, assert_capture_disabled
 from tests.helpers.timeouts import (
     child_argv,
     pending_tasks,
@@ -222,9 +222,7 @@ def test_allows_disabling_capture(
 
     result = execute(command, {"output": RunOutputOptions(capture=False)})
 
-    assert result.exit_code == 0
-    assert result.stdout is None
-    assert result.stderr is None
+    assert_capture_disabled(result)
 
 
 def test_timeout_raises_timeout_expired(

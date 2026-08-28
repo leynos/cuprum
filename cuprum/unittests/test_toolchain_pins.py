@@ -25,6 +25,7 @@ import re
 import tomllib
 import typing as typ
 
+import pytest
 import yaml
 
 from tests.helpers.docs import repo_root
@@ -34,6 +35,13 @@ if typ.TYPE_CHECKING:
 
 #: A release version: dotted digit groups, no range operators or wildcards.
 _VERSION_SHAPE_RE = re.compile(r"\d+(?:\.\d+)+")
+
+#: (tool package name, Makefile/ci.yml env var name, human-readable subject)
+#: for each lint/typecheck tool whose pin is synchronized across sites.
+_TOOL_PIN_SITES = (
+    ("ruff", "RUFF_VERSION", "Ruff"),
+    ("ty", "TY_VERSION", "ty"),
+)
 
 _MAKEFILE_PIN_RE_TEMPLATE = r"^{name}\s*\?=\s*(\S+)\s*$"
 
@@ -109,20 +117,20 @@ def _assert_pins_agree(pins: dict[str, str], subject: str) -> None:
     )
 
 
-def test_ruff_pins_are_synchronized() -> None:
-    """The Ruff pin is identical in the Makefile, ci.yml, and pyproject."""
-    _assert_pins_agree(_read_pin_sites(repo_root(), "ruff", "RUFF_VERSION"), "Ruff")
-
-
-def test_ty_pins_are_synchronized() -> None:
-    """The ty pin is identical in the Makefile, ci.yml, and pyproject."""
-    _assert_pins_agree(_read_pin_sites(repo_root(), "ty", "TY_VERSION"), "ty")
+@pytest.mark.parametrize(
+    ("tool", "env_name", "subject"),
+    _TOOL_PIN_SITES,
+    ids=[subject for _, _, subject in _TOOL_PIN_SITES],
+)
+def test_tool_pins_are_synchronized(tool: str, env_name: str, subject: str) -> None:
+    """A tool's pin is identical in the Makefile, ci.yml, and pyproject."""
+    _assert_pins_agree(_read_pin_sites(repo_root(), tool, env_name), subject)
 
 
 def test_ruff_and_ty_pins_are_release_versions() -> None:
     """Each pin is an exact release version, not a range or wildcard."""
     root = repo_root()
-    for tool, env_name in (("ruff", "RUFF_VERSION"), ("ty", "TY_VERSION")):
+    for tool, env_name, _subject in _TOOL_PIN_SITES:
         for site, value in _read_pin_sites(root, tool, env_name).items():
             assert _VERSION_SHAPE_RE.fullmatch(value), (
                 f"{site} pins {tool} as {value!r}, which is not an exact "

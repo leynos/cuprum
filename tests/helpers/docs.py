@@ -51,6 +51,29 @@ def read_users_guide() -> str:
     return read_doc("docs/users-guide.md")
 
 
+# -- Documentation clause assertions ------------------------------------------
+
+
+def assert_documents(section: str, term: str) -> None:
+    """Assert that a documentation section contains a required clause.
+
+    Parameters
+    ----------
+    section : str
+        The documentation text under contract.
+    term : str
+        The clause the section must contain verbatim.
+
+    Raises
+    ------
+    AssertionError
+        If the clause is absent from the section.
+    """
+    if term not in section:
+        msg = f"Missing documentation clause: '{term}'"
+        raise AssertionError(msg)
+
+
 # -- Case-insensitive assertion helpers ---------------------------------------
 
 

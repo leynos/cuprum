@@ -57,6 +57,15 @@ def pipeline_execution_strategy(
     return ("sync", _execute_sync)
 
 
+def assert_echoed_and_captured(
+    result: PipelineResult, sink: io.StringIO, expected: str
+) -> None:
+    """Assert a pipeline both captured and echoed the expected output."""
+    assert result.ok is True, "the pipeline should succeed"
+    assert result.stdout == expected, "capture must return the final stage output"
+    assert sink.getvalue() == expected, "echo must also tee the output to the sink"
+
+
 def _identity_pipeline() -> tuple[Pipeline, frozenset[Program]]:
     """Build a two-stage pipeline that forwards stdin to stdout."""
     catalogue, python_program = python_catalogue()
@@ -87,11 +96,7 @@ def test_pipeline_output_options_echo_for_run_and_run_sync(
             },
         )
 
-    assert result.ok is True, "the pipeline should succeed"
-    assert result.stdout == "echoed", "capture must return the final stage output"
-    assert stdout_sink.getvalue() == "echoed", (
-        "echo must also tee the output to the sink"
-    )
+    assert_echoed_and_captured(result, stdout_sink, "echoed")
 
 
 @pytest.mark.usefixtures("stream_backend")
@@ -116,11 +121,7 @@ def test_pipeline_flat_capture_echo_kwargs_are_deprecated_for_public_entrypoints
             },
         )
 
-    assert result.ok is True, "the pipeline should succeed"
-    assert result.stdout == "echoed", "capture must return the final stage output"
-    assert stdout_sink.getvalue() == "echoed", (
-        "echo must also tee the output to the sink"
-    )
+    assert_echoed_and_captured(result, stdout_sink, "echoed")
 
 
 _OUTPUT_OPTIONS = st.one_of(

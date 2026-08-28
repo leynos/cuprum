@@ -24,16 +24,18 @@ from __future__ import annotations
 
 import typing as typ
 
-from cuprum.adapters.tracing_adapter import (
-    InMemorySpan,
-    InMemoryTracer,
-    TracingHook,
-)
+from cuprum.adapters.tracing_adapter import InMemorySpan
 from cuprum.events import new_exec_id
-from cuprum.unittests._adapter_test_support import _make_exec_event
+from cuprum.unittests._adapter_test_support import (
+    Traced,
+    _make_exec_event,
+    tracing_hook,
+)
 
 if typ.TYPE_CHECKING:
     import pytest
+
+__all__ = ["tracing_hook"]
 
 # A single recycled PID shared by two distinct executions A and B.
 _SHARED_PID = 1234
@@ -42,14 +44,16 @@ _SHARED_PID = 1234
 class TestTracingExecIdCorrelation:
     """Events must reach the span of the execution that produced them."""
 
-    def test_recycled_pid_output_attaches_by_exec_id_not_pid(self) -> None:
+    def test_recycled_pid_output_attaches_by_exec_id_not_pid(
+        self,
+        tracing_hook: Traced,
+    ) -> None:
         """Delayed output for A never lands on B, despite the shared PID.
 
         A and B run on the same recycled PID. A's exit is missed, then A emits a
         late ``stdout``; keying by ``exec_id`` routes it to A, never to B.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
+        tracer, hook = tracing_hook
         exec_a = new_exec_id()
         exec_b = new_exec_id()
 
@@ -87,13 +91,15 @@ class TestTracingExecIdCorrelation:
             "B's span must only receive B's output, never A's delayed line"
         )
 
-    def test_recycled_pid_exit_closes_correct_execution(self) -> None:
+    def test_recycled_pid_exit_closes_correct_execution(
+        self,
+        tracing_hook: Traced,
+    ) -> None:
         """A delayed exit for A closes A and never touches B.
 
         B, still open on the recycled PID, retains its status until its own exit.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
+        tracer, hook = tracing_hook
         exec_a = new_exec_id()
         exec_b = new_exec_id()
 
@@ -143,14 +149,16 @@ class TestTracingExecIdCorrelation:
         assert span_b.ended is True, "B's exit must close B"
         assert span_b.status_ok is True, "B must retain its own clean status"
 
-    def test_recycled_pid_normal_flow_for_second_execution(self) -> None:
+    def test_recycled_pid_normal_flow_for_second_execution(
+        self,
+        tracing_hook: Traced,
+    ) -> None:
         """B's own output and exit still attach to and close B's span.
 
         Even with A left open on the shared PID, the ordinary path for B is
         unaffected.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
+        tracer, hook = tracing_hook
         exec_a = new_exec_id()
         exec_b = new_exec_id()
 
@@ -195,15 +203,17 @@ class TestTracingExecIdCorrelation:
         assert span_b.ended is True, "B's exit must close B's span"
         assert span_b.status_ok is True, "B's clean exit must mark its span ok"
 
-    def test_legacy_events_without_exec_id_are_ignored(self) -> None:
+    def test_legacy_events_without_exec_id_are_ignored(
+        self,
+        tracing_hook: Traced,
+    ) -> None:
         """Legacy PID-only events are ignored and cannot disturb a tracked span.
 
         This locks in the documented policy: without a correlation token an event
         is ambiguous, so the hook drops it rather than attach output/exit to the
         most recent span for the same PID.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
+        tracer, hook = tracing_hook
         exec_b = new_exec_id()
 
         # A live, correlated execution B on the PID.
@@ -245,6 +255,7 @@ class TestTracingExecIdCorrelation:
 
     def test_duplicate_exec_id_start_ends_prior_span(
         self,
+        tracing_hook: Traced,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A repeated exec_id ends the prior span after installing the new one.
@@ -255,8 +266,7 @@ class TestTracingExecIdCorrelation:
         exec_id→span mapping already points at the replacement by the time the
         prior span is ended and never exposes a missing entry.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
+        tracer, hook = tracing_hook
         exec_id = new_exec_id()
         hook(_make_exec_event(phase="start", overrides={"pid": 42, "exec_id": exec_id}))
         stale = tracer.spans[0]
@@ -288,15 +298,14 @@ class TestTracingExecIdCorrelation:
             "the replacement span must remain installed after the prior span ends"
         )
 
-    def test_events_without_exec_id_are_ignored(self) -> None:
+    def test_events_without_exec_id_are_ignored(self, tracing_hook: Traced) -> None:
         """Legacy events lacking an exec_id are ignored (uncorrelatable).
 
         Without a correlation token the hook cannot know which execution an
         event belongs to, so it declines to trace it rather than risk
         attaching output/exit to an unrelated PID's span.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
+        tracer, hook = tracing_hook
 
         base = {"program": "echo", "argv": ("echo", "hello"), "pid": 4321}
         # A full lifecycle, but every event predates the correlation token.
