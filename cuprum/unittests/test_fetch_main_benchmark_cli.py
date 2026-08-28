@@ -39,7 +39,7 @@ def test_main_returns_not_found_when_no_baseline_available(
     """CLI should return the bootstrap exit code when no baseline is found."""
     monkeypatch.setenv("GITHUB_TOKEN", "token")
     monkeypatch.setattr(
-        "benchmarks.fetch_main_benchmark_baseline.find_latest_artifact_download_url",
+        "benchmarks.fetch_main_benchmark_baseline.find_latest_artefact_download_url",
         lambda **_: None,
     )
 
@@ -69,7 +69,7 @@ def test_main_downloads_and_extracts_latest_baseline(
     """CLI should download the selected archive and extract it into output_dir."""
     monkeypatch.setenv("GITHUB_TOKEN", "token")
     monkeypatch.setattr(
-        "benchmarks.fetch_main_benchmark_baseline.find_latest_artifact_download_url",
+        "benchmarks.fetch_main_benchmark_baseline.find_latest_artefact_download_url",
         lambda **_: "https://example.invalid/baseline.zip",
     )
 

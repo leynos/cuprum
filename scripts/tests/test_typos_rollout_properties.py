@@ -23,8 +23,8 @@ if typ.TYPE_CHECKING:
     import types
 
 # Disjoint alphabets keep the generated corpora collision-free by
-# construction: stem expansions always contain ``is``/``iz``, so words drawn
-# from these alphabets can never alias an expanded stem, an accepted word,
+# construction: stem expansions retain a reserved spelling marker, so words
+# drawn from these alphabets can never alias an expanded stem, an accepted word,
 # or a correction key from another pool.
 _STEM_ALPHABET = "abcde"
 _ACCEPTED_ALPHABET = "mno"

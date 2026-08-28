@@ -39,6 +39,8 @@ open each document.
   `cuprum/context.py` into a `cuprum/context/` package.
 - [ADR-007: Subprocess execution module boundaries][adr-007] - accepted
   decision to split private subprocess execution by lifecycle concern.
+- [ADR-009: Enforce Oxford spelling in source][adr-009] - accepted decision to
+  govern identifiers and source prose with the repository spelling gate.
 
 ## Planning and validation references
 
@@ -56,5 +58,6 @@ open each document.
 [adr-005]: adr-005-unified-rust-availability-probe.md
 [adr-006]: adr-006-context-package-split.md
 [adr-007]: adr-007-subprocess-execution-module-boundaries.md
+[adr-009]: adr-009-enforce-oxford-spelling-in-source.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md

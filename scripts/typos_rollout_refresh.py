@@ -361,7 +361,7 @@ def _refresh_http(
             )
     except urllib.error.HTTPError as error:
         return _http_error_result(cache, error)
-    # ValueError covers oversized and unparseable response bodies (including
+    # ValueError covers oversized and unparsable response bodies (including
     # ``tomllib.TOMLDecodeError``): a bad download degrades to a valid stale
     # cache rather than failing the refresh outright.
     except (OSError, urllib.error.URLError, ValueError) as error:

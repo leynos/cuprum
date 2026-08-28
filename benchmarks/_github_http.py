@@ -115,7 +115,7 @@ def _with_retry[T](
             time.sleep(retry_delay)
 
 
-class _ArtifactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
+class _ArtefactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Strip GitHub-only headers when following cross-origin archive redirects."""
 
     @staticmethod
@@ -168,7 +168,7 @@ def _load_json_response(*, url: str, token: str) -> cabc.Mapping[str, object]:
         },
     )
 
-    opener = urllib.request.build_opener(_ArtifactArchiveRedirectHandler())
+    opener = urllib.request.build_opener(_ArtefactArchiveRedirectHandler())
 
     def _open_json_response() -> cabc.Mapping[str, object]:
         with opener.open(
@@ -204,7 +204,7 @@ def _download_bytes(*, url: str, token: str) -> bytes:
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
-    opener = urllib.request.build_opener(_ArtifactArchiveRedirectHandler())
+    opener = urllib.request.build_opener(_ArtefactArchiveRedirectHandler())
 
     def _open_archive() -> bytes:
         with opener.open(

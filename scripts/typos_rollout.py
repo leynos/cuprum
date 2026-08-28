@@ -47,6 +47,7 @@ generate_word_mappings = typos_rollout_dictionary.generate_word_mappings
 
 RefreshResult = typos_rollout_refresh.RefreshResult
 refresh_base = typos_rollout_refresh.refresh_base
+_MARKDOWN_IGNORE_PATTERNS = frozenset((r"`[^`\n]+`", r"(?s)```.*?```"))
 
 
 def _toml_string(value: str) -> str:
@@ -81,16 +82,34 @@ def render_typos_config(dictionary: Dictionary) -> str:
     tomllib.TOMLDecodeError
         If the rendered document fails the ``tomllib.loads`` parse check.
     """  # noqa: DOC502 - TOMLDecodeError propagates from tomllib.loads
+    global_patterns = tuple(
+        sorted(
+            pattern
+            for pattern in dictionary.ignore_patterns
+            if pattern not in _MARKDOWN_IGNORE_PATTERNS
+        )
+    )
+    markdown_patterns = tuple(
+        sorted(
+            pattern
+            for pattern in dictionary.ignore_patterns
+            if pattern in _MARKDOWN_IGNORE_PATTERNS
+        )
+    )
     lines = [
         "# Generated from the shared en-GB-oxendict dictionary.",
         "# Regenerate with scripts/generate_typos_config.py; do not edit by hand.",
         "",
         "[files]",
-        *_render_array("extend-exclude", dictionary.excluded_files),
+        *_render_array("extend-exclude", tuple(sorted(dictionary.excluded_files))),
         "",
         "[default]",
         'locale = "en-gb"',
-        *_render_array("extend-ignore-re", dictionary.ignore_patterns),
+        *_render_array("extend-ignore-re", global_patterns),
+        "",
+        "[type.markdown]",
+        *_render_array("extend-glob", ("*.md",)),
+        *_render_array("extend-ignore-re", markdown_patterns),
         "",
         "[default.extend-words]",
     ]

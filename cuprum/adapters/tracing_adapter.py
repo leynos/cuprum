@@ -176,7 +176,7 @@ class TracingHook:
         missing or half-updated entry. The detached stale span is then marked
         failed and ended *outside* the lock — exactly once, since it is already
         unreachable via the map — so an arbitrary ``Span`` whose
-        ``set_status``/``end`` blocks on I/O cannot serialise other executions'
+        ``set_status``/``end`` blocks on I/O cannot serialize other executions'
         handlers. The unrelated tracer setup (building attributes and starting
         the span) likewise runs outside the lock.
         """
@@ -215,7 +215,7 @@ class TracingHook:
             # Duplicated/reused exec_id: the prior span is now detached from the
             # map, so exactly one handler ends it. Mark and end it outside the
             # lock — a production Span may block on I/O in set_status()/end(),
-            # and holding the lifecycle lock across that would serialise every
+            # and holding the lifecycle lock across that would serialize every
             # other execution's handler.
             self._close_span(stale, ok=False)
 
@@ -225,7 +225,7 @@ class TracingHook:
         Must be called with ``self._lock`` held. Returns the detached spans so
         the caller can end them outside the lock — an arbitrary ``Span`` may
         block on I/O in ``set_status``/``end``, and holding the lifecycle lock
-        across that would serialise every other execution's handler.
+        across that would serialize every other execution's handler.
 
         Order is recency of activity, not of arrival: ``_record_span_event``
         moves a span to the back whenever one of its events lands, so a
@@ -248,7 +248,7 @@ class TracingHook:
             return []
         overflow = len(self._active_spans) - _MAX_ACTIVE_SPANS
         # ``popitem(last=False)`` takes the front — the least recently active
-        # end — without materialising the other thousand-odd keys the way a
+        # end — without materializing the other thousand-odd keys the way a
         # ``list(...)`` slice would.
         abandoned: list[_ActiveSpan] = []
         for _ in range(overflow):

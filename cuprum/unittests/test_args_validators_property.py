@@ -15,7 +15,7 @@ The invariants checked here are:
 - Category coverage: NUL bytes, ``..`` segments, whitespace, and a leading
   ``-`` map to their designated rejection categories.
 - Round-trip: constructed valid inputs classify as ``None`` and survive the
-  validators unchanged (``git_ref``) or normalised and idempotent
+  validators unchanged (``git_ref``) or normalized and idempotent
   (``safe_path``).
 """
 
@@ -93,15 +93,15 @@ def test_parent_segments_are_rejected(prefix: str, suffix: str) -> None:
 
 @given(segments=st.lists(_REF_SEGMENT, min_size=1, max_size=4))
 def test_absolute_paths_without_traversal_round_trip(segments: list[str]) -> None:
-    """Absolute, NUL-free, traversal-free paths validate and normalise stably."""
+    """Absolute, NUL-free, traversal-free paths validate and normalize stably."""
     # Use a platform-native absolute anchor: on Windows a leading "/" without a
     # drive is root-relative (not absolute), so anchor with a drive there.
     raw = _ABSOLUTE_ANCHOR + "/".join(segments)
     assert classify_path_string(raw, allow_relative=False) is None
-    normalised = safe_path(raw)
-    # A valid, traversal-free absolute path stays valid and normalises stably.
-    assert classify_path_string(normalised, allow_relative=False) is None
-    assert safe_path(normalised) == normalised
+    normalized = safe_path(raw)
+    # A valid, traversal-free absolute path stays valid and normalizes stably.
+    assert classify_path_string(normalized, allow_relative=False) is None
+    assert safe_path(normalized) == normalized
 
 
 @given(raw=_FUZZ_TEXT)

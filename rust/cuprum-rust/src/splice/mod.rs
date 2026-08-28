@@ -10,7 +10,7 @@
 //!
 //! - Returns `Some(Ok(bytes))` when splice succeeds and transfers all data
 //! - Returns `Some(Err(e))` for fatal I/O errors that should propagate
-//! - Returns `None` when splice is not supported, signaling fallback needed
+//! - Returns `None` when splice is not supported, signalling fallback needed
 //!
 //! Splice requires at least one pipe endpoint. Regular files, most sockets,
 //! and other file descriptor types return `EINVAL` and trigger the fallback.

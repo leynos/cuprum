@@ -155,7 +155,7 @@ def test_worker_resets_prepopulated_selector_metrics(
         """Delegate directly while exposing the helper selector metrics state."""
 
         def __init__(self) -> None:
-            """Initialise the helper base with deterministic selector timing."""
+            """Initialize the helper base with deterministic selector timing."""
             super().__init__({}, [], threading.Lock())
             self._delegate = _tee_profile_worker_backend._EnvBackendSelector(
                 clock=_SequenceClock([0.0, 0.0]),

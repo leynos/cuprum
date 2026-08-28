@@ -1,4 +1,4 @@
-"""Unit tests for benchmark artifact redirect argument and header policy."""
+"""Unit tests for benchmark artefact redirect argument and header policy."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from unittest import mock
 import pytest
 
 from benchmarks._github_http import (
-    _ArtifactArchiveRedirectHandler,
+    _ArtefactArchiveRedirectHandler,
     _download_bytes,
     _load_json_response,
     _redirect_request_arguments,
@@ -21,8 +21,8 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 
-def _make_github_artifact_request() -> urllib.request.Request:
-    """Build a GitHub artifact download request with standard auth headers."""
+def _make_github_artefact_request() -> urllib.request.Request:
+    """Build a GitHub artefact download request with standard auth headers."""
     return urllib.request.Request(
         "https://api.github.com/repos/leynos/cuprum/actions/artifacts/1/zip",
         headers={
@@ -217,13 +217,13 @@ def test_redirect_arguments_reject_invalid_types(
         ),
     ],
 )
-def test_artifact_redirect_handler_header_policy(
+def test_artefact_redirect_handler_header_policy(
     newurl: str,
     expected_headers: dict[str, str | None],
 ) -> None:
     """Redirect handler strips auth on cross-origin, preserves on same-origin."""
-    handler = _ArtifactArchiveRedirectHandler()
-    request = _make_github_artifact_request()
+    handler = _ArtefactArchiveRedirectHandler()
+    request = _make_github_artefact_request()
 
     redirected_request = handler.redirect_request(
         request,

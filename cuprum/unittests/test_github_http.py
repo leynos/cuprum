@@ -9,7 +9,7 @@ from unittest import mock
 
 import pytest
 
-from benchmarks._github_http import _ArtifactArchiveRedirectHandler, _with_retry
+from benchmarks._github_http import _ArtefactArchiveRedirectHandler, _with_retry
 from benchmarks.fetch_main_benchmark_baseline import _load_json_response
 
 
@@ -74,7 +74,7 @@ def test_load_json_response_rejects_oversized_response(
             token="".join(("tok", "en")),
         )
 
-    assert isinstance(received_handler, _ArtifactArchiveRedirectHandler), (
+    assert isinstance(received_handler, _ArtefactArchiveRedirectHandler), (
         "JSON loading must install the archive-safe redirect handler"
     )
 

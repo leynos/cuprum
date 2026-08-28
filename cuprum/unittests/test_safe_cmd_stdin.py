@@ -285,7 +285,7 @@ def test_stdin_input_with_timeout_escalation(
     ],
 )
 def test_timeout_with_blocked_stdin_writer_does_not_hang(
-    capture: bool,  # noqa: FBT001 - pytest parametrises this value.
+    capture: bool,  # noqa: FBT001 - pytest parametrizes this value.
     mode: str,
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],

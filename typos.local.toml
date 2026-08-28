@@ -11,12 +11,21 @@ accepted = []
 [words.corrections]
 
 [patterns]
-# Inline code spans hold identifiers, CLI flags, and API names that must match
-# their upstream spelling exactly, so they are not the prose this policy
-# governs. The shared dictionary already excludes fenced blocks for that
-# reason; single-backtick spans are the same category. The style guide states
-# the rule directly: "Keep United States (US) spelling when used in an API".
-ignore = ['`[^`\n]+`']
+ignore = [
+  # GitHub's Actions API and the established CLI expose these literal names.
+  '"artifacts"',
+  '/artifacts(?:[/?#]|$)',
+  '--artifact-name(?:[=\s"`]|$)',
+  # Spelling-policy tests must contain the deliberately invalid input tokens.
+  'mappings\["organise"\]',
+  '\("teh", "(?:the|ten)"\)',
+  '\("ises", "izes"\)',
+  # This byte-splitting fixture deliberately divides "second" after "sec".
+  'b"ond\\n"',
+  # Inline code spans quote identifiers verbatim (`color`, `--artifact-name`);
+  # their spelling is the quoted API's, not this repository's prose policy.
+  '`[^`\n]+`',
+]
 
 [files]
 exclude = []

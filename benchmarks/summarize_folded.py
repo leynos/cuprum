@@ -1,4 +1,4 @@
-"""Summarise folded stack samples into JSON rankings."""
+"""Summarize folded stack samples into JSON rankings."""
 
 from __future__ import annotations
 
@@ -104,7 +104,7 @@ def summarize_folded_file(
     limit: int = 30,
     example_limit: int = 3,
 ) -> dict[str, object]:
-    """Summarise a folded stack file into an agent-friendly JSON document.
+    """Summarize a folded stack file into an agent-friendly JSON document.
 
     Parameters
     ----------
@@ -174,7 +174,7 @@ def summarize_folded_file(
 
 
 def _parse_args() -> argparse.Namespace:
-    """Parse summariser CLI arguments."""
+    """Parse summarizer CLI arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("folded", type=pth.Path)
     parser.add_argument("--output", type=pth.Path, required=True)
@@ -184,7 +184,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    """Run the folded-stack summariser CLI.
+    """Run the folded-stack summarizer CLI.
 
     Returns
     -------

@@ -35,7 +35,7 @@ def run_profile_plan(*, config: TeeProfileDriverConfig) -> dict[str, object]:
     Returns
     -------
     dict[str, object]
-        JSON-serialisable plan with ``fixture_path``,
+        JSON-serializable plan with ``fixture_path``,
         ``wrapped_fixture_path``, ``output_dir``, ``profiler``,
         ``warmup_count``, ``repeat_count``, ``perf_frequency``,
         ``perf_call_graph``, and ``scenarios`` (list of dicts, each containing
@@ -200,7 +200,7 @@ def main() -> int:
     Raises
     ------
     ValueError
-        If the parsed subcommand is not recognised.
+        If the parsed subcommand is not recognized.
     """
     args = _base_parser().parse_args()
     config = _config_from_args(args)

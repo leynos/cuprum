@@ -13,7 +13,7 @@ from cuprum.unittests._maturin_pin_support import read_expected_maturin_version
 from tests.helpers.docs import repo_root
 from tests.helpers.maturin import (
     MaturinBuildError,
-    build_native_wheel_artifact,
+    build_native_wheel_artefact,
     maturin_script_locatable,
     toolchain_available,
     wheel_build_snapshot,
@@ -33,10 +33,10 @@ def _build_with_fake_subprocess_run(
 ) -> pth.Path:
     """Build the native wheel while replacing ``subprocess.run``."""
     monkeypatch.setattr(subprocess, "run", fake_run)
-    return build_native_wheel_artifact(repo_root(), tmp_path / "wheelhouse")
+    return build_native_wheel_artefact(repo_root(), tmp_path / "wheelhouse")
 
 
-def test_build_native_wheel_artifact_uses_locked_cargo_deps(
+def test_build_native_wheel_artefact_uses_locked_cargo_deps(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -47,7 +47,7 @@ def test_build_native_wheel_artifact_uses_locked_cargo_deps(
         command: list[str],
         **_kwargs: object,
     ) -> subprocess.CompletedProcess[str]:
-        """Record the command and create the expected wheel artifact."""
+        """Record the command and create the expected wheel artefact."""
         captured_command.extend(command)
         (tmp_path / "wheelhouse" / "cuprum-test.whl").touch()
         return subprocess.CompletedProcess(command, 0, "", "")
@@ -62,7 +62,7 @@ def test_build_native_wheel_artifact_uses_locked_cargo_deps(
     )
 
 
-def test_build_native_wheel_artifact_reports_maturin_stderr(
+def test_build_native_wheel_artefact_reports_maturin_stderr(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -133,7 +133,7 @@ def test_maturin_wheel_build_snapshot(
             "interpreters such as a `uv run --with ...` overlay."
         )
 
-    wheel_path = build_native_wheel_artifact(root, tmp_path / "wheelhouse")
+    wheel_path = build_native_wheel_artefact(root, tmp_path / "wheelhouse")
     snapshot_payload = wheel_build_snapshot(wheel_path)
     assert snapshot_payload["generator"] == expected, (
         f"Expected generator {expected!r}, found {snapshot_payload['generator']!r}"

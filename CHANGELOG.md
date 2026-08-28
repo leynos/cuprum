@@ -51,6 +51,13 @@
   with it instead of a bare `str`
   ([#271](https://github.com/leynos/cuprum/pull/271)).
 
+### Changed
+
+- **Source spelling enforcement:** Check tracked Python and Rust source as well
+  as Markdown for en-GB-oxendict spelling, including code identifiers, so
+  contributor changes can now fail the spelling gate on source-code drift
+  ([#259](https://github.com/leynos/cuprum/pull/259)).
+
 ### Fixed
 
 - **Repeated cancellation during teardown:** Repeated cancellation arriving
@@ -75,6 +82,7 @@
 
 ## [0.2.0] - 2026-06-21
 
+<!-- markdownlint-disable-next-line MD024 -->
 ### Changed
 
 - **Environment overlays (breaking):** Document that scoped `env(...)` overlays

@@ -107,7 +107,7 @@ class _TokenRegistration:
     __slots__ = ("_detached", "_token")
 
     def __init__(self) -> None:
-        """Initialise the handle in the attached, token-less state."""
+        """Initialize the handle in the attached, token-less state."""
         self._detached = False
         self._token: Token[CuprumContext] | None = None
 
