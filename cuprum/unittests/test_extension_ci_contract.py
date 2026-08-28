@@ -97,6 +97,14 @@ def _run_scripts() -> cabc.Iterator[tuple[str, str]]:
                 yield job_name, script
 
 
+def _is_environment_assignment(token: str) -> bool:
+    """Return whether *token* is a leading shell environment assignment."""
+    if "=" not in token:
+        return False
+    name, _ = token.split("=", maxsplit=1)
+    return name.isidentifier()
+
+
 def _script_runs_command(script: str, command: str) -> bool:
     """Return whether *script* executes *command* as leading shell tokens."""
     expected = tuple(shlex.split(command))
@@ -124,11 +132,9 @@ def _script_runs_command(script: str, command: str) -> bool:
             if token not in boundaries:
                 continue
             segment = tokens[segment_start:index]
-            while (
-                segment
-                and "=" in segment[0]
-                and segment[0].split("=", maxsplit=1)[0].isidentifier()
-            ):
+            while segment:
+                if not _is_environment_assignment(segment[0]):
+                    break
                 segment.pop(0)
             if tuple(segment[: len(expected)]) == expected:
                 return True
@@ -168,6 +174,8 @@ def test_the_ci_job_builds_the_extension_before_running_the_gated_tests() -> Non
         ("make develop", "make develop", True),
         ("make develop MATURIN_DEVELOP_FLAGS=--release", "make develop", True),
         ("TOOL=rust make develop", "make develop", True),
+        ("9TOOL=rust make develop", "make develop", False),
+        ("=rust make develop", "make develop", False),
         ("make " + "\\" + "\n" + "develop", "make develop", True),
         ("if make develop", "make develop", True),
         ("then make develop", "make develop", True),
