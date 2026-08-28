@@ -51,6 +51,7 @@ _ANCILLARY_PHASES = {
     "stdin_error": "write",
     "timeout": "wait",
     "teardown_error": "drain",
+    "capture_eof_grace_expired": "drain",
 }
 
 
@@ -240,6 +241,7 @@ class TestAdapterProjection:
         is_exit = phase == "exit"
         is_output = phase in {"stdout", "stderr"}
         is_timeout = phase == "timeout"
+        is_grace_expiry = phase == "capture_eof_grace_expired"
         is_fail_fast = phase == "pipeline_fail_fast"
         ancillary = phase in _ANCILLARY_PHASES
         return ExecEvent(
@@ -262,7 +264,7 @@ class TestAdapterProjection:
             operation=_ANCILLARY_PHASES.get(phase),
             error_type="TimeoutError"
             if is_timeout
-            else ("ValueError" if ancillary else None),
+            else ("ValueError" if ancillary and not is_grace_expiry else None),
             note="consumer drain failed: ValueError"
             if phase == "teardown_error"
             else None,
@@ -270,6 +272,8 @@ class TestAdapterProjection:
             timeout_mode="elapsed_deadline" if is_timeout else None,
             stage_index=0 if is_fail_fast else None,
             stage_count=2 if is_fail_fast else None,
+            eof_grace_s=0.25 if is_grace_expiry else None,
+            pending_readers=1 if is_grace_expiry else None,
         )
 
     @staticmethod

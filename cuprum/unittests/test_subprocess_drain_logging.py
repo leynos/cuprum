@@ -129,11 +129,23 @@ def test_an_expired_grace_window_is_recorded_with_its_pending_readers(
 
     async def run_case() -> None:
         """Drain one wedged reader and one that reached EOF, under capture."""
+        completed = asyncio.create_task(_completes("err"))
+        await completed
         consumers = (
             asyncio.create_task(_never_reaches_eof()),
-            asyncio.create_task(_completes("err")),
+            completed,
         )
-        await _drain_stream_consumers(consumers, capture=True)
+
+        async def expire_immediately(
+            _consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+        ) -> None:
+            """Close the test grace window without elapsed wall-clock time."""
+
+        await _drain_stream_consumers(
+            consumers,
+            capture=True,
+            eof_grace_waiter=expire_immediately,
+        )
 
     with caplog.at_level(logging.DEBUG, logger=_DRAIN_LOGGER):
         asyncio.run(run_case())

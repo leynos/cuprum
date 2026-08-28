@@ -144,6 +144,32 @@ print('stderr-line', file=sys.stderr)""",
             "test_records_output_events should preserve stdout line text"
         )
 
+    def test_records_capture_eof_grace_event_on_the_correlated_span(self) -> None:
+        """Grace expiry records bounded drain details on its execution span."""
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+        exec_id = new_exec_id()
+
+        hook(_make_exec_event(phase="start", overrides={"exec_id": exec_id}))
+        hook(
+            _make_exec_event(
+                phase="capture_eof_grace_expired",
+                overrides={
+                    "exec_id": exec_id,
+                    "operation": "drain",
+                    "eof_grace_s": 0.25,
+                    "pending_readers": 2,
+                },
+            )
+        )
+
+        assert tracer.spans[0].events == [
+            (
+                "cuprum.capture_eof_grace_expired",
+                {"operation": "drain", "eof_grace_s": 0.25, "pending_readers": 2},
+            )
+        ], "grace expiry must attach one bounded event to the matching exec_id"
+
     def test_disables_output_recording(self) -> None:
         """Hook skips output events when record_output=False."""
         _, span = self._run_traced_command(

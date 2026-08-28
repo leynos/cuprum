@@ -65,6 +65,15 @@
   observe-hook failures rather than swallowing them. Cuprum's own adapters are
   updated in the same change; third-party hooks written the same fail-closed
   way need an explicit arm.
+- **New `ExecPhase` value (breaking for fail-closed hooks):** `ExecPhase` gains
+  `capture_eof_grace_expired` when a capturing timeout drain exhausts its
+  bounded EOF grace with one or more readers still pending. Existing hooks that
+  reject unknown phases need an explicit arm. The event carries only
+  `operation="drain"`, `eof_grace_s`, and `pending_readers`; it never contains
+  captured stream payloads. `MetricsHook` counts it as
+  `cuprum_capture_eof_grace_expired_total`, labelled only by `program` and
+  `project`, and `TracingHook` records a correlated
+  `cuprum.capture_eof_grace_expired` span event.
 - **`ExecHook` import path (breaking):** Import `ExecHook` from top-level
   `cuprum` or its definition site, `cuprum.events`. The former
   `cuprum.context.ExecHook` re-export has been removed; only the import path

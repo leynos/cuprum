@@ -138,7 +138,8 @@ def structured_logging_hook(
     The hook attaches structured ``extra`` data to log records including:
 
     - ``cuprum_phase``: Event phase (plan, start, stdout, stderr, stdin,
-      stdin_error, exit, pipeline_fail_fast)
+      stdin_error, timeout, teardown_error, capture_eof_grace_expired, exit,
+      pipeline_fail_fast)
     - ``cuprum_program``: Program being executed
     - ``cuprum_argv``: Full argument vector
     - ``cuprum_pid``: Process ID (when available)
@@ -147,6 +148,8 @@ def structured_logging_hook(
       pipeline_fail_fast events)
     - ``cuprum_stage_index`` / ``cuprum_stage_count``: Position of the failing
       stage and the pipeline width (for pipeline_fail_fast events)
+    - ``cuprum_eof_grace_s`` / ``cuprum_pending_readers``: Fixed grace duration
+      and pending-reader count (for capture_eof_grace_expired events)
 
     The adapter projects selected execution fields into log extras; it does
     not emit the full tags mapping.
@@ -173,6 +176,11 @@ def _build_extra(event: ExecEvent) -> dict[str, object]:
     else:
         extra.update(common_fields)
         extra["cuprum_tags"] = dict(event.tags)
+    if event.phase == "capture_eof_grace_expired":
+        if event.eof_grace_s is not None:
+            extra["cuprum_eof_grace_s"] = event.eof_grace_s
+        if event.pending_readers is not None:
+            extra["cuprum_pending_readers"] = event.pending_readers
     return extra
 
 

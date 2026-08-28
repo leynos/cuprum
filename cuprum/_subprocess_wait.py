@@ -27,6 +27,7 @@ from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._subprocess_stdin import _cancel_stdin_writer
 from cuprum._subprocess_timeout import _require_timeout
 from cuprum._timeout_reporting import (
+    _report_capture_eof_grace_expiry,
     _report_teardown_drain_failure,
     _report_timeout_expiry,
 )
@@ -185,6 +186,12 @@ async def _drain_stream_consumers(
                     "cuprum_pending_readers": pending_count,
                     "cuprum_timeout_s": _CAPTURE_EOF_GRACE_S,
                 },
+            )
+            _report_capture_eof_grace_expiry(
+                context.observation,
+                pid=context.pid,
+                eof_grace_s=_CAPTURE_EOF_GRACE_S,
+                pending_readers=pending_count,
             )
     stdout_result, stderr_result = await _settle_consumers(consumers)
     drain_errors = tuple(

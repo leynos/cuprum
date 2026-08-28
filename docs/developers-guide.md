@@ -284,10 +284,11 @@ independent phase-count oracle.
 Two consequences are worth preserving when changing the mapping. Labels are
 projected only when the reducer yields at least one operation, so a `plan`
 event never touches `event.program` or the project tag. And the reducer is
-total over `ExecPhase` — all nine phases (`plan`, `start`, `stdout`,
-`stderr`, `exit`, `stdin`, `stdin_error`, `timeout`, `teardown_error`) have
+total over `ExecPhase` — every declared phase has an arm, including
+`capture_eof_grace_expired`,
 an arm, with `plan`, `stdin`, and `exit` handled directly and the remaining
-six routed through `_PHASE_COUNTERS` — and fail-closed beyond it: any other
+phases routed through `_PHASE_COUNTERS` — including
+`capture_eof_grace_expired` — and fail-closed beyond it: any other
 phase raises `_UnhandledMetricsPhaseError` rather than being silently
 dropped. That is deliberate, and its cost is worth stating plainly. A
 hook exception is not swallowed, so adding a value to `ExecPhase` without
@@ -785,8 +786,9 @@ synchronization of its own.
 **Phase dispatch.** `TracingHook.__call__` matches every `ExecEvent.phase` in a
 single `match`, and each phase falls into exactly one of four categories: span
 lifecycle (`start` opens a span, `exit` ends it), span event (`stdout`,
-`stderr`, `stdin_error`, `timeout`, and `teardown_error` record a
-`cuprum.<phase>` event on the already-open span), deliberately ignored (`plan`
+`stderr`, `stdin_error`, `timeout`, `teardown_error`, and
+`capture_eof_grace_expired` record a `cuprum.<phase>` event on the already-open
+span), deliberately ignored (`plan`
 and `stdin` carry no tracing semantics), or unhandled (the `case _` logs via
 `_log_unhandled_phase` instead of failing silently or raising). A new phase
 should be slotted into this policy rather than given an ad-hoc side path.
@@ -802,22 +804,27 @@ internal `threading.Lock`:
   the lock, so an arbitrary `Span` that blocks on I/O in `set_status()`/`end()`
   cannot stall other executions' handlers; each replaced span is still ended
   exactly once because it is already unreachable via the map.
-- **stdout/stderr/stdin_error/timeout/teardown_error** all route through the
+- **stdout/stderr/stdin_error/timeout/teardown_error/capture_eof_grace_expired**
+  all route through the
   single `_record_span_event` helper: it looks up the span for the event's
   `exec_id` under the lock — moving it to the most-recently-active end of the
   registry as it does so, see "Bounded span registry" below — then, outside
   the lock, copies whichever of the `line`, `operation`, `error_type`, `note`,
   `timeout_s`, and `timeout_mode` fields are set on the event onto a
   `cuprum.<phase>` span event (for example `cuprum.stdout`, `cuprum.timeout`,
-  or `cuprum.teardown_error`). New event-recording phases should extend this
-  shared field set rather than add a bespoke per-phase method. The helper
+  or `cuprum.teardown_error`). The grace-expiry event carries only
+  `eof_grace_s` and `pending_readers` in addition to the common correlation
+  fields. New event-recording phases should extend this shared field set rather
+  than add a bespoke per-phase method. The helper
   never sets the span status or ends the span — only `exit` does that — so
   `stdin_error` (the child process may legitimately ignore its stdin),
-  `timeout`, and `teardown_error` are all recorded as diagnostics without
+  `timeout`, `teardown_error`, and `capture_eof_grace_expired` are all recorded
+  as diagnostics without
   failing or closing the execution span. `stdout`/`stderr` recording is gated
   by the hook's `record_output` flag; the other three are recorded
   unconditionally, so a stdin-write failure, a timeout, or a teardown failure
   stays diagnosable even when line-by-line output recording is switched off.
+  Captured stdout and stderr payloads are never sent through observability.
   Because `teardown_error` can be an execution's last event — cleanup also
   runs on external cancellation and on a stdin-writer failure, and on those
   paths the original exception propagates with no `exit` — a span opened by
@@ -3049,7 +3056,7 @@ best-effort `cuprum.timeout` log record carrying the same stable `cuprum_*`
 `extra` fields. Both accompany — never replace — the public `TimeoutExpired`
 exception and the existing `start` and `exit` events.
 
-Two observe events are added to `ExecPhase`:
+Three observe events are added to `ExecPhase`:
 
 - **`timeout`** — emitted before `TimeoutExpired` when a run exceeds its
   deadline. Fields: `operation` (`"wait"`), `pid`, `timeout_s` (the configured
@@ -3062,14 +3069,25 @@ Two observe events are added to `ExecPhase`:
   `operation` (`"drain"`), `pid`, and `error_type` (the comma-joined failure
   classes). The failure is absorbed to preserve the primary timeout or
   cancellation, but stays observable through this event.
+- **`capture_eof_grace_expired`** — emitted when a capturing drain exhausts
+  `_CAPTURE_EOF_GRACE_S` with one or two readers still pending. It carries the
+  execution's `exec_id` and `pid`, `operation` (`"drain"`), `eof_grace_s`, and
+  `pending_readers`. It is projected to the
+  `cuprum_capture_eof_grace_expired_total` counter, labelled only by
+  `program` and `project`, and to a
+  `cuprum.capture_eof_grace_expired` event on the matching trace span. No
+  captured stream payload is emitted; unexpected reader failures remain the
+  separate `teardown_error` signal.
 
-Both expiry routes report through `_report_timeout_expiry` in
+The two timeout-expiry routes report through `_report_timeout_expiry` in
 `cuprum._timeout_reporting`, which pairs the log record with the observe event
 from one set of values so the two channels cannot drift. The single-command
 path calls it from `_wait_for_exit_code_within_timeout`; the pipeline path
 calls it from `_report_pipeline_timeout_expiry`, once per stage, because a
 pipeline enforces its deadline for the whole run and so never passes through
-the single-command wait helper.
+the single-command wait helper. Capture-grace expiry instead uses
+`_report_capture_eof_grace_expiry`, which has no payload or timeout exception
+to report.
 
 `_timeout_reporting` is a module of its own rather than part of
 `_subprocess_timeout` because this surface is shared by both paths: the
@@ -3086,10 +3104,12 @@ A hook that returns an awaitable is scheduled as a background task instead;
 those tasks are still tracked and drained during cleanup, and a failure there
 is aggregated with the active error into a `BaseExceptionGroup` rather than
 replacing it, so the primary error is preserved within the aggregate. The
-metrics adapter counts the two phases as `cuprum_timeouts_total` and
-`cuprum_teardown_errors_total`; the tracing
-adapter records them as ancillary span events that leave the span open for the
-subsequent `exit`.
+metrics adapter counts timeout and teardown phases as
+`cuprum_timeouts_total` and `cuprum_teardown_errors_total`, and counts
+`capture_eof_grace_expired` as
+`cuprum_capture_eof_grace_expired_total`; these counters use only the
+`program` and `project` labels. The tracing adapter records them as ancillary
+span events that leave the span open for the subsequent `exit`.
 
 The parallel `cuprum.timeout` log records use the same field names under the
 `cuprum_` prefix (`cuprum_operation`, `cuprum_pid`, `cuprum_timeout_s`,

@@ -1,9 +1,9 @@
 """Timeout and teardown telemetry reporting.
 
 Owns the two channels a timeout or teardown failure is reported on — the
-structured ``cuprum.timeout`` log record and the ``timeout`` /
-``teardown_error`` observe events — and the ``_report_*`` helpers that pair
-them so the channels cannot drift.
+structured ``cuprum.timeout`` log record and the ancillary ``timeout``,
+``teardown_error``, and ``capture_eof_grace_expired`` observe events — and the
+``_report_*`` helpers that pair them so the channels cannot drift.
 
 This lives apart from ``cuprum._subprocess_timeout`` because the reporting
 surface is shared: the single-command wait path and the pipeline deadline path
@@ -122,7 +122,7 @@ def _log_teardown_drain_failure(*, pid: int | None, joined: str) -> None:
 
 def _safe_emit(
     observation: _StageObservation,
-    phase: typ.Literal["timeout", "teardown_error"],
+    phase: typ.Literal["timeout", "teardown_error", "capture_eof_grace_expired"],
     details: _EventDetails,
 ) -> None:
     """Emit an observe event best-effort so telemetry cannot mask a failure.
@@ -190,6 +190,28 @@ def _emit_teardown_error_event(
             operation="drain",
             error_type=joined,
             note=f"consumer drain failed: {joined}",
+        ),
+    )
+
+
+def _report_capture_eof_grace_expiry(
+    observation: _StageObservation | None,
+    *,
+    pid: int | None,
+    eof_grace_s: float,
+    pending_readers: int,
+) -> None:
+    """Best-effort event for a bounded capture EOF grace expiry."""
+    if observation is None:
+        return
+    _safe_emit(
+        observation,
+        "capture_eof_grace_expired",
+        _EventDetails(
+            pid=pid,
+            operation="drain",
+            eof_grace_s=eof_grace_s,
+            pending_readers=pending_readers,
         ),
     )
 
@@ -284,6 +306,7 @@ __all__ = [
     "_emit_timeout_log",
     "_log_teardown_drain_failure",
     "_log_timeout_expiry",
+    "_report_capture_eof_grace_expiry",
     "_report_pipeline_timeout_expiry",
     "_report_teardown_drain_failure",
     "_report_timeout_expiry",

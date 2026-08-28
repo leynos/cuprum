@@ -169,10 +169,17 @@ B boundaries above.
   cancels and drains every still-pending stream-consumer task before the
   exception propagates, so no pending stream-consumer task is ever left behind.
 - **Observability.** These paths emit best-effort `timeout` and
-  `teardown_error` `ExecEvent` observe events, plus parallel `cuprum.timeout`
-  log diagnostics (documented in the developers' guide), that never mask
-  `TimeoutExpired`. Emission failures are swallowed so cleanup and exception
-  precedence are preserved.
+  `teardown_error` `ExecEvent` observe events, plus a
+  `capture_eof_grace_expired` event when a capturing drain exhausts its fixed
+  EOF-grace budget with readers still pending. The latter carries only the
+  correlated `exec_id`/`pid`, `operation="drain"`, `eof_grace_s`, and
+  `pending_readers`; `MetricsHook` counts it as
+  `cuprum_capture_eof_grace_expired_total` with only `program` and `project`
+  labels, and `TracingHook` records a matching
+  `cuprum.capture_eof_grace_expired` span event. Captured payloads are never
+  emitted. Parallel `cuprum.timeout` log diagnostics and all event emission
+  remain best-effort and never mask `TimeoutExpired`; unexpected reader
+  failures retain the separate `teardown_error` signal.
 
 This refinement changes no public API: `SafeCmd`, `Pipeline`, `TimeoutExpired`,
 its payload of partial captured output, and timeout/exception precedence are

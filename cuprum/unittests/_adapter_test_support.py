@@ -66,6 +66,8 @@ def _make_exec_event(
         "exec_id": new_exec_id(),
         "stage_index": None,
         "stage_count": None,
+        "eof_grace_s": None,
+        "pending_readers": None,
     }
     if overrides is not None:
         unknown = set(overrides) - {field.name for field in dc.fields(ExecEvent)}
@@ -95,6 +97,8 @@ def _make_exec_event(
         exec_id=typ.cast("ExecId | None", values["exec_id"]),
         stage_index=typ.cast("int | None", values["stage_index"]),
         stage_count=typ.cast("int | None", values["stage_count"]),
+        eof_grace_s=typ.cast("float | None", values["eof_grace_s"]),
+        pending_readers=typ.cast("int | None", values["pending_readers"]),
     )
 
 

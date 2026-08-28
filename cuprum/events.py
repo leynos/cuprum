@@ -33,6 +33,7 @@ type ExecPhase = typ.Literal[
     "stdin_error",
     "timeout",
     "teardown_error",
+    "capture_eof_grace_expired",
     "pipeline_fail_fast",
 ]
 
@@ -81,12 +82,14 @@ class ExecEvent:
         both of which are preserved.
 
         ``teardown_error`` marks a stream consumer that drained with an
-        unexpected error during cleanup, and carries no such ordering
-        guarantee. Cleanup also runs on external cancellation and on an
-        unexpected stdin-writer failure, and on those paths the original
+        unexpected error during cleanup. ``capture_eof_grace_expired`` marks a
+        capturing drain whose bounded EOF grace elapsed while one or two
+        readers remained pending. Neither ancillary diagnostic carries an
+        ordering guarantee. Cleanup also runs on external cancellation and on
+        an unexpected stdin-writer failure, and on those paths the original
         exception propagates unchanged: no ``exit`` event follows and no
-        ``TimeoutExpired`` is raised, so a ``teardown_error`` may be the last
-        event a consumer sees for that execution.
+        ``TimeoutExpired`` is raised, so an ancillary diagnostic may be the
+        last event a consumer sees for that execution.
     program:
         The allowlisted program that is executing.
     argv:
@@ -159,6 +162,11 @@ class ExecEvent:
         callers may shadow.
     stage_count:
         Pipeline width for ``pipeline_fail_fast``.
+    eof_grace_s:
+        Fixed capture EOF grace duration for ``capture_eof_grace_expired``.
+    pending_readers:
+        Number of readers (one or two) still pending when the capture EOF
+        grace elapsed. ``None`` for other phases.
 
     New optional fields are appended after ``exec_id`` rather than inserted
     beside the field they relate to. Inserting one ahead of ``exec_id`` would
@@ -191,6 +199,8 @@ class ExecEvent:
     timeout_mode: TimeoutMode | None = None
     stage_index: int | None = None
     stage_count: int | None = None
+    eof_grace_s: float | None = None
+    pending_readers: int | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]

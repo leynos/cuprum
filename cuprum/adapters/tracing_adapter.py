@@ -83,8 +83,18 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook, ExecId
 
 
-# Ancillary span-event fields; the timeout pair distinguishes expiry modes.
-_SPAN_FIELDS = ("line", "operation", "error_type", "note", "timeout_s", "timeout_mode")
+# Ancillary span-event fields; the timeout pair distinguishes expiry modes and
+# the grace pair describes the bounded drain outcome without stream contents.
+_SPAN_FIELDS = (
+    "line",
+    "operation",
+    "error_type",
+    "note",
+    "timeout_s",
+    "timeout_mode",
+    "eof_grace_s",
+    "pending_readers",
+)
 
 # ``teardown_error`` can be the last event, so without a bound it could retain a
 # span for the hook's lifetime. See ``_evict_overflow_locked`` for the ordering
@@ -146,7 +156,12 @@ class TracingHook:
             case "stdout" | "stderr":
                 if self._record_output:
                     self._record_span_event(event)
-            case "stdin_error" | "timeout" | "teardown_error":
+            case (
+                "stdin_error"
+                | "timeout"
+                | "teardown_error"
+                | "capture_eof_grace_expired"
+            ):
                 self._record_span_event(event)
             case "pipeline_fail_fast":
                 self._record_fail_fast(event)
@@ -220,29 +235,15 @@ class TracingHook:
             self._close_span(stale, ok=False)
 
     def _evict_overflow_locked(self) -> list[_ActiveSpan]:
-        """Detach the least recently active spans once the cap is exceeded.
+        """Detach least-recently-active overflow spans while holding the registry lock.
 
-        Must be called with ``self._lock`` held. Returns the detached spans so
-        the caller can end them outside the lock — an arbitrary ``Span`` may
-        block on I/O in ``set_status``/``end``, and holding the lifecycle lock
-        across that would serialize every other execution's handler.
-
-        Order is recency of activity, not of arrival: ``_record_span_event``
-        moves a span to the back whenever one of its events lands, so a
-        long-running execution that is still producing output is not evicted
-        ahead of a short one that went quiet. That is a heuristic, not a
-        guarantee — a live but silent execution can still be evicted, and its
-        span is then ended as failed while the process runs on. Evicting is
-        nonetheless preferred to refusing to register new spans: the cap exists
-        because executions that never emit ``exit`` accumulate, and a registry
-        that rejected newcomers instead would stop tracing *every* subsequent
-        execution once the leaked ones filled it.
+        The caller ends the detached spans outside the lock because a backend
+        callback may block. Activity, rather than arrival, determines recency.
 
         Returns
         -------
         list[_ActiveSpan]
-            The detached spans, for the caller to end outside the lock. Empty
-            when the registry is within its cap.
+            Detached spans for the caller to close.
         """
         if len(self._active_spans) <= _MAX_ACTIVE_SPANS:
             return []

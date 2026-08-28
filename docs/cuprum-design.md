@@ -780,11 +780,13 @@ Internally, command execution can be described in terms of events:
 - `timeout` – a run exceeded its deadline;
 - `teardown_error` – a stream consumer drained with an unexpected error
   during cleanup;
+- `capture_eof_grace_expired` – a capturing drain reached the fixed EOF-grace
+  limit while one or more stream consumers were still pending;
 - `pipeline_fail_fast` – a pipeline coordinator decision, emitted before it
   terminates remaining running stages after the first qualifying failure;
 - `exit` – process finished, with exit code and duration.
 
-These are the ten declared `ExecPhase` values. Hooks must still handle
+These are the eleven declared `ExecPhase` values. Hooks must still handle
 unrecognized runtime values defensively: manually constructed or future events
 may carry a value such as `unheard-of`.
 
@@ -804,6 +806,7 @@ class ExecEvent:
         "stdin_error",
         "timeout",
         "teardown_error",
+        "capture_eof_grace_expired",
         "pipeline_fail_fast",
     ]
     program: Program | None
@@ -1015,11 +1018,14 @@ The structured event stream (`ExecEvent`) is exposed via `sh.observe()` and
 implemented with the following decisions:
 
 - **Event phases:** Cuprum emits `plan`, `start`, `stdout`, `stderr`, `stdin`,
-  `stdin_error`, `exit`, `timeout`, `teardown_error`, and `pipeline_fail_fast`
+  `stdin_error`, `exit`, `timeout`, `teardown_error`,
+  `capture_eof_grace_expired`, and `pipeline_fail_fast`
   phases for both single commands and pipeline stages — the declared
   `ExecPhase` values. `timeout` and `teardown_error` are ancillary diagnostics
-  rather than lifecycle phases. Pipeline stage events are tagged with a stage
-  index and stage count.
+  rather than lifecycle phases. `capture_eof_grace_expired` is an ancillary
+  diagnostic emitted only when a capturing drain exhausts its fixed
+  `_CAPTURE_EOF_GRACE_S` budget with one or more readers still pending.
+  Pipeline stage events are tagged with a stage index and stage count.
 - **Fail-fast decision:** a pipeline emits one `pipeline_fail_fast` event when
   a non-final stage is the first to fail and at least one other stage remains
   running. It is published before every other still-running stage — upstream
@@ -1240,6 +1246,16 @@ preserving the `SafeCmd.run()` execution contract:
   absent text. This makes the timeout contract deterministic: a capturing
   `TimeoutExpired.stdout` or `.stderr` is always text, including when no reader
   text arrived before the bounded teardown window.
+- When that window expires with readers still pending, `_subprocess_wait` uses
+  `_timeout_reporting` to emit one correlated
+  `capture_eof_grace_expired` `ExecEvent`. The event carries the execution's
+  `exec_id` and `pid`, `operation="drain"`, `eof_grace_s`, and
+  `pending_readers`. `MetricsHook` projects it to
+  `cuprum_capture_eof_grace_expired_total` with only `program` and `project`
+  labels, while `TracingHook` adds a
+  `cuprum.capture_eof_grace_expired` event to the matching span. No captured
+  stream payload is emitted. Unexpected reader failures remain separately
+  reported as `teardown_error`.
 - `cuprum/_timeout_reporting.py` owns the two channels a timeout or teardown
   failure is reported on — the structured `cuprum.timeout` log record and the
   `timeout` / `teardown_error` observe events — and the `_report_*` helpers
@@ -1631,8 +1647,11 @@ design decisions guide these adapters:
 - Counter metrics (`cuprum_executions_total`, `cuprum_failures_total`,
   `cuprum_stdout_lines_total`, `cuprum_stderr_lines_total`,
   `cuprum_stdin_bytes_total`, `cuprum_stdin_errors_total`,
-  `cuprum_pipeline_fail_fast_total`) are incremented on the corresponding event
-  phases.
+  `cuprum_pipeline_fail_fast_total`,
+  `cuprum_capture_eof_grace_expired_total`) are incremented on the
+  corresponding event phases. The EOF-grace counter has only the low-cardinality
+  `program` and `project` labels; duration and pending-reader count remain event
+  fields, not labels.
 - Histogram metrics (`cuprum_duration_seconds`) are observed on `exit` events.
 - All metrics include `program` and `project` labels for multi‑dimensional
   analysis. The `project` label uses `_project_tag` and falls back to
@@ -1654,6 +1673,10 @@ design decisions guide these adapters:
 - Output lines can optionally be recorded as span events (controlled by
   `record_output` parameter). `stdin_error`, `timeout`, and `teardown_error`
   are also recorded as span events, unconditionally, without ending the span.
+  `capture_eof_grace_expired` is recorded as a
+  `cuprum.capture_eof_grace_expired` event on the matching `exec_id` span with
+  its `eof_grace_s` and `pending_readers` fields. Captured stream payloads
+  are never emitted through these projections.
 - Span status is set based on exit code (OK for 0, ERROR otherwise).
 - Pipeline stages create separate spans with `pipeline_stage_index` attribute.
 - The active-span registry is bounded (1024 entries) and evicts by recency of
@@ -1681,9 +1704,8 @@ design decisions guide these adapters:
   property-tested without a collector at all.
 - Labels are resolved only when the reducer yields at least one operation, so a
   `plan` event — which records nothing — never projects labels off the event.
-- The reducer is total over `ExecPhase` — all nine phases (`plan`, `start`,
-  `stdout`, `stderr`, `exit`, `stdin`, `stdin_error`, `timeout`,
-  `teardown_error`) have an arm — and fail-closed beyond it: any other phase
+- The reducer is total over `ExecPhase` — every declared phase has an arm,
+  including `capture_eof_grace_expired` — and fail-closed beyond it: any other phase
   raises `_UnhandledMetricsPhaseError` rather than being silently ignored. That
   is deliberate, and its cost is worth stating plainly. A hook exception is not
   swallowed, so adding a value to `ExecPhase` without adding an arm here would

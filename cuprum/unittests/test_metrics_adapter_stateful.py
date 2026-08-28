@@ -44,6 +44,9 @@ _KNOWN_PHASES: list[str] = [
     "stderr",
     "stdin",
     "stdin_error",
+    "timeout",
+    "teardown_error",
+    "capture_eof_grace_expired",
     "exit",
     "pipeline_fail_fast",
 ]
@@ -53,6 +56,9 @@ _UNIT_COUNTER_PHASES = (
     ("stdout", "cuprum_stdout_lines_total"),
     ("stderr", "cuprum_stderr_lines_total"),
     ("stdin_error", "cuprum_stdin_errors_total"),
+    ("timeout", "cuprum_timeouts_total"),
+    ("teardown_error", "cuprum_teardown_errors_total"),
+    ("capture_eof_grace_expired", "cuprum_capture_eof_grace_expired_total"),
     ("pipeline_fail_fast", "cuprum_pipeline_fail_fast_total"),
 )
 
