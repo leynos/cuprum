@@ -47,7 +47,7 @@ class _ResultTag(enum.StrEnum):
 
 
 def _make_pipe_result(tag: _ResultTag) -> object:
-    """Materialise a pipe-task result for the given tag as a fresh object."""
+    """Materialize a pipe-task result for the given tag as a fresh object."""
     match tag:
         case _ResultTag.OK:
             return object()
