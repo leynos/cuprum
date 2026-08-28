@@ -100,7 +100,18 @@ def _run_scripts() -> cabc.Iterator[tuple[str, str]]:
 def _script_runs_command(script: str, command: str) -> bool:
     """Return whether *script* executes *command* as leading shell tokens."""
     expected = tuple(shlex.split(command))
-    separators = frozenset({"&", "&&", ";", "|", "||"})
+    boundaries = frozenset({
+        "&",
+        "&&",
+        ";",
+        "|",
+        "||",
+        "if",
+        "then",
+        "elif",
+        "else",
+        "do",
+    })
 
     for line in script.replace("\\\n", " ").splitlines():
         lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
@@ -110,7 +121,7 @@ def _script_runs_command(script: str, command: str) -> bool:
         segment_start = 0
 
         for index, token in enumerate([*tokens, ";"]):
-            if token not in separators:
+            if token not in boundaries:
                 continue
             segment = tokens[segment_start:index]
             while (
@@ -158,6 +169,11 @@ def test_the_ci_job_builds_the_extension_before_running_the_gated_tests() -> Non
         ("make develop MATURIN_DEVELOP_FLAGS=--release", "make develop", True),
         ("TOOL=rust make develop", "make develop", True),
         ("make " + "\\" + "\n" + "develop", "make develop", True),
+        ("if make develop", "make develop", True),
+        ("then make develop", "make develop", True),
+        ("elif make develop", "make develop", True),
+        ("else make develop", "make develop", True),
+        ("do make develop", "make develop", True),
         ("# make develop", "make develop", False),
         ('echo "make develop"', "make develop", False),
         ("maturin develop", "maturin develop", True),
@@ -171,7 +187,9 @@ def test_script_runs_command_ignores_comments_and_non_commands(
     expected: bool,
 ) -> None:
     """The workflow matcher detects executable commands, not text mentions."""
-    assert _script_runs_command(script, command) is expected
+    assert _script_runs_command(script, command) is expected, (
+        f"expected script {script!r} to match command {command!r} as {expected}"
+    )
 
 
 def test_only_boundary_jobs_build_the_extension() -> None:
