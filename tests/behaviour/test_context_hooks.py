@@ -16,6 +16,7 @@ from cuprum.context import (
     scoped,
 )
 from tests.behaviour._context_hooks_support import (
+    ThreadAllowlistResults,
     build_after_hook_context,
     build_before_hook_context,
     run_async_allowlist_checks,
@@ -334,16 +335,17 @@ def when_threads_check_allowlist(
     thread_setup : dict[str, frozenset[Program]]
         Per-thread allowlists keyed by thread name.
     """
-    behaviour_state["thread_results"] = run_threaded_allowlist_checks(
+    thread_results: ThreadAllowlistResults = run_threaded_allowlist_checks(
         thread_setup,
     )
+    behaviour_state["thread_results"] = thread_results
 
 
 @then("each thread sees its own allowlist")
 def then_threads_see_own_allowlist(behaviour_state: dict[str, object]) -> None:
     """Verify thread isolation."""
     results = typ.cast(
-        "dict[str, tuple[bool, bool]]",
+        "ThreadAllowlistResults",
         behaviour_state["thread_results"],
     )
     assert results["thread1"] == (True, False), "thread1 isolation boundary failed"
