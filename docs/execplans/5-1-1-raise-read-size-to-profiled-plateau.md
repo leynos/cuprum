@@ -190,10 +190,10 @@ This task is complete only when:
 
 ## Progress
 
-- [ ] 2026-08-29 Stage A: the existing implementation PR is stacked on #318,
-  not two commits directly behind `origin/main`. Rebase only this branch's four
-  ExecPlan commits onto `origin/main`, then retarget #321 to `main`, so the PR
-  does not duplicate #318's eleven commits.
+- [x] 2026-08-29 Stage A: rebased the five branch-exclusive ExecPlan commits
+  from parent `41707268` onto `origin/main` (`ba32d3f5`) without conflicts.
+  The existing PR will be retargeted to `main` after the force-with-lease push,
+  so it no longer duplicates the stale #318 stack.
 - [ ] EP-M1: branch rebased; line-splitting defect fixed with a behavioural
   red-to-green test.
 - [ ] EP-M2: read size threaded as an injectable parameter; sweep support added;
@@ -214,6 +214,15 @@ This task is complete only when:
   Impact: Stage A must rebase the four branch-exclusive commits with
   `git rebase --onto origin/main <parent-head>` and retarget #321 to `main`.
   This preserves the approved plan and removes the obsolete stack relationship.
+
+- Observation: the remote stack parent had been rewritten after this branch
+  forked.
+  Evidence: rebasing against the current remote parent would have selected its
+  older common ancestor and replayed unrelated lint-rollout commits. The parent
+  of the first plan commit, `41707268`, selected exactly the four original plan
+  commits plus this progress-record commit; all five replayed cleanly.
+  Impact: the completed Stage A rebase is a narrow, conflict-free replay onto
+  `ba32d3f5`, not a merge of the current #318 branch.
 
 - Observation: line emission is already read-size dependent, so the change is
   not behaviour-preserving as originally assumed.
@@ -302,6 +311,15 @@ This task is complete only when:
   number, draft state, and remote branch.
   Date/Author: 2026-08-29, implementation agent. No requirement, interface,
   dependency, or acceptance criterion changes.
+
+- Decision D11: use the first plan commit's parent as the rebase cut point.
+  Rationale: the current #318 branch no longer shared its original tip with
+  this branch, so it was unsuitable as an upstream argument. Commit `41707268`
+  is the immediate parent of `8e72b33f`, the first ExecPlan commit, and therefore
+  selects the exact independent PR payload. The replay completed without
+  conflicts on `origin/main` at `ba32d3f5`.
+  Date/Author: 2026-08-29, implementation agent. This completes the Stage A
+  stack correction and does not alter functional scope.
 
 - Decision D1: the 20% gate is measured against a fresh 4096 control taken in
   the same interleaved sweep session.
