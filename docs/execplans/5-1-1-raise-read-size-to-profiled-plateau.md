@@ -142,7 +142,7 @@ This task is complete only when:
   Mitigation: the gate turns on roughly 1.7 percentage points. At a realistic
   per-run coefficient of variation the confidence interval straddles the
   threshold, so a five-repeat protocol would accept or reject on noise. Decision
-  D9 raises the protocol to at least fifteen interleaved, randomised repeats
+  D9 raises the protocol to at least fifteen interleaved, randomized repeats
   with a bootstrap interval.
 
 - Risk: larger echo writes lengthen event-loop stalls.
@@ -309,7 +309,7 @@ This task is complete only when:
   pipe capacity or buffer shuffling.
   Rationale: `_READ_SIZE` never reaches a syscall, and deleting from the front
   of a `bytearray` is not a memmove. The honest mechanism is per-read fixed
-  overhead amortised over the slice, bottoming out when one read drains a whole
+  overhead amortized over the slice, bottoming out when one read drains a whole
   pipe-full. A wrong causal model in the design document is what a future
   maintainer will reason from when someone proposes 128 KiB. Record also that
   `st_blksize` on a pipe is 4096, so CPython's `open()` heuristic would
@@ -371,11 +371,11 @@ This task is complete only when:
   invitation to change them together.
   Date/Author: 2026-08-29, planning agent.
 
-- Decision D9: the measurement protocol is interleaved, randomised, and
+- Decision D9: the measurement protocol is interleaved, randomized, and
   interval-gated.
   Rationale: the gate turns on about 1.7 percentage points, which a median of
   five cannot resolve. Run at least fifteen rounds; within each round visit the
-  read sizes in randomised order so thermal drift and page-cache eviction of the
+  read sizes in randomized order so thermal drift and page-cache eviction of the
   fixture affect all points equally; gate on the upper bound of a bootstrap
   interval for the ratio rather than the point estimate; declare inconclusive if
   effect size over pooled dispersion is below 3. The extra cost is roughly two
@@ -385,7 +385,7 @@ This task is complete only when:
 ## Outcomes & retrospective
 
 To be completed at EP-M5. Record the chosen value, the measured curve with
-intervals, the realised ratchet shift against the prediction, any scenario that
+intervals, the realized ratchet shift against the prediction, any scenario that
 regressed, and whether the line-splitting fix surfaced further questions,
 notably whether splitting on vertical tab, form feed, and U+2028 while retaining
 the separator is intended.
@@ -442,10 +442,10 @@ The benchmark harness, under `benchmarks/`:
 
 Terms:
 
-- *Read size*: the maximum bytes requested per read on an asyncio stream. A read
+- _Read size_: the maximum bytes requested per read on an asyncio stream. A read
   returns at most that many and at least one, or zero at end of file.
-- *Plateau*: the point beyond which increasing the read size stops helping.
-- *Negative control*: a temporary seeded fault used to prove a test can fail.
+- _Plateau_: the point beyond which increasing the read size stops helping.
+- _Negative control_: a temporary seeded fault used to prove a test can fail.
 
 ## Conformance basis
 
@@ -598,7 +598,7 @@ Obligations:
   dispersion is inspectable. Discard any sample whose stream pipe capacity is
   below 65536, since such a sample structurally cannot show the effect.
 
-V1 and V2 exercise a Python-only path by design, so parameterising them over the
+V1 and V2 exercise a Python-only path by design, so parameterizing them over the
 `stream_backend` fixture would double their runtime while advertising Rust
 coverage that does not exist. V3 and the existing parity scenario carry the
 backend-parity burden.
@@ -743,7 +743,7 @@ Stage E:
 export RUSTFLAGS="-C force-frame-pointers=yes"
 uv run maturin develop --release --manifest-path rust/cuprum-rust/Cargo.toml
 set -o pipefail; uv run python -m benchmarks.profile_tee_hotpath \
-  --read-sizes 4096,8192,16384,32768,65536 --rounds 15 --randomise-order \
+  --read-sizes 4096,8192,16384,32768,65536 --rounds 15 --randomize-order \
   run-scenario --scenario tee-devnull-nocb-s1 2>&1 | tee /tmp/5-1-1-sweep.log
 ```
 
@@ -836,8 +836,7 @@ stream:
 | 65536     | 1024       | 65536     | 65536                  |
 | 262144    | 1024       | 65536     | 65536                  |
 
-_Table 1: read-call count falls sixteenfold to a floor at 65536, while peak
-per-stream memory is unchanged._
+_Table 1: read calls fall to a floor at 65536; peak memory is unchanged._
 
 The argv ceiling, measured by invoking `/bin/true` with one oversized argument:
 
@@ -879,7 +878,7 @@ In `benchmarks/`, `read_size` joins `TeeProfileWorkerConfig` and
 `TeeProfileScenario` rather than `_build_worker_result`'s argument list, which
 is at the `max-args` limit. It is emitted by `_worker_command` and appears in
 `TeeProfileWorkerResult`, read back from the module at measurement time. The
-existing driver gains `--read-sizes`, `--rounds`, and `--randomise-order`; no
+existing driver gains `--read-sizes`, `--rounds`, and `--randomize-order`; no
 new module is added.
 
 New test artefact: `cuprum/unittests/test_stream_read_size.py` for V0 and V4.
@@ -912,7 +911,7 @@ the plateau rationale from a convergence-of-ceilings story to the measured
 call-count floor (D3), since `_READ_SIZE` never reaches a syscall; struck the
 memory risk, its 5% tolerance, and the planned users'-guide note after measuring
 that peak per-stream memory is invariant; strengthened the measurement protocol
-to interleaved randomised rounds with a bootstrap interval (D9); added the
+to interleaved randomized rounds with a bootstrap interval (D9); added the
 capture-only scenario so the phase-6 gate this plan exists to protect is
 measured honestly, and added the PTY, text-sink, and line-callback scenarios
 after measuring a sixteenfold rise in worst-case event-loop stall; added the CI
