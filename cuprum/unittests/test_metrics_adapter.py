@@ -99,15 +99,14 @@ print('err1', file=sys.stderr)""",
         assert durations[0] >= 0.0, "duration samples should be non-negative"
 
     @pytest.mark.parametrize(
-        ("phase", "extra_kwargs", "metric_name", "expected_value"),
+        ("phase", "extra_kwargs", "expected_counter"),
         [
             (
                 "stdin_error",
                 {"note": "BrokenPipeError: forced EPIPE"},
-                "cuprum_stdin_errors_total",
-                1.0,
+                ("cuprum_stdin_errors_total", 1.0),
             ),
-            ("stdin", {"byte_count": 7}, "cuprum_stdin_bytes_total", 7.0),
+            ("stdin", {"byte_count": 7}, ("cuprum_stdin_bytes_total", 7.0)),
         ],
     )
     def test_counts_stdin_metrics(
@@ -115,10 +114,10 @@ print('err1', file=sys.stderr)""",
         metrics_hook: Metered,
         phase: str,
         extra_kwargs: dict[str, object],
-        metric_name: str,
-        expected_value: float,
+        expected_counter: tuple[str, float],
     ) -> None:
         """Hook increments stdin byte and error counters for stdin events."""
+        metric_name, expected_value = expected_counter
         metrics, hook = metrics_hook
         program = Program(sys.executable)
 
