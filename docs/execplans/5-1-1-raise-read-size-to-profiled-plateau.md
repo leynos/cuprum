@@ -351,10 +351,11 @@ The tests that depend on the constant:
   fed to an in-process `asyncio.StreamReader`, plus a stub reader yielding
   `_READ_SIZE`-sized chunks (line 308). These scale automatically and use no
   real pipes, so they are safe at the larger size.
-- `tests/helpers/parity.py` builds the property pipeline. `chunked_writer_script`
-  generates a Python program that reads a base64 payload from `sys.argv[1]` and
-  chunk sizes from `sys.argv[2]`, then writes the payload in those chunks. This
-  is the argv-limited path described in `Risks`. The docstring of
+- `tests/helpers/parity.py` builds the property pipeline.
+  `chunked_writer_script` generates a Python program that reads a base64
+  payload from `sys.argv[1]` and chunk sizes from `sys.argv[2]`, then writes
+  the payload in those chunks. This is the argv-limited path described in
+  `Risks`. The docstring of
   `utf8_stress_payload` (line 105) states "4096-byte reads" and will need
   updating.
 - `tests/features/` holds Gherkin feature files paired with pytest-bdd step
@@ -441,8 +442,8 @@ Non-trivial axioms this reasoning depends on:
   pauses its transport above twice that. Measured on the target machine;
   relevant only to the plateau explanation, not to correctness.
 - A3: Linux caps a single `argv` entry at `MAX_ARG_STRLEN` (131072 bytes).
-  Measured empirically on the target machine; a 98304-byte payload base64-encodes
-  to exactly 131072 bytes and raises `E2BIG`.
+  Measured empirically on the target machine; a 98304-byte payload
+  base64-encodes to exactly 131072 bytes and raises `E2BIG`.
 - A4: Default pipe capacity is 65536 bytes and can shrink under per-user page
   pressure. Measured; drives the preference for in-process readers in new tests.
 
@@ -504,9 +505,10 @@ Obligations:
   end-to-end coverage at the new boundary.
   Domain: payload sizes in `[_READ_SIZE - 512, _READ_SIZE + 512]`, run against
   both the Python and Rust backends, subject to the A3 ceiling.
-  Artefact: `test_stream_preserves_random_payloads_around_python_read_size_boundary`
-  in `cuprum/unittests/test_stream_property_based.py`, plus a new module-level
-  assertion that `_BOUNDARY_MAX_SIZE` stays within the argv budget.
+  Artefact: the boundary test
+  `test_stream_preserves_random_payloads_around_python_read_size_boundary`
+  in `cuprum/unittests/test_stream_property_based.py`, plus a new
+  module-level assertion that `_BOUNDARY_MAX_SIZE` stays within the argv budget.
   Evidence: the test passes for both backends after the bump; the new assertion
   fails at import time if a future read size exceeds the budget.
   Non-vacuity: the generated cut points guarantee multi-chunk writes upstream;
@@ -640,9 +642,9 @@ Write `docs/read-size-sweep-<date>.md` and commit its JSON. Cross-link it from
 rationale and the 64 KiB convergence), `docs/developers-guide.md` ("Canonical
 stream-drain loop": the new value, the two-binding hazard, and the override
 helper), and `docs/users-guide.md` ("Performance extensions": the per-stream
-transient memory trade-off). Correct the stale citations at `docs/roadmap.md:236`
-and `docs/adr-001-rust-extension.md:14`. Mark roadmap item 5.1.1 done. Go/no-go:
-all gates green.
+transient memory trade-off). Correct the stale citations at
+`docs/roadmap.md:236` and `docs/adr-001-rust-extension.md:14`. Mark roadmap
+item 5.1.1 done. Go/no-go: all gates green.
 
 ## Milestones and plateaus
 
@@ -730,8 +732,8 @@ Stage B (sweep tooling, tests first):
 set -o pipefail; uv run pytest benchmarks/ -k read_size 2>&1 | tee /tmp/5-1-1-sweep-red.log
 ```
 
-Expected: the new tests fail because `--read-size` does not yet exist. Implement,
-then:
+Expected: the new tests fail because `--read-size` does not yet exist.
+Implement, then:
 
 ```plaintext
 set -o pipefail; uv run pytest benchmarks/ 2>&1 | tee /tmp/5-1-1-sweep-green.log
@@ -752,8 +754,8 @@ set -o pipefail; uv run python -m benchmarks.read_size_sweep \
   --output dist/benchmarks/read-size-sweep.json 2>&1 | tee /tmp/5-1-1-sweep.log
 ```
 
-Expected: one median per read size, monotonically improving then flattening. Then
-repeat with `--scenario echo-devnull-nocb-s1`,
+Expected: one median per read size, monotonically improving then flattening.
+Then repeat with `--scenario echo-devnull-nocb-s1`,
 `--scenario echo-devnull-nocb-s4-python`, and
 `--scenario echo-devnull-nocb-s4-rust` to check for regression. Compute the
 acceptance ratio as the chosen value's median divided by the 4096 median from
@@ -799,7 +801,8 @@ coverage database is shared and concurrent runs corrupt it.
 ## Validation and acceptance
 
 A user can observe success by running a command that produces a large captured
-output and seeing it complete measurably faster, with identical bytes. Concretely:
+output and seeing it complete measurably faster, with identical bytes.
+Concretely:
 
 1. Run the gated benchmark scenario before and after the change and compare
    medians. Expect the post-change median to be at or below 80% of the
