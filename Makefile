@@ -228,6 +228,7 @@ spelling-helper-test: build spelling-config ## Validate the shared spelling-poli
 		--with pytest-cov==7.0.0 \
 		python -m pytest scripts/tests/test_typos_rollout.py \
 		scripts/tests/test_typos_rollout_properties.py \
+		scripts/tests/test_typos_rollout_spelling_gate.py \
 		scripts/tests/test_typos_rollout_render_properties.py \
 		scripts/tests/test_typos_rollout_freshness_properties.py \
 		scripts/tests/test_typos_rollout_refresh.py \
