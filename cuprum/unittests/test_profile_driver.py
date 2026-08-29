@@ -29,6 +29,7 @@ _SCENARIO_NAMES_WITH_RUST: list[str] = [
     "echo-textblackhole-nocb-s1",
     "echo-pty-nocb-s1",
     "tee-devnull-nocb-s1",
+    "capture-devnull-nocb-s1",
     "echo-devnull-cb-s1",
     "echo-devnull-nocb-s4-python",
     "echo-devnull-nocb-s4-rust",
@@ -39,6 +40,7 @@ _SCENARIO_NAMES_WITHOUT_RUST: list[str] = [
     "echo-textblackhole-nocb-s1",
     "echo-pty-nocb-s1",
     "tee-devnull-nocb-s1",
+    "capture-devnull-nocb-s1",
     "echo-devnull-cb-s1",
     "echo-devnull-nocb-s4-python",
 ]
@@ -157,6 +159,7 @@ def test_scenario_matrix_order_is_stable(
         "echo-textblackhole-nocb-s1",
         "echo-pty-nocb-s1",
         "tee-devnull-nocb-s1",
+        "capture-devnull-nocb-s1",
         "echo-devnull-cb-s1",
         "echo-devnull-nocb-s4-python",
     ]

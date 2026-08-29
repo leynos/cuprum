@@ -12,8 +12,8 @@ from benchmarks._benchmark_type_validators import (
     _validate_minimum_int,
 )
 from benchmarks.tee_profile_worker import TeeProfileWorkerConfig
-from cuprum._streams_pump import _READ_SIZE
 from cuprum import is_rust_available as can_use_rust_backend
+from cuprum._streams_pump import _READ_SIZE
 
 if typ.TYPE_CHECKING:
     import argparse
@@ -193,6 +193,16 @@ def _single_stage_no_callback_scenarios(
             fixture_path=fixture_path,
             stages=1,
             mode="tee",
+            sink_kind="devnull",
+            with_line_callbacks=False,
+            backend="auto",
+            repeat_count=repeat_count,
+        ),
+        TeeProfileScenario(
+            name="capture-devnull-nocb-s1",
+            fixture_path=fixture_path,
+            stages=1,
+            mode="capture",
             sink_kind="devnull",
             with_line_callbacks=False,
             backend="auto",

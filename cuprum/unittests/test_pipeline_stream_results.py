@@ -131,9 +131,10 @@ def fixture_recorded_pumps(
         writer: object,
         *,
         read_size: int | None = None,
-    ) -> None:  # noqa: RUF029
+    ) -> None:
         """Record which pair of handles this hop was given."""
         del read_size
+        await asyncio.sleep(0)
         recorded.append(
             (
                 typ.cast("_StubStream", reader).name,

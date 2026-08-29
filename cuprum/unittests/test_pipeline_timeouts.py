@@ -24,7 +24,7 @@ import pytest
 from cuprum import ScopeConfig, TimeoutExpired, _pipeline_collect, scoped, sh
 from cuprum._backend import get_stream_backend
 from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
-from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
 from cuprum.sh import Pipeline, RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.execution import _RunKwargs
@@ -177,6 +177,7 @@ def test_zero_timeout_reconciles_pipe_tasks(
     python = sh.make(python_program, catalogue=catalogue)
     created: list[asyncio.Task[None]] = []
     events: list[ExecEvent] = []
+    timed_out_processes: tuple[asyncio.subprocess.Process, ...] = ()
     real_create = _pipeline_collect._create_pipe_tasks
 
     def spy(
@@ -194,7 +195,9 @@ def test_zero_timeout_reconciles_pipe_tasks(
         cancel_grace: float,
     ) -> None:
         """Stand in for stage termination without settling anything."""
-        _ = (processes, cancel_grace)
+        nonlocal timed_out_processes
+        timed_out_processes = tuple(processes)
+        del cancel_grace
         await asyncio.sleep(0)
 
     pipeline = python(
@@ -217,6 +220,12 @@ def test_zero_timeout_reconciles_pipe_tasks(
                 f"pump {index} was left unsettled after the immediate timeout: "
                 "nothing reconciled the pumps the caller owns"
             )
+
+        # The assertion above deliberately runs while both stages remain alive
+        # so their blocked pipe does not hide detached-pump cleanup. Reap them
+        # before closing this event loop: asyncio otherwise retains subprocess
+        # transport waiter tasks until their 30-second sleeps naturally finish.
+        await _terminate_all_shielded(timed_out_processes, cancel_grace=0)
 
     try:
         with (
