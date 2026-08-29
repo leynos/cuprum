@@ -34,23 +34,16 @@ class TestMetricsHook:
     """Tests for MetricsHook and InMemoryMetrics."""
 
     @pytest.mark.parametrize(
-        (
-            "command_code",
-            "expected_executions",
-            "expected_failures",
-            "failure_message",
-        ),
+        ("command_code", "expected_counts", "failure_message"),
         [
             (
                 "print('hello')",
-                1.0,
-                0.0,
+                (1.0, 0.0),
                 "successful executions should increment only the executions counter",
             ),
             (
                 "import sys; sys.exit(1)",
-                1.0,
-                1.0,
+                (1.0, 1.0),
                 "failed executions should increment executions and failures counters",
             ),
         ],
@@ -59,11 +52,11 @@ class TestMetricsHook:
         self,
         metrics_hook: Metered,
         command_code: str,
-        expected_executions: float,
-        expected_failures: float,
+        expected_counts: tuple[float, float],
         failure_message: str,
     ) -> None:
         """Hook increments counters for successful and failed executions."""
+        expected_executions, expected_failures = expected_counts
         metrics, hook = metrics_hook
         _run_observed_python(hook, "-c", command_code, project_name="metrics-counters")
 
