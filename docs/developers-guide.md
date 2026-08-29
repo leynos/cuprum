@@ -2120,9 +2120,12 @@ beyond the Kani model once that model is complete, lives in issue `#89`.
 
 `_run_rust_pump` keeps the asyncio transport's writer descriptor in Python's
 ownership. It gives `rust_pump_stream` a duplicate instead, because the native
-pump consumes and closes the descriptor it receives. The duplicate remains
-owned by the executor future until its worker settles, including native-load
-failure and cancellation of the awaiting task; only then is it closed. The
+pump consumes and closes the descriptor it receives. Once executor submission
+succeeds, Rust exclusively owns that duplicate; the native-future completion
+callback must not close it. Python retains ownership only until submission, so
+it closes the duplicate solely when setting its blocking mode or submitting the
+worker fails. asyncio keeps and closes the original transport descriptor after
+the worker settles. No descriptor number may be closed by both owners. The
 reader transport remains paused, and the original descriptor modes are
 restored, until that same completion boundary. This prevents cancellation
 cleanup from racing with native I/O on a descriptor that is still in use.

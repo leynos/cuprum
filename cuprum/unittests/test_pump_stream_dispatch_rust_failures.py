@@ -199,6 +199,12 @@ class TestRustPumpFailures:
             return duplicate
 
         monkeypatch.setattr(_pipeline_streams.os, "dup", record_dup)
+        close_duplicate = mock.Mock(wraps=_pipeline_streams._close_rust_writer_fd)
+        monkeypatch.setattr(
+            _pipeline_streams,
+            "_close_rust_writer_fd",
+            close_duplicate,
+        )
 
         async def run_with_rejected_executor_submission(
             awaitable: cabc.Awaitable[object],
@@ -242,5 +248,6 @@ class TestRustPumpFailures:
                 )
 
             assert duplicated_fds, "native pumping should create a writer duplicate"
+            close_duplicate.assert_called_once_with(duplicated_fds[0])
             with pytest.raises(OSError, match="Bad file descriptor"):
                 os.fstat(duplicated_fds[0])
