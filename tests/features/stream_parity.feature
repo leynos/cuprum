@@ -26,3 +26,8 @@ Feature: Stream backend parity for edge cases
     When I run the parity pipeline synchronously
     Then the stdout matches the expected large payload
     And the pipeline succeeded
+
+  Scenario: CRLF split at a read boundary emits no empty line
+    Given a command whose CRLF crosses the stream read boundary
+    When I run the command with a line observer
+    Then the observer receives the complete CRLF line and no empty line

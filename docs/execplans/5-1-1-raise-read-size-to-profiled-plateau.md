@@ -194,8 +194,9 @@ This task is complete only when:
   from parent `41707268` onto `origin/main` (`ba32d3f5`) without conflicts.
   The existing PR will be retargeted to `main` after the force-with-lease push,
   so it no longer duplicates the stale #318 stack.
-- [ ] EP-M1: branch rebased; line-splitting defect fixed with a behavioural
-  red-to-green test.
+- [x] EP-M1: branch rebased; the line-splitting defect is fixed with a
+  red-to-green regression test and BDD scenario. All deterministic gates passed
+  and CodeRabbit reported zero findings.
 - [ ] EP-M2: read size threaded as an injectable parameter; sweep support added;
   verification scaffold green at 4096 with negative-control evidence.
 - [ ] EP-M3: fresh interleaved sweep run, value chosen, artefact written.
@@ -214,6 +215,16 @@ This task is complete only when:
   Impact: Stage A must rebase the four branch-exclusive commits with
   `git rebase --onto origin/main <parent-head>` and retarget #321 to `main`.
   This preserves the approved plan and removes the obsolete stack relationship.
+
+- Observation: the CRLF defect has a small, deterministic reproducer using a
+  real `asyncio.StreamReader`.
+  Evidence: `test_crlf_split_at_read_boundary_emits_no_empty_line` constructs a
+  first line whose carriage return is byte `_READ_SIZE`, then feeds the complete
+  payload to the reader. Before the fix it failed with
+  `[first_line, "", "b"]`; after the fix it passes with `[first_line, "b"]`.
+  The BDD scenario observes the same two stdout lines from a subprocess.
+  Impact: V0 has direct red-green evidence without relying on scheduler timing
+  or a hand-written stream-reader double.
 
 - Observation: the remote stack parent had been rewritten after this branch
   forked.
@@ -320,6 +331,16 @@ This task is complete only when:
   conflicts on `origin/main` at `ba32d3f5`.
   Date/Author: 2026-08-29, implementation agent. This completes the Stage A
   stack correction and does not alter functional scope.
+
+- Decision D12: retain the direct helper's historical end-of-input default.
+  Rationale: `_split_complete_lines(..., final=True)` remains suitable for its
+  direct tests and callers, while `_emit_completed_lines` uses `final=False`
+  for every decoded chunk and explicitly finalizes after decoder flush. This
+  holds only a non-final lone carriage return, leaving all other universal line
+  boundaries unchanged. The resulting state transition is local, testable, and
+  avoids making a private helper's pre-existing direct contract surprising.
+  Date/Author: 2026-08-29, implementation agent. Satisfies V0 and D6 without
+  changing a public interface or adding a dependency.
 
 - Decision D1: the 20% gate is measured against a fresh 4096 control taken in
   the same interleaved sweep session.
