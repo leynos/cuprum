@@ -5,7 +5,7 @@ This ExecPlan (execution plan) is a living document. The sections
 `Decision log`, `Outcomes & retrospective`, `Conformance basis`, and
 `Verification plan` must be kept up to date as work proceeds.
 
-Status: DRAFT
+Status: IN PROGRESS
 
 Roadmap reference: `docs/roadmap.md` item `5.1.1` (phase 5, step 5.1).
 
@@ -190,6 +190,10 @@ This task is complete only when:
 
 ## Progress
 
+- [ ] 2026-08-29 Stage A: the existing implementation PR is stacked on #318,
+  not two commits directly behind `origin/main`. Rebase only this branch's four
+  ExecPlan commits onto `origin/main`, then retarget #321 to `main`, so the PR
+  does not duplicate #318's eleven commits.
 - [ ] EP-M1: branch rebased; line-splitting defect fixed with a behavioural
   red-to-green test.
 - [ ] EP-M2: read size threaded as an injectable parameter; sweep support added;
@@ -199,6 +203,17 @@ This task is complete only when:
 - [ ] EP-M5: documentation, changelog, and roadmap updated; all gates green.
 
 ## Surprises & discoveries
+
+- Observation: the implementation PR has a stale stacked base.
+  Evidence: PR #321 targets
+  `issue-312-apply-repository-lint-standards-to-helper-scripts-scripts`; its
+  four ExecPlan commits are above that branch's eleven commits, while
+  `origin/main` contains neither group and is two commits ahead of their common
+  ancestor. A plain `git rebase origin/main` would replay the parent PR into
+  this PR.
+  Impact: Stage A must rebase the four branch-exclusive commits with
+  `git rebase --onto origin/main <parent-head>` and retarget #321 to `main`.
+  This preserves the approved plan and removes the obsolete stack relationship.
 
 - Observation: line emission is already read-size dependent, so the change is
   not behaviour-preserving as originally assumed.
@@ -275,6 +290,18 @@ This task is complete only when:
   existing `test_tee_profile_worker_*.py` modules.
 
 ## Decision log
+
+- Decision D10: unstack PR #321 while performing Stage A.
+  Rationale: the plan requires the implementation branch to rebase onto
+  `origin/main`, but its original stack parent contains eleven unrelated
+  commits. Replaying the entire branch would broaden this PR by 45 files and
+  violate the plan's scope tolerance before implementation starts. Replaying
+  only the four plan commits preserves the branch's intended contents, makes
+  the PR independently reviewable, and keeps the required rebase against the
+  current `main` line. Retarget the existing draft PR to `main`; retain its
+  number, draft state, and remote branch.
+  Date/Author: 2026-08-29, implementation agent. No requirement, interface,
+  dependency, or acceptance criterion changes.
 
 - Decision D1: the 20% gate is measured against a fresh 4096 control taken in
   the same interleaved sweep session.
