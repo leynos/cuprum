@@ -317,7 +317,8 @@ sink and no line callbacks.
 production code does not route stream consumption through it yet. The symbol is
 annotated as "implemented but not yet integrated" in `cuprum/_streams_rs.py`
 and the users' guide so it is not mistaken for a wired bridge. A guard test
-(`cuprum/unittests/test_rust_streams.py`) fails if production code starts
+(`cuprum/unittests/test_rust_consume_integration_guard.py`) fails if
+production code starts
 referencing the symbol without revisiting this decision. Phase 2 integration
 should remove that marker only alongside the dispatcher, fallback path, and the
 Python/Rust parity property tests tracked by issue #90.

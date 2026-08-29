@@ -23,6 +23,7 @@ than assumed at the boundary.
 from __future__ import annotations
 
 import functools
+import shlex
 import typing as typ
 
 import pytest
@@ -96,11 +97,67 @@ def _run_scripts() -> cabc.Iterator[tuple[str, str]]:
                 yield job_name, script
 
 
+def _is_environment_assignment(token: str) -> bool:
+    """Return whether *token* is a leading shell environment assignment."""
+    if "=" not in token:
+        return False
+    name, _ = token.split("=", maxsplit=1)
+    return name.isidentifier()
+
+
+def _command_segments(script: str) -> cabc.Iterator[list[str]]:
+    """Yield shell token segments split at command boundaries."""
+    boundaries = frozenset({
+        "&",
+        "&&",
+        ";",
+        "|",
+        "||",
+        "if",
+        "then",
+        "elif",
+        "else",
+        "do",
+    })
+
+    for line in script.replace("\\\n", " ").splitlines():
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        tokens = list(lexer)
+        segment_start = 0
+
+        for index, token in enumerate([*tokens, ";"]):
+            if token not in boundaries:
+                continue
+            segment = tokens[segment_start:index]
+            yield segment
+            segment_start = index + 1
+
+
+def _segment_starts_command(segment: list[str], expected: tuple[str, ...]) -> bool:
+    """Return whether a segment starts with the expected command tokens."""
+    while segment:
+        if not _is_environment_assignment(segment[0]):
+            break
+        segment.pop(0)
+    return tuple(segment[: len(expected)]) == expected
+
+
+def _script_runs_command(script: str, command: str) -> bool:
+    """Return whether *script* executes *command* as leading shell tokens."""
+    expected = tuple(shlex.split(command))
+    return any(
+        _segment_starts_command(segment, expected)
+        for segment in _command_segments(script)
+    )
+
+
 def _first_step_running(command: str, *, job_name: str) -> tuple[int, str]:
     """Return the position and script of the first step running `command`."""
     for index, step in enumerate(_job_steps(job_name)):
         script = _script_of(step)
-        if script is not None and command in script:
+        if script is not None and _script_runs_command(script, command):
             return index, script
     pytest.fail(f"no step in the {job_name!r} job runs {command!r}")
 
@@ -118,6 +175,52 @@ def test_the_ci_job_builds_the_extension_before_running_the_gated_tests() -> Non
         "the extension-tests job must build the extension with `make "
         "develop` before `make test-extension` runs; found the build at step "
         f"{build} and the tests at step {tests}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("script", "command", "expected"),
+    [
+        ("make develop", "make develop", True),
+        ("make develop MATURIN_DEVELOP_FLAGS=--release", "make develop", True),
+        ("TOOL=rust make develop", "make develop", True),
+        ("9TOOL=rust make develop", "make develop", False),
+        ("=rust make develop", "make develop", False),
+        ("make " + "\\" + "\n" + "develop", "make develop", True),
+        ("if make develop", "make develop", True),
+        ("then make develop", "make develop", True),
+        ("elif make develop", "make develop", True),
+        ("else make develop", "make develop", True),
+        ("do make develop", "make develop", True),
+        ("# make develop", "make develop", False),
+        ('echo "make develop"', "make develop", False),
+        ("maturin develop", "maturin develop", True),
+        ("# maturin develop", "maturin develop", False),
+    ],
+)
+def test_script_runs_command_ignores_comments_and_non_commands(
+    script: str,
+    command: str,
+    *,
+    expected: bool,
+) -> None:
+    """The workflow matcher detects executable commands, not text mentions."""
+    assert _script_runs_command(script, command) is expected, (
+        f"expected script {script!r} to match command {command!r} as {expected}"
+    )
+
+
+def test_only_boundary_jobs_build_the_extension() -> None:
+    """Only jobs isolated from the full suite may install the extension."""
+    builders = {
+        job_name
+        for job_name, script in _run_scripts()
+        if _script_runs_command(script, "make develop")
+    }
+
+    assert builders == {"benchmark-ratchet", "extension-tests"}, (
+        "only the isolated extension and benchmark jobs may run `make develop`; "
+        f"found {builders}"
     )
 
 
@@ -144,7 +247,9 @@ def test_no_ci_step_invokes_maturin_develop_directly() -> None:
     something nobody maintains.
     """
     offenders = sorted({
-        job_name for job_name, script in _run_scripts() if "maturin develop" in script
+        job_name
+        for job_name, script in _run_scripts()
+        if _script_runs_command(script, "maturin develop")
     })
 
     assert not offenders, (

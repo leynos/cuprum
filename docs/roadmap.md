@@ -364,7 +364,8 @@ if the gate in 6.2 passed. See `cuprum/_pipeline_streams.py:290`
   - Update the `rust_consume_stream` docstring in `cuprum/_streams_rs.py`, and
     flip `test_rust_consume_stream_not_referenced_in_production` and
     `test_rust_consume_stream_docstring_not_integrated`
-    (`cuprum/unittests/test_rust_streams.py`) to assert the wired state.
+    (`cuprum/unittests/test_rust_consume_integration_guard.py`) to assert the
+    wired state.
   - Success: `make check-fmt lint test` is green with the guards asserting
     production routing rather than its absence.
 - [ ] 6.3.3. Add a combinatorial fallback E2E suite across the eligibility

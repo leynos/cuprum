@@ -7,15 +7,22 @@ import os
 import threading
 import typing as typ
 
+from cuprum.unittests._rust_stream_test_support import (
+    INVALID_FD_ERRNOS,
+    INVALID_FD_MESSAGE_RE,
+    _safe_close,
+)
+
+__all__ = [
+    "INVALID_FD_ERRNOS",
+    "INVALID_FD_MESSAGE_RE",
+    "drain_blocking_payload_size",
+    "feed_source_pipe",
+]
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from types import ModuleType
-
-
-def _safe_close(fd: int) -> None:
-    """Close a file descriptor, ignoring errors."""
-    with contextlib.suppress(OSError):
-        os.close(fd)
 
 
 def _read_all(fd: int, *, chunk_size: int = 4096) -> bytes:

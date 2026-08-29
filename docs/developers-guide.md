@@ -1653,7 +1653,8 @@ with no `raw_os_error` — one synthesized in Rust rather than returned by a
 syscall — has no number to preserve, so PyO3's `ErrorKind` mapping remains the
 best available and is used unchanged.
 
-`cuprum/unittests/test_rust_errno.py` covers both arms, with each set of
+`cuprum/unittests/test_rust_errno.py` covers the POSIX arm and
+`cuprum/unittests/test_rust_errno_windows.py` the Windows one, with each set of
 assertions scoped to the platform whose taxonomy it names — the POSIX cases
 name an `errno` and the subclass CPython derives from it, the Windows case
 names a `winerror` and the `errno` CPython derives from *that*. The Windows
@@ -1996,11 +1997,11 @@ text diff rather than a boolean failure.
 
 These Rust-side cases are not the only coverage of these categories, and it is
 worth knowing why they carry the load. `TestRustConsumeStream` in
-`cuprum/unittests/test_rust_streams.py` already defines Python/Rust boundary
-tests over the same four inputs — ASCII, multibyte UTF-8 split across a read
-boundary, invalid UTF-8, and an incomplete trailing sequence — and each one
-calls `rust_consume_stream` and compares the result against Python's own
-replacement decoding, `payload.decode("utf-8", errors="replace")`.
+`cuprum/unittests/test_rust_consume_stream.py` already defines Python/Rust
+boundary tests over the same four inputs — ASCII, multibyte UTF-8 split
+across a read boundary, invalid UTF-8, and an incomplete trailing sequence —
+each case calls `rust_consume_stream` and compares the result against Python's
+own replacement decoding, `payload.decode("utf-8", errors="replace")`.
 
 Those cases do now execute in CI — see [Building the extension for
 tests](#building-the-extension-for-tests) — but they did not until `#258` was
@@ -2141,11 +2142,13 @@ Table 1: modules gated on the compiled extension
 
 | Module | Covers |
 | --- | --- |
-| `test_rust_streams.py` | pump and consume entry points, including the four `TestRustConsumeStream` replacement scenarios that are the end-to-end regression coverage for `#105` |
+| `test_rust_streams.py` | the Rust-backed pump entry point |
+| `test_rust_consume_stream.py` | the Rust-backed consume entry point, including the four replacement scenarios that are the end-to-end regression coverage for `#105` and the I/O-error boundary case |
 | `test_rust_streams_boundary_property.py` | randomized payloads across the boundary |
 | `test_rust_extension.py` | extension availability and module surface |
 | `test_rust_splice.py` | the Linux `splice` fast path |
-| `test_rust_errno.py` | `OSError.errno` and subclass selection across the boundary |
+| `test_rust_errno.py` | POSIX `OSError.errno` conversion and subclass selection across the boundary |
+| `test_rust_errno_windows.py` | Windows `winerror` conversion and the `errno` and subclass values CPython derives from it |
 | `test_backend.py` | the extension-dependent backend-selection cases |
 | `test_extension_requirement_guard.py` | the fail-loud guard itself |
 | `tests/behaviour/test_rust_streams_behaviour.py` | the consumer-facing pump and consume scenarios |
