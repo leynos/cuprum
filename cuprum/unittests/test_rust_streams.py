@@ -17,7 +17,7 @@ import os
 import typing as typ
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, settings
 from hypothesis import strategies as st
 
 from cuprum.unittests._rust_stream_test_support import (

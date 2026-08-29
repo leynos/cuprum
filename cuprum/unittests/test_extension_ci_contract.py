@@ -130,8 +130,7 @@ def _command_segments(script: str) -> cabc.Iterator[list[str]]:
         for index, token in enumerate([*tokens, ";"]):
             if token not in boundaries:
                 continue
-            segment = tokens[segment_start:index]
-            yield segment
+            yield tokens[segment_start:index]
             segment_start = index + 1
 
 
