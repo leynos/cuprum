@@ -823,6 +823,8 @@ class ExecEvent:
     project: str | None  # trusted configured project for metrics projection
     stage_index: int | None  # pipeline_fail_fast: failing stage's position
     stage_count: int | None  # pipeline_fail_fast: pipeline width
+    eof_grace_s: float | None  # capture_eof_grace_expired: fixed grace budget
+    pending_readers: int | None  # capture_eof_grace_expired: 1 or 2
 
 
 ExecHook = Callable[[ExecEvent], None | Awaitable[None]]
@@ -1021,10 +1023,11 @@ implemented with the following decisions:
   `stdin_error`, `exit`, `timeout`, `teardown_error`,
   `capture_eof_grace_expired`, and `pipeline_fail_fast`
   phases for both single commands and pipeline stages — the declared
-  `ExecPhase` values. `timeout` and `teardown_error` are ancillary diagnostics
-  rather than lifecycle phases. `capture_eof_grace_expired` is an ancillary
-  diagnostic emitted only when a capturing drain exhausts its fixed
-  `_CAPTURE_EOF_GRACE_S` budget with one or more readers still pending.
+  `ExecPhase` values. `timeout`, `teardown_error`, and
+  `capture_eof_grace_expired` are ancillary diagnostics rather than lifecycle
+  phases. `capture_eof_grace_expired` is emitted only when a capturing drain
+  exhausts its fixed `_CAPTURE_EOF_GRACE_S` budget with one or more readers
+  still pending.
   Pipeline stage events are tagged with a stage index and stage count.
 - **Fail-fast decision:** a pipeline emits one `pipeline_fail_fast` event when
   a non-final stage is the first to fail and at least one other stage remains
@@ -1043,8 +1046,9 @@ implemented with the following decisions:
   available for observability but is not a reliable correlation key. Legacy or
   manually constructed events may omit `exec_id` (`None`); such events cannot
   be correlated. Consumers should ignore an uncorrelatable `start` and create
-  no span for it, and likewise ignore ambiguous `stdout`, `stderr`, and `exit`
-  events rather than guess.
+  no span for it, and likewise ignore ambiguous `stdout`, `stderr`, `timeout`,
+  `teardown_error`, `capture_eof_grace_expired`, and `exit` events rather than
+  guess.
 - **Line emission:** `stdout`/`stderr` phases are emitted per decoded line. Line
   terminators are removed, and the final partial line (when output does not end
   with a newline) is still emitted.
@@ -1254,8 +1258,8 @@ preserving the `SafeCmd.run()` execution contract:
   `cuprum_capture_eof_grace_expired_total` with only `program` and `project`
   labels, while `TracingHook` adds a
   `cuprum.capture_eof_grace_expired` event to the matching span. No captured
-  stream payload is emitted. Unexpected reader failures remain separately
-  reported as `teardown_error`.
+  stream payload is emitted in that event. Unexpected reader failures remain
+  separately reported as `teardown_error`.
 - `cuprum/_timeout_reporting.py` owns the two channels a timeout or teardown
   failure is reported on — the structured `cuprum.timeout` log record and the
   `timeout` / `teardown_error` observe events — and the `_report_*` helpers
@@ -1668,15 +1672,16 @@ design decisions guide these adapters:
   (8.1.3).
 - Events without an `exec_id` (legacy or manually constructed) are ambiguous
   and are ignored: no span is created for such a `start`, and their `stdout`/
-  `stderr`/`stdin_error`/`pipeline_fail_fast`/`exit` events are dropped rather
-  than guessed from PID.
+  `stderr`/`stdin_error`/`timeout`/`teardown_error`/
+  `capture_eof_grace_expired`/`pipeline_fail_fast`/`exit` events are dropped
+  rather than guessed from PID.
 - Output lines can optionally be recorded as span events (controlled by
   `record_output` parameter). `stdin_error`, `timeout`, and `teardown_error`
   are also recorded as span events, unconditionally, without ending the span.
   `capture_eof_grace_expired` is recorded as a
   `cuprum.capture_eof_grace_expired` event on the matching `exec_id` span with
-  its `eof_grace_s` and `pending_readers` fields. Captured stream payloads
-  are never emitted through these projections.
+  its `eof_grace_s` and `pending_readers` fields. The grace-expiry event itself
+  carries no captured stream payload.
 - Span status is set based on exit code (OK for 0, ERROR otherwise).
 - Pipeline stages create separate spans with `pipeline_stage_index` attribute.
 - The active-span registry is bounded (1024 entries) and evicts by recency of

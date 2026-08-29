@@ -94,7 +94,8 @@ def test_capturing_drain_waits_for_an_imminent_eof() -> None:
     """A capturing drain lets a reader a few turns from EOF deliver its capture.
 
     This is the shape of the loss seen when a process exit is observed before
-    the pipe's EOF events are: the readers are still parked, but only briefly.
+    the pipe's EOF events are processed: the readers are still parked, but only
+    briefly.
     Cancelling them straight away would discard output the run did capture.
     """
 
@@ -217,7 +218,7 @@ def readers_that_never_reach_eof(
         """Stand in for a reader that is cancelled before EOF ever arrives."""
         del on_line  # Required by the _consume_stream callback interface.
         await asyncio.Event().wait()
-        return None
+        return
 
     monkeypatch.setattr(
         "cuprum._subprocess_execution._consume_stream",

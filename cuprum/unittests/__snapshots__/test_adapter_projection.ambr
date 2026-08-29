@@ -2,21 +2,13 @@
 # name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[capture_eof_grace_expired]
   dict({
     'logging_extra': dict({
-      'cuprum_argv': tuple(
-        'echo',
-        'hello',
-      ),
-      'cuprum_cwd': '<cwd>',
       'cuprum_eof_grace_s': 0.25,
+      'cuprum_operation': 'drain',
       'cuprum_pending_readers': 1,
       'cuprum_phase': 'capture_eof_grace_expired',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
-      'cuprum_tags': dict({
-        'pipeline_stage_index': 0,
-        'pipeline_stages': 2,
-        'project': 'proj',
-      }),
+      'cuprum_project': 'proj',
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -55,11 +47,6 @@
       'cuprum_phase': 'exit',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
-      'cuprum_tags': dict({
-        'pipeline_stage_index': 0,
-        'pipeline_stages': 2,
-        'project': 'proj',
-      }),
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -126,11 +113,6 @@
       'cuprum_cwd': '<cwd>',
       'cuprum_phase': 'plan',
       'cuprum_program': 'echo',
-      'cuprum_tags': dict({
-        'pipeline_stage_index': 0,
-        'pipeline_stages': 2,
-        'project': 'proj',
-      }),
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -161,11 +143,6 @@
       'cuprum_phase': 'start',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
-      'cuprum_tags': dict({
-        'pipeline_stage_index': 0,
-        'pipeline_stages': 2,
-        'project': 'proj',
-      }),
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -198,11 +175,6 @@
       'cuprum_phase': 'stderr',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
-      'cuprum_tags': dict({
-        'pipeline_stage_index': 0,
-        'pipeline_stages': 2,
-        'project': 'proj',
-      }),
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -235,11 +207,6 @@
       'cuprum_phase': 'stdin',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
-      'cuprum_tags': dict({
-        'pipeline_stage_index': 0,
-        'pipeline_stages': 2,
-        'project': 'proj',
-      }),
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -271,11 +238,6 @@
       'cuprum_phase': 'stdin_error',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
-      'cuprum_tags': dict({
-        'pipeline_stage_index': 0,
-        'pipeline_stages': 2,
-        'project': 'proj',
-      }),
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -312,11 +274,6 @@
       'cuprum_phase': 'stdout',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
-      'cuprum_tags': dict({
-        'pipeline_stage_index': 0,
-        'pipeline_stages': 2,
-        'project': 'proj',
-      }),
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -349,11 +306,6 @@
       'cuprum_phase': 'teardown_error',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
-      'cuprum_tags': dict({
-        'pipeline_stage_index': 0,
-        'pipeline_stages': 2,
-        'project': 'proj',
-      }),
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -390,11 +342,6 @@
       'cuprum_phase': 'timeout',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
-      'cuprum_tags': dict({
-        'pipeline_stage_index': 0,
-        'pipeline_stages': 2,
-        'project': 'proj',
-      }),
     }),
     'metrics_labels': dict({
       'program': 'echo',

@@ -235,6 +235,7 @@ def test_pump_phases_stay_out_of_the_exec_phase_contract() -> None:
         "stdin_error",
         "timeout",
         "teardown_error",
+        "capture_eof_grace_expired",
         "pipeline_fail_fast",
     }, f"ExecPhase gained or lost a member: {sorted(exec_phases)}"
     assert not exec_phases & pump_phases, (

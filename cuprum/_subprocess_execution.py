@@ -31,6 +31,7 @@ from cuprum._subprocess_wait import (
     _drain_stream_consumers,
     _DrainContext,
     _reconcile_run_tasks,
+    _RunTaskOwnership,
     _wait_for_exit_code_within_timeout,
 )
 
@@ -137,14 +138,10 @@ def _build_stream_config(execution: _SubprocessExecution) -> _StreamConfig:
     )
 
 
-# This private boundary deliberately exposes its five ownership inputs.
-# pylint: disable-next=too-many-arguments
-async def _wait_for_streamed_process_exit(  # noqa: PLR0913 -- preserves the requested task ownership boundary
+async def _wait_for_streamed_process_exit(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
-    stdin_task: asyncio.Task[None] | None,
-    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-    *,
+    tasks: _RunTaskOwnership,
     pid: int | None,
 ) -> tuple[int, float]:
     """Wait for exit and reconcile every stream task when that wait fails."""
@@ -161,8 +158,7 @@ async def _wait_for_streamed_process_exit(  # noqa: PLR0913 -- preserves the req
         # otherwise abandon the consumers mid-drain and leak them.
         stdout_text, stderr_text = await _shielded_cleanup(
             _reconcile_run_tasks(
-                stdin_task,
-                consumers,
+                tasks,
                 _DrainContext(
                     capture=execution.capture,
                     pid=pid,
@@ -183,8 +179,7 @@ async def _wait_for_streamed_process_exit(  # noqa: PLR0913 -- preserves the req
         # before re-raising the original failure unchanged.
         await _shielded_cleanup(
             _reconcile_run_tasks(
-                stdin_task,
-                consumers,
+                tasks,
                 _DrainContext(
                     capture=False,
                     pid=pid,
@@ -203,20 +198,21 @@ async def _run_subprocess_with_streams(
 ) -> tuple[int, float, str | None, str | None]:
     """Run subprocess with stream capture and timeout handling."""
     stream_config = _build_stream_config(execution)
-    consumers = _spawn_stream_consumers(process, execution, stream_config, pid=pid)
-    stdin_task = _spawn_stdin_writer(
-        process, execution.stdin_data, execution.observation
+    tasks = _RunTaskOwnership(
+        stdin_task=_spawn_stdin_writer(
+            process, execution.stdin_data, execution.observation
+        ),
+        consumers=_spawn_stream_consumers(process, execution, stream_config, pid=pid),
     )
     exit_code, exited_at = await _wait_for_streamed_process_exit(
         process,
         execution,
-        stdin_task,
-        consumers,
-        pid=pid,
+        tasks,
+        pid,
     )
-    if stdin_task is not None:
+    if tasks.stdin_task is not None:
         try:
-            await stdin_task
+            await tasks.stdin_task
         except BaseException:
             # An unexpected stdin-writer failure (or a cancellation landing on
             # this await) must still reconcile the stdout/stderr consumers,
@@ -225,7 +221,7 @@ async def _run_subprocess_with_streams(
             # has already settled here, so only the consumers need draining.
             await _shielded_cleanup(
                 _drain_stream_consumers(
-                    consumers,
+                    tasks.consumers,
                     _DrainContext(
                         capture=False, pid=pid, observation=execution.observation
                     ),
@@ -233,7 +229,7 @@ async def _run_subprocess_with_streams(
             )
             raise
     try:
-        stdout_text, stderr_text = await asyncio.gather(*consumers)
+        stdout_text, stderr_text = await asyncio.gather(*tasks.consumers)
     except BaseException:
         # `gather` re-raises the first failure and leaves its sibling running,
         # so a reader wedged on a pipe would outlive the run it belonged to.
@@ -242,7 +238,7 @@ async def _run_subprocess_with_streams(
         # propagating — and here the consumer failure *is* that error.
         await _shielded_cleanup(
             _drain_stream_consumers(
-                consumers,
+                tasks.consumers,
                 _DrainContext(
                     capture=False, pid=pid, observation=execution.observation
                 ),

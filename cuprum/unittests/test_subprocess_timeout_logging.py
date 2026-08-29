@@ -145,7 +145,7 @@ def test_teardown_drain_failure_logs_diagnostic(
         except asyncio.CancelledError:
             msg = "consumer boom"
             raise ValueError(msg) from None
-        return None
+        return
 
     async def run_case() -> None:
         """Drain a consumer that surfaces a non-cancellation error on teardown."""

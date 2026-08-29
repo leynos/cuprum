@@ -161,8 +161,30 @@ def structured_logging_hook(
     )
 
 
+def _capture_eof_grace_extra(event: ExecEvent) -> dict[str, object]:
+    """Build bounded, trusted fields for a capture EOF-grace expiry."""
+    optional_fields = (
+        ("cuprum_pid", event.pid),
+        ("cuprum_project", event.project),
+        ("cuprum_exec_id", event.exec_id),
+        ("cuprum_operation", event.operation),
+        ("cuprum_eof_grace_s", event.eof_grace_s),
+        ("cuprum_pending_readers", event.pending_readers),
+    )
+    return {
+        "cuprum_phase": event.phase,
+        "cuprum_program": str(event.program),
+        **{name: value for name, value in optional_fields if value is not None},
+    }
+
+
 def _build_extra(event: ExecEvent) -> dict[str, object]:
     """Build structured extra data for a log record."""
+    if event.phase == "capture_eof_grace_expired":
+        # The grace expiry can occur after a timeout, so retain only bounded,
+        # trusted correlation fields—not caller tags or the raw argument vector.
+        return _capture_eof_grace_extra(event)
+
     extra: dict[str, object] = {"cuprum_phase": event.phase}
     common_fields = _event_common_fields(event, _prefixed("cuprum_"))
     if event.phase == "pipeline_fail_fast":
@@ -173,14 +195,9 @@ def _build_extra(event: ExecEvent) -> dict[str, object]:
             (name, value) for name, value in common_fields if name != "cuprum_argv"
         )
         extra["cuprum_exec_id"] = event.exec_id
-    else:
-        extra.update(common_fields)
-        extra["cuprum_tags"] = dict(event.tags)
-    if event.phase == "capture_eof_grace_expired":
-        if event.eof_grace_s is not None:
-            extra["cuprum_eof_grace_s"] = event.eof_grace_s
-        if event.pending_readers is not None:
-            extra["cuprum_pending_readers"] = event.pending_readers
+        return extra
+
+    extra.update(common_fields)
     return extra
 
 

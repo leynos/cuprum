@@ -50,7 +50,7 @@ async def _never_reaches_eof() -> str | None:
 def test_a_failed_reader_is_recorded_before_it_is_discarded(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A reader that raised is named at DEBUG, with its exception attached.
+    """A reader that raised is named at DEBUG, without its exception attached.
 
     Decoding maps the failure to the same empty string an idle reader reports,
     so without this record a broken pipe and a silent command are the same
@@ -87,7 +87,7 @@ def test_a_failed_reader_is_recorded_before_it_is_discarded(
     assert error_type == "_ReaderFailureError", (
         f"the record must name the failure, got {error_type!r}"
     )
-    assert record.exc_info is not None, "the record must carry the failure itself"
+    assert record.exc_info is None, "the record must not attach reader tracebacks"
 
 
 def test_a_cancelled_reader_is_not_recorded_as_a_failure(

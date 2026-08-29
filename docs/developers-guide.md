@@ -285,17 +285,15 @@ Two consequences are worth preserving when changing the mapping. Labels are
 projected only when the reducer yields at least one operation, so a `plan`
 event never touches `event.program` or the project tag. And the reducer is
 total over `ExecPhase` — every declared phase has an arm, including
-`capture_eof_grace_expired`,
-an arm, with `plan`, `stdin`, and `exit` handled directly and the remaining
-phases routed through `_PHASE_COUNTERS` — including
-`capture_eof_grace_expired` — and fail-closed beyond it: any other
-phase raises `_UnhandledMetricsPhaseError` rather than being silently
-dropped. That is deliberate, and its cost is worth stating plainly. A
-hook exception is not swallowed, so adding a value to `ExecPhase` without
-adding an arm here would raise for every caller that has already registered
-`MetricsHook`. A new phase therefore cannot reach metrics without a decision in
-this reducer. The structured logging adapter is fail-open by contrast,
-formatting an unrecognized phase generically.
+`capture_eof_grace_expired`, with `plan`, `stdin`, and `exit` handled directly
+and the remaining phases routed through `_PHASE_COUNTERS` — and fail-closed
+beyond it: any other phase raises `_UnhandledMetricsPhaseError` rather than
+being silently dropped. That is deliberate, and its cost is worth stating
+plainly. A hook exception is not swallowed, so adding a value to `ExecPhase`
+without adding an arm here would raise for every caller that has already
+registered `MetricsHook`. A new phase therefore cannot reach metrics without a
+decision in this reducer. The structured logging adapter is fail-open by
+contrast, formatting an unrecognized phase generically.
 
 Applying the operations is deliberately non-atomic, and that is a contract
 collectors rely on rather than an implementation detail. An `exit` event yields
@@ -627,26 +625,23 @@ descriptive:
 
 - `cuprum_exec_id` is the stage's `_StageObservation.exec_id`, the same
   per-execution token the observe hooks publish on that stage's span and its
-  `start` and `exit` events. It reaches the wait path as
-  `_PipelineSpawnResult.exec_ids`, threaded through `_wait_for_pipeline`
-  alongside `started_at` — the established way per-stage data the wait needs is
-  supplied. It defaults to empty, and `_PipelineWaitState.exec_id` then reports
-  `None`, because the pure transition never reads it and the symbolic model
-  must not carry it.
+  `start` and `exit` events. It reaches the wait path through
+  `_PipelineSpawnResult.stages.observations`, the immutable
+  `_StageWaitContext` snapshot passed to `_PipelineWaitState.from_processes`
+  alongside `started_at`. It defaults to an empty tuple, and
+  `_PipelineWaitState.exec_id` then reports `None`, because the pure transition
+  never reads it and the symbolic model must not carry it.
 - `cuprum_terminated_stage_count` is what
   `_terminate_pipeline_remaining_stages` returns. Reporting it from the helper
   that does the terminating, rather than recomputing the selection at the call
   site, is what keeps the count honest when the selection changes.
 
-Cuprum emits **no metric and no trace event** for fail-fast. That is
-deliberate. The library emits no metrics of its own anywhere: `MetricsHook` is
-an opt-in adapter that translates `ExecEvent`s, and its phase match is
-fail-closed, so introducing a phase for fail-fast would make the hook raise for
-every user who has already registered it. A fail-fast counter therefore needs
-either a new library-side metrics surface or a change to the `ExecPhase`
-contract, and neither belongs in the module that decides completion order.
-`cuprum_action` is a stable, low-cardinality event name, so a log-based counter
-covers the same ground until that surface exists.
+The fail-fast decision is also projected through the opt-in adapters:
+`MetricsHook` increments `cuprum_pipeline_fail_fast_total` with only the
+`program` and `project` labels, while `TracingHook` records a
+`cuprum.pipeline_fail_fast` event on the failing stage's span. The event and
+the three structured records above share the stage's `cuprum_exec_id`; no
+captured output or unbounded identifiers are used as metric labels.
 
 Three verification layers cover this seam; keep all three when changing it:
 
@@ -810,7 +805,8 @@ internal `threading.Lock`:
   `exec_id` under the lock — moving it to the most-recently-active end of the
   registry as it does so, see "Bounded span registry" below — then, outside
   the lock, copies whichever of the `line`, `operation`, `error_type`, `note`,
-  `timeout_s`, and `timeout_mode` fields are set on the event onto a
+  `timeout_s`, `timeout_mode`, `eof_grace_s`, and `pending_readers` fields are
+  set on the event onto a
   `cuprum.<phase>` span event (for example `cuprum.stdout`, `cuprum.timeout`,
   or `cuprum.teardown_error`). The grace-expiry event carries only
   `eof_grace_s` and `pending_readers` in addition to the common correlation
@@ -821,10 +817,11 @@ internal `threading.Lock`:
   `timeout`, `teardown_error`, and `capture_eof_grace_expired` are all recorded
   as diagnostics without
   failing or closing the execution span. `stdout`/`stderr` recording is gated
-  by the hook's `record_output` flag; the other three are recorded
-  unconditionally, so a stdin-write failure, a timeout, or a teardown failure
+  by the hook's `record_output` flag; ancillary diagnostics are recorded
+  unconditionally, so a stdin-write failure, a timeout, a teardown failure, or
+  an EOF-grace expiry
   stays diagnosable even when line-by-line output recording is switched off.
-  Captured stdout and stderr payloads are never sent through observability.
+  The grace-expiry event carries no captured stdout or stderr payload.
   Because `teardown_error` can be an execution's last event — cleanup also
   runs on external cancellation and on a stdin-writer failure, and on those
   paths the original exception propagates with no `exit` — a span opened by
@@ -869,8 +866,9 @@ without a signal that loss is undiagnosable.
 **Legacy or manual events.** An event whose `exec_id` is `None` (a legacy or
 hand-constructed event) cannot be correlated, so it is ignored rather than
 guessed from PID: a `start` without an `exec_id` creates no span, and
-`stdout`/`stderr`/`stdin_error`/`timeout`/`teardown_error`/`exit` without one
-are dropped. Every event Cuprum itself emits carries an `exec_id`, so this
+`stdout`/`stderr`/`stdin_error`/`timeout`/`teardown_error`/
+`capture_eof_grace_expired`/`exit` without one are dropped. Every event Cuprum
+itself emits carries an `exec_id`, so this
 only affects hand-built event streams.
 
 ## Canonical `_TokenRegistration` handle base
@@ -2959,6 +2957,17 @@ consumers exactly once via `_drain_stream_consumers` (see the stdin-injection
 sequence below), and terminating the process before that drain is what lets it
 reach EOF.
 
+The drain boundary carries an important teardown policy. Only the timeout path
+passes `capture=True`, allowing the fixed `_CAPTURE_EOF_GRACE_S` window to
+preserve text that is about to arrive at EOF. Cancellation, stdin-writer
+failure, and consumer-failure cleanup pass `capture=False`, so they cancel and
+settle promptly without waiting for that window or retaining output. The
+timeout and cancellation reconciliations run under `_shielded_cleanup`; if
+cancellation arrives during capture grace, both consumer tasks are settled
+before `CancelledError` is re-raised. Keep these choices at the drain boundary:
+moving capture draining into generic cleanup changes both timeout output and
+cancellation latency.
+
 All three subprocess exit-wait paths use `_await_process_exit` from
 `cuprum/_process_exit.py`: the single-command wait in `_wait_for_exit_code`,
 the per-stage waits created by `_PipelineWaitState.from_processes`, and the
@@ -3137,15 +3146,14 @@ executes:
    byte count.  The metrics adapter increments `cuprum_stdin_bytes_total` for
    successful writes and `cuprum_stdin_errors_total` for failure events.
 5. In the streaming path (`_run_subprocess_with_streams`), the stdin writer
-   task runs concurrently with the stdout/stderr consumer tasks.  On
-   `TimeoutError` or `asyncio.CancelledError`, `_run_subprocess_with_streams`
-   itself cancels and gathers the stdin writer via `_cancel_stdin_writer`,
-   then drains the stdout/stderr consumers exactly once via
-   `_drain_stream_consumers`.  `_wait_for_exit_code` has already terminated
-   the process, so the drain reaches EOF.  Only after that draining does it
-   call `_handle_stream_timeout`, which merely raises
-   `_SubprocessTimeoutError` carrying the pre-drained stdout/stderr; on the
-   cancellation path `CancelledError` is re-raised directly.
+   task runs concurrently with the stdout/stderr consumer tasks. On
+   `TimeoutError` or `asyncio.CancelledError`,
+   `_wait_for_streamed_process_exit` reconciles the stdin writer and stream
+   consumers exactly once via `_reconcile_run_tasks`. The timeout reconciliation
+   passes the execution's capture setting so the bounded EOF grace preserves
+   partial text before `_handle_stream_timeout` raises
+   `_SubprocessTimeoutError`; cancellation passes `capture=False` and re-raises
+   `CancelledError` after all tasks settle.
 6. In the non-streaming path, `_execute_subprocess` delegates to
    `_run_subprocess_without_streams`, which creates the same writer task and
    awaits `_wait_for_exit_code` itself.  On `TimeoutError` or

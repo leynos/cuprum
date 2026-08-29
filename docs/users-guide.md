@@ -804,8 +804,8 @@ The `capture_eof_grace_expired` event carries the execution's `exec_id` and
 two). It is emitted only when a capturing drain reaches the fixed grace limit;
 the corresponding `cuprum_capture_eof_grace_expired_total` metric uses only
 the `program` and `project` labels, and tracing adds a
-`cuprum.capture_eof_grace_expired` event to the matching span. Captured stdout
-and stderr are never emitted through these observability channels.
+`cuprum.capture_eof_grace_expired` event to the matching span. The grace-expiry
+event itself carries no captured stdout or stderr payload.
 
 These ancillary events preserve the public outcome: `start` and `exit` are
 unchanged, and synchronous hook failures handling `timeout`, `teardown_error`,
@@ -966,7 +966,8 @@ with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
 The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 
 - `cuprum_phase`: Event phase (plan, start, stdout, stderr, stdin,
-  stdin_error, exit, pipeline_fail_fast)
+  stdin_error, timeout, teardown_error, capture_eof_grace_expired, exit,
+  pipeline_fail_fast)
 - `cuprum_program`: Program being executed
 - `cuprum_argv`: The command's argument vector, recorded verbatim for phases
   that project it (see the security note below)
@@ -976,8 +977,9 @@ The hook attaches selected `cuprum_*` prefixed extra fields to log records:
   events)
 - `cuprum_stage_index` / `cuprum_stage_count`: Failing stage position and
   pipeline width (for `pipeline_fail_fast` events)
-- `cuprum_tags`: Event tags as a dictionary, except for
-  `pipeline_fail_fast`, whose projection omits tags
+- `cuprum_eof_grace_s` / `cuprum_pending_readers`: Fixed EOF-grace duration
+  and pending-reader count (for `capture_eof_grace_expired` events)
+Event tags are not emitted by this structured logging adapter.
 
 When registered, `structured_logging_hook()` emits `pipeline_fail_fast` at
 `LogLevels.fail_fast_level`, which defaults to `logging.WARNING`. This default
@@ -985,13 +987,14 @@ means the registered adapter needs no extra level configuration; set the field
 to change it.
 
 > **Security note — argument logging.** For phases that project it,
-> `cuprum_argv` is emitted verbatim and is **not** redacted. Any secret passed
-> on the command line — a `--password=…`, an API token, a connection string —
+> `cuprum_argv` is emitted verbatim and is **not** redacted for phases that
+> project it. Any secret passed on the command line — a `--password=…`, an API
+> token, a connection string —
 > is written into that log record (and into the `JsonLoggingFormatter` output)
 > exactly as supplied. The same applies to the plain-text `logging_hook()`.
-> The `pipeline_fail_fast` projection is the exception: it omits both
-> `cuprum_argv` and `cuprum_tags`, so the fail-fast warning does not expose
-> command-line secrets or arbitrary tag values. Prefer passing secrets via the
+> The `pipeline_fail_fast` and `capture_eof_grace_expired` projections omit
+> `cuprum_argv`, so those records do not expose command-line arguments. Event
+> tags are not emitted by the structured adapter. Prefer passing secrets via the
 > environment or files rather than as arguments, and scope log destinations
 > accordingly.
 
@@ -1142,7 +1145,7 @@ always followed by `exit`, while `teardown_error` may be the final event.
 Ancillary events carry their set `line`, `operation`, `error_type`, `note`,
 `timeout_s`, `timeout_mode`, `eof_grace_s`, and `pending_readers` fields, and
 correlate by `exec_id`; an event without a matching open span is dropped.
-Captured stdout and stderr payloads are never emitted.
+The grace-expiry event carries no captured stdout or stderr payload.
 
 **Correlation note:** the hook correlates an execution's `start`, `stdout`,
 `stderr`, and `exit` events by `ExecEvent.exec_id`, a stable token minted once
@@ -1152,7 +1155,8 @@ as the `cuprum.pid` attribute for observability. Events emitted by Cuprum
 always carry an `exec_id`, so ordinary usage is unaffected. Only hand-built or
 legacy events that omit `exec_id` are affected: the hook cannot correlate them,
 so it ignores them — a `start` without an `exec_id` creates no span, and
-`stdout`/`stderr`/`stdin_error`/`pipeline_fail_fast`/`exit` without one are
+`stdout`/`stderr`/`stdin_error`/`timeout`/`teardown_error`/
+`capture_eof_grace_expired`/`pipeline_fail_fast`/`exit` without one are
 dropped.
 
 A pipeline's `pipeline_fail_fast` event is recorded as a

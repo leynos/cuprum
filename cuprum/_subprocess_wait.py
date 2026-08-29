@@ -60,6 +60,14 @@ class _DrainContext:
     observation: _StageObservation | None = None
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _RunTaskOwnership:
+    """The stdin writer and stream consumers owned by one streamed run."""
+
+    stdin_task: asyncio.Task[None] | None
+    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]]
+
+
 async def _await_eof_grace(
     consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
 ) -> None:
@@ -70,10 +78,10 @@ async def _await_eof_grace(
 def _cancel_pending_consumers(
     consumers: tuple[asyncio.Task[str | None], ...],
 ) -> None:
+    """Cancel each consumer task that has not already completed."""
     # Finished readers keep their captured output; only tasks still blocked
     # after process termination (or on cancellation) are cancelled, so cleanup
     # cannot hang on a reader wedged on a pipe that never reached EOF.
-    """Cancel each consumer task that has not already completed."""
     for task in consumers:
         if not task.done():
             task.cancel()
@@ -218,7 +226,6 @@ async def _drain_stream_consumers(
                     "cuprum_operation": f"drain_{stream}",
                     "cuprum_error_type": type(result).__name__,
                 },
-                exc_info=result,
             )
     stdout_text = _decode_consumer_result(stdout_result, capture=context.capture)
     stderr_text = _decode_consumer_result(stderr_result, capture=context.capture)
@@ -311,8 +318,7 @@ async def _wait_for_exit_code_within_timeout(
 
 
 async def _reconcile_run_tasks(
-    stdin_task: asyncio.Task[None] | None,
-    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+    tasks: _RunTaskOwnership,
     context: _DrainContext,
 ) -> tuple[str | None, str | None]:
     """Cancel the stdin writer and drain the stream consumers, in that order.
@@ -328,15 +334,16 @@ async def _reconcile_run_tasks(
         The decoded stdout and stderr text, as produced by
         :func:`_drain_stream_consumers`.
     """
-    await _cancel_stdin_writer(stdin_task)
+    await _cancel_stdin_writer(tasks.stdin_task)
     return await _drain_stream_consumers(
-        consumers,
+        tasks.consumers,
         context,
     )
 
 
 __all__ = [
     "_DrainContext",
+    "_RunTaskOwnership",
     "_await_eof_grace",
     "_cancel_pending_consumers",
     "_decode_consumer_result",

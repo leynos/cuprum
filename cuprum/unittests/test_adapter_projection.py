@@ -159,16 +159,27 @@ class TestAdapterProjection:
     @staticmethod
     def _assert_logging_projection(event: ExecEvent, canonical: set[str]) -> None:
         """Assert the logging projection preserves its canonical fields."""
-        expected_log_fields = (
-            (canonical - {"argv"}) | {"exec_id"}
-            if event.phase == "pipeline_fail_fast"
-            else canonical
-        )
+        if event.phase == "pipeline_fail_fast":
+            expected_log_fields = (canonical - {"argv"}) | {"exec_id"}
+        elif event.phase == "capture_eof_grace_expired":
+            expected_log_fields = {"program"}
+            for field in (
+                "pid",
+                "project",
+                "exec_id",
+                "operation",
+                "eof_grace_s",
+                "pending_readers",
+            ):
+                if getattr(event, field) is not None:
+                    expected_log_fields.add(field)
+        else:
+            expected_log_fields = canonical
 
         extra_keys = {
             key.removeprefix("cuprum_")
             for key in _build_extra(event)
-            if key not in {"cuprum_phase", "cuprum_tags"}
+            if key != "cuprum_phase"
         }
         assert extra_keys == expected_log_fields, (
             "logging extras must expose exactly the canonical common fields after "
@@ -181,16 +192,36 @@ class TestAdapterProjection:
             assert "cuprum_argv" not in _build_extra(event), (
                 "fail-fast extras must omit the raw argument vector"
             )
-            assert "cuprum_tags" not in _build_extra(event), (
-                "fail-fast extras must omit arbitrary event tags"
+        elif event.phase == "capture_eof_grace_expired":
+            assert "cuprum_argv" not in _build_extra(event), (
+                "grace-expiry extras must omit the raw argument vector"
             )
+            if event.exec_id is not None:
+                assert _build_extra(event)["cuprum_exec_id"] == event.exec_id, (
+                    "grace-expiry extras must preserve execution correlation"
+                )
         else:
             assert _build_extra(event)["cuprum_argv"] == event.argv, (
                 "logging extras must preserve argv as a tuple"
             )
-            assert _build_extra(event)["cuprum_tags"] == dict(event.tags), (
-                "logging extras must preserve the event tag mapping"
-            )
+        assert "cuprum_tags" not in _build_extra(event), (
+            "logging extras must omit arbitrary event tags"
+        )
+
+    def test_logging_extras_exclude_untrusted_tags(self) -> None:
+        """Structured records never retain caller-controlled tag values."""
+        event = dc.replace(
+            self._representative_event("start"),
+            tags={"token": "secret", "email": "person@example.test"},
+        )
+
+        extra = _build_extra(event)
+
+        assert "cuprum_tags" not in extra, "structured logs must not expose tags"
+        assert "secret" not in extra.values(), "structured logs must not expose tokens"
+        assert "person@example.test" not in extra.values(), (
+            "structured logs must not expose personal data"
+        )
 
     @staticmethod
     def _assert_tracing_projection(event: ExecEvent, canonical: set[str]) -> None:

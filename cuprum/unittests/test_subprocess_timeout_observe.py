@@ -65,16 +65,20 @@ def _single_timeout_event(
     return timeouts[0]
 
 
-def test_elapsed_timeout_emits_observe_event() -> None:
-    """An elapsed deadline emits a ``timeout`` observe event with stable fields."""
+def _observe_timeout(
+    process: _TimeoutWaitProcess | _ExitedProcess,
+    *,
+    timeout: float,
+    cancel_grace: float,
+) -> _RecordingObservation:
+    """Run one timeout route and return its recorded observation."""
 
     async def run_case() -> _RecordingObservation:
-        """Let a positive deadline elapse and return the recorded observation."""
-        process = _TimeoutWaitProcess()
+        """Exercise the process waiter under the requested timeout."""
         recorder = _RecordingObservation()
         execution = _DeadlineExecution(
-            ctx=ExecutionContext(cancel_grace=0.1),
-            timeout=0.05,
+            ctx=ExecutionContext(cancel_grace=cancel_grace),
+            timeout=timeout,
             observation=recorder,
         )
 
@@ -85,35 +89,40 @@ def test_elapsed_timeout_emits_observe_event() -> None:
             )
         return recorder
 
-    observation = asyncio.run(run_case())
+    return asyncio.run(run_case())
+
+
+def test_elapsed_timeout_emits_observe_event() -> None:
+    """An elapsed deadline emits an ``elapsed_deadline`` event."""
+    timeout = 0.05
+    observation = _observe_timeout(
+        _TimeoutWaitProcess(),
+        timeout=timeout,
+        cancel_grace=0.1,
+    )
     details = _single_timeout_event(observation)
     _assert_timeout_event_fields(
-        details, mode="elapsed_deadline", pid=4321, timeout_s=0.05
+        details,
+        mode="elapsed_deadline",
+        pid=4321,
+        timeout_s=timeout,
     )
 
 
 def test_non_positive_timeout_emits_observe_event() -> None:
-    """The immediate fast path emits a ``timeout`` event tagged non-positive."""
-
-    async def run_case() -> _RecordingObservation:
-        """Trigger the immediate fast path and return the recorded observation."""
-        process = _ExitedProcess()
-        recorder = _RecordingObservation()
-        execution = _DeadlineExecution(
-            ctx=ExecutionContext(), timeout=0, observation=recorder
-        )
-
-        with pytest.raises(TimeoutError):
-            await _wait_for_exit_code_within_timeout(
-                typ.cast("asyncio.subprocess.Process", process),
-                typ.cast("_SubprocessExecution", execution),
-            )
-        return recorder
-
-    observation = asyncio.run(run_case())
+    """A non-positive timeout emits a ``non_positive_immediate`` event."""
+    timeout = 0
+    observation = _observe_timeout(
+        _ExitedProcess(),
+        timeout=timeout,
+        cancel_grace=1.0,
+    )
     details = _single_timeout_event(observation)
     _assert_timeout_event_fields(
-        details, mode="non_positive_immediate", pid=5678, timeout_s=0
+        details,
+        mode="non_positive_immediate",
+        pid=5678,
+        timeout_s=timeout,
     )
 
 

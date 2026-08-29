@@ -217,7 +217,8 @@ class TestConsumerDrainProperties:
                 asyncio.create_task(_make_consumer(stdout_kind, "out")),
                 asyncio.create_task(_make_consumer(stderr_kind, "err")),
             )
-            await asyncio.sleep(0)
+            for _ in range(4):
+                await asyncio.sleep(0)
             primary = TimeoutError("primary")
             with pytest.raises(TimeoutError) as exc_info:
                 await _drain_while_raising(primary, consumers)
