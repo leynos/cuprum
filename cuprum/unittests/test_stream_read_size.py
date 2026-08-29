@@ -39,3 +39,8 @@ def test_crlf_split_at_read_boundary_emits_no_empty_line() -> None:
 
     assert captured == f"{first_line}\r\nb"
     assert lines == [first_line, "b"]
+
+
+def test_default_read_size_is_profiled_plateau() -> None:
+    """The production default remains the selected 64 KiB plateau."""
+    assert _READ_SIZE == 65536, "The profiled 64 KiB default must not regress."

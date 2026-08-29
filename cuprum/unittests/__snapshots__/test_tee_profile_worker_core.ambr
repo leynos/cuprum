@@ -8,7 +8,7 @@
     'fixture_path': '<redacted>',
     'lock_wait_seconds': '<redacted>',
     'mode': 'tee',
-    'read_size': 4096,
+    'read_size': 65536,
     'reentrant_rejection_count': 0,
     'repeat_count': 1,
     'scenario': 'tee-devnull-cb-s1-python',
