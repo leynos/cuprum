@@ -55,8 +55,7 @@ enough times to catch the scheduling variation. If every run passes, compare it
 with the immediately preceding full-suite segment before treating the timeout
 as an environmental flake.
 
-### H3: the ownership fix leaves a Rust pump blocked independently of the
-test's termination stub
+### H3: the ownership fix leaves a Rust pump blocked independently of the test's termination stub
 
 **Prediction:** A normal forced-Rust timeout scenario also hangs or fails to
 close output.
