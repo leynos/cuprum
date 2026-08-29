@@ -8,7 +8,7 @@ import logging
 import os
 import re
 import shlex
-import subprocess  # noqa: S404 - integration tests run the pinned spelling tool.
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - integration tests run the pinned spelling tool.
 import sys
 import tomllib
 import typing as typ
@@ -149,15 +149,15 @@ def test_spelling_target_generates_config_and_scans_all_source_types(
     tracked_files = ("guide.md", "module.py", "crate.rs")
     for filename in tracked_files:
         (tmp_path / filename).write_text("organize\n", encoding="utf-8")
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)  # noqa: S607
-    subprocess.run(  # noqa: S603
-        ["git", "add", *tracked_files],  # noqa: S607
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)  # ruff: ignore[start-process-with-partial-path]
+    subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+        ["git", "add", *tracked_files],  # ruff: ignore[start-process-with-partial-path]
         cwd=tmp_path,
         check=True,
     )
 
-    result = subprocess.run(  # noqa: S603
-        [  # noqa: S607
+    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+        [  # ruff: ignore[start-process-with-partial-path]
             "make",
             "-f",
             str(script_directory.parent / "Makefile"),
@@ -192,7 +192,7 @@ def _run_spelling_gate(
             f"uv tool run typos@{_TYPOS_VERSION}",
         )
     )
-    return subprocess.run(  # noqa: S603 - arguments are fixed except test paths.
+    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - arguments are fixed except test paths.
         [
             *command,
             "--config",

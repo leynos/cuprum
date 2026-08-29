@@ -72,7 +72,7 @@ def test_each_real_decline_path_increments_once(
     assert name == RUST_PUMP_DECLINED_TOTAL, (
         f"expected {RUST_PUMP_DECLINED_TOTAL!r}, found {name!r}"
     )
-    assert value == 1.0, f"a decline counts as one, found {value}"
+    assert value == pytest.approx(1.0), f"a decline counts as one, found {value}"
     assert labels == {"reason": expected_reason}, (
         f"expected the reason label alone, found {labels}"
     )
@@ -147,7 +147,9 @@ def test_a_failure_recovered_after_cancellation_counts_once(
     assert name == RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL, (
         f"expected {RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL!r}, found {name!r}"
     )
-    assert value == 1.0, f"a recovered failure counts as one, found {value}"
+    assert value == pytest.approx(1.0), (
+        f"a recovered failure counts as one, found {value}"
+    )
     assert labels == {}, (
         "this counter is deliberately unlabelled — an exception type would be "
         f"a series per failure mode — but it carried {labels}"

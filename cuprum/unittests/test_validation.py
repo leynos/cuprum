@@ -35,7 +35,7 @@ def test_require_non_empty_string_rejects_blank_str(value: str) -> None:
 def test_require_non_empty_string_returns_value_unchanged(value: str) -> None:
     """Any string with non-whitespace content is returned unchanged.
 
-    The identity assertion pins that no stripping, copying, or normalisation
+    The identity assertion pins that no stripping, copying, or normalization
     happens on the accepting path, so surrounding whitespace survives.
     """
     assert _require_non_empty_string(value, name="field") is value, (

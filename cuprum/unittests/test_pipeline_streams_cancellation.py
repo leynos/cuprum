@@ -50,13 +50,19 @@ class _MidTransferContext:
     release: threading.Event
 
 
+class _FakeStreamsRs(types.ModuleType):
+    """Fake ``cuprum._streams_rs`` module with the pump entry point."""
+
+    rust_pump_stream: cabc.Callable[[int, int], int]
+
+
 def _install_fake_pump(
     monkeypatch: pytest.MonkeyPatch,
     pump: cabc.Callable[[int, int], int],
 ) -> None:
     """Replace the Rust pump entry point with ``pump``."""
-    fake_streams_rs = types.ModuleType("cuprum._streams_rs")
-    fake_streams_rs.rust_pump_stream = pump  # type: ignore[attr-defined]
+    fake_streams_rs = _FakeStreamsRs("cuprum._streams_rs")
+    fake_streams_rs.rust_pump_stream = pump
     monkeypatch.setitem(sys.modules, "cuprum._streams_rs", fake_streams_rs)
 
 

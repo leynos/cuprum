@@ -187,7 +187,7 @@ def test_hyperfine_config_rejects_invalid_iterations(
 
 def test_pipeline_benchmark_config_coerces_string_paths() -> None:
     """Config path fields accept strings and are normalized to ``Path``."""
-    # The fields are declared as ``pth.Path`` because that is the normalised
+    # The fields are declared as ``pth.Path`` because that is the normalized
     # attribute type; the casts document the str inputs the constructor
     # deliberately coerces.
     config = PipelineBenchmarkConfig(

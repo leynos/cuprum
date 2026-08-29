@@ -167,7 +167,7 @@ def _invoke_pump_hook(hook: PumpHook, event: PumpEvent) -> None:
     """Invoke one pump hook, reporting rather than propagating its failure."""
     try:
         result = hook(event)
-    except Exception as exc:  # noqa: BLE001 - policy documented on the emitter
+    except Exception as exc:
         _LOGGER.warning(
             "pump_observer_failed phase=%s reason=%s error=%s",
             event.phase,
