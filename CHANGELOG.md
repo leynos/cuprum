@@ -119,6 +119,11 @@
 <!-- markdownlint-disable-next-line MD024 -->
 ### Fixed
 
+- **CRLF line emission at a read boundary:** A carriage return at the end of a
+  stream read now remains pending until the next decoded text or end of file.
+  A following line feed therefore completes the existing line rather than
+  producing a spurious empty stdout or stderr line event.
+
 - **Partial capture on timeout:** A capturing `run()` or `run_sync()` that times
   out now reports text for both streams, preserving partial output when readers
   have not yet observed EOF. The bounded drain grace avoids dependence on

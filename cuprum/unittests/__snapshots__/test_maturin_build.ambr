@@ -234,6 +234,7 @@
       'cuprum/unittests/test_stream_pump_runtime_behaviour.py',
       'cuprum/unittests/test_streams_rs_handoff_observability.py',
       'cuprum/unittests/test_streams_rs_writer_transfer.py',
+      'cuprum/unittests/test_stream_read_size.py',
       'cuprum/unittests/test_subprocess_drain_logging.py',
       'cuprum/unittests/test_subprocess_drain_properties.py',
       'cuprum/unittests/test_subprocess_exit_publication.py',
