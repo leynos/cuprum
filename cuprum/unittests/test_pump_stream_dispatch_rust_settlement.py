@@ -39,6 +39,10 @@ class _HeldNativePump:
         self.received_fds.append(writer_fd)
         return 0
 
+    def close_received_writer(self) -> None:
+        """Model Rust consuming its duplicate before worker completion."""
+        os.close(self.received_fds[0])
+
     def submit(
         self,
         executor: object,
@@ -202,6 +206,7 @@ async def _cancel_before_native_worker_settles(
             )
             os.fstat(native_pump.received_fds[0])
 
+            native_pump.close_received_writer()
             native_pump.future.set_result(0)
             await asyncio.wait_for(cleanup.finished.wait(), timeout=0.5)
 

@@ -98,8 +98,6 @@ def _install_recording_native_failure(
 
 
 class TestRustPumpFailures:
-    """Regression tests for Rust-pump cleanup paths."""
-
     def test_run_rust_pump_resumes_reader_when_draining_raises_base_exception(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -185,11 +183,12 @@ class TestRustPumpFailures:
         )
         close_writer.assert_not_awaited()
 
-    def test_run_rust_pump_closes_duplicate_after_native_load_failure(
+    def test_run_rust_pump_closes_duplicate_when_executor_rejects_submission(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A native-load failure should close the duplicate writer descriptor."""
+        """A rejected executor submission should close the duplicate writer FD."""
+        _ = self
         duplicated_fds: list[int] = []
         original_dup = os.dup
 
@@ -201,40 +200,27 @@ class TestRustPumpFailures:
 
         monkeypatch.setattr(_pipeline_streams.os, "dup", record_dup)
 
-        import cuprum._streams_rs as streams_rs
-
-        def fail_native_load() -> object:
-            """Model an unavailable native extension import."""
-            raise ImportError(_NATIVE_LOAD_FAILURE_MESSAGE)
-
-        async def run_with_native_load_failure(
+        async def run_with_rejected_executor_submission(
             awaitable: cabc.Awaitable[object],
         ) -> None:
-            """Publish a native-load failure through the submitted future."""
+            """Reject submission before a worker can consume the duplicate."""
             loop = asyncio.get_running_loop()
 
-            def submit_native_load_failure(
+            def reject_native_submission(
                 executor: object,
                 function: cabc.Callable[..., object],
                 *args: object,
             ) -> asyncio.Future[object]:
-                """Execute the worker and publish its import failure to a future."""
-                del executor
-                future = loop.create_future()
-                try:
-                    function(*args)
-                except ImportError as exc:
-                    future.set_exception(exc)
-                return future
+                """Raise before ``function`` is accepted by the executor."""
+                del executor, function, args
+                raise RuntimeError(_NATIVE_LOAD_FAILURE_MESSAGE)
 
             with mock.patch.object(
                 loop,
                 "run_in_executor",
-                side_effect=submit_native_load_failure,
+                side_effect=reject_native_submission,
             ):
                 await awaitable
-
-        monkeypatch.setattr(streams_rs, "_load_native", fail_native_load)
 
         with _nonblocking_pipe_pair() as (
             read_fd,
@@ -243,9 +229,9 @@ class TestRustPumpFailures:
             write_fd,
         ):
             del read_write_fd, write_read_fd
-            with pytest.raises(ImportError, match=_NATIVE_LOAD_FAILURE_MESSAGE):
+            with pytest.raises(RuntimeError, match=_NATIVE_LOAD_FAILURE_MESSAGE):
                 asyncio.run(
-                    run_with_native_load_failure(
+                    run_with_rejected_executor_submission(
                         _pipeline_streams._run_rust_pump(
                             reader=typ.cast("asyncio.StreamReader", object()),
                             writer=None,

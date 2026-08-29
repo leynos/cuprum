@@ -194,6 +194,7 @@
       'cuprum/unittests/test_rust_errno.py',
       'cuprum/unittests/test_rust_errno_windows.py',
       'cuprum/unittests/test_rust_extension.py',
+      'cuprum/unittests/test_rust_pump_debug_abort.py',
       'cuprum/unittests/test_rust_splice.py',
       'cuprum/unittests/test_rust_streams.py',
       'cuprum/unittests/test_rust_streams_boundary_property.py',

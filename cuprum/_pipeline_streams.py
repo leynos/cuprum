@@ -135,10 +135,9 @@ def _restore_rust_pump_state(state: _RustPumpState) -> None:
 
 
 def _complete_rust_pump(
-    completed: asyncio.Future[int],
+    completed: asyncio.Future[object],
     *,
     cleanup_complete: asyncio.Future[None],
-    rust_writer_fd: int,
     state: _RustPumpState,
 ) -> None:
     """Release native-pump resources after its executor worker settles."""
@@ -148,18 +147,9 @@ def _complete_rust_pump(
             if state.was_cancelled and error is not None:
                 _log_rust_pump_failed_after_cancel(error)
     finally:
-        _close_rust_writer_fd(rust_writer_fd)
-        try:
-            with _suppressed_teardown_failure(
-                _LOGGER,
-                "restore_state",
-                OSError,
-                ValueError,
-            ):
-                _restore_rust_pump_state(state)
-        finally:
-            if not cleanup_complete.done():
-                cleanup_complete.set_result(None)
+        _restore_rust_pump_state(state)
+        if not cleanup_complete.done():
+            cleanup_complete.set_result(None)
 
 
 async def _await_native_pump_cleanup(
@@ -188,11 +178,15 @@ async def _run_rust_pump_with_blocking_fds(
     """Run the native pump while its executor future owns cleanup."""
     from cuprum._streams_rs import rust_pump_stream
 
-    # Rust consumes this duplicate; asyncio keeps the transport descriptor.
+    # Rust owns and closes this duplicate. asyncio owns the original transport
+    # descriptor, so their close operations always target distinct FD numbers.
     rust_writer_fd = os.dup(state.writer_fd)
     loop = asyncio.get_running_loop()
     cleanup_complete = loop.create_future()
     try:
+        # The transport FD is restored by ``state``; configure Rust's own
+        # descriptor for the blocking writes it performs in its worker thread.
+        os.set_blocking(rust_writer_fd, True)
         native_pump = loop.run_in_executor(
             None,
             rust_pump_stream,
@@ -207,7 +201,6 @@ async def _run_rust_pump_with_blocking_fds(
         functools.partial(
             _complete_rust_pump,
             cleanup_complete=cleanup_complete,
-            rust_writer_fd=rust_writer_fd,
             state=state,
         )
     )
@@ -257,8 +250,9 @@ async def _run_rust_pump(
     )
     if not handled:
         return False
-    # Rust closed only its duplicate, so the transport descriptor is still
-    # valid: close it through asyncio to signal EOF downstream.
+    # The transport owns the original FD; Rust owns and has closed its duplicate.
+    # Suppress a broken pipe or a transport that is already closing while we
+    # close the original through asyncio to signal EOF downstream.
     with _suppressed_teardown_failure(_LOGGER, "writer_close", OSError):
         await _close_stream_writer(writer)
     return True

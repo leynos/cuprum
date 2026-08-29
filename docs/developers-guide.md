@@ -2079,6 +2079,11 @@ There is deliberately no borrowed *writer* variant. The writer FD handed to
 so downstream readers observe EOF. Reconstruct the writer with
 `stream_from_raw` (which yields an owning handle) and let it drop; reserve
 `with_borrowed_reader` for descriptors whose ownership stays with the caller.
+Python callers must therefore fully relinquish the writer descriptor supplied
+to `pump_stream`/`rust_pump_stream`. The pipeline caller does this by passing
+an `os.dup` of the asyncio transport descriptor: asyncio keeps and closes the
+original, while Rust closes the received duplicate on drop to signal EOF. The
+two descriptor numbers must never be shared between those owners.
 The helper's safety contract obliges the caller to guarantee `fd` is a valid
 open descriptor (or Windows handle) for the duration of the call and that
 ownership remains with the caller; in return the helper guarantees it never
