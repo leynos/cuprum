@@ -1051,13 +1051,14 @@ unsupported tracer, and confirms its contracts on every supported interpreter.
 
 ## Canonical stream-drain loop
 
-`cuprum._streams._drain(stream, config, *, on_chunk=None)` is the single
-read/echo/buffer loop behind both consume variants. It reads in `_READ_SIZE`
-chunks, extends the capture buffer when capturing, echoes each chunk to the
-configured sink when echoing, and hands the chunk to the optional `on_chunk`
-callback for variant-specific processing. When `config.echo_max_line_bytes` is
-set, the echo side additionally splits raw bytes into logical lines and passes
-their bodies to the per-drain `_EchoLineLimiter` in
+`cuprum._streams._drain(stream, config, *, on_chunk=None, read_size=_READ_SIZE)`
+is the single read/echo/buffer loop behind both consume variants. Production
+uses the tuned `_READ_SIZE` of 65536 bytes; the private benchmark worker passes
+its task-local profiling value. The loop extends the capture buffer when
+capturing, echoes each chunk to the configured sink when echoing, and hands the
+chunk to the optional `on_chunk` callback for variant-specific processing. When
+`config.echo_max_line_bytes` is set, the echo side additionally splits raw bytes
+into logical lines and passes their bodies to the per-drain `_EchoLineLimiter` in
 `cuprum/_echo_truncation.py`:
 
 - the limiter keeps its byte count and dropped-byte count across reader chunks,
@@ -1137,6 +1138,12 @@ payloads, keep final stdout and stderr captures independent, and echo all
 stdout and stderr text when both streams share one sink.
 `cuprum/unittests/test_stream_drain.py` keeps focused direct coverage for the
 canonical helper contract and the two `_consume_stream` variants.
+
+The 65536-byte value is a private, profile-selected Python tuning constant, not
+a public configuration option. It is independent of the Rust extension's
+`buffer_size`; changes to either value require their own benchmark evidence.
+The selection evidence and raw samples are recorded in
+[`tee-hotpath-read-size-sweep-2026-08-29.md`](tee-hotpath-read-size-sweep-2026-08-29.md).
 
 ### Concurrency model
 
