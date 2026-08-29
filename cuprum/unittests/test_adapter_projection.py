@@ -51,6 +51,7 @@ _ANCILLARY_PHASES = {
     "stdin_error": "write",
     "timeout": "wait",
     "teardown_error": "drain",
+    "capture_eof_grace_expired": "drain",
 }
 
 
@@ -158,38 +159,81 @@ class TestAdapterProjection:
     @staticmethod
     def _assert_logging_projection(event: ExecEvent, canonical: set[str]) -> None:
         """Assert the logging projection preserves its canonical fields."""
-        expected_log_fields = (
-            (canonical - {"argv"}) | {"exec_id"}
-            if event.phase == "pipeline_fail_fast"
-            else canonical
-        )
-
+        extra = _build_extra(event)
         extra_keys = {
-            key.removeprefix("cuprum_")
-            for key in _build_extra(event)
-            if key not in {"cuprum_phase", "cuprum_tags"}
+            key.removeprefix("cuprum_") for key in extra if key != "cuprum_phase"
         }
-        assert extra_keys == expected_log_fields, (
+        assert extra_keys == TestAdapterProjection._expected_logging_fields(
+            event, canonical
+        ), (
             "logging extras must expose exactly the canonical common fields after "
             "removing their backend prefix"
         )
+        TestAdapterProjection._assert_phase_specific_logging_rules(event, extra)
+
+    @staticmethod
+    def _expected_logging_fields(event: ExecEvent, canonical: set[str]) -> set[str]:
+        """Return the structured-log fields the event phase may expose."""
         if event.phase == "pipeline_fail_fast":
-            assert _build_extra(event)["cuprum_exec_id"] == event.exec_id, (
+            return (canonical - {"argv"}) | {"exec_id"}
+        if event.phase != "capture_eof_grace_expired":
+            return canonical
+
+        trusted_fields = (
+            "pid",
+            "project",
+            "exec_id",
+            "operation",
+            "eof_grace_s",
+            "pending_readers",
+        )
+        return {"program"} | {
+            field for field in trusted_fields if getattr(event, field) is not None
+        }
+
+    @staticmethod
+    def _assert_phase_specific_logging_rules(
+        event: ExecEvent,
+        extra: dict[str, object],
+    ) -> None:
+        """Assert phase-specific privacy and correlation rules for log extras."""
+        if event.phase == "pipeline_fail_fast":
+            assert extra["cuprum_exec_id"] == event.exec_id, (
                 "fail-fast extras must preserve the execution correlation token"
             )
-            assert "cuprum_argv" not in _build_extra(event), (
+            assert "cuprum_argv" not in extra, (
                 "fail-fast extras must omit the raw argument vector"
             )
-            assert "cuprum_tags" not in _build_extra(event), (
-                "fail-fast extras must omit arbitrary event tags"
+        elif event.phase == "capture_eof_grace_expired":
+            assert "cuprum_argv" not in extra, (
+                "grace-expiry extras must omit the raw argument vector"
             )
+            if event.exec_id is not None:
+                assert extra["cuprum_exec_id"] == event.exec_id, (
+                    "grace-expiry extras must preserve execution correlation"
+                )
         else:
-            assert _build_extra(event)["cuprum_argv"] == event.argv, (
+            assert extra["cuprum_argv"] == event.argv, (
                 "logging extras must preserve argv as a tuple"
             )
-            assert _build_extra(event)["cuprum_tags"] == dict(event.tags), (
-                "logging extras must preserve the event tag mapping"
-            )
+        assert "cuprum_tags" not in extra, (
+            "logging extras must omit arbitrary event tags"
+        )
+
+    def test_logging_extras_exclude_untrusted_tags(self) -> None:
+        """Structured records never retain caller-controlled tag values."""
+        event = dc.replace(
+            self._representative_event("start"),
+            tags={"token": "secret", "email": "person@example.test"},
+        )
+
+        extra = _build_extra(event)
+
+        assert "cuprum_tags" not in extra, "structured logs must not expose tags"
+        assert "secret" not in extra.values(), "structured logs must not expose tokens"
+        assert "person@example.test" not in extra.values(), (
+            "structured logs must not expose personal data"
+        )
 
     @staticmethod
     def _assert_tracing_projection(event: ExecEvent, canonical: set[str]) -> None:
@@ -240,6 +284,7 @@ class TestAdapterProjection:
         is_exit = phase == "exit"
         is_output = phase in {"stdout", "stderr"}
         is_timeout = phase == "timeout"
+        is_grace_expiry = phase == "capture_eof_grace_expired"
         is_fail_fast = phase == "pipeline_fail_fast"
         ancillary = phase in _ANCILLARY_PHASES
         return ExecEvent(
@@ -262,7 +307,7 @@ class TestAdapterProjection:
             operation=_ANCILLARY_PHASES.get(phase),
             error_type="TimeoutError"
             if is_timeout
-            else ("ValueError" if ancillary else None),
+            else ("ValueError" if ancillary and not is_grace_expiry else None),
             note="consumer drain failed: ValueError"
             if phase == "teardown_error"
             else None,
@@ -270,6 +315,8 @@ class TestAdapterProjection:
             timeout_mode="elapsed_deadline" if is_timeout else None,
             stage_index=0 if is_fail_fast else None,
             stage_count=2 if is_fail_fast else None,
+            eof_grace_s=0.25 if is_grace_expiry else None,
+            pending_readers=1 if is_grace_expiry else None,
         )
 
     @staticmethod

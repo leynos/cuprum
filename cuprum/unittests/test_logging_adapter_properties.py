@@ -43,6 +43,9 @@ _KNOWN_PHASES = (
     "stderr",
     "stdin",
     "stdin_error",
+    "timeout",
+    "teardown_error",
+    "capture_eof_grace_expired",
     "exit",
     "pipeline_fail_fast",
 )

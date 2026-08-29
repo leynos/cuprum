@@ -73,6 +73,8 @@ class _EventDetails:
     # events carry its position in ``tags`` instead.
     stage_index: int | None = None
     stage_count: int | None = None
+    eof_grace_s: float | None = None
+    pending_readers: int | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -121,6 +123,8 @@ class _StageObservation:
             exec_id=self.exec_id,
             stage_index=details.stage_index,
             stage_count=details.stage_count,
+            eof_grace_s=details.eof_grace_s,
+            pending_readers=details.pending_readers,
         )
         self._emit_event(event)
 
@@ -150,6 +154,8 @@ class _StageObservation:
             exec_id=self.exec_id,
             stage_index=details.stage_index,
             stage_count=details.stage_count,
+            eof_grace_s=None,
+            pending_readers=None,
         )
         self._emit_event(event)
 

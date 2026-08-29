@@ -41,17 +41,16 @@
 
 - **Timeout and teardown telemetry:** Emit `timeout` and `teardown_error`
   `ExecEvent` phases. `timeout` carries `operation="wait"`, `error_type`,
-  `timeout_s` (the configured timeout), and `timeout_mode`, which
-  distinguishes an elapsed deadline from an immediate non-positive expiry;
-  `teardown_error` instead carries `operation="drain"` and `error_type` (the
-  comma-joined failure classes), with both timeout fields unset. Both
-  phases are accompanied by a structured `cuprum.timeout` log channel, the
-  `cuprum_timeouts_total` and `cuprum_teardown_errors_total` metrics
-  counters, and ancillary tracing span events. Adoption is additive:
-  existing hooks, the `TimeoutExpired` exception and its payload, and the
-  `start` / `exit` events are unchanged, so no caller has to do anything,
-  and telemetry failures cannot mask `TimeoutExpired` or `CancelledError`
-  ([#271](https://github.com/leynos/cuprum/pull/271)).
+  `timeout_s` (the configured timeout), and `timeout_mode`, which distinguishes
+  an elapsed deadline from an immediate non-positive expiry; `teardown_error`
+  instead carries `operation="drain"` and `error_type` (the comma-joined
+  failure classes), with both timeout fields unset. Both phases are accompanied
+  by a structured `cuprum.timeout` log channel, the `cuprum_timeouts_total` and
+  `cuprum_teardown_errors_total` metrics counters, and ancillary tracing span
+  events. Adoption is additive: existing hooks, the `TimeoutExpired` exception
+  and its payload, and the `start` / `exit` events are unchanged, so no caller
+  has to do anything, and telemetry failures cannot mask `TimeoutExpired` or
+  `CancelledError` ([#271](https://github.com/leynos/cuprum/pull/271)).
 - A public `TimeoutMode` type alias is exported from `cuprum.events`, naming
   the two stable `timeout_mode` values (`"elapsed_deadline"` and
   `"non_positive_immediate"`), and `ExecEvent.timeout_mode` is now annotated
@@ -66,6 +65,15 @@
   observe-hook failures rather than swallowing them. Cuprum's own adapters are
   updated in the same change; third-party hooks written the same fail-closed
   way need an explicit arm.
+- **New `ExecPhase` value (breaking for fail-closed hooks):** `ExecPhase` gains
+  `capture_eof_grace_expired` when a capturing timeout drain exhausts its
+  bounded EOF grace with one or more readers still pending. Existing hooks that
+  reject unknown phases need an explicit arm. The event carries only
+  `operation="drain"`, `eof_grace_s`, and `pending_readers`; it never contains
+  captured stream payloads. `MetricsHook` counts it as
+  `cuprum_capture_eof_grace_expired_total`, labelled only by `program` and
+  `project`, and `TracingHook` records a correlated
+  `cuprum.capture_eof_grace_expired` span event.
 - **`ExecHook` import path (breaking):** Import `ExecHook` from top-level
   `cuprum` or its definition site, `cuprum.events`. The former
   `cuprum.context.ExecHook` re-export has been removed; only the import path
@@ -80,10 +88,16 @@
 
 ### Fixed
 
+- **Partial capture on timeout:** A capturing `run()` or `run_sync()` that times
+  out now reports text for both streams, preserving partial output when readers
+  have not yet observed EOF. The bounded drain grace avoids dependence on
+  event-loop scheduling while leaving non-capturing teardown prompt
+  ([#292](https://github.com/leynos/cuprum/issues/292)).
+
 - **Repeated cancellation during teardown:** Repeated cancellation arriving
   during timeout or fail-fast teardown no longer strands a `SIGTERM`-immune
-  child process; the shielded teardown wait is now retried until it
-  completes, so the `SIGKILL` escalation and reap always run
+  child process; the shielded teardown wait is now retried until it completes,
+  so the `SIGKILL` escalation and reap always run
   ([#271](https://github.com/leynos/cuprum/pull/271)).
 - Cleanup now completes before a cancellation arriving mid-cleanup propagates.
   Stream consumers, the stdin writer, and background observe-hook tasks are

@@ -175,6 +175,15 @@ print('err1', file=sys.stderr)""",
                 {"operation": "drain", "error_type": "ValueError"},
                 "cuprum_teardown_errors_total",
             ),
+            (
+                "capture_eof_grace_expired",
+                {
+                    "operation": "drain",
+                    "eof_grace_s": 0.25,
+                    "pending_readers": 1,
+                },
+                "cuprum_capture_eof_grace_expired_total",
+            ),
         ],
     )
     def test_counts_timeout_metrics(
@@ -183,7 +192,7 @@ print('err1', file=sys.stderr)""",
         extra_kwargs: dict[str, object],
         metric_name: str,
     ) -> None:
-        """Hook counts timeout expiries and teardown drain failures."""
+        """Hook counts timeout, drain failure, and capture-grace diagnostics."""
         metrics = InMemoryMetrics()
         hook = MetricsHook(metrics)
 
@@ -205,6 +214,32 @@ print('err1', file=sys.stderr)""",
             f"{phase} is a counter-only ancillary phase and must not observe a "
             f"histogram, got {metrics.histograms!r}"
         )
+
+    def test_capture_eof_grace_metric_uses_only_standard_labels(self) -> None:
+        """Grace expiry increments once without introducing diagnostic labels."""
+        collector = _LabelRecordingCollector()
+        hook = MetricsHook(collector)
+
+        hook(
+            _make_exec_event(
+                phase="capture_eof_grace_expired",
+                overrides={
+                    "operation": "drain",
+                    "eof_grace_s": 0.25,
+                    "pending_readers": 2,
+                    "pid": 321,
+                    "tags": {"project": "grace-metrics", "untrusted": "value"},
+                },
+            )
+        )
+
+        assert collector.calls == [
+            (
+                "cuprum_capture_eof_grace_expired_total",
+                1.0,
+                {"program": "cat", "project": "grace-metrics"},
+            )
+        ], "grace expiry must increment once using only program/project labels"
 
     def test_factory_function_returns_hook(self) -> None:
         """metrics_hook() factory returns a valid ExecHook."""

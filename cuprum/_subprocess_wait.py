@@ -15,6 +15,10 @@ so its callers can run it under ``_shielded_cleanup`` as one unit.
 from __future__ import annotations
 
 import asyncio
+import collections.abc as cabc
+import contextlib
+import dataclasses as dc
+import logging
 import time
 import typing as typ
 
@@ -23,6 +27,7 @@ from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._subprocess_stdin import _cancel_stdin_writer
 from cuprum._subprocess_timeout import _require_timeout
 from cuprum._timeout_reporting import (
+    _report_capture_eof_grace_expiry,
     _report_teardown_drain_failure,
     _report_timeout_expiry,
 )
@@ -33,13 +38,50 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import ExecutionContext
 
 
+# A capturing drain gives readers a short bounded chance to observe the EOF
+# created by process termination. A grandchild may keep a pipe open, so teardown
+# must never wait indefinitely.
+_CAPTURE_EOF_GRACE_S = 0.25
+_DRAIN_LOGGER = logging.getLogger("cuprum._subprocess_drain")
+
+type _EofGraceWaiter = cabc.Callable[
+    [tuple[asyncio.Task[str | None], asyncio.Task[str | None]]],
+    cabc.Awaitable[object],
+]
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _DrainContext:
+    """Capture and observability context for one consumer drain."""
+
+    capture: bool
+    eof_grace_waiter: _EofGraceWaiter | None = None
+    pid: int | None = None
+    observation: _StageObservation | None = None
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _RunTaskOwnership:
+    """The stdin writer and stream consumers owned by one streamed run."""
+
+    stdin_task: asyncio.Task[None] | None
+    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]]
+
+
+async def _await_eof_grace(
+    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+) -> None:
+    """Give readers the production-bounded opportunity to observe EOF."""
+    await asyncio.wait(consumers, timeout=_CAPTURE_EOF_GRACE_S)
+
+
 def _cancel_pending_consumers(
     consumers: tuple[asyncio.Task[str | None], ...],
 ) -> None:
+    """Cancel each consumer task that has not already completed."""
     # Finished readers keep their captured output; only tasks still blocked
     # after process termination (or on cancellation) are cancelled, so cleanup
     # cannot hang on a reader wedged on a pipe that never reached EOF.
-    """Cancel each consumer task that has not already completed."""
     for task in consumers:
         if not task.done():
             task.cancel()
@@ -95,15 +137,17 @@ async def _wait_for_exit_code(
 
 async def _drain_stream_consumers(
     consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+    context: _DrainContext | None = None,
     *,
-    pid: int | None = None,
-    observation: _StageObservation | None = None,
+    capture: bool | None = None,
+    **options: object,
 ) -> tuple[str | None, str | None]:
     """Cancel pending consumers, drain them once, and decode their output.
 
-    A consumer that failed or was cancelled maps to ``None`` so a broken reader
-    cannot mask the surrounding failure. Draining here exactly once keeps the
-    timeout and cancellation paths from reconciling the same tasks twice.
+    A capture-aware drain lets its readers observe EOF before it cancels them,
+    then maps an absent result to the empty string so a timed-out capturing run
+    always reports text. Other paths discard output and therefore skip the
+    grace window and retain ``None`` for absent text.
 
     A consumer that drains with an unexpected exception (anything other than the
     ``CancelledError`` produced by cancelling it) is still absorbed to preserve
@@ -115,13 +159,49 @@ async def _drain_stream_consumers(
     Returns
     -------
     tuple[str | None, str | None]
-        The decoded stdout and stderr text, each ``None`` when its consumer
-        failed or was cancelled.
+        The decoded stdout and stderr text. Capturing drains return text for
+        both streams, while other drains report ``None`` for absent text.
+
+    Raises
+    ------
+    asyncio.CancelledError
+        If cancellation arrives while the capture grace is active.
     """
-    _cancel_pending_consumers(consumers)
-    stdout_result, stderr_result = await asyncio.gather(
-        *consumers, return_exceptions=True
-    )
+    if context is None:
+        context = _DrainContext(
+            typ.cast("bool", capture),
+            eof_grace_waiter=typ.cast(
+                "_EofGraceWaiter | None", options.get("eof_grace_waiter")
+            ),
+            pid=typ.cast("int | None", options.get("pid")),
+            observation=typ.cast(
+                "_StageObservation | None", options.get("observation")
+            ),
+        )
+    if context.capture:
+        try:
+            await (context.eof_grace_waiter or _await_eof_grace)(consumers)
+        except asyncio.CancelledError:
+            with contextlib.suppress(asyncio.CancelledError):
+                await _settle_consumers(consumers)
+            raise
+        pending_count = sum(not task.done() for task in consumers)
+        if pending_count:
+            _DRAIN_LOGGER.debug(
+                "capture_eof_grace_expired pending_readers=%s",
+                pending_count,
+                extra={
+                    "cuprum_pending_readers": pending_count,
+                    "cuprum_timeout_s": _CAPTURE_EOF_GRACE_S,
+                },
+            )
+            _report_capture_eof_grace_expiry(
+                context.observation,
+                pid=context.pid,
+                eof_grace_s=_CAPTURE_EOF_GRACE_S,
+                pending_readers=pending_count,
+            )
+    stdout_result, stderr_result = await _settle_consumers(consumers)
     drain_errors = tuple(
         type(result).__name__
         for result in (stdout_result, stderr_result)
@@ -129,10 +209,46 @@ async def _drain_stream_consumers(
         and not isinstance(result, asyncio.CancelledError)
     )
     if drain_errors:
-        _report_teardown_drain_failure(observation, pid=pid, error_types=drain_errors)
-    stdout_text = None if isinstance(stdout_result, BaseException) else stdout_result
-    stderr_text = None if isinstance(stderr_result, BaseException) else stderr_result
+        _report_teardown_drain_failure(
+            context.observation, pid=context.pid, error_types=drain_errors
+        )
+    for stream, result in zip(
+        ("stdout", "stderr"), (stdout_result, stderr_result), strict=True
+    ):
+        if isinstance(result, BaseException) and not isinstance(
+            result, asyncio.CancelledError
+        ):
+            _DRAIN_LOGGER.debug(
+                "stream_consumer_failed stream=%s error=%s",
+                stream,
+                type(result).__name__,
+                extra={
+                    "cuprum_operation": f"drain_{stream}",
+                    "cuprum_error_type": type(result).__name__,
+                },
+            )
+    stdout_text = _decode_consumer_result(stdout_result, capture=context.capture)
+    stderr_text = _decode_consumer_result(stderr_result, capture=context.capture)
     return stdout_text, stderr_text
+
+
+def _decode_consumer_result(
+    result: str | BaseException | None,
+    *,
+    capture: bool,
+) -> str | None:
+    """Map an absent consumer result to the contract for its drain."""
+    if isinstance(result, BaseException) or result is None:
+        return "" if capture else None
+    return result
+
+
+async def _settle_consumers(
+    consumers: tuple[asyncio.Task[str | None], ...],
+) -> list[str | BaseException | None]:
+    """Cancel unfinished consumers and drain every result once."""
+    _cancel_pending_consumers(consumers)
+    return await asyncio.gather(*consumers, return_exceptions=True)
 
 
 async def _wait_for_exit_code_within_timeout(
@@ -202,11 +318,8 @@ async def _wait_for_exit_code_within_timeout(
 
 
 async def _reconcile_run_tasks(
-    stdin_task: asyncio.Task[None] | None,
-    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-    *,
-    pid: int | None,
-    observation: _StageObservation | None = None,
+    tasks: _RunTaskOwnership,
+    context: _DrainContext,
 ) -> tuple[str | None, str | None]:
     """Cancel the stdin writer and drain the stream consumers, in that order.
 
@@ -221,14 +334,22 @@ async def _reconcile_run_tasks(
         The decoded stdout and stderr text, as produced by
         :func:`_drain_stream_consumers`.
     """
-    await _cancel_stdin_writer(stdin_task)
-    return await _drain_stream_consumers(consumers, pid=pid, observation=observation)
+    await _cancel_stdin_writer(tasks.stdin_task)
+    return await _drain_stream_consumers(
+        tasks.consumers,
+        context,
+    )
 
 
 __all__ = [
+    "_DrainContext",
+    "_RunTaskOwnership",
+    "_await_eof_grace",
     "_cancel_pending_consumers",
+    "_decode_consumer_result",
     "_drain_stream_consumers",
     "_reconcile_run_tasks",
+    "_settle_consumers",
     "_wait_for_exit_code",
     "_wait_for_exit_code_within_timeout",
 ]

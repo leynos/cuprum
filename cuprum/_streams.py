@@ -15,6 +15,7 @@ must not reuse the writer afterwards.
 
 from __future__ import annotations
 
+import asyncio
 import codecs
 import dataclasses as dc
 import typing as typ
@@ -30,7 +31,6 @@ from cuprum._streams_pump import (
 )
 
 if typ.TYPE_CHECKING:
-    import asyncio
     import collections.abc as cabc
 
 
@@ -43,6 +43,16 @@ class _StreamConfig:
     sink: typ.IO[str]
     encoding: str
     errors: str
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _DrainState:
+    """Mutable-free state carried through one stream-drain loop."""
+
+    config: _StreamConfig
+    buffer: bytearray | None
+    echo_decoder: codecs.IncrementalDecoder | None
+    on_chunk: cabc.Callable[[bytes], None] | None
 
 
 async def _consume_stream(
@@ -74,26 +84,32 @@ async def _drain(
     # line-emitting path cannot drift.
     buffer = bytearray() if config.capture_output else None
     echo_decoder = _echo_decoder(config)
-    while True:
-        chunk = await stream.read(_READ_SIZE)
-        if not chunk:
-            break
-        if buffer is not None:
-            buffer.extend(chunk)
-        if config.echo_output:
-            _write_chunk(
-                config,
-                chunk,
-                decoder=echo_decoder,
-            )
-        if on_chunk is not None:
-            on_chunk(chunk)
+    try:
+        await _drain_chunks(stream, _DrainState(config, buffer, echo_decoder, on_chunk))
+    except asyncio.CancelledError:
+        if buffer is None:
+            raise
+        return buffer.decode(config.encoding, errors=config.errors)
 
     _flush_echo_decoder(config, echo_decoder)
 
     if buffer is None:
         return None
     return buffer.decode(config.encoding, errors=config.errors)
+
+
+async def _drain_chunks(
+    stream: asyncio.StreamReader,
+    state: _DrainState,
+) -> None:
+    """Consume chunks until EOF, updating the caller-owned capture buffer."""
+    while chunk := await stream.read(_READ_SIZE):
+        if state.buffer is not None:
+            state.buffer.extend(chunk)
+        if state.config.echo_output:
+            _write_chunk(state.config, chunk, decoder=state.echo_decoder)
+        if state.on_chunk is not None:
+            state.on_chunk(chunk)
 
 
 async def _consume_stream_without_lines(

@@ -29,7 +29,9 @@ from cuprum._subprocess_timeout import (
 )
 from cuprum._subprocess_wait import (
     _drain_stream_consumers,
+    _DrainContext,
     _reconcile_run_tasks,
+    _RunTaskOwnership,
     _wait_for_exit_code_within_timeout,
 )
 
@@ -136,20 +138,15 @@ def _build_stream_config(execution: _SubprocessExecution) -> _StreamConfig:
     )
 
 
-async def _run_subprocess_with_streams(
+async def _wait_for_streamed_process_exit(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
-    *,
+    tasks: _RunTaskOwnership,
     pid: int | None,
-) -> tuple[int, float, str | None, str | None]:
-    """Run subprocess with stream capture and timeout handling."""
-    stream_config = _build_stream_config(execution)
-    consumers = _spawn_stream_consumers(process, execution, stream_config, pid=pid)
-    stdin_task = _spawn_stdin_writer(
-        process, execution.stdin_data, execution.observation
-    )
+) -> tuple[int, float]:
+    """Wait for exit and reconcile every stream task when that wait fails."""
     try:
-        exit_code, exited_at = await _wait_for_exit_code_within_timeout(
+        return await _wait_for_exit_code_within_timeout(
             process,
             execution,
         )
@@ -161,7 +158,12 @@ async def _run_subprocess_with_streams(
         # otherwise abandon the consumers mid-drain and leak them.
         stdout_text, stderr_text = await _shielded_cleanup(
             _reconcile_run_tasks(
-                stdin_task, consumers, pid=pid, observation=execution.observation
+                tasks,
+                _DrainContext(
+                    capture=execution.capture,
+                    pid=pid,
+                    observation=execution.observation,
+                ),
             )
         )
         _handle_stream_timeout(
@@ -172,20 +174,45 @@ async def _run_subprocess_with_streams(
         )
     except BaseException:
         # Cancellation, and any other failure escaping the wait — an OS error
-        # while terminating, say — need the same reconciliation: the timeout
-        # clause above already handled its own case, so everything reaching
-        # here cancels the stdin writer, drains the consumers, and re-raises
-        # unchanged rather than leaking those tasks. Shielded, so a cancellation
-        # arriving *during* that reconciliation cannot cut it short either.
+        # while terminating, say — need the same reconciliation. Do not capture
+        # stream text while another error propagates, but settle every task
+        # before re-raising the original failure unchanged.
         await _shielded_cleanup(
             _reconcile_run_tasks(
-                stdin_task, consumers, pid=pid, observation=execution.observation
+                tasks,
+                _DrainContext(
+                    capture=False,
+                    pid=pid,
+                    observation=execution.observation,
+                ),
             )
         )
         raise
-    if stdin_task is not None:
+
+
+async def _run_subprocess_with_streams(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+    *,
+    pid: int | None,
+) -> tuple[int, float, str | None, str | None]:
+    """Run subprocess with stream capture and timeout handling."""
+    stream_config = _build_stream_config(execution)
+    tasks = _RunTaskOwnership(
+        stdin_task=_spawn_stdin_writer(
+            process, execution.stdin_data, execution.observation
+        ),
+        consumers=_spawn_stream_consumers(process, execution, stream_config, pid=pid),
+    )
+    exit_code, exited_at = await _wait_for_streamed_process_exit(
+        process,
+        execution,
+        tasks,
+        pid,
+    )
+    if tasks.stdin_task is not None:
         try:
-            await stdin_task
+            await tasks.stdin_task
         except BaseException:
             # An unexpected stdin-writer failure (or a cancellation landing on
             # this await) must still reconcile the stdout/stderr consumers,
@@ -194,12 +221,15 @@ async def _run_subprocess_with_streams(
             # has already settled here, so only the consumers need draining.
             await _shielded_cleanup(
                 _drain_stream_consumers(
-                    consumers, pid=pid, observation=execution.observation
+                    tasks.consumers,
+                    _DrainContext(
+                        capture=False, pid=pid, observation=execution.observation
+                    ),
                 )
             )
             raise
     try:
-        stdout_text, stderr_text = await asyncio.gather(*consumers)
+        stdout_text, stderr_text = await asyncio.gather(*tasks.consumers)
     except BaseException:
         # `gather` re-raises the first failure and leaves its sibling running,
         # so a reader wedged on a pipe would outlive the run it belonged to.
@@ -208,7 +238,10 @@ async def _run_subprocess_with_streams(
         # propagating — and here the consumer failure *is* that error.
         await _shielded_cleanup(
             _drain_stream_consumers(
-                consumers, pid=pid, observation=execution.observation
+                tasks.consumers,
+                _DrainContext(
+                    capture=False, pid=pid, observation=execution.observation
+                ),
             )
         )
         raise

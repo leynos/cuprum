@@ -264,14 +264,13 @@ before termination begins. The wait path also reports three fixed completion
 records through the optional pipeline-wait reporter:
 `pipeline_stage_first_failure` when the first failure is latched,
 `pipeline_fail_fast_termination` before termination starts, and
-`pipeline_fail_fast_terminated` with the termination outcome.
-The optional pipeline-wait reporter emits these canonical wait records at a
-fixed WARNING level on `cuprum._pipeline_wait`.
-`structured_logging_hook()` separately renders the `pipeline_fail_fast`
-`ExecEvent` at `LogLevels.fail_fast_level`. The latter two records occur only
-when there are stages to terminate; the first-failure record still documents a
-final-stage, single-stage, or already-settled non-final failure. The closing
-record's
+`pipeline_fail_fast_terminated` with the termination outcome. The optional
+pipeline-wait reporter emits these canonical wait records at a fixed WARNING
+level on `cuprum._pipeline_wait`. `structured_logging_hook()` separately
+renders the `pipeline_fail_fast` `ExecEvent` at `LogLevels.fail_fast_level`.
+The latter two records occur only when there are stages to terminate; the
+first-failure record still documents a final-stage, single-stage, or
+already-settled non-final failure. The closing record's
 `cuprum_terminated_stage_count` counts only confirmed process terminations, so
 a stage that settles after termination selection is excluded. The
 `pipeline_fail_fast` observe event is separate from these records; metrics,
@@ -282,14 +281,13 @@ The event carries the failing stage's index, pipeline width, exit code,
 duration, and execution token. It is sanitized by removing caller-controlled
 `argv`, `cwd`, `env`, and `tags`; it retains the runtime fields `program`,
 `pid`, `timestamp`, trusted configured project, typed decision fields, and
-`ExecEvent.exec_id`. All projections consume this same sanitized
-event, so they do not need to parse log text. The metrics adapter labels
+`ExecEvent.exec_id`. All projections consume this same sanitized event, so they
+do not need to parse log text. The metrics adapter labels
 `cuprum_pipeline_fail_fast_total` with `program` and `project` alone; `project`
 comes from the trusted configured project and falls back to `unknown` only when
-absent, and the execution token
-remains event and trace detail rather than a metric label. It also
-distinguishes concurrent pipelines whose stage indices would otherwise look
-identical.
+absent, and the execution token remains event and trace detail rather than a
+metric label. It also distinguishes concurrent pipelines whose stage indices
+would otherwise look identical.
 
 `structured_logging_hook()` consumes the event at `LogLevels.fail_fast_level`,
 which defaults to `logging.WARNING`. Once that hook is registered, no extra
@@ -449,6 +447,15 @@ Any output already captured before the timeout fired is preserved on the
 exception: `exc.output` / `exc.stderr` hold the partial stdout/stderr (or
 `None` when `capture=False`), so callers can inspect what the command produced
 before it was killed.
+
+Under `capture=True` those attributes are always strings, never `None`: a
+stream that produced nothing before the deadline reports the empty string.
+Cuprum gives the readers a brief bounded window to observe end-of-file once the
+process has died, and keeps whatever a reader had already read even when the
+window closes first and that reader has to be cancelled — which is what happens
+when a grandchild process inherited the pipe and holds it open. The window is
+short and fixed, because teardown must never wait on a pipe that may never
+close.
 
 **Non-positive timeout behaviour:** a `timeout` of `0` or a negative value is
 treated as an already-elapsed deadline, so the command expires immediately: it
@@ -766,6 +773,8 @@ hooks receive `ExecEvent` values describing:
   preserved `exit` event and the public `TimeoutExpired`).
 - `teardown_error` — a stream consumer drained with an unexpected error during
   cleanup (ancillary; the error is absorbed to preserve the primary exception).
+- `capture_eof_grace_expired` — a capturing drain exhausted its fixed EOF grace
+  budget while one or more readers remained pending (ancillary).
 - `pipeline_fail_fast` — a pipeline is being torn down early because a
   non-final stage was the first to fail. Emitted at most once per pipeline,
   before every other still-running stage — upstream producers and downstream
@@ -783,16 +792,25 @@ Hooks can be used for structured logging, metrics, or tracing without coupling
 Cuprum to a specific telemetry library.
 
 The `timeout` event carries `operation` (`"wait"`), `pid`, `timeout_s`,
-`error_type` (`"TimeoutError"`), and `timeout_mode`: `"elapsed_deadline"` for
-a positive elapsed deadline or `"non_positive_immediate"` for a non-positive
+`error_type` (`"TimeoutError"`), and `timeout_mode`: `"elapsed_deadline"` for a
+positive elapsed deadline or `"non_positive_immediate"` for a non-positive
 deadline that expires without awaiting the process. The `teardown_error` event
 carries `operation` (`"drain"`), `pid`, and `error_type`, the comma-joined
 classes raised while cancelling and draining stream consumers. It fires at most
 once per execution and excludes expected `CancelledError` failures.
 
+The `capture_eof_grace_expired` event carries the execution's `exec_id` and
+`pid`, `operation` (`"drain"`), `eof_grace_s`, and `pending_readers` (one or
+two). It is emitted only when a capturing drain reaches the fixed grace limit;
+the corresponding `cuprum_capture_eof_grace_expired_total` metric uses only
+the `program` and `project` labels, and tracing adds a
+`cuprum.capture_eof_grace_expired` event to the matching span. The grace-expiry
+event itself carries no captured stdout or stderr payload.
+
 These ancillary events preserve the public outcome: `start` and `exit` are
-unchanged, and synchronous hook failures handling `timeout` or `teardown_error`
-are suppressed rather than masking `TimeoutExpired` or `CancelledError`.
+unchanged, and synchronous hook failures handling `timeout`, `teardown_error`,
+or `capture_eof_grace_expired` are suppressed rather than masking
+`TimeoutExpired` or `CancelledError`.
 
 Each event carries a stable `exec_id` correlation token: every lifecycle event
 for one execution — a single command, or one stage of a pipeline — shares the
@@ -948,7 +966,8 @@ with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
 The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 
 - `cuprum_phase`: Event phase (plan, start, stdout, stderr, stdin,
-  stdin_error, exit, pipeline_fail_fast)
+  stdin_error, timeout, teardown_error, capture_eof_grace_expired, exit,
+  pipeline_fail_fast)
 - `cuprum_program`: Program being executed
 - `cuprum_argv`: The command's argument vector, recorded verbatim for phases
   that project it (see the security note below)
@@ -958,8 +977,9 @@ The hook attaches selected `cuprum_*` prefixed extra fields to log records:
   events)
 - `cuprum_stage_index` / `cuprum_stage_count`: Failing stage position and
   pipeline width (for `pipeline_fail_fast` events)
-- `cuprum_tags`: Event tags as a dictionary, except for
-  `pipeline_fail_fast`, whose projection omits tags
+- `cuprum_eof_grace_s` / `cuprum_pending_readers`: Fixed EOF-grace duration
+  and pending-reader count (for `capture_eof_grace_expired` events)
+Event tags are not emitted by this structured logging adapter.
 
 When registered, `structured_logging_hook()` emits `pipeline_fail_fast` at
 `LogLevels.fail_fast_level`, which defaults to `logging.WARNING`. This default
@@ -967,13 +987,14 @@ means the registered adapter needs no extra level configuration; set the field
 to change it.
 
 > **Security note — argument logging.** For phases that project it,
-> `cuprum_argv` is emitted verbatim and is **not** redacted. Any secret passed
-> on the command line — a `--password=…`, an API token, a connection string —
+> `cuprum_argv` is emitted verbatim and is **not** redacted for phases that
+> project it. Any secret passed on the command line — a `--password=…`, an API
+> token, a connection string —
 > is written into that log record (and into the `JsonLoggingFormatter` output)
 > exactly as supplied. The same applies to the plain-text `logging_hook()`.
-> The `pipeline_fail_fast` projection is the exception: it omits both
-> `cuprum_argv` and `cuprum_tags`, so the fail-fast warning does not expose
-> command-line secrets or arbitrary tag values. Prefer passing secrets via the
+> The `pipeline_fail_fast` and `capture_eof_grace_expired` projections omit
+> `cuprum_argv`, so those records do not expose command-line arguments. Event
+> tags are not emitted by the structured adapter. Prefer passing secrets via the
 > environment or files rather than as arguments, and scope log destinations
 > accordingly.
 
@@ -1023,6 +1044,8 @@ The hook collects:
 - `cuprum_timeouts_total`: Counter of subprocess timeout expiries
 - `cuprum_teardown_errors_total`: Counter of stream-consumer drain failures
   during cleanup
+- `cuprum_capture_eof_grace_expired_total`: Counter of capturing drains that
+  reach the fixed EOF-grace limit with readers still pending
 - `cuprum_pipeline_fail_fast_total`: Counter incremented once per pipeline torn
   down early because a non-final stage was the first to fail
 
@@ -1114,13 +1137,15 @@ The hook creates spans with these attributes:
 Output lines (stdout/stderr) are recorded as span events when
 `record_output=True` (the default).
 
-**Ancillary span events.** `stdin_error`, `timeout`, and `teardown_error` are
+**Ancillary span events.** `stdin_error`, `timeout`, `teardown_error`, and
+`capture_eof_grace_expired` are
 recorded as `cuprum.<phase>` events on the execution's open span. They leave it
 neither ended nor marked; a later `exit` closes it normally. `timeout` is
 always followed by `exit`, while `teardown_error` may be the final event.
 Ancillary events carry their set `line`, `operation`, `error_type`, `note`,
-`timeout_s`, and `timeout_mode` fields, and correlate by `exec_id`; an event
-without a matching open span is dropped.
+`timeout_s`, `timeout_mode`, `eof_grace_s`, and `pending_readers` fields, and
+correlate by `exec_id`; an event without a matching open span is dropped.
+The grace-expiry event carries no captured stdout or stderr payload.
 
 **Correlation note:** the hook correlates an execution's `start`, `stdout`,
 `stderr`, and `exit` events by `ExecEvent.exec_id`, a stable token minted once
@@ -1130,7 +1155,8 @@ as the `cuprum.pid` attribute for observability. Events emitted by Cuprum
 always carry an `exec_id`, so ordinary usage is unaffected. Only hand-built or
 legacy events that omit `exec_id` are affected: the hook cannot correlate them,
 so it ignores them — a `start` without an `exec_id` creates no span, and
-`stdout`/`stderr`/`stdin_error`/`pipeline_fail_fast`/`exit` without one are
+`stdout`/`stderr`/`stdin_error`/`timeout`/`teardown_error`/
+`capture_eof_grace_expired`/`pipeline_fail_fast`/`exit` without one are
 dropped.
 
 A pipeline's `pipeline_fail_fast` event is recorded as a
@@ -1394,8 +1420,8 @@ confusing failure.
 ```python
 from cuprum import ConcurrentConfig
 
-ConcurrentConfig(concurrency=0)      # ValueError: concurrency must be >= 1
-ConcurrentConfig(concurrency=True)   # TypeError: concurrency must be an int, got bool
+ConcurrentConfig(concurrency=0)  # ValueError: concurrency must be >= 1
+ConcurrentConfig(concurrency=True)  # TypeError: concurrency must be an int, got bool
 ```
 
 `ConcurrentResult` is normally returned by `run_concurrent`/
@@ -1460,8 +1486,9 @@ The helper returns `False` on pure Python installations and does not raise when
 native wheels are missing. Other native-extension import failures still surface
 so broken installations are visible.
 
-The helper raises `TypeError` with the message `Rust availability resolver must
-return bool` if the canonical backend resolver returns a non-boolean value.
+The helper raises `TypeError` with the message
+`Rust availability resolver must return bool` if the canonical backend resolver
+returns a non-boolean value.
 
 ### Rust stream pump (internal)
 

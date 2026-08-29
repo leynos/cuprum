@@ -32,7 +32,6 @@ from tests.helpers.timeouts import pending_tasks
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum._pipeline_types import _StageObservation
     from cuprum.events import ExecEvent
 
 
@@ -186,20 +185,17 @@ class TestSingleCommandRun:
         real_drain = _subprocess_wait._drain_stream_consumers
         observed: dict[str, tuple[asyncio.Task[str | None], ...]] = {}
 
-        # Mirrors _drain_stream_consumers exactly — the fixed-length consumer pair
-        # and both keyword-only arguments — so the stand-in needs no type
-        # suppression to forward its call on.
+        # Keep the test double at the drain boundary, including its context
+        # object, so it observes the run's actual cleanup call shape.
         async def gated_drain(
             consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-            *,
-            pid: int | None = None,
-            observation: _StageObservation | None = None,
+            context: _subprocess_wait._DrainContext,
         ) -> tuple[str | None, str | None]:
             """Announce that the drain started, wait to be released, then drain."""
             observed["consumers"] = consumers
             gate.entered.set()
             await gate.release.wait()
-            return await real_drain(consumers, pid=pid, observation=observation)
+            return await real_drain(consumers, context)
 
         monkeypatch.setattr(_subprocess_wait, "_drain_stream_consumers", gated_drain)
 

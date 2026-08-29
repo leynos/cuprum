@@ -138,7 +138,8 @@ def structured_logging_hook(
     The hook attaches structured ``extra`` data to log records including:
 
     - ``cuprum_phase``: Event phase (plan, start, stdout, stderr, stdin,
-      stdin_error, exit, pipeline_fail_fast)
+      stdin_error, timeout, teardown_error, capture_eof_grace_expired, exit,
+      pipeline_fail_fast)
     - ``cuprum_program``: Program being executed
     - ``cuprum_argv``: Full argument vector
     - ``cuprum_pid``: Process ID (when available)
@@ -147,6 +148,8 @@ def structured_logging_hook(
       pipeline_fail_fast events)
     - ``cuprum_stage_index`` / ``cuprum_stage_count``: Position of the failing
       stage and the pipeline width (for pipeline_fail_fast events)
+    - ``cuprum_eof_grace_s`` / ``cuprum_pending_readers``: Fixed grace duration
+      and pending-reader count (for capture_eof_grace_expired events)
 
     The adapter projects selected execution fields into log extras; it does
     not emit the full tags mapping.
@@ -158,8 +161,30 @@ def structured_logging_hook(
     )
 
 
+def _capture_eof_grace_extra(event: ExecEvent) -> dict[str, object]:
+    """Build bounded, trusted fields for a capture EOF-grace expiry."""
+    optional_fields = (
+        ("cuprum_pid", event.pid),
+        ("cuprum_project", event.project),
+        ("cuprum_exec_id", event.exec_id),
+        ("cuprum_operation", event.operation),
+        ("cuprum_eof_grace_s", event.eof_grace_s),
+        ("cuprum_pending_readers", event.pending_readers),
+    )
+    return {
+        "cuprum_phase": event.phase,
+        "cuprum_program": str(event.program),
+        **{name: value for name, value in optional_fields if value is not None},
+    }
+
+
 def _build_extra(event: ExecEvent) -> dict[str, object]:
     """Build structured extra data for a log record."""
+    if event.phase == "capture_eof_grace_expired":
+        # The grace expiry can occur after a timeout, so retain only bounded,
+        # trusted correlation fields—not caller tags or the raw argument vector.
+        return _capture_eof_grace_extra(event)
+
     extra: dict[str, object] = {"cuprum_phase": event.phase}
     common_fields = _event_common_fields(event, _prefixed("cuprum_"))
     if event.phase == "pipeline_fail_fast":
@@ -170,9 +195,9 @@ def _build_extra(event: ExecEvent) -> dict[str, object]:
             (name, value) for name, value in common_fields if name != "cuprum_argv"
         )
         extra["cuprum_exec_id"] = event.exec_id
-    else:
-        extra.update(common_fields)
-        extra["cuprum_tags"] = dict(event.tags)
+        return extra
+
+    extra.update(common_fields)
     return extra
 
 

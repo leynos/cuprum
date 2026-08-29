@@ -145,7 +145,7 @@ def test_teardown_drain_failure_logs_diagnostic(
         except asyncio.CancelledError:
             msg = "consumer boom"
             raise ValueError(msg) from None
-        return None
+        return
 
     async def run_case() -> None:
         """Drain a consumer that surfaces a non-cancellation error on teardown."""
@@ -156,7 +156,7 @@ def test_teardown_drain_failure_logs_diagnostic(
         # CancelledError during the drain.
         await asyncio.sleep(0)
 
-        await _drain_stream_consumers((consumer, completed), pid=5678)
+        await _drain_stream_consumers((consumer, completed), capture=False, pid=5678)
 
     with caplog.at_level(logging.ERROR, logger=_TIMEOUT_LOGGER):
         asyncio.run(run_case())
