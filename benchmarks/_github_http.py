@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
 import http.client
 import inspect
 import json
@@ -155,47 +156,24 @@ class _ArtefactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
         return redirected_request
 
 
-def _load_json_response(*, url: str, token: str) -> cabc.Mapping[str, object]:
-    """Load a GitHub API JSON response."""
+@dc.dataclass(frozen=True, slots=True)
+class _ResponseLabels:
+    """Name a bounded response for its size-limit and retry diagnostics."""
+
+    resource: str
+    retry_description: str
+
+
+def _load_bounded_response_bytes(
+    *,
+    url: str,
+    token: str,
+    max_bytes: int,
+    labels: _ResponseLabels,
+) -> bytes:
+    """Read an authenticated GitHub response body under a byte ceiling."""
     _require_https_url(url)
-    request = urllib.request.Request(  # ruff: ignore[suspicious-url-open-usage] - URL is selected by trusted caller
-        url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "User-Agent": "cuprum-benchmark-ratchet",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
-
-    opener = urllib.request.build_opener(_ArtefactArchiveRedirectHandler())
-
-    def _open_json_response() -> cabc.Mapping[str, object]:
-        with opener.open(
-            request,
-            timeout=_REQUEST_TIMEOUT_SECONDS,
-        ) as response:
-            chunks: list[bytes] = []
-            response_size = 0
-            while chunk := response.read(_ARCHIVE_READ_CHUNK_BYTES):
-                response_size += len(chunk)
-                if response_size > _MAX_JSON_RESPONSE_BYTES:
-                    msg = (
-                        f"JSON response from {url} exceeds "
-                        f"{_MAX_JSON_RESPONSE_BYTES} bytes"
-                    )
-                    raise ValueError(msg)
-                chunks.append(chunk)
-            payload = json.loads(b"".join(chunks))
-        return _require_mapping(payload, name=f"response from {url}")
-
-    return _with_retry(_open_json_response, description=f"load JSON from {url}")
-
-
-def _download_bytes(*, url: str, token: str) -> bytes:
-    """Download raw bytes from an authenticated URL."""
-    _require_https_url(url)
-    request = urllib.request.Request(  # ruff: ignore[suspicious-url-open-usage] - URL is returned by the GitHub API
+    request = urllib.request.Request(  # ruff: ignore[suspicious-url-open-usage] - URL is HTTPS-checked above and chosen by a trusted caller or the GitHub API
         url,
         headers={
             "Accept": "application/vnd.github+json",
@@ -206,22 +184,48 @@ def _download_bytes(*, url: str, token: str) -> bytes:
     )
     opener = urllib.request.build_opener(_ArtefactArchiveRedirectHandler())
 
-    def _open_archive() -> bytes:
-        with opener.open(
-            request,
-            timeout=_REQUEST_TIMEOUT_SECONDS,
-        ) as response:
+    def _read_bounded_body() -> bytes:
+        with opener.open(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
             chunks: list[bytes] = []
-            archive_size = 0
+            body_size = 0
             while chunk := response.read(_ARCHIVE_READ_CHUNK_BYTES):
-                archive_size += len(chunk)
-                if archive_size > _MAX_ARCHIVE_BYTES:
-                    msg = f"archive from {url} exceeds {_MAX_ARCHIVE_BYTES} bytes"
+                body_size += len(chunk)
+                if body_size > max_bytes:
+                    msg = f"{labels.resource} from {url} exceeds {max_bytes} bytes"
                     raise ValueError(msg)
                 chunks.append(chunk)
             return b"".join(chunks)
 
-    return _with_retry(_open_archive, description=f"download archive from {url}")
+    return _with_retry(_read_bounded_body, description=labels.retry_description)
+
+
+def _load_json_response(*, url: str, token: str) -> cabc.Mapping[str, object]:
+    """Load a GitHub API JSON response."""
+    payload = json.loads(
+        _load_bounded_response_bytes(
+            url=url,
+            token=token,
+            max_bytes=_MAX_JSON_RESPONSE_BYTES,
+            labels=_ResponseLabels(
+                resource="JSON response",
+                retry_description=f"load JSON from {url}",
+            ),
+        )
+    )
+    return _require_mapping(payload, name=f"response from {url}")
+
+
+def _download_bytes(*, url: str, token: str) -> bytes:
+    """Download raw bytes from an authenticated URL."""
+    return _load_bounded_response_bytes(
+        url=url,
+        token=token,
+        max_bytes=_MAX_ARCHIVE_BYTES,
+        labels=_ResponseLabels(
+            resource="archive",
+            retry_description=f"download archive from {url}",
+        ),
+    )
 
 
 def _require_https_url(url: str) -> None:

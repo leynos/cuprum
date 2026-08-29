@@ -3,14 +3,25 @@
 from __future__ import annotations
 
 import http.client
+import typing as typ
 import urllib.error
 import urllib.request
 from unittest import mock
 
 import pytest
 
+from benchmarks import _github_http
 from benchmarks._github_http import _ArtefactArchiveRedirectHandler, _with_retry
-from benchmarks.fetch_main_benchmark_baseline import _load_json_response
+from benchmarks.fetch_main_benchmark_baseline import (
+    _download_bytes,
+    _load_json_response,
+)
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+_BOUNDED_URL = "https://api.github.com/repos/leynos/cuprum/actions/runs"
+_BOUNDED_TOKEN = "".join(("tok", "en"))
 
 
 def test_load_json_response_rejects_oversized_response(
@@ -131,3 +142,63 @@ def test_with_retry_raises_non_transient_http_error(
     assert operation.call_count == 1, "non-transient errors should stop after one call"
     assert not delays, "non-transient errors should not schedule a retry delay"
     assert error.closed, "re-raised HTTP errors should close before propagation"
+
+
+@pytest.mark.parametrize(
+    ("wrapper", "expected_description"),
+    [
+        (_load_json_response, f"load JSON from {_BOUNDED_URL}"),
+        (_download_bytes, f"download archive from {_BOUNDED_URL}"),
+    ],
+    ids=["json", "archive"],
+)
+def test_bounded_wrappers_describe_their_retry_operation(
+    monkeypatch: pytest.MonkeyPatch,
+    wrapper: cabc.Callable[..., object],
+    expected_description: str,
+) -> None:
+    """Each wrapper labels its own retry operation.
+
+    ``_with_retry`` discards the description, so nothing at runtime would
+    reveal the two wrappers swapping labels now that both route through the
+    shared bounded reader.
+    """
+    captured: list[str] = []
+
+    def _capture_description(
+        operation: cabc.Callable[[], bytes],
+        *,
+        description: str,
+    ) -> bytes:
+        """Record the retry description without performing the read."""
+        del operation
+        captured.append(description)
+        return b'{"ok": true}'
+
+    monkeypatch.setattr(_github_http, "_with_retry", _capture_description)
+
+    wrapper(url=_BOUNDED_URL, token=_BOUNDED_TOKEN)
+
+    assert captured == [expected_description], (
+        f"expected the retry description {expected_description!r}, got {captured!r}"
+    )
+
+
+def test_load_json_response_requires_a_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A well-formed JSON body that is not an object is rejected."""
+
+    def _return_json_array(
+        operation: cabc.Callable[[], bytes],
+        *,
+        description: str,
+    ) -> bytes:
+        """Return a JSON array instead of performing the read."""
+        del operation, description
+        return b"[]"
+
+    monkeypatch.setattr(_github_http, "_with_retry", _return_json_array)
+
+    with pytest.raises(TypeError, match="must be an object"):
+        _load_json_response(url=_BOUNDED_URL, token=_BOUNDED_TOKEN)
