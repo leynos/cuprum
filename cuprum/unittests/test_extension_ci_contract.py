@@ -105,9 +105,8 @@ def _is_environment_assignment(token: str) -> bool:
     return name.isidentifier()
 
 
-def _script_runs_command(script: str, command: str) -> bool:
-    """Return whether *script* executes *command* as leading shell tokens."""
-    expected = tuple(shlex.split(command))
+def _command_segments(script: str) -> cabc.Iterator[list[str]]:
+    """Yield shell token segments split at command boundaries."""
     boundaries = frozenset({
         "&",
         "&&",
@@ -132,15 +131,26 @@ def _script_runs_command(script: str, command: str) -> bool:
             if token not in boundaries:
                 continue
             segment = tokens[segment_start:index]
-            while segment:
-                if not _is_environment_assignment(segment[0]):
-                    break
-                segment.pop(0)
-            if tuple(segment[: len(expected)]) == expected:
-                return True
+            yield segment
             segment_start = index + 1
 
-    return False
+
+def _segment_starts_command(segment: list[str], expected: tuple[str, ...]) -> bool:
+    """Return whether a segment starts with the expected command tokens."""
+    while segment:
+        if not _is_environment_assignment(segment[0]):
+            break
+        segment.pop(0)
+    return tuple(segment[: len(expected)]) == expected
+
+
+def _script_runs_command(script: str, command: str) -> bool:
+    """Return whether *script* executes *command* as leading shell tokens."""
+    expected = tuple(shlex.split(command))
+    return any(
+        _segment_starts_command(segment, expected)
+        for segment in _command_segments(script)
+    )
 
 
 def _first_step_running(command: str, *, job_name: str) -> tuple[int, str]:
