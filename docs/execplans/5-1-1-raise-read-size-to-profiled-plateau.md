@@ -5,7 +5,7 @@ This ExecPlan (execution plan) is a living document. The sections
 `Decision log`, `Outcomes & retrospective`, `Conformance basis`, and
 `Verification plan` must be kept up to date as work proceeds.
 
-Status: IN PROGRESS
+Status: COMPLETE
 
 Measurement update (2026-08-29): the 15-round interleaved sweep selected
 65536 bytes. The tee median improvement was 22.9997% (95% paired-bootstrap
@@ -217,8 +217,10 @@ This task is complete only when:
   the dated companion document records every sample and interval.
 - [x] 2026-08-29 EP-M4: `_READ_SIZE` was raised to 65536; the deterministic
   test suite and the same-session performance gate were re-confirmed.
-- [ ] EP-M5: documentation, changelog, and roadmap updated; final gates and
-  review remain to be recorded.
+- [x] 2026-08-29 EP-M5: documentation, changelog, roadmap, and companion
+  sweep record completed. `make check-fmt`, `make lint`, `make typecheck`,
+  `make test`, `make markdownlint`, and `make nixie` passed; CodeRabbit
+  completed with zero findings.
 
 ## Surprises & discoveries
 
@@ -568,7 +570,7 @@ fixture supplied roughly 28 million lines per repeat. This was an operational
 cost, not a change in scope. The CRLF boundary fix did not surface an
 additional line-ending question; vertical tab, form feed, U+2028, and NEL
 remain the existing stable separator cases covered by the line-splitting
-properties. Final gate and CodeRabbit evidence are added at EP-M5.
+properties. Final gate and CodeRabbit evidence completed at EP-M5.
 
 ## Context and orientation
 
@@ -629,8 +631,8 @@ Terms:
 
 ## Conformance basis
 
-- `docs/roadmap.md` item 5.1.1 is the requirement of record. The branch is two
-  commits behind `origin/main` and must be rebased before Stage A.
+- `docs/roadmap.md` item 5.1.1 is the requirement of record and is checked
+  complete by this implementation.
 - `docs/tee-hotpath-profiling-baseline-2026-06-12.md` §1 (Table 3) supplies the
   prior measurement and the 16-64 KiB range.
 - `docs/adr-002-additional-rust-components.md` Proposal 3 (lines 176-191)
@@ -1086,8 +1088,8 @@ Revision 3, 2026-08-29, after the Stage E sweep and implementation: selected
 65536 bytes from the randomized 15-round curve, recorded the paired bootstrap
 intervals and all raw samples in the dated companion document, raised the
 constant, and updated the design, developer, benchmark, baseline, changelog,
-ADR-001, contents, and roadmap references. EP-M5 remains open for the final
-deterministic gates and CodeRabbit review.
+ADR-001, contents, and roadmap references. EP-M5 then recorded the final
+deterministic-gate and CodeRabbit evidence, completing the ExecPlan.
 
 Revision 2, 2026-08-29, after a six-expert design review. Substantive changes:
 added the line-splitting prerequisite (decision D6) after discovering that line
