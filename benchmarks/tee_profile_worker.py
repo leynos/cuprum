@@ -44,7 +44,6 @@ from benchmarks._tee_profile_worker_backend import (
     _SelectorMetrics,
 )
 from benchmarks.sinks import SinkKind, open_sink
-from cuprum._streams_pump import _current_read_size, _override_read_size, _READ_SIZE
 from cuprum import (
     ExecEvent,
     ExecutionContext,
@@ -55,6 +54,7 @@ from cuprum import (
     scoped,
     sh,
 )
+from cuprum._streams_pump import _READ_SIZE, _current_read_size, _override_read_size
 
 type TeeMode = typ.Literal["echo", "capture", "tee"]
 type WorkerCommandResult = sh.CommandResult | sh.PipelineResult

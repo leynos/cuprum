@@ -24,7 +24,7 @@ import pytest
 from cuprum import ScopeConfig, TimeoutExpired, _pipeline_collect, scoped, sh
 from cuprum._backend import get_stream_backend
 from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
-from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
 from cuprum.sh import Pipeline, RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.execution import _RunKwargs
@@ -80,27 +80,6 @@ def _pipeline_timeout_sync(
     with pytest.raises(TimeoutExpired) as exc_info:
         pipeline.run_sync(**kwargs)
     return exc_info.value, set()
-
-
-async def _run_zero_timeout_case(
-    pipeline: Pipeline,
-    created: list[asyncio.Task[None]],
-) -> None:
-    """Time out immediately, then inspect pumps before the loop closes.
-
-    ``asyncio.run`` cancels everything still pending during shutdown, so a
-    stranded pump looks settled from outside. The assertion has to happen
-    while the loop is still live.
-    """
-    with pytest.raises(TimeoutExpired):
-        await pipeline.run(timeout=0, output=RunOutputOptions(capture=False))
-
-    assert created, "the pipeline must create an inter-stage pump to reconcile"
-    for index, task in enumerate(created):
-        assert task.done(), (
-            f"pump {index} was left unsettled after the immediate timeout: "
-            "nothing reconciled the pumps the caller owns"
-        )
 
 
 @pytest.fixture(params=["async", "sync"], ids=["run()", "run_sync()"])
@@ -198,6 +177,7 @@ def test_zero_timeout_reconciles_pipe_tasks(
     python = sh.make(python_program, catalogue=catalogue)
     created: list[asyncio.Task[None]] = []
     events: list[ExecEvent] = []
+    timed_out_processes: tuple[asyncio.subprocess.Process, ...] = ()
     real_create = _pipeline_collect._create_pipe_tasks
 
     def spy(
@@ -220,12 +200,37 @@ def test_zero_timeout_reconciles_pipe_tasks(
         cancel_grace: float,
     ) -> None:
         """Stand in for stage termination without settling anything."""
-        _ = (processes, cancel_grace)
+        nonlocal timed_out_processes
+        timed_out_processes = tuple(processes)
+        del cancel_grace
         await asyncio.sleep(0)
 
     pipeline = python(
         "-c", "import sys, time; sys.stdout.write('x' * 10_000_000); time.sleep(30)"
     ) | python("-c", "import time; time.sleep(30)")
+
+    async def run_case() -> None:
+        """Time out immediately, then inspect the pumps before the loop closes.
+
+        ``asyncio.run`` cancels everything still pending during shutdown, so a
+        stranded pump looks settled from outside. The assertion has to happen
+        while the loop is still live.
+        """
+        try:
+            with pytest.raises(TimeoutExpired):
+                await pipeline.run(timeout=0, output=RunOutputOptions(capture=False))
+
+            assert created, "the pipeline must create an inter-stage pump to reconcile"
+            for index, task in enumerate(created):
+                assert task.done(), (
+                    f"pump {index} was left unsettled after the immediate timeout: "
+                    "nothing reconciled the pumps the caller owns"
+                )
+        finally:
+            # The assertions deliberately run while both stages remain alive so
+            # their blocked pipe cannot hide detached-pump cleanup. Reap them
+            # before closing the loop even when an assertion fails.
+            await _terminate_all_shielded(timed_out_processes, cancel_grace=0)
 
     try:
         with (
@@ -236,7 +241,7 @@ def test_zero_timeout_reconciles_pipe_tasks(
             scoped(ScopeConfig(allowlist=frozenset([python_program]))),
             sh.observe(events.append),
         ):
-            asyncio.run(_run_zero_timeout_case(pipeline, created))
+            asyncio.run(run_case())
     finally:
         get_stream_backend.cache_clear()
         for pid in started_pids(events):
