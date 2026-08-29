@@ -68,9 +68,10 @@
 - **New `ExecPhase` value (breaking for fail-closed hooks):** `ExecPhase` gains
   `capture_eof_grace_expired` when a capturing timeout drain exhausts its
   bounded EOF grace with one or more readers still pending. Existing hooks that
-  reject unknown phases need an explicit arm. The event carries only
-  `operation="drain"`, `eof_grace_s`, and `pending_readers`; it never contains
-  captured stream payloads. `MetricsHook` counts it as
+  reject unknown phases need an explicit arm. The event adds
+  `operation="drain"`, `eof_grace_s`, and `pending_readers` to the common
+  `ExecEvent` fields, including `pid` and the required `exec_id`; it never
+  contains captured stream payloads. `MetricsHook` counts it as
   `cuprum_capture_eof_grace_expired_total`, labelled only by `program` and
   `project`, and `TracingHook` records a correlated
   `cuprum.capture_eof_grace_expired` span event.

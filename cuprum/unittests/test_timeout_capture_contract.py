@@ -21,7 +21,9 @@ import pytest
 
 from cuprum import Program, TimeoutExpired, sh
 from cuprum._subprocess_wait import (
+    _CAPTURE_EOF_GRACE_S,
     _drain_stream_consumers,
+    _DrainContext,
 )
 from cuprum.sh import RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
@@ -46,19 +48,6 @@ async def _reaches_eof_late(text: str, turns: int) -> str | None:
     return text
 
 
-async def _skip_eof_grace(
-    _consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-) -> None:
-    """Return immediately so a test never depends on elapsed wall-clock time."""
-
-
-async def _wait_for_consumers(
-    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-) -> None:
-    """Let test consumers finish without using the production wall-clock grace."""
-    await asyncio.gather(*consumers)
-
-
 def test_capturing_drain_reports_empty_text_for_a_reader_with_no_capture() -> None:
     """A capturing drain reports the empty string for a reader that never ran.
 
@@ -74,11 +63,11 @@ def test_capturing_drain_reports_empty_text_for_a_reader_with_no_capture() -> No
             asyncio.create_task(_never_reaches_eof()),
         )
 
-        stdout_text, stderr_text = await _drain_stream_consumers(
-            consumers,
-            capture=True,
-            eof_grace_waiter=_skip_eof_grace,
-        )
+        async with asyncio.timeout(_CAPTURE_EOF_GRACE_S * 2):
+            stdout_text, stderr_text = await _drain_stream_consumers(
+                consumers,
+                _DrainContext(capture=True),
+            )
 
         assert stdout_text == "", (
             f"a capturing drain must report stdout as text, got {stdout_text!r}"
@@ -108,8 +97,7 @@ def test_capturing_drain_waits_for_an_imminent_eof() -> None:
 
         stdout_text, stderr_text = await _drain_stream_consumers(
             consumers,
-            capture=True,
-            eof_grace_waiter=_wait_for_consumers,
+            _DrainContext(capture=True),
         )
 
         assert stdout_text == "out", (
@@ -151,8 +139,7 @@ def test_capturing_drain_settles_its_readers_when_cancelled_mid_grace() -> None:
         drain = asyncio.create_task(
             _drain_stream_consumers(
                 consumers,
-                capture=True,
-                eof_grace_waiter=wait_at_grace,
+                _DrainContext(capture=True, eof_grace_waiter=wait_at_grace),
             ),
         )
         await grace_started.wait()
@@ -184,7 +171,7 @@ def test_non_capturing_drain_leaves_a_wedged_reader_unset() -> None:
 
         stdout_text, stderr_text = await _drain_stream_consumers(
             consumers,
-            capture=False,
+            _DrainContext(capture=False),
         )
 
         assert stdout_text is None, (

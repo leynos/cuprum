@@ -16,6 +16,7 @@ import pytest
 from cuprum._subprocess_wait import (
     _CAPTURE_EOF_GRACE_S,
     _drain_stream_consumers,
+    _DrainContext,
     _wait_for_exit_code_within_timeout,
 )
 from cuprum.sh import ExecutionContext
@@ -147,9 +148,11 @@ def test_teardown_drain_failure_emits_observe_event() -> None:
 
         await _drain_stream_consumers(
             (consumer, completed),
-            capture=False,
-            pid=5678,
-            observation=typ.cast("_StageObservation", observation),
+            _DrainContext(
+                capture=False,
+                pid=5678,
+                observation=typ.cast("_StageObservation", observation),
+            ),
         )
         return observation
 
@@ -196,10 +199,12 @@ def test_capture_eof_grace_expiry_emits_observe_event() -> None:
         recorder = _RecordingObservation()
         await _drain_stream_consumers(
             (asyncio.create_task(never_reaches_eof()), completed),
-            capture=True,
-            eof_grace_waiter=expire_immediately,
-            pid=5678,
-            observation=typ.cast("_StageObservation", recorder),
+            _DrainContext(
+                capture=True,
+                eof_grace_waiter=expire_immediately,
+                pid=5678,
+                observation=typ.cast("_StageObservation", recorder),
+            ),
         )
         return recorder
 
@@ -240,9 +245,11 @@ def test_completed_capturing_readers_emit_no_grace_expiry_event() -> None:
                 asyncio.create_task(asyncio.sleep(0, result="stdout")),
                 asyncio.create_task(asyncio.sleep(0, result="stderr")),
             ),
-            capture=True,
-            eof_grace_waiter=wait_for_readers,
-            observation=typ.cast("_StageObservation", recorder),
+            _DrainContext(
+                capture=True,
+                eof_grace_waiter=wait_for_readers,
+                observation=typ.cast("_StageObservation", recorder),
+            ),
         )
         return recorder
 
@@ -267,8 +274,10 @@ def test_non_capturing_drain_emits_no_grace_expiry_event() -> None:
                 asyncio.create_task(never_reaches_eof()),
                 asyncio.create_task(never_reaches_eof()),
             ),
-            capture=False,
-            observation=typ.cast("_StageObservation", recorder),
+            _DrainContext(
+                capture=False,
+                observation=typ.cast("_StageObservation", recorder),
+            ),
         )
         return recorder
 
@@ -300,7 +309,7 @@ def test_failing_grace_observer_cannot_replace_cancellation() -> None:
             assert task is not None, "the drain must run inside an asyncio task"
             task.cancel()
             msg = "grace observer exploded"
-            raise RuntimeError(msg)
+            raise ValueError(msg)
 
     async def run_case() -> None:
         """Drive grace expiry, observer failure, and cancellation together."""
@@ -311,9 +320,11 @@ def test_failing_grace_observer_cannot_replace_cancellation() -> None:
         with pytest.raises(asyncio.CancelledError):
             await _drain_stream_consumers(
                 consumers,
-                capture=True,
-                eof_grace_waiter=expire_immediately,
-                observation=typ.cast("_StageObservation", _CancellingObservation()),
+                _DrainContext(
+                    capture=True,
+                    eof_grace_waiter=expire_immediately,
+                    observation=typ.cast("_StageObservation", _CancellingObservation()),
+                ),
             )
         assert all(task.done() for task in consumers), (
             "a cancellation after grace telemetry must still settle every reader"

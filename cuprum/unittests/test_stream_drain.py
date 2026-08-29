@@ -13,6 +13,7 @@ import asyncio
 import io
 import typing as typ
 
+import pytest
 from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
@@ -154,6 +155,50 @@ def test_drain_can_disable_capture_while_echoing() -> None:
     assert sink.getvalue() == "only echo", (
         f"echo-only drain must write all decoded chunks for chunks={chunks!r}"
     )
+
+
+def test_discarding_a_cancelled_capture_skips_decoding() -> None:
+    """Cleanup cancellation discards an incomplete capture without decoding it."""
+
+    async def run_case() -> None:
+        """Cancel a reader after it has buffered invalid but incomplete UTF-8."""
+        discard_on_cancel = asyncio.Event()
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"\xff")
+        config = _StreamConfig(
+            capture_output=True,
+            echo_output=False,
+            sink=io.StringIO(),
+            encoding="utf-8",
+            errors="strict",
+            discard_on_cancel=discard_on_cancel,
+        )
+        task = asyncio.create_task(_drain(reader, config))
+        await asyncio.sleep(0)
+        discard_on_cancel.set()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run_case())
+
+
+def test_line_observer_cancellation_propagates() -> None:
+    """Cancellation raised by a line observer is not mistaken for reader cleanup."""
+
+    def cancel_on_line(_line: str) -> None:
+        """Model an observer that requests cancellation while receiving output."""
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            _consume_stream(
+                _reader((b"line\n",)),
+                _config(io.StringIO()),
+                on_line=cancel_on_line,
+            )
+        )
 
 
 def test_drain_echoes_split_multibyte_text_sink() -> None:

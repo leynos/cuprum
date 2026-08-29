@@ -123,7 +123,10 @@ def _spawn_stream_consumers(
     )
 
 
-def _build_stream_config(execution: _SubprocessExecution) -> _StreamConfig:
+def _build_stream_config(
+    execution: _SubprocessExecution,
+    discard_on_cancel: asyncio.Event,
+) -> _StreamConfig:
     """Build the stdout _StreamConfig for an execution context."""
     return _StreamConfig(
         capture_output=execution.capture,
@@ -135,6 +138,7 @@ def _build_stream_config(execution: _SubprocessExecution) -> _StreamConfig:
         ),
         encoding=execution.ctx.encoding,
         errors=execution.ctx.errors,
+        discard_on_cancel=discard_on_cancel,
     )
 
 
@@ -163,6 +167,7 @@ async def _wait_for_streamed_process_exit(
                     capture=execution.capture,
                     pid=pid,
                     observation=execution.observation,
+                    discard_on_cancel=tasks.discard_on_cancel,
                 ),
             )
         )
@@ -184,6 +189,7 @@ async def _wait_for_streamed_process_exit(
                     capture=False,
                     pid=pid,
                     observation=execution.observation,
+                    discard_on_cancel=tasks.discard_on_cancel,
                 ),
             )
         )
@@ -197,12 +203,14 @@ async def _run_subprocess_with_streams(
     pid: int | None,
 ) -> tuple[int, float, str | None, str | None]:
     """Run subprocess with stream capture and timeout handling."""
-    stream_config = _build_stream_config(execution)
+    discard_on_cancel = asyncio.Event()
+    stream_config = _build_stream_config(execution, discard_on_cancel)
     tasks = _RunTaskOwnership(
         stdin_task=_spawn_stdin_writer(
             process, execution.stdin_data, execution.observation
         ),
         consumers=_spawn_stream_consumers(process, execution, stream_config, pid=pid),
+        discard_on_cancel=discard_on_cancel,
     )
     exit_code, exited_at = await _wait_for_streamed_process_exit(
         process,
@@ -223,7 +231,10 @@ async def _run_subprocess_with_streams(
                 _drain_stream_consumers(
                     tasks.consumers,
                     _DrainContext(
-                        capture=False, pid=pid, observation=execution.observation
+                        capture=False,
+                        pid=pid,
+                        observation=execution.observation,
+                        discard_on_cancel=tasks.discard_on_cancel,
                     ),
                 )
             )
@@ -240,7 +251,10 @@ async def _run_subprocess_with_streams(
             _drain_stream_consumers(
                 tasks.consumers,
                 _DrainContext(
-                    capture=False, pid=pid, observation=execution.observation
+                    capture=False,
+                    pid=pid,
+                    observation=execution.observation,
+                    discard_on_cancel=tasks.discard_on_cancel,
                 ),
             )
         )

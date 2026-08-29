@@ -43,6 +43,7 @@ class _StreamConfig:
     sink: typ.IO[str]
     encoding: str
     errors: str
+    discard_on_cancel: asyncio.Event | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -84,11 +85,12 @@ async def _drain(
     # line-emitting path cannot drift.
     buffer = bytearray() if config.capture_output else None
     echo_decoder = _echo_decoder(config)
-    try:
-        await _drain_chunks(stream, _DrainState(config, buffer, echo_decoder, on_chunk))
-    except asyncio.CancelledError:
-        if buffer is None:
-            raise
+    reached_eof = await _drain_chunks(
+        stream, _DrainState(config, buffer, echo_decoder, on_chunk)
+    )
+    if not reached_eof:
+        if buffer is None or _discard_on_cancel(config):
+            raise asyncio.CancelledError
         return buffer.decode(config.encoding, errors=config.errors)
 
     _flush_echo_decoder(config, echo_decoder)
@@ -98,12 +100,23 @@ async def _drain(
     return buffer.decode(config.encoding, errors=config.errors)
 
 
+def _discard_on_cancel(config: _StreamConfig) -> bool:
+    """Whether cancellation must discard buffered bytes without decoding them."""
+    return config.discard_on_cancel is not None and config.discard_on_cancel.is_set()
+
+
 async def _drain_chunks(
     stream: asyncio.StreamReader,
     state: _DrainState,
-) -> None:
+) -> bool:
     """Consume chunks until EOF, updating the caller-owned capture buffer."""
-    while chunk := await stream.read(_READ_SIZE):
+    while True:
+        try:
+            chunk = await stream.read(_READ_SIZE)
+        except asyncio.CancelledError:
+            return False
+        if not chunk:
+            return True
         if state.buffer is not None:
             state.buffer.extend(chunk)
         if state.config.echo_output:

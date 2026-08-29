@@ -867,8 +867,8 @@ without a signal that loss is undiagnosable.
 hand-constructed event) cannot be correlated, so it is ignored rather than
 guessed from PID: a `start` without an `exec_id` creates no span, and
 `stdout`/`stderr`/`stdin_error`/`timeout`/`teardown_error`/
-`capture_eof_grace_expired`/`exit` without one are dropped. Every event Cuprum
-itself emits carries an `exec_id`, so this
+`capture_eof_grace_expired`/`pipeline_fail_fast`/`exit` without one are
+dropped. Every event Cuprum itself emits carries an `exec_id`, so this
 only affects hand-built event streams.
 
 ## Canonical `_TokenRegistration` handle base
@@ -2916,8 +2916,15 @@ spawning, wiring streams, and assembling the result — belongs in
 `cuprum/_subprocess_wait.py` holds `_wait_for_exit_code`,
 `_wait_for_exit_code_within_timeout`, `_drain_stream_consumers`,
 `_cancel_pending_consumers`, and `_reconcile_run_tasks` (see the wait-path
-detail below). It was split out of `_subprocess_execution` so that module
-stays about orchestration; termination routes through
+detail below). The drain interface is explicit: `_RunTaskOwnership` bundles
+the optional stdin-writer task with the stdout and stderr consumer tasks,
+`_DrainContext` carries capture and observability settings, and
+`_reconcile_run_tasks(tasks, context)` cancels stdin before settling both
+consumers. The reconciliation is one unit for shielded cleanup. A capturing
+context gives readers the bounded EOF-grace window and decodes absent output as
+text, while a non-capturing context settles promptly and discards output. It
+was split out of `_subprocess_execution` so that module stays about
+orchestration; termination routes through
 `_terminate_all_shielded` (`cuprum/_process_lifecycle.py`), so a caller
 cancelling during the grace period cannot skip the `SIGKILL` escalation.
 

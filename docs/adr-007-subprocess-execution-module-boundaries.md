@@ -31,7 +31,7 @@ event emission.
 - Give process waiting, termination, and stream-drain teardown clear ownership.
 - Preserve text output for capturing timeout results even when readers have not
   observed EOF at the first teardown check.
-- Preserve existing private import compatibility where it remains necessary.
+- Preserve existing private interfaces where they remain necessary.
 - Make the specialized lifecycles independently testable.
 
 ## Options considered
@@ -51,10 +51,6 @@ Keep runner orchestration, process spawning, and stream-consumer creation in
 `_subprocess_stdin.py`; move timeout translation plus shared exit-event
 accounting to `_subprocess_timeout.py`; and move process waiting, termination,
 and stream-consumer draining to `_subprocess_wait.py`.
-
-Expose the drain helpers through `_subprocess_drain.py` as a narrow
-compatibility boundary for focused tests and private imports rather than a
-second live implementation.
 
 This makes ownership explicit while retaining the runner as the composition
 root.
@@ -84,9 +80,11 @@ spawning and stream-consumer creation/wiring. `_subprocess_stdin` owns
 `cuprum.stdin` logger. `_subprocess_timeout` owns timeout details/errors,
 timeout translation, and the exit-event helpers shared by timeout and normal
 completion paths. `_subprocess_wait` owns the deadline wait, process
-termination, and the single stream-consumer drain. `_subprocess_drain` exposes
-that drain boundary for focused tests and private imports while re-exporting
-the implementation from `_subprocess_wait`.
+termination, and the single stream-consumer drain. Its drain interface uses
+`_RunTaskOwnership` to bundle the optional stdin-writer task with the stdout
+and stderr consumer tasks, `_DrainContext` to carry capture and observability
+settings, and `_reconcile_run_tasks(tasks, context)` to cancel stdin before
+settling both consumers as one shielded cleanup unit.
 
 The drain is capture-aware. A capturing drain waits for up to
 `_CAPTURE_EOF_GRACE_S` for terminated-process readers to observe EOF, then

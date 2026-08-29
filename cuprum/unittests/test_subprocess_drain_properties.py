@@ -19,7 +19,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from cuprum._streams import _drain, _StreamConfig
-from cuprum._subprocess_drain import _drain_stream_consumers
+from cuprum._subprocess_wait import _drain_stream_consumers, _DrainContext
 
 _EXAMPLES = 25
 
@@ -105,7 +105,7 @@ async def _drain_while_raising(
     try:
         raise primary
     finally:
-        await _drain_stream_consumers(consumers, capture=False)
+        await _drain_stream_consumers(consumers, _DrainContext(capture=False))
 
 
 class TestConsumerDrainProperties:
@@ -138,7 +138,7 @@ class TestConsumerDrainProperties:
             for _ in range(4):
                 await asyncio.sleep(0)
             stdout_text, stderr_text = await _drain_stream_consumers(
-                consumers, capture=False
+                consumers, _DrainContext(capture=False)
             )
 
             for task, kind, value in (
@@ -180,7 +180,7 @@ class TestConsumerDrainProperties:
             for _ in range(4):
                 await asyncio.sleep(0)
             stdout_text, stderr_text = await _drain_stream_consumers(
-                consumers, capture=True
+                consumers, _DrainContext(capture=True)
             )
 
             for task, kind, value in (
