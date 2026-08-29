@@ -16,12 +16,15 @@ must not reuse the writer afterwards.
 from __future__ import annotations
 
 import asyncio
-import collections.abc as cabc
 import contextlib
 import contextvars
 import dataclasses as dc
 import enum
 import logging
+import typing as typ
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 _READ_SIZE = 4096
 _POST_CLOSE_DRAIN_TIMEOUT_S = 0.25
@@ -218,9 +221,9 @@ def _log_suppressed_stream_close_error(operation: str, exc: BaseException) -> No
 
 
 __all__ = [
-    "_DrainProgress",
     "_POST_CLOSE_DRAIN_TIMEOUT_S",
     "_READ_SIZE",
+    "_DrainProgress",
     "_WriteOutcome",
     "_close_stream_writer",
     "_current_read_size",
