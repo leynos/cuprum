@@ -1,5 +1,4 @@
 """Pipeline execution configuration helpers."""
-
 from __future__ import annotations
 
 import dataclasses as dc
@@ -7,6 +6,7 @@ import sys
 import typing as typ
 
 from cuprum._streams import _StreamConfig
+from cuprum._streams_pump import _current_read_size
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import ExecutionContext, RunOutputOptions
@@ -52,6 +52,7 @@ class _PipelineRunConfig:
             sink=self.stdout_sink,
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
+            read_size=_current_read_size(),
         )
 
     @property
@@ -64,6 +65,7 @@ class _PipelineRunConfig:
             sink=self.stderr_sink,
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
+            read_size=_current_read_size(),
         )
 
 

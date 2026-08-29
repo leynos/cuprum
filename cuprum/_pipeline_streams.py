@@ -42,6 +42,7 @@ from cuprum._pipeline_stream_native_cleanup import (
     _run_rust_pump_with_blocking_fds,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
+from cuprum._streams_pump import _current_read_size
 from cuprum.pump_events import RustPumpDeclineReason, RustPumpHandoffOutcome
 from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
 
@@ -223,13 +224,15 @@ async def _drain_reader_buffer(
 async def _run_python_pump(
     reader: asyncio.StreamReader | None,
     writer: asyncio.StreamWriter | None,
+    *,
+    read_size: int,
 ) -> None:
     """Run the configured Python pump implementation."""
     python_pump = _PUMP_STREAM_DISPATCH_TEST_HOOKS.python_pump
     if python_pump is not None:
         await python_pump(reader, writer)
         return
-    await _pump_stream(reader, writer)
+    await _pump_stream(reader, writer, read_size=read_size)
 
 
 async def _try_rust_pump(
@@ -275,10 +278,12 @@ async def _pump_stream_dispatch(
     writer: asyncio.StreamWriter | None,
     *,
     cleanup_grace_s: float = _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE,
+    read_size: int | None = None,
 ) -> None:
     """Route inter-stage pump to the Rust or Python implementation."""
+    active_read_size = _current_read_size() if read_size is None else read_size
     if reader is None:
-        await _run_python_pump(reader, writer)
+        await _run_python_pump(reader, writer, read_size=active_read_size)
         return
 
     backend = get_stream_backend()
@@ -289,7 +294,7 @@ async def _pump_stream_dispatch(
     ):
         return
 
-    await _run_python_pump(reader, writer)
+    await _run_python_pump(reader, writer, read_size=active_read_size)
 
 
 def _create_pipe_tasks(
@@ -304,5 +309,6 @@ def _create_pipe_tasks(
         functools.partial(
             _pump_stream_dispatch,
             cleanup_grace_s=native_pump_cleanup_grace,
+            read_size=_current_read_size(),
         ),
     )

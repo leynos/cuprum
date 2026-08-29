@@ -59,6 +59,9 @@ class _StreamConfig:
     sink: typ.IO[str]
     encoding: str
     errors: str
+    # The active private profiling read size. Production callers retain the
+    # default while benchmark workers inject a task-local value.
+    read_size: int = _READ_SIZE
     # Byte bound for each line mirrored to the echo sink; ``None`` keeps the
     # raw chunk-for-chunk echo. Bounded echoing protects consumers that stop
     # accepting a line past a size limit (GitHub Actions job logs end at a
@@ -103,11 +106,17 @@ async def _consume_stream(
     config: _StreamConfig,
     *,
     on_line: cabc.Callable[[str], None] | None = None,
+    read_size: int = _READ_SIZE,
 ) -> str | None:
     """Read from a subprocess stream, teeing to sink when requested."""
     if on_line is None:
-        return await _consume_stream_without_lines(stream, config)
-    return await _consume_stream_with_lines(stream, config, on_line=on_line)
+        return await _consume_stream_without_lines(stream, config, read_size=read_size)
+    return await _consume_stream_with_lines(
+        stream,
+        config,
+        on_line=on_line,
+        read_size=read_size,
+    )
 
 
 async def _drain(
@@ -115,6 +124,7 @@ async def _drain(
     config: _StreamConfig,
     *,
     on_chunk: cabc.Callable[[bytes], None] | None = None,
+    read_size: int = _READ_SIZE,
 ) -> str | None:
     """Run the canonical read/echo/buffer loop over *stream*."""
     # This is the single source of truth for the consume mechanics shared by
@@ -142,7 +152,7 @@ async def _drain(
         echo_guard,
         echo_limiter=echo_limiter,
     )
-    reached_eof = await _drain_chunks(stream, state)
+    reached_eof = await _drain_chunks(stream, state, read_size=read_size)
     if not reached_eof:
         if buffer is None or _discard_on_cancel(config):
             raise asyncio.CancelledError
@@ -164,11 +174,13 @@ def _discard_on_cancel(config: _StreamConfig) -> bool:
 async def _drain_chunks(
     stream: asyncio.StreamReader,
     state: _DrainState,
+    *,
+    read_size: int,
 ) -> bool:
     """Consume chunks until EOF, updating the caller-owned capture buffer."""
     while True:
         try:
-            chunk = await stream.read(_READ_SIZE)
+            chunk = await stream.read(read_size)
         except asyncio.CancelledError:
             return False
         if not chunk:
@@ -184,11 +196,13 @@ async def _drain_chunks(
 async def _consume_stream_without_lines(
     stream: asyncio.StreamReader | None,
     config: _StreamConfig,
+    *,
+    read_size: int,
 ) -> str | None:
     """Read from a subprocess stream without emitting line callbacks."""
     if stream is None:
         return "" if config.capture_output else None
-    return await _drain(stream, config)
+    return await _drain(stream, config, read_size=read_size)
 
 
 async def _consume_stream_with_lines(
@@ -196,6 +210,7 @@ async def _consume_stream_with_lines(
     config: _StreamConfig,
     *,
     on_line: cabc.Callable[[str], None],
+    read_size: int,
 ) -> str | None:
     """Read from a subprocess stream while emitting decoded output lines."""
     if stream is None:
@@ -212,7 +227,12 @@ async def _consume_stream_with_lines(
             on_line=on_line,
         )
 
-    captured = await _drain(stream, config, on_chunk=feed_decoder)
+    captured = await _drain(
+        stream,
+        config,
+        on_chunk=feed_decoder,
+        read_size=read_size,
+    )
 
     pending_text = _emit_completed_lines(
         pending_text + decoder.decode(b"", final=True),

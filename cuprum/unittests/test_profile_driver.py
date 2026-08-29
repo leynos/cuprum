@@ -279,6 +279,7 @@ def test_worker_command_uses_module_invocation(tmp_path: pth.Path) -> None:
         with_line_callbacks=False,
         backend="python",
         repeat_count=1,
+        read_size=16384,
     )
     cmd = _worker_command(scenario)
 
@@ -286,8 +287,56 @@ def test_worker_command_uses_module_invocation(tmp_path: pth.Path) -> None:
     assert cmd[2] == "benchmarks.tee_profile_worker", (
         f"expected module name at index 2, got {cmd}"
     )
+    read_size_index = cmd.index("--read-size")
+    assert cmd[read_size_index : read_size_index + 2] == ["--read-size", "16384"], (
+        f"expected worker command to propagate read size, got {cmd}"
+    )
 
+def test_profile_sweep_runs_every_size_in_each_round(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Read-size sweeps preserve every configured measurement point per round."""
+    fixture = tmp_path / "fixture.b64"
+    fixture.write_text("YWJj\n")
+    wrapped = tmp_path / "fixture-wrap76.b64"
+    wrapped.write_text("YWJj\n")
+    config = TeeProfileDriverConfig(
+        fixture_path=fixture,
+        wrapped_fixture_path=wrapped,
+        output_dir=tmp_path / "profiles",
+        profiler="none",
+        warmup_count=0,
+        repeat_count=1,
+        read_sizes=(4096, 16384),
+        rounds=2,
+        randomize_order=True,
+        scenario_name="tee-devnull-nocb-s1",
+    )
+    observed: list[int] = []
 
+    def fake_run(
+        scenario: profile_tee_hotpath.TeeProfileScenario,
+        *,
+        config: TeeProfileDriverConfig,
+        scenario_dir: pth.Path,
+    ) -> dict[str, object]:
+        """Record the scenario's read size without running a subprocess."""
+        _ = (config, scenario_dir)
+        observed.append(scenario.read_size)
+        return {"exit_code": 0, "read_size": scenario.read_size, "status": "ok"}
+
+    monkeypatch.setattr(profile_tee_hotpath, "_run_profile_scenario", fake_run)
+
+    results = profile_tee_hotpath.run_profile_sweep(config=config)
+
+    assert len(results) == 4, f"expected four sweep samples, got {results}"
+    assert set(observed[:2]) == {4096, 16384}, (
+        f"first round must visit each size exactly once, got {observed}"
+    )
+    assert set(observed[2:]) == {4096, 16384}, (
+        f"second round must visit each size exactly once, got {observed}"
+    )
 def _run_profile_cli(*args: str) -> int:
     """Invoke benchmarks.profile_tee_hotpath via subprocess and return its exit code."""
     completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]

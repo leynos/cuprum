@@ -98,6 +98,7 @@ def _create_stage_capture_tasks(
                     stream=EchoStream.STDERR,
                 ),
                 on_line=stderr_on_line,
+                read_size=config.stderr_stream_config.read_size,
             ),
         )
 
@@ -120,6 +121,7 @@ def _create_stage_capture_tasks(
                 process.stdout,
                 config.stream_config,
                 on_line=stdout_on_line,
+                read_size=config.stream_config.read_size,
             ),
         )
 
