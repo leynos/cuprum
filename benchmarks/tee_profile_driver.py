@@ -18,6 +18,7 @@ from benchmarks.tee_profile_scenarios import (
     _worker_command,
     default_tee_profile_scenarios,
 )
+from cuprum._streams_pump import _READ_SIZE
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -178,6 +179,9 @@ def _base_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--warmup-count", type=int, default=1)
     parser.add_argument("--repeat-count", type=int, default=3)
+    parser.add_argument("--read-sizes", type=_parse_read_sizes, default=(_READ_SIZE,))
+    parser.add_argument("--rounds", type=int, default=1)
+    parser.add_argument("--randomize-order", action="store_true")
     parser.add_argument("--perf-frequency", type=int, default=999)
     parser.add_argument("--perf-call-graph", default="dwarf,16384")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -186,6 +190,19 @@ def _base_parser() -> argparse.ArgumentParser:
     run_scenario = subparsers.add_parser("run-scenario")
     run_scenario.add_argument("--scenario", required=True)
     return parser
+
+
+def _parse_read_sizes(value: str) -> tuple[int, ...]:
+    """Parse a comma-separated read-size list for a profiling sweep."""
+    try:
+        read_sizes = tuple(int(item) for item in value.split(","))
+    except ValueError as exc:
+        msg = f"read-sizes must be comma-separated integers, got {value!r}"
+        raise argparse.ArgumentTypeError(msg) from exc
+    if not read_sizes or any(read_size < 1 for read_size in read_sizes):
+        msg = "read-sizes must contain at least one positive integer"
+        raise argparse.ArgumentTypeError(msg)
+    return read_sizes
 
 
 def main() -> int:

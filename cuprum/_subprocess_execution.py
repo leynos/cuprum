@@ -42,6 +42,19 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
 
 
+from cuprum._streams_pump import _current_read_size
+
+"""Internal subprocess execution machinery.
+Orchestration for ``SafeCmd.run()``: spawning the subprocess, wiring its
+stream consumers, and assembling the ``CommandResult``. The rules for ending a
+run — applying the deadline, terminating the process, and draining the stream
+consumers exactly once — live in ``cuprum._subprocess_wait``.
+"""
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+    from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
+
+
 @dc.dataclass(frozen=True, slots=True)
 class _SubprocessExecution:
     """Execution context bundle for subprocess spawning."""
@@ -113,6 +126,7 @@ def _spawn_stream_consumers(
                 process.stdout,
                 stream_config,
                 on_line=stdout_on_line,
+                read_size=stream_config.read_size,
             ),
         ),
         asyncio.create_task(
@@ -120,6 +134,7 @@ def _spawn_stream_consumers(
                 process.stderr,
                 stderr_config,
                 on_line=stderr_on_line,
+                read_size=stderr_config.read_size,
             ),
         ),
     )
@@ -141,6 +156,7 @@ def _build_stream_config(
         encoding=execution.ctx.encoding,
         errors=execution.ctx.errors,
         discard_on_cancel=discard_on_cancel,
+        read_size=_current_read_size(),
     )
 
 
