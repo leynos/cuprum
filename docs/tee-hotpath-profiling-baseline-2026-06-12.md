@@ -7,6 +7,12 @@ baseline evidence called for by Architectural Decision Record (ADR) 002
 decision on issue [#127](https://github.com/leynos/cuprum/issues/127)
 (capture-only consume dispatch through `rust_consume_stream`).
 
+The follow-up read-size sweep in
+[`tee-hotpath-read-size-sweep-2026-08-29.md`](tee-hotpath-read-size-sweep-2026-08-29.md)
+raised the pure-Python `_READ_SIZE` to 65536 bytes. It uses a fresh,
+interleaved 15-round control and records the raw samples, so Table 3 remains
+the historical baseline rather than the acceptance control for that change.
+
 ## Environment
 
 | Item          | Value                                                      |

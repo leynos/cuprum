@@ -2042,9 +2042,18 @@ behavioural guarantees.
 
 ### 13.1 Motivation
 
-The current implementation reads and writes data in 4 KB chunks (defined by
-`_READ_SIZE = 4096` in `cuprum/_streams_pump.py`). The core functions affected
-are:
+The pure-Python implementation now reads and writes data in 64 KiB chunks
+(defined by `_READ_SIZE = 65536` in `cuprum/_streams_pump.py`). The previous
+4 KiB value was the subject of the original profiling baseline. A fresh,
+interleaved 15-round sweep selected 64 KiB: the tee scenario improved by
+22.9997% (95% paired-bootstrap interval 22.5508% to 23.2037%) against its
+same-session 4 KiB control. The complete measurements are in
+[`tee-hotpath-read-size-sweep-2026-08-29.md`](tee-hotpath-read-size-sweep-2026-08-29.md).
+
+The read size is a Python-side slice size; it does not change the asyncio
+transport's independent pipe reads. The measured plateau is the call-count
+floor at one 64 KiB slice per pipe-full, not a new pipe-capacity setting. The
+core functions affected are:
 
 - `_pump_stream()` in `cuprum/_streams_pump.py` – transfers data between
   pipeline stages with backpressure;
@@ -2072,10 +2081,15 @@ and `config.errors`, and `_drain()` applies the same error policy when decoding
 captured bytes. New consume variants should reuse `_drain()` unless they
 deliberately replace the whole stream-consumption contract.
 
-For a 1 GB data stream, this results in:
+At the former 4 KiB setting, a 1 GiB data stream required approximately
+262,000 parent-side read iterations. At the tuned setting, the same stream
+requires approximately 16,000 iterations. Each iteration still allocates and
+processes a returned `bytes` object, so this tuning reduces fixed event-loop
+overhead but does not remove the Python implementation's allocation or GIL
+costs:
 
-- approximately 262,000 round-trips through the Python event loop;
-- approximately 262,000 `bytes` object allocations;
+- approximately 16,000 round-trips through the Python event loop;
+- approximately 16,000 `bytes` object allocations;
 - repeated buffer copying between Python and OS buffers;
 - Global Interpreter Lock (GIL) contention when multiple asyncio tasks compete
   for CPU.
@@ -2495,6 +2509,10 @@ The following table summarizes when each pathway is recommended:
 
 Current Rust acceleration applies to inter-stage pipeline pumping, not
 stdout/stderr capture.
+
+The Python 64 KiB setting is an independently measured baseline for later
+consume-path work. It is not coupled to the Rust extension's separate
+`buffer_size` default, even though both currently use the same numeric value.
 
 The `rust_consume_stream()` helper targets a measured capture-only hotspot but
 is not yet integrated. The tee profiling baseline found that capture plus echo

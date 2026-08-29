@@ -111,6 +111,12 @@
 
 ### Changed
 
+- **Pure-Python stream read size:** The private parent-side stream read size is
+  now 65536 bytes, selected from a fresh 15-round interleaved sweep. Large
+  tee workloads improved by 22.9997% against the same-session 4096-byte
+  control, with no measured regression across echo, text-sink, PTY, or line-
+  callback scenarios. The value is not a public configuration option; see the
+  [sweep record](docs/tee-hotpath-read-size-sweep-2026-08-29.md).
 - **Source spelling enforcement:** Check tracked Python and Rust source as well
   as Markdown for en-GB-oxendict spelling, including code identifiers, so
   contributor changes can now fail the spelling gate on source-code drift

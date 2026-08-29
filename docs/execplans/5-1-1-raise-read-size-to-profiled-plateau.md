@@ -213,9 +213,12 @@ This task is complete only when:
   fixtures, rebuilt the release extension, and verified the full suite after
   the new control. The gate ran 1,313 Python and 104 Rust tests; CodeRabbit
   reported zero findings.
-- [ ] EP-M3: fresh interleaved sweep run, value chosen, artefact written.
-- [ ] EP-M4: `_READ_SIZE` raised, full suite green, gate re-confirmed.
-- [ ] EP-M5: documentation, changelog, and roadmap updated; all gates green.
+- [x] 2026-08-29 EP-M3: fresh interleaved sweep run selected 65536 bytes and
+  the dated companion document records every sample and interval.
+- [x] 2026-08-29 EP-M4: `_READ_SIZE` was raised to 65536; the deterministic
+  test suite and the same-session performance gate were re-confirmed.
+- [ ] EP-M5: documentation, changelog, and roadmap updated; final gates and
+  review remain to be recorded.
 
 ## Surprises & discoveries
 
@@ -314,6 +317,20 @@ This task is complete only when:
   (`cuprum/unittests/test_stream_property_based.py:15`).
   Impact: any override-by-assignment scheme is unsound. Decision D2 removes the
   need for one.
+
+- Observation: the fresh sweep confirms a 64 KiB plateau on the current
+  interpreter and kernel. Evidence: tee medians were 11.609 s, 10.252 s,
+  9.499 s, 9.139 s, and 8.951 s at 4, 8, 16, 32, and 64 KiB respectively;
+  the 64 KiB point was 22.9997% faster than its paired 4 KiB control, with a
+  95% interval of 22.5508% to 23.2037%. Impact: 64 KiB is selected as the
+  smallest value at the one-read-per-pipe-full call-count floor.
+
+- Observation: the line-callback regression campaign was materially slower
+  than the other scenarios. Evidence: the wrap-76 fixture contains roughly
+  28 million lines per repeat, and 15 randomized rounds with three repeats at
+  each of two read sizes took about 4 hours 57 minutes. Impact: the longer
+  runtime is recorded in the companion sweep document and does not change the
+  acceptance result.
 
 - Observation: `benchmarks/` is not collected by the test gate.
   Evidence: `PYTEST_TARGETS` (`Makefile:40-43`) lists `cuprum/unittests/` and
@@ -419,6 +436,17 @@ This task is complete only when:
   profile driver, its snapshots, and Stage E use one canonical scenario set.
   Date/Author: 2026-08-29, implementation agent. This is a measurement control
   only: it exposes neither a public API nor a new runtime behaviour.
+
+- Decision D16: select 65536 bytes for the Python read size.
+  Rationale: the 15-round randomized sweep reached the one-read-per-pipe-full
+  call-count floor at 65536 bytes, and the gated tee scenario improved by
+  22.9997% against the paired 4096-byte control. Its 95% bootstrap interval,
+  22.5508% to 23.2037%, clears the 20% requirement. The smaller candidates
+  remained above the measured call-count floor, while all regression scenarios
+  stayed within the 5% tolerance. The complete raw sample record is in
+  `docs/tee-hotpath-read-size-sweep-2026-08-29.md`.
+  Date/Author: 2026-08-29, implementation agent. This changes no public
+  interface and does not couple the Python value to the Rust buffer size.
 
 - Decision D1: the 20% gate is measured against a fresh 4096 control taken in
   the same interleaved sweep session.
@@ -528,11 +556,19 @@ This task is complete only when:
 
 ## Outcomes & retrospective
 
-To be completed at EP-M5. Record the chosen value, the measured curve with
-intervals, the realized ratchet shift against the prediction, any scenario that
-regressed, and whether the line-splitting fix surfaced further questions,
-notably whether splitting on vertical tab, form feed, and U+2028 while retaining
-the separator is intended.
+The selected value is 65536 bytes. The gated tee median fell from 11.609 s at
+4096 bytes to 8.951 s at 65536 bytes, a 22.9997% paired improvement with a
+95% bootstrap interval of 22.5508% to 23.2037%. The capture-only scenario
+improved by 11.8415%. Echo-to-`/dev/null`, text-sink, PTY, and line-callback
+scenarios improved by 51.9213%, 43.3911%, 11.5028%, and 1.9721%
+respectively; no measured scenario regressed beyond 5%.
+
+The line-callback campaign took about 4 hours 57 minutes because the wrapped
+fixture supplied roughly 28 million lines per repeat. This was an operational
+cost, not a change in scope. The CRLF boundary fix did not surface an
+additional line-ending question; vertical tab, form feed, U+2028, and NEL
+remain the existing stable separator cases covered by the line-splitting
+properties. Final gate and CodeRabbit evidence are added at EP-M5.
 
 ## Context and orientation
 
@@ -542,7 +578,7 @@ from the child's pipe in a loop. That loop is the parent-side consume path.
 
 Key modules, by full path:
 
-- `cuprum/_streams_pump.py` defines `_READ_SIZE = 4096` at line 23. It owns the
+- `cuprum/_streams_pump.py` defines `_READ_SIZE = 65536` at line 29. It owns the
   inter-stage pump: `_relay_chunks` (line 84) copies one stage's stdout into the
   next stage's stdin with backpressure, and `_drain_stream_reader` (line 102)
   discards to end of file when there is no downstream writer.
@@ -842,7 +878,7 @@ uv run python -c "import fcntl,os;r,w=os.pipe();print('pipe',fcntl.fcntl(w,1032)
 pgrep -af 'make (lint|test)|pytest' || echo "no gate running"
 ```
 
-Expected: line 23 reads `_READ_SIZE = 4096`, pipe capacity 65536, and no gate
+Expected: line 29 reads `_READ_SIZE = 65536`, pipe capacity 65536, and no gate
 running. If `dist/fixtures/` is absent, regenerate it:
 
 ```plaintext
@@ -960,7 +996,7 @@ independently valuable and should not be reverted with the constant.
 Logs at `/tmp/5-1-1-*.log`. Committed artefact: a dated read-size sweep
 companion document under `docs/`, named for the ISO date of the sweep session.
 
-Measured during planning, to be re-confirmed at Stage A:
+Confirmed during Stage A and the Stage E sweep:
 
 ```plaintext
 .venv/bin/python                 3.13.13   (baseline document used 3.14.4)
@@ -1002,7 +1038,7 @@ No new runtime dependency. No public interface change.
 In `cuprum/_streams_pump.py`, the constant changes value only:
 
 ```python
-_READ_SIZE = 65536  # value to be confirmed by the Stage E sweep
+_READ_SIZE = 65536  # selected by the Stage E sweep
 ```
 
 Per decision D2, add keyword-only parameters defaulting to the constant:
@@ -1045,6 +1081,13 @@ for the property tests and `python-testing` for the behavioural scenario;
 investigation.
 
 ## Revision note
+
+Revision 3, 2026-08-29, after the Stage E sweep and implementation: selected
+65536 bytes from the randomized 15-round curve, recorded the paired bootstrap
+intervals and all raw samples in the dated companion document, raised the
+constant, and updated the design, developer, benchmark, baseline, changelog,
+ADR-001, contents, and roadmap references. EP-M5 remains open for the final
+deterministic gates and CodeRabbit review.
 
 Revision 2, 2026-08-29, after a six-expert design review. Substantive changes:
 added the line-splitting prerequisite (decision D6) after discovering that line

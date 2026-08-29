@@ -10,8 +10,11 @@ ______________________________________________________________________
 
 ## Context
 
-Cuprum's stream operations route data through Python's asyncio event loop in 4
-KB chunks (defined by `_READ_SIZE = 4096` in `cuprum/_streams.py`). The core
+Cuprum's stream operations route data through Python's asyncio event loop in 64
+KiB chunks (defined by `_READ_SIZE = 65536` in `cuprum/_streams_pump.py`). The
+read size was raised from 4 KiB after the 2026-08-29 interleaved sweep; see
+[`tee-hotpath-read-size-sweep-2026-08-29.md`](tee-hotpath-read-size-sweep-2026-08-29.md).
+The core
 functions affected are:
 
 - `_pump_stream()` – transfers data between pipeline stages with backpressure;
@@ -74,8 +77,8 @@ pump and consume functions that operate outside the GIL.
    - `python` – force pure Python pathway.
 
 3. **Larger default buffer for Rust:** The Rust extension uses a 64 KB default
-   buffer (vs 4 KB in Python) to reduce syscall frequency whilst still
-   providing reasonable memory overhead.
+   buffer (independent of the Python read size) to reduce syscall frequency
+   whilst still providing reasonable memory overhead.
 
 4. **Platform-specific optimizations:** On Linux, the extension leverages the
    `splice()` system call for zero-copy transfer between pipe file descriptors.
