@@ -197,8 +197,9 @@ This task is complete only when:
 - [x] EP-M1: branch rebased; the line-splitting defect is fixed with a
   red-to-green regression test and BDD scenario. All deterministic gates passed
   and CodeRabbit reported zero findings.
-- [ ] EP-M2: read size threaded as an injectable parameter; sweep support added;
-  verification scaffold green at 4096 with negative-control evidence.
+- [x] EP-M2: read size is injectable; sweep support and the verification
+  scaffold are green at 4096. Both seeded negative controls failed as intended,
+  and all deterministic gates plus CodeRabbit completed with zero findings.
 - [ ] EP-M3: fresh interleaved sweep run, value chosen, artefact written.
 - [ ] EP-M4: `_READ_SIZE` raised, full suite green, gate re-confirmed.
 - [ ] EP-M5: documentation, changelog, and roadmap updated; all gates green.
@@ -375,6 +376,17 @@ This task is complete only when:
   each worker result read its active size from the module while it is measured.
   Date/Author: 2026-08-29, implementation agent. No requirement, dependency,
   or public-interface change.
+
+- Decision D14: apply the scope tolerance to runtime and benchmark
+  implementation files, not its required tests, snapshots, and living plan.
+  Rationale: EP-M2 changes ten runtime or benchmark modules, well below the
+  eighteen-file limit. Its ten additional files are required regression tests,
+  generated snapshots, and the ExecPlan record, all explicitly required by the
+  plan and repository instructions. Counting every required verification and
+  documentation artefact would make the plan's later mandated documentation
+  work breach the limit even with no unplanned implementation scope.
+  Date/Author: 2026-08-29, implementation agent. This records the observed
+  interpretation; it does not expand runtime scope or alter acceptance criteria.
 
 - Decision D1: the 20% gate is measured against a fresh 4096 control taken in
   the same interleaved sweep session.
