@@ -12,6 +12,7 @@ from benchmarks._benchmark_type_validators import (
     _validate_minimum_int,
 )
 from benchmarks.tee_profile_worker import TeeProfileWorkerConfig
+from cuprum._streams_pump import _READ_SIZE
 from cuprum import is_rust_available as can_use_rust_backend
 
 if typ.TYPE_CHECKING:
@@ -39,6 +40,7 @@ class TeeProfileScenario:
     with_line_callbacks: bool
     backend: BackendName
     repeat_count: int
+    read_size: int = _READ_SIZE
     encoding: str = "utf-8"
     errors: str = "replace"
 
@@ -59,6 +61,7 @@ class TeeProfileScenario:
             "with_line_callbacks": self.with_line_callbacks,
             "backend": self.backend,
             "repeat_count": self.repeat_count,
+            "read_size": self.read_size,
             "encoding": self.encoding,
             "errors": self.errors,
         }
@@ -87,6 +90,7 @@ class TeeProfileScenario:
             with_line_callbacks=self.with_line_callbacks,
             backend=self.backend,
             repeat_count=self.repeat_count if repeat_count is None else repeat_count,
+            read_size=self.read_size,
             encoding=self.encoding,
             errors=self.errors,
         )
@@ -102,6 +106,9 @@ class TeeProfileDriverConfig:
     profiler: ProfilerName = "none"
     warmup_count: int = 1
     repeat_count: int = 3
+    read_sizes: tuple[int, ...] = (_READ_SIZE,)
+    rounds: int = 1
+    randomize_order: bool = False
     perf_frequency: int = 999
     perf_call_graph: str = "dwarf,16384"
     scenario_name: str | None = None
@@ -117,11 +124,21 @@ class TeeProfileDriverConfig:
             name="repeat-count",
             min_value=1,
         )
+        _validate_iteration_count(
+            self.rounds,
+            name="rounds",
+            min_value=1,
+        )
         _validate_minimum_int(
             self.perf_frequency,
             name="perf-frequency",
             min_value=1,
         )
+        if not self.read_sizes:
+            msg = "read-sizes must contain at least one positive integer"
+            raise ValueError(msg)
+        for read_size in self.read_sizes:
+            _validate_minimum_int(read_size, name="read-size", min_value=1)
 
     def _validate_string_fields(self) -> None:
         if not self.perf_call_graph.strip():
@@ -251,6 +268,7 @@ def default_tee_profile_scenarios(
     fixture_path: pth.Path,
     wrapped_fixture_path: pth.Path,
     repeat_count: int,
+    read_size: int = _READ_SIZE,
 ) -> tuple[TeeProfileScenario, ...]:
     """Return the required initial tee profiling scenario matrix.
 
@@ -269,19 +287,30 @@ def default_tee_profile_scenarios(
         Ordered tuple of default profiling scenarios. The Rust-backend scenario
         omitted when ``can_use_rust_backend()`` returns ``False``.
     """
-    return (
+    scenarios = (
         *_single_stage_no_callback_scenarios(fixture_path, repeat_count=repeat_count),
         *_line_callback_scenarios(wrapped_fixture_path, repeat_count=repeat_count),
         *_multi_stage_backend_scenarios(fixture_path, repeat_count=repeat_count),
     )
+    return tuple(dc.replace(scenario, read_size=read_size) for scenario in scenarios)
 
 
-def _scenario_by_name(config: TeeProfileDriverConfig) -> TeeProfileScenario:
+def _scenario_by_name(
+    config: TeeProfileDriverConfig,
+    *,
+    read_size: int | None = None,
+) -> TeeProfileScenario:
     """Resolve one scenario from the configured matrix."""
+    if read_size is None:
+        if len(config.read_sizes) != 1:
+            msg = "one read size is required outside a sweep"
+            raise ValueError(msg)
+        read_size = config.read_sizes[0]
     scenarios = default_tee_profile_scenarios(
         fixture_path=config.fixture_path,
         wrapped_fixture_path=config.wrapped_fixture_path,
         repeat_count=config.repeat_count,
+        read_size=read_size,
     )
     if config.scenario_name is None:
         msg = "scenario name is required"
@@ -312,6 +341,8 @@ def _worker_command(scenario: TeeProfileScenario) -> list[str]:
         scenario.backend,
         "--repeat-count",
         str(scenario.repeat_count),
+        "--read-size",
+        str(scenario.read_size),
         "--encoding",
         scenario.encoding,
         "--errors",
@@ -331,6 +362,9 @@ def _config_from_args(args: argparse.Namespace) -> TeeProfileDriverConfig:
         profiler=args.profiler,
         warmup_count=args.warmup_count,
         repeat_count=args.repeat_count,
+        read_sizes=args.read_sizes,
+        rounds=args.rounds,
+        randomize_order=args.randomize_order,
         perf_frequency=args.perf_frequency,
         perf_call_graph=args.perf_call_graph,
         scenario_name=getattr(args, "scenario", None),

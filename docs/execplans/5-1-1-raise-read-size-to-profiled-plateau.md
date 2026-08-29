@@ -309,6 +309,28 @@ This task is complete only when:
   Impact: benchmark-harness tests belong in `cuprum/unittests/`, alongside the
   existing `test_tee_profile_worker_*.py` modules.
 
+- Observation: the profiling worker needs an execution-local bridge into the
+  normal command path.
+  Evidence: `TeeProfileWorkerConfig` reaches `run_sync`, whereas
+  `_consume_stream` and `_relay_chunks` are invoked below the public execution
+  façade. Passing `read_size` only to a direct helper would therefore label a
+  measurement without changing its reads.
+  Impact: the implementation uses a `ContextVar` only while the private worker
+  runs. Stream configuration and pipe-task creation immediately convert that
+  task-local value back into the explicit D2 keyword arguments. Concurrent
+  workers therefore cannot overwrite one another, and normal executions retain
+  `_READ_SIZE` without a public setting.
+
+- Observation: the V1 and V2 properties reject their deliberately seeded
+  defects.
+  Evidence: truncating every full-size chunk failed V1's pinned
+  `payload=b"abcdef", read_size=3` example with captured `"abde"` in
+  `/tmp/5-1-1-v1-negative-control.log`. Resetting the incremental decoder for
+  each one-byte chunk failed V2's `"☃\r\nx"` example with `"��"` rather than
+  `"☃"` in `/tmp/5-1-1-v2-negative-control.log`.
+  Impact: the new external-oracle properties are non-vacuous; both mutations
+  were immediately reverted before the green scaffold run.
+
 ## Decision log
 
 - Decision D10: unstack PR #321 while performing Stage A.
@@ -341,6 +363,18 @@ This task is complete only when:
   avoids making a private helper's pre-existing direct contract surprising.
   Date/Author: 2026-08-29, implementation agent. Satisfies V0 and D6 without
   changing a public interface or adding a dependency.
+
+- Decision D13: bridge worker configuration with task-local state, then call
+  the D2 parameters explicitly.
+  Rationale: the worker must exercise ordinary `run_sync` execution, which has
+  no valid public read-size option. A process-global assignment would recreate
+  the mirrored-binding hazard D2 rejects. `_override_read_size` is a private
+  `ContextVar` context manager scoped to one worker; normal stream setup reads
+  it and passes the value directly to `_consume_stream` and `_relay_chunks`.
+  This preserves concurrent isolation, leaves public APIs unchanged, and makes
+  each worker result read its active size from the module while it is measured.
+  Date/Author: 2026-08-29, implementation agent. No requirement, dependency,
+  or public-interface change.
 
 - Decision D1: the 20% gate is measured against a fresh 4096 control taken in
   the same interleaved sweep session.
