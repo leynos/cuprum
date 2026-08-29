@@ -7,6 +7,14 @@ This ExecPlan (execution plan) is a living document. The sections
 
 Status: IN PROGRESS
 
+Measurement update (2026-08-29): the 15-round interleaved sweep selected
+65536 bytes. The tee median improvement was 22.9997% (95% paired-bootstrap
+interval 22.5508% to 23.2037%). The completed regression sweeps found median
+changes of -51.921% (devnull), -43.391% (text sink), -11.503% (PTY), and
+-1.972% (line callbacks); all satisfy the 5% tolerance. The line-callback
+campaign took about 4 hours 57 minutes for the 2.1 GiB wrapped fixture, rather
+than the planning estimate; this is an observation, not a scope change.
+
 Roadmap reference: `docs/roadmap.md` item `5.1.1` (phase 5, step 5.1).
 
 `PLANS.md` is not present in this repository, so this plan follows the

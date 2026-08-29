@@ -26,7 +26,7 @@ import typing as typ
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-_READ_SIZE = 4096
+_READ_SIZE = 65536
 _POST_CLOSE_DRAIN_TIMEOUT_S = 0.25
 _LOGGER = logging.getLogger(__name__)
 _ACTIVE_READ_SIZE: contextvars.ContextVar[int] = contextvars.ContextVar(

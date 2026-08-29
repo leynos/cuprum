@@ -16,6 +16,8 @@ profiler artefacts such as ``perf.data``, ``perf.report.txt``,
 Example: ``python -m benchmarks.profile_tee_hotpath --profiler none run``.
 """
 
+# pylint: disable=too-many-lines  # One reproducible CLI owns scenarios and artefacts.
+
 from __future__ import annotations
 
 import dataclasses as dc
