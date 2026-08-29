@@ -200,6 +200,11 @@ This task is complete only when:
 - [x] EP-M2: read size is injectable; sweep support and the verification
   scaffold are green at 4096. Both seeded negative controls failed as intended,
   and all deterministic gates plus CodeRabbit completed with zero findings.
+- [x] 2026-08-29 Stage E prerequisite: added
+  `capture-devnull-nocb-s1` to the standard matrix, generated both 1.5 GiB
+  fixtures, rebuilt the release extension, and verified the full suite after
+  the new control. The gate ran 1,313 Python and 104 Rust tests; CodeRabbit
+  reported zero findings.
 - [ ] EP-M3: fresh interleaved sweep run, value chosen, artefact written.
 - [ ] EP-M4: `_READ_SIZE` raised, full suite green, gate re-confirmed.
 - [ ] EP-M5: documentation, changelog, and roadmap updated; all gates green.
@@ -332,6 +337,17 @@ This task is complete only when:
   Impact: the new external-oracle properties are non-vacuous; both mutations
   were immediately reverted before the green scaffold run.
 
+- Observation: the immediate-timeout ownership test retained live subprocess
+  transports after intentionally stubbing production termination.
+  Evidence: the full capture-control gate timed out after 30 seconds in
+  `test_zero_timeout_reconciles_pipe_tasks`, waiting in `asyncio`'s subprocess
+  waiter for the test children' deliberate 30-second sleeps. Its pump
+  assertion had already succeeded; the focused rerun passed once the test
+  reaped its deliberately live children before `asyncio.run` closed the loop.
+  Impact: the test now preserves its assertion boundary, then performs local
+  cleanup. This removes a deterministic test-harness leak without altering
+  product timeout behaviour.
+
 ## Decision log
 
 - Decision D10: unstack PR #321 while performing Stage A.
@@ -387,6 +403,14 @@ This task is complete only when:
   work breach the limit even with no unplanned implementation scope.
   Date/Author: 2026-08-29, implementation agent. This records the observed
   interpretation; it does not expand runtime scope or alter acceptance criteria.
+
+- Decision D15: include a capture-only scenario in the standard sweep matrix.
+  Rationale: the plan's acceptance criterion requires the control, but the
+  pre-existing matrix had only the tee scenario. Defining
+  `capture-devnull-nocb-s1` beside the existing control means the normal
+  profile driver, its snapshots, and Stage E use one canonical scenario set.
+  Date/Author: 2026-08-29, implementation agent. This is a measurement control
+  only: it exposes neither a public API nor a new runtime behaviour.
 
 - Decision D1: the 20% gate is measured against a fresh 4096 control taken in
   the same interleaved sweep session.
