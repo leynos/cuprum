@@ -85,28 +85,10 @@ def _create_self_signed_certificate(tmp_path: pth.Path) -> tuple[pth.Path, pth.P
     return certificate_path, private_key_path
 
 
-@contextlib.contextmanager
-def local_https_baseline_server(
-    *,
-    tmp_path: pth.Path,
-    archive_bytes: bytes,
-) -> cabc.Iterator[_HttpsBaselineServer]:
-    """Run a controlled HTTPS GitHub Actions endpoint for one test.
-
-    Parameters
-    ----------
-    tmp_path : pathlib.Path
-        Test-owned directory in which to create the temporary certificate.
-    archive_bytes : bytes
-        Archive response body served after the workflow and artefact requests.
-
-    Yields
-    ------
-    _HttpsBaselineServer
-        The HTTPS API base URL and record of received requests.
-    """
-    certificate_path, private_key_path = _create_self_signed_certificate(tmp_path)
-    state = _BaselineServerState(archive_bytes=archive_bytes)
+def _make_request_handler(
+    state: _BaselineServerState,
+) -> type[http.server.BaseHTTPRequestHandler]:
+    """Create a request handler closed over one server's isolated state."""
 
     class _RequestHandler(http.server.BaseHTTPRequestHandler):
         """Serve the small workflow, artefact, and archive fixture sequence."""
@@ -166,7 +148,33 @@ def local_https_baseline_server(
             self.end_headers()
             self.wfile.write(body)
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RequestHandler)
+    return _RequestHandler
+
+
+@contextlib.contextmanager
+def local_https_baseline_server(
+    *,
+    tmp_path: pth.Path,
+    archive_bytes: bytes,
+) -> cabc.Iterator[_HttpsBaselineServer]:
+    """Run a controlled HTTPS GitHub Actions endpoint for one test.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Test-owned directory in which to create the temporary certificate.
+    archive_bytes : bytes
+        Archive response body served after the workflow and artefact requests.
+
+    Yields
+    ------
+    _HttpsBaselineServer
+        The HTTPS API base URL and record of received requests.
+    """
+    certificate_path, private_key_path = _create_self_signed_certificate(tmp_path)
+    state = _BaselineServerState(archive_bytes=archive_bytes)
+    request_handler = _make_request_handler(state)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), request_handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(certificate_path, private_key_path)
     server.socket = context.wrap_socket(server.socket, server_side=True)
