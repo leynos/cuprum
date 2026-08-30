@@ -1,3 +1,4 @@
+---
 name: Refresh CodeScene CLI SHA256
 
 on:
@@ -21,7 +22,7 @@ jobs:
           curl -fsSL "$url" -o install-cs-coverage-tool.sh
           echo "sha=$(sha256sum install-cs-coverage-tool.sh | awk '{print $1}')" >> "$GITHUB_OUTPUT"
       - name: Update repository variable
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v7
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v7
         with:
           script: |
             const sha = process.env.SHA

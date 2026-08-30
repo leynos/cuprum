@@ -17,6 +17,7 @@ import re
 import typing as typ
 
 import pytest
+import yaml
 
 from cuprum.unittests._maturin_pin_support import (
     MANYLINUX_CONTAINER_SHA256_RE,
@@ -32,8 +33,8 @@ if typ.TYPE_CHECKING:
 
 _WORKFLOW_PIN_RE = re.compile(r'MATURIN_VERSION:\s*"(\d+\.\d+\.\d+)"')
 _ACTION_PIN_RE = re.compile(r'default:\s*"(\d+\.\d+\.\d+)"')
-_AARCH64_CONTAINER_PIN_RE = re.compile(
-    r"^\s*MANYLINUX_AARCH64_CONTAINER:\s*([^\s#]+)\s+#\s*\S.*$",
+_AARCH64_CONTAINER_COMMENT_RE = re.compile(
+    r"^\s*MANYLINUX_AARCH64_CONTAINER:\s*>-\s+#\s*\S.*$",
     re.MULTILINE,
 )
 _AARCH64_CONTAINER_USAGE_RE = re.compile(
@@ -65,13 +66,20 @@ def _read_maturin_pins(root: pth.Path) -> dict[str, str]:
 
 def _read_manylinux_aarch64_container_ref(root: pth.Path) -> str:
     """Read the pinned manylinux aarch64 container reference from the workflow."""
-    return require_pin_match(
-        _AARCH64_CONTAINER_PIN_RE.search(
-            read_text(root, ".github/workflows/build-wheels.yml"),
-        ),
-        ".github/workflows/build-wheels.yml",
-        subject="MANYLINUX_AARCH64_CONTAINER pin",
+    workflow_path = ".github/workflows/build-wheels.yml"
+    workflow_text = read_text(root, workflow_path)
+    assert _AARCH64_CONTAINER_COMMENT_RE.search(workflow_text), (
+        "MANYLINUX_AARCH64_CONTAINER must retain the source-tag comment"
     )
+    workflow = yaml.safe_load(workflow_text)
+    assert isinstance(workflow, dict), f"{workflow_path} must parse to a mapping"
+    environment = workflow.get("env")
+    assert isinstance(environment, dict), f"{workflow_path} must declare env"
+    container_ref = environment.get("MANYLINUX_AARCH64_CONTAINER")
+    assert isinstance(container_ref, str), (
+        "MANYLINUX_AARCH64_CONTAINER must be a scalar string"
+    )
+    return container_ref
 
 
 def _workflow_uses_manylinux_aarch64_container_ref(root: pth.Path) -> bool:
@@ -144,12 +152,12 @@ def test_manylinux_aarch64_container_ref_rejects_mutable_tag(
 def test_manylinux_aarch64_container_pin_regex_rejects_missing_comment() -> None:
     """Aarch64 manylinux container pins require the source-tag comment."""
     yaml_line = (
-        "MANYLINUX_AARCH64_CONTAINER: "
-        "ghcr.io/rust-cross/manylinux_2_28-cross@sha256:"
-        "4864c3e931d790def6dba05cbf133b236b242d0c732f77546c68663c7923116e"
+        "MANYLINUX_AARCH64_CONTAINER: >-\n"
+        "  ghcr.io/rust-cross/manylinux_2_28-cross@sha256:"
+        "4864c3e931d790def6dba05cbf133b236b242d0c732f77546c68663c7923116e\n"
     )
 
-    assert _AARCH64_CONTAINER_PIN_RE.search(yaml_line) is None, (
+    assert _AARCH64_CONTAINER_COMMENT_RE.search(yaml_line) is None, (
         "the pin pattern must reject a digest carrying no trailing comment: "
         "the comment records which tag the digest came from, without which a "
         "reviewer cannot tell what a bump is bumping to"

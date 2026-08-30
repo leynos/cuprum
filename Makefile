@@ -1,7 +1,9 @@
 MDLINT ?= markdownlint-cli2
 NIXIE ?= nixie
 MDFORMAT_ALL ?= mdformat-all
-TOOLS = $(MDFORMAT_ALL) $(MDLINT) uv
+YAMLLINT ?= yamllint
+ACTIONLINT ?= actionlint
+TOOLS = $(MDFORMAT_ALL) $(MDLINT) $(YAMLLINT) $(ACTIONLINT) uv
 VENV_TOOLS = pytest ruff
 RUST_DIR ?= rust
 CARGO ?= cargo
@@ -124,6 +126,7 @@ AMBRLEAKS = $(UV_RUN_ENV) uv run --python $(DF12_PYTHON) ambrleaks
 MD_FILES_FIND = bash -o pipefail -c 'git ls-files -z -- "$$1" | while IFS= read -r -d "" markdown_file; do if [ -e "$$markdown_file" ]; then printf "%s\0" "$$markdown_file"; fi; done' -- '*.md'
 
 .PHONY: help all clean build build-release lint python-lint rust-lint \
+        github-actions-lint \
         lint-windows fmt check-fmt \
         markdownlint spelling spelling-config spelling-helper-test \
         _run_spelling_gate nixie test test-python test-rust typecheck \
@@ -210,7 +213,7 @@ test-markdown-format: ## Validate the Markdown formatter checker
 		python -m pytest scripts/tests/test_check_markdown_format.py -c /dev/null \
 		--rootdir=. -p no:cacheprovider
 
-lint: python-lint rust-lint ## Run Python and Rust linters
+lint: python-lint rust-lint github-actions-lint ## Run Python, Rust, and GitHub Actions linters
 
 python-lint: ruff uv ## Run Ruff, interrogate, pylint, df12-python-lints, and ambrleaks
 	$(RUFF) check && $(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum && $(PYLINT) $(PYLINT_TARGETS)
@@ -222,6 +225,10 @@ rust-lint: ## Run Rust documentation, Clippy, Whitaker, and spelling checks
 	@if ! $(LOCAL_TOOL_ENV) command -v $(WHITAKER) >/dev/null 2>&1; then echo "whitaker is required for linting. Install it before running this target." >&2; exit 1; fi
 	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- $(WHITAKER_CARGO_FLAGS)
 	+$(MAKE) spelling
+
+github-actions-lint: $(YAMLLINT) $(ACTIONLINT) ## Validate GitHub Actions workflows
+	$(YAMLLINT) .github/workflows
+	$(ACTIONLINT)
 
 lint-windows: ## Lint the Rust extension's Windows cfg branches (cross-target)
 	@if ! rustup target list --installed | grep -qx '$(WINDOWS_TARGET)'; then \
