@@ -91,6 +91,7 @@ async def _drain(
     if not reached_eof:
         if buffer is None or _discard_on_cancel(config):
             raise asyncio.CancelledError
+        _flush_echo_decoder(config, echo_decoder)
         return buffer.decode(config.encoding, errors=config.errors)
 
     _flush_echo_decoder(config, echo_decoder)

@@ -31,7 +31,7 @@ event emission.
 - Give process waiting, termination, and stream-drain teardown clear ownership.
 - Preserve text output for capturing timeout results even when readers have not
   observed EOF at the first teardown check.
-- Preserve existing private interfaces where they remain necessary.
+- Preserve existing private import compatibility where it remains necessary.
 - Make the specialized lifecycles independently testable.
 
 ## Options considered
@@ -51,6 +51,10 @@ Keep runner orchestration, process spawning, and stream-consumer creation in
 `_subprocess_stdin.py`; move timeout translation plus shared exit-event
 accounting to `_subprocess_timeout.py`; and move process waiting, termination,
 and stream-consumer draining to `_subprocess_wait.py`.
+
+Expose the drain helpers through `_subprocess_drain.py` as a narrow
+compatibility boundary for focused tests and private imports rather than a
+second live implementation.
 
 This makes ownership explicit while retaining the runner as the composition
 root.
@@ -80,11 +84,9 @@ spawning and stream-consumer creation/wiring. `_subprocess_stdin` owns
 `cuprum.stdin` logger. `_subprocess_timeout` owns timeout details/errors,
 timeout translation, and the exit-event helpers shared by timeout and normal
 completion paths. `_subprocess_wait` owns the deadline wait, process
-termination, and the single stream-consumer drain. Its drain interface uses
-`_RunTaskOwnership` to bundle the optional stdin-writer task with the stdout
-and stderr consumer tasks, `_DrainContext` to carry capture and observability
-settings, and `_reconcile_run_tasks(tasks, context)` to cancel stdin before
-settling both consumers as one shielded cleanup unit.
+termination, and the single stream-consumer drain. `_subprocess_drain`
+exposes that drain boundary for focused tests and private imports while
+re-exporting the implementation from `_subprocess_wait`.
 
 The drain is capture-aware. A capturing drain waits for up to
 `_CAPTURE_EOF_GRACE_S` for terminated-process readers to observe EOF, then
@@ -183,3 +185,19 @@ This refinement changes no public API: `SafeCmd`, `Pipeline`, `TimeoutExpired`,
 its payload of partial captured output, and timeout/exception precedence are
 all unchanged. The telemetry above is additive new observable behaviour,
 emitted best-effort alongside, never in place of, those existing results.
+
+## Addendum (2026-08-30): consolidate the drain compatibility boundary
+
+The focused drain tests no longer require a second compatibility module.
+`_subprocess_drain.py` was removed, leaving `_subprocess_wait.py` as the single
+owner of the drain implementation and its private imports. The wait boundary
+uses `_RunTaskOwnership` to bundle the optional stdin-writer task with the
+stdout and stderr consumer tasks, `_DrainContext` to carry capture and
+observability settings, and `_reconcile_run_tasks(tasks, context)` to cancel
+stdin before settling both consumers as one shielded cleanup unit.
+
+Cancellation preserves the capture-aware teardown contract: capturing drains
+allow terminated-process readers the bounded EOF-grace window before settling
+them, while non-capturing cleanup settles promptly without that window and
+discards output. Cancellation during capture grace still settles the consumers
+before propagating, so process cleanup cannot leave stream readers pending.

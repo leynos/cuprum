@@ -184,6 +184,40 @@ def test_discarding_a_cancelled_capture_skips_decoding() -> None:
     asyncio.run(run_case())
 
 
+def test_cancelled_capture_retains_buffered_text() -> None:
+    """Cancellation returns buffered capture when cleanup does not discard it."""
+
+    async def run_case() -> str | None:
+        """Cancel a reader after it buffers text and blocks awaiting EOF."""
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"partial output")
+        task = asyncio.create_task(_drain(reader, _config(io.StringIO())))
+        await asyncio.sleep(0)
+        task.cancel()
+        return await task
+
+    assert asyncio.run(run_case()) == "partial output"
+
+
+def test_cancelled_capture_flushes_replacement_echo() -> None:
+    """Cancellation flushes an incomplete echoed character before returning it."""
+
+    async def run_case() -> tuple[str | None, str]:
+        """Cancel after buffering an incomplete UTF-8 sequence without EOF."""
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"\xc3")
+        sink = io.StringIO()
+        task = asyncio.create_task(_drain(reader, _config(sink, echo=True)))
+        await asyncio.sleep(0)
+        task.cancel()
+        return await task, sink.getvalue()
+
+    assert asyncio.run(run_case()) == (
+        "\N{REPLACEMENT CHARACTER}",
+        "\N{REPLACEMENT CHARACTER}",
+    )
+
+
 def test_line_observer_cancellation_propagates() -> None:
     """Cancellation raised by a line observer is not mistaken for reader cleanup."""
 

@@ -782,8 +782,8 @@ synchronization of its own.
 single `match`, and each phase falls into exactly one of four categories: span
 lifecycle (`start` opens a span, `exit` ends it), span event (`stdout`,
 `stderr`, `stdin_error`, `timeout`, `teardown_error`, and
-`capture_eof_grace_expired` record a `cuprum.<phase>` event on the already-open
-span), deliberately ignored (`plan`
+`capture_eof_grace_expired`, and `pipeline_fail_fast` record a
+`cuprum.<phase>` event on the already-open span), deliberately ignored (`plan`
 and `stdin` carry no tracing semantics), or unhandled (the `case _` logs via
 `_log_unhandled_phase` instead of failing silently or raising). A new phase
 should be slotted into this policy rather than given an ad-hoc side path.
