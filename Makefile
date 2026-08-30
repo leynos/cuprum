@@ -71,7 +71,7 @@ RUFF_ENV = RAYON_NUM_THREADS=1
 # failures because rule sets differ between Ruff releases. The pin-parity
 # contract test in cuprum/unittests/test_toolchain_pins.py enforces this.
 RUFF_VERSION ?= 0.16.4
-RUFF = $(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from ruff==$(RUFF_VERSION) ruff
+RUFF = $(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from $(call shell_quote,ruff==$(RUFF_VERSION)) ruff
 # Pin ty so `make` and CI invoke the same typechecker release. ty is pre-1.0
 # and diagnostics shift between releases, so an unpinned install breaks the
 # typecheck gate without any code change. Bump deliberately and fix new
@@ -79,7 +79,7 @@ RUFF = $(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from ruff==$(RUFF_VERSION) ruff
 # in pyproject.toml and the TY_VERSION env in .github/workflows/ci.yml by the
 # same contract test as the Ruff pin.
 TY_VERSION ?= 0.0.74
-TY = $(UV_RUN_ENV) uv tool run --from ty==$(TY_VERSION) ty
+TY = $(UV_RUN_ENV) uv tool run --from $(call shell_quote,ty==$(TY_VERSION)) ty
 PYTEST = $(UV_RUN_ENV) uv run pytest
 PYLINT_PYTHON ?= pypy
 PYLINT_TARGETS ?= benchmarks conftest.py cuprum tests

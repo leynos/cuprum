@@ -1031,9 +1031,17 @@ Runtime (`cuprum/`):
 Benchmarks (`benchmarks/`):
 
 - `benchmarks/_github_http.py` — authenticated GitHub request construction,
-  bounded retries, and cross-origin redirect policy for benchmark baseline
-  discovery and downloads. Reuse it for benchmark GitHub transfers; keep
-  general-purpose HTTP concerns outside this private module.
+  bounded response reads, retries, and cross-origin redirect policy for
+  benchmark baseline discovery and downloads. `_load_bounded_response_bytes`
+  rejects non-HTTPS URLs before constructing a request, sends the GitHub bearer
+  token and API headers, and enforces the caller's byte ceiling while reading
+  64 KiB chunks. `_load_json_response` uses a 1 MiB ceiling; `_download_bytes`
+  uses a 64 MiB ceiling. Transient `429`, `5xx`, and URL errors are retried
+  after 0.5 and 1.0 seconds before the final failure is raised. The
+  `_ResponseLabels` value identifies the response kind in size-limit
+  diagnostics and carries a wrapper-specific retry description. Reuse this
+  helper for benchmark GitHub transfers; keep general-purpose HTTP concerns
+  outside this private module.
 - `benchmarks/ratchet_ratio_extraction.py` — extracts within-run Rust/Python
   ratio maps and validates that baseline and candidate comparison groups match.
   `benchmarks/ratchet_rust_performance.py` owns report-value construction; this
@@ -1295,6 +1303,16 @@ python -m benchmarks.deterministic_b64_fixture \
 | `pty_blackhole`  | `PtyBlackhole` pseudo-terminal master/slave pair | Drains the master side from a daemon thread to simulate terminal-like throughput. |
 
 <!-- markdownlint-enable MD013 -->
+
+`PtyBlackhole` transfers master-file-descriptor ownership to its daemon
+drainer before `__enter__` returns. The drainer counts raw bytes read from the
+master, while the caller writes text to the slave stream. On exit, the slave
+and master are closed and the drainer is given a bounded five-second join.
+`drained_bytes` exposes the count only after the drainer has terminated; it is
+`None` while a timed-out drainer is still running. Tests that verify the count
+should write a multibyte payload without a newline and compare it with the
+payload's UTF-8 encoded byte length, since PTY line-ending translation would
+otherwise make the result platform-dependent.
 
 ## Worker (`benchmarks/tee_profile_worker.py`)
 
@@ -2317,8 +2335,9 @@ context such as the rejected redirect's scheme or the triggering error's type.
 
 Ruff and ty are invoked through pinned `uv tool run` commands rather than
 floating host tools. `RUFF` expands to
-`$(UV_RUN_ENV) uv tool run --from ruff==$(RUFF_VERSION) ruff`, and `TY` expands
-to `$(UV_RUN_ENV) uv tool run --from ty==$(TY_VERSION) ty`. The Makefile
+`$(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from 'ruff==$(RUFF_VERSION)' ruff`,
+and `TY` expands to
+`$(UV_RUN_ENV) uv tool run --from 'ty==$(TY_VERSION)' ty`. The Makefile
 defaults are `RUFF_VERSION ?= 0.16.4` and `TY_VERSION ?= 0.0.74`; the
 workflow-level `RUFF_VERSION: '0.16.4'` and `TY_VERSION: '0.0.74'` environment
 values in `.github/workflows/ci.yml` override those defaults, and the
@@ -2347,9 +2366,10 @@ Table: Lint-related Makefile variables and their defaults.
 | ----------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | `VENV_TOOLS`            | `pytest ruff`                                                                | Tools checked in the project virtualenv; Ruff uses its pinned command.     |
 | `RUFF_VERSION`          | `0.16.4`                                                                     | Ruff release supplied to `uv tool run --from`.                             |
-| `RUFF`                  | `$(UV_RUN_ENV) uv tool run --from ruff==$(RUFF_VERSION) ruff`                | Pinned Ruff command used by `fmt`, `check-fmt`, and `lint`.                |
+| `RUFF_ENV`              | `RAYON_NUM_THREADS=1`                                                        | Keeps Ruff parallelism deterministic for the lint and format gates.        |
+| `RUFF`                  | `$(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from 'ruff==$(RUFF_VERSION)' ruff`  | Pinned Ruff command used by `fmt`, `check-fmt`, and `lint`.                |
 | `TY_VERSION`            | `0.0.74`                                                                     | ty release supplied to `uv tool run --from`.                               |
-| `TY`                    | `$(UV_RUN_ENV) uv tool run --from ty==$(TY_VERSION) ty`                      | Pinned ty command used by `typecheck`.                                     |
+| `TY`                    | `$(UV_RUN_ENV) uv tool run --from 'ty==$(TY_VERSION)' ty`                    | Pinned ty command used by `typecheck`.                                     |
 | `PYLINT_PYTHON`         | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.         |
 | `PYLINT_TARGETS`        | `benchmarks conftest.py cuprum tests`                                        | Directories and files passed to `pylint-pypy`.                             |
 | `PYLINT_PYPY_SHIM_REF`  | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                              |

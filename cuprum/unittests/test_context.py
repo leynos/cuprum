@@ -243,9 +243,13 @@ def test_hook_registration_and_detach(
     hook: BeforeHook | AfterHook = mock.Mock()
     with scoped(ScopeConfig()):
         reg = case.register(hook)
-        assert hook in getattr(current_context(), case.hooks_attr)
+        assert hook in getattr(current_context(), case.hooks_attr), (
+            f"{case.hooks_attr} must contain the hook after its registration"
+        )
         reg.detach()
-        assert hook not in getattr(current_context(), case.hooks_attr)
+        assert hook not in getattr(current_context(), case.hooks_attr), (
+            f"{case.hooks_attr} must not contain the hook after detach"
+        )
 
 
 @pytest.mark.parametrize("case", _HOOK_REGISTRATIONS)
@@ -256,8 +260,12 @@ def test_hook_as_context_manager(
     hook: BeforeHook | AfterHook = mock.Mock()
     with scoped(ScopeConfig()):
         with case.register(hook):
-            assert hook in getattr(current_context(), case.hooks_attr)
-        assert hook not in getattr(current_context(), case.hooks_attr)
+            assert hook in getattr(current_context(), case.hooks_attr), (
+                f"{case.hooks_attr} must contain the hook inside its context"
+            )
+        assert hook not in getattr(current_context(), case.hooks_attr), (
+            f"{case.hooks_attr} must not contain the hook after context exit"
+        )
 
 
 # =============================================================================

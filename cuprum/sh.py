@@ -262,7 +262,7 @@ class ExecutionContext:
     tags: cabc.Mapping[str, object] | None = None
 
 
-class TimeoutExpired(TimeoutError):  # ruff: ignore[error-suffix-on-exception-name]  # match subprocess.TimeoutExpired naming.
+class TimeoutExpired(TimeoutError):  # ruff: ignore[error-suffix-on-exception-name] - match subprocess.TimeoutExpired naming.
     """Raised when command execution exceeds the configured timeout."""
 
     def __init__(

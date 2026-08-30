@@ -22,6 +22,7 @@ same parity treatment.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - reads fixed local Makefile recipes.
 import tomllib
 import typing as typ
@@ -111,11 +112,22 @@ def _read_pin_sites(root: pth.Path, tool: str, env_name: str) -> dict[str, str]:
     }
 
 
-def _expanded_make_recipes(root: pth.Path) -> str:
+def _expanded_make_recipes(root: pth.Path, *, ruff_pin: str, ty_pin: str) -> str:
     """Return the dry-run expansion of the lint and typecheck recipes."""
-    completed = subprocess.run(
-        ["make", "--dry-run", "lint", "typecheck"],  # ruff: ignore[start-process-with-partial-path] - `make` is resolved from PATH.
+    make_executable = shutil.which("make")
+    assert make_executable is not None, "make must be available to expand recipes"
+    # The fixed local Makefile command only expands recipes; it runs no target.
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+        [
+            make_executable,
+            "--dry-run",
+            f"RUFF_VERSION={ruff_pin}",
+            f"TY_VERSION={ty_pin}",
+            "lint",
+            "typecheck",
+        ],
         check=True,
+        shell=False,
         cwd=root,
         capture_output=True,
         encoding="utf-8",
@@ -156,12 +168,12 @@ def test_make_lint_and_typecheck_use_the_pinned_tool_commands() -> None:
     root = repo_root()
     ruff_pin = _read_makefile_pin(root, "RUFF_VERSION")
     ty_pin = _read_makefile_pin(root, "TY_VERSION")
-    recipes = _expanded_make_recipes(root)
+    recipes = _expanded_make_recipes(root, ruff_pin=ruff_pin, ty_pin=ty_pin)
 
-    assert f"uv tool run --from ruff=={ruff_pin} ruff check" in recipes, (
+    assert f"uv tool run --from 'ruff=={ruff_pin}' ruff check" in recipes, (
         "make lint must run Ruff through the pinned uv tool command"
     )
-    assert f"uv tool run --from ty=={ty_pin} ty check --python .venv" in recipes, (
+    assert f"uv tool run --from 'ty=={ty_pin}' ty check --python .venv" in recipes, (
         "make typecheck must run ty through its pin against the project venv"
     )
 

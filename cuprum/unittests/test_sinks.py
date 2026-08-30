@@ -101,13 +101,33 @@ def test_pty_blackhole_drains_written_bytes() -> None:
     """Data written to the PtyBlackhole slave FD is consumed by the drainer."""
     # Deliberately no newline: the PTY line discipline expands "\n" to "\r\n"
     # on write, which would make the drained byte count platform-dependent.
-    payload = "hello from test"
+    payload = "héllo from tėst"
     bh = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
     with bh as stream:
         stream.write(payload)
         stream.flush()
     # __exit__ joins the drainer thread, so drained_bytes is safe to read here.
     assert bh.drained_bytes == len(payload.encode("utf-8"))
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "openpty"),
+    reason="os.openpty is unavailable on this platform",
+)
+def test_pty_blackhole_resets_the_count_when_reused() -> None:
+    """A completed PtyBlackhole context can count a subsequent drain."""
+    bh = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
+    first_payload = "first"
+    with bh as stream:
+        stream.write(first_payload)
+        stream.flush()
+    assert bh.drained_bytes == len(first_payload.encode("utf-8"))
+
+    second_payload = "sécond"
+    with bh as stream:
+        stream.write(second_payload)
+        stream.flush()
+    assert bh.drained_bytes == len(second_payload.encode("utf-8"))
 
 
 @pytest.mark.skipif(
@@ -137,6 +157,24 @@ def test_pty_blackhole_hides_drain_count_until_the_drainer_stops() -> None:
     still_running.join.assert_called_once_with(timeout=5.0)
     assert bh._thread is still_running
     assert bh.drained_bytes is None
+
+
+def test_pty_blackhole_publishes_count_after_a_late_drainer_exit() -> None:
+    """A drainer that stops after the bounded join eventually publishes its count."""
+    bh = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
+    eventually_stopped = mock.Mock(spec=threading.Thread)
+    eventually_stopped.is_alive.side_effect = (True, False)
+    bh._thread = eventually_stopped
+    bh._drained_bytes = 42
+
+    bh.__exit__(None, None, None)
+
+    assert bh.drained_bytes == 42
+    assert eventually_stopped.join.call_args_list == [
+        mock.call(timeout=5.0),
+        mock.call(),
+    ]
+    assert bh._thread is None
 
 
 # ---------------------------------------------------------------------------
