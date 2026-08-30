@@ -80,7 +80,7 @@ def _run_summary_script(
     """Execute the real script and parse the row it appended."""
     summary_path = tmp_path / "step-summary.md"
     summary_path.touch()
-    completed = subprocess.run(  # noqa: S603
+    completed = subprocess.run(  # noqa: S603 - the checked-in workflow script is trusted
         ["/usr/bin/env", "bash", "-c", _summary_script()],
         env={
             "PATH": "/usr/bin:/bin",
@@ -161,7 +161,9 @@ def then_the_summary_records(summary: Summary, decision: str) -> None:
 @then(parsers.parse("the summary reports the detector as {outcome}"))
 def then_the_summary_reports_the_detector(summary: Summary, outcome: str) -> None:
     """Assert the detector's own status reached the summary."""
-    assert summary.fields["detector"] == outcome
+    assert summary.fields["detector"] == outcome, (
+        f"expected detector status {outcome!r}; summary was {summary.fields!r}"
+    )
 
 
 @then(parsers.parse("the summary reports the changed-path verdict as {verdict}"))
@@ -171,7 +173,9 @@ def then_the_summary_reports_the_verdict(summary: Summary, verdict: str) -> None
     Recording `false` when the detector never produced a verdict would read
     as "no performance-relevant changes", which is a claim nothing measured.
     """
-    assert summary.fields["bench"] == verdict
+    assert summary.fields["bench"] == verdict, (
+        f"expected changed-path verdict {verdict!r}; summary was {summary.fields!r}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -211,5 +215,9 @@ def test_the_recorded_decision_matches_the_gate(
     """
     summary = _run_summary_script(event=event, detector=detector, tmp_path=tmp_path)
 
-    assert summary.fields["decision"] == expected
-    assert summary.fields["event"] == event
+    assert summary.fields["decision"] == expected, (
+        f"expected decision {expected!r}; summary was {summary.fields!r}"
+    )
+    assert summary.fields["event"] == event, (
+        f"expected event {event!r}; summary was {summary.fields!r}"
+    )

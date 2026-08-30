@@ -10,7 +10,7 @@ a regression:
 - invert the condition, or drop a path from the filter, and a genuine
   performance change merges unbenchmarked;
 - drop the `github.event_name != 'pull_request'` clause and pushes to `main`
-  stop refreshing the baseline artifact that pull-request runs compare
+  stop refreshing the baseline artefact that pull-request runs compare
   against, so the ratchet quietly degrades to comparing against nothing;
 - move `changes` onto the paid runner and the saving is spent detecting
   whether to spend it.
@@ -156,7 +156,7 @@ def test_the_benchmark_job_declares_the_expected_gate() -> None:
 
     assert condition == EXPECTED_GATE, (
         f"the {BENCHMARK_JOB!r} job's `if:` must be {EXPECTED_GATE!r} — pushes to "
-        "main always benchmark so the baseline artifact stays fresh, and pull "
+        "main always benchmark so the baseline artefact stays fresh, and pull "
         f"requests benchmark only on performance-relevant diffs; found {condition!r}"
     )
 
@@ -266,7 +266,7 @@ def test_a_non_pull_request_event_always_benchmarks(
     """
     assert benchmark_runs(event_name=event_name, bench=bench_output(changed)), (
         f"a {event_name!r} event changing {changed} must run {BENCHMARK_JOB!r} so "
-        "the main baseline artifact is refreshed"
+        "the main baseline artefact is refreshed"
     )
 
 
@@ -323,7 +323,7 @@ def test_the_workflow_serializes_runs_per_ref() -> None:
     of the claim: GitHub replaces a *pending* run when a newer one arrives and
     promises nothing about completion order, so this is not a guarantee that
     baselines are published in commit order. Anything needing that has to
-    enforce it where the artifact is written.
+    enforce it where the artefact is written.
     """
     concurrency = mapping(
         typ.cast("dict[str, object]", workflow()).get("concurrency"),
@@ -339,6 +339,6 @@ def test_the_workflow_serializes_runs_per_ref() -> None:
         "${{ github.event_name == 'pull_request' }}"
     ), (
         "only pull-request runs may be cancelled; a cancelled `main` run never "
-        "republishes the baseline artifact. Found "
+        "republishes the baseline artefact. Found "
         f"{concurrency.get('cancel-in-progress')!r}"
     )

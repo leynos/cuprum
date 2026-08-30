@@ -2806,7 +2806,6 @@ link, and are lifted once the upstream fix lands.
   [pytest-bdd#823](https://github.com/pytest-dev/pytest-bdd/issues/823); remove
   the pin and this note once a released `pytest-bdd` supports pytest 9.1.
 
-
 ## Gating the paid benchmark job
 
 `benchmark-ratchet` is the only job in `ci.yml` that runs on a paid runner

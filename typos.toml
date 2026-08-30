@@ -33,7 +33,7 @@ extend-ignore-re = [
     "\"artifacts\"",
     "--artifact-name(?:[=\\s\"`]|$)",
     "--artifact-server-path",
-    "/artifacts(?:[/?#]|$)",
+    "/artifacts(?:[/?#\"`]|$)",
     "\\(\"ises\", \"izes\"\\)",
     "\\(\"teh\", \"(?:the|ten)\"\\)",
     "\\bbuild_native_wheel_artifact\\b",

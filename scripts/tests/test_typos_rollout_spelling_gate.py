@@ -173,6 +173,10 @@ class TestSpellingGate:
         [
             (".md", _spelling_fixture("organi", "se\n")),
             (
+                ".md",
+                _spelling_fixture("Call `organi", "se` on the upstream handle.\n"),
+            ),
+            (
                 ".py",
                 _spelling_fixture("def organi", "se_value() -> None:\n    pass\n"),
             ),
@@ -201,11 +205,10 @@ class TestSpellingGate:
         ("suffix", "content"),
         [
             (".md", "Use `--artifact-name` to organize output.\n"),
-            (
-                ".md",
-                _spelling_fixture("Call `organi", "se` on the upstream handle.\n"),
-            ),
             (".md", _spelling_fixture("```text\norgani", "se\n```\n")),
+            (".md", "The API returns a `color` value.\n"),
+            (".py", "build_native_wheel_artifact()\n"),
+            (".md", "Pass `--artifact-server-path` to the external client.\n"),
             (
                 ".py",
                 'url = "https://api.github.test/actions/runs/1/artifacts?per_page=1"\n',

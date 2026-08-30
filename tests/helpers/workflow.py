@@ -64,12 +64,17 @@ class Workflow(typ.TypedDict, total=False):
     jobs: dict[str, Job]
 
 
-def _require(condition: bool, message: str) -> None:  # noqa: FBT001
+def _require(*, condition: bool, message: str) -> None:
     """Raise `AssertionError` when a shape requirement is unmet.
 
     Plain `AssertionError`, not a bespoke subclass: no caller distinguishes
     "the file is not shaped like a workflow" from any other failed assertion,
     and pytest reports both identically.
+
+    Raises
+    ------
+    AssertionError
+        If `condition` is false.
     """
     if not condition:
         raise AssertionError(message)
@@ -80,8 +85,13 @@ def mapping(value: object, message: str) -> dict[str, object]:
 
     `yaml.safe_load` produces mappings of unknown key type, which makes every
     subsequent `.get("…")` a type error rather than a narrowing.
+
+    Returns
+    -------
+    dict[str, object]
+        The narrowed mapping.
     """
-    _require(isinstance(value, dict), message)
+    _require(condition=isinstance(value, dict), message=message)
     return typ.cast("dict[str, object]", value)
 
 
@@ -89,7 +99,10 @@ def mapping(value: object, message: str) -> dict[str, object]:
 def workflow() -> Workflow:
     """Parse the CI workflow."""
     parsed = yaml.safe_load((repo_root() / CI_WORKFLOW).read_text(encoding="utf-8"))
-    _require(isinstance(parsed, dict), f"{CI_WORKFLOW} must parse to a mapping")
+    _require(
+        condition=isinstance(parsed, dict),
+        message=f"{CI_WORKFLOW} must parse to a mapping",
+    )
     return typ.cast("Workflow", parsed)
 
 
@@ -105,7 +118,10 @@ def job(job_name: str) -> dict[str, object]:
 def steps(job_name: str) -> list[dict[str, object]]:
     """Return the steps of a named job."""
     declared = job(job_name).get("steps")
-    _require(isinstance(declared, list), f"the {job_name!r} job must declare steps")
+    _require(
+        condition=isinstance(declared, list),
+        message=f"the {job_name!r} job must declare steps",
+    )
     return typ.cast("list[dict[str, object]]", declared)
 
 
@@ -144,6 +160,11 @@ def _declared_steps(job_payload: object, *, job_name: str) -> list[dict[str, obj
 
     A job that calls a reusable workflow declares `uses:` and no steps, which
     is a legitimate shape rather than a contract failure.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        The declared steps, or an empty list for a reusable-workflow job.
     """
     declared = mapping(job_payload, f"job {job_name!r}").get("steps")
     if not isinstance(declared, list):
@@ -224,7 +245,10 @@ def first_step_running(command: str, *, job_name: str) -> tuple[int, str]:
         ),
         None,
     )
-    _require(found is not None, f"no step in the {job_name!r} job runs {command!r}")
+    _require(
+        condition=found is not None,
+        message=f"no step in the {job_name!r} job runs {command!r}",
+    )
     return typ.cast("tuple[int, str]", found)
 
 
@@ -232,8 +256,8 @@ def benchmark_gate() -> str:
     """Return the `if:` expression gating the benchmark job."""
     condition = job(BENCHMARK_JOB).get("if")
     _require(
-        isinstance(condition, str),
-        f"the {BENCHMARK_JOB!r} job must declare an `if:` condition",
+        condition=isinstance(condition, str),
+        message=f"the {BENCHMARK_JOB!r} job must declare an `if:` condition",
     )
     return typ.cast("str", condition)
 
@@ -252,8 +276,10 @@ def filter_paths() -> frozenset[str]:
     )
     patterns = filters.get(FILTER_NAME)
     _require(
-        isinstance(patterns, list),
-        f"the filter must declare a {FILTER_NAME!r} list; found {sorted(filters)}",
+        condition=isinstance(patterns, list),
+        message=(
+            f"the filter must declare a {FILTER_NAME!r} list; found {sorted(filters)}"
+        ),
     )
     return frozenset(str(pattern) for pattern in typ.cast("list[object]", patterns))
 
@@ -265,6 +291,11 @@ def matches_filter(pattern: str, path: str) -> bool:
     literal path, and a `dir/**` prefix. A contract test fails when a pattern
     outside those forms is declared, so the model cannot silently stop
     describing the filter it stands in for.
+
+    Returns
+    -------
+    bool
+        Whether the path matches the declared pattern.
     """
     if pattern.endswith("/**"):
         return path.startswith(pattern.removesuffix("**"))
@@ -285,5 +316,10 @@ def benchmark_runs(*, event_name: str, bench: bool) -> bool:
 
     Mirrors the `if:` expression a contract test pins verbatim; the pin is what
     keeps this model and the workflow from drifting apart.
+
+    Returns
+    -------
+    bool
+        Whether the benchmark job should run for the event and filter verdict.
     """
     return event_name != "pull_request" or bench
