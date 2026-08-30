@@ -1,0 +1,119 @@
+"""Rust-pump cleanup failures during cancellation."""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+import threading
+import typing as typ
+
+import pytest
+
+from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum._pipeline_stream_fds import RUST_PUMP_TEARDOWN_FAILED_ACTION
+from cuprum.unittests._rust_pump_test_helpers import install_fake_pump, owned_fds
+
+
+class _FailingRestoreGuard:
+    """Guard double that fails while returning descriptor ownership to asyncio."""
+
+    def restore(self) -> None:
+        """Fail with the descriptor error the cancellation path must suppress."""
+        msg = "the descriptor cannot be restored"
+        raise OSError(msg)
+
+
+def test_cancellation_settles_when_descriptor_restore_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed descriptor restore cannot strand a cancelled native pump."""
+    worker_started = threading.Event()
+    worker_finished = threading.Event()
+    release = threading.Event()
+    cleanup_futures: list[asyncio.Future[None]] = []
+
+    def blocking_pump(reader_fd: int, writer_fd: int) -> int:
+        """Block until cancellation releases the native-pump stand-in."""
+        del reader_fd, writer_fd
+        worker_started.set()
+        release.wait(timeout=5.0)
+        worker_finished.set()
+        return 0
+
+    original_await_cleanup = _pipeline_streams._await_native_pump_cleanup
+
+    async def capture_cleanup_future(cleanup_complete: asyncio.Future[None]) -> None:
+        """Retain cleanup state so a broken implementation remains bounded."""
+        cleanup_futures.append(cleanup_complete)
+        await original_await_cleanup(cleanup_complete)
+
+    install_fake_pump(monkeypatch, blocking_pump)
+    monkeypatch.setattr(
+        _pipeline_streams,
+        "_await_native_pump_cleanup",
+        capture_cleanup_future,
+    )
+
+    async def cancel_pump() -> None:
+        """Cancel a hop and prove it settles within the default grace period."""
+        task: asyncio.Task[None] | None = None
+        try:
+            with owned_fds() as (reader_fd, writer_fd):
+                state = _pipeline_streams._RustPumpState(
+                    reader_fd=reader_fd,
+                    writer_fd=writer_fd,
+                    blocking_mode_guard=typ.cast(
+                        "_pipeline_stream_fds._BlockingModeGuard",
+                        _FailingRestoreGuard(),
+                    ),
+                    resume_reader=None,
+                )
+                task = asyncio.create_task(
+                    _pipeline_streams._run_rust_pump_with_blocking_fds(state=state)
+                )
+                started = await asyncio.to_thread(worker_started.wait, 5.0)
+                assert started, (
+                    "the native-pump stand-in must start before cancellation"
+                )
+                task.cancel()
+                await asyncio.sleep(0)
+                release.set()
+                done, pending = await asyncio.wait((task,), timeout=0.5)
+                assert done == {task}, (
+                    "a cancelled hop must settle within the default cancellation grace "
+                    f"after restore failure; pending={pending}"
+                )
+                with pytest.raises(asyncio.CancelledError):
+                    task.result()
+                finished = await asyncio.to_thread(worker_finished.wait, 5.0)
+                assert finished, "the native-pump worker must settle before the hop"
+        finally:
+            for cleanup_complete in cleanup_futures:
+                if not cleanup_complete.done():
+                    cleanup_complete.set_result(None)
+            if task is not None:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    with caplog.at_level(logging.DEBUG, logger=_pipeline_streams.__name__):
+        asyncio.run(cancel_pump())
+
+    teardown_records = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("cuprum_action") == RUST_PUMP_TEARDOWN_FAILED_ACTION
+    ]
+    assert len(teardown_records) == 1, (
+        "a failed descriptor restore must be recorded once, found "
+        f"{len(teardown_records)}"
+    )
+    assert teardown_records[0].__dict__.get("cuprum_site") == "restore_state", (
+        "the cleanup record must name state restoration, found "
+        f"{teardown_records[0].__dict__.get('cuprum_site')!r}"
+    )
+    assert teardown_records[0].__dict__.get("cuprum_error_type") == "OSError", (
+        "the cleanup record must preserve the restore failure type, found "
+        f"{teardown_records[0].__dict__.get('cuprum_error_type')!r}"
+    )

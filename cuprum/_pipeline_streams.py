@@ -129,9 +129,17 @@ def _complete_rust_pump(
                 _log_rust_pump_failed_after_cancel(error)
     finally:
         _close_rust_writer_fd(rust_writer_fd)
-        _restore_rust_pump_state(state)
-        if not cleanup_complete.done():
-            cleanup_complete.set_result(None)
+        try:
+            with _suppressed_teardown_failure(
+                _LOGGER,
+                "restore_state",
+                OSError,
+                ValueError,
+            ):
+                _restore_rust_pump_state(state)
+        finally:
+            if not cleanup_complete.done():
+                cleanup_complete.set_result(None)
 
 
 async def _await_native_pump_cleanup(cleanup_complete: asyncio.Future[None]) -> None:

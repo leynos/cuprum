@@ -156,6 +156,7 @@
       'cuprum/unittests/test_pipeline_stream_results.py',
       'cuprum/unittests/test_pipeline_streams_blocking_mode.py',
       'cuprum/unittests/test_pipeline_streams_cancellation.py',
+      'cuprum/unittests/test_pipeline_streams_cleanup_failure.py',
       'cuprum/unittests/test_pipeline_streams_fd_lifecycle.py',
       'cuprum/unittests/test_pipeline_streams_observability.py',
       'cuprum/unittests/test_pipeline_teardown_cancellation.py',
