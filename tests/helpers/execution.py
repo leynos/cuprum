@@ -34,7 +34,20 @@ type ExecuteFn = cabc.Callable[[SafeCmd, _RunKwargs], CommandResult]
 
 
 def assert_capture_disabled(result: CommandResult) -> None:
-    """Assert a command exited cleanly with no output retained."""
+    """Assert a command exited cleanly with no output retained.
+
+    Parameters
+    ----------
+    result : CommandResult
+        Command result under test. The assertion succeeds only when
+        ``result.exit_code == 0``, ``result.stdout is None``, and
+        ``result.stderr is None``.
+
+    Raises
+    ------
+    AssertionError
+        If any required exit-code or captured-output condition is not met.
+    """
     if result.exit_code != 0:
         msg = f"expected a clean exit with capture disabled, got {result.exit_code!r}"
         raise AssertionError(msg)
