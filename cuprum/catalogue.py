@@ -10,14 +10,11 @@ Example:
 
 from __future__ import annotations
 
+import collections.abc as cabc
 import dataclasses as dc
-import typing as typ
 from types import MappingProxyType
 
 from cuprum.program import Program
-
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
 
 
 def _coerce_program(raw: Program | str) -> Program:
@@ -108,8 +105,38 @@ class ProgramEntry:
 
     @property
     def project_name(self) -> str:
-        """The owning project's name."""
+        """The owning project's name.
+
+        Returns
+        -------
+        str
+            The name of the project that registered this program.
+        """
         return self.project.name
+
+
+class _VisibleSettings(cabc.Mapping[str, ProjectSettings]):
+    """Cached, read-only catalogue settings with legacy call compatibility."""
+
+    def __init__(self, settings: cabc.Mapping[str, ProjectSettings]) -> None:
+        """Store an immutable view of the catalogue settings."""
+        self._settings = MappingProxyType(settings)
+
+    def __getitem__(self, key: str) -> ProjectSettings:
+        """Return the settings registered for ``key``."""
+        return self._settings[key]
+
+    def __iter__(self) -> cabc.Iterator[str]:
+        """Iterate over project names."""
+        return iter(self._settings)
+
+    def __len__(self) -> int:
+        """Return the number of visible projects."""
+        return len(self._settings)
+
+    def __call__(self) -> _VisibleSettings:
+        """Return this mapping for callers using the former method form."""
+        return self
 
 
 class ProgramCatalogue:
@@ -120,13 +147,18 @@ class ProgramCatalogue:
         self._projects = self._index_projects(projects)
         self._program_to_project = self._index_programs(self._projects)
         self._allowlist = frozenset(self._program_to_project)
-        self._visible_settings_cache: MappingProxyType[str, ProjectSettings] = (
-            MappingProxyType(self._projects)
-        )
+        self._visible_settings_cache = _VisibleSettings(self._projects)
 
     @property
     def allowlist(self) -> frozenset[Program]:
-        """The curated allowlist of programs."""
+        """The curated allowlist of programs.
+
+        Returns
+        -------
+        frozenset[Program]
+            Every program registered in the catalogue. The returned set cannot
+            be modified.
+        """
         return self._allowlist
 
     def is_allowed(self, program: Program | str) -> bool:
@@ -191,8 +223,15 @@ class ProgramCatalogue:
         return self.lookup(program).project
 
     @property
-    def visible_settings(self) -> cabc.Mapping[str, ProjectSettings]:
-        """A cached read-only mapping of project name to its settings."""
+    def visible_settings(self) -> _VisibleSettings:
+        """Cached, read-only settings indexed by project name.
+
+        Returns
+        -------
+        _VisibleSettings
+            The same immutable mapping for the catalogue lifetime. Access it
+            as a property; calling it remains a temporary compatibility form.
+        """
         return self._visible_settings_cache
 
     @staticmethod

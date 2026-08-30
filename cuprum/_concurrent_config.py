@@ -255,12 +255,26 @@ class ConcurrentResult:
 
     @property
     def ok(self) -> bool:
-        """True when all commands exited successfully."""
+        """Whether every command completed successfully.
+
+        Returns
+        -------
+        bool
+            ``True`` when no result is recorded as a failure; otherwise
+            ``False``.
+        """
         return not self.failures
 
     @property
     def first_failure(self) -> CommandResult | None:
-        """The first failed result, or None if all succeeded."""
+        """The earliest failed command result, if any.
+
+        Returns
+        -------
+        CommandResult | None
+            The result at the first recorded failure index, or ``None`` when
+            every command succeeded.
+        """
         if not self.failures:
             return None
         return self.results[self.failures[0]]

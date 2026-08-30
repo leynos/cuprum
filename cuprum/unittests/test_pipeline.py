@@ -48,10 +48,11 @@ def _association_trees(draw: st.DrawFn) -> tuple[int, _AssociationTree]:
 
 def _compose(tree: _AssociationTree, stages: list[SafeCmd]) -> SafeCmd | Pipeline:
     """Fold ``stages`` with ``|`` following the bracketing in ``tree``."""
-    if isinstance(tree, int):
-        return stages[tree]
-    left, right = tree
-    return _compose(left, stages) | _compose(right, stages)
+    match tree:
+        case int() as index:
+            return stages[index]
+        case (left, right):
+            return _compose(left, stages) | _compose(right, stages)
 
 
 def test_or_operator_composes_pipeline() -> None:

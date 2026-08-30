@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import errno
 import os
+import threading
 import typing as typ
+from unittest import mock
 
 import pytest
 
@@ -120,6 +122,21 @@ def test_pty_blackhole_exit_clears_internal_state() -> None:
     assert bh._master_fd is None
     assert bh._slave is None
     assert bh._thread is None
+
+
+def test_pty_blackhole_hides_drain_count_until_the_drainer_stops() -> None:
+    """A timed-out join must not publish a drainer-owned counter."""
+    bh = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
+    still_running = mock.Mock(spec=threading.Thread)
+    still_running.is_alive.return_value = True
+    bh._thread = still_running
+    bh._drained_bytes = 42
+
+    bh.__exit__(None, None, None)
+
+    still_running.join.assert_called_once_with(timeout=5.0)
+    assert bh._thread is still_running
+    assert bh.drained_bytes is None
 
 
 # ---------------------------------------------------------------------------

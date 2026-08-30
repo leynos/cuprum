@@ -164,6 +164,6 @@ def test_percent_of_empty_summary_is_zero() -> None:
     Hypothesis strategy (``min_value=1``) never reach ``total == 0``, so this
     explicit example covers the guard against dividing by zero.
     """
-    assert _percent(0, 0) == pytest.approx(0.0), (
+    assert _percent(0, 0) == 0.0, (  # ruff: ignore[float-equality-comparison] - exact zero sentinel
         "zero total must produce a 0.0 percentage"
     )

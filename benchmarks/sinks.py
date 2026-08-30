@@ -91,17 +91,20 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
         self._slave: typ.IO[str] | None = None
         self._thread: threading.Thread | None = None
         self._drained_bytes = 0
+        self._drainer_finished = False
 
     @property
-    def drained_bytes(self) -> int:
+    def drained_bytes(self) -> int | None:
         """Report the number of bytes consumed by the drainer thread.
 
         Returns
         -------
-        int
-            The total byte count read from the PTY master. Only meaningful
-            after ``__exit__`` has joined the drainer thread.
+        int | None
+            The total byte count read from the PTY master after the drainer
+            has terminated, or ``None`` when its bounded shutdown is pending.
         """
+        if not self._drainer_finished:
+            return None
         return self._drained_bytes
 
     def __enter__(self) -> typ.IO[str]:
@@ -132,6 +135,7 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
             self._master_fd = None
             self._slave = None
             self._thread = None
+            self._drainer_finished = False
             raise
         return slave
 
@@ -151,7 +155,9 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
             self._master_fd = None
         if self._thread is not None:
             self._thread.join(timeout=5.0)
-            self._thread = None
+            if not self._thread.is_alive():
+                self._thread = None
+                self._drainer_finished = True
         return None
 
     def _drain(self) -> None:

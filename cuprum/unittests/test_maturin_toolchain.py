@@ -165,11 +165,11 @@ def test_toolchain_available_propagates_a_non_import_error(
 #: result) for the scenarios below. The scheme name and scripts directory
 #: name are both mocked and never inspected by the logic under test, so a
 #: single directory layout exercises all three cases.
-_SCRIPT_LOCATABLE_CASES = [
+_SCRIPT_LOCATABLE_CASES = (
     pytest.param("maturin", True, id="script_present"),
     pytest.param("mutmut", False, id="unrelated_script_only"),
     pytest.param("maturin.exe", True, id="windows_exe_launcher"),
-]
+)
 
 
 @pytest.mark.parametrize(("filename", "expected"), _SCRIPT_LOCATABLE_CASES)

@@ -304,7 +304,7 @@ class TracingHook:
 
     def _record_fail_fast(self, event: ExecEvent) -> None:
         """Note a pipeline fail-fast decision on the failing stage's span."""
-        active = self._lookup_active_span(event)
+        active = self._lookup_active_span(event, touch=True)
         if active is None:
             return
 

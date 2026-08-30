@@ -180,21 +180,19 @@ def allow(*programs: Program) -> AllowRegistration:
 
 def _context_with_hook(
     ctx: CuprumContext,
-    hook: cabc.Callable[..., typ.Any],
+    hook: BeforeHook | AfterHook | ExecHook,
     hook_type: typ.Literal["before", "after", "observe"],
 ) -> CuprumContext:
     """Derive a context carrying ``hook`` registered under ``hook_type``."""
-    # The tag and the callable's signature cannot be correlated by a type
-    # checker, so this boundary is deliberately gradual; the precisely typed
-    # public factories (before, after, observe) check each shape at their own
-    # signature instead.
+    # The tag and callable signature are correlated by the public factories.
+    # Narrow here because Python cannot express that dependent union directly.
     match hook_type:
         case "before":
-            return ctx.with_before_hook(hook)
+            return ctx.with_before_hook(typ.cast("BeforeHook", hook))
         case "after":
-            return ctx.with_after_hook(hook)
+            return ctx.with_after_hook(typ.cast("AfterHook", hook))
         case "observe":
-            return ctx.with_observe_hook(hook)
+            return ctx.with_observe_hook(typ.cast("ExecHook", hook))
         case _:
             msg = f"Unsupported hook type: {hook_type}"
             raise ValueError(msg)

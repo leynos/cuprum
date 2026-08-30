@@ -31,10 +31,21 @@ _BACKEND_LOGGER = "cuprum._backend"
 _RUST_BACKEND_LOGGER = "cuprum._rust_backend"
 
 
+class _BackendEnv(typ.Protocol):
+    """Configure backend availability and the backend-selection environment."""
+
+    def __call__(
+        self,
+        probe: bool | cabc.Callable[[], bool],
+        env_value: str | None = None,
+    ) -> None:
+        """Set the availability probe and optional backend environment value."""
+
+
 @pytest.fixture
 def backend_env(
     monkeypatch: pytest.MonkeyPatch,
-) -> cabc.Callable[..., None]:
+) -> _BackendEnv:
     """Configure the backend-selection env var and the Rust availability probe.
 
     Returns
@@ -89,7 +100,7 @@ def test_stream_backend_is_str_enum() -> None:
     ids=["rust-available", "rust-unavailable"],
 )
 def test_auto_selects_backend_by_availability(
-    backend_env: cabc.Callable[..., None],
+    backend_env: _BackendEnv,
     *,
     is_available: bool,
     expected: StreamBackend,
@@ -103,7 +114,7 @@ def test_auto_selects_backend_by_availability(
 
 
 def test_auto_falls_back_on_import_error(
-    backend_env: cabc.Callable[..., None],
+    backend_env: _BackendEnv,
 ) -> None:
     """Auto mode falls back to Python when the Rust probe raises ImportError."""
 
@@ -120,7 +131,7 @@ def test_auto_falls_back_on_import_error(
 
 
 def test_auto_resolution_logs_selected_backend(
-    backend_env: cabc.Callable[..., None],
+    backend_env: _BackendEnv,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Auto mode emits a structured decision log record."""
@@ -150,7 +161,7 @@ def test_auto_resolution_logs_selected_backend(
     ids=["rust-available", "rust-unavailable"],
 )
 def test_forced_rust_mode_honours_availability(
-    backend_env: cabc.Callable[..., None],
+    backend_env: _BackendEnv,
     *,
     is_available: bool,
     expected: StreamBackend | None,
@@ -169,7 +180,7 @@ def test_forced_rust_mode_honours_availability(
 
 
 def test_forced_rust_unavailable_logs_warning(
-    backend_env: cabc.Callable[..., None],
+    backend_env: _BackendEnv,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Forced Rust mode logs the unavailable-backend failure boundary."""
@@ -190,7 +201,7 @@ def test_forced_rust_unavailable_logs_warning(
 
 
 def test_forced_rust_probe_import_error_logs_warning(
-    backend_env: cabc.Callable[..., None],
+    backend_env: _BackendEnv,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A forced-Rust probe that raises ImportError still hits the warning boundary."""
@@ -332,7 +343,7 @@ def test_env_var_case_insensitive(
 
 
 def test_availability_is_cached(
-    backend_env: cabc.Callable[..., None],
+    backend_env: _BackendEnv,
 ) -> None:
     """The availability probe is called at most once across invocations."""
     call_count = 0
@@ -485,7 +496,7 @@ def test_raw_probe_logs_missing_native_module(
 
 def test_cache_clear_allows_recheck(
     monkeypatch: pytest.MonkeyPatch,
-    backend_env: cabc.Callable[..., None],
+    backend_env: _BackendEnv,
 ) -> None:
     """Clearing the cache allows the availability probe to run again."""
     backend_env(probe=False)

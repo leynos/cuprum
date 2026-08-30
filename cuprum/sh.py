@@ -48,8 +48,11 @@ from cuprum.context import current_context as current_context
 from cuprum.context import observe as observe
 from cuprum.context import scoped as scoped
 
-if typ.TYPE_CHECKING:
-    from cuprum.program import Program
+# Public annotations use ``Program``. Keep it in module globals so
+# ``typing.get_type_hints`` can resolve the postponed public annotations.
+from cuprum.program import (
+    Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime
+)
 
 type _ArgValue = str | int | float | bool | Path
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
@@ -142,7 +145,13 @@ class CommandResult:
 
     @property
     def ok(self) -> bool:
-        """True when the command exited successfully."""
+        """Whether the command exited successfully.
+
+        Returns
+        -------
+        bool
+            ``True`` exactly when ``exit_code`` is zero.
+        """
         return self.exit_code == 0
 
 
@@ -167,24 +176,51 @@ class PipelineResult:
 
     @property
     def final(self) -> CommandResult:
-        """The CommandResult for the last stage."""
+        """The result from the final pipeline stage.
+
+        Returns
+        -------
+        CommandResult
+            The last stage's result in execution order.
+        """
         return self.stages[-1]
 
     @property
     def failure(self) -> CommandResult | None:
-        """The stage that triggered fail-fast termination, when any."""
+        """The stage that triggered fail-fast termination, if any.
+
+        Returns
+        -------
+        CommandResult | None
+            The failing stage result, or ``None`` when no stage triggered
+            fail-fast termination.
+        """
         if self.failure_index is None:
             return None
         return self.stages[self.failure_index]
 
     @property
     def ok(self) -> bool:
-        """True when all pipeline stages exited successfully."""
+        """Whether every pipeline stage exited successfully.
+
+        Returns
+        -------
+        bool
+            ``True`` when every stage result is successful; otherwise
+            ``False``.
+        """
         return all(stage.ok for stage in self.stages)
 
     @property
     def stdout(self) -> str | None:
-        """The captured stdout from the last stage, when available."""
+        """Captured output from the final pipeline stage.
+
+        Returns
+        -------
+        str | None
+            The final stage's captured standard output, or ``None`` when
+            capture was disabled.
+        """
         return self.final.stdout
 
 
@@ -246,7 +282,14 @@ class TimeoutExpired(TimeoutError):  # ruff: ignore[error-suffix-on-exception-na
 
     @property
     def stdout(self) -> str | bytes | None:
-        """Captured stdout, mirroring subprocess.TimeoutExpired.output."""
+        """Captured stdout, mirroring ``subprocess.TimeoutExpired``.
+
+        Returns
+        -------
+        str | bytes | None
+            Captured standard output, or ``None`` when no output was
+            captured before expiry.
+        """
         return self.output
 
 
@@ -458,7 +501,13 @@ class SafeCmd:
 
     @property
     def argv_with_program(self) -> tuple[str, ...]:
-        """Argv prefixed with the program name."""
+        """The program name followed by this command's arguments.
+
+        Returns
+        -------
+        tuple[str, ...]
+            An argument vector whose first item is ``str(program)``.
+        """
         return (str(self.program), *self.argv)
 
     def __or__(self, other: SafeCmd | Pipeline) -> Pipeline:

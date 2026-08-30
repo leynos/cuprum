@@ -30,12 +30,28 @@ if typ.TYPE_CHECKING:
 
     from cuprum.catalogue import Program
 
-#: (register_fn, hooks attribute name) for before()/after() hook registration
-#: tests, which are structurally identical apart from which hook slot and
-#: context attribute they exercise.
+
+class _HookRegistrationCase(typ.NamedTuple):
+    """Typed variant of one before/after registration contract."""
+
+    register: cabc.Callable[[BeforeHook | AfterHook], HookRegistration]
+    hooks_attr: typ.Literal["before_hooks", "after_hooks"]
+
+
+def _register_before(hook: BeforeHook | AfterHook) -> HookRegistration:
+    """Adapt the before-hook factory to the shared registration case shape."""
+    return before(typ.cast("BeforeHook", hook))
+
+
+def _register_after(hook: BeforeHook | AfterHook) -> HookRegistration:
+    """Adapt the after-hook factory to the shared registration case shape."""
+    return after(typ.cast("AfterHook", hook))
+
+
+#: Typed before/after variants for structurally identical registration tests.
 _HOOK_REGISTRATIONS = (
-    pytest.param(before, "before_hooks", id="before"),
-    pytest.param(after, "after_hooks", id="after"),
+    pytest.param(_HookRegistrationCase(_register_before, "before_hooks"), id="before"),
+    pytest.param(_HookRegistrationCase(_register_after, "after_hooks"), id="after"),
 )
 
 _PROPERTY_SETTINGS = settings(derandomize=True, deadline=None, max_examples=50)
@@ -219,31 +235,29 @@ def test_allow_as_context_manager() -> None:
 # =============================================================================
 
 
-@pytest.mark.parametrize(("register_fn", "hooks_attr"), _HOOK_REGISTRATIONS)
+@pytest.mark.parametrize("case", _HOOK_REGISTRATIONS)
 def test_hook_registration_and_detach(
-    register_fn: cabc.Callable[[typ.Any], HookRegistration],
-    hooks_attr: str,
+    case: _HookRegistrationCase,
 ) -> None:
     """before()/after() register a hook that can be detached."""
     hook: BeforeHook | AfterHook = mock.Mock()
     with scoped(ScopeConfig()):
-        reg = register_fn(hook)
-        assert hook in getattr(current_context(), hooks_attr)
+        reg = case.register(hook)
+        assert hook in getattr(current_context(), case.hooks_attr)
         reg.detach()
-        assert hook not in getattr(current_context(), hooks_attr)
+        assert hook not in getattr(current_context(), case.hooks_attr)
 
 
-@pytest.mark.parametrize(("register_fn", "hooks_attr"), _HOOK_REGISTRATIONS)
+@pytest.mark.parametrize("case", _HOOK_REGISTRATIONS)
 def test_hook_as_context_manager(
-    register_fn: cabc.Callable[[typ.Any], HookRegistration],
-    hooks_attr: str,
+    case: _HookRegistrationCase,
 ) -> None:
     """before()/after() can be used as a context manager."""
     hook: BeforeHook | AfterHook = mock.Mock()
     with scoped(ScopeConfig()):
-        with register_fn(hook):
-            assert hook in getattr(current_context(), hooks_attr)
-        assert hook not in getattr(current_context(), hooks_attr)
+        with case.register(hook):
+            assert hook in getattr(current_context(), case.hooks_attr)
+        assert hook not in getattr(current_context(), case.hooks_attr)
 
 
 # =============================================================================

@@ -310,6 +310,43 @@ class TestTracingSpanLifecycle:
             "ahead of one that fell silent earlier"
         )
 
+    def test_fail_fast_event_refreshes_the_span_eviction_recency(
+        self,
+        tracing_hook: Traced,
+    ) -> None:
+        """A fail-fast decision keeps its span ahead of an idle one."""
+        tracer, hook = tracing_hook
+        busy, quiet = new_exec_id(), new_exec_id()
+        hook(_make_exec_event(phase="start", overrides=_cat_overrides(busy, pid=1)))
+        busy_span = tracer.spans[0]
+        hook(_make_exec_event(phase="start", overrides=_cat_overrides(quiet, pid=2)))
+        quiet_span = tracer.spans[1]
+
+        hook(
+            _make_exec_event(
+                phase="pipeline_fail_fast",
+                overrides={
+                    **_cat_overrides(busy, pid=1),
+                    "exit_code": 1,
+                    "duration_s": 0.0,
+                    "stage_index": 0,
+                    "stage_count": 2,
+                },
+            ),
+        )
+        for index in range(_MAX_ACTIVE_SPANS - 1):
+            hook(
+                _make_exec_event(
+                    phase="start",
+                    overrides=_cat_overrides(new_exec_id(), pid=index + 3),
+                ),
+            )
+
+        assert quiet_span.ended is True, "the idle span must be evicted first"
+        assert busy_span.ended is False, (
+            "a span touched by pipeline_fail_fast must remain active until exit"
+        )
+
     def test_emitted_attributes_match_documented_contract(self) -> None:
         """The attributes the hook emits equal the documented contract.
 

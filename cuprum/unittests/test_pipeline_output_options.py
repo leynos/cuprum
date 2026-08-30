@@ -57,10 +57,20 @@ def pipeline_execution_strategy(
     return ("sync", _execute_sync)
 
 
-def assert_echoed_and_captured(
+def _assert_echoed_and_captured(
     result: PipelineResult, sink: io.StringIO, expected: str
 ) -> None:
-    """Assert a pipeline both captured and echoed the expected output."""
+    """Assert a pipeline both captured and echoed the expected output.
+
+    Parameters
+    ----------
+    result:
+        Pipeline result whose success and captured output are asserted.
+    sink:
+        Text sink expected to contain the echoed output.
+    expected:
+        Output expected from both capture and echo.
+    """
     assert result.ok is True, "the pipeline should succeed"
     assert result.stdout == expected, "capture must return the final stage output"
     assert sink.getvalue() == expected, "echo must also tee the output to the sink"
@@ -96,7 +106,7 @@ def test_pipeline_output_options_echo_for_run_and_run_sync(
             },
         )
 
-    assert_echoed_and_captured(result, stdout_sink, "echoed")
+    _assert_echoed_and_captured(result, stdout_sink, "echoed")
 
 
 @pytest.mark.usefixtures("stream_backend")
@@ -121,7 +131,7 @@ def test_pipeline_flat_capture_echo_kwargs_are_deprecated_for_public_entrypoints
             },
         )
 
-    assert_echoed_and_captured(result, stdout_sink, "echoed")
+    _assert_echoed_and_captured(result, stdout_sink, "echoed")
 
 
 _OUTPUT_OPTIONS = st.one_of(

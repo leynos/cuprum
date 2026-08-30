@@ -86,7 +86,11 @@ def _make_exec_event(
     thread a shared ``exec_id`` override; pass ``{"exec_id": None}`` to build a
     legacy, uncorrelated event.
     """
-    changes: dict[str, object] = {"phase": phase, "exec_id": new_exec_id()}
+    changes: dict[str, object] = {
+        "phase": phase,
+        "exec_id": new_exec_id(),
+        "tags": {},
+    }
     if overrides is not None:
         changes.update(overrides)
     return dc.replace(_DEFAULT_EXEC_EVENT, **changes)

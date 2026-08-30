@@ -133,6 +133,15 @@ def _complete_rust_pump(
             cleanup_complete.set_result(None)
 
 
+async def _await_native_pump_cleanup(cleanup_complete: asyncio.Future[None]) -> None:
+    """Wait for native cleanup despite repeated cancellation requests."""
+    while not cleanup_complete.done():
+        try:
+            await asyncio.shield(cleanup_complete)
+        except asyncio.CancelledError:
+            continue
+
+
 async def _run_rust_pump_with_blocking_fds(
     *,
     state: _RustPumpState,
@@ -167,13 +176,12 @@ async def _run_rust_pump_with_blocking_fds(
         await asyncio.shield(native_pump)
     except asyncio.CancelledError:
         state.was_cancelled = True
-        # Re-raise immediately without awaiting cleanup_complete: a cancelled
-        # task is expected to unwind promptly, and the native worker may
-        # still be blocked in the executor thread, so waiting here could
-        # stall cancellation indefinitely. Cleanup still happens — the
-        # done_callback registered on native_pump above runs independently
-        # of this await and restores state once the executor future
-        # settles, whenever that is.
+        # The enclosing pipeline terminates its stages before collecting this
+        # task, so the native read is released within the caller's bounded
+        # cancellation grace. Keeping this task alive until the callback has
+        # restored the descriptors prevents pipeline teardown from reporting
+        # completion while the executor worker still owns them.
+        await _await_native_pump_cleanup(cleanup_complete)
         raise
     except BaseException:
         await asyncio.shield(cleanup_complete)

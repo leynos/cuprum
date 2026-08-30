@@ -71,7 +71,7 @@ async def _cancel_mid_transfer(
     *,
     cancellations: int = 1,
 ) -> None:
-    """Start the pump, cancel it mid-transfer, then release the worker."""
+    """Start a pipeline pump, cancel it mid-transfer, then release its worker."""
     reader_fd, writer_fd = os.pipe()
     try:
         state = _pipeline_streams._RustPumpState(
@@ -94,10 +94,10 @@ async def _cancel_mid_transfer(
         for _ in range(cancellations):
             task.cancel()
             await asyncio.sleep(0.05)
-        with pytest.raises(asyncio.CancelledError):
-            await task
         context.events.append("released")
         context.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
         await asyncio.to_thread(context.worker_finished.wait, 5.0)
         await asyncio.sleep(0)
     finally:
@@ -118,7 +118,7 @@ def test_cancellation_restores_descriptors_only_after_worker_returns(
     monkeypatch: pytest.MonkeyPatch,
     cancellations: int,
 ) -> None:
-    """Cancelling mid-transfer waits for the worker before restoring FDs.
+    """A cancelled pipeline pump waits for the worker before restoring FDs.
 
     ``run_in_executor`` cannot interrupt the worker thread, which still owns
     both raw descriptors. Restoring their blocking mode while it runs would
@@ -167,6 +167,10 @@ def test_cancellation_restores_descriptors_only_after_worker_returns(
     assert events.index("worker_returned") < events.index("restored"), (
         f"restore must happen only after the worker thread returns, even after "
         f"{cancellations} cancellation(s); observed order {events}"
+    )
+    assert events.count("restored") == 1, (
+        "the reader descriptor state must be restored exactly once after "
+        f"cancellation; observed order {events}"
     )
 
 

@@ -193,9 +193,6 @@ async def _cancel_before_native_worker_settles(
             await asyncio.wait_for(native_pump.submitted.wait(), timeout=0.5)
             task.cancel()
 
-            with pytest.raises(asyncio.CancelledError):
-                await task
-
             assert cleanup.order == ["pause", "drain"], (
                 "expected FD restoration and reader resumption to wait for native "
                 "worker settlement"
@@ -207,6 +204,9 @@ async def _cancel_before_native_worker_settles(
 
             native_pump.future.set_result(0)
             await asyncio.wait_for(cleanup.finished.wait(), timeout=0.5)
+
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
             assert cleanup.order == ["pause", "drain", "restore", "resume"], (
                 "expected settlement to restore descriptors before resuming reader"
