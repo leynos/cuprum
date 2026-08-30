@@ -810,8 +810,8 @@ once per execution and excludes expected `CancelledError` failures.
 The `capture_eof_grace_expired` event carries the execution's `exec_id` and
 `pid`, `operation` (`"drain"`), `eof_grace_s`, and `pending_readers` (one or
 two). It is emitted only when a capturing drain reaches the fixed grace limit;
-the corresponding `cuprum_capture_eof_grace_expired_total` metric uses only
-the `program` and `project` labels, and tracing adds a
+the corresponding `cuprum_capture_eof_grace_expired_total` metric uses only the
+`program` and `project` labels, and tracing adds a
 `cuprum.capture_eof_grace_expired` event to the matching span. The grace-expiry
 event itself carries no captured stdout or stderr payload.
 
@@ -986,8 +986,8 @@ The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 - `cuprum_stage_index` / `cuprum_stage_count`: Failing stage position and
   pipeline width (for `pipeline_fail_fast` events)
 - `cuprum_eof_grace_s` / `cuprum_pending_readers`: Fixed EOF-grace duration
-  and pending-reader count (for `capture_eof_grace_expired` events)
-Event tags are not emitted by this structured logging adapter.
+  and pending-reader count (for `capture_eof_grace_expired` events) Event tags
+  are not emitted by this structured logging adapter.
 
 When registered, `structured_logging_hook()` emits `pipeline_fail_fast` at
 `LogLevels.fail_fast_level`, which defaults to `logging.WARNING`. This default
@@ -1146,14 +1146,14 @@ Output lines (stdout/stderr) are recorded as span events when
 `record_output=True` (the default).
 
 **Ancillary span events.** `stdin_error`, `timeout`, `teardown_error`, and
-`capture_eof_grace_expired` are
-recorded as `cuprum.<phase>` events on the execution's open span. They leave it
-neither ended nor marked; a later `exit` closes it normally. `timeout` is
-always followed by `exit`, while `teardown_error` may be the final event.
-Ancillary events carry their set `line`, `operation`, `error_type`, `note`,
-`timeout_s`, `timeout_mode`, `eof_grace_s`, and `pending_readers` fields, and
-correlate by `exec_id`; an event without a matching open span is dropped.
-The grace-expiry event carries no captured stdout or stderr payload.
+`capture_eof_grace_expired` are recorded as `cuprum.<phase>` events on the
+execution's open span. They leave it neither ended nor marked; a later `exit`
+closes it normally. `timeout` is always followed by `exit`, while
+`teardown_error` may be the final event. Ancillary events carry their set
+`line`, `operation`, `error_type`, `note`, `timeout_s`, `timeout_mode`,
+`eof_grace_s`, and `pending_readers` fields, and correlate by `exec_id`; an
+event without a matching open span is dropped. The grace-expiry event carries
+no captured stdout or stderr payload.
 
 **Correlation note:** the hook correlates an execution's `start`, `stdout`,
 `stderr`, and `exit` events by `ExecEvent.exec_id`, a stable token minted once
@@ -1164,8 +1164,7 @@ always carry an `exec_id`, so ordinary usage is unaffected. Only hand-built or
 legacy events that omit `exec_id` are affected: the hook cannot correlate them,
 so it ignores them — a `start` without an `exec_id` creates no span, and
 `stdout`/`stderr`/`stdin_error`/`timeout`/`teardown_error`/
-`capture_eof_grace_expired`/`pipeline_fail_fast`/`exit` without one are
-dropped.
+`capture_eof_grace_expired`/`pipeline_fail_fast`/`exit` without one are dropped.
 
 A pipeline's `pipeline_fail_fast` event is recorded as a
 `cuprum.pipeline_fail_fast` span event on the failing stage's already-open

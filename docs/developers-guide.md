@@ -1078,7 +1078,9 @@ that turns the `ExecEvent` stream into OpenTelemetry-style spans. It depends
 only on the `Tracer` and `Span` protocols from
 `cuprum.adapters.tracing_protocols`, so any backend that implements them can be
 plugged in. `tracing_adapter` re-exports `Span` and `Tracer` as its public
-integration boundary. `cuprum/adapters/tracing_memory.py` supplies
+integration boundary. The legacy `cuprum.adapters._tracing_protocols` module is
+a compatibility re-export only and does not define a second protocol contract.
+`cuprum/adapters/tracing_memory.py` supplies
 `InMemoryTracer` and `InMemorySpan`, the reference doubles used by tests and
 examples: `InMemoryTracer` collects spans in memory and protects its span store
 through the shared `_LockedStore` lock (its mutators, and `reset()`, run under
@@ -1328,7 +1330,8 @@ Runtime (`cuprum/`):
   stages.
 - `cuprum/_streams_pump.py` — the stream pump loop with backpressure.
 - `cuprum/adapters/tracing_protocols.py` — the canonical PEP 544 `Span`/
-  `Tracer` protocols. `tracing_adapter` re-exports both.
+  `Tracer` protocols. `tracing_adapter` re-exports both;
+  `_tracing_protocols.py` remains a compatibility re-export only.
 
 Benchmarks (`benchmarks/`):
 
