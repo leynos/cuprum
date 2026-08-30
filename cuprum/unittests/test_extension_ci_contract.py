@@ -26,10 +26,11 @@ from tests.helpers.workflow import (
 )
 
 
-def test_the_ci_job_builds_the_extension_before_running_the_gated_tests(
+def _assert_extension_job_builds_before_gated_tests(
     workflow_data: Workflow,
+    job_name: str,
 ) -> None:
-    """`extension-tests` must run `make develop` first.
+    """Assert that an extension-test job runs `make develop` first.
 
     `make build` only syncs dependencies, so this ordering is the whole reason
     the job can pass at all, and nothing else asserts it.
@@ -37,19 +38,39 @@ def test_the_ci_job_builds_the_extension_before_running_the_gated_tests(
     Parameters
     ----------
     workflow_data : Workflow
-        Parsed ``ci.yml`` model used to inspect the extension-tests job.
+        Parsed ``ci.yml`` model used to inspect the job.
+    job_name : str
+        CI job identifier whose build and test step ordering is asserted.
     """
     build, _ = first_step_running(
-        workflow_data, "make develop", job_name="extension-tests"
+        workflow_data, "make develop", job_name=job_name
     )
     tests, _ = first_step_running(
-        workflow_data, "make test-extension", job_name="extension-tests"
+        workflow_data, "make test-extension", job_name=job_name
     )
 
     assert build < tests, (
-        "the extension-tests job must build the extension with `make "
-        "develop` before `make test-extension` runs; found the build at step "
+        f"the {job_name} job must build the extension with `make develop` "
+        "before `make test-extension` runs; found the build at step "
         f"{build} and the tests at step {tests}"
+    )
+
+
+def test_the_ci_job_builds_the_extension_before_running_the_gated_tests(
+    workflow_data: Workflow,
+) -> None:
+    """The Linux extension-test job builds before it runs gated tests."""
+    _assert_extension_job_builds_before_gated_tests(
+        workflow_data, "extension-tests"
+    )
+
+
+def test_windows_ci_job_builds_the_extension_before_running_gated_tests(
+    workflow_data: Workflow,
+) -> None:
+    """The Windows extension-test job builds before it runs gated tests."""
+    _assert_extension_job_builds_before_gated_tests(
+        workflow_data, "extension-tests-windows"
     )
 
 
@@ -123,7 +144,11 @@ def test_only_boundary_jobs_build_the_extension(workflow_data: Workflow) -> None
         if script_runs_command(script, "make develop")
     }
 
-    assert builders == {"benchmark-ratchet", "extension-tests"}, (
+    assert builders == {
+        "benchmark-ratchet",
+        "extension-tests",
+        "extension-tests-windows",
+    }, (
         "only the isolated extension and benchmark jobs may run `make develop`; "
         f"found {builders}"
     )

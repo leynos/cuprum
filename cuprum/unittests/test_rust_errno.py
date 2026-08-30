@@ -38,10 +38,10 @@ if typ.TYPE_CHECKING:
 
 # The assertions are scoped to the platform they describe rather than the module
 # being skipped wholesale, because the two arms carry different taxonomies: the
-# POSIX cases below name an `errno` and the subclass CPython derives from it. No
-# job executes them today (see `docs/developers-guide.md`, "Preserving the
-# operating-system error code"); POSIX execution arrives with the
-# `extension-tests` job in #269. Until then they encode the contract.
+# POSIX cases below name an `errno` and the subclass CPython derives from it.
+# The `extension-tests` job executes them on Linux, while
+# `extension-tests-windows` executes the separate Win32 taxonomy in
+# `test_rust_errno_windows.py`.
 _posix_only = pytest.mark.skipif(
     sys.platform == "win32",
     reason="asserts POSIX errno values and the subclasses derived from them",

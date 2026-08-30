@@ -770,6 +770,55 @@ jobs:
           mode: report
           vcpus: ${{ env.LINUX_RUNNER_VCPUS }}
 
+  extension-tests-windows:
+    name: Extension-gated tests (Windows Python/Rust boundary)
+    runs-on: windows-2022
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          # This job compiles and runs repository code, so the checkout token
+          # must not stay in .git/config where that code could reach it.
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+        with:
+          enable-cache: true
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal
+          rustup default 1.85.0
+
+      - name: Install GNU Make
+        shell: bash
+        run: |
+          if ! command -v make >/dev/null 2>&1; then
+            choco install make --no-progress --yes
+          fi
+          make --version
+
+      - name: Prepare Cargo dependencies
+        shell: bash
+        run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml
+
+      # Use the Makefile targets so this job shares the local build flags and
+      # extension-gated module list instead of copying either into CI.
+      - name: Build the native extension
+        shell: bash
+        run: make develop
+
+      - name: Run extension-gated tests
+        shell: bash
+        run: make test-extension
+
   coverage:
     # Pull requests only. Pushes to main are handled by coverage-main.yml,
     # which also uploads the report to CodeScene; guarding here stops

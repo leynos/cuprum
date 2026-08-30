@@ -2187,14 +2187,19 @@ run as coverage of both arms:
   so CI's `extension-tests` job runs them with
   `CUPRUM_REQUIRE_RUST_EXTENSION=1`: a build that never produced the extension
   fails rather than skipping quietly (`#258`).
-- **Windows** — the `#[cfg(windows)]` arm is compiled natively on
-  `windows-2022` by the wheel build (`.github/workflows/build-wheels.yml`,
-  reached unconditionally from `ci.yml`, so it runs on every pull request),
-  which catches a Windows arm that does not build or type-check. No job runs
-  the Python suite on Windows, so nothing executes the `winerror` assertions;
-  that gap is tracked by `#277`.
+- **Windows** — the `CI` workflow's `extension-tests-windows` job builds the
+  extension and runs the extension-gated modules on `windows-2022`. This is
+  deliberately not the full suite because of the `#124` interpreter-abort
+  constraint; it does execute `test_rust_errno_windows.py`, including the
+  `winerror`, derived `errno`, exception-subclass, and message-formatting
+  assertions. Reproduce the native check from a Windows checkout with:
 
-That wheel build is a plain `maturin build`, so it compiles the Windows arm
+  ```bash
+  make develop
+  make test-extension
+  ```
+
+The wheel build is a plain `maturin build`, so it compiles the Windows arm
 without `-D warnings`. It therefore catches a Windows arm that fails to
 compile, and only that. Warn-level regressions pass it — and the cheapest way
 to introduce one is to gate a helper on `#[cfg(unix)]` incorrectly, which makes
