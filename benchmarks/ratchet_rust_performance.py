@@ -103,16 +103,11 @@ def _baseline_window(
     artefact, or a window emptied by a benchmark-profile change — a worse bar
     than the window, but the one this ratchet used before the window existed.
     """
-    version, worker_iterations = profile_metadata(candidate.plan)
-    compatible = (
-        history.compatible_with(
-            benchmark_profile_version=version,
-            worker_iterations=worker_iterations,
-        )
-        if history is not None
-        else BaselineHistory()
+    recent = _compatible_history_window(
+        candidate=candidate,
+        history=history,
+        window_size=window_size,
     )
-    recent = BaselineHistory(samples=compatible.samples[-window_size:])
     if recent.samples:
         return {name: recent.ratios_for(name) for name in recent.scenarios}
 
@@ -126,7 +121,23 @@ def _baseline_window(
     )
     return {name: (ratio,) for name, ratio in run_ratios(baseline).items()}
 
-
+def _compatible_history_window(
+    *,
+    candidate: BenchmarkRunPayload,
+    history: BaselineHistory | None,
+    window_size: int,
+) -> BaselineHistory:
+    """Return recent history samples compatible with the candidate's profile."""
+    version, worker_iterations = profile_metadata(candidate.plan)
+    compatible = (
+        history.compatible_with(
+            benchmark_profile_version=version,
+            worker_iterations=worker_iterations,
+        )
+        if history is not None
+        else BaselineHistory()
+    )
+    return BaselineHistory(samples=compatible.samples[-window_size:])
 def _compare_scenario(
     *,
     scenario_name: str,
@@ -272,14 +283,20 @@ def main() -> int:
     )
     args = _parse_args()
     try:
-        report = compare_rust_regressions(
-            baseline=_load_baseline(args),
-            candidate=BenchmarkRunPayload(
-                plan=load_plan(args.candidate_plan),
-                throughput=load_throughput(args.candidate_throughput),
-                context_name="candidate",
-            ),
+        candidate = BenchmarkRunPayload(
+            plan=load_plan(args.candidate_plan),
+            throughput=load_throughput(args.candidate_throughput),
+            context_name="candidate",
+        )
+        history = _compatible_history_window(
+            candidate=candidate,
             history=load_history(args.baseline_history),
+            window_size=args.history_window,
+        )
+        report = compare_rust_regressions(
+            baseline=None if history.samples else _load_baseline(args),
+            candidate=candidate,
+            history=history,
             policy=RatchetPolicy(
                 max_regression=args.max_regression,
                 noise_sigmas=args.noise_sigmas,
