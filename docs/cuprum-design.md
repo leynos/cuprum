@@ -1259,6 +1259,36 @@ preserving the `SafeCmd.run()` execution contract:
   `cuprum.capture_eof_grace_expired` event to the matching span. No captured
   stream payload is emitted in that event. Unexpected reader failures remain
   separately reported as `teardown_error`.
+
+For screen readers: The following sequence diagram shows how
+`_drain_stream_consumers` gives capturing stream readers a bounded EOF-grace
+period. The wait logic asks consumers to read chunks; if EOF arrives within
+grace, captured text is returned. If grace expires while readers remain
+pending, telemetry records the expiry, consumers are settled once, and their
+deterministic captured result is returned.
+
+Figure 5: Capturing drain EOF-grace sequence
+
+```mermaid
+sequenceDiagram
+    participant Wait as _subprocess_wait
+    participant Consumers as Stream consumers
+    participant Reader as StreamReader
+    participant Telemetry as Exec telemetry
+
+    Wait->>Consumers: _drain_stream_consumers(consumers, context)
+    Wait->>Consumers: _await_eof_grace(consumers)
+    Consumers->>Reader: read(_READ_SIZE)
+    alt EOF observed within grace
+        Reader-->>Consumers: empty chunk
+        Consumers-->>Wait: captured text
+    else grace expires with readers pending
+        Wait->>Telemetry: _report_capture_eof_grace_expiry(...)
+        Wait->>Consumers: _settle_consumers(consumers, discard_on_cancel)
+        Consumers-->>Wait: deterministic captured result
+    end
+```
+
 - `cuprum/_timeout_reporting.py` owns the two channels a timeout or teardown
   failure is reported on — the structured `cuprum.timeout` log record and the
   `timeout` / `teardown_error` observe events — and the `_report_*` helpers
@@ -1336,7 +1366,7 @@ outcome per selected target, and the fail-fast caller counts only outcomes that
 verify process exit. When the reducer selects no stages — every other stage has
 already settled — no tasks are created and no gather occurs.
 
-Figure 5: Fail-fast termination selection via the `_stages_to_terminate` reducer
+Figure 6: Fail-fast termination selection via the `_stages_to_terminate` reducer
 
 ```mermaid
 sequenceDiagram
@@ -1523,7 +1553,7 @@ the result aggregator; and releases the semaphore. Once all have finished, the
 aggregator returns the results in submission order and `run_concurrent` returns
 a `ConcurrentResult` carrying the results, the failures, and the `ok` flag.
 
-Figure 6: Concurrent execution flow with allowlist validation and semaphore
+Figure 7: Concurrent execution flow with allowlist validation and semaphore
 gating
 
 ```mermaid
@@ -1569,7 +1599,7 @@ results — the commands that *completed*; cancelled ones produced no
 mapping each back to its original position and the failure indices within the
 compacted tuple.
 
-Figure 7: Fail-fast mode cancellation behaviour
+Figure 8: Fail-fast mode cancellation behaviour
 
 ```mermaid
 sequenceDiagram
@@ -1728,7 +1758,7 @@ each operation in turn: a `_CounterOp` becomes
 `inc_counter(name, value, labels)` on the collector, and a `_HistogramOp`
 becomes `observe_histogram(name, value, labels)`.
 
-Figure 8: Metrics hook dispatch, from `ExecEvent` to collector calls
+Figure 9: Metrics hook dispatch, from `ExecEvent` to collector calls
 
 ```mermaid
 sequenceDiagram
