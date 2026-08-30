@@ -238,32 +238,13 @@ jobs:
         with:
           version: ${{ env.MDTABLEFIX_VERSION }}
 
-      - name: Cache Whitaker installation
-        id: cache-whitaker
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/bin/whitaker-installer
-            ~/.local/bin/whitaker
-            ~/.dylint_drivers
-            ~/.local/share/whitaker
-          key: whitaker-v5-${{ runner.os }}-${{ env.WHITAKER_INSTALLER_VERSION }}
+      - name: Install Nixie
+        uses: leynos/shared-actions/.github/actions/install-nixie@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
 
       - name: Install Whitaker
-        run: |
-          if [ "${{ steps.cache-whitaker.outputs.cache-hit }}" != "true" ]; then
-            if cargo binstall -V >/dev/null 2>&1; then
-              cargo binstall --no-confirm --locked \
-                --disable-strategies compile \
-                --git https://github.com/leynos/whitaker \
-                --version "${WHITAKER_INSTALLER_VERSION}" \
-                whitaker-installer
-            else
-              echo "cargo-binstall is required for the pinned prebuilt Whitaker installer" >&2
-              exit 1
-            fi
-          fi
-          whitaker-installer --cranelift
+        uses: leynos/shared-actions/.github/actions/install-whitaker@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        with:
+          installer-version: ${{ env.WHITAKER_INSTALLER_VERSION }}
 
       - name: Validate Makefile
         run: mbake validate Makefile

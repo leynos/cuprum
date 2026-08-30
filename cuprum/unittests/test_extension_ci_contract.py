@@ -23,7 +23,10 @@ from tests.helpers.workflow import (
     first_step_running,
     run_scripts,
     script_runs_command,
+    step_named,
 )
+
+SHARED_ACTIONS_SHA = "794e4801babcf68065c660fdf4781ad62be5d061"
 
 
 def _assert_extension_job_builds_before_gated_tests(
@@ -193,3 +196,22 @@ def test_no_ci_step_invokes_maturin_develop_directly(workflow_data: Workflow) ->
         "these CI jobs invoke `maturin develop` directly instead of going "
         f"through `make develop`: {offenders}"
     )
+
+def test_lint_job_uses_shared_tooling_installers(workflow_data: Workflow) -> None:
+    """The lint job delegates Nixie and Whitaker installation to shared actions."""
+    expected_installers = {
+        "Install Nixie": (
+            f"leynos/shared-actions/.github/actions/install-nixie@{SHARED_ACTIONS_SHA}"
+        ),
+        "Install Whitaker": (
+            "leynos/shared-actions/.github/actions/"
+            f"install-whitaker@{SHARED_ACTIONS_SHA}"
+        ),
+    }
+
+    for step_name, expected_uses in expected_installers.items():
+        step = step_named(workflow_data, "lint-test", step_name)
+        assert step.get("uses") == expected_uses, (
+            f"the {step_name!r} step must use the shared action pinned to "
+            f"{SHARED_ACTIONS_SHA}"
+        )
