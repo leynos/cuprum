@@ -23,9 +23,12 @@ import typing as typ
 import pytest
 
 from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum.pump_observation import observe_pump
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.pump_events import PumpEvent
 
 
 class _RecordingGuard:
@@ -172,6 +175,63 @@ def test_cancellation_restores_descriptors_only_after_worker_returns(
         "the reader descriptor state must be restored exactly once after "
         f"cancellation; observed order {events}"
     )
+
+
+def test_cancellation_records_native_pump_cleanup_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Cancellation records bounded native-pump cleanup completion telemetry."""
+    events: list[str] = []
+    release = threading.Event()
+    worker_started = threading.Event()
+    worker_finished = threading.Event()
+    context = _MidTransferContext(
+        events=events,
+        worker_started=worker_started,
+        worker_finished=worker_finished,
+        release=release,
+    )
+    pump_events: list[PumpEvent] = []
+
+    def blocking_pump(reader_fd: int, writer_fd: int) -> int:
+        """Block until cancellation releases the native-pump stand-in."""
+        del reader_fd, writer_fd
+        worker_started.set()
+        release.wait(timeout=5.0)
+        worker_finished.set()
+        return 0
+
+    _install_fake_pump(monkeypatch, blocking_pump)
+    caplog.set_level(logging.DEBUG, logger=_pipeline_streams.__name__)
+    with observe_pump(pump_events.append):
+        asyncio.run(_cancel_mid_transfer(context))
+
+    assert [event.phase for event in pump_events] == [
+        "cleanup_started",
+        "cleanup_completed",
+    ], f"cleanup telemetry must bracket cancellation, found {pump_events}"
+    duration_s = pump_events[1].duration_s
+    assert duration_s is not None, (
+        f"cleanup completion must carry a monotonic duration, found {duration_s!r}"
+    )
+    assert duration_s >= 0.0, (
+        "cleanup completion must carry a non-negative monotonic duration, "
+        f"found {duration_s!r}"
+    )
+    cleanup_records = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("cuprum_action") == "rust_pump_cleanup"
+    ]
+    assert [record.__dict__.get("cuprum_outcome") for record in cleanup_records] == [
+        "started",
+        "completed",
+    ], f"cleanup logs must report both bounded outcomes, found {cleanup_records}"
+    assert all(
+        record.__dict__.get("cuprum_operation") == "native_pump_cleanup"
+        for record in cleanup_records
+    ), f"cleanup logs must name their operation, found {cleanup_records}"
 
 
 def _assert_cancelled_pump_failure_reported(

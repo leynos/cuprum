@@ -458,11 +458,17 @@ paths in one place rather than inlined in the pump:
 Cancellation is handled explicitly. `run_in_executor` cannot interrupt the
 worker thread running the Rust pump, and that thread still owns both
 descriptors. `_run_rust_pump_with_blocking_fds` shields the executor future and
-propagates `CancelledError` promptly; its completion callback closes the native
-writer duplicate and restores descriptor and transport state once the worker
-settles. Pipeline teardown remains coupled to that cleanup, so restoring the
+re-raises `CancelledError` after cleanup; its completion callback closes the
+native writer duplicate and restores descriptor and transport state once the
+worker settles. Pipeline teardown remains coupled to that cleanup, so restoring
 blocking mode or resuming the transport earlier cannot hand descriptors back
 to asyncio while native code is still mid-transfer.
+
+During cancellation, `_await_native_pump_cleanup` emits structured `DEBUG`
+records at cleanup start and completion. Both records carry
+`cuprum_action=rust_pump_cleanup`, `cuprum_operation=native_pump_cleanup`, and
+an outcome of `started` or `completed`; completion also carries the monotonic
+`cuprum_duration_s`.
 
 The module's reuse policy is narrow: further descriptor-lifecycle concerns for
 this hand-off belong here, but the seams are not a general-purpose descriptor
@@ -521,12 +527,15 @@ unretrieved-exception warning, detached from the hop that caused it.
 separate from `ExecEvent`. This avoids adding a new `ExecPhase`, which would
 break already-registered `MetricsHook` instances that match that closed set.
 `observe_pump` registers synchronous hooks in a `ContextVar`, and
-`PumpMetricsHook` maps the events to two bounded counters:
+`PumpMetricsHook` maps the events to bounded counters and a cleanup-duration
+histogram:
 
-| Counter | Labels |
+| Metric | Labels |
 | --- | --- |
 | `cuprum_rust_pump_declined_total` | `reason` |
 | `cuprum_rust_pump_failed_after_cancel_total` | none |
+| `cuprum_rust_pump_cleanup_total` | none |
+| `cuprum_rust_pump_cleanup_duration_seconds` | none |
 
 `RustPumpDeclineReason` bounds the decline label to its three declared values.
 Observer failures are logged and do not alter the successful fallback or the
@@ -2362,29 +2371,29 @@ The root `Makefile` exposes the following lint-related variables:
 
 Table: Lint-related Makefile variables and their defaults.
 
-| Variable                | Default                                                                      | Purpose                                                                    |
-| ----------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `VENV_TOOLS`            | `pytest ruff`                                                                | Tools checked in the project virtualenv; Ruff uses its pinned command.     |
-| `RUFF_VERSION`          | `0.16.4`                                                                     | Ruff release supplied to `uv tool run --from`.                             |
-| `RUFF_ENV`              | `RAYON_NUM_THREADS=1`                                                        | Keeps Ruff parallelism deterministic for the lint and format gates.        |
-| `RUFF`                  | `$(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from 'ruff==$(RUFF_VERSION)' ruff`  | Pinned Ruff command used by `fmt`, `check-fmt`, and `lint`.                |
-| `TY_VERSION`            | `0.0.74`                                                                     | ty release supplied to `uv tool run --from`.                               |
-| `TY`                    | `$(UV_RUN_ENV) uv tool run --from 'ty==$(TY_VERSION)' ty`                    | Pinned ty command used by `typecheck`.                                     |
-| `PYLINT_PYTHON`         | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.         |
-| `PYLINT_TARGETS`        | `benchmarks conftest.py cuprum tests`                                        | Directories and files passed to `pylint-pypy`.                             |
-| `PYLINT_PYPY_SHIM_REF`  | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                              |
-| `PYLINT_PYPY_SHIM`      | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                      |
-| `PYLINT_VERSION`        | `4.0.7`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.         |
-| `PYLINT_CACHE`          | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                         |
-| `PYLINT`                | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                       |
-| `DF12_PYTHON_LINTS_REF` | `4cf41736cce2f7ba2778882a5c629c044568a0e5`                                   | Immutable v0.3.0 revision locked for DF12 lint tooling.                    |
-| `DF12_PYTHON`           | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                      |
-| `DF12_PYLINT_MESSAGES`  | All v0.3.0 message IDs, including `R9112`                                    | Explicit allowlist for the df12 Pylint pass.                               |
-| `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                   |
-| `AMBRLEAKS`             | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                  |
-| `LOCAL_TOOL_ENV`        | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools. |
-| `UV_ENV`                | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                  |
-| `UV_RUN_ENV`            | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment for locked `uv run` commands such as `$(RUFF)`.         |
+| Variable                | Default                                                                      | Purpose                                                                                                                     |
+| ----------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------|
+| `VENV_TOOLS`            | `pytest ruff`                                                                | Tools checked in the project virtualenv; Ruff uses its pinned command.                                                      |
+| `RUFF_VERSION`          | `0.16.4`                                                                     | Ruff release supplied to `uv tool run --from`.                                                                              |
+| `RUFF_ENV`              | `RAYON_NUM_THREADS=1`                                                        | Keeps Ruff parallelism deterministic for the lint and format gates.                                                         |
+| `RUFF`                  | `$(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from 'ruff==$(RUFF_VERSION)' ruff`  | Pinned Ruff command used by `fmt`, `check-fmt`, and `lint`.                                                                 |
+| `TY_VERSION`            | `0.0.74`                                                                     | ty release supplied to `uv tool run --from`.                                                                                |
+| `TY`                    | `$(UV_RUN_ENV) uv tool run --from 'ty==$(TY_VERSION)' ty`                    | Pinned ty command used by `typecheck`.                                                                                      |
+| `PYLINT_PYTHON`         | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.                                                          |
+| `PYLINT_TARGETS`        | `benchmarks conftest.py cuprum tests`                                        | Directories and files passed to `pylint-pypy`.                                                                              |
+| `PYLINT_PYPY_SHIM_REF`  | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                                                                               |
+| `PYLINT_PYPY_SHIM`      | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                                                                       |
+| `PYLINT_VERSION`        | `4.0.7`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.                                                          |
+| `PYLINT_CACHE`          | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                                                                          |
+| `PYLINT`                | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                                                                        |
+| `DF12_PYTHON_LINTS_REF` | `4cf41736cce2f7ba2778882a5c629c044568a0e5`                                   | Immutable v0.3.0 revision locked for DF12 lint tooling.                                                                     |
+| `DF12_PYTHON`           | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                                                                       |
+| `DF12_PYLINT_MESSAGES`  | All v0.3.0 message IDs, including `R9112`                                    | Explicit allowlist for the df12 Pylint pass.                                                                                |
+| `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                                                                    |
+| `AMBRLEAKS`             | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                                                                   |
+| `LOCAL_TOOL_ENV`        | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools.                                                  |
+| `UV_ENV`                | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                                                                   |
+| `UV_RUN_ENV`            | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment prefix for locked `uv run` commands and the pinned `uv tool run` commands used by `$(RUFF)` and `$(TY)`. |
 
 <!-- markdownlint-enable MD013 -->
 

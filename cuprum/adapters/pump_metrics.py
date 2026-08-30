@@ -1,8 +1,9 @@
 """Metrics adapter for Rust-pump routing events.
 
-Counts the two pump lifecycle facts that are otherwise visible only as ``DEBUG``
+Counts the pump lifecycle facts that are otherwise visible only as ``DEBUG``
 log records: how often an inter-stage hop declined the Rust pump, broken down by
-the seam that refused, and how often a cancelled hop's worker had failed.
+the seam that refused; how often a cancelled hop's worker failed; and how long
+native cleanup took after cancellation.
 
 The hook consumes :class:`~cuprum.pump_events.PumpEvent` values from
 :func:`~cuprum.pump_observation.observe_pump`, not
@@ -46,11 +47,18 @@ RUST_PUMP_DECLINED_TOTAL = "cuprum_rust_pump_declined_total"
 RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL = "cuprum_rust_pump_failed_after_cancel_total"
 """Rust-pump worker failures consumed after their hop was cancelled."""
 
+RUST_PUMP_CLEANUP_TOTAL = "cuprum_rust_pump_cleanup_total"
+"""Completed native-pump cleanups after a pipeline cancellation."""
+
+RUST_PUMP_CLEANUP_DURATION_SECONDS = "cuprum_rust_pump_cleanup_duration_seconds"
+"""Monotonic wait durations for completed native-pump cleanup."""
+
 # One counter per phase, keyed by phase so the metric names have exactly one
 # definition. Read-only so an importing module cannot rewrite them at runtime.
 _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
     "declined": RUST_PUMP_DECLINED_TOTAL,
     "failed_after_cancel": RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL,
+    "cleanup_completed": RUST_PUMP_CLEANUP_TOTAL,
 })
 
 UNKNOWN_DECLINE_REASON = "unknown"
@@ -107,6 +115,10 @@ class PumpMetricsHook:
     - ``cuprum_rust_pump_failed_after_cancel_total``: incremented once,
       unlabelled, per Rust-pump worker failure recovered after its hop was
       cancelled.
+    - ``cuprum_rust_pump_cleanup_total``: incremented once, unlabelled, for a
+      native-pump cleanup that completed after cancellation.
+    - ``cuprum_rust_pump_cleanup_duration_seconds``: observed once,
+      unlabelled, with the completed cleanup's monotonic wait duration.
 
     A successful hand-off increments nothing; there is no pump event for it.
 
@@ -154,9 +166,15 @@ class PumpMetricsHook:
         """
         phase: PumpPhase = event.phase
         counter_name = _PHASE_COUNTERS.get(phase)
-        if counter_name is None:
+        if counter_name is not None:
+            self._collector.inc_counter(counter_name, 1.0, _phase_labels(event))
+        if phase != "cleanup_completed" or event.duration_s is None:
             return
-        self._collector.inc_counter(counter_name, 1.0, _phase_labels(event))
+        self._collector.observe_histogram(
+            RUST_PUMP_CLEANUP_DURATION_SECONDS,
+            event.duration_s,
+            {},
+        )
 
 
 def pump_metrics_hook(collector: MetricsCollector) -> PumpHook:
@@ -186,6 +204,8 @@ def pump_metrics_hook(collector: MetricsCollector) -> PumpHook:
 
 
 __all__ = [
+    "RUST_PUMP_CLEANUP_DURATION_SECONDS",
+    "RUST_PUMP_CLEANUP_TOTAL",
     "RUST_PUMP_DECLINED_TOTAL",
     "RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL",
     "UNKNOWN_DECLINE_REASON",

@@ -33,6 +33,18 @@ class _BaselineServerState:
     archive_bytes: bytes
     requests: list[_RecordedRequest] = dc.field(default_factory=list)
     workflow_attempts: int = 0
+    _lock: threading.Lock = dc.field(default_factory=threading.Lock, repr=False)
+
+    def record_request(self, request: _RecordedRequest) -> None:
+        """Append one request under the server-state lock."""
+        with self._lock:
+            self.requests.append(request)
+
+    def is_initial_workflow_attempt(self) -> bool:
+        """Allocate and report whether this is the first workflow request."""
+        with self._lock:
+            self.workflow_attempts += 1
+            return self.workflow_attempts == 1
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -79,7 +91,20 @@ def local_https_baseline_server(
     tmp_path: pth.Path,
     archive_bytes: bytes,
 ) -> cabc.Iterator[_HttpsBaselineServer]:
-    """Run a controlled HTTPS GitHub Actions endpoint for one test."""
+    """Run a controlled HTTPS GitHub Actions endpoint for one test.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Test-owned directory in which to create the temporary certificate.
+    archive_bytes : bytes
+        Archive response body served after the workflow and artefact requests.
+
+    Yields
+    ------
+    _HttpsBaselineServer
+        The HTTPS API base URL and record of received requests.
+    """
     certificate_path, private_key_path = _create_self_signed_certificate(tmp_path)
     state = _BaselineServerState(archive_bytes=archive_bytes)
 
@@ -88,7 +113,7 @@ def local_https_baseline_server(
 
         def do_GET(self) -> None:
             """Record and respond to one authenticated baseline request."""
-            state.requests.append(
+            state.record_request(
                 _RecordedRequest(
                     path=self.path,
                     authorization=self.headers.get("Authorization"),
@@ -97,8 +122,7 @@ def local_https_baseline_server(
             )
             path = urllib.parse.urlsplit(self.path).path
             if path.endswith("/actions/workflows/ci.yml/runs"):
-                state.workflow_attempts += 1
-                if state.workflow_attempts == 1:
+                if state.is_initial_workflow_attempt():
                     self.send_error(http.HTTPStatus.SERVICE_UNAVAILABLE)
                     return
                 self._send_json({"workflow_runs": [{"id": 42}]})

@@ -10,7 +10,7 @@ from unittest import mock
 
 import pytest
 
-from benchmarks import sinks
+from benchmarks import PtyBlackholeStateError, sinks
 
 
 @pytest.mark.skipif(
@@ -107,7 +107,9 @@ def test_pty_blackhole_drains_written_bytes() -> None:
         stream.write(payload)
         stream.flush()
     # __exit__ joins the drainer thread, so drained_bytes is safe to read here.
-    assert bh.drained_bytes == len(payload.encode("utf-8"))
+    assert bh.drained_bytes == len(payload.encode("utf-8")), (
+        "the drainer must publish exactly the UTF-8 byte count after exit"
+    )
 
 
 @pytest.mark.skipif(
@@ -121,13 +123,17 @@ def test_pty_blackhole_resets_the_count_when_reused() -> None:
     with bh as stream:
         stream.write(first_payload)
         stream.flush()
-    assert bh.drained_bytes == len(first_payload.encode("utf-8"))
+    assert bh.drained_bytes == len(first_payload.encode("utf-8")), (
+        "the first completed context must publish its UTF-8 byte count"
+    )
 
     second_payload = "sécond"
     with bh as stream:
         stream.write(second_payload)
         stream.flush()
-    assert bh.drained_bytes == len(second_payload.encode("utf-8"))
+    assert bh.drained_bytes == len(second_payload.encode("utf-8")), (
+        "reusing the sink must publish only the second context's byte count"
+    )
 
 
 @pytest.mark.skipif(
@@ -139,9 +145,9 @@ def test_pty_blackhole_exit_clears_internal_state() -> None:
     bh = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
     with bh:
         pass
-    assert bh._master_fd is None
-    assert bh._slave is None
-    assert bh._thread is None
+    assert bh._master_fd is None, "exit must clear the PTY master descriptor"
+    assert bh._slave is None, "exit must clear the PTY slave stream"
+    assert bh._thread is None, "exit must clear a joined drainer thread"
 
 
 def test_pty_blackhole_hides_drain_count_until_the_drainer_stops() -> None:
@@ -155,26 +161,49 @@ def test_pty_blackhole_hides_drain_count_until_the_drainer_stops() -> None:
     bh.__exit__(None, None, None)
 
     still_running.join.assert_called_once_with(timeout=5.0)
-    assert bh._thread is still_running
-    assert bh.drained_bytes is None
+    assert bh._thread is still_running, (
+        "a timed-out join must retain the drainer for a later lifecycle boundary"
+    )
+    assert bh.drained_bytes is None, (
+        "the count must remain unavailable while the drainer is still running"
+    )
 
 
 def test_pty_blackhole_publishes_count_after_a_late_drainer_exit() -> None:
     """A drainer that stops after the bounded join eventually publishes its count."""
     bh = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
     eventually_stopped = mock.Mock(spec=threading.Thread)
-    eventually_stopped.is_alive.side_effect = (True, False)
+    eventually_stopped.is_alive.side_effect = (True, False, False)
     bh._thread = eventually_stopped
     bh._drained_bytes = 42
 
     bh.__exit__(None, None, None)
 
-    assert bh.drained_bytes == 42
+    bh._drainer_finished.set()
+
+    assert bh.drained_bytes == 42, (
+        "a completed drainer must publish its count without mutating lifecycle state"
+    )
+    assert bh._thread is eventually_stopped, (
+        "reading the count must not join or clear the retained drainer"
+    )
+    bh._publish_finished_drainer()
     assert eventually_stopped.join.call_args_list == [
         mock.call(timeout=5.0),
         mock.call(),
-    ]
-    assert bh._thread is None
+    ], "a late drainer must be joined only at the explicit lifecycle boundary"
+    assert bh._thread is None, "the lifecycle boundary must clear a joined drainer"
+
+
+def test_pty_blackhole_rejects_reuse_while_the_drainer_is_running() -> None:
+    """PtyBlackhole reports an active previous drainer with its domain error."""
+    bh = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
+    still_running = mock.Mock(spec=threading.Thread)
+    still_running.is_alive.return_value = True
+    bh._thread = still_running
+
+    with pytest.raises(PtyBlackholeStateError, match="cannot reuse PtyBlackhole"):
+        bh.__enter__()
 
 
 # ---------------------------------------------------------------------------

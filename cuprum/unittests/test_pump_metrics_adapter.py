@@ -19,6 +19,8 @@ import pytest
 from cuprum import observe
 from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
 from cuprum.adapters.pump_metrics import (
+    RUST_PUMP_CLEANUP_DURATION_SECONDS,
+    RUST_PUMP_CLEANUP_TOTAL,
     RUST_PUMP_DECLINED_TOTAL,
     RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL,
     UNKNOWN_DECLINE_REASON,
@@ -131,17 +133,17 @@ def test_a_successful_hand_off_counts_nothing(
     )
 
 
-def test_a_failure_recovered_after_cancellation_counts_once(
+def test_a_failure_recovered_after_cancellation_records_failure_and_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A cancellation-masked pump failure increments one unlabelled counter."""
+    """A cancellation-masked failure records its failure and cleanup once."""
     collector = RecordingCollector()
     with observe_pump(PumpMetricsHook(collector)):
         run_failing_pump_on_a_cancelled_hop(monkeypatch)
 
-    assert len(collector.counters) == 1, (
-        "a pump failure recovered after cancellation must increment exactly "
-        f"one counter, found {collector.counters}"
+    assert len(collector.counters) == 2, (
+        "a pump failure recovered after cancellation must record its failure "
+        f"and cleanup, found {collector.counters}"
     )
     name, value, labels = collector.counters[0]
     assert name == RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL, (
@@ -154,16 +156,46 @@ def test_a_failure_recovered_after_cancellation_counts_once(
         "this counter is deliberately unlabelled — an exception type would be "
         f"a series per failure mode — but it carried {labels}"
     )
+    cleanup_name, cleanup_value, cleanup_labels = collector.counters[1]
+    assert cleanup_name == RUST_PUMP_CLEANUP_TOTAL, (
+        f"expected {RUST_PUMP_CLEANUP_TOTAL!r}, found {cleanup_name!r}"
+    )
+    assert cleanup_value == 1.0, (  # ruff: ignore[float-equality-comparison] - counter increment is exact
+        f"a completed cleanup counts as one, found {cleanup_value}"
+    )
+    assert cleanup_labels == {}, (
+        f"a cleanup counter must remain unlabelled, but it carried {cleanup_labels}"
+    )
+    assert len(collector.histograms) == 1, (
+        "a completed cleanup must record exactly one duration, found "
+        f"{collector.histograms}"
+    )
 
 
-def test_a_cancelled_hop_whose_pump_succeeded_counts_nothing(
+def test_a_completed_native_cleanup_records_count_and_duration() -> None:
+    """A completed cleanup records one bounded count and one duration sample."""
+    collector = RecordingCollector()
+
+    PumpMetricsHook(collector)(PumpEvent(phase="cleanup_completed", duration_s=0.25))
+
+    assert collector.counters == [(RUST_PUMP_CLEANUP_TOTAL, 1.0, {})], (
+        "completed cleanup must increment its bounded counter, found "
+        f"{collector.counters}"
+    )
+    assert collector.histograms == [(RUST_PUMP_CLEANUP_DURATION_SECONDS, 0.25, {})], (
+        f"completed cleanup must observe its duration, found {collector.histograms}"
+    )
+
+
+def test_a_cancelled_hop_whose_pump_succeeds_records_only_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Cancellation alone is not a failure, so it records nothing.
+    """Cancellation alone records cleanup but not a failed pump.
 
     ``_report_pump_outcome_after_cancel`` runs on every cancelled hop. A
     counter placed before its outcome checks would turn ordinary cancellation
-    into a reported pump failure.
+    into a reported pump failure. Cleanup is separately observable because it
+    owns descriptor safety after cancellation.
     """
     release = threading.Event()
     worker_started = threading.Event()
@@ -180,9 +212,13 @@ def test_a_cancelled_hop_whose_pump_succeeded_counts_nothing(
     with observe_pump(PumpMetricsHook(collector)):
         asyncio.run(cancel_mid_transfer(worker_started, release))
 
-    assert collector.counters == [], (
-        f"a cancelled hop with a healthy pump records nothing, found "
-        f"{collector.counters}"
+    assert collector.counters == [(RUST_PUMP_CLEANUP_TOTAL, 1.0, {})], (
+        "a cancelled hop with a healthy pump must record only its cleanup, "
+        f"found {collector.counters}"
+    )
+    assert len(collector.histograms) == 1, (
+        "a completed cleanup must record exactly one duration, found "
+        f"{collector.histograms}"
     )
 
 

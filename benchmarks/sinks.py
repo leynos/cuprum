@@ -10,6 +10,8 @@ import pty
 import threading
 import typing as typ
 
+from benchmarks.errors import PtyBlackholeStateError
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import types
@@ -77,11 +79,11 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
     by ``__enter__`` must only be used from the thread that called
     ``__enter__``. ``__exit__`` closes the slave first, which causes the
     master-side ``os.read`` in ``_drain`` to raise ``OSError`` and return,
-    then waits up to five seconds for the thread to finish. No lock is needed
-    because the two threads access disjoint file descriptors, and
-    ``drained_bytes`` is only safe to read after ``__exit__`` has joined the
-    drainer thread; the join is the happens-after edge that publishes the
-    drainer's writes to the caller's thread.
+    then waits up to five seconds for the thread to finish. The drainer sets a
+    completion event only after tallying its final bytes. ``drained_bytes``
+    observes that event and the thread's termination without changing
+    lifecycle state; ``__exit__`` and a subsequent ``__enter__`` own joining
+    and clearing a completed drainer.
     """
 
     def __init__(self, *, encoding: str, errors: str) -> None:
@@ -91,7 +93,7 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
         self._slave: typ.IO[str] | None = None
         self._thread: threading.Thread | None = None
         self._drained_bytes = 0
-        self._drainer_finished = False
+        self._drainer_finished = threading.Event()
 
     @property
     def drained_bytes(self) -> int | None:
@@ -103,19 +105,36 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
             The total byte count read from the PTY master after the drainer
             has terminated, or ``None`` when its bounded shutdown is pending.
         """
-        self._publish_finished_drainer()
-        if not self._drainer_finished:
+        if not self._drainer_has_terminated():
             return None
         return self._drained_bytes
 
     def __enter__(self) -> typ.IO[str]:
-        """Open the pseudo-terminal and start draining the master side."""
+        """Open the pseudo-terminal and start draining the master side.
+
+        Returns
+        -------
+        IO[str]
+            The writable slave stream connected to the PTY.
+
+        Raises
+        ------
+        PtyBlackholeStateError
+            If a previous drainer has not yet terminated.
+        LookupError
+            If ``encoding`` or ``errors`` is not known to :func:`os.fdopen`.
+        OSError
+            If the pseudo-terminal cannot be opened or its descriptors cannot
+            be initialized.
+        RuntimeError
+            If the daemon thread cannot be started.
+        """
         self._publish_finished_drainer()
         if self._thread is not None:
             msg = "cannot reuse PtyBlackhole while its drainer is still running"
-            raise RuntimeError(msg)
+            raise PtyBlackholeStateError(msg)
         self._drained_bytes = 0
-        self._drainer_finished = False
+        self._drainer_finished.clear()
         master_fd, slave_fd = pty.openpty()
         slave: typ.IO[str] | None = None
         try:
@@ -148,7 +167,7 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
             self._master_fd = None
             self._slave = None
             self._thread = None
-            self._drainer_finished = False
+            self._drainer_finished.clear()
             raise
         return slave
 
@@ -177,7 +196,14 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
             return
         self._thread.join()
         self._thread = None
-        self._drainer_finished = True
+
+    def _drainer_has_terminated(self) -> bool:
+        """Return whether the drainer has both published and terminated."""
+        if not self._drainer_finished.is_set():
+            return False
+        if self._thread is None:
+            return True
+        return not self._thread.is_alive()
 
     def _drain(self, master_fd: int, ready: threading.Event) -> None:
         """Continuously read and discard bytes from the PTY master.
@@ -188,15 +214,18 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
         can verify the drainer actually consumed written data, rather than
         merely inferring success from the absence of a hang.
         """
-        ready.set()
-        while True:
-            try:
-                chunk = os.read(master_fd, 65536)
-            except OSError:
-                return
-            if not chunk:
-                return
-            self._drained_bytes += len(chunk)
+        try:
+            ready.set()
+            while True:
+                try:
+                    chunk = os.read(master_fd, 65536)
+                except OSError:
+                    return
+                if not chunk:
+                    return
+                self._drained_bytes += len(chunk)
+        finally:
+            self._drainer_finished.set()
 
 
 @contextlib.contextmanager
