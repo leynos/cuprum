@@ -59,6 +59,12 @@
 
 ### Breaking changes
 
+- **`ProgramCatalogue.visible_settings` is now a property:** Prefer
+  `catalogue.visible_settings` over the former callable spelling. Existing
+  `catalogue.visible_settings()` callers remain supported during the
+  next-minor migration and receive the same cached, read-only mapping of
+  project names to `ProjectSettings`
+  ([`079d6698`](https://github.com/leynos/cuprum/commit/079d6698cfdc833928628b0c3278a5cb7d646d9b)).
 - **New `ExecPhase` value (breaking for fail-closed hooks):** `ExecPhase` gains
   `pipeline_fail_fast`. Observe hooks that match exhaustively on phase and
   reject unknown values will raise on it until updated, and Cuprum re-raises

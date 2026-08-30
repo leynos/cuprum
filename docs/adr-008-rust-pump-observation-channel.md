@@ -127,7 +127,8 @@ hop that would otherwise have fallen back and succeeded, or displace the
 
 Anything that is not an `Exception` — `SystemExit`, `KeyboardInterrupt`,
 `asyncio.CancelledError` — propagates untouched, on the same reasoning as
-`_await_rust_pump`: a shutdown signal arriving here must still travel.
+`_run_rust_pump_with_blocking_fds`: a shutdown signal arriving here must still
+travel.
 
 `PumpMetricsHook` ignores a phase it does not recognize instead of raising on
 it, so a future phase cannot recreate inside this channel the breakage that

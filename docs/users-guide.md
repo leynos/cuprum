@@ -36,8 +36,16 @@ project = ProjectSettings(
 catalogue = ProgramCatalogue(projects=(project,))
 ```
 
-Downstream services can fetch metadata via `catalogue.visible_settings()` to
-propagate noise filters and documentation links alongside the allowlist.
+Downstream services can fetch metadata via the `catalogue.visible_settings`
+property to propagate noise filters and documentation links alongside the
+allowlist. It returns a cached, read-only mapping from project name to
+`ProjectSettings`.
+
+Callers upgrading from a release that exposed `visible_settings()` should
+remove the parentheses and adopt `catalogue.visible_settings` in the next
+minor release. The callable form remains a compatibility path during the
+transition; both forms return the same read-only mapping, and attempts to
+mutate it fail as before.
 
 ### Handling duplicate catalogue entries
 
@@ -1485,10 +1493,6 @@ else:
 The helper returns `False` on pure Python installations and does not raise when
 native wheels are missing. Other native-extension import failures still surface
 so broken installations are visible.
-
-The helper raises `TypeError` with the message
-`Rust availability resolver must return bool` if the canonical backend resolver
-returns a non-boolean value.
 
 ### Rust stream pump (internal)
 

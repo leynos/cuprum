@@ -241,8 +241,11 @@ surface. Each entry belongs to a `ProjectSettings` record that holds:
 Cuprum ships with `DEFAULT_CATALOGUE`, anchored by the `core-ops` project and
 extended with project-specific metadata. The catalogue rejects unknown
 executables via `UnknownProgramError`, making the allowlist the default gate.
-Downstream services (for example, logging hooks) can call `visible_settings()`
-to read noise rules and documentation links without mutating the catalogue.
+Downstream services (for example, logging hooks) can read the
+`visible_settings` property to obtain the cached, read-only mapping of project
+names to settings without mutating the catalogue. Property access is preferred;
+the former `visible_settings()` call remains a compatibility path during the
+next-minor migration and returns the same mapping.
 
 ### 5.2 Safe vs Dynamic Commands
 
@@ -2554,8 +2557,8 @@ described below and closes the writer only once the pump has returned.
 The layering matters, and this example used to get it wrong. Awaiting
 `_try_rust_pump` and *then* calling `rust_pump_stream` would run the native
 pump twice, and extracting the descriptors in the dispatcher would restore
-their state before the cancellation-safe drain in `_await_rust_pump` had let
-the worker thread finish with them — which is the exact hazard that drain
+their state before `_run_rust_pump_with_blocking_fds` had let the worker thread
+finish with them — which is the exact hazard that its completion callback
 exists to prevent.
 
 Error propagation from Rust to Python uses standard exception mechanisms. The
@@ -2606,10 +2609,11 @@ each path is testable without a live pump:
 
 Cancellation is handled explicitly rather than implicitly. `run_in_executor`
 cannot interrupt the worker thread running the Rust pump, and that thread still
-owns both raw descriptors, so cancelling the awaiting task waits for the worker
-to return before the blocking mode is restored and the transport resumed.
-Restoring or resuming earlier would hand the descriptors back to asyncio while
-native code was still mid-transfer.
+owns both raw descriptors. Cancelling the awaiting task therefore propagates
+promptly, while the native-pump completion callback closes the duplicate and
+restores the descriptor and transport state once the worker returns. Restoring
+or resuming earlier would hand the descriptors back to asyncio while native
+code was still mid-transfer.
 
 The module's scope is deliberately narrow: descriptor extraction plus the pause
 and blocking-mode lifecycle for the Rust pump hand-off. Production code
