@@ -409,14 +409,18 @@ remains the behavioural reference, and users keep the same public API.
 The Python pipeline now makes the native pump's descriptor boundary explicit.
 `_run_rust_pump` retains the descriptor owned by the asyncio writer transport
 and passes `rust_pump_stream` a duplicate, because the native pump consumes and
-closes the descriptor it receives. Ownership of that duplicate remains with the
-executor worker until its future settles, including native-load failure and
-awaiting-task cancellation. Descriptor-mode restoration and reader transport
-resumption therefore occur at worker settlement, and the duplicate is closed
-after that boundary. This preserves the original Python transport ownership
-whilst preventing cancellation cleanup from racing with native I/O.
+closes the descriptor it receives. Python closes that duplicate only if
+blocking-mode setup or executor submission fails. Once submission succeeds, the
+`_streams_rs` shim owns the hand-off: it closes the duplicate on native-load or
+platform-preparation failure, or transfers it to Rust, which closes the received
+resource. On Windows the shim converts the duplicate to an independently owned
+Win32 handle and closes the duplicate CRT descriptor before invoking Rust. The
+completion callback never closes the writer resource. Descriptor-mode
+restoration and reader transport resumption still occur at worker settlement,
+which prevents cancellation cleanup from racing with native I/O while leaving
+the original asyncio transport descriptor under Python ownership.
 
 The regression coverage in
 `cuprum/unittests/test_pump_stream_dispatch_rust_failures.py` exercises native
-load failure, cancellation before worker settlement, and the late duplicate
-close; the FD-blocking tests retain the transport-descriptor ownership check.
+load failure and cancellation before worker settlement; the FD-blocking and
+settlement tests retain the duplicate-versus-transport ownership checks.

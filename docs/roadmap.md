@@ -463,12 +463,15 @@ consumed-writer invariants.
 - [x] 8.1.1. Fix the silent `OSError: [Errno 9] Bad file descriptor` raised from
   `_UnixWritePipeTransport._call_connection_lost` during Rust pump shutdown.
   - Completion evidence (2026-08-24): `_run_rust_pump` gives native code a
-    duplicate writer descriptor and keeps it owned by the executor future until
-    worker settlement. Reader resumption and descriptor-mode restoration use
-    that same boundary, including cancellation and native-load failure. The
+    duplicate writer descriptor while asyncio retains the original. Python
+    closes the duplicate only when blocking-mode setup or executor submission
+    fails; after submission, the `_streams_rs` shim closes it on native-load or
+    platform-preparation failure, or transfers it to Rust, which closes the
+    received resource. Reader resumption and descriptor-mode restoration use
+    worker settlement as their boundary, including cancellation. The
     regression tests in
     `cuprum/unittests/test_pump_stream_dispatch_rust_failures.py` reproduce the
-    close race and assert late duplicate closure and clean shutdown; the
+    close race and assert clean shutdown without late duplicate closure; the
     ownership contract is recorded in the developers' guide and ADR-002.
 
 ### 8.2. Restore Python-frame attribution in perf captures

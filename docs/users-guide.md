@@ -1673,18 +1673,24 @@ stays diagnosable instead of vanishing behind the cancellation. It sits at
 
 Handing the descriptors back is best-effort: resuming the reader transport,
 restoring the descriptors' blocking mode, and closing the writer after the pump
-has already closed it all run while the hop is unwinding, so an error there is
-suppressed rather than raised. Each suppression records a `DEBUG` event with a
-`cuprum_action` of `rust_pump_teardown_failed`, a `cuprum_site` naming the step
-— `resume`, `restore_blocking`, or `writer_close` — and the exception class and
-errno. The record carries nothing drawn from the transfer itself.
+has settled all run while the hop is unwinding, so an error there is suppressed
+rather than raised. The asyncio transport owns the original writer descriptor.
+Rust owns and closes only the separate resource derived from the duplicate
+after the native call begins; the native shim closes the duplicate itself if
+native loading or platform preparation fails. Python closes that duplicate
+only when setup or executor submission fails. No descriptor number is closed by
+both owners. Each
+suppression records a `DEBUG` event with a `cuprum_action` of
+`rust_pump_teardown_failed`, a `cuprum_site` naming the step — `resume`,
+`restore_blocking`, or `writer_close` — and the exception class and errno. The
+record carries nothing drawn from the transfer itself.
 
-`writer_close` reporting `EBADF` is routine: the Rust pump closes that
-descriptor on return, so the subsequent transport close finds it gone. The
-other two sites, and any other errno at `writer_close`, mean a descriptor was
-left in a state nothing else reports. The `resume` and `restore_blocking`
-records come from the `cuprum._pipeline_stream_fds` logger; `writer_close`
-comes from `cuprum._pipeline_streams`.
+An `EBADF` at `writer_close` is therefore not expected merely because Rust
+completed: the transport is closing its distinct original descriptor. Any
+`writer_close` error, like errors at the other two sites, indicates a teardown
+problem worth investigating. The `resume` and `restore_blocking` records come
+from the `cuprum._pipeline_stream_fds` logger; `writer_close` comes from
+`cuprum._pipeline_streams`.
 
 ### Counting pump routing decisions
 

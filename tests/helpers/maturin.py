@@ -189,7 +189,17 @@ def build_debug_native_wheel_artefact(root: Path, out_dir: Path) -> Path:
     Path
         The path to the single built debug wheel.
 
-    """
+    Raises
+    ------
+    AssertionError
+        If the build does not produce exactly one wheel.
+    MaturinBuildError
+        If the maturin build command exits non-zero.
+    OSError
+        If creating the output directory or starting the maturin subprocess
+        fails.
+
+    """  # noqa: DOC502 - exceptions propagate from the shared build helper
     return _build_native_wheel_artefact(root, out_dir, release=False)
 
 def _build_native_wheel_artefact(root: Path, out_dir: Path, *, release: bool) -> Path:

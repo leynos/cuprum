@@ -175,11 +175,12 @@ async def _run_rust_pump_with_blocking_fds(
     *,
     state: _RustPumpState,
 ) -> None:
-    """Run the native pump while its executor future owns cleanup."""
+    """Run the native pump while worker settlement owns transport cleanup."""
     from cuprum._streams_rs import rust_pump_stream
 
-    # Rust owns and closes this duplicate. asyncio owns the original transport
-    # descriptor, so their close operations always target distinct FD numbers.
+    # asyncio owns the original transport descriptor. The submitted shim owns
+    # this duplicate until it invokes Rust, which then consumes and closes its
+    # received resource; neither completion path closes this FD number.
     rust_writer_fd = os.dup(state.writer_fd)
     loop = asyncio.get_running_loop()
     cleanup_complete = loop.create_future()

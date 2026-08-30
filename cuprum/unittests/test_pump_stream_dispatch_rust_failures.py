@@ -13,6 +13,7 @@ from cuprum import _pipeline_stream_fds, _pipeline_streams
 from cuprum.unittests._pump_stream_dispatch_support import (
     _nonblocking_pipe_pair,
     _run_with_inline_executor,
+    bypass_reader_drain,
     clear_backend_caches,
 )
 
@@ -182,6 +183,82 @@ class TestRustPumpFailures:
             "expected native failure cleanup to restore modes before resuming"
         )
         close_writer.assert_not_awaited()
+
+    def test_run_rust_pump_closes_duplicate_when_native_load_fails(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A submitted shim failure should close its writer duplicate once."""
+        _ = self
+        duplicated_fds: list[int] = []
+        original_dup = os.dup
+
+        def record_dup(fd: int) -> int:
+            """Record the duplicate passed across the submitted worker boundary."""
+            duplicate = original_dup(fd)
+            duplicated_fds.append(duplicate)
+            return duplicate
+
+        import cuprum._streams_rs as streams_rs
+
+        def fail_native_load() -> typ.NoReturn:
+            """Fail before the shim can invoke the native callable."""
+            raise ImportError(_NATIVE_LOAD_FAILURE_MESSAGE)
+
+        async def run_with_submitted_native_failure(
+            awaitable: cabc.Awaitable[object],
+        ) -> None:
+            """Accept the worker, then publish its pre-native failure."""
+            loop = asyncio.get_running_loop()
+
+            def submit_native_work(
+                executor: object,
+                function: cabc.Callable[..., object],
+                *args: object,
+            ) -> asyncio.Future[object]:
+                """Return a settled future after executing accepted native work."""
+                del executor
+                future = loop.create_future()
+                try:
+                    future.set_result(function(*args))
+                except BaseException as exc:  # noqa: BLE001 - preserve worker errors
+                    future.set_exception(exc)
+                return future
+
+            with mock.patch.object(
+                loop,
+                "run_in_executor",
+                side_effect=submit_native_work,
+            ):
+                await awaitable
+
+        monkeypatch.setattr(_pipeline_streams.os, "dup", record_dup)
+        monkeypatch.setattr(streams_rs, "_load_native", fail_native_load)
+        bypass_reader_drain(monkeypatch)
+
+        with _nonblocking_pipe_pair() as (
+            read_fd,
+            read_write_fd,
+            write_read_fd,
+            write_fd,
+        ):
+            del read_write_fd, write_read_fd
+            with pytest.raises(ImportError, match=_NATIVE_LOAD_FAILURE_MESSAGE):
+                asyncio.run(
+                    run_with_submitted_native_failure(
+                        _pipeline_streams._run_rust_pump(
+                            reader=typ.cast("asyncio.StreamReader", object()),
+                            writer=None,
+                            reader_fd=read_fd,
+                            writer_fd=write_fd,
+                        )
+                    )
+                )
+
+            assert duplicated_fds, "native pumping should create a writer duplicate"
+            with pytest.raises(OSError, match="Bad file descriptor"):
+                os.fstat(duplicated_fds[0])
+            os.fstat(write_fd)
 
     def test_run_rust_pump_closes_duplicate_when_executor_rejects_submission(
         self,

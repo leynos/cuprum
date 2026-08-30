@@ -19,6 +19,7 @@ output = rust_consume_stream(reader_fd, buffer_size=65536)
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import importlib
 import os
@@ -26,6 +27,9 @@ import typing as typ
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+
+_DUPLICATE_SAME_ACCESS = 2
 
 
 class _NativeBackend(typ.Protocol):
@@ -80,7 +84,67 @@ def _convert_fd_for_platform(fd: int) -> int:
     mask = (1 << bit_size) - 1
     return handle & mask
 
+def _close_writer_after_pre_native_failure(writer_fd: int) -> None:
+    """Close a writer that never reached the native ownership boundary."""
+    with contextlib.suppress(OSError):
+        os.close(writer_fd)
 
+def _duplicate_windows_handle(handle: int) -> int:
+    """Duplicate a Win32 handle so Rust can own it independently of the CRT."""
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # ty: ignore[unresolved-attribute]  # Windows-only ctypes API.
+    current_process = kernel32.GetCurrentProcess()
+    duplicated_handle = ctypes.c_void_p()
+    should_inherit_handle = False
+    duplicate_succeeded = kernel32.DuplicateHandle(
+        current_process,
+        ctypes.c_void_p(handle),
+        current_process,
+        ctypes.byref(duplicated_handle),
+        0,
+        should_inherit_handle,
+        _DUPLICATE_SAME_ACCESS,
+    )
+    if not duplicate_succeeded:
+        raise _windows_error(ctypes)
+    if duplicated_handle.value is None:
+        msg = "DuplicateHandle returned a null handle"
+        raise OSError(msg)
+    return int(duplicated_handle.value)
+
+def _close_windows_handle(handle: int) -> None:
+    """Close a duplicated Win32 handle that was not handed to Rust."""
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # ty: ignore[unresolved-attribute]  # Windows-only ctypes API.
+    if not kernel32.CloseHandle(ctypes.c_void_p(handle)):
+        raise _windows_error(ctypes)
+
+def _windows_error(ctypes_module: ModuleType) -> OSError:
+    """Build an OSError from a Windows-only ctypes last-error function."""
+    get_last_error = typ.cast(
+        "cabc.Callable[[], int]",
+        getattr(ctypes_module, "get_last_error"),  # noqa: B009  # Windows-only API
+    )
+    win_error = typ.cast(
+        "cabc.Callable[[int], OSError]",
+        getattr(ctypes_module, "WinError"),  # noqa: B009  # Windows-only API
+    )
+    return win_error(get_last_error())
+
+def _transfer_writer_fd_for_platform(writer_fd: int) -> int:
+    """Return a writer resource that Rust can consume without a CRT FD leak."""
+    if os.name != "nt":
+        return writer_fd
+
+    owned_handle = _duplicate_windows_handle(_convert_fd_for_platform(writer_fd))
+    try:
+        os.close(writer_fd)
+    except BaseException:
+        _close_windows_handle(owned_handle)
+        raise
+    return owned_handle
 def rust_pump_stream(
     reader_fd: int,
     writer_fd: int,
@@ -112,13 +176,15 @@ def rust_pump_stream(
     ``ValueError`` if ``buffer_size`` is not a positive integer or exceeds the
     1 GiB maximum, and ``OSError`` if an I/O error occurs while pumping bytes.
     """
-    native = _load_native()
+    try:
+        native_pump = _load_native().rust_pump_stream
+        reader = _convert_fd_for_platform(reader_fd)
+        writer = _transfer_writer_fd_for_platform(writer_fd)
+    except BaseException:
+        _close_writer_after_pre_native_failure(writer_fd)
+        raise
     return int(
-        native.rust_pump_stream(
-            _convert_fd_for_platform(reader_fd),
-            _convert_fd_for_platform(writer_fd),
-            buffer_size=buffer_size,
-        ),
+        native_pump(reader, writer, buffer_size=buffer_size),
     )
 
 

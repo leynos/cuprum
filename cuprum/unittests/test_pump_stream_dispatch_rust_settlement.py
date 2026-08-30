@@ -164,12 +164,18 @@ async def _cancel_before_native_worker_settles(
     loop = asyncio.get_running_loop()
     native_pump = _HeldNativePump(loop)
     cleanup = _CleanupOrder()
+    close_duplicate = mock.Mock(wraps=_pipeline_streams._close_rust_writer_fd)
 
     import cuprum._streams_rs as streams_rs
 
     monkeypatch.setattr(streams_rs, "rust_pump_stream", native_pump.retain_writer)
     monkeypatch.setattr(_pipeline_streams, "_pause_reader_transport", cleanup.pause)
     monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", cleanup.drain)
+    monkeypatch.setattr(
+        _pipeline_streams,
+        "_close_rust_writer_fd",
+        close_duplicate,
+    )
     monkeypatch.setattr(
         _pipeline_stream_fds, "_restore_stream_fd_blocking", cleanup.restore
     )
@@ -197,6 +203,9 @@ async def _cancel_before_native_worker_settles(
             await asyncio.wait_for(native_pump.submitted.wait(), timeout=0.5)
             task.cancel()
 
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
             assert cleanup.order == ["pause", "drain"], (
                 "expected FD restoration and reader resumption to wait for native "
                 "worker settlement"
@@ -207,14 +216,20 @@ async def _cancel_before_native_worker_settles(
             os.fstat(native_pump.received_fds[0])
 
             native_pump.close_received_writer()
-            native_pump.future.set_result(0)
-            await asyncio.wait_for(cleanup.finished.wait(), timeout=0.5)
+            os.fstat(write_fd)
+            reused_writer_fd = os.open(os.devnull, os.O_WRONLY)
+            try:
+                assert reused_writer_fd == native_pump.received_fds[0], (
+                    "the native duplicate's numeric slot should be available for reuse"
+                )
+                native_pump.future.set_result(0)
+                await asyncio.wait_for(cleanup.finished.wait(), timeout=0.5)
 
-            with pytest.raises(asyncio.CancelledError):
-                await task
-
-            assert cleanup.order == ["pause", "drain", "restore", "resume"], (
-                "expected settlement to restore descriptors before resuming reader"
-            )
-            with pytest.raises(OSError, match="Bad file descriptor"):
-                os.fstat(native_pump.received_fds[0])
+                assert cleanup.order == ["pause", "drain", "restore", "resume"], (
+                    "expected settlement to restore descriptors before resuming reader"
+                )
+                os.fstat(write_fd)
+                os.fstat(reused_writer_fd)
+                close_duplicate.assert_not_called()
+            finally:
+                os.close(reused_writer_fd)
