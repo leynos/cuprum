@@ -84,6 +84,11 @@ def _run(*, ratios: cabc.Mapping[str, float], context_name: str) -> BenchmarkRun
     The ratio is what the ratchet reads, so the Python mean is fixed at one
     second and the Rust mean carries the ratio. Anything else would encode
     the same number twice.
+
+    Returns
+    -------
+    BenchmarkRunPayload
+        A plan and matching Hyperfine results for the requested ratios.
     """
     scenarios: list[dict[str, object]] = []
     results: list[dict[str, object]] = []
@@ -92,7 +97,10 @@ def _run(*, ratios: cabc.Mapping[str, float], context_name: str) -> BenchmarkRun
             {"name": f"python-{scenario}", "backend": "python"},
             {"name": f"rust-{scenario}", "backend": "rust"},
         ))
-        results.extend(({"mean": 1.0}, {"mean": ratio}))
+        results.extend((
+            {"command": f"python-{scenario}", "mean": 1.0},
+            {"command": f"rust-{scenario}", "mean": ratio},
+        ))
     return BenchmarkRunPayload(
         plan={
             "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
@@ -363,7 +371,7 @@ def test_an_absent_history_reads_as_empty(tmp_path: pth.Path) -> None:
 @pytest.mark.parametrize(
     ("content", "reason"),
     [
-        ("not json at all", "unparseable"),
+        ("not json at all", "unparsable"),
         ('["not", "an", "object"]', "not a JSON object"),
         ('{"schema": 99, "samples": []}', "unrecognized schema"),
     ],

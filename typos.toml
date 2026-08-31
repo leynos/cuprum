@@ -30,10 +30,12 @@ extend-exclude = [
 [default]
 locale = "en-gb"
 extend-ignore-re = [
+    "\"artifact\"",
     "\"artifacts\"",
     "--artifact-name(?:[=\\s\"`]|$)",
     "--artifact-server-path(?:[=\\s\"`]|$)",
     "/artifacts(?:[/?#\"`]|$)",
+    "Upload main benchmark baseline artifact",
     "\\(\"ises\", \"izes\"\\)",
     "\\(\"teh\", \"(?:the|ten)\"\\)",
     "\\bbuild_native_wheel_artifact\\b",

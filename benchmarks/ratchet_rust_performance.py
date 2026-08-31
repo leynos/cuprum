@@ -25,7 +25,6 @@ import argparse
 import json
 import logging
 import pathlib as pth
-import sys  # noqa: F401
 import typing as typ
 
 from benchmarks.benchmark_profile import (
@@ -102,6 +101,16 @@ def _baseline_window(
     single-sample baseline is the fallback for a first run, an expired
     artefact, or a window emptied by a benchmark-profile change — a worse bar
     than the window, but the one this ratchet used before the window existed.
+
+    Returns
+    -------
+    dict[str, tuple[float, ...]]
+        The samples used to judge every scenario.
+
+    Raises
+    ------
+    ValueError
+        If neither a compatible history nor a fallback baseline is available.
     """
     recent = _compatible_history_window(
         candidate=candidate,
@@ -121,6 +130,7 @@ def _baseline_window(
     )
     return {name: (ratio,) for name, ratio in run_ratios(baseline).items()}
 
+
 def _compatible_history_window(
     *,
     candidate: BenchmarkRunPayload,
@@ -138,6 +148,8 @@ def _compatible_history_window(
         else BaselineHistory()
     )
     return BaselineHistory(samples=compatible.samples[-window_size:])
+
+
 def _compare_scenario(
     *,
     scenario_name: str,
@@ -158,25 +170,38 @@ def _compare_scenario(
     )
 
 
+def _comparison_policy(options: dict[str, object]) -> RatchetPolicy:
+    """Resolve supported policy keywords, including the legacy threshold."""
+    policy = options.pop("policy", None)
+    max_regression = options.pop("max_regression", None)
+    if options:
+        msg = f"unsupported comparison option(s): {', '.join(sorted(options))}"
+        raise TypeError(msg)
+    if policy is not None and not isinstance(policy, RatchetPolicy):
+        msg = "policy must be a RatchetPolicy"
+        raise TypeError(msg)
+    if max_regression is not None and not isinstance(max_regression, float):
+        msg = "max_regression must be a float"
+        raise TypeError(msg)
+    if policy is not None and max_regression is not None:
+        msg = "pass either policy or max_regression, not both"
+        raise ValueError(msg)
+    if policy is not None:
+        return policy
+    if max_regression is not None:
+        return RatchetPolicy(max_regression=max_regression)
+    return RatchetPolicy()
+
+
 def compare_rust_regressions(
     *,
     candidate: BenchmarkRunPayload,
     baseline: BenchmarkRunPayload | None = None,
     history: BaselineHistory | None = None,
-    policy: RatchetPolicy | None = None,
-    max_regression: float | None = None,
+    **options: object,
 ) -> ComparisonReport:
     """Compare within-run Rust/Python ratios and evaluate the threshold."""
-    if policy is not None and max_regression is not None:
-        msg = "pass either policy or max_regression, not both"
-        raise ValueError(msg)
-    resolved = (
-        policy
-        if policy is not None
-        else RatchetPolicy()
-        if max_regression is None
-        else RatchetPolicy(max_regression=max_regression)
-    )
+    resolved = _comparison_policy(options)
     window = _baseline_window(
         baseline=baseline,
         candidate=candidate,
@@ -308,8 +333,8 @@ def main() -> int:
         write_incompatible_profile_report(reason=str(exc), output_path=args.output)
         _logger.info("benchmark ratchet skipped: %s", exc)
         return 0
-    except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
-        _logger.error("benchmark ratchet failed to evaluate inputs: %s", exc)  # noqa: TRY400
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
+        _logger.exception("benchmark ratchet failed to evaluate inputs")
         return 2
 
     if report.passed:

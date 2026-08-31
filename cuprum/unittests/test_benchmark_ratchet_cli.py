@@ -45,10 +45,15 @@ def _candidate_plan() -> dict[str, object]:
 
 def _candidate_throughput() -> dict[str, object]:
     """Return matching one-second Python and Rust measurements."""
-    return {"results": [{"mean": 1.0}, {"mean": 1.0}]}
+    return {
+        "results": [
+            {"command": f"python-{SCENARIO}", "mean": 1.0},
+            {"command": f"rust-{SCENARIO}", "mean": 1.0},
+        ],
+    }
 
 
-def test_history_only_artifact_does_not_require_fallback_files(
+def test_history_only_artefact_does_not_require_fallback_files(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

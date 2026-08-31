@@ -342,6 +342,7 @@ def test_find_latest_artefact_download_url_queries_workflow_and_artefacts(
     )
     assert requested_urls[1].endswith("/actions/runs/42/artifacts?per_page=100")
 
+
 def test_find_latest_artefact_download_url_honours_the_run_status_filter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

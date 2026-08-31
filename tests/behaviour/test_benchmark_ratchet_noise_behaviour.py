@@ -79,6 +79,11 @@ def _candidate(ratio: float) -> BenchmarkRunPayload:
 
     The Python mean is fixed at one second so the Rust mean carries the
     ratio the ratchet reads.
+
+    Returns
+    -------
+    BenchmarkRunPayload
+        A candidate measurement with logical Hyperfine command names.
     """
     return BenchmarkRunPayload(
         plan={
@@ -89,7 +94,12 @@ def _candidate(ratio: float) -> BenchmarkRunPayload:
                 {"name": f"rust-{SCENARIO}", "backend": "rust"},
             ],
         },
-        throughput={"results": [{"mean": 1.0}, {"mean": ratio}]},
+        throughput={
+            "results": [
+                {"command": f"python-{SCENARIO}", "mean": 1.0},
+                {"command": f"rust-{SCENARIO}", "mean": ratio},
+            ],
+        },
         context_name="candidate",
     )
 

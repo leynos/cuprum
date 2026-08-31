@@ -140,7 +140,9 @@ def then_the_ratchet_passes(verdict: cabc.Mapping[str, object]) -> None:
 def then_the_ratchet_fails_on(verdict: cabc.Mapping[str, object], name: str) -> None:
     """Assert the named scenario is the confirmed regression."""
     assert verdict["passed"] is False, "expected the reproduced regression to fail"
-    assert _names(verdict["confirmed_regressions"]) == [name]
+    assert _names(verdict["confirmed_regressions"]) == [name], (
+        f"expected only {name!r} to reproduce; report was {verdict}"
+    )
 
 
 @then(parsers.parse("{name} is reported as unconfirmed"))
@@ -150,4 +152,6 @@ def then_reported_as_unconfirmed(verdict: cabc.Mapping[str, object], name: str) 
     Reported rather than discarded, so a maintainer can see that the job
     considered a regression and decided it was noise.
     """
-    assert name in _names(verdict["unconfirmed_regressions"])
+    assert name in _names(verdict["unconfirmed_regressions"]), (
+        f"expected {name!r} to remain unconfirmed; report was {verdict}"
+    )

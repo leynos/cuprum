@@ -54,7 +54,12 @@ def _write_candidate(directory: pth.Path, *, ratio: float) -> Candidate:
         encoding="utf-8",
     )
     throughput_path.write_text(
-        json.dumps({"results": [{"mean": 1.0}, {"mean": ratio}]}),
+        json.dumps({
+            "results": [
+                {"command": f"python-{SCENARIO}", "mean": 1.0},
+                {"command": f"rust-{SCENARIO}", "mean": ratio},
+            ],
+        }),
         encoding="utf-8",
     )
     return Candidate(plan=plan_path, throughput=throughput_path)

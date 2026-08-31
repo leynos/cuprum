@@ -100,6 +100,11 @@ class RatchetPolicy:
 
         A NaN threshold compares false against everything, so validating it
         by ``< 0`` would accept it and then silently pass every candidate.
+
+        Raises
+        ------
+        ValueError
+            If a threshold is negative, non-finite, or the window is empty.
         """
         _require_non_negative_float(self.max_regression, name="max_regression")
         _require_non_negative_float(self.noise_sigmas, name="noise_sigmas")
@@ -198,6 +203,11 @@ class BaselineHistory:
         Different sampling protocols produce different ratios for unchanged
         code, so a sample from an older profile is not a smaller amount of
         evidence — it is evidence about a different question.
+
+        Returns
+        -------
+        BaselineHistory
+            Only samples measured with the candidate's profile and iterations.
         """
         kept = tuple(
             sample
@@ -239,6 +249,11 @@ def history_from_payload(payload: cabc.Mapping[str, object]) -> BaselineHistory:
     An unrecognized schema yields an empty history rather than an error: the
     ratchet then falls back to the single-sample baseline, which is a
     degraded bar but still a working one.
+
+    Returns
+    -------
+    BaselineHistory
+        The decoded history, or an empty one for an unknown schema.
     """
     schema = payload.get("schema")
     if schema != HISTORY_SCHEMA:
@@ -263,6 +278,11 @@ def load_history(path: pth.Path | None) -> BaselineHistory:
     A missing history is the ordinary state on the first run after this
     landed, and on any run whose predecessor's artefact has expired. Neither
     should fail the job.
+
+    Returns
+    -------
+    BaselineHistory
+        The decoded file contents, or an empty history when unavailable.
     """
     if path is None or not path.is_file():
         return BaselineHistory()
@@ -305,6 +325,11 @@ def noise_tolerance(
     the effective bar is whichever of the two is wider. Fewer than two
     samples, or a window with no spread, yields zero — the flat threshold
     then decides alone, which is exactly the pre-window behaviour.
+
+    Returns
+    -------
+    float
+        The capped relative tolerance derived from the median deviation.
     """
     if len(values) < _MIN_SPREAD_SAMPLES:
         return 0.0

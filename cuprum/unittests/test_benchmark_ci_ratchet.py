@@ -304,7 +304,27 @@ def test_extract_scenario_entry_rejects_mismatched_command() -> None:
             result_value={"command": "python-small", "mean": 1.5},
         )
 
-
+def test_compare_rust_regressions_rejects_mismatched_result_command() -> None:
+    """The comparison must validate result commands through its public path."""
+    with pytest.raises(ValueError, match=r"results\[0\]\.command .* must match"):
+        compare_rust_regressions(
+            baseline=BenchmarkRunPayload(
+                plan=_plan_payload(),
+                throughput=_throughput_payload(python_mean=1.0, rust_mean=1.0),
+                context_name="baseline",
+            ),
+            candidate=BenchmarkRunPayload(
+                plan=_plan_payload(),
+                throughput={
+                    "results": [
+                        {"command": "rust-small-single-nocb", "mean": 1.0},
+                        {"command": "rust-small-single-nocb", "mean": 1.0},
+                    ],
+                },
+                context_name="candidate",
+            ),
+            policy=RatchetPolicy(max_regression=0.10),
+        )
 @pytest.mark.parametrize(
     ("result_value", "expected_exception"),
     [

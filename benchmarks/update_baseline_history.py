@@ -54,6 +54,11 @@ def _candidate_sample(
     Returning ``None`` rather than raising keeps a malformed or missing
     measurement from destroying the window that already exists: the caller
     carries the previous samples forward and the next run tries again.
+
+    Returns
+    -------
+    HistorySample | None
+        The run's sample, or ``None`` when it cannot be safely derived.
     """
     if not plan_path.is_file() or not throughput_path.is_file():
         _logger.warning(
@@ -138,8 +143,8 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
     )
     try:
         write_history(history=updated, output_path=args.output)
-    except OSError as exc:
-        _logger.error("failed to write baseline history: %s", exc)  # noqa: TRY400
+    except OSError:
+        _logger.exception("failed to write baseline history")
         return 2
     _logger.info(
         "baseline history now holds %d sample(s) at %s",

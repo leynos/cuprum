@@ -53,6 +53,11 @@ def _comparison_performed(report: cabc.Mapping[str, object]) -> bool:
 
     A skip report — no baseline yet, or an incompatible benchmark profile —
     records `comparison_performed: False` and carries no comparisons.
+
+    Returns
+    -------
+    bool
+        Whether the report contains a comparable measurement.
     """
     return report.get("comparison_performed") is not False
 
@@ -67,6 +72,11 @@ def confirm_regressions(
     The result keeps the primary report's shape, so the workflow summary and
     every other consumer read it unchanged, with `regressions` narrowed to
     those the second measurement reproduced.
+
+    Returns
+    -------
+    dict[str, object]
+        The primary report shape with only reproduced regressions retained.
     """
     flagged = _regressed_scenarios(primary)
     if not _comparison_performed(confirmation):
@@ -133,8 +143,8 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
             json.dumps(combined, indent=2, sort_keys=True),
             encoding="utf-8",
         )
-    except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
-        _logger.error("failed to combine ratchet reports: %s", exc)  # noqa: TRY400
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
+        _logger.exception("failed to combine ratchet reports")
         return 2
 
     unconfirmed = combined["unconfirmed_regressions"]

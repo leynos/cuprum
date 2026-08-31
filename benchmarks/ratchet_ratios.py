@@ -31,7 +31,9 @@ from benchmarks.benchmark_profile import (
     require_worker_iterations,
     validate_profile_version,
 )
-from benchmarks.ratchet_ratio_extraction import _extract_rust_python_ratios
+from benchmarks.ratchet_ratio_extraction import (
+    _extract_rust_python_ratios as _extract_validated_rust_python_ratios,
+)
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -143,114 +145,19 @@ def _extract_scenario_entry(
     return comparison_id, backend, mean
 
 
-def _collect_backend_means(
-    scenarios: list[object],
-    results: list[object],
-) -> dict[str, dict[str, float]]:
-    """Group mean runtimes by comparison identifier and backend.
-
-    Raises ``ValueError`` when a comparison group contains duplicate entries
-    for the same backend.
-    """
-    grouped: dict[str, dict[str, float]] = {}
-    for index, (scenario_value, result_value) in enumerate(
-        zip(scenarios, results, strict=True)
-    ):
-        comparison_id, backend, mean = _extract_scenario_entry(
-            index=index,
-            scenario_value=scenario_value,
-            result_value=result_value,
-        )
-        group = grouped.setdefault(comparison_id, {})
-        if backend in group:
-            msg = (
-                f"comparison group {comparison_id!r} contains duplicate "
-                f"{backend!r} scenario entries"
-            )
-            raise ValueError(msg)
-        group[backend] = mean
-    return grouped
-
-
-def _compute_group_ratio(
-    *,
-    context_name: str,
-    comparison_id: str,
-    group: dict[str, float],
-) -> float:
-    """Return the Rust/Python mean ratio for one comparison group."""
-    python_mean = group.get("python")
-    rust_mean = group.get("rust")
-    if python_mean is None:
-        msg = (
-            f"{context_name}: comparison group {comparison_id!r} is missing "
-            "its Python scenario"
-        )
-        raise ValueError(msg)
-    if rust_mean is None:
-        msg = (
-            f"{context_name}: comparison group {comparison_id!r} is missing "
-            "its Rust scenario"
-        )
-        raise ValueError(msg)
-    return rust_mean / python_mean
-
-
-def _build_ratio_map(
-    *,
-    context_name: str,
-    grouped: dict[str, dict[str, float]],
-) -> dict[str, float]:
-    """Build a sorted comparison-id → Rust/Python ratio map."""
-    ratios = {
-        comparison_id: _compute_group_ratio(
-            context_name=context_name,
-            comparison_id=comparison_id,
-            group=group,
-        )
-        for comparison_id, group in sorted(grouped.items())
-    }
-    if not ratios:
-        msg = f"{context_name}: Rust scenarios are required for ratchet comparison"
-        raise ValueError(msg)
-    return ratios
-
-
-def _extract_rust_python_ratios(
-    *,
-    plan_payload: dict[str, object],
-    throughput_payload: dict[str, object],
-    context_name: str,
-) -> dict[str, float]:
-    """Map comparison identifiers to within-run Rust/Python mean ratios.
-
-    Each ratio divides the Rust scenario mean by the matched Python scenario
-    mean from the same benchmark run, so runner speed and interpreter startup
-    overhead cancel out of the cross-run comparison.
-    """
-    scenarios = _require_list(plan_payload.get("scenarios"), name="scenarios")
-    results = _require_list(throughput_payload.get("results"), name="results")
-
-    if len(scenarios) != len(results):
-        msg = (
-            f"{context_name}: plan scenario count ({len(scenarios)}) must match "
-            f"throughput result count ({len(results)})"
-        )
-        raise ValueError(msg)
-
-    grouped = _collect_backend_means(scenarios, results)
-
-    return _build_ratio_map(context_name=context_name, grouped=grouped)
-
-
 def run_ratios(payload: BenchmarkRunPayload) -> dict[str, float]:
     """Return the within-run Rust/Python ratios for one benchmark run.
 
     The public entry point the history recorder uses, so a recorded sample
     and a compared candidate are derived by the same code rather than by two
     implementations that agree until one is edited.
+
+    Returns
+    -------
+    dict[str, float]
+        Each comparison identifier's Rust-to-Python mean ratio.
     """
-    return _extract_rust_python_ratios(
+    return _extract_validated_rust_python_ratios(
         plan_payload=payload.plan,
         throughput_payload=payload.throughput,
         context_name=payload.context_name,

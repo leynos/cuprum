@@ -75,7 +75,7 @@ def test_every_main_run_records_its_sample() -> None:
     )
 
 
-def test_the_baseline_artifact_is_published_from_every_main_run() -> None:
+def test_the_baseline_artefact_is_published_from_every_main_run() -> None:
     """Publishing only from passing runs discards the corrective samples."""
     condition = _step_named(UPLOAD_STEP).get("if")
 
@@ -85,7 +85,7 @@ def test_the_baseline_artifact_is_published_from_every_main_run() -> None:
     )
 
 
-def test_the_published_artifact_carries_the_window() -> None:
+def test_the_published_artefact_carries_the_window() -> None:
     """The artefact must contain the history file, not just the latest run."""
     inputs = mapping(
         _step_named(UPLOAD_STEP).get("with"),
