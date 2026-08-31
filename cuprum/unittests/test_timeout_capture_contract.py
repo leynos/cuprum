@@ -53,17 +53,20 @@ async def _reaches_eof_late(text: str, turns: int) -> str | None:
     return text
 
 
-async def _wait_for_marker(marker: Path, *, seconds: float = 10.0) -> None:
-    """Fail unless the child writes its readiness marker within ``seconds``."""
+async def _wait_for_marker(marker: Path, *, deadline: float) -> None:
+    """Fail unless the child writes its readiness marker before ``deadline``."""
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + seconds
-    while loop.time() < deadline:
-        # ASYNC240: a child process writes this file, so no asyncio primitive
-        # can observe it directly.
-        if marker.exists():  # noqa: ASYNC240
-            return
-        await asyncio.sleep(0.01)
-    pytest.fail(f"the child did not write {marker} within {seconds}s")
+    try:
+        async with asyncio.timeout_at(deadline):
+            while loop.time() < deadline:
+                # ASYNC240: a child process writes this file, so no asyncio
+                # primitive can observe it directly.
+                if marker.exists():  # noqa: ASYNC240
+                    return
+                await asyncio.sleep(0.01)
+    except TimeoutError:
+        pass
+    pytest.fail(f"the child did not write {marker} before its deadline")
 
 
 def test_capturing_drain_reports_empty_text_for_a_reader_with_no_capture() -> None:
@@ -303,11 +306,13 @@ def test_timeout_keeps_flushed_output_after_the_child_is_ready(tmp_path: Path) -
             Program(python_interpreter()),
             catalogue=python_catalogue()[0],
         )(*child_argv(marker))
+        run_timeout = 1.0
+        deadline = asyncio.get_running_loop().time() + run_timeout
         run = asyncio.create_task(
-            command.run(timeout=1.0, output=RunOutputOptions(capture=True)),
+            command.run(timeout=run_timeout, output=RunOutputOptions(capture=True)),
         )
 
-        await _wait_for_marker(marker)
+        await _wait_for_marker(marker, deadline=deadline)
 
         with pytest.raises(TimeoutExpired) as expired:
             await run
