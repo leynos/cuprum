@@ -305,7 +305,33 @@ def test_a_caller_variable_cannot_reach_the_nested_make(
         "the Makefile"
     )
 
+def test_local_tool_environment_preserves_the_windows_action_path() -> None:
+    """Windows must retain the PATH that setup-uv has already configured."""
+    makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
+    match = re.search(
+        r"^ifeq \(\$\(OS\),Windows_NT\)\n"
+        r"(?P<windows>.*?)^else\n(?P<posix>.*?)^endif$",
+        makefile,
+        flags=re.MULTILINE | re.DOTALL,
+    )
 
+    assert match is not None, (
+        "LOCAL_TOOL_ENV must branch explicitly for Windows_NT, so Git Bash "
+        "keeps the setup-uv PATH instead of rebuilding it with POSIX separators"
+    )
+
+    windows = match["windows"]
+    posix = match["posix"]
+    assert re.fullmatch(r"LOCAL_TOOL_ENV\s*=\s*\n", windows) is not None, (
+        "the Windows_NT branch must leave LOCAL_TOOL_ENV empty rather than "
+        "prefixing or replacing PATH"
+    )
+    assert "PATH" not in windows, (
+        "the Windows_NT branch must not rewrite PATH; setup-uv already adds "
+        "the Windows uv directory"
+    )
+    assert "LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)" in posix
+    assert 'LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"' in posix
 def test_the_develop_target_installs_pip_before_building() -> None:
     """`develop` must run `ensurepip` before `maturin develop`.
 
