@@ -20,13 +20,14 @@ import typing as typ
 import pytest
 from pytest_bdd import given, parsers, scenario, then, when
 
-from tests.helpers.workflow import CHANGES_JOB, script_of, step_named
+from tests.helpers.workflow import CHANGES_JOB, script_of, step_named, workflow
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
 
 FEATURE = "../features/benchmark_gate_summary.feature"
 SUMMARY_STEP = "Record the benchmark gate decision"
+WORKFLOW_DATA = workflow()
 
 #: Column order of the table the script emits.
 _COLUMNS = ("event", "detector", "bench", "decision")
@@ -82,9 +83,14 @@ def test_the_detector_itself_failed() -> None:
     """Record the summary produced when path detection fails."""
 
 
+@scenario(FEATURE, "The detector fails for a push")
+def test_the_detector_fails_for_a_push() -> None:
+    """Record that a failed detector skips a non-pull-request event."""
+
+
 def _summary_script() -> str:
     """Return the summary step's script, as `ci.yml` declares it."""
-    script = script_of(step_named(CHANGES_JOB, SUMMARY_STEP))
+    script = script_of(step_named(WORKFLOW_DATA, CHANGES_JOB, SUMMARY_STEP))
     assert script is not None, f"the {SUMMARY_STEP!r} step must run a script"
     return script
 

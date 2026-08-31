@@ -1,0 +1,106 @@
+"""Shell-command matching used by CI workflow contract tests."""
+
+from __future__ import annotations
+
+import shlex
+import typing as typ
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+
+def _is_environment_assignment(token: str) -> bool:
+    """Return whether ``token`` is a leading shell environment assignment."""
+    if "=" not in token:
+        return False
+    name, _ = token.split("=", maxsplit=1)
+    return name.isidentifier()
+
+
+_OPERATORS = frozenset({"&", "&&", ";", "|", "||"})
+_KEYWORDS = frozenset({"if", "then", "elif", "else", "do"})
+
+
+def _shell_words(line: str) -> list[str]:
+    """Tokenize one shell line."""
+    lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    return list(lexer)
+
+
+def _is_command_boundary(shell_word: str, *, is_command_position: bool) -> bool:
+    """Return whether a shell word begins a new command segment."""
+    return shell_word in _OPERATORS or (is_command_position and shell_word in _KEYWORDS)
+
+
+def _here_document_state(shell_words: list[str]) -> tuple[str, bool] | None:
+    """Return the marker and tab-stripping mode for one here-document."""
+    for index, shell_word in enumerate(shell_words[:-1]):
+        if shell_word == "<<":
+            marker = shell_words[index + 1]
+            return marker.removeprefix("-"), marker.startswith("-")
+    return None
+
+
+def _closes_here_document(line: str, here_document: tuple[str, bool]) -> bool:
+    """Return whether a line closes the active here-document."""
+    marker, strips_tabs = here_document
+    return (line.lstrip("\t") if strips_tabs else line) == marker
+
+
+def _line_command_segments(shell_words: list[str]) -> cabc.Iterator[list[str]]:
+    """Yield command segments from a shell line's words."""
+    segment: list[str] = []
+    is_command_position = True
+    for shell_word in [*shell_words, ";"]:
+        if _is_command_boundary(shell_word, is_command_position=is_command_position):
+            yield segment
+            segment = []
+            is_command_position = True
+            continue
+        segment.append(shell_word)
+        is_command_position = False
+
+
+def _command_segments(script: str) -> cabc.Iterator[list[str]]:
+    """Yield shell-token segments split at command boundaries."""
+    here_document: tuple[str, bool] | None = None
+    for line in script.replace("\\\n", " ").splitlines():
+        if here_document is not None:
+            if _closes_here_document(line, here_document):
+                here_document = None
+            continue
+        shell_words = _shell_words(line)
+        here_document = _here_document_state(shell_words)
+        yield from _line_command_segments(shell_words)
+
+
+def _segment_starts_command(segment: list[str], expected: tuple[str, ...]) -> bool:
+    """Return whether a shell segment starts with the expected command."""
+    while segment and _is_environment_assignment(segment[0]):
+        segment.pop(0)
+    return tuple(segment[: len(expected)]) == expected
+
+
+def script_runs_command(script: str, command: str) -> bool:
+    """Return whether ``script`` executes ``command`` as leading shell tokens.
+
+    Parameters
+    ----------
+    script : str
+        Shell script to inspect.
+    command : str
+        Command whose token sequence must begin a script segment.
+
+    Returns
+    -------
+    bool
+        Whether a command segment in ``script`` starts with ``command``, after
+        leading environment assignments have been ignored.
+    """
+    expected = tuple(shlex.split(command))
+    return any(
+        _segment_starts_command(segment, expected)
+        for segment in _command_segments(script)
+    )

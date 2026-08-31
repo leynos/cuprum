@@ -31,3 +31,10 @@ Feature: Recording the benchmark gate decision in the run summary
     Then the summary records the benchmark job as skip-detector-failed
     And the summary reports the detector as failure
     And the summary reports the changed-path verdict as unknown
+
+  Scenario: The detector fails for a push
+    Given the detector failed
+    When the gate summary script runs for a push event
+    Then the summary records the benchmark job as skip-detector-failed
+    And the summary reports the detector as failure
+    And the summary reports the changed-path verdict as unknown

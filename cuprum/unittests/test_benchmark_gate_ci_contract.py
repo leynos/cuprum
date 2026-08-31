@@ -51,6 +51,8 @@ from tests.helpers.workflow import (
 
 PATHS_FILTER_ACTION = "dorny/paths-filter@"
 SUMMARY_STEP = "Record the benchmark gate decision"
+WORKFLOW_DATA = workflow()
+FILTER_PATHS = filter_paths(WORKFLOW_DATA)
 
 #: The gate, verbatim. Pinning the whole expression rather than probing it for
 #: substrings is what makes an inverted or half-deleted condition a failure:
@@ -99,13 +101,9 @@ STATUS_FUNCTIONS = ("always(", "failure(", "cancelled(")
 
 
 def test_the_changes_job_publishes_the_filter_result() -> None:
-    """`changes` must expose the filter's verdict as its `bench` output.
-
-    The output is the whole interface between the two jobs; without it the
-    gate reads an empty string and every pull request skips the benchmark.
-    """
+    """Require `changes` to expose the filter verdict as its `bench` output."""
     outputs = mapping(
-        job(CHANGES_JOB).get("outputs"),
+        job(WORKFLOW_DATA, CHANGES_JOB).get("outputs"),
         f"the {CHANGES_JOB!r} job must declare outputs",
     )
 
@@ -116,7 +114,7 @@ def test_the_changes_job_publishes_the_filter_result() -> None:
         f"{FILTER_STEP_ID!r} step; found {outputs.get(FILTER_NAME)!r}"
     )
 
-    step = step_with_id(CHANGES_JOB, FILTER_STEP_ID)
+    step = step_with_id(WORKFLOW_DATA, CHANGES_JOB, FILTER_STEP_ID)
     uses = step.get("uses")
     assert isinstance(uses, str), (
         f"the {FILTER_STEP_ID!r} step must run an action; found {uses!r}"
@@ -128,7 +126,7 @@ def test_the_changes_job_publishes_the_filter_result() -> None:
 
 def test_the_changes_job_runs_on_a_github_hosted_runner() -> None:
     """The detector must not run on the runner it exists to avoid paying for."""
-    runner = job(CHANGES_JOB).get("runs-on")
+    runner = job(WORKFLOW_DATA, CHANGES_JOB).get("runs-on")
 
     assert runner == "ubuntu-latest", (
         f"the {CHANGES_JOB!r} job must run on ubuntu-latest so that deciding "
@@ -136,13 +134,23 @@ def test_the_changes_job_runs_on_a_github_hosted_runner() -> None:
     )
 
 
-def test_the_benchmark_job_waits_for_the_detector() -> None:
-    """`benchmark-ratchet` must declare the `needs` edge its gate reads.
+def test_the_detector_runs_on_every_event() -> None:
+    """Require detector execution to be independent of the triggering event."""
+    changes_job = job(WORKFLOW_DATA, CHANGES_JOB)
+    filter_step = step_with_id(WORKFLOW_DATA, CHANGES_JOB, FILTER_STEP_ID)
 
-    Without it `needs.changes.outputs.bench` is empty, the gate is false for
-    every pull request, and the job silently never benchmarks anything.
-    """
-    needs = job(BENCHMARK_JOB).get("needs")
+    assert changes_job.get("if") is None, (
+        f"the {CHANGES_JOB!r} job must not filter events before publishing its verdict"
+    )
+    assert filter_step.get("if") is None, (
+        f"the {FILTER_STEP_ID!r} step must run for every event so its output is "
+        "always available to the benchmark gate"
+    )
+
+
+def test_the_benchmark_job_waits_for_the_detector() -> None:
+    """Require `benchmark-ratchet` to declare the detector dependency."""
+    needs = job(WORKFLOW_DATA, BENCHMARK_JOB).get("needs")
     assert isinstance(needs, list), f"the {BENCHMARK_JOB!r} job must declare needs"
 
     assert CHANGES_JOB in needs, (
@@ -152,8 +160,8 @@ def test_the_benchmark_job_waits_for_the_detector() -> None:
 
 
 def test_the_benchmark_job_declares_the_expected_gate() -> None:
-    """The gate expression must be exactly the rule the rest of these tests model."""
-    condition = benchmark_gate()
+    """Require the gate expression to match the model used by these tests."""
+    condition = benchmark_gate(WORKFLOW_DATA)
 
     assert condition == EXPECTED_GATE, (
         f"the {BENCHMARK_JOB!r} job's `if:` must be {EXPECTED_GATE!r} — pushes to "
@@ -163,12 +171,8 @@ def test_the_benchmark_job_declares_the_expected_gate() -> None:
 
 
 def test_a_failed_detector_does_not_benchmark_ungated() -> None:
-    """The gate must not name a status function, so a failed `changes` skips.
-
-    `if: always() && (…)` reads as a harmless robustness tweak and is the one
-    edit that turns a broken detector into an unconditional paid run.
-    """
-    named = sorted(fn for fn in STATUS_FUNCTIONS if fn in benchmark_gate())
+    """Require a failed detector to skip the paid benchmark rather than run ungated."""
+    named = sorted(fn for fn in STATUS_FUNCTIONS if fn in benchmark_gate(WORKFLOW_DATA))
 
     assert not named, (
         f"the {BENCHMARK_JOB!r} gate must leave GitHub's implicit `success()` in "
@@ -178,8 +182,8 @@ def test_a_failed_detector_does_not_benchmark_ungated() -> None:
 
 
 def test_a_failed_detector_skips_non_pull_request_events() -> None:
-    """A detector failure must skip even a main push's paid benchmark."""
-    condition = benchmark_gate()
+    """Require detector failure to skip the paid benchmark for every event."""
+    condition = benchmark_gate(WORKFLOW_DATA)
 
     assert "needs.changes.result == 'success'" in condition, (
         "the benchmark gate must make detector success explicit so a failed "
@@ -191,28 +195,19 @@ def test_a_failed_detector_skips_non_pull_request_events() -> None:
 
 
 def test_the_filter_declares_every_performance_relevant_path() -> None:
-    """The filter's path list must be exactly the performance-relevant set.
-
-    A missing entry merges a regression unmeasured; a spurious one pays for a
-    benchmark that cannot move, which is the cost this gate exists to avoid.
-    """
-    assert filter_paths() == EXPECTED_FILTER_PATHS, (
+    """Require the filter path list to be exactly the performance-relevant set."""
+    assert FILTER_PATHS == EXPECTED_FILTER_PATHS, (
         "the `bench` filter must watch exactly the performance-relevant paths; "
-        f"missing {sorted(EXPECTED_FILTER_PATHS - filter_paths())}, "
-        f"unexpected {sorted(filter_paths() - EXPECTED_FILTER_PATHS)}"
+        f"missing {sorted(EXPECTED_FILTER_PATHS - FILTER_PATHS)}, "
+        f"unexpected {sorted(FILTER_PATHS - EXPECTED_FILTER_PATHS)}"
     )
 
 
 def test_the_filter_uses_only_modelled_pattern_forms() -> None:
-    """Every declared pattern must be a form `matches_filter` actually models.
-
-    The property tests below are only evidence about the real filter for as
-    long as this holds; a `cuprum/**/*.py` added tomorrow would make the model
-    silently over-match rather than fail.
-    """
+    """Require every declared filter pattern to use a modelled form."""
     unmodelled = sorted(
         pattern
-        for pattern in filter_paths()
+        for pattern in FILTER_PATHS
         if not pattern.endswith("/**") and any(c in pattern for c in "*?[")
     )
 
@@ -223,8 +218,10 @@ def test_the_filter_uses_only_modelled_pattern_forms() -> None:
 
 
 def test_the_irrelevant_paths_are_genuinely_irrelevant() -> None:
-    """The property tests' docs-only pool must not match the filter."""
-    matched = sorted(path for path in IRRELEVANT_PATHS if bench_output([path]))
+    """Require the property tests' docs-only paths to remain outside the filter."""
+    matched = sorted(
+        path for path in IRRELEVANT_PATHS if bench_output([path], FILTER_PATHS)
+    )
 
     assert not matched, (
         "these paths are sampled as performance-irrelevant but the filter "
@@ -238,7 +235,7 @@ def _relevant_paths() -> list[str]:
         f"{pattern.removesuffix('**')}pkg/module.rs"
         if pattern.endswith("/**")
         else pattern
-        for pattern in filter_paths()
+        for pattern in FILTER_PATHS
     )
 
 
@@ -249,22 +246,36 @@ def _relevant_paths() -> list[str]:
 def test_any_performance_relevant_change_benchmarks(
     relevant: list[str], irrelevant: list[str]
 ) -> None:
-    """A pull request touching any watched path benchmarks, however mixed."""
+    """Require a benchmark when any watched path changes.
+
+    Parameters
+    ----------
+    relevant : list[str]
+        Performance-relevant paths included in the sampled pull request.
+    irrelevant : list[str]
+        Non-performance paths mixed into the sampled pull request.
+    """
     changed = [*relevant, *irrelevant]
 
     assert benchmark_runs(
         event_name="pull_request",
-        bench=bench_output(changed),
+        bench=bench_output(changed, FILTER_PATHS),
         detector_succeeded=True,
     ), f"a pull request changing {changed} must run {BENCHMARK_JOB!r}"
 
 
 @given(irrelevant=st.lists(st.sampled_from(IRRELEVANT_PATHS), unique=True))
 def test_a_pull_request_touching_nothing_relevant_skips(irrelevant: list[str]) -> None:
-    """A docs-only pull request — including an empty diff — skips the paid job."""
+    """Require a skip when a pull request touches no watched paths.
+
+    Parameters
+    ----------
+    irrelevant : list[str]
+        Non-performance paths included in the sampled pull request.
+    """
     assert not benchmark_runs(
         event_name="pull_request",
-        bench=bench_output(irrelevant),
+        bench=bench_output(irrelevant, FILTER_PATHS),
         detector_succeeded=True,
     ), f"a pull request changing only {irrelevant} must skip {BENCHMARK_JOB!r}"
 
@@ -276,15 +287,19 @@ def test_a_pull_request_touching_nothing_relevant_skips(irrelevant: list[str]) -
 def test_a_non_pull_request_event_always_benchmarks(
     changed: list[str], event_name: str
 ) -> None:
-    """Pushes to main benchmark whatever they touch, refreshing the baseline.
+    """Require benchmarking for every non-pull-request event.
 
-    Gating them would make the ratchet compare against an ever-staler
-    baseline, which fails open: regressions stop being detected rather than
-    being reported.
+    Parameters
+    ----------
+    changed : list[str]
+        Paths included in the sampled event.
+    event_name : str
+        Non-pull-request event type used by the sampled case.
+
     """
     assert benchmark_runs(
         event_name=event_name,
-        bench=bench_output(changed),
+        bench=bench_output(changed, FILTER_PATHS),
         detector_succeeded=True,
     ), (
         f"a {event_name!r} event changing {changed} must run {BENCHMARK_JOB!r} so "
@@ -293,18 +308,10 @@ def test_a_non_pull_request_event_always_benchmarks(
 
 
 def test_the_gate_decision_is_recorded_in_the_run_summary() -> None:
-    """The `changes` job must write its verdict to the run summary.
-
-    A skipped job and a broken gate look identical in the run list, so the
-    decision — and the inputs that produced it — has to be stated somewhere a
-    maintainer auditing paid-runner spend can read it. What the script
-    actually emits for each input is asserted by running it, in
-    `tests/behaviour/test_benchmark_gate_summary_behaviour.py`; this only
-    pins that the step exists and reads the right things.
-    """
+    """Require the `changes` job to record its verdict in the run summary."""
     scripts = [
         script
-        for step in steps(CHANGES_JOB)
+        for step in steps(WORKFLOW_DATA, CHANGES_JOB)
         if isinstance(script := step.get("run"), str)
     ]
     summary_steps = [script for script in scripts if "GITHUB_STEP_SUMMARY" in script]
@@ -322,14 +329,8 @@ def test_the_gate_decision_is_recorded_in_the_run_summary() -> None:
 
 
 def test_the_gate_decision_is_recorded_even_when_the_detector_fails() -> None:
-    """The summary step must not inherit the implicit `success()`.
-
-    A failed detector is the case most worth recording: `benchmark-ratchet`
-    then skips for a reason that has nothing to do with the diff. A summary
-    that stops being written exactly when the gate misbehaves documents only
-    the runs that needed no explanation.
-    """
-    condition = step_named(CHANGES_JOB, SUMMARY_STEP).get("if")
+    """Require the summary step to record decisions when detector execution fails."""
+    condition = step_named(WORKFLOW_DATA, CHANGES_JOB, SUMMARY_STEP).get("if")
 
     assert condition == "${{ !cancelled() }}", (
         f"the {SUMMARY_STEP!r} step must run on every completed run, not only "
@@ -338,17 +339,9 @@ def test_the_gate_decision_is_recorded_even_when_the_detector_fails() -> None:
 
 
 def test_the_workflow_serializes_runs_per_ref() -> None:
-    """Concurrency must cancel superseded pull-request runs but never main runs.
-
-    Cancelling a `main` run mid-flight abandons the baseline upload, leaving
-    later pull requests comparing against a stale commit. Note the narrowness
-    of the claim: GitHub replaces a *pending* run when a newer one arrives and
-    promises nothing about completion order, so this is not a guarantee that
-    baselines are published in commit order. Anything needing that has to
-    enforce it where the artefact is written.
-    """
+    """Require per-ref concurrency that cancels pull-request runs only."""
     concurrency = mapping(
-        typ.cast("dict[str, object]", workflow()).get("concurrency"),
+        typ.cast("dict[str, object]", WORKFLOW_DATA).get("concurrency"),
         f"{CI_WORKFLOW} must declare a concurrency policy",
     )
 
