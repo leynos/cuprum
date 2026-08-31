@@ -24,6 +24,51 @@ class _FailingRestoreGuard:
         raise OSError(msg)
 
 
+async def _cancel_pump_with_failing_restore(
+    worker_started: threading.Event,
+    worker_finished: threading.Event,
+    release: threading.Event,
+    cleanup_futures: list[asyncio.Future[None]],
+) -> None:
+    """Cancel a hop and prove it settles within the default grace period."""
+    task: asyncio.Task[None] | None = None
+    try:
+        with owned_fds() as (reader_fd, writer_fd):
+            state = _pipeline_streams._RustPumpState(
+                reader_fd=reader_fd,
+                writer_fd=writer_fd,
+                blocking_mode_guard=typ.cast(
+                    "_pipeline_stream_fds._BlockingModeGuard",
+                    _FailingRestoreGuard(),
+                ),
+                resume_reader=None,
+            )
+            task = asyncio.create_task(
+                _pipeline_streams._run_rust_pump_with_blocking_fds(state=state)
+            )
+            started = await asyncio.to_thread(worker_started.wait, 5.0)
+            assert started, "the native-pump stand-in must start before cancellation"
+            task.cancel()
+            await asyncio.sleep(0)
+            release.set()
+            done, pending = await asyncio.wait((task,), timeout=0.5)
+            assert done == {task}, (
+                "a cancelled hop must settle within the default cancellation grace "
+                f"after restore failure; pending={pending}"
+            )
+            with pytest.raises(asyncio.CancelledError):
+                task.result()
+            finished = await asyncio.to_thread(worker_finished.wait, 5.0)
+            assert finished, "the native-pump worker must settle before the hop"
+    finally:
+        for cleanup_complete in cleanup_futures:
+            if not cleanup_complete.done():
+                cleanup_complete.set_result(None)
+        if task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
 def test_cancellation_settles_when_descriptor_restore_fails(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -56,49 +101,15 @@ def test_cancellation_settles_when_descriptor_restore_fails(
         capture_cleanup_future,
     )
 
-    async def cancel_pump() -> None:
-        """Cancel a hop and prove it settles within the default grace period."""
-        task: asyncio.Task[None] | None = None
-        try:
-            with owned_fds() as (reader_fd, writer_fd):
-                state = _pipeline_streams._RustPumpState(
-                    reader_fd=reader_fd,
-                    writer_fd=writer_fd,
-                    blocking_mode_guard=typ.cast(
-                        "_pipeline_stream_fds._BlockingModeGuard",
-                        _FailingRestoreGuard(),
-                    ),
-                    resume_reader=None,
-                )
-                task = asyncio.create_task(
-                    _pipeline_streams._run_rust_pump_with_blocking_fds(state=state)
-                )
-                started = await asyncio.to_thread(worker_started.wait, 5.0)
-                assert started, (
-                    "the native-pump stand-in must start before cancellation"
-                )
-                task.cancel()
-                await asyncio.sleep(0)
-                release.set()
-                done, pending = await asyncio.wait((task,), timeout=0.5)
-                assert done == {task}, (
-                    "a cancelled hop must settle within the default cancellation grace "
-                    f"after restore failure; pending={pending}"
-                )
-                with pytest.raises(asyncio.CancelledError):
-                    task.result()
-                finished = await asyncio.to_thread(worker_finished.wait, 5.0)
-                assert finished, "the native-pump worker must settle before the hop"
-        finally:
-            for cleanup_complete in cleanup_futures:
-                if not cleanup_complete.done():
-                    cleanup_complete.set_result(None)
-            if task is not None:
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-
     with caplog.at_level(logging.DEBUG, logger=_pipeline_streams.__name__):
-        asyncio.run(cancel_pump())
+        asyncio.run(
+            _cancel_pump_with_failing_restore(
+                worker_started,
+                worker_finished,
+                release,
+                cleanup_futures,
+            )
+        )
 
     teardown_records = [
         record
