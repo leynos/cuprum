@@ -187,3 +187,15 @@ This supersedes the position recorded in Proposal 3 of
 their stability and cardinality are now established by a closed enum and a
 fixed label set. Rust-side buffer and throughput counters remain out of the
 public runtime API.
+
+## Addendum — 2026-08-31
+
+The cleanup-observability extension adds the `cleanup_started` and
+`cleanup_completed` phases, with the completion duration in
+`PumpEvent.duration_s`. It also adds the unlabelled
+`cuprum_rust_pump_cleanup_total` counter and the unlabelled
+`cuprum_rust_pump_cleanup_duration_seconds` histogram. The counter and
+histogram are emitted only when native cleanup completes; the duration is the
+monotonic time spent waiting for that cleanup. The extension adds no descriptor
+data, exception text, or unbounded labels. These cleanup events remain on the
+separate synchronous pump-observation channel and do not extend `ExecEvent`.

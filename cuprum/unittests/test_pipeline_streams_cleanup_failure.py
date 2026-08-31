@@ -14,6 +14,9 @@ from cuprum import _pipeline_stream_fds, _pipeline_streams
 from cuprum._pipeline_stream_fds import RUST_PUMP_TEARDOWN_FAILED_ACTION
 from cuprum.unittests._rust_pump_test_helpers import install_fake_pump, owned_fds
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 
 class _FailingRestoreGuard:
     """Guard double that fails while returning descriptor ownership to asyncio."""
@@ -89,10 +92,17 @@ def test_cancellation_settles_when_descriptor_restore_fails(
 
     original_await_cleanup = _pipeline_streams._await_native_pump_cleanup
 
-    async def capture_cleanup_future(cleanup_complete: asyncio.Future[None]) -> None:
+    async def capture_cleanup_future(
+        cleanup_complete: asyncio.Future[None],
+        *,
+        monotonic_clock: cabc.Callable[[], float],
+    ) -> None:
         """Retain cleanup state so a broken implementation remains bounded."""
         cleanup_futures.append(cleanup_complete)
-        await original_await_cleanup(cleanup_complete)
+        await original_await_cleanup(
+            cleanup_complete,
+            monotonic_clock=monotonic_clock,
+        )
 
     install_fake_pump(monkeypatch, blocking_pump)
     monkeypatch.setattr(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import re
 import typing as typ
 import urllib.error
 import urllib.request
@@ -24,17 +25,38 @@ _BOUNDED_URL = "https://api.github.com/repos/leynos/cuprum/actions/runs"
 _BOUNDED_TOKEN = "".join(("tok", "en"))
 
 
-def test_load_json_response_rejects_oversized_response(
+@pytest.mark.parametrize(
+    ("wrapper", "limit_name", "resource"),
+    [
+        pytest.param(
+            _load_json_response,
+            "_MAX_JSON_RESPONSE_BYTES",
+            "JSON response",
+            id="json",
+        ),
+        pytest.param(
+            _download_bytes,
+            "_MAX_ARCHIVE_BYTES",
+            "archive",
+            id="archive",
+        ),
+    ],
+)
+def test_bounded_wrappers_reject_oversized_responses(
     monkeypatch: pytest.MonkeyPatch,
+    wrapper: cabc.Callable[..., object],
+    limit_name: str,
+    resource: str,
 ) -> None:
-    """JSON responses beyond the configured bound should be rejected."""
+    """Each wrapper rejects a response beyond its configured byte ceiling."""
 
     class _Response:
-        """Minimal response that exceeds the configured JSON limit."""
+        """Minimal response that exceeds the configured byte ceiling."""
 
         def __init__(self) -> None:
-            """Track the chunks that make the response oversized."""
-            self._chunks = iter((b"{}", b"too"))
+            """Track the bounded reads that make the response oversized."""
+            self.read_sizes: list[int] = []
+            self._chunks = iter((b"12345",))
 
         def __enter__(self) -> _Response:
             """Return the stub response for use as a context manager."""
@@ -50,8 +72,10 @@ def test_load_json_response_rejects_oversized_response(
 
         def read(self, size: int) -> bytes:
             """Return bounded chunks until the simulated response is exhausted."""
-            assert size > 0, "JSON reads should request a bounded chunk"
-            return next(self._chunks, b"")
+            self.read_sizes.append(size)
+            chunk = next(self._chunks, b"")
+            assert len(chunk) <= size, "the fake response must respect read bounds"
+            return chunk
 
     class _Opener:
         """Minimal urllib opener returning the oversized response."""
@@ -64,8 +88,9 @@ def test_load_json_response_rejects_oversized_response(
         ) -> _Response:
             """Return the response while accepting the request contract."""
             del request, timeout
-            return _Response()
+            return response
 
+    response = _Response()
     received_handler: urllib.request.BaseHandler | None = None
 
     def build_opener(handler: urllib.request.BaseHandler) -> _Opener:
@@ -77,16 +102,20 @@ def test_load_json_response_rejects_oversized_response(
     monkeypatch.setattr(
         "benchmarks._github_http.urllib.request.build_opener", build_opener
     )
-    monkeypatch.setattr("benchmarks._github_http._MAX_JSON_RESPONSE_BYTES", 4)
+    limit = 4
+    monkeypatch.setattr(f"benchmarks._github_http.{limit_name}", limit)
+    expected_message = f"{resource} from {_BOUNDED_URL} exceeds {limit} bytes"
 
-    with pytest.raises(ValueError, match=r"JSON response .* exceeds 4 bytes"):
-        _load_json_response(
-            url="https://example.invalid/workflow-runs",
-            token="".join(("tok", "en")),
-        )
+    with pytest.raises(ValueError, match=re.escape(expected_message)) as raised:
+        wrapper(url=_BOUNDED_URL, token=_BOUNDED_TOKEN)
 
+    assert str(raised.value) == expected_message
+    assert response.read_sizes == [_github_http._ARCHIVE_READ_CHUNK_BYTES], (
+        "bounded response loading must use the archive read chunk size, found "
+        f"{response.read_sizes}"
+    )
     assert isinstance(received_handler, _ArtefactArchiveRedirectHandler), (
-        "JSON loading must install the archive-safe redirect handler"
+        "bounded response loading must install the archive-safe redirect handler"
     )
 
 
@@ -142,46 +171,6 @@ def test_with_retry_raises_non_transient_http_error(
     assert operation.call_count == 1, "non-transient errors should stop after one call"
     assert not delays, "non-transient errors should not schedule a retry delay"
     assert error.closed, "re-raised HTTP errors should close before propagation"
-
-
-@pytest.mark.parametrize(
-    ("wrapper", "expected_description"),
-    [
-        (_load_json_response, f"load JSON from {_BOUNDED_URL}"),
-        (_download_bytes, f"download archive from {_BOUNDED_URL}"),
-    ],
-    ids=["json", "archive"],
-)
-def test_bounded_wrappers_describe_their_retry_operation(
-    monkeypatch: pytest.MonkeyPatch,
-    wrapper: cabc.Callable[..., object],
-    expected_description: str,
-) -> None:
-    """Each wrapper labels its own retry operation.
-
-    ``_with_retry`` discards the description, so nothing at runtime would
-    reveal the two wrappers swapping labels now that both route through the
-    shared bounded reader.
-    """
-    captured: list[str] = []
-
-    def _capture_description(
-        operation: cabc.Callable[[], bytes],
-        *,
-        description: str,
-    ) -> bytes:
-        """Record the retry description without performing the read."""
-        del operation
-        captured.append(description)
-        return b'{"ok": true}'
-
-    monkeypatch.setattr(_github_http, "_with_retry", _capture_description)
-
-    wrapper(url=_BOUNDED_URL, token=_BOUNDED_TOKEN)
-
-    assert captured == [expected_description], (
-        f"expected the retry description {expected_description!r}, got {captured!r}"
-    )
 
 
 def test_load_json_response_requires_a_mapping(

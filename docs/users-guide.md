@@ -1696,13 +1696,20 @@ decision rather than a command's lifecycle, so they are not `ExecEvent` values
 and never reach an observe hook. An `ExecEvent` consumer registered elsewhere
 in the process is unaffected.
 
-The channel counts declines and post-cancellation failures, and nothing else. A
-successful hand-off emits no event, deliberately: there is no per-hop counter
-and no total-hop counter to divide by. So these counters give the *number* of
-hops that left the fast path, not the *fraction* that stayed on it. To report
-that fraction, pair the decline counter with a hop total measured independently
-— for example, a counter of your own incremented once per inter-stage hop you
-submit.
+The channel counts declines, post-cancellation failures, and native-pump
+cleanup. A successful hand-off emits no event, deliberately: there is no
+per-hop counter and no total-hop counter to divide by. So the decline counter
+gives the *number* of hops that left the fast path, not the *fraction* that
+stayed on it. To report that fraction, pair the decline counter with a hop total
+measured independently — for example, a counter of your own incremented once
+per inter-stage hop you submit.
+
+Cancellation emits `PumpEvent.phase="cleanup_started"` when it starts waiting
+for native worker cleanup. It emits `PumpEvent.phase="cleanup_completed"` when
+that cleanup releases descriptor ownership. `PumpEvent.duration_s` is the
+monotonic cleanup-wait duration and is set only on `cleanup_completed`. The
+executor worker retains descriptor ownership until it settles, so this cleanup
+must complete before the pipeline can finish tearing down the hop.
 
 ```python
 from cuprum.adapters.metrics_adapter import InMemoryMetrics
@@ -1730,10 +1737,19 @@ with sh.observe(MetricsHook(metrics)), observe_pump(PumpMetricsHook(metrics)):
 
 Table 2: counters emitted by `PumpMetricsHook`
 
-| Counter                                      | Labels   | Incremented when                                                |
-| -------------------------------------------- | -------- | --------------------------------------------------------------- |
-| `cuprum_rust_pump_declined_total`            | `reason` | a hop fell back from the Rust pump to the Python pump           |
-| `cuprum_rust_pump_failed_after_cancel_total` | none     | a cancelled hop's Rust worker failure was consumed and recorded |
+| Counter                                      | Labels   | Incremented when                                                 |
+| -------------------------------------------- | -------- | ---------------------------------------------------------------  |
+| `cuprum_rust_pump_declined_total`            | `reason` | a hop fell back from the Rust pump to the Python pump            |
+| `cuprum_rust_pump_failed_after_cancel_total` | none     | a cancelled hop's Rust worker failure was consumed and recorded  |
+| `cuprum_rust_pump_cleanup_total`             | none     | native cleanup completed after cancellation                      |
+| `cuprum_rust_pump_cleanup_duration_seconds`  | none     | one monotonic duration was observed for completed native cleanup |
+
+The cleanup metrics are emitted only when callers register
+`observe_pump(PumpMetricsHook(metrics))`. `cuprum_rust_pump_cleanup_total` is
+incremented once for every completed native cleanup, and
+`cuprum_rust_pump_cleanup_duration_seconds` records one duration observation
+for each such cleanup. Both metrics are unlabelled. The `reason` label on the
+decline counter retains the bounded cardinality described below.
 
 The `reason` label takes exactly the values in Table 1, plus `unknown`, and
 nothing else. Table 1's values are published as the `RustPumpDeclineReason`

@@ -23,6 +23,10 @@ import time
 import typing as typ
 
 from cuprum._backend import StreamBackend, get_stream_backend
+from cuprum._pipeline_stream_cleanup_observation import (
+    _log_native_pump_cleanup_completed,
+    _log_native_pump_cleanup_started,
+)
 from cuprum._pipeline_stream_fds import (
     _BlockingModeGuard,
     _close_rust_writer_fd,
@@ -76,6 +80,7 @@ class _RustPumpState:
     blocking_mode_guard: _BlockingModeGuard
     resume_reader: cabc.Callable[[], None] | None
     was_cancelled: bool = False
+    monotonic_clock: cabc.Callable[[], float] = time.monotonic
 
 
 _PUMP_STREAM_DISPATCH_TEST_HOOKS = _PumpStreamDispatchTestHooks()
@@ -142,10 +147,14 @@ def _complete_rust_pump(
                 cleanup_complete.set_result(None)
 
 
-async def _await_native_pump_cleanup(cleanup_complete: asyncio.Future[None]) -> None:
+async def _await_native_pump_cleanup(
+    cleanup_complete: asyncio.Future[None],
+    *,
+    monotonic_clock: cabc.Callable[[], float],
+) -> None:
     """Wait for native cleanup despite repeated cancellation requests."""
-    started_at = time.monotonic()
-    _log_native_pump_cleanup_started()
+    started_at = monotonic_clock()
+    _log_native_pump_cleanup_started(_LOGGER)
     try:
         while not cleanup_complete.done():
             try:
@@ -154,35 +163,7 @@ async def _await_native_pump_cleanup(cleanup_complete: asyncio.Future[None]) -> 
                 continue
     finally:
         if cleanup_complete.done():
-            _log_native_pump_cleanup_completed(time.monotonic() - started_at)
-
-
-def _log_native_pump_cleanup_started() -> None:
-    """Record that cancellation is waiting for native-pump cleanup."""
-    _LOGGER.debug(
-        "Native pump cleanup started after cancellation",
-        extra={
-            "cuprum_action": "rust_pump_cleanup",
-            "cuprum_operation": "native_pump_cleanup",
-            "cuprum_outcome": "started",
-        },
-    )
-    _emit_pump_event(PumpEvent(phase="cleanup_started"))
-
-
-def _log_native_pump_cleanup_completed(duration_s: float) -> None:
-    """Record that native-pump cleanup released its descriptors."""
-    _LOGGER.debug(
-        "Native pump cleanup completed after cancellation in %.6fs",
-        duration_s,
-        extra={
-            "cuprum_action": "rust_pump_cleanup",
-            "cuprum_operation": "native_pump_cleanup",
-            "cuprum_outcome": "completed",
-            "cuprum_duration_s": duration_s,
-        },
-    )
-    _emit_pump_event(PumpEvent(phase="cleanup_completed", duration_s=duration_s))
+            _log_native_pump_cleanup_completed(_LOGGER, monotonic_clock() - started_at)
 
 
 async def _run_rust_pump_with_blocking_fds(
@@ -224,7 +205,10 @@ async def _run_rust_pump_with_blocking_fds(
         # cancellation grace. Keeping this task alive until the callback has
         # restored the descriptors prevents pipeline teardown from reporting
         # completion while the executor worker still owns them.
-        await _await_native_pump_cleanup(cleanup_complete)
+        await _await_native_pump_cleanup(
+            cleanup_complete,
+            monotonic_clock=state.monotonic_clock,
+        )
         raise
     except BaseException:
         await asyncio.shield(cleanup_complete)

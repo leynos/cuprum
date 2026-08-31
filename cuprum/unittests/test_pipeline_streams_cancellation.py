@@ -234,6 +234,55 @@ def test_cancellation_records_native_pump_cleanup_lifecycle(
     ), f"cleanup logs must name their operation, found {cleanup_records}"
 
 
+def test_native_pump_cleanup_uses_the_injected_monotonic_clock(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Cleanup telemetry uses the monotonic clock carried by the pump state."""
+    clock_values = iter((10.0, 12.5))
+    expected_duration_s = 2.5
+    pump_events: list[PumpEvent] = []
+
+    def monotonic_clock() -> float:
+        """Return the next controlled cleanup timestamp."""
+        return next(clock_values)
+
+    async def await_completed_cleanup() -> None:
+        """Run the cleanup boundary with an already-settled worker future."""
+        cleanup_complete = asyncio.get_running_loop().create_future()
+        cleanup_complete.set_result(None)
+        await _pipeline_streams._await_native_pump_cleanup(
+            cleanup_complete,
+            monotonic_clock=monotonic_clock,
+        )
+
+    caplog.set_level(logging.DEBUG, logger=_pipeline_streams.__name__)
+    with observe_pump(pump_events.append):
+        asyncio.run(await_completed_cleanup())
+
+    completed_event = pump_events[-1]
+    assert completed_event.phase == "cleanup_completed", (
+        f"the final cleanup event must report completion, found {pump_events}"
+    )
+    assert completed_event.duration_s == pytest.approx(expected_duration_s), (
+        "the completion event must use the injected monotonic duration, found "
+        f"{completed_event.duration_s!r}"
+    )
+    completed_records = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("cuprum_outcome") == "completed"
+    ]
+    assert len(completed_records) == 1, (
+        f"cleanup must emit one completed DEBUG record, found {completed_records}"
+    )
+    assert completed_records[0].__dict__.get("cuprum_duration_s") == pytest.approx(
+        expected_duration_s
+    ), (
+        "the completed DEBUG record must use the injected monotonic duration, "
+        f"found {completed_records[0].__dict__.get('cuprum_duration_s')!r}"
+    )
+
+
 def _assert_cancelled_pump_failure_reported(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

@@ -844,11 +844,22 @@ The concrete shape is an implementation detail, but the design assumes:
 
 #### Rust-pump routing events
 
-Rust-pump declines and failures recovered after cancellation are routing facts,
-not command lifecycle phases. They are therefore represented by `PumpEvent` on
-the separate `observe_pump` channel. `RustPumpDeclineReason` bounds the only
-metric label, and `PumpMetricsHook` emits counters without extending the closed
-`ExecPhase` contract. See [ADR-008](adr-008-rust-pump-observation-channel.md).
+Rust-pump declines, failures recovered after cancellation, and native cleanup
+are routing facts, not command lifecycle phases. They are therefore represented
+by `PumpEvent` on the separate `observe_pump` channel. Its
+`phase="cleanup_started"` event marks cancellation beginning to wait for the
+native worker, while `phase="cleanup_completed"` marks the worker releasing
+descriptor ownership. The latter carries `PumpEvent.duration_s`, the monotonic
+cleanup wait duration; other phases leave it unset. Cleanup is required because
+the executor worker retains descriptor ownership until it settles.
+
+`PumpMetricsHook` emits `cuprum_rust_pump_cleanup_total` once for each completed
+native cleanup and one observation of
+`cuprum_rust_pump_cleanup_duration_seconds` for each such cleanup. Both cleanup
+metrics are unlabelled and emitted only on completion. `RustPumpDeclineReason`
+bounds the `reason` label on the decline metric, and `PumpMetricsHook` emits
+counters without extending the closed `ExecPhase` contract. See
+[ADR-008](adr-008-rust-pump-observation-channel.md).
 
 ### 7.2 Logging via `logging`
 
