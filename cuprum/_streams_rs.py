@@ -22,6 +22,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import importlib
+import operator
 import os
 import typing as typ
 
@@ -30,6 +31,9 @@ if typ.TYPE_CHECKING:
 
 
 _DUPLICATE_SAME_ACCESS = 2
+_I64_MIN = -(1 << 63)
+_I64_MAX = (1 << 63) - 1
+_MAX_BUFFER_SIZE = 1 << 30
 
 
 class _NativeBackend(typ.Protocol):
@@ -89,6 +93,18 @@ def _close_writer_after_pre_native_failure(writer_fd: int) -> None:
     with contextlib.suppress(OSError):
         os.close(writer_fd)
 
+def _validate_buffer_size_before_writer_transfer(buffer_size: int) -> None:
+    """Raise native-compatible buffer-size errors before transferring a writer."""
+    size = operator.index(buffer_size)
+    if not _I64_MIN <= size <= _I64_MAX:
+        msg = "Python int too large to convert to C long"
+        raise OverflowError(msg)
+    if size <= 0:
+        msg = "buffer_size must be greater than zero"
+        raise ValueError(msg)
+    if size > _MAX_BUFFER_SIZE:
+        msg = "buffer_size exceeds the maximum permitted size"
+        raise ValueError(msg)
 def _duplicate_windows_handle(handle: int) -> int:
     """Duplicate a Win32 handle so Rust can own it independently of the CRT."""
     import ctypes
@@ -171,14 +187,16 @@ def rust_pump_stream(
 
     Notes
     -----
-    Failures propagate unchanged from the Rust extension rather than being
-    raised here: ``ImportError`` if the native module cannot be imported,
-    ``ValueError`` if ``buffer_size`` is not a positive integer or exceeds the
-    1 GiB maximum, and ``OSError`` if an I/O error occurs while pumping bytes.
+    The wrapper validates ``buffer_size`` before transferring a Windows writer
+    resource, preserving the native entry point's errors without leaking a
+    duplicated handle. Other failures propagate unchanged from the Rust
+    extension: ``ImportError`` if the native module cannot be imported and
+    ``OSError`` if an I/O error occurs while pumping bytes.
     """
     try:
         native_pump = _load_native().rust_pump_stream
         reader = _convert_fd_for_platform(reader_fd)
+        _validate_buffer_size_before_writer_transfer(buffer_size)
         writer = _transfer_writer_fd_for_platform(writer_fd)
     except BaseException:
         _close_writer_after_pre_native_failure(writer_fd)

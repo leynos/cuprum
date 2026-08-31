@@ -3071,6 +3071,21 @@ uv run pytest cuprum/unittests/test_maturin_build.py \
     --snapshot-update -k test_maturin_wheel_build_snapshot
 ```
 
+
+### Debug Rust-pump early-exit regression
+
+`cuprum/unittests/test_rust_pump_debug_abort.py` checks the Rust pump's writer
+ownership on broken-pipe and timeout paths. It requires both the Rust toolchain
+and a maturin script that the current interpreter can locate, using
+`toolchain_available()` and `maturin_script_locatable()` for those prerequisites.
+
+The test uses `build_debug_native_wheel_artefact()` without `--release`, so the
+debug build retains Rust's I/O-safety assertions. It extracts that fresh wheel
+and starts a fresh child interpreter to run the scenarios with
+`CUPRUM_STREAM_BACKEND=rust`; this keeps the child from reusing a native module
+loaded by the test process. The child must exit successfully, and the test
+explicitly rejects `SIGABRT` (`-6`) and `SIGSEGV` (`-11`).
+
 ### `maturin_script_locatable()` — native-wheel skip boundary
 
 `maturin_script_locatable()` (in `tests/helpers/maturin.py`) is the shared
