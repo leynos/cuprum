@@ -32,7 +32,7 @@ locale = "en-gb"
 extend-ignore-re = [
     "\"artifacts\"",
     "--artifact-name(?:[=\\s\"`]|$)",
-    "--artifact-server-path",
+    "--artifact-server-path(?:[=\\s\"`]|$)",
     "/artifacts(?:[/?#\"`]|$)",
     "\\(\"ises\", \"izes\"\\)",
     "\\(\"teh\", \"(?:the|ten)\"\\)",

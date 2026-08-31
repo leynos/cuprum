@@ -2109,8 +2109,10 @@ The continuous integration (CI) workflows run the following checks:
   change performance-relevant paths (`cuprum/`, `rust/`, `benchmarks/`,
   `conftest.py`, `Makefile`, `pyproject.toml`, `uv.lock`, or the CI workflow
   itself). Pull requests touching only documentation skip it; pushes to `main`
-  are never skipped, because that run publishes the baseline artefact. Each
-  run records the gate decision in its workflow summary.
+  are never skipped when detection succeeds, because that run publishes the
+  baseline artefact. If the path detector fails, every event skips the paid
+  benchmark without a path verdict, including pushes to `main`. Each run
+  records the detector status and gate decision in its workflow summary.
   - It benchmarks the current checkout in smoke mode with a release build of
     the Rust extension.
   - It compares each scenario's within-run `rust_mean / python_mean` ratio

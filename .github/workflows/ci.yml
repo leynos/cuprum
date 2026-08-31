@@ -390,9 +390,10 @@ jobs:
       - changes
     # Benchmarks are the estate's dominant paid-runner cost, and most CI
     # runs (Dependabot dev-dependency bumps, docs edits) cannot change
-    # pipeline throughput. Pushes to main always run so the ratchet
-    # baseline artifact is refreshed for every merge.
-    if: github.event_name != 'pull_request' || needs.changes.outputs.bench == 'true'
+    # pipeline throughput. Successful pushes to main always run so the ratchet
+    # baseline artifact is refreshed for every merge. A failed detector skips
+    # every event, rather than spending paid-runner time on an ungated run.
+    if: needs.changes.result == 'success' && (github.event_name != 'pull_request' || needs.changes.outputs.bench == 'true')
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4

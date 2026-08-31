@@ -22,7 +22,6 @@ this suite does not control, and are narrowed where they are read.
 
 from __future__ import annotations
 
-import functools
 import shlex
 import typing as typ
 
@@ -95,7 +94,6 @@ def mapping(value: object, message: str) -> dict[str, object]:
     return typ.cast("dict[str, object]", value)
 
 
-@functools.cache
 def workflow() -> Workflow:
     """Parse the CI workflow."""
     parsed = yaml.safe_load((repo_root() / CI_WORKFLOW).read_text(encoding="utf-8"))
@@ -191,31 +189,51 @@ def _is_environment_assignment(token: str) -> bool:
 
 def _command_segments(script: str) -> cabc.Iterator[list[str]]:
     """Yield shell-token segments split at command boundaries."""
-    boundaries = frozenset({
+    operator_boundaries = frozenset({
         "&",
         "&&",
         ";",
         "|",
         "||",
+    })
+    keyword_boundaries = frozenset({
         "if",
         "then",
         "elif",
         "else",
         "do",
     })
+    here_document_end: str | None = None
 
     for line in script.replace("\\\n", " ").splitlines():
+        if here_document_end is not None:
+            if line == here_document_end:
+                here_document_end = None
+            continue
+
         lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
         lexer.commenters = "#"
         tokens = list(lexer)
-        segment_start = 0
+        segment: list[str] = []
+        is_command_position = True
 
-        for index, token in enumerate([*tokens, ";"]):
-            if token not in boundaries:
+        for shell_word in [*tokens, ";"]:
+            is_boundary = shell_word in operator_boundaries or (
+                is_command_position and shell_word in keyword_boundaries
+            )
+            if is_boundary:
+                yield segment
+                segment = []
+                is_command_position = True
                 continue
-            yield tokens[segment_start:index]
-            segment_start = index + 1
+            segment.append(shell_word)
+            is_command_position = False
+
+        for index, shell_word in enumerate(tokens[:-1]):
+            if shell_word == "<<":
+                here_document_end = tokens[index + 1]
+                break
 
 
 def _segment_starts_command(segment: list[str], expected: tuple[str, ...]) -> bool:
@@ -262,7 +280,6 @@ def benchmark_gate() -> str:
     return typ.cast("str", condition)
 
 
-@functools.cache
 def filter_paths() -> frozenset[str]:
     """Return the path patterns the `bench` filter declares."""
     step = step_with_id(CHANGES_JOB, FILTER_STEP_ID)
@@ -311,7 +328,7 @@ def bench_output(changed_paths: cabc.Collection[str]) -> bool:
     )
 
 
-def benchmark_runs(*, event_name: str, bench: bool) -> bool:
+def benchmark_runs(*, event_name: str, bench: bool, detector_succeeded: bool) -> bool:
     """Model the gate, returning whether `benchmark-ratchet` runs.
 
     Mirrors the `if:` expression a contract test pins verbatim; the pin is what
@@ -322,4 +339,4 @@ def benchmark_runs(*, event_name: str, bench: bool) -> bool:
     bool
         Whether the benchmark job should run for the event and filter verdict.
     """
-    return event_name != "pull_request" or bench
+    return detector_succeeded and (event_name != "pull_request" or bench)

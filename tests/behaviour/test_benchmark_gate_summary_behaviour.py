@@ -34,7 +34,16 @@ _COLUMNS = ("event", "detector", "bench", "decision")
 
 @dc.dataclass(frozen=True, slots=True)
 class Detector:
-    """What the paths-filter step reported to the summary step."""
+    """Represent the paths-filter result supplied to the summary step.
+
+    Attributes
+    ----------
+    outcome : str
+        Closed-set outcome reported by the detector step.
+    bench : str
+        Changed-path verdict emitted by the detector, or an empty string when
+        no verdict was produced.
+    """
 
     outcome: str
     bench: str
@@ -42,29 +51,35 @@ class Detector:
 
 @dc.dataclass(frozen=True, slots=True)
 class Summary:
-    """The row the summary script emitted, by column."""
+    """Represent the parsed row emitted by the summary script.
+
+    Attributes
+    ----------
+    fields : dict[str, str]
+        Summary columns keyed by their names in the workflow table.
+    """
 
     fields: dict[str, str]
 
 
 @scenario(FEATURE, "A pull request touching performance-relevant paths")
 def test_a_pull_request_touching_performance_relevant_paths() -> None:
-    """A pull request touching performance-relevant paths."""
+    """Record a run for a pull request with relevant changed paths."""
 
 
 @scenario(FEATURE, "A documentation-only pull request")
 def test_a_documentation_only_pull_request() -> None:
-    """A documentation-only pull request."""
+    """Record a skipped run for a documentation-only pull request."""
 
 
 @scenario(FEATURE, "A push to main is never gated")
 def test_a_push_to_main_is_never_gated() -> None:
-    """A push to main is never gated."""
+    """Record that a detected push to ``main`` runs the benchmark."""
 
 
 @scenario(FEATURE, "The detector itself failed")
 def test_the_detector_itself_failed() -> None:
-    """The detector itself failed."""
+    """Record the summary produced when path detection fails."""
 
 
 def _summary_script() -> str:
@@ -123,13 +138,30 @@ def _run_summary_script(
     target_fixture="detector",
 )
 def given_the_detector_succeeded(presence: str) -> Detector:
-    """Describe a detector run that completed and produced a verdict."""
+    """Describe a detector run that completed and produced a verdict.
+
+    Parameters
+    ----------
+    presence : str
+        Feature-file value indicating whether relevant paths were found.
+
+    Returns
+    -------
+    Detector
+        Detector result with a successful outcome and Boolean path verdict.
+    """
     return Detector(outcome="success", bench="true" if presence != "no" else "false")
 
 
 @given("the detector failed", target_fixture="detector")
 def given_the_detector_failed() -> Detector:
-    """Describe a detector run that failed, leaving its output unset."""
+    """Describe a detector run that failed, leaving its output unset.
+
+    Returns
+    -------
+    Detector
+        Detector result with failure status and no path verdict.
+    """
     return Detector(outcome="failure", bench="")
 
 
@@ -143,7 +175,22 @@ def given_the_detector_failed() -> Detector:
 def when_the_summary_script_runs(
     detector: Detector, event: str, tmp_path: pth.Path
 ) -> Summary:
-    """Run the workflow's script for the stated event."""
+    """Run the workflow's summary script for the stated event.
+
+    Parameters
+    ----------
+    detector : Detector
+        Detector status and path verdict to expose to the workflow script.
+    event : str
+        Event class supplied through the workflow environment.
+    tmp_path : pathlib.Path
+        Pytest temporary directory in which to capture the step summary.
+
+    Returns
+    -------
+    Summary
+        Parsed summary row emitted by the workflow script.
+    """
     return _run_summary_script(event=event, detector=detector, tmp_path=tmp_path)
 
 
@@ -152,7 +199,16 @@ def when_the_summary_script_runs(
 
 @then(parsers.parse("the summary records the benchmark job as {decision}"))
 def then_the_summary_records(summary: Summary, decision: str) -> None:
-    """Assert the recorded decision, which is the whole point of the step."""
+    """Assert the benchmark decision recorded in the summary.
+
+    Parameters
+    ----------
+    summary : Summary
+        Parsed row emitted by the workflow summary script.
+    decision : str
+        Expected benchmark decision from the feature scenario.
+
+    """
     assert summary.fields["decision"] == decision, (
         f"expected the summary to record {decision!r}; it recorded {summary.fields!r}"
     )
@@ -160,7 +216,16 @@ def then_the_summary_records(summary: Summary, decision: str) -> None:
 
 @then(parsers.parse("the summary reports the detector as {outcome}"))
 def then_the_summary_reports_the_detector(summary: Summary, outcome: str) -> None:
-    """Assert the detector's own status reached the summary."""
+    """Assert that the detector status reached the summary.
+
+    Parameters
+    ----------
+    summary : Summary
+        Parsed row emitted by the workflow summary script.
+    outcome : str
+        Expected detector outcome from the feature scenario.
+
+    """
     assert summary.fields["detector"] == outcome, (
         f"expected detector status {outcome!r}; summary was {summary.fields!r}"
     )
@@ -172,6 +237,14 @@ def then_the_summary_reports_the_verdict(summary: Summary, verdict: str) -> None
 
     Recording `false` when the detector never produced a verdict would read
     as "no performance-relevant changes", which is a claim nothing measured.
+
+    Parameters
+    ----------
+    summary : Summary
+        Parsed row emitted by the workflow summary script.
+    verdict : str
+        Expected changed-path verdict from the feature scenario.
+
     """
     assert summary.fields["bench"] == verdict, (
         f"expected changed-path verdict {verdict!r}; summary was {summary.fields!r}"
@@ -212,6 +285,18 @@ def test_the_recorded_decision_matches_the_gate(
     event name. Enumerating it keeps the summary from drifting away from the
     `if:` expression it describes, which is the failure a maintainer reading
     the summary could not detect.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest temporary directory in which to capture the step summary.
+    event : str
+        Event class supplied through the workflow environment.
+    detector : Detector
+        Detector status and path verdict to expose to the workflow script.
+    expected : str
+        Benchmark decision expected for the event and detector inputs.
+
     """
     summary = _run_summary_script(event=event, detector=detector, tmp_path=tmp_path)
 

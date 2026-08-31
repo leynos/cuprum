@@ -57,6 +57,8 @@ def test_the_ci_job_builds_the_extension_before_running_the_gated_tests() -> Non
         ("do make develop", "make develop", True),
         ("# make develop", "make develop", False),
         ('echo "make develop"', "make develop", False),
+        ("echo if make develop", "make develop", False),
+        ("cat <<EOF\nif make develop\nEOF", "make develop", False),
         ("maturin develop", "maturin develop", True),
         ("# maturin develop", "maturin develop", False),
     ],
@@ -67,7 +69,18 @@ def test_script_runs_command_ignores_comments_and_non_commands(
     *,
     expected: bool,
 ) -> None:
-    """The workflow matcher detects executable commands, not text mentions."""
+    """The workflow matcher detects executable commands, not text mentions.
+
+    Parameters
+    ----------
+    script : str
+        Shell script text to inspect for an executable command.
+    command : str
+        Command invocation that must be recognized in the script.
+    expected : bool
+        Whether the command is expected to be recognized.
+
+    """
     assert script_runs_command(script, command) is expected, (
         f"expected script {script!r} to match command {command!r} as {expected}"
     )

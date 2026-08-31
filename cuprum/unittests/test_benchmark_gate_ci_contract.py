@@ -58,7 +58,8 @@ SUMMARY_STEP = "Record the benchmark gate decision"
 #: check would look for. It is also what keeps `benchmark_runs` — the model the
 #: property and behavioural tests reason with — describing the real gate.
 EXPECTED_GATE = (
-    "github.event_name != 'pull_request' || needs.changes.outputs.bench == 'true'"
+    "needs.changes.result == 'success' && (github.event_name != 'pull_request' || "
+    "needs.changes.outputs.bench == 'true')"
 )
 
 #: Every path whose contents can change measured throughput: the package and
@@ -176,6 +177,19 @@ def test_a_failed_detector_does_not_benchmark_ungated() -> None:
     )
 
 
+def test_a_failed_detector_skips_non_pull_request_events() -> None:
+    """A detector failure must skip even a main push's paid benchmark."""
+    condition = benchmark_gate()
+
+    assert "needs.changes.result == 'success'" in condition, (
+        "the benchmark gate must make detector success explicit so a failed "
+        "detector skips all events rather than running ungated"
+    )
+    assert not benchmark_runs(
+        event_name="push", bench=False, detector_succeeded=False
+    ), "a failed detector must skip a non-pull-request event"
+
+
 def test_the_filter_declares_every_performance_relevant_path() -> None:
     """The filter's path list must be exactly the performance-relevant set.
 
@@ -238,16 +252,20 @@ def test_any_performance_relevant_change_benchmarks(
     """A pull request touching any watched path benchmarks, however mixed."""
     changed = [*relevant, *irrelevant]
 
-    assert benchmark_runs(event_name="pull_request", bench=bench_output(changed)), (
-        f"a pull request changing {changed} must run {BENCHMARK_JOB!r}"
-    )
+    assert benchmark_runs(
+        event_name="pull_request",
+        bench=bench_output(changed),
+        detector_succeeded=True,
+    ), f"a pull request changing {changed} must run {BENCHMARK_JOB!r}"
 
 
 @given(irrelevant=st.lists(st.sampled_from(IRRELEVANT_PATHS), unique=True))
 def test_a_pull_request_touching_nothing_relevant_skips(irrelevant: list[str]) -> None:
     """A docs-only pull request — including an empty diff — skips the paid job."""
     assert not benchmark_runs(
-        event_name="pull_request", bench=bench_output(irrelevant)
+        event_name="pull_request",
+        bench=bench_output(irrelevant),
+        detector_succeeded=True,
     ), f"a pull request changing only {irrelevant} must skip {BENCHMARK_JOB!r}"
 
 
@@ -264,7 +282,11 @@ def test_a_non_pull_request_event_always_benchmarks(
     baseline, which fails open: regressions stop being detected rather than
     being reported.
     """
-    assert benchmark_runs(event_name=event_name, bench=bench_output(changed)), (
+    assert benchmark_runs(
+        event_name=event_name,
+        bench=bench_output(changed),
+        detector_succeeded=True,
+    ), (
         f"a {event_name!r} event changing {changed} must run {BENCHMARK_JOB!r} so "
         "the main baseline artefact is refreshed"
     )

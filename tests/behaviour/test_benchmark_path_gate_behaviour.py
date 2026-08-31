@@ -118,7 +118,9 @@ def when_the_workflow_classifies(event: Event) -> Decision:
     bench = bench_output(event.changed_paths)
     return Decision(
         bench=bench,
-        benchmark_runs=benchmark_runs(event_name=event.name, bench=bench),
+        benchmark_runs=benchmark_runs(
+            event_name=event.name, bench=bench, detector_succeeded=True
+        ),
     )
 
 

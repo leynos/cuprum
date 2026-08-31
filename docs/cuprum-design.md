@@ -2839,9 +2839,12 @@ CI includes a benchmark ratchet job on pushes to `main` and on pull requests
 that change performance-relevant paths. The job runs on a paid runner, so a
 cheap path filter decides whether a pull request can plausibly move the
 numbers; pushes to `main` are never filtered, because that run publishes the
-baseline artefact every later comparison depends on. The gate and its
-rationale are described under "Gating the paid benchmark job" in the
-developers' guide. The job executes smoke-mode throughput benchmarks for the
+baseline artefact every later comparison depends on. Detector failure is fail
+closed for every event, including pushes to `main`, so an unknown path verdict
+cannot spend paid-runner time. The gate summary records both the detector
+status and the resulting benchmark decision. The gate and its rationale are
+described under "Gating the paid benchmark job" in the developers' guide. The
+job executes smoke-mode throughput benchmarks for the
 current checkout (with a release build of the Rust extension) and compares
 each scenario's within-run
 Rust-to-Python mean ratio against the latest successful `main` baseline

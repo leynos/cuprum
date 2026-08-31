@@ -171,6 +171,14 @@ class TestSpellingGate:
     @pytest.mark.parametrize(
         ("suffix", "content"),
         [
+            (
+                ".md",
+                _spelling_fixture(
+                    "Pass `--arti",
+                    "fact-server-path-organi",
+                    "se` to the external client.\n",
+                ),
+            ),
             (".md", _spelling_fixture("organi", "se\n")),
             (
                 ".md",

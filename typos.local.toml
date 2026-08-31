@@ -28,7 +28,7 @@ ignore = [
   # Prefer another narrow pattern to reinstating a blanket rule: prose inside
   # backticks should still be spell-checked.
   '\bbuild_native_wheel_artifact\b',
-  '--artifact-server-path',
+  '--artifact-server-path(?:[=\s"`]|$)',
   '`color`',
 ]
 
