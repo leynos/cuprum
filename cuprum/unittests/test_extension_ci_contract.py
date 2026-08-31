@@ -24,6 +24,7 @@ from tests.helpers.workflow import (
     run_scripts,
     script_runs_command,
     step_named,
+    steps,
 )
 
 SHARED_ACTIONS_SHA = "794e4801babcf68065c660fdf4781ad62be5d061"
@@ -178,10 +179,16 @@ def test_no_ci_step_invokes_maturin_develop_directly(workflow_data: Workflow) ->
 
 
 def test_lint_job_uses_shared_tooling_installers(workflow_data: Workflow) -> None:
-    """The lint job delegates Nixie and Whitaker installation to shared actions."""
-    expected_installers = {
+    """The lint job uses shared tooling setup in the required order."""
+    expected_actions = {
+        "Install Rust toolchain for Nixie": (
+            f"leynos/shared-actions/.github/actions/setup-rust@{SHARED_ACTIONS_SHA}"
+        ),
         "Install Nixie": (
             f"leynos/shared-actions/.github/actions/install-nixie@{SHARED_ACTIONS_SHA}"
+        ),
+        "Install project Rust toolchain": (
+            f"leynos/shared-actions/.github/actions/setup-rust@{SHARED_ACTIONS_SHA}"
         ),
         "Install Whitaker": (
             "leynos/shared-actions/.github/actions/"
@@ -189,9 +196,34 @@ def test_lint_job_uses_shared_tooling_installers(workflow_data: Workflow) -> Non
         ),
     }
 
-    for step_name, expected_uses in expected_installers.items():
+    for step_name, expected_uses in expected_actions.items():
         step = step_named(workflow_data, "lint-test", step_name)
         assert step.get("uses") == expected_uses, (
             f"the {step_name!r} step must use the shared action pinned to "
             f"{SHARED_ACTIONS_SHA}"
         )
+
+    nixie_toolchain = step_named(
+        workflow_data, "lint-test", "Install Rust toolchain for Nixie"
+    )
+    project_toolchain = step_named(
+        workflow_data, "lint-test", "Install project Rust toolchain"
+    )
+    assert nixie_toolchain.get("with") == {
+        "toolchain": "1.95.0",
+        "cache-provider": "external",
+        "use-sccache": "false",
+    }
+    assert project_toolchain.get("with") == {
+        "toolchain": "1.85.0",
+        "cache-provider": "external",
+        "use-sccache": "false",
+    }
+
+    step_names = [step.get("name") for step in steps(workflow_data, "lint-test")]
+    assert (
+        step_names.index("Install Rust toolchain for Nixie")
+        < step_names.index("Install Nixie")
+        < step_names.index("Install project Rust toolchain")
+        < step_names.index("Install Whitaker")
+    )

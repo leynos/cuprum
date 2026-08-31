@@ -208,13 +208,12 @@ jobs:
           uv tool install "mbake==${MBAKE_VERSION}"
           npm install -g "markdownlint-cli2@${MARKDOWNLINT_VERSION}"
 
-      # `cache-provider: external`, so the shared action archives neither the
-      # Cargo registry nor `target/${BUILD_PROFILE}`. This job owns the
-      # registry; nothing owns `target`, because sccache owns compiler output.
-      - name: Install Rust toolchain
+      # Merman CLI 0.7.0 needs Rust 1.95+, while the project gates must keep
+      # running with the supported Rust 1.85.0 toolchain below.
+      - name: Install Rust toolchain for Nixie
         uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
         with:
-          toolchain: '1.85.0'
+          toolchain: '1.95.0'
           cache-provider: external
           use-sccache: 'false'
 
@@ -240,6 +239,13 @@ jobs:
 
       - name: Install Nixie
         uses: leynos/shared-actions/.github/actions/install-nixie@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+
+      - name: Install project Rust toolchain
+        uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        with:
+          toolchain: '1.85.0'
+          cache-provider: external
+          use-sccache: 'false'
 
       - name: Install Whitaker
         uses: leynos/shared-actions/.github/actions/install-whitaker@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
