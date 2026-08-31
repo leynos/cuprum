@@ -34,6 +34,14 @@ _REDIRECT_TEXT = st.text(max_size=64)
 _REDIRECT_HEADERS = st.builds(http.client.HTTPMessage)
 _REDIRECT_FILE_POINTERS = st.builds(io.BytesIO, st.binary(max_size=256))
 _REDIRECT_POSITIONAL_COUNTS = st.integers(min_value=0, max_value=5)
+_VALID_REDIRECT_MIXED_CALLS = st.tuples(
+    _REDIRECT_FILE_POINTERS,
+    _REDIRECT_CODES,
+    _REDIRECT_TEXT,
+    _REDIRECT_HEADERS,
+    _REDIRECT_TEXT,
+    _REDIRECT_POSITIONAL_COUNTS,
+)
 _INVALID_REDIRECT_FIELD_VALUES = st.one_of(
     st.tuples(st.just("code"), st.one_of(st.booleans(), st.none(), _REDIRECT_TEXT)),
     st.tuples(
@@ -150,23 +158,12 @@ def test_redirect_arguments_support_mixed_binding(
     assert actual == values, "Mixed redirect arguments were bound incorrectly"
 
 
-@given(
-    fp=_REDIRECT_FILE_POINTERS,
-    code=_REDIRECT_CODES,
-    msg=_REDIRECT_TEXT,
-    headers=_REDIRECT_HEADERS,
-    newurl=_REDIRECT_TEXT,
-    positional_argument_count=_REDIRECT_POSITIONAL_COUNTS,
-)
+@given(mixed_call=_VALID_REDIRECT_MIXED_CALLS)
 def test_redirect_arguments_bind_every_valid_mixed_call(
-    fp: io.BytesIO,
-    code: int,
-    msg: str,
-    headers: http.client.HTTPMessage,
-    newurl: str,
-    positional_argument_count: int,
+    mixed_call: tuple[io.BytesIO, int, str, http.client.HTTPMessage, str, int],
 ) -> None:
     """Every valid positional-or-keyword split retains the supplied values."""
+    fp, code, msg, headers, newurl, positional_argument_count = mixed_call
     values: tuple[object, ...] = (fp, code, msg, headers, newurl)
     names = ("fp", "code", "msg", "headers", "newurl")
     kwargs = dict(
@@ -249,6 +246,24 @@ def test_redirect_arguments_reject_invalid_binding_shapes(
         _redirect_request_arguments(args, kwargs)
 
 
+def _assert_redirect_arguments_reject_invalid_field_type(
+    field: str,
+    invalid_value: object,
+) -> None:
+    """Assert invalid redirect field types are rejected."""
+    kwargs: dict[str, object] = {
+        "fp": io.BytesIO(),
+        "code": 302,
+        "msg": "Found",
+        "headers": http.client.HTTPMessage(),
+        "newurl": "https://example.com/archive.zip",
+    }
+    kwargs[field] = invalid_value
+
+    with pytest.raises(TypeError):
+        _redirect_request_arguments((), kwargs)
+
+
 @pytest.mark.parametrize(
     ("name", "invalid_value"),
     [
@@ -264,17 +279,7 @@ def test_redirect_arguments_reject_invalid_types(
     invalid_value: object,
 ) -> None:
     """Redirect argument binding should retain its runtime type contract."""
-    kwargs: dict[str, object] = {
-        "fp": io.BytesIO(),
-        "code": 302,
-        "msg": "Found",
-        "headers": http.client.HTTPMessage(),
-        "newurl": "https://example.com/archive.zip",
-    }
-    kwargs[name] = invalid_value
-
-    with pytest.raises(TypeError):
-        _redirect_request_arguments((), kwargs)
+    _assert_redirect_arguments_reject_invalid_field_type(name, invalid_value)
 
 
 @given(field_and_value=_INVALID_REDIRECT_FIELD_VALUES)
@@ -283,17 +288,7 @@ def test_redirect_arguments_reject_every_generated_invalid_field_type(
 ) -> None:
     """Each type-checked redirect field rejects arbitrary invalid values."""
     field, invalid_value = field_and_value
-    kwargs: dict[str, object] = {
-        "fp": io.BytesIO(),
-        "code": 302,
-        "msg": "Found",
-        "headers": http.client.HTTPMessage(),
-        "newurl": "https://example.com/archive.zip",
-    }
-    kwargs[field] = invalid_value
-
-    with pytest.raises(TypeError):
-        _redirect_request_arguments((), kwargs)
+    _assert_redirect_arguments_reject_invalid_field_type(field, invalid_value)
 
 
 @given(args=_MALFORMED_POSITIONAL_ARGUMENTS)
