@@ -1565,7 +1565,6 @@ it entirely. Keep it unset in new usage and set `python_bin` when a specific
 interpreter is required. In dry-run mode, command rendering does not resolve
 `python_bin` via PATH.
 
-
 ### The baseline the ratchet compares against
 
 The bar is the median of a rolling window of the last seven `main` runs, held
