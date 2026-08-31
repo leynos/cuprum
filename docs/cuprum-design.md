@@ -1277,7 +1277,7 @@ sequenceDiagram
     participant Telemetry as Exec telemetry
 
     Wait->>Consumers: _drain_stream_consumers(consumers, context)
-    Wait->>Consumers: _await_eof_grace(consumers)
+    Wait->>Consumers: _await_capture_eof_grace(consumers, context)
     Consumers->>Reader: read(_READ_SIZE)
     alt EOF observed within grace
         Reader-->>Consumers: empty chunk

@@ -54,7 +54,7 @@ class _BlockingChunkedReader:
         await self._blocked.wait()
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class _DrainScenario:
     """One EOF or cancellation outcome for a capturing drain."""
 
@@ -198,21 +198,50 @@ async def _run_drain_scenario(scenario: _DrainScenario) -> str | None:
         discard_on_cancel=discard_event,
     )
     if scenario.reached_eof:
-        reader = asyncio.StreamReader()
-        for chunk in chunks:
-            reader.feed_data(chunk)
-        reader.feed_eof()
-        return await _drain(reader, config)
+        return await _drain_to_eof(chunks, config)
+    return await _drain_until_cancelled(
+        chunks,
+        config,
+        discard_event,
+        cancel_before_read=scenario.cancel_before_read,
+    )
 
+
+async def _drain_to_eof(
+    chunks: tuple[bytes, ...],
+    config: _StreamConfig,
+) -> str | None:
+    """Drain chunks supplied through EOF."""
+    reader = asyncio.StreamReader()
+    for chunk in chunks:
+        reader.feed_data(chunk)
+    reader.feed_eof()
+    return await _drain(reader, config)
+
+
+def _signal_discard_on_cancel(discard_event: asyncio.Event | None) -> None:
+    """Signal that cancellation must discard retained output when configured."""
+    if discard_event is not None:
+        discard_event.set()
+
+
+async def _drain_until_cancelled(
+    chunks: tuple[bytes, ...],
+    config: _StreamConfig,
+    discard_event: asyncio.Event | None,
+    *,
+    cancel_before_read: bool,
+) -> str | None:
+    """Drain chunks until cancellation reaches the blocked reader."""
     reader = _BlockingChunkedReader(chunks)
     task = asyncio.create_task(_drain(typ.cast("asyncio.StreamReader", reader), config))
-    if scenario.cancel_before_read:
+    if cancel_before_read:
         task.cancel()
-    else:
-        await reader.wait_until_blocked()
-        if discard_event is not None:
-            discard_event.set()
-        task.cancel()
+        return await task
+
+    await reader.wait_until_blocked()
+    _signal_discard_on_cancel(discard_event)
+    task.cancel()
     return await task
 
 

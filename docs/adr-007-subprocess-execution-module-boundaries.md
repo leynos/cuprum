@@ -52,9 +52,10 @@ Keep runner orchestration, process spawning, and stream-consumer creation in
 accounting to `_subprocess_timeout.py`; and move process waiting, termination,
 and stream-consumer draining to `_subprocess_wait.py`.
 
-Expose the drain helpers through `_subprocess_drain.py` as a narrow
-compatibility boundary for focused tests and private imports rather than a
-second live implementation.
+The original proposal exposed the drain helpers through
+`_subprocess_drain.py` as a narrow compatibility boundary for focused tests
+and private imports rather than a second live implementation. The
+2026-08-30 addendum records that this former boundary was removed.
 
 This makes ownership explicit while retaining the runner as the composition
 root.
@@ -84,9 +85,9 @@ spawning and stream-consumer creation/wiring. `_subprocess_stdin` owns
 `cuprum.stdin` logger. `_subprocess_timeout` owns timeout details/errors,
 timeout translation, and the exit-event helpers shared by timeout and normal
 completion paths. `_subprocess_wait` owns the deadline wait, process
-termination, and the single stream-consumer drain. `_subprocess_drain`
-exposes that drain boundary for focused tests and private imports while
-re-exporting the implementation from `_subprocess_wait`.
+termination, and remains the single owner of stream-consumer draining. The
+formerly proposed `_subprocess_drain` compatibility boundary was removed by
+the 2026-08-30 addendum.
 
 The drain is capture-aware. A capturing drain waits for up to
 `_CAPTURE_EOF_GRACE_S` for terminated-process readers to observe EOF, then
