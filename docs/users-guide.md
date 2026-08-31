@@ -1701,8 +1701,8 @@ cleanup. A successful hand-off emits no event, deliberately: there is no
 per-hop counter and no total-hop counter to divide by. So the decline counter
 gives the *number* of hops that left the fast path, not the *fraction* that
 stayed on it. To report that fraction, pair the decline counter with a hop total
-measured independently — for example, a counter of your own incremented once
-per inter-stage hop you submit.
+measured independently — for example, a separately maintained counter
+incremented once per submitted inter-stage hop.
 
 Cancellation emits `PumpEvent.phase="cleanup_started"` when it starts waiting
 for native worker cleanup. It emits `PumpEvent.phase="cleanup_completed"` when

@@ -72,15 +72,14 @@ async def _cancel_pump_with_failing_restore(
                 await task
 
 
-def test_cancellation_settles_when_descriptor_restore_fails(
+def _run_cancelled_pump_with_captured_cleanup(
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
+    worker_started: threading.Event,
+    worker_finished: threading.Event,
+    release: threading.Event,
+    cleanup_futures: list[asyncio.Future[None]],
 ) -> None:
-    """A failed descriptor restore cannot strand a cancelled native pump."""
-    worker_started = threading.Event()
-    worker_finished = threading.Event()
-    release = threading.Event()
-    cleanup_futures: list[asyncio.Future[None]] = []
+    """Install the blocked pump double and run its cancellation path."""
 
     def blocking_pump(reader_fd: int, writer_fd: int) -> int:
         """Block until cancellation releases the native-pump stand-in."""
@@ -110,15 +109,33 @@ def test_cancellation_settles_when_descriptor_restore_fails(
         "_await_native_pump_cleanup",
         capture_cleanup_future,
     )
+    asyncio.run(
+        _cancel_pump_with_failing_restore(
+            worker_started,
+            worker_finished,
+            release,
+            cleanup_futures,
+        )
+    )
+
+
+def test_cancellation_settles_when_descriptor_restore_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed descriptor restore cannot strand a cancelled native pump."""
+    worker_started = threading.Event()
+    worker_finished = threading.Event()
+    release = threading.Event()
+    cleanup_futures: list[asyncio.Future[None]] = []
 
     with caplog.at_level(logging.DEBUG, logger=_pipeline_streams.__name__):
-        asyncio.run(
-            _cancel_pump_with_failing_restore(
-                worker_started,
-                worker_finished,
-                release,
-                cleanup_futures,
-            )
+        _run_cancelled_pump_with_captured_cleanup(
+            monkeypatch,
+            worker_started,
+            worker_finished,
+            release,
+            cleanup_futures,
         )
 
     teardown_records = [
