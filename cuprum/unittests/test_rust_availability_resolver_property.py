@@ -23,7 +23,7 @@ _NON_BOOLEAN_RESOLVER_VALUES = st.one_of(
     st.text(max_size=64),
     st.lists(st.integers(), max_size=4),
     st.dictionaries(st.text(max_size=8), st.integers(), max_size=4),
-).filter(lambda value: not isinstance(value, bool))
+)
 
 
 @given(availability=_NON_BOOLEAN_RESOLVER_VALUES)

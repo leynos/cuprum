@@ -162,7 +162,19 @@ def test_redirect_arguments_support_mixed_binding(
 def test_redirect_arguments_bind_every_valid_mixed_call(
     mixed_call: tuple[io.BytesIO, int, str, http.client.HTTPMessage, str, int],
 ) -> None:
-    """Every valid positional-or-keyword split retains the supplied values."""
+    """Verify that generated valid calls preserve their bound values.
+
+    Parameters
+    ----------
+    mixed_call
+        Generated redirect values and a positional argument count from zero
+        through five.
+
+    Notes
+    -----
+    Every valid positional-or-keyword split must bind the five callback
+    arguments without changing their values or runtime types.
+    """
     fp, code, msg, headers, newurl, positional_argument_count = mixed_call
     values: tuple[object, ...] = (fp, code, msg, headers, newurl)
     names = ("fp", "code", "msg", "headers", "newurl")
@@ -286,7 +298,18 @@ def test_redirect_arguments_reject_invalid_types(
 def test_redirect_arguments_reject_every_generated_invalid_field_type(
     field_and_value: tuple[str, object],
 ) -> None:
-    """Each type-checked redirect field rejects arbitrary invalid values."""
+    """Verify that generated invalid field values are rejected.
+
+    Parameters
+    ----------
+    field_and_value
+        Generated field name and value whose runtime type violates that
+        field's redirect-binding contract.
+
+    Notes
+    -----
+    The binder must raise ``TypeError`` for every generated invalid value.
+    """
     field, invalid_value = field_and_value
     _assert_redirect_arguments_reject_invalid_field_type(field, invalid_value)
 
@@ -295,7 +318,19 @@ def test_redirect_arguments_reject_every_generated_invalid_field_type(
 def test_redirect_arguments_reject_generated_malformed_arity(
     args: tuple[object, ...],
 ) -> None:
-    """Incomplete and excessive positional calls always fail binding."""
+    """Verify that generated malformed positional calls are rejected.
+
+    Parameters
+    ----------
+    args
+        Generated positional arguments with fewer than five or more than five
+        values.
+
+    Notes
+    -----
+    Calls with malformed positional arity must raise ``TypeError`` during
+    redirect argument binding.
+    """
     with pytest.raises(TypeError):
         _redirect_request_arguments(args, {})
 
