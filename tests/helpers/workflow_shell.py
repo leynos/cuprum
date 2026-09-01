@@ -21,7 +21,7 @@ _OPERATORS = frozenset({"&", "&&", ";", "|", "||"})
 _KEYWORDS = frozenset({"if", "then", "elif", "else", "do"})
 
 
-def _shell_words(line: str) -> list[str]:
+def _shell_tokens(line: str) -> list[str]:
     """Tokenize one shell line."""
     lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
@@ -34,46 +34,47 @@ def _is_command_boundary(shell_word: str, *, is_command_position: bool) -> bool:
     return shell_word in _OPERATORS or (is_command_position and shell_word in _KEYWORDS)
 
 
-def _here_document_state(shell_words: list[str]) -> tuple[str, bool] | None:
-    """Return the marker and tab-stripping mode for one here-document."""
-    for index, shell_word in enumerate(shell_words[:-1]):
+def _here_document_delimiter(tokens: list[str]) -> str | None:
+    """Return the declared here-document delimiter, when present."""
+    for index, shell_word in enumerate(tokens[:-1]):
         if shell_word == "<<":
-            marker = shell_words[index + 1]
-            return marker.removeprefix("-"), marker.startswith("-")
+            return tokens[index + 1]
     return None
 
 
-def _closes_here_document(line: str, here_document: tuple[str, bool]) -> bool:
-    """Return whether a line closes the active here-document."""
-    marker, strips_tabs = here_document
-    return (line.lstrip("\t") if strips_tabs else line) == marker
+def _consume_here_document_line(line: str, delimiter: str) -> str | None:
+    """Return the delimiter while a here-document body remains."""
+    terminator = delimiter.removeprefix("-")
+    candidate = line.lstrip("\t") if delimiter.startswith("-") else line
+    return None if candidate == terminator else delimiter
 
 
-def _line_command_segments(shell_words: list[str]) -> cabc.Iterator[list[str]]:
-    """Yield command segments from a shell line's words."""
+def _command_segments_from_tokens(tokens: list[str]) -> cabc.Iterator[list[str]]:
+    """Yield command segments from a shell line's tokens."""
     segment: list[str] = []
     is_command_position = True
-    for shell_word in [*shell_words, ";"]:
-        if _is_command_boundary(shell_word, is_command_position=is_command_position):
+    for token in [*tokens, ";"]:
+        if _is_command_boundary(token, is_command_position=is_command_position):
             yield segment
             segment = []
             is_command_position = True
             continue
-        segment.append(shell_word)
+        segment.append(token)
         is_command_position = False
 
 
 def _command_segments(script: str) -> cabc.Iterator[list[str]]:
     """Yield shell-token segments split at command boundaries."""
-    here_document: tuple[str, bool] | None = None
+    here_document_delimiter: str | None = None
     for line in script.replace("\\\n", " ").splitlines():
-        if here_document is not None:
-            if _closes_here_document(line, here_document):
-                here_document = None
+        if here_document_delimiter is not None:
+            here_document_delimiter = _consume_here_document_line(
+                line, here_document_delimiter
+            )
             continue
-        shell_words = _shell_words(line)
-        here_document = _here_document_state(shell_words)
-        yield from _line_command_segments(shell_words)
+        tokens = _shell_tokens(line)
+        yield from _command_segments_from_tokens(tokens)
+        here_document_delimiter = _here_document_delimiter(tokens)
 
 
 def _segment_starts_command(segment: list[str], expected: tuple[str, ...]) -> bool:
