@@ -137,15 +137,15 @@ class TestSpellingGate:
         tracked_files = ("guide.md", "module.py", "crate.rs")
         for filename in tracked_files:
             (tmp_path / filename).write_text("organize\n", encoding="utf-8")
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)  # ruff: ignore[start-process-with-partial-path] - the integration test drives the real git/make on PATH
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)  # ruff: ignore[start-process-with-partial-path] - fixed git executable with a test-owned temporary path
         subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - the argument list is literal; no shell is involved
-            ["git", "add", *tracked_files],  # ruff: ignore[start-process-with-partial-path] - the integration test drives the real git/make on PATH
+            ["git", "add", *tracked_files],  # ruff: ignore[start-process-with-partial-path] - fixed git executable with a test-owned temporary path
             cwd=tmp_path,
             check=True,
         )
 
         result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - the argument list is literal; no shell is involved
-            [  # ruff: ignore[start-process-with-partial-path] - the integration test drives the real git/make on PATH
+            [  # ruff: ignore[start-process-with-partial-path] - fixed make executable with a test-owned temporary path
                 "make",
                 "-f",
                 str(script_directory.parent / "Makefile"),

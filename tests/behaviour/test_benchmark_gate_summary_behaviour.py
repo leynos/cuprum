@@ -65,22 +65,46 @@ class Summary:
 
 @scenario(FEATURE, "A pull request touching performance-relevant paths")
 def test_a_pull_request_touching_performance_relevant_paths() -> None:
-    """Record a run for a pull request with relevant changed paths."""
+    """Record the run decision for a performance-relevant pull request.
+
+    Notes
+    -----
+    The feature scenario expects the benchmark job to run after successful
+    detection reports performance-relevant changes.
+    """
 
 
 @scenario(FEATURE, "A documentation-only pull request")
 def test_a_documentation_only_pull_request() -> None:
-    """Record a skipped run for a documentation-only pull request."""
+    """Record the skip decision for a documentation-only pull request.
+
+    Notes
+    -----
+    The feature scenario expects the benchmark job to skip after successful
+    detection reports no performance-relevant changes.
+    """
 
 
 @scenario(FEATURE, "A push to main is never gated")
 def test_a_push_to_main_is_never_gated() -> None:
-    """Record that a detected push to ``main`` runs the benchmark."""
+    """Record the run decision for an ungated push to ``main``.
+
+    Notes
+    -----
+    The feature scenario expects the benchmark job to run regardless of a
+    successful detector result that reports no performance-relevant changes.
+    """
 
 
 @scenario(FEATURE, "The detector itself failed")
 def test_the_detector_itself_failed() -> None:
-    """Record the summary produced when path detection fails."""
+    """Record the failed-detector decision for a pull request.
+
+    Notes
+    -----
+    The feature scenario expects the benchmark job to skip with the
+    ``skip-detector-failed`` decision when path detection fails.
+    """
 
 
 @scenario(FEATURE, "The detector fails for a push")
