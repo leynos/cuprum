@@ -1,9 +1,9 @@
 # Debugging Plan: pipeline timeout gate failure
 
-**Generated**: 2026-09-02  
-**Issue ID**: post-V3/V4 deterministic-gate precondition  
-**Severity**: medium  
-**Falsification sub-agent**: alchemist  
+**Generated**: 2026-09-02
+**Issue ID**: post-V3/V4 deterministic-gate precondition
+**Severity**: medium
+**Falsification sub-agent**: alchemist
 **Planning agent boundary**: This document was prepared by the planning agent.
 Falsification must be executed by the named sub-agent, not by the planning
 agent.
