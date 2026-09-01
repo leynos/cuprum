@@ -377,6 +377,7 @@ def test_worker_command_uses_module_invocation(tmp_path: pth.Path) -> None:
         f"expected worker command to propagate read size, got {cmd}"
     )
 
+
 def test_profile_sweep_runs_every_size_in_each_round(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -422,6 +423,8 @@ def test_profile_sweep_runs_every_size_in_each_round(
     assert set(observed[2:]) == {4096, 16384}, (
         f"second round must visit each size exactly once, got {observed}"
     )
+
+
 def _run_profile_cli(*args: str) -> int:
     """Invoke benchmarks.profile_tee_hotpath via subprocess and return its exit code."""
     completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]

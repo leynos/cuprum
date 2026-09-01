@@ -71,6 +71,30 @@ if typ.TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
+"""Pump and collect pipeline streams after subprocess spawning.
+The process lifecycle owns process lifetime, ``_pipeline_stage_streams`` owns
+stdio shape, and this module moves and collects bytes using that policy.
+"""
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+    from cuprum._pipeline_types import _StageObservation
+_LOGGER = logging.getLogger(__name__)
+"""Pipeline stream pumping, capture collection, and backend dispatch.
+This module handles data movement after ``cuprum._process_lifecycle`` has
+spawned each subprocess with the canonical stdio handles from
+``cuprum._pipeline_stage_streams``. It creates the tasks that capture final
+stdout and per-stage stderr, pumps stdout from one stage into the next stage's
+stdin, and chooses between the Python and Rust stream backends for that pump.
+The module intentionally consumes the canonical stage stream policy instead of
+``_pipeline_stage_streams`` responsible for stdio shape, and this module
+responsible for moving and collecting bytes once those streams exist.
+"""
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+    from cuprum._pipeline_types import _StageObservation
+_LOGGER = logging.getLogger(__name__)
+
+
 def _log_rust_pump_declined(reason: RustPumpDeclineReason) -> None:
     """Record the reason an inter-stage hop falls back to Python pumping."""
     _pump_obs._log_native_pump_declined(_LOGGER, reason)

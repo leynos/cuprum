@@ -358,6 +358,7 @@ def _split_complete_lines(
 
     return [_strip_line_ending(line) for line in lines], remainder
 
+
 def _should_hold_trailing_line(line: str, *, final: bool) -> bool:
     """Return whether a trailing line needs the next decoded chunk."""
     if not _ends_with_line_ending(line):
