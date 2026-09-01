@@ -163,6 +163,7 @@ def _clear_backend_cache() -> None:
     _check_rust_available.cache_clear()
     get_stream_backend.cache_clear()
 
+
 @pytest.fixture(scope="session")
 def workflow_data() -> Workflow:
     """Provide the checked-in Continuous Integration workflow model.
@@ -173,6 +174,7 @@ def workflow_data() -> Workflow:
         Parsed ``ci.yml`` model shared by workflow contract tests.
     """
     return parse_workflow(read_workflow_source())
+
 
 @pytest.fixture(scope="session")
 def filter_path_patterns(workflow_data: Workflow) -> frozenset[str]:
