@@ -396,7 +396,7 @@ def test_the_workflow_serializes_runs_per_ref(workflow_data: Workflow) -> None:
 def test_a_new_run_cancels_only_superseded_pull_request_runs(
     workflow_data: Workflow,
     newer_event: str,
-    expected_cancellation: bool,  # noqa: FBT001 - pytest parametrizes this value.
+    expected_cancellation: bool,
 ) -> None:
     """Model the cancellation policy for a newer run on the same ref.
 

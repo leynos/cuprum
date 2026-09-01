@@ -50,7 +50,7 @@ def mapping(value: object, message: str) -> dict[str, object]:
     ------
     AssertionError
         If ``value`` is not a mapping with only string keys.
-    """  # noqa: DOC502 - contract validation delegates to _require.
+    """  # ruff: ignore[docstring-extraneous-exception] - contract validation delegates to _require.
     _require(
         condition=isinstance(value, dict)
         and all(isinstance(key, str) for key in value),
@@ -71,7 +71,7 @@ def read_workflow_source() -> str:
     ------
     OSError
         If the workflow source cannot be read.
-    """  # noqa: DOC502 - read_text propagates OSError.
+    """  # ruff: ignore[docstring-extraneous-exception] - read_text propagates OSError.
     return (repo_root() / CI_WORKFLOW).read_text(encoding="utf-8")
 
 
@@ -94,7 +94,7 @@ def parse_workflow(source: str) -> Workflow:
         If the parsed document is not a mapping.
     yaml.YAMLError
         If ``source`` is not valid YAML.
-    """  # noqa: DOC502 - parser and contract validator exceptions propagate.
+    """  # ruff: ignore[docstring-extraneous-exception] - parser and contract validator exceptions propagate.
     parsed = yaml.safe_load(source)
     boolean_on_key = (
         next((key for key in parsed if key is True), None)
@@ -127,7 +127,7 @@ def job(workflow_data: Workflow, job_name: str) -> dict[str, object]:
     ------
     AssertionError
         If the jobs mapping or named job is absent or malformed.
-    """  # noqa: DOC502 - contract validation delegates to _require.
+    """  # ruff: ignore[docstring-extraneous-exception] - contract validation delegates to _require.
     jobs = mapping(
         workflow_data.get("jobs"), f"{CI_WORKFLOW} must declare a jobs mapping"
     )
@@ -156,7 +156,7 @@ def steps(workflow_data: Workflow, job_name: str) -> list[dict[str, object]]:
     ------
     AssertionError
         If the named job or its declared steps are malformed or absent.
-    """  # noqa: DOC502 - contract validation delegates to _require.
+    """  # ruff: ignore[docstring-extraneous-exception] - contract validation delegates to _require.
     declared = job(workflow_data, job_name).get("steps")
     _require(
         condition=isinstance(declared, list),
@@ -188,7 +188,7 @@ def step_with_id(
     ------
     AssertionError
         If the named job has no steps or no step carries ``step_id``.
-    """  # noqa: DOC502 - contract validation delegates to _require.
+    """  # ruff: ignore[docstring-extraneous-exception] - contract validation delegates to _require.
     found, _ = _step_matching(workflow_data, job_name, "id", step_id)
     return mapping(
         found, f"the {job_name!r} job must declare a step with id {step_id!r}"
@@ -218,7 +218,7 @@ def step_named(
     ------
     AssertionError
         If the named job has no steps or no step carries ``step_name``.
-    """  # noqa: DOC502 - contract validation delegates to _require.
+    """  # ruff: ignore[docstring-extraneous-exception] - contract validation delegates to _require.
     found, declared_steps = _step_matching(workflow_data, job_name, "name", step_name)
     names = [step.get("name") for step in declared_steps]
     return mapping(
@@ -281,7 +281,7 @@ def run_scripts(workflow_data: Workflow) -> cabc.Iterator[tuple[str, str]]:
     ------
     AssertionError
         If the workflow's jobs mapping or a job payload is malformed.
-    """  # noqa: DOC502 - contract validation delegates to _require.
+    """  # ruff: ignore[docstring-extraneous-exception] - contract validation delegates to _require.
     jobs = mapping(
         workflow_data.get("jobs"), f"{CI_WORKFLOW} must declare a jobs mapping"
     )
@@ -314,7 +314,7 @@ def first_step_running(
     ------
     AssertionError
         If no step in the named job runs ``command``.
-    """  # noqa: DOC502 - contract validation delegates to _require.
+    """  # ruff: ignore[docstring-extraneous-exception] - contract validation delegates to _require.
     found = next(
         (
             (index, script)
@@ -349,7 +349,7 @@ def benchmark_gate(workflow_data: Workflow) -> str:
     AssertionError
         If the benchmark job or its string ``if:`` condition is malformed or
         absent.
-    """  # noqa: DOC502 - contract validation delegates to _require.
+    """  # ruff: ignore[docstring-extraneous-exception] - contract validation delegates to _require.
     condition = job(workflow_data, BENCHMARK_JOB).get("if")
     _require(
         condition=isinstance(condition, str),
@@ -380,7 +380,7 @@ def filter_paths(workflow_data: Workflow) -> frozenset[str]:
         If the filter step does not provide a ``filters`` input.
     yaml.YAMLError
         If the ``filters`` input is not valid YAML.
-    """  # noqa: DOC502 - contract validation delegates to _require.
+    """  # ruff: ignore[docstring-extraneous-exception] - contract validation delegates to _require.
     step = step_with_id(workflow_data, CHANGES_JOB, FILTER_STEP_ID)
     inputs = mapping(
         step.get("with"),

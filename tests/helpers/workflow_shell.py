@@ -123,7 +123,7 @@ def script_runs_command(script: str, command: str) -> bool:
     ------
     ValueError
         If ``script`` or ``command`` contains unclosed shell quoting.
-    """  # noqa: DOC502 - shlex propagates malformed quoting.
+    """  # ruff: ignore[docstring-extraneous-exception] - shlex propagates malformed quoting.
     expected = tuple(shlex.split(command))
     return any(
         _segment_starts_command(segment, expected)

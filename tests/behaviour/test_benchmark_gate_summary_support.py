@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import dataclasses as dc
-import subprocess  # noqa: S404 - tests run the checked-in workflow script.
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - tests run the checked-in workflow script.
 import typing as typ
 
 from tests.helpers.workflow import CHANGES_JOB, Workflow, script_of, step_named
@@ -86,7 +86,7 @@ def _execute_summary_script(
     workflow_data: Workflow,
 ) -> subprocess.CompletedProcess[str]:
     """Execute the checked-in summary script."""
-    completed = subprocess.run(  # noqa: S603 - the checked-in workflow script is trusted
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - the checked-in workflow script is trusted
         ["/usr/bin/env", "bash", "-c", _summary_script(workflow_data)],
         env={
             "PATH": "/usr/bin:/bin",
