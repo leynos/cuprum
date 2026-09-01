@@ -87,7 +87,7 @@ Choose Option C. The root `Makefile` defines the Pylint command in terms of:
 - `PYLINT`, the full `uv tool run` command.
 
 The `lint` target runs `ruff check` first and the PyPy-backed Pylint tier after
-`interrogate`. It then runs all `df12-python-lints` v0.1.0 messages under
+`interrogate`. It then runs all `df12-python-lints` v0.3.0 messages under
 CPython 3.14 and scans both snapshot roots with `ambrleaks`. Earlier failures
 stop the target before later stages, keeping the feedback order predictable.
 
@@ -98,7 +98,7 @@ The canonical policy lives in `pyproject.toml`:
   `typing.*` aliases.
 - `[tool.pylint.main]`, `[tool.pylint.design]`, and
   `[tool.pylint."messages control"]` define the focused second tier.
-- The development dependency pins the `df12-python-lints` v0.1.0 release at an
+- The development dependency pins the `df12-python-lints` v0.3.0 release at an
   immutable commit; the Makefile's `DF12_PYTHON_LINTS_REF` pins the standalone
   `ambrleaks` tool to the same commit.
 - `ambrleaks.toml` records exact deterministic fixture values that resemble
