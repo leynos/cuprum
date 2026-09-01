@@ -14,7 +14,6 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-007: Subprocess execution module boundaries](adr-007-subprocess-execution-module-boundaries.md)
 - [ADR-009: Enforce Oxford spelling in source](adr-009-enforce-oxford-spelling-in-source.md)
 
-
 ## GitHub Actions runner profiles
 
 Compatible repository-owned Linux jobs run on the shared uncached
