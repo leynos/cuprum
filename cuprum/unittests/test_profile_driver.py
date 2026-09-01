@@ -212,6 +212,7 @@ def test_default_scenarios_use_requested_repeat_count(tmp_path: pth.Path) -> Non
 @given(repeat_count=st.integers(min_value=1, max_value=10))
 @settings(
     max_examples=20,
+    deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 def test_scenario_matrix_order_is_stable(

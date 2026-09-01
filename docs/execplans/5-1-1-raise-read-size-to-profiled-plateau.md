@@ -5,7 +5,7 @@ This ExecPlan (execution plan) is a living document. The sections
 `Decision log`, `Outcomes & retrospective`, `Conformance basis`, and
 `Verification plan` must be kept up to date as work proceeds.
 
-Status: COMPLETE
+Status: IN PROGRESS
 
 Measurement update (2026-08-29): the 15-round interleaved sweep selected
 65536 bytes. The tee median improvement was 22.9997% (95% paired-bootstrap
@@ -221,6 +221,20 @@ This task is complete only when:
   sweep record completed. `make check-fmt`, `make lint`, `make typecheck`,
   `make test`, `make markdownlint`, and `make nixie` passed; CodeRabbit
   completed with zero findings.
+- [x] 2026-09-02 V3/V4 correction: restored the boundary property to a real
+  two-process pipeline on both backends, required each case to write more than
+  one chunk, and made V4 assert the approved inclusive range with the sweep
+  artefact in its failure message. The focused tests passed.
+- [x] 2026-09-02 Gate preflight: repaired the isolated timeout-test fixture so
+  its deliberately blocked inter-stage pump uses the Python backend. The test
+  owns task reconciliation, whereas native raw-descriptor cleanup is covered
+  separately; this prevents its final child-reaping step from hanging.
+- [x] 2026-09-02 Gate preflight: disabled Hypothesis's per-example deadline
+  for the profile scenario-matrix property, whose fixture writes files and
+  imports benchmark configuration. Its initial 258 ms cold run exceeded the
+  200 ms default but its rerun took 36 ms; the property now remains semantic.
+- [ ] 2026-09-02 Re-run the deterministic gates, publish the correction, and
+  obtain a new CodeRabbit result before returning this ExecPlan to `COMPLETE`.
 
 ## Surprises & discoveries
 
@@ -375,6 +389,42 @@ This task is complete only when:
   cleanup. This removes a deterministic test-harness leak without altering
   product timeout behaviour.
 
+- Observation: V3's boundary test had stopped exercising a real pipeline.
+  Evidence: it accepted `stream_backend` but passed an in-memory
+  `asyncio.StreamReader` to `_consume_stream`, so neither backend dispatcher
+  nor `_pump_stream_dispatch` ran. The chunk partition was also discarded.
+  Impact: V3 did not discharge its real-pipeline, both-backend obligation even
+  though the selected 64 KiB value and the production implementation were
+  correct. The correction restores `build_property_pipeline_case()` and
+  `run_parity_pipeline()`, retains their independent hexadecimal byte oracle,
+  and requires every near-boundary case to make multiple upstream writes.
+
+- Observation: V4 pinned the selected value instead of the approved range.
+  Evidence: `test_default_read_size_is_profiled_plateau` asserted
+  `_READ_SIZE == 65536`, contrary to V4's stated inclusive 16384–65536
+  contract. Impact: an evidence-backed retune inside the approved range would
+  have required a mechanical test edit. The test now asserts the range and
+  names `docs/tee-hotpath-read-size-sweep-2026-08-29.md` if it fails.
+
+- Observation: the pre-correction full test gate timed out in the zero-timeout
+  task-ownership test.
+  Evidence: its isolated invocation timed out after 30 seconds even though it
+  captured two started processes. The test passed in 0.46 seconds with the
+  Python backend. The focused falsification record is
+  `docs/debugging/debugging-plan-2026-09-02-pipeline-timeout.md`.
+  Impact: the test's deliberately blocked fixture now forces the Python pump,
+  because its assertion is about pipeline-owned task reconciliation. Native
+  raw-descriptor lifecycle remains covered by its dedicated test modules.
+
+- Observation: the profile scenario-matrix property exceeded Hypothesis's
+  default 200 ms deadline only on a cold run.
+  Evidence: the full gate recorded 258.03 ms initially and 35.74 ms on rerun
+  for the same `repeat_count=4` case. The property creates fixtures and imports
+  benchmark configuration, so wall-clock scheduling is not its contract.
+  Impact: `deadline=None` prevents a flaky timing check from obscuring the
+  finite scenario-order assertion; its example count and semantic oracle are
+  unchanged.
+
 ## Decision log
 
 - Decision D10: unstack PR #321 while performing Stage A.
@@ -397,6 +447,42 @@ This task is complete only when:
   conflicts on `origin/main` at `ba32d3f5`.
   Date/Author: 2026-08-29, implementation agent. This completes the Stage A
   stack correction and does not alter functional scope.
+
+- Decision D17: restore V3's real-pipeline oracle rather than extending the
+  in-process reader helper.
+  Rationale: V3 is specifically the integration proof for `_pump_stream_dispatch`
+  and the Python/Rust backend choice; `_consume_at_read_size()` cannot prove
+  either. `build_property_pipeline_case()` already supplies a subprocess writer,
+  a downstream hexadecimal sink, and a byte-level expected result, so it is the
+  smallest existing harness that satisfies the plan without a new test seam.
+  Date/Author: 2026-09-02, implementation agent. No production interface,
+  dependency, or benchmark result changes.
+
+- Decision D18: make V4 enforce the approved interval, not 65536.
+  Rationale: the sweep selected 65536, but the roadmap and V4 approve any
+  evidence-backed value from 16384 through 65536. Naming the sweep artefact in
+  the failure message directs a future retuning change to its required evidence.
+  Date/Author: 2026-09-02, implementation agent. No production change.
+
+- Decision D19: constrain the immediate-timeout ownership fixture to the
+  Python pump.
+  Rationale: when the test deliberately left its writer unread, final reaping
+  through the native raw-descriptor pump did not return before pytest's
+  30-second timeout. The fixture's stated property is that pipeline ownership
+  settles the created task, not that the native pump handles a blocked descriptor;
+  native cleanup tests already cover the latter. This removes a false gate
+  failure without reducing the intended ownership evidence.
+  Date/Author: 2026-09-02, implementation agent. No production behaviour or
+  public interface changes.
+
+- Decision D20: disable the Hypothesis deadline for scenario-matrix ordering.
+  Rationale: the property validates deterministic ordering across a small
+  integer range, not latency. Its file-backed fixture makes a 200 ms cold-start
+  deadline unreliable, while the project uses `deadline=None` for comparable
+  fixture-backed or subprocess-facing properties. Keep the finite 20-example
+  search and the exact ordering oracle unchanged.
+  Date/Author: 2026-09-02, implementation agent. No production behaviour,
+  public interface, or coverage reduction.
 
 - Decision D12: retain the direct helper's historical end-of-input default.
   Rationale: `_split_complete_lines(..., final=True)` remains suitable for its
@@ -570,7 +656,9 @@ fixture supplied roughly 28 million lines per repeat. This was an operational
 cost, not a change in scope. The CRLF boundary fix did not surface an
 additional line-ending question; vertical tab, form feed, U+2028, and NEL
 remain the existing stable separator cases covered by the line-splitting
-properties. Final gate and CodeRabbit evidence completed at EP-M5.
+properties. The 2026-09-02 V3/V4 correction restored the final integration and
+retuning contracts; its final deterministic-gate and CodeRabbit evidence is
+pending before this outcome is declared complete again.
 
 ## Context and orientation
 
@@ -1083,6 +1171,14 @@ for the property tests and `python-testing` for the behavioural scenario;
 investigation.
 
 ## Revision note
+
+Revision 4, 2026-09-02, after review found two incomplete verification claims:
+V3 now executes the near-64 KiB cases through the real two-process pipeline on
+both backends, asserts more than one upstream write, and retains the external
+hexadecimal expected-byte oracle. V4 now asserts the approved 16–64 KiB range
+and names the sweep artefact in its failure message. The roadmap acceptance
+text records these contracts. The ExecPlan is `IN PROGRESS` until the renewed
+deterministic gates and CodeRabbit review pass.
 
 Revision 3, 2026-08-29, after the Stage E sweep and implementation: selected
 65536 bytes from the randomized 15-round curve, recorded the paired bootstrap
