@@ -1047,8 +1047,8 @@ implemented with the following decisions:
   manually constructed events may omit `exec_id` (`None`); such events cannot
   be correlated. Consumers should ignore an uncorrelatable `start` and create
   no span for it, and likewise ignore ambiguous `stdout`, `stderr`, `timeout`,
-  `teardown_error`, `capture_eof_grace_expired`, and `exit` events rather than
-  guess.
+  `teardown_error`, `capture_eof_grace_expired`, `pipeline_fail_fast`, and
+  `exit` events rather than guess.
 - **Line emission:** `stdout`/`stderr` phases are emitted per decoded line. Line
   terminators are removed, and the final partial line (when output does not end
   with a newline) is still emitted.
@@ -1238,18 +1238,17 @@ preserving the `SafeCmd.run()` execution contract:
 - `cuprum/_subprocess_wait.py` owns the rules for *ending* a run: applying the
   deadline, terminating the process (through `_terminate_all_shielded`, so a
   caller cancelling during the grace period cannot skip the `SIGKILL`
-  escalation), and draining the stream consumers exactly once. Split out of
-  `_subprocess_execution` so that module stays about orchestration — spawning,
-  wiring streams, assembling the result.
-- `cuprum/_subprocess_drain.py` is the narrow compatibility boundary for the
-  stream-drain helpers used by focused tests and private imports. The live
-  implementation remains in `_subprocess_wait.py`; a capture-aware drain gives
-  readers a bounded `_CAPTURE_EOF_GRACE_S` window to observe EOF before
-  cancellation. Capturing drains map an absent reader result to an empty
-  string, while non-capturing drains skip the window and retain `None` for
-  absent text. This makes the timeout contract deterministic: a capturing
-  `TimeoutExpired.stdout` or `.stderr` is always text, including when no reader
-  text arrived before the bounded teardown window.
+  escalation), and draining the stream consumers exactly once. Its explicit
+  drain interface uses `_RunTaskOwnership` to bundle the optional stdin-writer
+  task with the stdout and stderr consumer tasks, `_DrainContext` to carry
+  capture and observability settings, and `_reconcile_run_tasks(tasks,
+  context)` to cancel stdin before settling both consumers as one shielded
+  cleanup unit. A capturing drain gives readers a bounded
+  `_CAPTURE_EOF_GRACE_S` window to observe EOF before cancellation, maps an
+  absent reader result to an empty string, and therefore keeps captured timeout
+  output deterministic; non-capturing drains skip the window and retain `None`
+  for absent text. Split out of `_subprocess_execution` so that module stays
+  about orchestration — spawning, wiring streams, assembling the result.
 - When that window expires with readers still pending, `_subprocess_wait` uses
   `_timeout_reporting` to emit one correlated
   `capture_eof_grace_expired` `ExecEvent`. The event carries the execution's
@@ -1260,6 +1259,36 @@ preserving the `SafeCmd.run()` execution contract:
   `cuprum.capture_eof_grace_expired` event to the matching span. No captured
   stream payload is emitted in that event. Unexpected reader failures remain
   separately reported as `teardown_error`.
+
+For screen readers: The following sequence diagram shows how
+`_drain_stream_consumers` gives capturing stream readers a bounded EOF-grace
+period. The wait logic asks consumers to read chunks; if EOF arrives within
+grace, captured text is returned. If grace expires while readers remain
+pending, telemetry records the expiry, consumers are settled once, and their
+deterministic captured result is returned.
+
+Figure 5: Capturing drain EOF-grace sequence
+
+```mermaid
+sequenceDiagram
+    participant Wait as _subprocess_wait
+    participant Consumers as Stream consumers
+    participant Reader as StreamReader
+    participant Telemetry as Exec telemetry
+
+    Wait->>Consumers: _drain_stream_consumers(consumers, context)
+    Wait->>Consumers: _await_capture_eof_grace(consumers, context)
+    Consumers->>Reader: read(_READ_SIZE)
+    alt EOF observed within grace
+        Reader-->>Consumers: empty chunk
+        Consumers-->>Wait: captured text
+    else grace expires with readers pending
+        Wait->>Telemetry: _report_capture_eof_grace_expiry(...)
+        Wait->>Consumers: _settle_consumers(consumers, discard_on_cancel)
+        Consumers-->>Wait: deterministic captured result
+    end
+```
+
 - `cuprum/_timeout_reporting.py` owns the two channels a timeout or teardown
   failure is reported on — the structured `cuprum.timeout` log record and the
   `timeout` / `teardown_error` observe events — and the `_report_*` helpers
@@ -1337,7 +1366,7 @@ outcome per selected target, and the fail-fast caller counts only outcomes that
 verify process exit. When the reducer selects no stages — every other stage has
 already settled — no tasks are created and no gather occurs.
 
-Figure 5: Fail-fast termination selection via the `_stages_to_terminate` reducer
+Figure 6: Fail-fast termination selection via the `_stages_to_terminate` reducer
 
 ```mermaid
 sequenceDiagram
@@ -1524,7 +1553,7 @@ the result aggregator; and releases the semaphore. Once all have finished, the
 aggregator returns the results in submission order and `run_concurrent` returns
 a `ConcurrentResult` carrying the results, the failures, and the `ok` flag.
 
-Figure 6: Concurrent execution flow with allowlist validation and semaphore
+Figure 7: Concurrent execution flow with allowlist validation and semaphore
 gating
 
 ```mermaid
@@ -1570,7 +1599,7 @@ results — the commands that *completed*; cancelled ones produced no
 mapping each back to its original position and the failure indices within the
 compacted tuple.
 
-Figure 7: Fail-fast mode cancellation behaviour
+Figure 8: Fail-fast mode cancellation behaviour
 
 ```mermaid
 sequenceDiagram
@@ -1729,7 +1758,7 @@ each operation in turn: a `_CounterOp` becomes
 `inc_counter(name, value, labels)` on the collector, and a `_HistogramOp`
 becomes `observe_histogram(name, value, labels)`.
 
-Figure 8: Metrics hook dispatch, from `ExecEvent` to collector calls
+Figure 9: Metrics hook dispatch, from `ExecEvent` to collector calls
 
 ```mermaid
 sequenceDiagram

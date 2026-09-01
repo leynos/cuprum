@@ -13,12 +13,16 @@ import asyncio
 import logging
 import typing as typ
 
-from cuprum._subprocess_drain import _CAPTURE_EOF_GRACE_S, _drain_stream_consumers
+from cuprum._subprocess_wait import (
+    _CAPTURE_EOF_GRACE_S,
+    _drain_stream_consumers,
+    _DrainContext,
+)
 
 if typ.TYPE_CHECKING:
     import pytest
 
-_DRAIN_LOGGER = "cuprum._subprocess_drain"
+_DRAIN_LOGGER = "cuprum._subprocess_wait"
 
 
 def _field(record: logging.LogRecord, name: str) -> object:
@@ -65,7 +69,7 @@ def test_a_failed_reader_is_recorded_before_it_is_discarded(
         )
         for _ in range(4):
             await asyncio.sleep(0)
-        await _drain_stream_consumers(consumers, capture=True)
+        await _drain_stream_consumers(consumers, _DrainContext(capture=True))
 
     with caplog.at_level(logging.DEBUG, logger=_DRAIN_LOGGER):
         asyncio.run(run_case())
@@ -105,7 +109,7 @@ def test_a_cancelled_reader_is_not_recorded_as_a_failure(
             asyncio.create_task(_never_reaches_eof()),
             asyncio.create_task(_never_reaches_eof()),
         )
-        await _drain_stream_consumers(consumers, capture=False)
+        await _drain_stream_consumers(consumers, _DrainContext(capture=False))
 
     with caplog.at_level(logging.DEBUG, logger=_DRAIN_LOGGER):
         asyncio.run(run_case())
@@ -143,8 +147,7 @@ def test_an_expired_grace_window_is_recorded_with_its_pending_readers(
 
         await _drain_stream_consumers(
             consumers,
-            capture=True,
-            eof_grace_waiter=expire_immediately,
+            _DrainContext(capture=True, eof_grace_waiter=expire_immediately),
         )
 
     with caplog.at_level(logging.DEBUG, logger=_DRAIN_LOGGER):
@@ -161,7 +164,7 @@ def test_an_expired_grace_window_is_recorded_with_its_pending_readers(
     record = expiries[0]
     pending = _field(record, "cuprum_pending_readers")
     assert pending == 1, f"the record must count the parked readers, got {pending!r}"
-    window = _field(record, "cuprum_timeout_s")
+    window = _field(record, "cuprum_eof_grace_s")
     assert window == _CAPTURE_EOF_GRACE_S, (
         f"the record must state the window, got {window!r}"
     )
@@ -178,7 +181,7 @@ def test_readers_that_all_reach_eof_leave_the_window_unrecorded(
             asyncio.create_task(_completes("out")),
             asyncio.create_task(_completes("err")),
         )
-        await _drain_stream_consumers(consumers, capture=True)
+        await _drain_stream_consumers(consumers, _DrainContext(capture=True))
 
     with caplog.at_level(logging.DEBUG, logger=_DRAIN_LOGGER):
         asyncio.run(run_case())

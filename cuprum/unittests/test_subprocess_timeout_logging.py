@@ -17,6 +17,7 @@ import pytest
 from cuprum import _timeout_reporting
 from cuprum._subprocess_wait import (
     _drain_stream_consumers,
+    _DrainContext,
     _wait_for_exit_code_within_timeout,
 )
 from cuprum.sh import ExecutionContext
@@ -156,7 +157,9 @@ def test_teardown_drain_failure_logs_diagnostic(
         # CancelledError during the drain.
         await asyncio.sleep(0)
 
-        await _drain_stream_consumers((consumer, completed), capture=False, pid=5678)
+        await _drain_stream_consumers(
+            (consumer, completed), _DrainContext(capture=False, pid=5678)
+        )
 
     with caplog.at_level(logging.ERROR, logger=_TIMEOUT_LOGGER):
         asyncio.run(run_case())

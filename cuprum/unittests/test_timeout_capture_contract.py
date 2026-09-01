@@ -15,23 +15,30 @@ running behind it.
 from __future__ import annotations
 
 import asyncio
+import io
 import typing as typ
 
 import pytest
 
 from cuprum import Program, TimeoutExpired, sh
+from cuprum._streams import _drain, _StreamConfig
 from cuprum._subprocess_wait import (
+    _CAPTURE_EOF_GRACE_S,
     _drain_stream_consumers,
+    _DrainContext,
 )
 from cuprum.sh import RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
-from tests.helpers.timeouts import child_argv, python_interpreter
+from tests.helpers.timeouts import (
+    CHILD_STDERR,
+    CHILD_STDOUT,
+    child_argv,
+    python_interpreter,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
-
-    from cuprum._streams import _StreamConfig
 
 
 async def _never_reaches_eof() -> str | None:
@@ -46,17 +53,20 @@ async def _reaches_eof_late(text: str, turns: int) -> str | None:
     return text
 
 
-async def _skip_eof_grace(
-    _consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-) -> None:
-    """Return immediately so a test never depends on elapsed wall-clock time."""
-
-
-async def _wait_for_consumers(
-    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-) -> None:
-    """Let test consumers finish without using the production wall-clock grace."""
-    await asyncio.gather(*consumers)
+async def _wait_for_marker(marker: Path, *, deadline: float) -> None:
+    """Fail unless the child writes its readiness marker before ``deadline``."""
+    loop = asyncio.get_running_loop()
+    try:
+        async with asyncio.timeout_at(deadline):
+            while loop.time() < deadline:
+                # ASYNC240: a child process writes this file, so no asyncio
+                # primitive can observe it directly.
+                if marker.exists():  # noqa: ASYNC240
+                    return
+                await asyncio.sleep(0.01)
+    except TimeoutError:
+        pass
+    pytest.fail(f"the child did not write {marker} before its deadline")
 
 
 def test_capturing_drain_reports_empty_text_for_a_reader_with_no_capture() -> None:
@@ -74,11 +84,11 @@ def test_capturing_drain_reports_empty_text_for_a_reader_with_no_capture() -> No
             asyncio.create_task(_never_reaches_eof()),
         )
 
-        stdout_text, stderr_text = await _drain_stream_consumers(
-            consumers,
-            capture=True,
-            eof_grace_waiter=_skip_eof_grace,
-        )
+        async with asyncio.timeout(_CAPTURE_EOF_GRACE_S * 2):
+            stdout_text, stderr_text = await _drain_stream_consumers(
+                consumers,
+                _DrainContext(capture=True),
+            )
 
         assert stdout_text == "", (
             f"a capturing drain must report stdout as text, got {stdout_text!r}"
@@ -108,8 +118,7 @@ def test_capturing_drain_waits_for_an_imminent_eof() -> None:
 
         stdout_text, stderr_text = await _drain_stream_consumers(
             consumers,
-            capture=True,
-            eof_grace_waiter=_wait_for_consumers,
+            _DrainContext(capture=True),
         )
 
         assert stdout_text == "out", (
@@ -151,8 +160,7 @@ def test_capturing_drain_settles_its_readers_when_cancelled_mid_grace() -> None:
         drain = asyncio.create_task(
             _drain_stream_consumers(
                 consumers,
-                capture=True,
-                eof_grace_waiter=wait_at_grace,
+                _DrainContext(capture=True, eof_grace_waiter=wait_at_grace),
             ),
         )
         await grace_started.wait()
@@ -184,7 +192,7 @@ def test_non_capturing_drain_leaves_a_wedged_reader_unset() -> None:
 
         stdout_text, stderr_text = await _drain_stream_consumers(
             consumers,
-            capture=False,
+            _DrainContext(capture=False),
         )
 
         assert stdout_text is None, (
@@ -192,6 +200,43 @@ def test_non_capturing_drain_leaves_a_wedged_reader_unset() -> None:
         )
         assert stderr_text is None, (
             f"a non-capturing drain must leave stderr unset, got {stderr_text!r}"
+        )
+
+    asyncio.run(run_case())
+
+
+def test_non_capturing_drain_discards_a_buffered_consumer_when_signalled() -> None:
+    """Non-capturing cleanup cancels a buffered reader without decoding it."""
+
+    async def run_case() -> None:
+        """Set the shared discard event before consumer settlement."""
+        discard_event = asyncio.Event()
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"buffered output")
+        config = _StreamConfig(
+            capture_output=True,
+            echo_output=False,
+            sink=io.StringIO(),
+            encoding="utf-8",
+            errors="strict",
+            discard_on_cancel=discard_event,
+        )
+        consumers = (
+            asyncio.create_task(_drain(reader, config)),
+            asyncio.create_task(_never_reaches_eof()),
+        )
+        await asyncio.sleep(0)
+        discard_event.set()
+
+        stdout_text, stderr_text = await _drain_stream_consumers(
+            consumers,
+            _DrainContext(capture=False, discard_on_cancel=discard_event),
+        )
+
+        assert stdout_text is None
+        assert stderr_text is None
+        assert all(task.cancelled() for task in consumers), (
+            "non-capturing cleanup must settle both readers by cancellation"
         )
 
     asyncio.run(run_case())
@@ -249,3 +294,33 @@ def test_timeout_reports_capture_as_text_when_no_reader_reached_eof(
     assert expired.value.stderr == "", (
         f"a capturing run must report stderr as text on timeout, got {detail}"
     )
+
+
+def test_timeout_keeps_flushed_output_after_the_child_is_ready(tmp_path: Path) -> None:
+    """A public timeout retains each stream flushed before its deadline."""
+
+    async def run_case() -> TimeoutExpired:
+        """Wait for the child readiness marker before its timeout fires."""
+        marker = tmp_path / "ready"
+        command = sh.make(
+            Program(python_interpreter()),
+            catalogue=python_catalogue()[0],
+        )(*child_argv(marker))
+        run_timeout = 1.0
+        deadline = asyncio.get_running_loop().time() + run_timeout
+        run = asyncio.create_task(
+            command.run(timeout=run_timeout, output=RunOutputOptions(capture=True)),
+        )
+
+        await _wait_for_marker(marker, deadline=deadline)
+
+        with pytest.raises(TimeoutExpired) as expired:
+            await run
+        return expired.value
+
+    expired = asyncio.run(run_case())
+
+    assert isinstance(expired.output, str)
+    assert CHILD_STDOUT in expired.output
+    assert isinstance(expired.stderr, str)
+    assert CHILD_STDERR in expired.stderr

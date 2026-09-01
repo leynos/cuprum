@@ -727,8 +727,11 @@ stdout and stderr are both echoed. Writes to that sink interleave only at
 intermediate `await` before that chunk write finishes.
 
 Cancellation is fail-fast. If an `asyncio.Task` wrapping `_drain()` is
-cancelled, `asyncio.CancelledError` propagates from `stream.read()` and any
-bytes captured by that invocation so far are discarded.
+cancelled, `asyncio.CancelledError` propagates from `stream.read()`. When
+`config.capture_output` is true and `config.discard_on_cancel` is unset, the
+bytes captured so far are decoded and returned; when the discard event is set
+(or output is not being captured), those bytes are discarded and cancellation
+propagates.
 
 Callers must not share one `asyncio.StreamReader` between two `_drain()`
 invocations. Each invocation must receive its own reader.
@@ -782,8 +785,8 @@ synchronization of its own.
 single `match`, and each phase falls into exactly one of four categories: span
 lifecycle (`start` opens a span, `exit` ends it), span event (`stdout`,
 `stderr`, `stdin_error`, `timeout`, `teardown_error`, and
-`capture_eof_grace_expired` record a `cuprum.<phase>` event on the already-open
-span), deliberately ignored (`plan`
+`capture_eof_grace_expired`, and `pipeline_fail_fast` record a
+`cuprum.<phase>` event on the already-open span), deliberately ignored (`plan`
 and `stdin` carry no tracing semantics), or unhandled (the `case _` logs via
 `_log_unhandled_phase` instead of failing silently or raising). A new phase
 should be slotted into this policy rather than given an ad-hoc side path.
@@ -867,8 +870,8 @@ without a signal that loss is undiagnosable.
 hand-constructed event) cannot be correlated, so it is ignored rather than
 guessed from PID: a `start` without an `exec_id` creates no span, and
 `stdout`/`stderr`/`stdin_error`/`timeout`/`teardown_error`/
-`capture_eof_grace_expired`/`exit` without one are dropped. Every event Cuprum
-itself emits carries an `exec_id`, so this
+`capture_eof_grace_expired`/`pipeline_fail_fast`/`exit` without one are
+dropped. Every event Cuprum itself emits carries an `exec_id`, so this
 only affects hand-built event streams.
 
 ## Canonical `_TokenRegistration` handle base
@@ -2916,10 +2919,24 @@ spawning, wiring streams, and assembling the result — belongs in
 `cuprum/_subprocess_wait.py` holds `_wait_for_exit_code`,
 `_wait_for_exit_code_within_timeout`, `_drain_stream_consumers`,
 `_cancel_pending_consumers`, and `_reconcile_run_tasks` (see the wait-path
-detail below). It was split out of `_subprocess_execution` so that module
-stays about orchestration; termination routes through
-`_terminate_all_shielded` (`cuprum/_process_lifecycle.py`), so a caller
-cancelling during the grace period cannot skip the `SIGKILL` escalation.
+detail below). The drain interface is explicit: `_RunTaskOwnership` bundles
+the optional stdin-writer task with the stdout and stderr consumer tasks,
+`_DrainContext` carries capture, observability, and the optional
+`discard_on_cancel` event, and `_reconcile_run_tasks(tasks, context)` cancels
+stdin before settling both consumers. The reconciliation is one unit for
+shielded cleanup. A capturing context gives readers the bounded EOF-grace
+window and decodes absent output as text, while a non-capturing context settles
+promptly and discards output. `_await_capture_eof_grace` uses an injected
+waiter when supplied and otherwise delegates to the bounded
+`_await_eof_grace`; `_settle_consumers` is the single optional settlement
+boundary that sets the discard event before cancelling pending readers.
+`_build_stream_config(execution, discard_on_cancel)` passes that shared event
+into each stream's `_StreamConfig`, so timeout capture can retain buffered
+text while cancellation and failure cleanup can discard it. It was split out
+of `_subprocess_execution` so that module stays about orchestration;
+termination routes through `_terminate_all_shielded`
+(`cuprum/_process_lifecycle.py`), so a caller cancelling during the grace
+period cannot skip the `SIGKILL` escalation.
 
 The pipeline side has an analogous split. `cuprum/_pipeline_results.py` owns
 per-stage *reporting*: the terminal `exit` event a stage owes its observers
@@ -3179,11 +3196,13 @@ and teardown" above). It replaces the try/except ladder that previously lived
 inline in `SafeCmd.run`, keeping the public method to a minimal orchestration
 skeleton (plan event, before-hooks dispatch, delegation).
 
-`_build_stream_config(execution)` centralizes construction of the
-`_StreamConfig` used by the streaming execution path
+`_build_stream_config(execution, discard_on_cancel)` centralizes construction
+of the `_StreamConfig` used by the streaming execution path
 (`_run_subprocess_with_streams`). Extracting it removes one branch from that
 function, reducing its cyclomatic complexity below the CodeScene threshold, and
-makes the stdout-sink resolution logic testable in isolation.
+makes the stdout-sink resolution logic testable in isolation. The required
+`discard_on_cancel` event is shared by both stream consumers and is set by
+`_settle_consumers` only for cleanup paths that must discard retained output.
 
 Passing no `StdinInput` leaves subprocess stdin inherited from the parent
 process, preserving the pre-feature behaviour.

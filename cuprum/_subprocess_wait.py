@@ -42,7 +42,7 @@ if typ.TYPE_CHECKING:
 # created by process termination. A grandchild may keep a pipe open, so teardown
 # must never wait indefinitely.
 _CAPTURE_EOF_GRACE_S = 0.25
-_DRAIN_LOGGER = logging.getLogger("cuprum._subprocess_drain")
+_DRAIN_LOGGER = logging.getLogger(__name__)
 
 type _EofGraceWaiter = cabc.Callable[
     [tuple[asyncio.Task[str | None], asyncio.Task[str | None]]],
@@ -58,6 +58,7 @@ class _DrainContext:
     eof_grace_waiter: _EofGraceWaiter | None = None
     pid: int | None = None
     observation: _StageObservation | None = None
+    discard_on_cancel: asyncio.Event | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -66,6 +67,7 @@ class _RunTaskOwnership:
 
     stdin_task: asyncio.Task[None] | None
     consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]]
+    discard_on_cancel: asyncio.Event
 
 
 async def _await_eof_grace(
@@ -137,10 +139,7 @@ async def _wait_for_exit_code(
 
 async def _drain_stream_consumers(
     consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-    context: _DrainContext | None = None,
-    *,
-    capture: bool | None = None,
-    **options: object,
+    context: _DrainContext,
 ) -> tuple[str | None, str | None]:
     """Cancel pending consumers, drain them once, and decode their output.
 
@@ -162,49 +161,60 @@ async def _drain_stream_consumers(
         The decoded stdout and stderr text. Capturing drains return text for
         both streams, while other drains report ``None`` for absent text.
 
-    Raises
-    ------
-    asyncio.CancelledError
-        If cancellation arrives while the capture grace is active.
     """
-    if context is None:
-        context = _DrainContext(
-            typ.cast("bool", capture),
-            eof_grace_waiter=typ.cast(
-                "_EofGraceWaiter | None", options.get("eof_grace_waiter")
-            ),
-            pid=typ.cast("int | None", options.get("pid")),
-            observation=typ.cast(
-                "_StageObservation | None", options.get("observation")
-            ),
-        )
     if context.capture:
-        try:
-            await (context.eof_grace_waiter or _await_eof_grace)(consumers)
-        except asyncio.CancelledError:
-            with contextlib.suppress(asyncio.CancelledError):
-                await _settle_consumers(consumers)
-            raise
-        pending_count = sum(not task.done() for task in consumers)
-        if pending_count:
-            _DRAIN_LOGGER.debug(
-                "capture_eof_grace_expired pending_readers=%s",
-                pending_count,
-                extra={
-                    "cuprum_pending_readers": pending_count,
-                    "cuprum_timeout_s": _CAPTURE_EOF_GRACE_S,
-                },
+        await _await_capture_eof_grace(consumers, context)
+    stdout_result, stderr_result = await _settle_consumers(
+        consumers,
+        discard_on_cancel=(None if context.capture else context.discard_on_cancel),
+    )
+    _report_drain_failures(stdout_result, stderr_result, context)
+    stdout_text = _decode_consumer_result(stdout_result, capture=context.capture)
+    stderr_text = _decode_consumer_result(stderr_result, capture=context.capture)
+    return stdout_text, stderr_text
+
+
+async def _await_capture_eof_grace(
+    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+    context: _DrainContext,
+) -> None:
+    """Give capturing consumers their bounded opportunity to reach EOF."""
+    try:
+        await (context.eof_grace_waiter or _await_eof_grace)(consumers)
+    except asyncio.CancelledError:
+        with contextlib.suppress(asyncio.CancelledError):
+            await _settle_consumers(
+                consumers, discard_on_cancel=context.discard_on_cancel
             )
-            _report_capture_eof_grace_expiry(
-                context.observation,
-                pid=context.pid,
-                eof_grace_s=_CAPTURE_EOF_GRACE_S,
-                pending_readers=pending_count,
-            )
-    stdout_result, stderr_result = await _settle_consumers(consumers)
+        raise
+    pending_count = sum(not task.done() for task in consumers)
+    if pending_count:
+        _DRAIN_LOGGER.debug(
+            "capture_eof_grace_expired pending_readers=%s",
+            pending_count,
+            extra={
+                "cuprum_pending_readers": pending_count,
+                "cuprum_eof_grace_s": _CAPTURE_EOF_GRACE_S,
+            },
+        )
+        _report_capture_eof_grace_expiry(
+            context.observation,
+            pid=context.pid,
+            eof_grace_s=_CAPTURE_EOF_GRACE_S,
+            pending_readers=pending_count,
+        )
+
+
+def _report_drain_failures(
+    stdout_result: str | BaseException | None,
+    stderr_result: str | BaseException | None,
+    context: _DrainContext,
+) -> None:
+    """Report unexpected consumer failures without replacing the primary error."""
+    results = (("stdout", stdout_result), ("stderr", stderr_result))
     drain_errors = tuple(
         type(result).__name__
-        for result in (stdout_result, stderr_result)
+        for _, result in results
         if isinstance(result, BaseException)
         and not isinstance(result, asyncio.CancelledError)
     )
@@ -212,9 +222,7 @@ async def _drain_stream_consumers(
         _report_teardown_drain_failure(
             context.observation, pid=context.pid, error_types=drain_errors
         )
-    for stream, result in zip(
-        ("stdout", "stderr"), (stdout_result, stderr_result), strict=True
-    ):
+    for stream, result in results:
         if isinstance(result, BaseException) and not isinstance(
             result, asyncio.CancelledError
         ):
@@ -227,9 +235,6 @@ async def _drain_stream_consumers(
                     "cuprum_error_type": type(result).__name__,
                 },
             )
-    stdout_text = _decode_consumer_result(stdout_result, capture=context.capture)
-    stderr_text = _decode_consumer_result(stderr_result, capture=context.capture)
-    return stdout_text, stderr_text
 
 
 def _decode_consumer_result(
@@ -245,8 +250,12 @@ def _decode_consumer_result(
 
 async def _settle_consumers(
     consumers: tuple[asyncio.Task[str | None], ...],
+    *,
+    discard_on_cancel: asyncio.Event | None = None,
 ) -> list[str | BaseException | None]:
     """Cancel unfinished consumers and drain every result once."""
+    if discard_on_cancel is not None:
+        discard_on_cancel.set()
     _cancel_pending_consumers(consumers)
     return await asyncio.gather(*consumers, return_exceptions=True)
 
@@ -344,11 +353,13 @@ async def _reconcile_run_tasks(
 __all__ = [
     "_DrainContext",
     "_RunTaskOwnership",
+    "_await_capture_eof_grace",
     "_await_eof_grace",
     "_cancel_pending_consumers",
     "_decode_consumer_result",
     "_drain_stream_consumers",
     "_reconcile_run_tasks",
+    "_report_drain_failures",
     "_settle_consumers",
     "_wait_for_exit_code",
     "_wait_for_exit_code_within_timeout",

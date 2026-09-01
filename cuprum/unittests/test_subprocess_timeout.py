@@ -23,6 +23,7 @@ from cuprum._subprocess_timeout import (
 )
 from cuprum._subprocess_wait import (
     _drain_stream_consumers,
+    _DrainContext,
     _wait_for_exit_code,
     _wait_for_exit_code_within_timeout,
 )
@@ -89,7 +90,7 @@ def test_drain_stream_consumers_cancels_pending_and_decodes() -> None:
         await completed  # the completed consumer must be genuinely done
 
         stdout_text, stderr_text = await _drain_stream_consumers(
-            (pending, completed), capture=False
+            (pending, completed), _DrainContext(capture=False)
         )
 
         assert pending.cancelled(), (
@@ -139,7 +140,7 @@ def test_drain_stream_consumers_decodes_across_orderings(case: _DrainCase) -> No
             await asyncio.sleep(0)
 
         stdout_text, stderr_text = await _drain_stream_consumers(
-            consumers, capture=False
+            consumers, _DrainContext(capture=False)
         )
 
         assert all(task.done() for task in consumers), (
