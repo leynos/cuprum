@@ -14,9 +14,7 @@ import dataclasses as dc
 
 from pytest_bdd import given, parsers, scenario, then, when
 
-from tests.helpers.workflow import bench_output, benchmark_runs, filter_paths, workflow
-
-FILTER_PATHS = filter_paths(workflow())
+from tests.helpers.workflow import bench_output, benchmark_runs
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -153,20 +151,24 @@ def given_a_push_to_main(paths: str) -> Event:
 
 
 @when("the workflow classifies the changed paths", target_fixture="decision")
-def when_the_workflow_classifies(event: Event) -> Decision:
+def when_the_workflow_classifies(
+    event: Event, filter_path_patterns: frozenset[str]
+) -> Decision:
     """Apply the declared filter and gate to an event.
 
     Parameters
     ----------
     event : Event
         Event to classify using the workflow model.
+    filter_path_patterns : frozenset[str]
+        Performance-relevant paths declared by the workflow fixture.
 
     Returns
     -------
     Decision
         Filter verdict and benchmark admission for the event.
     """
-    bench = bench_output(event.changed_paths, FILTER_PATHS)
+    bench = bench_output(event.changed_paths, filter_path_patterns)
     return Decision(
         bench=bench,
         benchmark_runs=benchmark_runs(

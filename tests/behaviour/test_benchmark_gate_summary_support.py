@@ -1,0 +1,159 @@
+"""Execute and parse the benchmark-gate summary script declared by CI."""
+
+from __future__ import annotations
+
+import dataclasses as dc
+import subprocess  # noqa: S404 - tests run the checked-in workflow script.
+import typing as typ
+
+from tests.helpers.workflow import CHANGES_JOB, Workflow, script_of, step_named
+
+if typ.TYPE_CHECKING:
+    import pathlib as pth
+
+SUMMARY_STEP = "Record the benchmark gate decision"
+_COLUMNS = ("event", "detector", "bench", "decision")
+_METRIC_PREFIX = "::notice title=benchmark-gate-decision::"
+
+
+@dc.dataclass(frozen=True, slots=True)
+class Detector:
+    """Represent the paths-filter result supplied to the summary step.
+
+    Attributes
+    ----------
+    outcome : str
+        Closed-set outcome reported by the detector step.
+    bench : str
+        Changed-path verdict emitted by the detector, or an empty string when
+        no verdict was produced.
+    """
+
+    outcome: str
+    bench: str
+
+
+@dc.dataclass(frozen=True, slots=True)
+class Summary:
+    """Represent the parsed row emitted by the summary script.
+
+    Attributes
+    ----------
+    fields : dict[str, str]
+        Summary columns keyed by their names in the workflow table.
+    table : str
+        Canonical Markdown table emitted by the workflow summary script.
+    metric : dict[str, str]
+        Bounded labels emitted in the workflow annotation.
+    """
+
+    fields: dict[str, str]
+    table: str
+    metric: dict[str, str]
+
+
+@dc.dataclass(frozen=True, slots=True)
+class SummaryCase:
+    """Describe one event and detector combination for summary validation.
+
+    Attributes
+    ----------
+    event : str
+        Event supplied to the workflow summary script.
+    detector : Detector
+        Detector result supplied to the workflow summary script.
+    decision : str
+        Expected bounded benchmark decision.
+    """
+
+    event: str
+    detector: Detector
+    decision: str
+
+
+def _summary_script(workflow_data: Workflow) -> str:
+    """Return the summary step's script, as `ci.yml` declares it."""
+    script = script_of(step_named(workflow_data, CHANGES_JOB, SUMMARY_STEP))
+    assert script is not None, f"the {SUMMARY_STEP!r} step must run a script"
+    return script
+
+
+def run_summary_script(
+    *,
+    event: str,
+    detector: Detector,
+    tmp_path: pth.Path,
+    workflow_data: Workflow,
+) -> Summary:
+    """Execute the real summary script and parse its durable outputs.
+
+    Parameters
+    ----------
+    event : str
+        Event class supplied through the workflow environment.
+    detector : Detector
+        Detector status and path verdict exposed to the workflow script.
+    tmp_path : pathlib.Path
+        Pytest temporary directory in which to capture the step summary.
+    workflow_data : Workflow
+        Parsed workflow containing the summary step.
+
+    Returns
+    -------
+    Summary
+        Parsed table and bounded metric emitted by the script.
+
+    """
+    summary_path = tmp_path / "step-summary.md"
+    summary_path.touch()
+    completed = subprocess.run(  # noqa: S603 - the checked-in workflow script is trusted
+        ["/usr/bin/env", "bash", "-c", _summary_script(workflow_data)],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "EVENT": event,
+            "BENCH": detector.bench,
+            "DETECTOR": detector.outcome,
+            "GITHUB_STEP_SUMMARY": str(summary_path),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, (
+        f"the summary script must not fail; stderr was:\n{completed.stderr}"
+    )
+
+    emitted = summary_path.read_text(encoding="utf-8")
+    rows = [
+        line
+        for line in emitted.splitlines()
+        if line.startswith("|") and not line.startswith("| ---")
+    ]
+    assert len(rows) == 2, (
+        f"expected a header row and one data row; the script emitted:\n{emitted}"
+    )
+    values = [cell.strip() for cell in rows[1].strip("|").split("|")]
+    assert len(values) == len(_COLUMNS), (
+        f"expected {len(_COLUMNS)} columns, found {values} in:\n{emitted}"
+    )
+    metric_line = next(
+        (
+            line
+            for line in completed.stdout.splitlines()
+            if line.startswith(_METRIC_PREFIX)
+        ),
+        None,
+    )
+    assert metric_line is not None, (
+        f"expected {_METRIC_PREFIX!r} in the workflow output; found:\n"
+        f"{completed.stdout}"
+    )
+    metric = dict(
+        label.split("=", maxsplit=1)
+        for label in metric_line.removeprefix(_METRIC_PREFIX).split()
+    )
+    return Summary(
+        fields=dict(zip(_COLUMNS, values, strict=True)),
+        table="\n".join(rows),
+        metric=metric,
+    )

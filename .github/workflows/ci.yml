@@ -373,6 +373,15 @@ jobs:
           else
             decision=skip
           fi
+          if [ "${EVENT}" = 'pull_request' ]; then
+            event_class=pull_request
+          else
+            event_class=other
+          fi
+          case "${detector}" in
+            success|failure) detector_status="${detector}" ;;
+            *) detector_status=unknown ;;
+          esac
           {
             printf '### Benchmark gate\n\n'
             printf '| event | detector | performance-relevant changes |'
@@ -381,6 +390,8 @@ jobs:
             printf '| %s | %s | %s | %s |\n' \
               "${EVENT}" "${detector}" "${BENCH:-unknown}" "${decision}"
           } >> "${GITHUB_STEP_SUMMARY}"
+          printf '%s\n' \
+            "::notice title=benchmark-gate-decision::event_class=${event_class} detector_status=${detector_status} decision=${decision}"
 
   benchmark-ratchet:
     runs-on: ubicloud-standard-4-ubuntu-2404

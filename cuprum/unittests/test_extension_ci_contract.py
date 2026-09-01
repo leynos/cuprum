@@ -19,26 +19,26 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers.workflow import (
+    Workflow,
     first_step_running,
     run_scripts,
     script_runs_command,
-    workflow,
 )
 
-WORKFLOW_DATA = workflow()
 
-
-def test_the_ci_job_builds_the_extension_before_running_the_gated_tests() -> None:
+def test_the_ci_job_builds_the_extension_before_running_the_gated_tests(
+    workflow_data: Workflow,
+) -> None:
     """`extension-tests` must run `make develop` first.
 
     `make build` only syncs dependencies, so this ordering is the whole reason
     the job can pass at all, and nothing else asserts it.
     """
     build, _ = first_step_running(
-        WORKFLOW_DATA, "make develop", job_name="extension-tests"
+        workflow_data, "make develop", job_name="extension-tests"
     )
     tests, _ = first_step_running(
-        WORKFLOW_DATA, "make test-extension", job_name="extension-tests"
+        workflow_data, "make test-extension", job_name="extension-tests"
     )
 
     assert build < tests, (
@@ -73,6 +73,12 @@ def test_the_ci_job_builds_the_extension_before_running_the_gated_tests() -> Non
             "maturin develop",
             True,
         ),
+        (
+            "cat <<FIRST <<SECOND\nignored first\nFIRST\nmaturin develop\n"
+            "SECOND\nmake develop",
+            "maturin develop",
+            False,
+        ),
         ("cat <<-EOF\n\tif make develop\n\tEOF\nmake develop", "make develop", True),
         ("maturin develop", "maturin develop", True),
         ("# maturin develop", "maturin develop", False),
@@ -101,11 +107,11 @@ def test_script_runs_command_ignores_comments_and_non_commands(
     )
 
 
-def test_only_boundary_jobs_build_the_extension() -> None:
+def test_only_boundary_jobs_build_the_extension(workflow_data: Workflow) -> None:
     """Only jobs isolated from the full suite may install the extension."""
     builders = {
         job_name
-        for job_name, script in run_scripts(WORKFLOW_DATA)
+        for job_name, script in run_scripts(workflow_data)
         if script_runs_command(script, "make develop")
     }
 
@@ -115,14 +121,16 @@ def test_only_boundary_jobs_build_the_extension() -> None:
     )
 
 
-def test_the_benchmark_job_builds_through_the_develop_target() -> None:
+def test_the_benchmark_job_builds_through_the_develop_target(
+    workflow_data: Workflow,
+) -> None:
     """`benchmark-ratchet` must reach an optimized build via `make develop`.
 
     Its numbers mean nothing against a debug build, so the flag matters
     as much as the shared target does.
     """
     _, script = first_step_running(
-        WORKFLOW_DATA, "make develop", job_name="benchmark-ratchet"
+        workflow_data, "make develop", job_name="benchmark-ratchet"
     )
 
     assert "make develop MATURIN_DEVELOP_FLAGS=--release" in script, (
@@ -132,7 +140,7 @@ def test_the_benchmark_job_builds_through_the_develop_target() -> None:
     )
 
 
-def test_no_ci_step_invokes_maturin_develop_directly() -> None:
+def test_no_ci_step_invokes_maturin_develop_directly(workflow_data: Workflow) -> None:
     """`make develop` must be the only definition of the extension build.
 
     A second copy of the three-step sequence is how the two drift: the copy
@@ -141,7 +149,7 @@ def test_no_ci_step_invokes_maturin_develop_directly() -> None:
     """
     offenders = sorted({
         job_name
-        for job_name, script in run_scripts(WORKFLOW_DATA)
+        for job_name, script in run_scripts(workflow_data)
         if script_runs_command(script, "maturin develop")
     })
 

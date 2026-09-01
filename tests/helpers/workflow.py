@@ -8,10 +8,13 @@ import yaml
 
 from .docs import repo_root
 from .workflow_gate import bench_output, benchmark_runs, matches_filter
-from .workflow_queries import first_step_running
 from .workflow_shell import script_runs_command
+from .workflow_types import Job, Step, Workflow
 
 __all__ = (
+    "Job",
+    "Step",
+    "Workflow",
     "bench_output",
     "benchmark_runs",
     "first_step_running",
@@ -27,57 +30,6 @@ FILTER_STEP_ID = "filter"
 FILTER_NAME = "bench"
 
 
-class Step(typ.TypedDict, total=False):
-    """A workflow step with keys represented in the narrow test model.
-
-    Attributes
-    ----------
-    id : object
-        Identifier used to locate the step within its job.
-    uses : object
-        Action or reusable workflow invoked by the step.
-    run : object
-        Shell script executed by the step.
-    """
-
-    id: object
-    uses: object
-    run: object
-
-
-class Job(typ.TypedDict, total=False):
-    """A workflow job with keys represented in the narrow test model.
-
-    Attributes
-    ----------
-    needs : object
-        Job or jobs that must complete before this job starts.
-    outputs : object
-        Values exposed by the job to downstream jobs.
-    steps : list[Step]
-        Steps executed by the job, when it does not call a reusable workflow.
-    """
-
-    needs: object
-    outputs: object
-    steps: list[Step]
-
-
-class Workflow(typ.TypedDict, total=False):
-    """A parsed workflow with keys represented in the narrow test model.
-
-    Attributes
-    ----------
-    concurrency : object
-        Concurrency configuration declared by the workflow.
-    jobs : dict[str, Job]
-        Jobs declared by the workflow, keyed by job name.
-    """
-
-    concurrency: object
-    jobs: dict[str, Job]
-
-
 def _require(*, condition: bool, message: str) -> None:
     """Raise ``AssertionError`` when a shape requirement is unmet."""
     if not condition:
@@ -87,7 +39,7 @@ def _require(*, condition: bool, message: str) -> None:
 def mapping(value: object, message: str) -> dict[str, object]:
     """Narrow a workflow value to a string-keyed mapping.
 
-    `yaml.safe_load` produces mappings of unknown key type, which makes every
+    YAML parsing produces mappings of unknown key type, which makes every
     subsequent `.get("…")` a type error rather than a narrowing.
 
     Parameters
@@ -105,27 +57,30 @@ def mapping(value: object, message: str) -> dict[str, object]:
     Raises
     ------
     AssertionError
-        If ``value`` is not a mapping.
+        If ``value`` is not a mapping with only string keys.
     """  # noqa: DOC502 - contract validation delegates to _require.
-    _require(condition=isinstance(value, dict), message=message)
+    _require(
+        condition=isinstance(value, dict)
+        and all(isinstance(key, str) for key in value),
+        message=message,
+    )
     return typ.cast("dict[str, object]", value)
 
 
-def workflow() -> Workflow:
-    """Read and parse the repository's Continuous Integration workflow.
+def read_workflow_source() -> str:
+    """Read the repository's Continuous Integration workflow source.
 
     Returns
     -------
-    Workflow
-        The parsed workflow represented by the narrow contract-test model.
+    str
+        UTF-8 source text from the checked-in workflow.
 
     Raises
     ------
-    AssertionError
-        If the workflow does not parse to a mapping.
-    """  # noqa: DOC502 - contract validation delegates to _require.
-    source = (repo_root() / CI_WORKFLOW).read_text(encoding="utf-8")
-    return parse_workflow(source)
+    OSError
+        If the workflow source cannot be read.
+    """  # noqa: DOC502 - read_text propagates OSError.
+    return (repo_root() / CI_WORKFLOW).read_text(encoding="utf-8")
 
 
 def parse_workflow(source: str) -> Workflow:
@@ -145,13 +100,15 @@ def parse_workflow(source: str) -> Workflow:
     ------
     AssertionError
         If the parsed document is not a mapping.
-    """  # noqa: DOC502 - contract validation delegates to _require.
+    yaml.YAMLError
+        If ``source`` is not valid YAML.
+    """  # noqa: DOC502 - parser and contract validator exceptions propagate.
     parsed = yaml.safe_load(source)
-    _require(
-        condition=isinstance(parsed, dict),
-        message=f"{CI_WORKFLOW} must parse to a mapping",
+    if isinstance(parsed, dict) and True in parsed:
+        parsed["on"] = parsed.pop(True)
+    return typ.cast(
+        "Workflow", mapping(parsed, f"{CI_WORKFLOW} must parse to a mapping")
     )
-    return typ.cast("Workflow", parsed)
 
 
 def job(workflow_data: Workflow, job_name: str) -> dict[str, object]:
@@ -333,6 +290,46 @@ def run_scripts(workflow_data: Workflow) -> cabc.Iterator[tuple[str, str]]:
         for step in _declared_steps(job_payload, job_name=job_name):
             if (script := script_of(step)) is not None:
                 yield job_name, script
+
+
+def first_step_running(
+    workflow_data: Workflow, command: str, *, job_name: str
+) -> tuple[int, str]:
+    """Return the first step in a job that runs ``command``.
+
+    Parameters
+    ----------
+    workflow_data : Workflow
+        Parsed workflow containing the job to search.
+    command : str
+        Command whose token sequence must begin a step's script segment.
+    job_name : str
+        Name of the job to search.
+
+    Returns
+    -------
+    tuple[int, str]
+        The zero-based step position and its matching shell script.
+
+    Raises
+    ------
+    AssertionError
+        If no step in the named job runs ``command``.
+    """  # noqa: DOC502 - contract validation delegates to _require.
+    found = next(
+        (
+            (index, script)
+            for index, step in enumerate(steps(workflow_data, job_name))
+            if (script := script_of(step)) is not None
+            and script_runs_command(script, command)
+        ),
+        None,
+    )
+    _require(
+        condition=found is not None,
+        message=f"no step in the {job_name!r} job runs {command!r}",
+    )
+    return typ.cast("tuple[int, str]", found)
 
 
 def benchmark_gate(workflow_data: Workflow) -> str:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shlex
 import typing as typ
+from collections import deque
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -34,12 +35,11 @@ def _is_command_boundary(shell_word: str, *, is_command_position: bool) -> bool:
     return shell_word in _OPERATORS or (is_command_position and shell_word in _KEYWORDS)
 
 
-def _here_document_delimiter(tokens: list[str]) -> str | None:
-    """Return the declared here-document delimiter, when present."""
+def _here_document_delimiters(tokens: list[str]) -> cabc.Iterator[str]:
+    """Yield declared here-document delimiters in declaration order."""
     for index, shell_word in enumerate(tokens[:-1]):
         if shell_word == "<<":
-            return tokens[index + 1]
-    return None
+            yield tokens[index + 1]
 
 
 def _consume_here_document_line(line: str, delimiter: str) -> str | None:
@@ -65,16 +65,15 @@ def _command_segments_from_tokens(tokens: list[str]) -> cabc.Iterator[list[str]]
 
 def _command_segments(script: str) -> cabc.Iterator[list[str]]:
     """Yield shell-token segments split at command boundaries."""
-    here_document_delimiter: str | None = None
+    here_document_delimiters: deque[str] = deque()
     for line in script.replace("\\\n", " ").splitlines():
-        if here_document_delimiter is not None:
-            here_document_delimiter = _consume_here_document_line(
-                line, here_document_delimiter
-            )
+        if here_document_delimiters:
+            if _consume_here_document_line(line, here_document_delimiters[0]) is None:
+                here_document_delimiters.popleft()
             continue
         tokens = _shell_tokens(line)
         yield from _command_segments_from_tokens(tokens)
-        here_document_delimiter = _here_document_delimiter(tokens)
+        here_document_delimiters.extend(_here_document_delimiters(tokens))
 
 
 def _segment_starts_command(segment: list[str], expected: tuple[str, ...]) -> bool:
