@@ -37,6 +37,21 @@ if typ.TYPE_CHECKING:
     from types import ModuleType
 
 
+"""Shared pytest fixtures for workflow contract and optional Rust stream tests.
+The ``workflow_data`` fixture parses the checked-in
+``.github/workflows/ci.yml`` model, while ``filter_path_patterns`` exposes its
+benchmark filter paths for workflow contract and behaviour tests.
+Use these fixtures to access optional backends without repeating availability
+checks in each test module.
+Example
+-------
+def test_pumps_bytes(rust_streams):
+    rust_streams.rust_pump_stream(reader_fd, writer_fd)
+"""
+if typ.TYPE_CHECKING:
+    from types import ModuleType
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Fail the run when the extension is required but absent.
 
@@ -148,7 +163,6 @@ def _clear_backend_cache() -> None:
     _check_rust_available.cache_clear()
     get_stream_backend.cache_clear()
 
-
 @pytest.fixture(scope="session")
 def workflow_data() -> Workflow:
     """Provide the checked-in Continuous Integration workflow model.
@@ -159,7 +173,6 @@ def workflow_data() -> Workflow:
         Parsed ``ci.yml`` model shared by workflow contract tests.
     """
     return parse_workflow(read_workflow_source())
-
 
 @pytest.fixture(scope="session")
 def filter_path_patterns(workflow_data: Workflow) -> frozenset[str]:
