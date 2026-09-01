@@ -20,7 +20,7 @@ env:
 
 jobs:
   lint-test:
-    runs-on: namespace-profile-default
+    runs-on: ubuntu-latest
     env:
       MBAKE_VERSION: '1.4.6'
       WHITAKER_INSTALLER_VERSION: '0.2.7'

@@ -17,10 +17,14 @@ of truth for day-to-day contributor expectations. For the system design, see the
 
 ## GitHub Actions runner profiles
 
-Repository-owned Linux jobs that do not require a native wheel platform run on
-the shared uncached `namespace-profile-default` profile (Ubuntu 22.04, amd64, 4
-vCPU, and 16 GB). The profile has no cache volume; existing GitHub Actions
-caches remain their own backend during this baseline measurement.
+Compatible repository-owned Linux jobs run on the shared uncached
+`namespace-profile-default` profile (Ubuntu 22.04, amd64, 4 vCPU, and 16 GB).
+The profile has no cache volume; existing GitHub Actions caches remain their
+own backend during this baseline measurement.
+
+The lint job remains on `ubuntu-latest`. Whitaker's prebuilt native tooling
+requires a newer GLIBC than the shared Ubuntu 22.04 profile supplies, and cache
+isolation does not make the cold installation compatible.
 
 The native-wheel matrix keeps its existing runner selection because it includes
 Linux container and QEMU work plus Windows and macOS targets. The benchmark

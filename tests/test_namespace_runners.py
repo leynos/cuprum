@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROFILE = "namespace-profile-default"
 MIGRATED_JOBS = {
     "build-wheels.yml": ("build-pure-wheel", "verify-wheel-install"),
-    "ci.yml": ("lint-test", "typecheck-test", "extension-tests", "coverage"),
+    "ci.yml": ("typecheck-test", "extension-tests", "coverage"),
     "coverage-main.yml": ("coverage-upload",),
     "delayed-pr-comment.yml": ("delay_and_comment",),
     "get-codescene-sha.yml": ("refresh-sha",),
@@ -54,8 +54,13 @@ def test_compatible_linux_jobs_use_the_shared_namespace_profile(
         )
 
 
-def test_native_wheel_and_benchmark_runners_remain_specialized() -> None:
-    """Preserve platform and benchmark runner contracts outside the pilot slice."""
+def test_specialized_jobs_retain_compatible_runners() -> None:
+    """Preserve platform and toolchain contracts outside the pilot slice."""
+    lint_runner = _job("ci.yml", "lint-test").get("runs-on")
+    assert lint_runner == "ubuntu-latest", (
+        "ci.yml:lint-test must retain the Whitaker-compatible GitHub image, "
+        f"got {lint_runner!r}"
+    )
     native_runner = _job("build-wheels.yml", "build-native-wheels").get("runs-on")
     assert native_runner == "${{ matrix.os }}", (
         "build-wheels.yml:build-native-wheels must keep its platform matrix, "
