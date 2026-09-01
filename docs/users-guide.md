@@ -986,7 +986,7 @@ The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 - `cuprum_stage_index` / `cuprum_stage_count`: Failing stage position and
   pipeline width (for `pipeline_fail_fast` events)
 - `cuprum_eof_grace_s` / `cuprum_pending_readers`: Fixed EOF-grace duration
-  and pending-reader count (for `capture_eof_grace_expired` events) Event tags
+  and pending-reader count (for `capture_eof_grace_expired` events). Event tags
   are not emitted by this structured logging adapter.
 
 When registered, `structured_logging_hook()` emits `pipeline_fail_fast` at

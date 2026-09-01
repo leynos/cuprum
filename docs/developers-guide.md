@@ -936,7 +936,7 @@ descriptive:
   `_PipelineSpawnResult.stages.observations`, the immutable `_StageWaitContext`
   snapshot passed to `_PipelineWaitState.from_processes` alongside
   `started_at`. It defaults to an empty tuple, and `_PipelineWaitState.exec_id`
-  then reports `None`, because the pure transition never reads it and the
+  then reports `None` because the pure transition never reads it and the
   symbolic model must not carry it.
 - `cuprum_terminated_stage_count` is what
   `_terminate_pipeline_remaining_stages` returns. Reporting it from the helper
