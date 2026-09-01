@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess  # noqa: S404  # behavioural test intentionally invokes CLI process
+import subprocess  # ruff: ignore[suspicious-subprocess-import]  # behavioural test intentionally invokes CLI process
 import sys
 import typing as typ
 
@@ -80,7 +80,7 @@ def when_generate_plans(
         str(benchmark_output_path),
     ]
     try:
-        subprocess.run(  # noqa: S603  # command is fixed test input
+        subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]  # command is fixed test input
             command,
             check=True,
             capture_output=True,

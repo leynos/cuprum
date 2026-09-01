@@ -141,22 +141,15 @@ def given_rust_unavailable() -> None:
     "inter-stage file descriptor extraction fails",
     target_fixture="python_pump_fallback_counter",
 )
-def given_fd_extraction_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> dict[str, int]:
+def given_fd_extraction_fails() -> dict[str, int]:
     """Force FD extraction to fail so dispatch falls back to Python pumping.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Pytest monkeypatch used by the shared fallback test utility.
 
     Returns
     -------
     dict[str, int]
         Mutable call counter updated when the Python fallback pump executes.
     """
-    return force_python_pump_fallback(monkeypatch)
+    return force_python_pump_fallback()
 
 
 def _make_echo_python_pipeline(

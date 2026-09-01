@@ -277,7 +277,7 @@ sys.stdout.write(data.upper())""",
             """Run a worker and retain any failure for the main thread."""
             try:
                 target()
-            except BaseException as exc:  # noqa: BLE001 - worker failures must surface.
+            except BaseException as exc:  # ruff: ignore[blind-except] - worker failures must surface.
                 with errors_lock:
                     errors.append(exc)
 
@@ -327,12 +327,16 @@ sys.stdout.write(data.upper())""",
         assert event.phase == "stdin", "phase overrides should be forwarded"
         assert event.cwd == Path("/workspace"), "cwd overrides should be forwarded"
         assert event.env == {"LANG": "C"}, "env overrides should be forwarded"
-        assert event.timestamp == 1.5, "timestamp overrides should be forwarded"
+        assert event.timestamp == pytest.approx(1.5), (
+            "timestamp overrides should be forwarded"
+        )
         assert event.note == "written", "note overrides should be forwarded"
         assert event.byte_count == 7, "byte count overrides should be forwarded"
         assert event.exec_id == exec_id, "exec_id overrides should be forwarded"
 
-        with pytest.raises(ValueError, match="unknown ExecEvent override fields"):
+        # ``dataclasses.replace`` rejects unknown field names for us, so the
+        # factory needs no hand-rolled validation of its override mapping.
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
             _make_exec_event(phase="start", overrides={"unknown": None})
 
     def test_logs_unhandled_phases(self, caplog: pytest.LogCaptureFixture) -> None:

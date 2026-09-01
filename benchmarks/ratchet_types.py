@@ -25,7 +25,7 @@ class ScenarioComparison:
 
     @property
     def is_regression(self) -> bool:
-        """Return ``True`` when scenario regression exceeds threshold."""
+        """``True`` when scenario regression exceeds threshold."""
         return (self.regression_ratio - self.max_regression) > _FLOAT_TOLERANCE
 
     def as_dict(self) -> dict[str, object]:
@@ -55,24 +55,24 @@ class ComparisonReport:
 
     @property
     def passed(self) -> bool:
-        """Return ``True`` when no scenario breaches the configured threshold."""
+        """``True`` when no scenario breaches the configured threshold."""
         return all(not comparison.is_regression for comparison in self.comparisons)
 
     @property
     def regressions(self) -> tuple[ScenarioComparison, ...]:
-        """Return comparisons that breached the regression threshold."""
+        """Comparisons that breached the regression threshold."""
         return tuple(
             comparison for comparison in self.comparisons if comparison.is_regression
         )
 
     @property
     def rust_scenarios_compared(self) -> int:
-        """Return the number of Rust scenarios included in the comparison."""
+        """The number of Rust scenarios included in the comparison."""
         return len(self.comparisons)
 
     @property
     def worst_regression_ratio(self) -> float:
-        """Return the worst regression ratio across all compared scenarios."""
+        """The worst regression ratio across all compared scenarios."""
         if not self.comparisons:
             return 0.0
         return max(comparison.regression_ratio for comparison in self.comparisons)

@@ -111,7 +111,6 @@ class TestRustPumpSettlement:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Cancellation should defer restoration and resumption to completion."""
-        _ = self
         asyncio.run(_cancel_before_native_worker_settles(monkeypatch))
 
     def test_run_rust_pump_suppresses_writer_close_oserror(
@@ -119,7 +118,6 @@ class TestRustPumpSettlement:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A successful native pump should suppress writer-close I/O failures."""
-        _ = self
         close_writer = mock.AsyncMock(side_effect=OSError("writer closed"))
 
         def close_duplicate(reader_fd: int, writer_fd: int) -> int:
@@ -195,9 +193,6 @@ async def _cancel_before_native_worker_settles(
             await asyncio.wait_for(native_pump.submitted.wait(), timeout=0.5)
             task.cancel()
 
-            with pytest.raises(asyncio.CancelledError):
-                await task
-
             assert cleanup.order == ["pause", "drain"], (
                 "expected FD restoration and reader resumption to wait for native "
                 "worker settlement"
@@ -209,6 +204,9 @@ async def _cancel_before_native_worker_settles(
 
             native_pump.future.set_result(0)
             await asyncio.wait_for(cleanup.finished.wait(), timeout=0.5)
+
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
             assert cleanup.order == ["pause", "drain", "restore", "resume"], (
                 "expected settlement to restore descriptors before resuming reader"

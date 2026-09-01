@@ -126,7 +126,7 @@ def fixture_recorded_pumps(
     """Replace the pump with a recorder, returning the list of its arguments."""
     recorded: list[tuple[str, str]] = []
 
-    async def fake_dispatch(reader: object, writer: object) -> None:  # noqa: RUF029
+    async def fake_dispatch(reader: object, writer: object) -> None:  # ruff: ignore[unused-async]
         """Record which pair of handles this hop was given."""
         recorded.append(
             (
@@ -182,7 +182,7 @@ def test_a_pump_task_joins_each_adjacent_stage_pair(
     )
 
 
-async def _immediate(value: str | None) -> str | None:  # noqa: RUF029
+async def _immediate(value: str | None) -> str | None:  # ruff: ignore[unused-async]
     """Return ``value`` from a task without touching real I/O."""
     return value
 
@@ -241,7 +241,7 @@ def test_gather_keeps_none_placeholders_aligned_with_inputs() -> None:
     assert asyncio.run(drive()) == (None, "first", None, "second", None)
 
 
-async def _failing(error: BaseException) -> None:  # noqa: RUF029
+async def _failing(error: BaseException) -> None:  # ruff: ignore[unused-async]
     """Raise ``error`` from a task, standing in for a failed pump."""
     raise error
 

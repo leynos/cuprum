@@ -15,7 +15,10 @@ from cuprum.catalogue import (
 from cuprum.program import Program
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from pathlib import Path
+
+    from cuprum.sh import SafeCmdBuilder
 
 
 def test_make_rejects_unknown_program() -> None:
@@ -78,22 +81,22 @@ def test_arguments_are_stringified_safely(tmp_path: Path) -> None:
     ), "Arguments must be stringified in order"
 
 
-def test_make_rejects_none_positional_argument() -> None:
-    """None as a positional argument is rejected with a TypeError."""
+@pytest.mark.parametrize(
+    "invoke",
+    [
+        lambda builder: builder(None),
+        lambda builder: builder(flag=None),
+    ],
+    ids=["positional-argument", "keyword-argument"],
+)
+def test_make_rejects_none_argument(
+    invoke: cabc.Callable[[SafeCmdBuilder], object],
+) -> None:
+    """None as a positional or keyword argument is rejected with a TypeError."""
     builder = sh.make(ECHO)
 
     with pytest.raises(TypeError) as excinfo:
-        builder(None)
-
-    assert "None" in str(excinfo.value), "None should be explicitly rejected"
-
-
-def test_make_rejects_none_keyword_argument() -> None:
-    """None as a keyword argument is rejected with a TypeError."""
-    builder = sh.make(ECHO)
-
-    with pytest.raises(TypeError) as excinfo:
-        builder(flag=None)
+        invoke(builder)
 
     assert "None" in str(excinfo.value), "None should be explicitly rejected"
 

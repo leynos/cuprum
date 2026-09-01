@@ -200,7 +200,7 @@ async def _drain_tasks_during_cleanup(
         await _wait_for_exec_hook_tasks(pending_tasks)
     # Catch every task failure, including non-Exception BaseExceptions, so
     # cleanup cannot mask the error that triggered it.
-    except BaseException as task_error:  # noqa: BLE001
+    except BaseException as task_error:  # ruff: ignore[blind-except]
         raise BaseExceptionGroup(
             message,
             (active_error, task_error),

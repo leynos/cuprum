@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess  # noqa: S404  # profiling driver intentionally invokes tools
+import subprocess  # ruff: ignore[suspicious-subprocess-import]  # profiling driver intentionally invokes tools
 import time
 import typing as typ
 
@@ -86,7 +86,7 @@ def _run_perf(
     started = time.perf_counter()
     env = os.environ.copy()
     env.setdefault("PYTHONPERFSUPPORT", "1")
-    completed = subprocess.run(  # noqa: S603  # command uses validated inputs
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]  # command uses validated inputs
         command,
         check=False,
         env=env,
@@ -105,7 +105,7 @@ def _run_perf(
 def _postprocess_perf(*, scenario_dir: pth.Path) -> None:
     """Create text call tree, folded stacks, and summary artefacts."""
     perf = _require_tool("perf")
-    report = subprocess.run(  # noqa: S603  # perf path comes from _require_tool
+    report = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]  # perf path comes from _require_tool
         [
             perf,
             "report",
@@ -124,12 +124,12 @@ def _postprocess_perf(*, scenario_dir: pth.Path) -> None:
         raise RuntimeError(msg)
 
     inferno = _require_tool("inferno-collapse-perf")
-    with subprocess.Popen(  # noqa: S603  # perf path comes from _require_tool
+    with subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true]  # perf path comes from _require_tool
         [perf, "script", "-i", str(scenario_dir / "perf.data")],
         stdout=subprocess.PIPE,
         text=True,
     ) as script:
-        folded = subprocess.run(  # noqa: S603  # inferno path comes from _require_tool
+        folded = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]  # inferno path comes from _require_tool
             [inferno],
             stdin=script.stdout,
             check=False,
@@ -170,7 +170,7 @@ def _run_py_spy(
         "--output",
         str(scenario_dir / "worker-result.json"),
     ]
-    completed = subprocess.run(  # noqa: S603  # path comes from _require_tool
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]  # path comes from _require_tool
         command,
         check=False,
     )

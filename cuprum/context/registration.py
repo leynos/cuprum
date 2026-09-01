@@ -178,11 +178,36 @@ def allow(*programs: Program) -> AllowRegistration:
     return AllowRegistration(*programs)
 
 
+def _context_with_hook(
+    ctx: CuprumContext,
+    hook: BeforeHook | AfterHook | ExecHook,
+    hook_type: typ.Literal["before", "after", "observe"],
+) -> CuprumContext:
+    """Derive a context carrying ``hook`` registered under ``hook_type``."""
+    # The tag and callable signature are correlated by the public factories.
+    # Narrow here because Python cannot express that dependent union directly.
+    match hook_type:
+        case "before":
+            return ctx.with_before_hook(typ.cast("BeforeHook", hook))
+        case "after":
+            return ctx.with_after_hook(typ.cast("AfterHook", hook))
+        case "observe":
+            return ctx.with_observe_hook(typ.cast("ExecHook", hook))
+        case _:
+            msg = f"Unsupported hook type: {hook_type}"
+            raise ValueError(msg)
+
+
 class HookRegistration(_TokenRegistration):
     """Registration handle for hooks with detach and context-manager support.
 
     The token-restoration discipline is documented on
     :class:`_TokenRegistration`.
+
+    Prefer the :func:`before`, :func:`after`, and :func:`observe` factories:
+    each pairs one hook shape with its slot, so a mismatched hook is rejected
+    at the call site. Constructing the handle directly pairs the hook and the
+    tag by hand, and only the tag itself is validated — at runtime.
     """
 
     __slots__ = ("_hook", "_hook_type")
@@ -196,18 +221,7 @@ class HookRegistration(_TokenRegistration):
         super().__init__()
         self._hook = hook
         self._hook_type = hook_type
-        ctx = current_context()
-        match hook_type:
-            case "before":
-                new_ctx = ctx.with_before_hook(typ.cast("BeforeHook", hook))
-            case "after":
-                new_ctx = ctx.with_after_hook(typ.cast("AfterHook", hook))
-            case "observe":
-                new_ctx = ctx.with_observe_hook(typ.cast("ExecHook", hook))
-            case _:
-                msg = f"Unsupported hook type: {hook_type}"
-                raise ValueError(msg)
-        self._install(new_ctx)
+        self._install(_context_with_hook(current_context(), hook, hook_type))
 
 
 def before(hook: BeforeHook) -> HookRegistration:
@@ -285,7 +299,7 @@ class EnvRegistration(_TokenRegistration):
 
     @property
     def overlay(self) -> cabc.Mapping[str, str] | None:
-        """Return the immutable overlay this registration applied."""
+        """The immutable overlay this registration applied."""
         return self._overlay
 
 

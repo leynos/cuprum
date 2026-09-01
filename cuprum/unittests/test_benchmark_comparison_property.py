@@ -16,6 +16,7 @@ inputs:
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 
 import pytest
@@ -23,7 +24,6 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from benchmarks.comparison_analysis import (
-    _FLOAT_TOLERANCE,
     _build_report_from_grouped_entries,
     _build_row,
     _ScenarioEntry,
@@ -46,7 +46,12 @@ def test_build_row_ratio_and_trichotomy(
     rust_mean: float,
     comparison_id: str,
 ) -> None:
-    """A row's ratio is python/rust and its winner follows the mean order."""
+    """A row's winner label agrees with its ratio.
+
+    These invariants must hold regardless of the tolerance or comparison
+    strategy ``_build_row`` uses internally, so they cannot pass by sharing a
+    misconception with the implementation.
+    """
     row = _build_row(
         comparison_id=comparison_id,
         python_entry=_ScenarioEntry(scenario_name="py", mean=python_mean),
@@ -58,12 +63,37 @@ def test_build_row_ratio_and_trichotomy(
     assert row.faster_backend in {"tie", "rust", "python"}, (
         f"faster_backend must be a known label, got {row.faster_backend!r}"
     )
-    if abs(python_mean - rust_mean) <= _FLOAT_TOLERANCE:
-        assert row.faster_backend == "tie", "near-equal means must classify as tie"
-    elif rust_mean < python_mean:
-        assert row.faster_backend == "rust", "the smaller mean (rust) must win"
-    else:
-        assert row.faster_backend == "python", "the smaller mean (python) must win"
+
+    # Winning implies a directional ratio: rust wins only when python is
+    # slower (ratio > 1), python wins only when python is faster (ratio < 1).
+    if row.faster_backend == "rust":
+        assert row.speedup_ratio > 1, "rust winning must imply speedup_ratio > 1"
+    if row.faster_backend == "python":
+        assert row.speedup_ratio < 1, "python winning must imply speedup_ratio < 1"
+
+    # A tie must imply the ratio is approximately 1, whatever tolerance the
+    # implementation applies to reach that conclusion.
+    if row.faster_backend == "tie":
+        assert math.isclose(row.speedup_ratio, 1.0, rel_tol=1e-6, abs_tol=1e-6), (
+            "a tie must imply speedup_ratio is approximately 1"
+        )
+
+    # Antisymmetry: swapping which mean is called "python" and which is
+    # "rust" must invert the ratio and swap the winner (a tie stays a tie).
+    swapped = _build_row(
+        comparison_id=comparison_id,
+        python_entry=_ScenarioEntry(scenario_name="rs", mean=rust_mean),
+        rust_entry=_ScenarioEntry(scenario_name="py", mean=python_mean),
+    )
+    assert math.isclose(row.speedup_ratio * swapped.speedup_ratio, 1.0, rel_tol=1e-6), (
+        "swapping the two means must invert speedup_ratio"
+    )
+    swapped_winner = {"rust": "python", "python": "rust", "tie": "tie"}[
+        row.faster_backend
+    ]
+    assert swapped.faster_backend == swapped_winner, (
+        "swapping the two means must swap which backend is reported faster"
+    )
 
 
 @given(groups=_GROUPS)

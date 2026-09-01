@@ -15,7 +15,8 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from cuprum.concurrent import _build_final_results
-from cuprum.sh import CommandResult, Program
+from cuprum.program import Program
+from cuprum.sh import CommandResult
 
 if sys.version_info >= (3, 15):
     pytest.skip(

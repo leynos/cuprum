@@ -143,28 +143,28 @@ def test_load_plan_rejects_legacy_profile_metadata(tmp_path: pth.Path) -> None:
         load_plan(path)
 
 
-def test_load_plan_rejects_old_profile_version(tmp_path: pth.Path) -> None:
-    """Old benchmark profile versions are incompatible with current results."""
-    payload = _plan_payload()
-    payload["benchmark_profile_version"] = "pipeline-worker-single-run-v1"
-    path = _write_json(tmp_path=tmp_path, filename="plan.json", payload=payload)
-
-    with pytest.raises(IncompatibleBenchmarkProfileError, match="incompatible"):
-        load_plan(path)
-
-
-def test_load_plan_rejects_immediate_predecessor_profile_version(
-    tmp_path: pth.Path,
+@pytest.mark.parametrize(
+    "profile_version",
+    [
+        pytest.param("pipeline-worker-single-run-v1", id="old_profile_version"),
+        pytest.param(
+            "pipeline-worker-release-ratio-v3",
+            id="immediate_predecessor_profile_version",
+        ),
+    ],
+)
+def test_load_plan_rejects_incompatible_profile_version(
+    tmp_path: pth.Path, profile_version: str
 ) -> None:
-    """The immediate predecessor profile version is incompatible.
+    """Old and superseded benchmark profile versions are incompatible.
 
     Baselines collected under ``pipeline-worker-release-ratio-v3`` recorded raw
     worker command strings in ``results[*].command``, so the current v4 ratchet
     must reject them even though the version string differs by a single
-    revision.
+    revision from an older, unrelated version.
     """
     payload = _plan_payload()
-    payload["benchmark_profile_version"] = "pipeline-worker-release-ratio-v3"
+    payload["benchmark_profile_version"] = profile_version
     path = _write_json(tmp_path=tmp_path, filename="plan.json", payload=payload)
 
     with pytest.raises(IncompatibleBenchmarkProfileError, match="incompatible"):
@@ -221,7 +221,7 @@ def test_compare_rust_regressions_pairs_command_names_with_raw_commands() -> Non
     scenario names. The ratchet must match those logical names against each
     plan's ``scenarios[*].name`` without ever parsing the raw commands.
     """
-    raw_command_plan = {
+    raw_command_plan: dict[str, object] = {
         "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
         "dry_run": True,
         "rust_available": True,
@@ -410,14 +410,14 @@ def test_compare_rust_regressions_sorts_scenarios_and_computes_ratios() -> None:
         -0.25,
         0.5,
     ]), "regression ratio must be (candidate - baseline) / baseline"
-    assert all(entry.max_regression == 0.10 for entry in report.comparisons), (
-        "the configured threshold must be carried onto every comparison"
-    )
+    assert all(
+        entry.max_regression == pytest.approx(0.10) for entry in report.comparisons
+    ), "the configured threshold must be carried onto every comparison"
 
 
 def test_compare_rust_regressions_rejects_result_count_mismatch() -> None:
     """Plan/results length mismatches should fail fast."""
-    candidate_throughput = {
+    candidate_throughput: dict[str, object] = {
         "results": [
             {"command": "python-only", "mean": 1.0},
         ],
@@ -441,7 +441,7 @@ def test_compare_rust_regressions_rejects_result_count_mismatch() -> None:
 
 def test_compare_rust_regressions_rejects_missing_python_scenarios() -> None:
     """Each Rust scenario must have a matched Python scenario for its ratio."""
-    rust_only_plan = {
+    rust_only_plan: dict[str, object] = {
         "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
         "dry_run": True,
         "rust_available": True,
@@ -451,7 +451,7 @@ def test_compare_rust_regressions_rejects_missing_python_scenarios() -> None:
             _scenario_payload(name="rust-small-single-nocb", backend="rust"),
         ],
     }
-    rust_only_throughput = {
+    rust_only_throughput: dict[str, object] = {
         "results": [
             {"command": "rust-small-single-nocb", "mean": 1.0},
         ],
@@ -475,7 +475,7 @@ def test_compare_rust_regressions_rejects_missing_python_scenarios() -> None:
 
 def test_compare_rust_regressions_rejects_missing_rust_scenarios() -> None:
     """Ratchet should fail if there are no Rust scenarios to compare."""
-    python_only_plan = {
+    python_only_plan: dict[str, object] = {
         "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
         "dry_run": True,
         "rust_available": False,
@@ -485,7 +485,7 @@ def test_compare_rust_regressions_rejects_missing_rust_scenarios() -> None:
             _scenario_payload(name="python-small-single-nocb", backend="python"),
         ],
     }
-    python_only_throughput = {
+    python_only_throughput: dict[str, object] = {
         "results": [
             {"command": "python-small-single-nocb", "mean": 1.0},
         ],
@@ -509,7 +509,7 @@ def test_compare_rust_regressions_rejects_missing_rust_scenarios() -> None:
 
 def test_compare_rust_regressions_rejects_invalid_backend() -> None:
     """Scenario backends must stay within the supported benchmark set."""
-    invalid_plan = {
+    invalid_plan: dict[str, object] = {
         "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
         "dry_run": True,
         "rust_available": True,
@@ -539,7 +539,7 @@ def test_compare_rust_regressions_rejects_invalid_backend() -> None:
 
 def test_compare_rust_regressions_rejects_duplicate_rust_scenario_names() -> None:
     """Rust scenario names must remain unique for stable matching."""
-    duplicate_plan = {
+    duplicate_plan: dict[str, object] = {
         "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
         "dry_run": True,
         "rust_available": True,
@@ -551,7 +551,7 @@ def test_compare_rust_regressions_rejects_duplicate_rust_scenario_names() -> Non
             _scenario_payload(name="rust-small-single-nocb", backend="rust"),
         ],
     }
-    duplicate_throughput = {
+    duplicate_throughput: dict[str, object] = {
         "results": [
             {"command": "python-small-single-nocb", "mean": 1.0},
             {"command": "rust-small-single-nocb", "mean": 1.0},

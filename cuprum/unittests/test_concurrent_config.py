@@ -2,7 +2,7 @@
 
 These exercise the dataclasses directly, without running commands: argument
 validation, the ``ok``/``first_failure`` properties, and the failure-index and
-submission-index invariants enforced in ``__post_init__``.
+submission-index invariants enforced during construction.
 """
 
 from __future__ import annotations
@@ -10,6 +10,8 @@ from __future__ import annotations
 import typing as typ
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from cuprum import (
     CommandResult,
@@ -25,9 +27,9 @@ class TestConcurrentConfig:
     """Validate concurrent execution configuration."""
 
     @staticmethod
-    @pytest.mark.parametrize("concurrency", [0, -1], ids=["zero", "negative"])
+    @given(concurrency=st.integers(max_value=0))
     def test_concurrency_below_one_raises_value_error(concurrency: int) -> None:
-        """Concurrency below 1 raises ValueError."""
+        """Every integer below 1 raises ValueError."""
         with pytest.raises(ValueError, match="concurrency must be >= 1"):
             ConcurrentConfig(concurrency=concurrency)
 
@@ -145,8 +147,9 @@ class TestConcurrentResult:
             CommandResult(Program("echo"), (), 0, 1, "out", ""),
             CommandResult(Program("echo"), (), 1, 2, "out", ""),
         )
-        # Two results but only one submission index: fail fast in __post_init__
-        # rather than defer to an IndexError from failure_submission_indices.
+        # Two results but only one submission index: fail fast during
+        # construction rather than defer to an IndexError from
+        # failure_submission_indices.
         with pytest.raises(ValueError, match="submission_indices length"):
             ConcurrentResult(results=results, failures=(1,), submission_indices=(0,))
 
@@ -190,11 +193,23 @@ class TestConcurrentResult:
         )
 
     @staticmethod
-    def test_out_of_range_failure_index_is_rejected() -> None:
-        """A failure index beyond the results range raises ValueError."""
-        results = (CommandResult(Program("echo"), (), 0, 1, "out", ""),)
-        with pytest.raises(ValueError, match="is out of range for 1 results"):
-            ConcurrentResult(results=results, failures=(5,))
+    @given(
+        result_count=st.integers(min_value=1, max_value=4),
+        overshoot=st.integers(min_value=0, max_value=1 << 16),
+    )
+    def test_out_of_range_failure_index_is_rejected(
+        result_count: int,
+        overshoot: int,
+    ) -> None:
+        """Any failure index at or beyond the results length raises ValueError."""
+        results = tuple(
+            CommandResult(Program("echo"), (), 0, pid, "out", "")
+            for pid in range(1, result_count + 1)
+        )
+        with pytest.raises(
+            ValueError, match=f"is out of range for {result_count} results"
+        ):
+            ConcurrentResult(results=results, failures=(result_count + overshoot,))
 
     @staticmethod
     @pytest.mark.parametrize(

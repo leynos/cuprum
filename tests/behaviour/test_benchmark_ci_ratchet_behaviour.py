@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import subprocess  # noqa: S404  # behavioural test intentionally invokes CLI process
+import subprocess  # ruff: ignore[suspicious-subprocess-import]  # behavioural test intentionally invokes CLI process
 import sys
 import typing as typ
 
@@ -163,7 +163,7 @@ def when_run_ratchet_cli(
         "--output",
         str(ratchet_fixture_bundle["report_path"]),
     ]
-    completed = subprocess.run(  # noqa: S603  # command is fixed test input
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]  # command is fixed test input
         command,
         check=False,
         capture_output=True,

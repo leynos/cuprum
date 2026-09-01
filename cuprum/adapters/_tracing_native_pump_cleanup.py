@@ -1,0 +1,49 @@
+"""Trace-event projection for correlated native-pump cleanup."""
+
+from __future__ import annotations
+
+import typing as typ
+
+if typ.TYPE_CHECKING:
+    from cuprum.adapters.tracing_adapter import TracingHook
+    from cuprum.pump_events import PumpEvent
+
+
+class _NativePumpCleanupTracingMixin:
+    """Add pump-channel cleanup events to an existing execution span."""
+
+    def record_pump_event(self, event: PumpEvent) -> None:
+        """Record a correlated native-pump cleanup event when its span is open.
+
+        Parameters
+        ----------
+        event:
+            A pump-channel event. Only correlated cleanup lifecycle events are
+            recorded; every other event is ignored.
+
+        """
+        if event.phase not in {"cleanup_started", "cleanup_completed"}:
+            return
+        if event.exec_id is None:
+            return
+
+        hook = typ.cast("TracingHook", self)
+        with hook._lock:
+            active = hook._span_states.get(event.exec_id)
+            if active is not None:
+                hook._active_spans.move_to_end(event.exec_id)
+        if active is None:
+            return
+
+        attributes: dict[str, object] = {
+            "operation": "native_pump_cleanup",
+            "outcome": event.phase.removeprefix("cleanup_"),
+        }
+        if event.phase == "cleanup_completed" and event.duration_s is not None:
+            attributes["duration_s"] = event.duration_s
+        with active.lock:
+            if not active.is_closed:
+                active.span.add_event(
+                    f"cuprum.{event.phase}",
+                    attributes,
+                )

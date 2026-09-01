@@ -23,9 +23,12 @@ import typing as typ
 import pytest
 
 from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum.pump_observation import observe_pump
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.pump_events import PumpEvent
 
 
 class _RecordingGuard:
@@ -50,13 +53,19 @@ class _MidTransferContext:
     release: threading.Event
 
 
+class _FakeStreamsRs(types.ModuleType):
+    """Fake ``cuprum._streams_rs`` module with the pump entry point."""
+
+    rust_pump_stream: cabc.Callable[[int, int], int]
+
+
 def _install_fake_pump(
     monkeypatch: pytest.MonkeyPatch,
     pump: cabc.Callable[[int, int], int],
 ) -> None:
     """Replace the Rust pump entry point with ``pump``."""
-    fake_streams_rs = types.ModuleType("cuprum._streams_rs")
-    fake_streams_rs.rust_pump_stream = pump  # type: ignore[attr-defined]
+    fake_streams_rs = _FakeStreamsRs("cuprum._streams_rs")
+    fake_streams_rs.rust_pump_stream = pump
     monkeypatch.setitem(sys.modules, "cuprum._streams_rs", fake_streams_rs)
 
 
@@ -65,7 +74,7 @@ async def _cancel_mid_transfer(
     *,
     cancellations: int = 1,
 ) -> None:
-    """Start the pump, cancel it mid-transfer, then release the worker."""
+    """Start a pipeline pump, cancel it mid-transfer, then release its worker."""
     reader_fd, writer_fd = os.pipe()
     try:
         state = _pipeline_streams._RustPumpState(
@@ -88,10 +97,10 @@ async def _cancel_mid_transfer(
         for _ in range(cancellations):
             task.cancel()
             await asyncio.sleep(0.05)
-        with pytest.raises(asyncio.CancelledError):
-            await task
         context.events.append("released")
         context.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
         await asyncio.to_thread(context.worker_finished.wait, 5.0)
         await asyncio.sleep(0)
     finally:
@@ -112,7 +121,7 @@ def test_cancellation_restores_descriptors_only_after_worker_returns(
     monkeypatch: pytest.MonkeyPatch,
     cancellations: int,
 ) -> None:
-    """Cancelling mid-transfer waits for the worker before restoring FDs.
+    """A cancelled pipeline pump waits for the worker before restoring FDs.
 
     ``run_in_executor`` cannot interrupt the worker thread, which still owns
     both raw descriptors. Restoring their blocking mode while it runs would
@@ -162,6 +171,67 @@ def test_cancellation_restores_descriptors_only_after_worker_returns(
         f"restore must happen only after the worker thread returns, even after "
         f"{cancellations} cancellation(s); observed order {events}"
     )
+    assert events.count("restored") == 1, (
+        "the reader descriptor state must be restored exactly once after "
+        f"cancellation; observed order {events}"
+    )
+
+
+def test_cancellation_records_native_pump_cleanup_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Cancellation records bounded native-pump cleanup completion telemetry."""
+    events: list[str] = []
+    release = threading.Event()
+    worker_started = threading.Event()
+    worker_finished = threading.Event()
+    context = _MidTransferContext(
+        events=events,
+        worker_started=worker_started,
+        worker_finished=worker_finished,
+        release=release,
+    )
+    pump_events: list[PumpEvent] = []
+
+    def blocking_pump(reader_fd: int, writer_fd: int) -> int:
+        """Block until cancellation releases the native-pump stand-in."""
+        del reader_fd, writer_fd
+        worker_started.set()
+        release.wait(timeout=5.0)
+        worker_finished.set()
+        return 0
+
+    _install_fake_pump(monkeypatch, blocking_pump)
+    caplog.set_level(logging.DEBUG, logger=_pipeline_streams.__name__)
+    with observe_pump(pump_events.append):
+        asyncio.run(_cancel_mid_transfer(context))
+
+    assert [event.phase for event in pump_events] == [
+        "cleanup_started",
+        "cleanup_completed",
+    ], f"cleanup telemetry must bracket cancellation, found {pump_events}"
+    duration_s = pump_events[1].duration_s
+    assert duration_s is not None, (
+        f"cleanup completion must carry a monotonic duration, found {duration_s!r}"
+    )
+    assert duration_s >= 0.0, (
+        "cleanup completion must carry a non-negative monotonic duration, "
+        f"found {duration_s!r}"
+    )
+    cleanup_records = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("cuprum_action") == "rust_pump_cleanup"
+    ]
+    assert [record.__dict__.get("cuprum_outcome") for record in cleanup_records] == [
+        "started",
+        "completed",
+    ], f"cleanup logs must report both bounded outcomes, found {cleanup_records}"
+    assert all(
+        record.__dict__.get("cuprum_operation") == "native_pump_cleanup"
+        for record in cleanup_records
+    ), f"cleanup logs must name their operation, found {cleanup_records}"
 
 
 def _assert_cancelled_pump_failure_reported(

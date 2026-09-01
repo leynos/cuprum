@@ -15,6 +15,7 @@ from cuprum.context import (
     BeforeHook,
     CuprumContext,
     ForbiddenProgramError,
+    HookRegistration,
     ScopeConfig,
     after,
     allow,
@@ -22,6 +23,35 @@ from cuprum.context import (
     current_context,
     get_context,
     scoped,
+)
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    from cuprum.catalogue import Program
+
+
+class _HookRegistrationCase(typ.NamedTuple):
+    """Typed variant of one before/after registration contract."""
+
+    register: cabc.Callable[[BeforeHook | AfterHook], HookRegistration]
+    hooks_attr: typ.Literal["before_hooks", "after_hooks"]
+
+
+def _register_before(hook: BeforeHook | AfterHook) -> HookRegistration:
+    """Adapt the before-hook factory to the shared registration case shape."""
+    return before(typ.cast("BeforeHook", hook))
+
+
+def _register_after(hook: BeforeHook | AfterHook) -> HookRegistration:
+    """Adapt the after-hook factory to the shared registration case shape."""
+    return after(typ.cast("AfterHook", hook))
+
+
+#: Typed before/after variants for structurally identical registration tests.
+_HOOK_REGISTRATIONS = (
+    pytest.param(_HookRegistrationCase(_register_before, "before_hooks"), id="before"),
+    pytest.param(_HookRegistrationCase(_register_after, "after_hooks"), id="after"),
 )
 
 _PROPERTY_SETTINGS = settings(derandomize=True, deadline=None, max_examples=50)
@@ -41,11 +71,29 @@ def test_empty_context_has_no_allowlist() -> None:
     assert ctx.allowlist == frozenset()
 
 
-def test_check_allowed_permits_all_with_empty_allowlist() -> None:
-    """check_allowed permits all programs when allowlist is empty."""
-    ctx = CuprumContext()  # Empty allowlist permits all (permissive default)
-    ctx.check_allowed(ECHO)  # Must not raise
-    ctx.check_allowed(LS)  # Must not raise
+@pytest.mark.parametrize(
+    ("ctx", "program"),
+    [
+        pytest.param(
+            CuprumContext(),
+            ECHO,
+            id="empty_allowlist_permits_echo",
+        ),
+        pytest.param(
+            CuprumContext(),
+            LS,
+            id="empty_allowlist_permits_ls",
+        ),
+        pytest.param(
+            CuprumContext(allowlist=frozenset([ECHO])),
+            ECHO,
+            id="restricted_allowlist_permits_allowed_program",
+        ),
+    ],
+)
+def test_check_allowed_must_not_raise(ctx: CuprumContext, program: Program) -> None:
+    """check_allowed does not raise for permitted programs."""
+    ctx.check_allowed(program)
 
 
 def test_context_with_allowlist() -> None:
@@ -187,42 +235,37 @@ def test_allow_as_context_manager() -> None:
 # =============================================================================
 
 
-def test_before_hook_registration_and_detach() -> None:
-    """before() registers a hook that can be detached."""
-    hook: BeforeHook = mock.Mock()
+@pytest.mark.parametrize("case", _HOOK_REGISTRATIONS)
+def test_hook_registration_and_detach(
+    case: _HookRegistrationCase,
+) -> None:
+    """before()/after() register a hook that can be detached."""
+    hook: BeforeHook | AfterHook = mock.Mock()
     with scoped(ScopeConfig()):
-        reg = before(hook)
-        assert hook in current_context().before_hooks
+        reg = case.register(hook)
+        assert hook in getattr(current_context(), case.hooks_attr), (
+            f"{case.hooks_attr} must contain the hook after its registration"
+        )
         reg.detach()
-        assert hook not in current_context().before_hooks
+        assert hook not in getattr(current_context(), case.hooks_attr), (
+            f"{case.hooks_attr} must not contain the hook after detach"
+        )
 
 
-def test_after_hook_registration_and_detach() -> None:
-    """after() registers a hook that can be detached."""
-    hook: AfterHook = mock.Mock()
+@pytest.mark.parametrize("case", _HOOK_REGISTRATIONS)
+def test_hook_as_context_manager(
+    case: _HookRegistrationCase,
+) -> None:
+    """before()/after() can be used as a context manager."""
+    hook: BeforeHook | AfterHook = mock.Mock()
     with scoped(ScopeConfig()):
-        reg = after(hook)
-        assert hook in current_context().after_hooks
-        reg.detach()
-        assert hook not in current_context().after_hooks
-
-
-def test_before_hook_as_context_manager() -> None:
-    """before() can be used as a context manager."""
-    hook: BeforeHook = mock.Mock()
-    with scoped(ScopeConfig()):
-        with before(hook):
-            assert hook in current_context().before_hooks
-        assert hook not in current_context().before_hooks
-
-
-def test_after_hook_as_context_manager() -> None:
-    """after() can be used as a context manager."""
-    hook: AfterHook = mock.Mock()
-    with scoped(ScopeConfig()):
-        with after(hook):
-            assert hook in current_context().after_hooks
-        assert hook not in current_context().after_hooks
+        with case.register(hook):
+            assert hook in getattr(current_context(), case.hooks_attr), (
+                f"{case.hooks_attr} must contain the hook inside its context"
+            )
+        assert hook not in getattr(current_context(), case.hooks_attr), (
+            f"{case.hooks_attr} must not contain the hook after context exit"
+        )
 
 
 # =============================================================================
@@ -342,12 +385,6 @@ def test_forbidden_program_error_raised_for_disallowed(
     assert "restricted_state=True" in record.getMessage()
     assert record.operation == LS
     assert record.restricted_state is True
-
-
-def test_check_allowed_passes_for_allowed_program() -> None:
-    """check_allowed does not raise for allowed programs."""
-    ctx = CuprumContext(allowlist=frozenset([ECHO]))
-    ctx.check_allowed(ECHO)  # Should not raise
 
 
 # =============================================================================

@@ -40,10 +40,7 @@ from cuprum._pipeline_results import (
     _build_pipeline_stage_results,
     _emit_timeout_exit_events,
 )
-from cuprum._pipeline_streams import (
-    _cancel_stream_tasks,
-    _PipelineRunConfig,
-)
+from cuprum._pipeline_stream_results import _cancel_stream_tasks
 from cuprum._pipeline_types import (
     _EventDetails,
     _ExecutionHooks,
@@ -59,6 +56,7 @@ from cuprum.context import current_context
 if typ.TYPE_CHECKING:
     import asyncio
 
+    from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum.context import CuprumContext
     from cuprum.sh import CommandResult, PipelineResult, SafeCmd
 

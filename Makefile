@@ -65,7 +65,21 @@ LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
 LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
 UV_RUN_ENV = $(LOCAL_TOOL_ENV) $(UV_ENV)
 RUFF_ENV = RAYON_NUM_THREADS=1
-RUFF = $(RUFF_ENV) $(UV_RUN_ENV) uv run ruff
+# Pin Ruff so `make` invokes the same version as the `ruff==` dev dependency
+# in pyproject.toml and the RUFF_VERSION env in .github/workflows/ci.yml.
+# Bump all three sites together: a version mismatch causes version-skew lint
+# failures because rule sets differ between Ruff releases. The pin-parity
+# contract test in cuprum/unittests/test_toolchain_pins.py enforces this.
+RUFF_VERSION ?= 0.16.4
+RUFF = $(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from $(call shell_quote,ruff==$(RUFF_VERSION)) ruff
+# Pin ty so `make` and CI invoke the same typechecker release. ty is pre-1.0
+# and diagnostics shift between releases, so an unpinned install breaks the
+# typecheck gate without any code change. Bump deliberately and fix new
+# diagnostics in the same commit. Kept in sync with the `ty==` dev dependency
+# in pyproject.toml and the TY_VERSION env in .github/workflows/ci.yml by the
+# same contract test as the Ruff pin.
+TY_VERSION ?= 0.0.74
+TY = $(UV_RUN_ENV) uv tool run --from $(call shell_quote,ty==$(TY_VERSION)) ty
 PYTEST = $(UV_RUN_ENV) uv run pytest
 PYLINT_PYTHON ?= pypy
 PYLINT_TARGETS ?= benchmarks conftest.py cuprum tests
@@ -81,10 +95,13 @@ PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) \
   --from '$(PYLINT_PYPY_SHIM)' --with 'pylint==$(PYLINT_VERSION)' pylint-pypy
 SPELLING_CONFIG_COMMAND ?= $(UV_RUN_ENV) uv run scripts/generate_typos_config.py
 SPELLING_HELPER_TARGET ?= spelling-helper-test
-DF12_PYTHON_LINTS_REF ?= 755b26f5792f71b37f3a9e656aef714ed98b2c3b
+# The v0.3.0 release tag, pinned by SHA so the gate cannot drift if the tag
+# is moved. Keep in step with the df12-python-lints dev dependency in
+# pyproject.toml.
+DF12_PYTHON_LINTS_REF ?= 4cf41736cce2f7ba2778882a5c629c044568a0e5
 DF12_PYTHON_LINTS = git+https://github.com/leynos/df12-python-lints.git@$(DF12_PYTHON_LINTS_REF)
 DF12_PYTHON ?= 3.14
-DF12_PYLINT_MESSAGES = R9101,C9102,R9103,R9104,C9105,C9106,C9107,R9108,R9109,R9110,R9111,C9112
+DF12_PYLINT_MESSAGES = R9101,C9102,R9103,R9104,C9105,C9106,C9107,R9108,R9109,R9110,R9111,C9112,R9112
 DF12_PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv run --isolated \
   --python $(DF12_PYTHON) --with 'pylint==$(PYLINT_VERSION)' \
   --with '$(DF12_PYTHON_LINTS)' pylint \
@@ -189,8 +206,8 @@ lint-windows: ## Lint the Rust extension's Windows cfg branches (cross-target)
 
 typecheck: build ## Run typechecking
 	$(UV_RUN_ENV) uv sync --group dev
-	$(UV_RUN_ENV) uv run ty --version
-	$(UV_RUN_ENV) uv run ty check
+	$(TY) --version
+	$(TY) check --python .venv
 
 markdownlint: $(MDLINT) ## Lint Markdown files
 	$(LOCAL_TOOL_ENV) $(MDLINT) '**/*.md'

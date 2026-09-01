@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import subprocess  # noqa: S404 - tests assert trusted maturin command handling.
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - tests assert trusted maturin command handling.
 import sys
 import typing as typ
 import zipfile

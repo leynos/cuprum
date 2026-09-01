@@ -2,6 +2,13 @@
 # /// script
 # requires-python = ">=3.13"
 # dependencies = []
+#
+# # ``typos_rollout`` and its siblings are plain modules in this directory,
+# # which Python puts on ``sys.path`` when the script runs. ty treats a file
+# # carrying inline script metadata as a standalone script, so the project's
+# # settings do not apply and the search path must be declared here.
+# [tool.ty.environment]
+# extra-paths = ["."]
 # ///
 """Generate ``typos.toml`` from the shared en-GB-oxendict dictionary.
 
@@ -51,7 +58,7 @@ def dictionary_from_cache(repository: Path = REPOSITORY_ROOT) -> rollout.Diction
     ValueError, TypeError, tomllib.TOMLDecodeError
         If a dictionary file fails validation, or the local overlay defines a
         correction that conflicts with the shared base.
-    """  # noqa: DOC502 - load/merge errors propagate from the rollout callees
+    """  # ruff: ignore[docstring-extraneous-exception] - load/merge errors propagate from the rollout callees
     dictionary = rollout.load_dictionary(repository / ".typos-oxendict-base.toml")
     local_overlay = repository / "typos.local.toml"
     if local_overlay.exists():
@@ -86,7 +93,7 @@ def render_config(repository: Path = REPOSITORY_ROOT) -> str:
         If a dictionary file fails validation, the local overlay conflicts
         with the shared base, or the rendered document fails the TOML parse
         check.
-    """  # noqa: DOC502 - load/merge/render errors propagate from the callees
+    """  # ruff: ignore[docstring-extraneous-exception] - load/merge/render errors propagate from the callees
     return rollout.render_typos_config(dictionary_from_cache(repository))
 
 
@@ -155,7 +162,7 @@ def main(
     tomllib.TOMLDecodeError
         If the shared dictionary source or the rendered configuration is
         not valid TOML.
-    """  # noqa: DOC502 - load, merge, and render errors propagate from the callees
+    """  # ruff: ignore[docstring-extraneous-exception] - load, merge, and render errors propagate from the callees
     destination = output if output is not None else repository / "typos.toml"
     try:
         result = rollout.refresh_base(

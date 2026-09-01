@@ -53,16 +53,30 @@ def _fd_from_transport(transport: object | None) -> int | None:
         return None
 
 
+def _stream_transport(stream: object) -> object | None:
+    """Return a stream's transport, tolerating the private attribute name.
+
+    ``asyncio.StreamWriter`` publishes ``transport``; ``StreamReader`` keeps it
+    on ``_transport``, so both spellings are consulted.
+
+    Returns
+    -------
+    object or None
+        The stream's transport, or ``None`` when it exposes neither attribute.
+    """
+    transport = getattr(stream, "transport", None)
+    if transport is None:
+        transport = getattr(stream, "_transport", None)
+    return transport
+
+
 def _extract_stream_fd(
     stream: asyncio.StreamReader | asyncio.StreamWriter | None,
 ) -> int | None:
     """Extract a raw FD from an asyncio stream via its transport."""
     if stream is None:
         return None
-    transport = getattr(stream, "transport", None)
-    if transport is None:
-        transport = getattr(stream, "_transport", None)
-    return _fd_from_transport(transport)
+    return _fd_from_transport(_stream_transport(stream))
 
 
 @dc.dataclass(frozen=True, slots=True, init=False)
@@ -98,9 +112,7 @@ def _pause_reader_transport(
     reader: asyncio.StreamReader,
 ) -> _ReaderPause:
     """Pause reader transport callbacks while Rust pump owns the raw FD."""
-    transport = getattr(reader, "transport", None)
-    if transport is None:
-        transport = getattr(reader, "_transport", None)
+    transport = _stream_transport(reader)
     pause_reading = getattr(transport, "pause_reading", None)
     resume_reading = getattr(transport, "resume_reading", None)
     if not callable(pause_reading):

@@ -8,7 +8,7 @@ import logging
 import os
 import shlex
 import shutil
-import subprocess  # noqa: S404  # benchmark runner intentionally invokes external tooling
+import subprocess  # ruff: ignore[suspicious-subprocess-import]  # benchmark runner intentionally invokes external tooling
 import typing as typ
 
 from benchmarks._benchmark_types import (
@@ -233,7 +233,7 @@ def _execute_hyperfine_benchmark(
     """Execute the hyperfine benchmark command."""
     command[0] = _resolve_executable(command[0])
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(  # noqa: S603  # command built from fixed executable + controlled args
+    subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]  # command built from fixed executable + controlled args
         command,
         check=True,
         timeout=1800,

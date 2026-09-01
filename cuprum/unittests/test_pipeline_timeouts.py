@@ -37,6 +37,7 @@ from tests.helpers.timeouts import (
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
+    from cuprum._pipeline_types import _StageObservation
     from cuprum.events import ExecEvent
 
 
@@ -173,9 +174,13 @@ def test_zero_timeout_reconciles_pipe_tasks() -> None:
     events: list[ExecEvent] = []
     real_create = _pipeline_collect._create_pipe_tasks
 
-    def spy(processes: list[asyncio.subprocess.Process]) -> list[asyncio.Task[None]]:
+    def spy(
+        processes: list[asyncio.subprocess.Process],
+        *,
+        observations: tuple[_StageObservation, ...],
+    ) -> list[asyncio.Task[None]]:
         """Record the pumps the pipeline creates so they can be inspected."""
-        tasks = real_create(processes)
+        tasks = real_create(processes, observations=observations)
         created.extend(tasks)
         return tasks
 

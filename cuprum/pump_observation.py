@@ -13,14 +13,17 @@ See :mod:`cuprum.pump_events` for the event types this channel carries.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import logging
 import typing as typ
 from contextvars import ContextVar
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from contextvars import Token
 
+    from cuprum.events import ExecId
     from cuprum.pump_events import PumpEvent, PumpHook
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,6 +32,25 @@ _pump_hooks: ContextVar[tuple[PumpHook, ...]] = ContextVar(
     "cuprum_pump_hooks",
     default=(),
 )
+_pump_event_exec_id: ContextVar[ExecId | None] = ContextVar(
+    "cuprum_pump_event_exec_id",
+    default=None,
+)
+
+
+@contextlib.contextmanager
+def _correlate_pump_events(exec_id: ExecId) -> cabc.Iterator[None]:
+    """Scope native-pump events to one upstream pipeline-stage token."""
+    token = _pump_event_exec_id.set(exec_id)
+    try:
+        yield
+    finally:
+        _pump_event_exec_id.reset(token)
+
+
+def _current_pump_event_exec_id() -> ExecId | None:
+    """Return the stage token inherited by the current native-pump task."""
+    return _pump_event_exec_id.get()
 
 
 def current_pump_hooks() -> tuple[PumpHook, ...]:
@@ -167,7 +189,7 @@ def _invoke_pump_hook(hook: PumpHook, event: PumpEvent) -> None:
     """Invoke one pump hook, reporting rather than propagating its failure."""
     try:
         result = hook(event)
-    except Exception as exc:  # noqa: BLE001 - policy documented on the emitter
+    except Exception as exc:
         _LOGGER.warning(
             "pump_observer_failed phase=%s reason=%s error=%s",
             event.phase,

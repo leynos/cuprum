@@ -105,7 +105,6 @@ class TestRustPumpFailures:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A drain BaseException should resume the reader and propagate unchanged."""
-        _ = self
         call_order: list[str] = []
 
         def pause_reader(
@@ -151,7 +150,6 @@ class TestRustPumpFailures:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A native failure should restore modes, resume, and skip close."""
-        _ = self
         call_order: list[str] = []
         close_writer = mock.AsyncMock()
         _install_recording_native_failure(monkeypatch, call_order, close_writer)
@@ -192,7 +190,6 @@ class TestRustPumpFailures:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A native-load failure should close the duplicate writer descriptor."""
-        _ = self
         duplicated_fds: list[int] = []
         original_dup = os.dup
 

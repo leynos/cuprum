@@ -81,7 +81,7 @@ def render_typos_config(dictionary: Dictionary) -> str:
     ------
     tomllib.TOMLDecodeError
         If the rendered document fails the ``tomllib.loads`` parse check.
-    """  # noqa: DOC502 - TOMLDecodeError propagates from tomllib.loads
+    """  # ruff: ignore[docstring-extraneous-exception] - TOMLDecodeError propagates from tomllib.loads
     global_patterns = tuple(
         sorted(
             pattern
@@ -139,5 +139,5 @@ def write_config(path: pathlib.Path, dictionary: Dictionary) -> None:
         performed by ``render_typos_config``.
     OSError
         If the atomic write to *path* fails.
-    """  # noqa: DOC502 - render and write errors propagate from the callees
+    """  # ruff: ignore[docstring-extraneous-exception] - render and write errors propagate from the callees
     _atomic_write(path, render_typos_config(dictionary).encode())

@@ -85,7 +85,7 @@ class BackendSelector(typ.Protocol):
 
     @property
     def metrics_state(self) -> _MetricsState:
-        """Return the metrics accumulator owned by this selector.
+        """The metrics accumulator owned by this selector.
 
         Returns
         -------
@@ -159,7 +159,7 @@ class _BackendSelectorState:
 
     @property
     def is_active(self) -> bool:
-        """Return whether the current thread already owns the selector."""
+        """Whether the current thread already owns the selector."""
         return bool(getattr(self._state, "is_active", False))
 
 
@@ -259,7 +259,7 @@ class _EnvBackendSelector:
 
     @property
     def metrics_state(self) -> _MetricsState:
-        """Return the metrics accumulator owned by this selector."""
+        """The metrics accumulator owned by this selector."""
         return self._metrics
 
     @contextlib.contextmanager

@@ -22,6 +22,7 @@ from cuprum import ECHO, ForbiddenProgramError, ScopeConfig, TimeoutExpired, sco
 from cuprum._subprocess_stdin import _write_stdin as _real_write_stdin
 from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
 from tests.helpers.catalogue import python_builder as build_python_builder
+from tests.helpers.execution import assert_capture_disabled
 from tests.helpers.stream_pipes import drain_blocking_payload_size
 
 if typ.TYPE_CHECKING:
@@ -179,11 +180,7 @@ def test_input_text_works_when_capture_is_disabled(
         },
     )
 
-    assert result.exit_code == 0, (
-        "stdin should still be fed when output capture is disabled"
-    )
-    assert result.stdout is None, "stdout must not be retained when capture is disabled"
-    assert result.stderr is None, "stderr must not be retained when capture is disabled"
+    assert_capture_disabled(result)
 
 
 def test_nonzero_exit_code_is_captured_with_input_text(
@@ -285,7 +282,7 @@ def test_stdin_input_with_timeout_escalation(
     ],
 )
 def test_timeout_with_blocked_stdin_writer_does_not_hang(
-    capture: bool,  # noqa: FBT001 - pytest parametrizes this value.
+    capture: bool,
     mode: str,
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],

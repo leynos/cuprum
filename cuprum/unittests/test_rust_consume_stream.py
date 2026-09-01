@@ -18,6 +18,8 @@ import os
 import typing as typ
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from cuprum.unittests._rust_stream_test_support import (
     INVALID_FD_ERRNOS,
@@ -27,6 +29,34 @@ from cuprum.unittests._rust_stream_test_support import (
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
+
+
+#: Cap generated payloads so each example stays cheap: every call opens a pipe.
+_MAX_PAYLOAD_BYTES = 4096
+
+# Mixing encoded text with raw byte runs generates well-formed multibyte
+# sequences, lone continuation bytes, and truncated sequences in one strategy.
+_DECODE_PAYLOADS = st.lists(
+    st.one_of(
+        st.text(max_size=8).map(lambda chunk: chunk.encode("utf-8")),
+        st.binary(max_size=8),
+    ),
+    max_size=16,
+).map(lambda chunks: b"".join(chunks)[:_MAX_PAYLOAD_BYTES])
+
+# Small buffers force multibyte sequences to straddle read boundaries; ``None``
+# exercises the default buffer size.
+_DECODE_BUFFER_SIZES = st.one_of(
+    st.none(),
+    st.integers(min_value=1, max_value=8),
+    st.integers(min_value=9, max_value=1 << 16),
+)
+
+_CONSUME_SETTINGS = settings(
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+    deadline=None,
+    max_examples=50,
+)
 
 
 def _consume_payload(
@@ -114,6 +144,26 @@ class TestRustConsumeStream:
         expected = payload.decode("utf-8", errors="replace")
         assert output == expected, (
             f"expected decoded output to match Python replace semantics ({test_id})"
+        )
+
+    @_CONSUME_SETTINGS
+    @given(payload=_DECODE_PAYLOADS, buffer_size=_DECODE_BUFFER_SIZES)
+    def test_decodes_payload_like_python(
+        self,
+        rust_streams: ModuleType,
+        payload: bytes,
+        buffer_size: int | None,
+    ) -> None:
+        """``rust_consume_stream`` matches Python's UTF-8 ``replace`` decoding.
+
+        The rows above pin the named examples; this generalizes the same
+        relation across arbitrary payloads and buffer sizes, so multibyte
+        sequences straddle read boundaries at sizes no fixed row happens to
+        choose.
+        """
+        output = self._consume(rust_streams, payload, buffer_size=buffer_size)
+        assert output == payload.decode("utf-8", errors="replace"), (
+            "decoded output must match Python's UTF-8 replace semantics"
         )
 
     @staticmethod

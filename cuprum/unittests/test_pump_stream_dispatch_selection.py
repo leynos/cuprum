@@ -72,7 +72,6 @@ class TestPumpStreamDispatch:
         case : _DispatchCase
             Parameterized backend mode and expected call counts.
         """
-        _ = self
         backend_env = case["backend_env"]
         rust_available = case["rust_available"]
         force_fd_extraction_failure = case["force_fd_extraction_failure"]
@@ -123,7 +122,6 @@ class TestPumpStreamDispatch:
         monkeypatch : pytest.MonkeyPatch
             Fixture used to override environment variables.
         """
-        _ = self
         monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
         set_rust_availability_for_testing(is_available=False)
 

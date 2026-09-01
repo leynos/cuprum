@@ -232,7 +232,7 @@ def _handle_stream_timeout(
         If no timeout was configured, signalling an internal inconsistency.
     _SubprocessTimeoutError
         Wrapping the captured stdout/stderr once the timeout is resolved.
-    """  # noqa: DOC502 - _SubprocessInvariantError propagates from _require_timeout
+    """  # ruff: ignore[docstring-extraneous-exception] - _SubprocessInvariantError propagates from _require_timeout
     raise _SubprocessTimeoutError(
         _SubprocessTimeoutDetails(
             timeout=_require_timeout(timeout, exc),

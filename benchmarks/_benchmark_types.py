@@ -36,14 +36,13 @@ import dataclasses as dc
 # dataclass annotations (``output_path: pth.Path`` and similar) remain
 # resolvable via ``typing.get_type_hints``; the TC003 suppression keeps ruff from
 # pushing it back into a type-checking block.
-import pathlib as pth  # noqa: TC003
+import pathlib as pth  # ruff: ignore[typing-only-standard-library-import]
 import sys
 import typing as typ
 
 from benchmarks._benchmark_type_validators import (
-    _validate_backend as _validate_backend_value,
-)
-from benchmarks._benchmark_type_validators import (
+    BackendName,
+    _validate_backend,
     _validate_bool,
     _validate_hyperfine_iterations,
     _validate_iteration_count,
@@ -52,8 +51,6 @@ from benchmarks._benchmark_type_validators import (
     _validate_stages,
 )
 from benchmarks._validation import _require_non_empty_string
-
-type BackendName = typ.Literal["python", "rust"]
 
 
 class PipelineBenchmarkScenarioDict(typ.TypedDict):
@@ -199,11 +196,6 @@ class HyperfineConfig:
         _validate_hyperfine_iterations(warmup=self.warmup, runs=self.runs)
 
 
-def _validate_backend(value: object) -> BackendName:
-    """Validate that a scenario backend is one of the supported values."""
-    return typ.cast("BackendName", _validate_backend_value(value))
-
-
 @dc.dataclass(frozen=True, slots=True)
 class PipelineBenchmarkConfig:
     """Configure a full pipeline benchmark run.
@@ -332,6 +324,7 @@ output_path=PosixPath('bench.json'), rust_available=False, scenarios=())
 
 
 __all__ = [
+    "BackendName",
     "HyperfineConfig",
     "PipelineBenchmarkConfig",
     "PipelineBenchmarkRunResult",

@@ -7,6 +7,7 @@ dispatch resolver, and the public Rust availability helper.
 from __future__ import annotations
 
 import logging
+import typing as typ
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -22,9 +23,52 @@ from cuprum._backend import (
 )
 from cuprum.rust import is_rust_available
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 _ENV_VAR = "CUPRUM_STREAM_BACKEND"
 _BACKEND_LOGGER = "cuprum._backend"
 _RUST_BACKEND_LOGGER = "cuprum._rust_backend"
+
+
+class _BackendEnv(typ.Protocol):
+    """Configure backend availability and the backend-selection environment."""
+
+    def __call__(
+        self,
+        probe: bool | cabc.Callable[[], bool],
+        env_value: str | None = None,
+    ) -> None:
+        """Set the availability probe and optional backend environment value."""
+
+
+@pytest.fixture
+def backend_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> _BackendEnv:
+    """Configure the backend-selection env var and the Rust availability probe.
+
+    Returns
+    -------
+    cabc.Callable[..., None]
+        ``configure(probe, env_value=None)``: clears (when ``env_value`` is
+        ``None``) or sets the backend-selection environment variable, then
+        patches ``_rust_backend.is_available`` with ``probe`` (either a bool
+        or a zero-argument callable).
+    """
+
+    def _configure(
+        probe: bool | cabc.Callable[[], bool],
+        env_value: str | None = None,
+    ) -> None:
+        if env_value is None:
+            monkeypatch.delenv(_ENV_VAR, raising=False)
+        else:
+            monkeypatch.setenv(_ENV_VAR, env_value)
+        resolved = probe if callable(probe) else (lambda: probe)
+        monkeypatch.setattr(_rust_backend, "is_available", resolved)
+
+    return _configure
 
 
 # -- StreamBackend enum -------------------------------------------------------
@@ -47,42 +91,39 @@ def test_stream_backend_is_str_enum() -> None:
 # -- auto mode ----------------------------------------------------------------
 
 
-def test_auto_returns_rust_when_available(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("is_available", "expected"),
+    [
+        (True, StreamBackend.RUST),
+        (False, StreamBackend.PYTHON),
+    ],
+    ids=["rust-available", "rust-unavailable"],
+)
+def test_auto_selects_backend_by_availability(
+    backend_env: _BackendEnv,
+    *,
+    is_available: bool,
+    expected: StreamBackend,
 ) -> None:
-    """Auto mode selects Rust when the extension is available."""
-    monkeypatch.delenv(_ENV_VAR, raising=False)
-    monkeypatch.setattr(_rust_backend, "is_available", lambda: True)
+    """Auto mode selects Rust when available and Python otherwise."""
+    backend_env(is_available)
 
-    assert get_stream_backend() is StreamBackend.RUST, (
-        "auto mode should select Rust when available"
-    )
-
-
-def test_auto_returns_python_when_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Auto mode falls back to Python when Rust is unavailable."""
-    monkeypatch.delenv(_ENV_VAR, raising=False)
-    monkeypatch.setattr(_rust_backend, "is_available", lambda: False)
-
-    assert get_stream_backend() is StreamBackend.PYTHON, (
-        "auto mode should fall back to Python when Rust is unavailable"
+    assert get_stream_backend() is expected, (
+        f"auto mode should select {expected!r} when is_available={is_available!r}"
     )
 
 
 def test_auto_falls_back_on_import_error(
-    monkeypatch: pytest.MonkeyPatch,
+    backend_env: _BackendEnv,
 ) -> None:
     """Auto mode falls back to Python when the Rust probe raises ImportError."""
-    monkeypatch.delenv(_ENV_VAR, raising=False)
 
     def _broken_probe() -> bool:
         """Raise ImportError to simulate a broken native backend probe."""
         msg = "broken native module"
         raise ImportError(msg)
 
-    monkeypatch.setattr(_rust_backend, "is_available", _broken_probe)
+    backend_env(_broken_probe)
 
     assert get_stream_backend() is StreamBackend.PYTHON, (
         "auto mode should fall back to Python when probe raises ImportError"
@@ -90,12 +131,11 @@ def test_auto_falls_back_on_import_error(
 
 
 def test_auto_resolution_logs_selected_backend(
-    monkeypatch: pytest.MonkeyPatch,
+    backend_env: _BackendEnv,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Auto mode emits a structured decision log record."""
-    monkeypatch.delenv(_ENV_VAR, raising=False)
-    monkeypatch.setattr(_rust_backend, "is_available", lambda: True)
+    backend_env(probe=True)
 
     with caplog.at_level(logging.DEBUG, logger=_BACKEND_LOGGER):
         assert get_stream_backend() is StreamBackend.RUST
@@ -112,36 +152,39 @@ def test_auto_resolution_logs_selected_backend(
 # -- forced rust mode ---------------------------------------------------------
 
 
-def test_forced_rust_returns_rust_when_available(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("is_available", "expected", "expected_error"),
+    [
+        (True, StreamBackend.RUST, None),
+        (False, None, ImportError),
+    ],
+    ids=["rust-available", "rust-unavailable"],
+)
+def test_forced_rust_mode_honours_availability(
+    backend_env: _BackendEnv,
+    *,
+    is_available: bool,
+    expected: StreamBackend | None,
+    expected_error: type[BaseException] | None,
 ) -> None:
-    """Forced Rust mode returns RUST when the extension is available."""
-    monkeypatch.setenv(_ENV_VAR, "rust")
-    monkeypatch.setattr(_rust_backend, "is_available", lambda: True)
+    """Forced Rust mode returns RUST when available, else raises ImportError."""
+    backend_env(is_available, "rust")
 
-    assert get_stream_backend() is StreamBackend.RUST, (
-        "forced Rust mode should return RUST when available"
-    )
-
-
-def test_forced_rust_raises_when_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Forced Rust mode raises ImportError when the extension is missing."""
-    monkeypatch.setenv(_ENV_VAR, "rust")
-    monkeypatch.setattr(_rust_backend, "is_available", lambda: False)
-
-    with pytest.raises(ImportError, match=_ENV_VAR):
-        get_stream_backend()
+    if expected_error is None:
+        assert get_stream_backend() is expected, (
+            "forced Rust mode should return RUST when available"
+        )
+    else:
+        with pytest.raises(expected_error, match=_ENV_VAR):
+            get_stream_backend()
 
 
 def test_forced_rust_unavailable_logs_warning(
-    monkeypatch: pytest.MonkeyPatch,
+    backend_env: _BackendEnv,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Forced Rust mode logs the unavailable-backend failure boundary."""
-    monkeypatch.setenv(_ENV_VAR, "rust")
-    monkeypatch.setattr(_rust_backend, "is_available", lambda: False)
+    backend_env(probe=False, env_value="rust")
 
     with (
         caplog.at_level(logging.WARNING, logger=_BACKEND_LOGGER),
@@ -158,18 +201,17 @@ def test_forced_rust_unavailable_logs_warning(
 
 
 def test_forced_rust_probe_import_error_logs_warning(
-    monkeypatch: pytest.MonkeyPatch,
+    backend_env: _BackendEnv,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A forced-Rust probe that raises ImportError still hits the warning boundary."""
-    monkeypatch.setenv(_ENV_VAR, "rust")
 
     def _broken_probe() -> bool:
         """Raise ImportError to simulate a broken native backend probe."""
         msg = "broken native module"
         raise ImportError(msg)
 
-    monkeypatch.setattr(_rust_backend, "is_available", _broken_probe)
+    backend_env(_broken_probe, "rust")
 
     with (
         caplog.at_level(logging.WARNING, logger=_BACKEND_LOGGER),
@@ -301,10 +343,9 @@ def test_env_var_case_insensitive(
 
 
 def test_availability_is_cached(
-    monkeypatch: pytest.MonkeyPatch,
+    backend_env: _BackendEnv,
 ) -> None:
     """The availability probe is called at most once across invocations."""
-    monkeypatch.delenv(_ENV_VAR, raising=False)
     call_count = 0
 
     def _counting_probe() -> bool:
@@ -313,7 +354,7 @@ def test_availability_is_cached(
         call_count += 1
         return False
 
-    monkeypatch.setattr(_rust_backend, "is_available", _counting_probe)
+    backend_env(_counting_probe)
 
     get_stream_backend()
     get_stream_backend()
@@ -324,41 +365,16 @@ def test_availability_is_cached(
 # -- public probe agrees with dispatch ----------------------------------------
 
 
-@pytest.mark.parametrize("available", [True, False])
-def test_public_probe_agrees_with_dispatch_resolver(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    available: bool,
-) -> None:
-    """The public ``is_rust_available`` agrees with the dispatch resolver.
+def test_public_probe_is_the_dispatch_resolver() -> None:
+    """The public ``is_rust_available`` is the dispatch resolver itself.
 
-    The public helper must delegate to the same resolver object imported by the
-    public Rust module, not the raw Rust import probe.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Fixture used to override the public module's resolver binding.
-    available : bool
-        Generated availability the resolver should report.
+    The public Rust module re-exports the backend's cached resolver rather
+    than wrapping it, so the public boundary and stream-backend dispatch
+    cannot disagree: they are the same function object.
     """
-    call_count = 0
-
-    def _counting_resolver() -> bool:
-        """Return deterministic availability and count public resolver calls."""
-        nonlocal call_count
-        call_count += 1
-        return available
-
-    monkeypatch.delenv(_ENV_VAR, raising=False)
-    monkeypatch.setattr(rust_api, "_check_rust_available", _counting_resolver)
-
-    for _ in range(2):
-        assert is_rust_available() is available, (
-            "public probe must return the dispatch resolver availability"
-        )
-
-    assert call_count == 2, "public probe should call the dispatch resolver each time"
+    assert rust_api.is_rust_available is _backend._check_rust_available, (
+        "public probe must be the dispatch resolver, not a wrapper around it"
+    )
 
 
 def test_public_probe_honours_test_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -480,10 +496,10 @@ def test_raw_probe_logs_missing_native_module(
 
 def test_cache_clear_allows_recheck(
     monkeypatch: pytest.MonkeyPatch,
+    backend_env: _BackendEnv,
 ) -> None:
     """Clearing the cache allows the availability probe to run again."""
-    monkeypatch.delenv(_ENV_VAR, raising=False)
-    monkeypatch.setattr(_rust_backend, "is_available", lambda: False)
+    backend_env(probe=False)
 
     assert get_stream_backend() is StreamBackend.PYTHON, (
         "first call should return PYTHON when unavailable"

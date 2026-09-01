@@ -16,12 +16,12 @@ were written. A separate event type, carried on a separate hook registry
 registering for them, and a consumer that does not is untouched.
 """
 
-from __future__ import annotations
-
 import collections.abc as cabc
 import dataclasses as dc
 import enum
 import typing as typ
+
+from cuprum.events import ExecId
 
 
 class RustPumpDeclineReason(enum.StrEnum):
@@ -47,7 +47,12 @@ class RustPumpDeclineReason(enum.StrEnum):
     BLOCKING_MODE_UNAVAILABLE = "blocking_mode_unavailable"
 
 
-type PumpPhase = typ.Literal["declined", "failed_after_cancel"]
+type PumpPhase = typ.Literal[
+    "declined",
+    "failed_after_cancel",
+    "cleanup_started",
+    "cleanup_completed",
+]
 """What a :class:`PumpEvent` reports.
 
 ``declined``
@@ -55,6 +60,11 @@ type PumpPhase = typ.Literal["declined", "failed_after_cancel"]
 ``failed_after_cancel``
     A cancelled hop's Rust worker had failed, and the failure was consumed
     rather than resurfacing detached at garbage collection.
+``cleanup_started``
+    Cancellation began waiting for the native worker's descriptor cleanup.
+``cleanup_completed``
+    The native worker released its descriptors after cancellation; ``duration_s``
+    records the monotonic cleanup wait.
 """
 
 
@@ -62,12 +72,13 @@ type PumpPhase = typ.Literal["declined", "failed_after_cancel"]
 class PumpEvent:
     """A Rust-pump routing decision reported to registered pump hooks.
 
-    The event carries the phase and, for a decline, the closed-set reason. It
-    deliberately carries nothing else. Descriptor numbers, command arguments,
-    exception types, and tracebacks are all either unbounded as metric labels
-    or a disclosure risk, and the DEBUG log records emitted alongside these
-    events already carry the diagnostic detail — including the pump's
-    traceback — for the cases that need it.
+    The event carries the phase, the closed-set reason for a decline, and the
+    monotonic wait duration for completed native-pump cleanup, and the source
+    stage token needed to correlate cleanup tracing. Descriptor numbers,
+    command arguments, exception types, and tracebacks are all either
+    unbounded as metric labels or a disclosure risk, and the DEBUG log records
+    emitted alongside these events carry the diagnostic detail — including the
+    pump's traceback — for the cases that need it.
 
     Attributes
     ----------
@@ -76,6 +87,14 @@ class PumpEvent:
     reason:
         For ``declined``, the seam that refused the hand-off. ``None`` for
         every other phase.
+    duration_s:
+        Monotonic seconds spent waiting for the native worker's cleanup when
+        ``phase`` is ``cleanup_completed``. ``None`` for every other phase.
+    exec_id:
+        The upstream pipeline stage's stable execution token for native-cleanup
+        phases. Tracing observers use it only to locate an existing execution
+        span; it is ``None`` for every other phase and is never a trace
+        attribute or metric label.
 
     Examples
     --------
@@ -91,17 +110,24 @@ class PumpEvent:
 
         assert PumpEvent(phase="failed_after_cancel").reason is None
 
+    A completed cleanup carries its monotonic duration::
+
+        cleanup = PumpEvent(phase="cleanup_completed", duration_s=0.25)
+        assert cleanup.duration_s == 0.25
+
     """
 
     phase: PumpPhase
     reason: RustPumpDeclineReason | None = None
+    duration_s: float | None = None
+    exec_id: ExecId | None = None
 
 
 type PumpHook = cabc.Callable[[PumpEvent], None]
 """A synchronous consumer of :class:`PumpEvent` values.
 
-Pump hooks are synchronous by contract. Both emission sites are synchronous
-functions — one on the Python-pump fall-back path, one inside cancellation
+Pump hooks are synchronous by contract. Every emission site is synchronous —
+one on the Python-pump fall-back path and the others inside cancellation
 unwinding — so there is no task to attach an awaitable to and no point at which
 awaiting it could be ordered against the transfer it describes. A hook that
 returns an awaitable is reported and discarded rather than run.

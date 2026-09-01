@@ -21,9 +21,13 @@ import dataclasses as dc
 import threading
 import typing as typ
 
-from cuprum.adapters.tracing_adapter import InMemorySpan, InMemoryTracer, TracingHook
+from cuprum.adapters.tracing_adapter import InMemorySpan, TracingHook
 from cuprum.events import new_exec_id
-from cuprum.unittests._adapter_test_support import _make_exec_event
+from cuprum.unittests._adapter_test_support import (
+    Traced,
+    _make_exec_event,
+    tracing_hook,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -31,6 +35,8 @@ if typ.TYPE_CHECKING:
     import pytest
 
     from cuprum.events import ExecId
+
+__all__ = ["tracing_hook"]
 
 # A shared recycled PID underscores that only ``exec_id`` distinguishes the
 # duplicate-token execution from the unrelated one.
@@ -166,6 +172,7 @@ class TestTracingSpanConcurrency:
 
     def test_duplicate_token_cleanup_does_not_hold_lifecycle_lock(
         self,
+        tracing_hook: Traced,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A blocked stale-span teardown must not stall unrelated executions.
@@ -175,8 +182,7 @@ class TestTracingSpanConcurrency:
         start/output/exit handlers must still acquire the hook's lock and run
         to completion.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
+        tracer, hook = tracing_hook
         exec_dup = new_exec_id()
         exec_other = new_exec_id()
 
@@ -216,6 +222,7 @@ class TestTracingSpanConcurrency:
 
     def test_a_fail_fast_racing_its_own_exit_is_dropped(
         self,
+        tracing_hook: Traced,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A fail-fast event that loses to ``exit`` records nothing.
@@ -232,8 +239,7 @@ class TestTracingSpanConcurrency:
         map, would instead record ``cuprum.pipeline_fail_fast`` on a span whose
         backend has already closed it.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
+        tracer, hook = tracing_hook
         exec_id = new_exec_id()
 
         _start(hook, exec_id)
@@ -261,6 +267,7 @@ class TestTracingSpanConcurrency:
 
     def test_a_fail_fast_is_not_stalled_by_another_span_ending(
         self,
+        tracing_hook: Traced,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A parked ``Span.end`` must not block another execution's fail-fast.
@@ -271,8 +278,7 @@ class TestTracingSpanConcurrency:
         would leave the fail-fast lookup — which takes the same lock — parked
         behind it until the backend returned.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
+        tracer, hook = tracing_hook
         exiting = new_exec_id()
         failing = new_exec_id()
 
@@ -314,11 +320,11 @@ class TestTracingSpanConcurrency:
 
     def test_a_fail_fast_finishes_before_its_own_exit(
         self,
+        tracing_hook: Traced,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A held fail-fast callback keeps only its own span open and ordered."""
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
+        tracer, hook = tracing_hook
         failing = new_exec_id()
         unrelated = new_exec_id()
         _start(hook, failing)

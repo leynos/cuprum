@@ -122,7 +122,8 @@ def test_failed_engage_leaks_no_blocking_state(
 
         real_set_blocking = os.set_blocking
 
-        def faulting_set_blocking(fd: int, blocking: bool) -> None:  # noqa: FBT001  # mirrors os.set_blocking's positional bool
+        # Mirrors os.set_blocking's positional bool signature.
+        def faulting_set_blocking(fd: int, blocking: bool) -> None:
             """Fail when the target FD is toggled to blocking; else delegate."""
             if fd == target_fd and blocking:
                 msg = "injected toggle failure"

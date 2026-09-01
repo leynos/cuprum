@@ -10,7 +10,8 @@ import typing as typ
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    import contextlib
+
+    from cuprum import HookRegistration
 
 from cuprum import (
     ECHO,
@@ -30,7 +31,7 @@ from cuprum.concurrent import (
 
 
 def _run_hook_test[T](
-    hook_context: cabc.Callable[[list[T]], contextlib.AbstractContextManager[None]],
+    hook_context: cabc.Callable[[list[T]], HookRegistration],
     num_commands: int = 3,
 ) -> list[T]:
     """Run concurrent echo commands within a hook context and return hook calls."""

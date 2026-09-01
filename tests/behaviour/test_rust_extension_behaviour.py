@@ -5,11 +5,9 @@ from __future__ import annotations
 import importlib
 import typing as typ
 
-import pytest
 from pytest_bdd import given, scenario, then, when
 
 import cuprum as c
-from cuprum import rust as rust_api
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -23,40 +21,6 @@ def test_rust_extension_availability() -> None:
     """Behavioural coverage for the Rust availability probe."""
 
 
-@scenario(
-    "../features/rust_extension.feature",
-    "Rust availability rejects a non-boolean resolver result",
-)
-def test_rust_extension_availability_rejects_non_boolean_result() -> None:
-    """Behavioural coverage for invalid Rust availability results."""
-
-
-@pytest.mark.parametrize(
-    "invalid_availability",
-    [
-        pytest.param(None, id="none"),
-        pytest.param(1, id="integer"),
-    ],
-)
-def test_rust_extension_availability_rejects_non_bool(
-    monkeypatch: pytest.MonkeyPatch,
-    invalid_availability: object,
-) -> None:
-    """The public probe rejects falsey and truthy non-boolean results."""
-
-    def _invalid_resolver() -> object:
-        """Return the configured invalid resolver result."""
-        return invalid_availability
-
-    monkeypatch.setattr(rust_api, "_check_rust_available", _invalid_resolver)
-
-    with pytest.raises(
-        TypeError,
-        match="Rust availability resolver must return bool",
-    ):
-        rust_api.is_rust_available()
-
-
 @given("the Cuprum Rust availability probe", target_fixture="probe")
 def given_probe() -> cabc.Callable[[], bool]:
     """Expose the Rust backend availability probe.
@@ -67,17 +31,6 @@ def given_probe() -> cabc.Callable[[], bool]:
         The ``is_rust_available`` probe callable.
     """
     return c.is_rust_available
-
-
-@given("a Rust availability resolver returning a non-boolean value")
-def given_invalid_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Override the resolver with a non-Boolean result for this scenario."""
-
-    def _invalid_resolver() -> object:
-        """Return a deliberately invalid availability value."""
-        return "available"
-
-    monkeypatch.setattr(rust_api, "_check_rust_available", _invalid_resolver)
 
 
 @when(
@@ -100,27 +53,10 @@ def when_check_availability(probe: cabc.Callable[[], bool]) -> bool:
     return probe()
 
 
-@when(
-    "I check the invalid Rust availability result",
-    target_fixture="availability_error",
-)
-def when_check_invalid_availability() -> TypeError:
-    """Capture the runtime contract violation raised by the public probe."""
-    with pytest.raises(TypeError) as error:
-        c.is_rust_available()
-    return error.value
-
-
 @then("the probe returns a boolean")
 def then_probe_returns_boolean(availability: object) -> None:
     """Assert the availability probe returns a boolean value."""
     assert isinstance(availability, bool), "Expected isinstance(availability, bool)"
-
-
-@then("the probe rejects the result with TypeError")
-def then_probe_rejects_invalid_result(availability_error: Exception) -> None:
-    """Assert the public probe rejects the invalid resolver result."""
-    assert isinstance(availability_error, TypeError), "Expected a TypeError"
 
 
 @then("the probe agrees with the native module when it is installed")

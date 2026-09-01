@@ -206,7 +206,7 @@ class TestFailFastEventEmission:
         apply_completions(state, [(0, 4)])
 
         (event,) = _fail_fast_events(_Driven(tuple(events), observations, ()))
-        assert event.duration_s == 0.0, (
+        assert event.duration_s == 0.0, (  # ruff: ignore[float-equality-comparison] - exact clamp sentinel
             f"backwards clock readings must clamp to zero, found {event.duration_s!r}"
         )
 

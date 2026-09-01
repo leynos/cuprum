@@ -7,6 +7,7 @@ import typing as typ
 import pytest
 
 from benchmarks.tee_profile_worker import TeeProfileWorkerConfig, run_tee_profile_worker
+from cuprum.unittests._tee_profile_backend_support import assert_worker_result_ok
 from cuprum.unittests.conftest import _VOLATILE_KEYS, redact
 
 if typ.TYPE_CHECKING:
@@ -18,7 +19,7 @@ if typ.TYPE_CHECKING:
 @pytest.mark.parametrize("with_line_callbacks", [False, True])
 def test_worker_exercises_parent_side_consume_path(
     tmp_path: pth.Path,
-    with_line_callbacks: bool,  # noqa: FBT001 - pytest parametrizes this value.
+    with_line_callbacks: bool,
 ) -> None:
     """A small fixture can run through echo, capture, and tee modes."""
     fixture = tmp_path / "fixture.b64"
@@ -38,10 +39,7 @@ def test_worker_exercises_parent_side_consume_path(
             ),
         )
 
-        assert result["status"] == "ok", f"expected worker status ok, got {result}"
-        assert result["exit_code"] == 0, (
-            f"expected worker exit code 0 for mode {mode}, got {result}"
-        )
+        assert_worker_result_ok(result)
         assert result["scenario"] == f"{mode}-devnull-{cb_label}-s1-python", (
             f"expected scenario label for mode {mode}, got {result}"
         )
@@ -105,12 +103,8 @@ def test_worker_accumulates_repeat_counters(tmp_path: pth.Path) -> None:
         ),
     )
 
-    assert result["status"] == "ok", f"expected worker status ok, got {result}"
-    assert result["exit_code"] == 0, f"expected worker exit code 0, got {result}"
-    assert result["captured_output_length"] == len(fixture.read_text()) * 3, (
-        "expected captured output length to accumulate across repeats, "
-        f"got {result['captured_output_length']}"
-    )
-    assert result["stdout_line_count"] == 3, (
-        f"expected line callbacks to accumulate across repeats, got {result}"
+    assert_worker_result_ok(
+        result,
+        expected_length=len(fixture.read_text()) * 3,
+        expected_lines=3,
     )

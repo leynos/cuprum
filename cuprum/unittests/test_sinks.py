@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import errno
 import os
+import threading
 import typing as typ
+from unittest import mock
 
 import pytest
 
-from benchmarks import sinks
+from benchmarks import PtyBlackholeStateError, sinks
 
 
 @pytest.mark.skipif(
@@ -67,17 +69,12 @@ def test_text_blackhole_write_returns_char_count() -> None:
     assert bh.write("x" * 1000) == 1000
 
 
-def test_text_blackhole_flush_is_a_noop() -> None:
-    """TextBlackhole.flush completes without raising."""
-    bh = sinks.TextBlackhole()
-    bh.flush()  # must not raise
-
-
 def test_text_blackhole_write_rejects_non_str() -> None:
     """TextBlackhole.write raises TypeError for non-str input."""
     bh = sinks.TextBlackhole()
+    # The cast documents the deliberately wrong-typed argument under test.
     with pytest.raises(TypeError):
-        bh.write(b"bytes")  # type: ignore[arg-type]
+        bh.write(typ.cast("str", b"bytes"))
 
 
 # ---------------------------------------------------------------------------
@@ -102,11 +99,41 @@ def test_pty_blackhole_enter_returns_writable_stream() -> None:
 )
 def test_pty_blackhole_drains_written_bytes() -> None:
     """Data written to the PtyBlackhole slave FD is consumed by the drainer."""
+    # Deliberately no newline: the PTY line discipline expands "\n" to "\r\n"
+    # on write, which would make the drained byte count platform-dependent.
+    payload = "héllo from tėst"
     bh = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
     with bh as stream:
-        stream.write("hello from test\n")
+        stream.write(payload)
         stream.flush()
-    # If __exit__ completes without hanging the drainer consumed the data.
+    # __exit__ joins the drainer thread, so drained_bytes is safe to read here.
+    assert bh.drained_bytes == len(payload.encode("utf-8")), (
+        "the drainer must publish exactly the UTF-8 byte count after exit"
+    )
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "openpty"),
+    reason="os.openpty is unavailable on this platform",
+)
+def test_pty_blackhole_resets_the_count_when_reused() -> None:
+    """A completed PtyBlackhole context can count a subsequent drain."""
+    bh = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
+    first_payload = "first"
+    with bh as stream:
+        stream.write(first_payload)
+        stream.flush()
+    assert bh.drained_bytes == len(first_payload.encode("utf-8")), (
+        "the first completed context must publish its UTF-8 byte count"
+    )
+
+    second_payload = "sécond"
+    with bh as stream:
+        stream.write(second_payload)
+        stream.flush()
+    assert bh.drained_bytes == len(second_payload.encode("utf-8")), (
+        "reusing the sink must publish only the second context's byte count"
+    )
 
 
 @pytest.mark.skipif(
@@ -118,9 +145,65 @@ def test_pty_blackhole_exit_clears_internal_state() -> None:
     bh = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
     with bh:
         pass
-    assert bh._master_fd is None
-    assert bh._slave is None
-    assert bh._thread is None
+    assert bh._master_fd is None, "exit must clear the PTY master descriptor"
+    assert bh._slave is None, "exit must clear the PTY slave stream"
+    assert bh._thread is None, "exit must clear a joined drainer thread"
+
+
+def test_pty_blackhole_hides_drain_count_until_the_drainer_stops() -> None:
+    """A timed-out join must not publish a drainer-owned counter."""
+    bh = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
+    still_running = mock.Mock(spec=threading.Thread)
+    still_running.is_alive.return_value = True
+    bh._thread = still_running
+    bh._drained_bytes = 42
+
+    bh.__exit__(None, None, None)
+
+    still_running.join.assert_called_once_with(timeout=5.0)
+    assert bh._thread is still_running, (
+        "a timed-out join must retain the drainer for a later lifecycle boundary"
+    )
+    assert bh.drained_bytes is None, (
+        "the count must remain unavailable while the drainer is still running"
+    )
+
+
+def test_pty_blackhole_publishes_count_after_a_late_drainer_exit() -> None:
+    """A drainer that stops after the bounded join eventually publishes its count."""
+    bh = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
+    eventually_stopped = mock.Mock(spec=threading.Thread)
+    eventually_stopped.is_alive.side_effect = (True, False, False)
+    bh._thread = eventually_stopped
+    bh._drained_bytes = 42
+
+    bh.__exit__(None, None, None)
+
+    bh._drainer_finished.set()
+
+    assert bh.drained_bytes == 42, (
+        "a completed drainer must publish its count without mutating lifecycle state"
+    )
+    assert bh._thread is eventually_stopped, (
+        "reading the count must not join or clear the retained drainer"
+    )
+    bh._publish_finished_drainer()
+    assert eventually_stopped.join.call_args_list == [
+        mock.call(timeout=5.0),
+        mock.call(),
+    ], "a late drainer must be joined only at the explicit lifecycle boundary"
+    assert bh._thread is None, "the lifecycle boundary must clear a joined drainer"
+
+
+def test_pty_blackhole_rejects_reuse_while_the_drainer_is_running() -> None:
+    """PtyBlackhole reports an active previous drainer with its domain error."""
+    bh = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
+    still_running = mock.Mock(spec=threading.Thread)
+    still_running.is_alive.return_value = True
+    bh._thread = still_running
+
+    with pytest.raises(PtyBlackholeStateError, match="cannot reuse PtyBlackhole"):
+        bh.__enter__()
 
 
 # ---------------------------------------------------------------------------

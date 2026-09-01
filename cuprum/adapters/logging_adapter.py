@@ -39,7 +39,7 @@ if typ.TYPE_CHECKING:
 _DEFAULT_LOGGER_NAME = "cuprum.exec"
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class LogLevels:
     """Configuration for logging levels per execution event phase.
 

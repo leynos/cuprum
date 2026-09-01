@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import subprocess  # noqa: S404 - integration tests exercise fixed CLI commands.
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - integration tests exercise fixed CLI commands.
 import sys
 import typing as typ
 
@@ -54,7 +54,7 @@ _SCENARIO_NAMES_WITHOUT_RUST: list[str] = [
 def test_profile_plan_scenario_matrix(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
-    rust_available: bool,  # noqa: FBT001 - pytest parametrizes this value.
+    rust_available: bool,
     expected_names: list[str],
 ) -> None:
     """The default plan includes or omits the Rust scenario.
@@ -290,7 +290,7 @@ def test_worker_command_uses_module_invocation(tmp_path: pth.Path) -> None:
 
 def _run_profile_cli(*args: str) -> int:
     """Invoke benchmarks.profile_tee_hotpath via subprocess and return its exit code."""
-    completed = subprocess.run(  # noqa: S603
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
         [sys.executable, "-m", "benchmarks.profile_tee_hotpath", *args],
         check=False,
     )

@@ -181,7 +181,7 @@ def test_handle_stream_timeout_preserves_timeout_and_output() -> None:
             timeout=1.5,
         )
 
-    assert exc_info.value.timeout == 1.5, (
+    assert exc_info.value.timeout == pytest.approx(1.5), (
         f"the configured timeout must survive unchanged: got {exc_info.value.timeout}"
     )
     assert exc_info.value.stdout == "captured-out", (

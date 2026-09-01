@@ -57,7 +57,7 @@ def pytest_configure(config: pytest.Config) -> None:
     covers every gated module regardless of how each one gates — fixture,
     module-level guard, or availability probe — so a new module cannot opt out
     of the requirement by skipping differently.
-    """  # noqa: DOC502 - ImportError propagates from is_available()
+    """  # ruff: ignore[docstring-extraneous-exception] - ImportError propagates from is_available()
     del config
     message = missing_extension_message(
         required=bool(os.environ.get(REQUIRE_EXTENSION_ENV)),

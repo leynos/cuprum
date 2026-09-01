@@ -61,7 +61,7 @@ async def _wait_for_marker(marker: Path, *, deadline: float) -> None:
             while loop.time() < deadline:
                 # ASYNC240: a child process writes this file, so no asyncio
                 # primitive can observe it directly.
-                if marker.exists():  # noqa: ASYNC240
+                if marker.exists():  # ruff: ignore[blocking-path-method-in-async-function]
                     return
                 await asyncio.sleep(0.01)
     except TimeoutError:

@@ -31,6 +31,7 @@ from cuprum.adapters.logging_adapter import (
     structured_logging_hook,
 )
 from cuprum.events import ExecEvent
+from cuprum.unittests._adapter_test_support import capturing_logger
 
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecPhase
@@ -56,31 +57,6 @@ _KNOWN_PHASES = (
 _RESERVED_RECORD_ATTRIBUTES = frozenset(
     vars(logging.LogRecord("n", 0, "p", 0, "m", (), None))
 )
-
-
-class _CollectingHandler(logging.Handler):
-    """Handler retaining every record it is given."""
-
-    def __init__(self) -> None:
-        """Start with no records collected."""
-        super().__init__(level=logging.NOTSET)
-        self.records: list[logging.LogRecord] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        """Retain ``record`` for inspection."""
-        self.records.append(record)
-
-
-def _capturing_logger(name: str) -> tuple[logging.Logger, _CollectingHandler]:
-    """Return a logger that captures everything, plus its handler."""
-    logger = logging.getLogger(name)
-    logger.handlers.clear()
-    logger.propagate = False
-    # Avoid inheriting the root WARNING level; the hook checks isEnabledFor.
-    logger.setLevel(logging.DEBUG)
-    handler = _CollectingHandler()
-    logger.addHandler(handler)
-    return logger, handler
 
 
 _awkward_text = st.text(
@@ -147,12 +123,12 @@ def _events(draw: st.DrawFn) -> ExecEvent:
 @settings(max_examples=200)
 def test_every_event_emits_exactly_one_record(event: ExecEvent) -> None:
     """No phase is silently dropped, and none emits twice."""
-    logger, handler = _capturing_logger("cuprum.test.one_record")
-    structured_logging_hook(logger=logger)(event)
+    with capturing_logger("cuprum.test.one_record") as capture:
+        structured_logging_hook(logger=capture.logger)(event)
 
-    assert len(handler.records) == 1, (
-        f"phase {event.phase!r} emitted {len(handler.records)} records, expected 1"
-    )
+        assert len(capture.records) == 1, (
+            f"phase {event.phase!r} emitted {len(capture.records)} records, expected 1"
+        )
 
 
 @given(event=_events())
@@ -166,26 +142,27 @@ def test_extras_cannot_collide_with_reserved_record_attributes(
     ``KeyError`` deep inside the caller's logging stack, which is expensive to
     trace back here.
     """
-    logger, handler = _capturing_logger("cuprum.test.reserved")
-    structured_logging_hook(logger=logger)(event)
+    with capturing_logger("cuprum.test.reserved") as capture:
+        structured_logging_hook(logger=capture.logger)(event)
 
-    record = handler.records[0]
-    attached = set(vars(record)) - _RESERVED_RECORD_ATTRIBUTES
-    unprefixed = {name for name in attached if not name.startswith("cuprum_")}
-    assert not unprefixed, (
-        f"every attached field must be cuprum_-prefixed, found {unprefixed}"
-    )
-    assert attached, "the hook must attach the structured fields it documents"
+        record = capture.records[0]
+        attached = set(vars(record)) - _RESERVED_RECORD_ATTRIBUTES
+        unprefixed = {name for name in attached if not name.startswith("cuprum_")}
+        assert not unprefixed, (
+            f"every attached field must be cuprum_-prefixed, found {unprefixed}"
+        )
+        assert attached, "the hook must attach the structured fields it documents"
 
 
 @given(event=_events())
 @settings(max_examples=200)
 def test_records_survive_the_json_formatter(event: ExecEvent) -> None:
     """Any event formats to JSON that ``json.loads`` accepts."""
-    logger, handler = _capturing_logger("cuprum.test.json")
-    structured_logging_hook(logger=logger)(event)
+    with capturing_logger("cuprum.test.json") as capture:
+        structured_logging_hook(logger=capture.logger)(event)
 
-    rendered = JsonLoggingFormatter().format(handler.records[0])
+        rendered = JsonLoggingFormatter().format(capture.records[0])
+
     decoded = json.loads(rendered)
 
     assert decoded["cuprum_phase"] == event.phase, (
@@ -235,19 +212,19 @@ def test_each_phase_logs_at_its_configured_level(
     any configured value: a permissive check passes even if a phase is dropped
     from the map entirely and silently falls back to ``DEBUG``.
     """
-    logger, handler = _capturing_logger("cuprum.test.levels")
-    structured_logging_hook(logger=logger, levels=levels)(event)
+    with capturing_logger("cuprum.test.levels") as capture:
+        structured_logging_hook(logger=capture.logger, levels=levels)(event)
 
-    expected = {
-        "plan": levels.plan_level,
-        "start": levels.start_level,
-        "stdout": levels.output_level,
-        "stderr": levels.output_level,
-        "exit": levels.exit_level,
-        "pipeline_fail_fast": levels.fail_fast_level,
-    }.get(event.phase, logging.DEBUG)
+        expected = {
+            "plan": levels.plan_level,
+            "start": levels.start_level,
+            "stdout": levels.output_level,
+            "stderr": levels.output_level,
+            "exit": levels.exit_level,
+            "pipeline_fail_fast": levels.fail_fast_level,
+        }.get(event.phase, logging.DEBUG)
 
-    assert handler.records[0].levelno == expected, (
-        f"phase {event.phase!r} logged at {handler.records[0].levelname}, "
-        f"expected {logging.getLevelName(expected)}"
-    )
+        assert capture.records[0].levelno == expected, (
+            f"phase {event.phase!r} logged at {capture.records[0].levelname}, "
+            f"expected {logging.getLevelName(expected)}"
+        )

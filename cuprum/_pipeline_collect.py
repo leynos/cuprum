@@ -19,12 +19,11 @@ import sys
 import time
 import typing as typ
 
-from cuprum._pipeline_streams import (
-    _create_pipe_tasks,
+from cuprum._pipeline_stream_results import (
     _gather_optional_text_tasks,
-    _PipelineRunConfig,
     _reconcile_pipe_tasks,
 )
+from cuprum._pipeline_streams import _create_pipe_tasks
 from cuprum._pipeline_types import (
     _ExecutionInvariantError,
     _PipelineOutputs,
@@ -40,6 +39,7 @@ from cuprum._process_lifecycle import (
 if typ.TYPE_CHECKING:
     import types
 
+    from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum._pipeline_wait import _PipelineWaitResult
     from cuprum.sh import SafeCmd
 
@@ -135,7 +135,10 @@ async def _collect_pipeline_inputs(
     if timeout is not None:
         timeout_deadline = time.monotonic() + timeout
 
-    pipe_tasks = _create_pipe_tasks(spawn.processes)
+    pipe_tasks = _create_pipe_tasks(
+        spawn.processes,
+        observations=spawn.stages.observations,
+    )
     try:
         wait_result = await _await_pipeline_wait_result(
             spawn,

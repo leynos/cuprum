@@ -17,6 +17,7 @@ from cuprum.sh import (
     Pipeline,
     PipelineResult,
     RunOutputOptions,
+    _DeprecatedOutputFlags,
     _resolve_pipeline_output,
 )
 from tests.helpers.catalogue import python_catalogue
@@ -56,6 +57,25 @@ def pipeline_execution_strategy(
     return ("sync", _execute_sync)
 
 
+def _assert_echoed_and_captured(
+    result: PipelineResult, sink: io.StringIO, expected: str
+) -> None:
+    """Assert a pipeline both captured and echoed the expected output.
+
+    Parameters
+    ----------
+    result:
+        Pipeline result whose success and captured output are asserted.
+    sink:
+        Text sink expected to contain the echoed output.
+    expected:
+        Output expected from both capture and echo.
+    """
+    assert result.ok is True, "the pipeline should succeed"
+    assert result.stdout == expected, "capture must return the final stage output"
+    assert sink.getvalue() == expected, "echo must also tee the output to the sink"
+
+
 def _identity_pipeline() -> tuple[Pipeline, frozenset[Program]]:
     """Build a two-stage pipeline that forwards stdin to stdout."""
     catalogue, python_program = python_catalogue()
@@ -86,11 +106,7 @@ def test_pipeline_output_options_echo_for_run_and_run_sync(
             },
         )
 
-    assert result.ok is True, "the pipeline should succeed"
-    assert result.stdout == "echoed", "capture must return the final stage output"
-    assert stdout_sink.getvalue() == "echoed", (
-        "echo must also tee the output to the sink"
-    )
+    _assert_echoed_and_captured(result, stdout_sink, "echoed")
 
 
 @pytest.mark.usefixtures("stream_backend")
@@ -115,11 +131,7 @@ def test_pipeline_flat_capture_echo_kwargs_are_deprecated_for_public_entrypoints
             },
         )
 
-    assert result.ok is True, "the pipeline should succeed"
-    assert result.stdout == "echoed", "capture must return the final stage output"
-    assert stdout_sink.getvalue() == "echoed", (
-        "echo must also tee the output to the sink"
-    )
+    _assert_echoed_and_captured(result, stdout_sink, "echoed")
 
 
 _OUTPUT_OPTIONS = st.one_of(
@@ -130,20 +142,32 @@ _OUTPUT_OPTIONS = st.one_of(
         echo=st.booleans(),
     ),
 )
+
+
+def _as_deprecated_flags(raw: cabc.Mapping[str, bool]) -> _DeprecatedOutputFlags:
+    """Narrow a generated capture/echo mapping to the keyword TypedDict."""
+    flags = _DeprecatedOutputFlags()
+    if "capture" in raw:
+        flags["capture"] = raw["capture"]
+    if "echo" in raw:
+        flags["echo"] = raw["echo"]
+    return flags
+
+
 _DEPRECATED_FLAGS = st.fixed_dictionaries(
     {},
     optional={
         "capture": st.booleans(),
         "echo": st.booleans(),
     },
-)
+).map(_as_deprecated_flags)
 
 
 @settings(max_examples=50, deadline=None, derandomize=True)
 @given(output=_OUTPUT_OPTIONS, flags=_DEPRECATED_FLAGS)
 def test_resolve_pipeline_output_preserves_option_invariants(
     output: RunOutputOptions | None,
-    flags: dict[str, bool],
+    flags: _DeprecatedOutputFlags,
 ) -> None:
     """Pipeline output resolution preserves the finite option invariants."""
     if output is not None and flags:

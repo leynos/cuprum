@@ -115,7 +115,7 @@ def utf8_stress_payload(n_chars: int = 32768) -> str:
         A string containing a mix of 1, 2, 3, and 4-byte UTF-8
         characters.
     """
-    rng = random.Random(_SEED)  # noqa: S311 — not security-sensitive; deterministic test seed
+    rng = random.Random(_SEED)  # ruff: ignore[suspicious-non-cryptographic-random-usage] — not security-sensitive; deterministic test seed
     chars: list[str] = []
     for i in range(n_chars):
         pool = _POOLS[i % len(_POOLS)]
@@ -204,7 +204,7 @@ def deterministic_property_case(
         msg = f"max_cuts must be non-negative, got {max_cuts}"
         raise ValueError(msg)
 
-    rng = random.Random(seed)  # noqa: S311  # FIXME: deterministic test-data RNG, not for security use
+    rng = random.Random(seed)  # ruff: ignore[suspicious-non-cryptographic-random-usage]  # deterministic test-data RNG, not for security use
     payload = rng.randbytes(payload_size)
 
     if payload_size <= 1 or max_cuts == 0:

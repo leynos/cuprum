@@ -32,10 +32,6 @@ User callers should use `cuprum.is_rust_available()`, which delegates to
 `_check_rust_available()`, so the public answer and dispatch resolver cannot
 diverge within a process.
 
-The public helper raises `TypeError` with the message `Rust availability
-resolver must return bool` if the canonical resolver returns a non-boolean
-value.
-
 Issue `#128` is resolved in this path: the public helper and backend dispatch
 now share the same cached resolver.
 
@@ -461,10 +457,18 @@ paths in one place rather than inlined in the pump:
 
 Cancellation is handled explicitly. `run_in_executor` cannot interrupt the
 worker thread running the Rust pump, and that thread still owns both
-descriptors, so `_await_rust_pump` shields the executor future and drains it
-before propagating `CancelledError`. Restoring the blocking mode or resuming
-the transport any earlier would hand the descriptors back to asyncio while
-native code was still mid-transfer.
+descriptors. `_run_rust_pump_with_blocking_fds` shields the executor future and
+re-raises `CancelledError` after cleanup; its completion callback closes the
+native writer duplicate and restores descriptor and transport state once the
+worker settles. Pipeline teardown remains coupled to that cleanup, so restoring
+blocking mode or resuming the transport earlier cannot hand descriptors back
+to asyncio while native code is still mid-transfer.
+
+During cancellation, `_await_native_pump_cleanup` emits structured `DEBUG`
+records at cleanup start and completion. Both records carry
+`cuprum_action=rust_pump_cleanup`, `cuprum_operation=native_pump_cleanup`, and
+an outcome of `started` or `completed`; completion also carries the monotonic
+`cuprum_duration_s`.
 
 The module's reuse policy is narrow: further descriptor-lifecycle concerns for
 this hand-off belong here, but the seams are not a general-purpose descriptor
@@ -523,12 +527,15 @@ unretrieved-exception warning, detached from the hop that caused it.
 separate from `ExecEvent`. This avoids adding a new `ExecPhase`, which would
 break already-registered `MetricsHook` instances that match that closed set.
 `observe_pump` registers synchronous hooks in a `ContextVar`, and
-`PumpMetricsHook` maps the events to two bounded counters:
+`PumpMetricsHook` maps the events to bounded counters and a cleanup-duration
+histogram:
 
-| Counter | Labels |
+| Metric | Labels |
 | --- | --- |
 | `cuprum_rust_pump_declined_total` | `reason` |
 | `cuprum_rust_pump_failed_after_cancel_total` | none |
+| `cuprum_rust_pump_cleanup_total` | none |
+| `cuprum_rust_pump_cleanup_duration_seconds` | none |
 
 `RustPumpDeclineReason` bounds the decline label to its three declared values.
 Observer failures are logged and do not alter the successful fallback or the
@@ -772,8 +779,7 @@ that turns the `ExecEvent` stream into OpenTelemetry-style spans. It depends
 only on the `Tracer` and `Span` protocols from
 `cuprum.adapters.tracing_protocols`, so any backend that implements them can be
 plugged in. `tracing_adapter` re-exports `Span` and `Tracer` as its public
-integration boundary. The legacy `cuprum.adapters._tracing_protocols` module is
-a compatibility re-export only and does not define a second protocol contract.
+integration boundary.
 `cuprum/adapters/tracing_memory.py` supplies
 `InMemoryTracer` and `InMemorySpan`, the reference doubles used by tests and
 examples: `InMemoryTracer` collects spans in memory and protects its span store
@@ -1029,15 +1035,22 @@ Runtime (`cuprum/`):
   stages.
 - `cuprum/_streams_pump.py` — the stream pump loop with backpressure.
 - `cuprum/adapters/tracing_protocols.py` — the canonical PEP 544 `Span`/
-  `Tracer` protocols. `tracing_adapter` re-exports both; `_tracing_protocols.py`
-  remains a compatibility re-export only.
+  `Tracer` protocols. `tracing_adapter` re-exports both.
 
 Benchmarks (`benchmarks/`):
 
 - `benchmarks/_github_http.py` — authenticated GitHub request construction,
-  bounded retries, and cross-origin redirect policy for benchmark baseline
-  discovery and downloads. Reuse it for benchmark GitHub transfers; keep
-  general-purpose HTTP concerns outside this private module.
+  bounded response reads, retries, and cross-origin redirect policy for
+  benchmark baseline discovery and downloads. `_load_bounded_response_bytes`
+  rejects non-HTTPS URLs before constructing a request, sends the GitHub bearer
+  token and API headers, and enforces the caller's byte ceiling while reading
+  64 KiB chunks. `_load_json_response` uses a 1 MiB ceiling; `_download_bytes`
+  uses a 64 MiB ceiling. Transient `429`, `5xx`, and URL errors are retried
+  after 0.5 and 1.0 seconds before the final failure is raised. The
+  `_ResponseLabels` value identifies the response kind in size-limit
+  diagnostics and carries a wrapper-specific retry description. Reuse this
+  helper for benchmark GitHub transfers; keep general-purpose HTTP concerns
+  outside this private module.
 - `benchmarks/ratchet_ratio_extraction.py` — extracts within-run Rust/Python
   ratio maps and validates that baseline and candidate comparison groups match.
   `benchmarks/ratchet_rust_performance.py` owns report-value construction; this
@@ -1299,6 +1312,16 @@ python -m benchmarks.deterministic_b64_fixture \
 | `pty_blackhole`  | `PtyBlackhole` pseudo-terminal master/slave pair | Drains the master side from a daemon thread to simulate terminal-like throughput. |
 
 <!-- markdownlint-enable MD013 -->
+
+`PtyBlackhole` transfers master-file-descriptor ownership to its daemon
+drainer before `__enter__` returns. The drainer counts raw bytes read from the
+master, while the caller writes text to the slave stream. On exit, the slave
+and master are closed and the drainer is given a bounded five-second join.
+`drained_bytes` exposes the count only after the drainer has terminated; it is
+`None` while a timed-out drainer is still running. Tests that verify the count
+should write a multibyte payload without a newline and compare it with the
+payload's UTF-8 encoded byte length, since PTY line-ending translation would
+otherwise make the result platform-dependent.
 
 ## Worker (`benchmarks/tee_profile_worker.py`)
 
@@ -2239,7 +2262,7 @@ The short version is:
   `--with 'pylint==$(PYLINT_VERSION)'` because the shim revision and Pylint
   package version are separate sources of lint behaviour.
 - `$(DF12_PYLINT)` enables every message shipped by
-  `df12-python-lints` v0.1.0 under CPython 3.14 while retaining Cuprum's
+  `df12-python-lints` v0.3.0 under CPython 3.14 while retaining Cuprum's
   `py-version = "3.12"` semantic baseline.
 - `$(AMBRLEAKS)` scans `cuprum/unittests` and `tests`; exact deterministic
   fixture values that resemble secrets belong in `ambrleaks.toml`.
@@ -2319,16 +2342,19 @@ counted in a bounded, fixed-key counter and reported through structured
 include the request URL; they carry only the event name and non-sensitive
 context such as the rejected redirect's scheme or the triggering error's type.
 
-Ruff must be invoked through the project virtual environment, not as a floating
-host tool. The `RUFF` variable expands to `$(UV_RUN_ENV) uv run ruff`, and the
-`ruff` probe lives in `VENV_TOOLS` so `make` verifies that the locked
-dependency from `uv.lock` is available before running `fmt`, `check-fmt`, or
-`lint`. Continuous Integration (CI) and local runs must keep using this
-`uv run` path for Ruff linting and formatting so preview-rule changes only
-arrive through an explicit lockfile update. `interrogate` is also invoked via
-`uv run` in the `lint` recipe, but it is not included in `VENV_TOOLS` and so is
-not gated by the probe; it relies on `uv sync` having installed it into the
-locked virtualenv.
+Ruff and ty are invoked through pinned `uv tool run` commands rather than
+floating host tools. `RUFF` expands to
+`$(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from 'ruff==$(RUFF_VERSION)' ruff`,
+and `TY` expands to
+`$(UV_RUN_ENV) uv tool run --from 'ty==$(TY_VERSION)' ty`. The Makefile
+defaults are `RUFF_VERSION ?= 0.16.4` and `TY_VERSION ?= 0.0.74`; the
+workflow-level `RUFF_VERSION: '0.16.4'` and `TY_VERSION: '0.0.74'` environment
+values in `.github/workflows/ci.yml` override those defaults, and the
+pin-parity contract test keeps all three sites aligned with the
+`pyproject.toml` dev dependencies.
+The `typecheck` recipe passes `--python .venv` so the tool-run ty process checks
+the project environment. `interrogate` remains invoked via `uv run` in the
+`lint` recipe.
 
 Because `interrogate` requires a docstring on every documentable node,
 documenting a large module can take it over the project's 400-line ceiling
@@ -2345,25 +2371,29 @@ The root `Makefile` exposes the following lint-related variables:
 
 Table: Lint-related Makefile variables and their defaults.
 
-| Variable                | Default                                                                      | Purpose                                                                    |
-| ----------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `VENV_TOOLS`            | `pytest ruff`                                                                | Tools that must resolve through `uv run` from the locked virtualenv.       |
-| `RUFF`                  | `$(UV_RUN_ENV) uv run ruff`                                                  | Locked Ruff command used by `fmt`, `check-fmt`, and `lint`.                |
-| `PYLINT_PYTHON`         | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.         |
-| `PYLINT_TARGETS`        | `benchmarks conftest.py cuprum tests`                                        | Directories and files passed to `pylint-pypy`.                             |
-| `PYLINT_PYPY_SHIM_REF`  | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                              |
-| `PYLINT_PYPY_SHIM`      | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                      |
-| `PYLINT_VERSION`        | `4.0.7`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.         |
-| `PYLINT_CACHE`          | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                         |
-| `PYLINT`                | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                       |
-| `DF12_PYTHON_LINTS_REF` | `755b26f5792f71b37f3a9e656aef714ed98b2c3b`                                   | Immutable v0.1.0 revision locked for DF12 lint tooling.                    |
-| `DF12_PYTHON`           | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                      |
-| `DF12_PYLINT_MESSAGES`  | All v0.1.0 message IDs                                                       | Explicit allowlist for the df12 Pylint pass.                               |
-| `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                   |
-| `AMBRLEAKS`             | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                  |
-| `LOCAL_TOOL_ENV`        | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools. |
-| `UV_ENV`                | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                  |
-| `UV_RUN_ENV`            | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment for locked `uv run` commands such as `$(RUFF)`.         |
+| Variable                | Default                                                                      | Purpose                                                                                                                     |
+| ----------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------|
+| `VENV_TOOLS`            | `pytest ruff`                                                                | Tools checked in the project virtualenv; Ruff uses its pinned command.                                                      |
+| `RUFF_VERSION`          | `0.16.4`                                                                     | Ruff release supplied to `uv tool run --from`.                                                                              |
+| `RUFF_ENV`              | `RAYON_NUM_THREADS=1`                                                        | Keeps Ruff parallelism deterministic for the lint and format gates.                                                         |
+| `RUFF`                  | `$(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from 'ruff==$(RUFF_VERSION)' ruff`  | Pinned Ruff command used by `fmt`, `check-fmt`, and `lint`.                                                                 |
+| `TY_VERSION`            | `0.0.74`                                                                     | ty release supplied to `uv tool run --from`.                                                                                |
+| `TY`                    | `$(UV_RUN_ENV) uv tool run --from 'ty==$(TY_VERSION)' ty`                    | Pinned ty command used by `typecheck`.                                                                                      |
+| `PYLINT_PYTHON`         | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.                                                          |
+| `PYLINT_TARGETS`        | `benchmarks conftest.py cuprum tests`                                        | Directories and files passed to `pylint-pypy`.                                                                              |
+| `PYLINT_PYPY_SHIM_REF`  | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                                                                               |
+| `PYLINT_PYPY_SHIM`      | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                                                                       |
+| `PYLINT_VERSION`        | `4.0.7`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.                                                          |
+| `PYLINT_CACHE`          | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                                                                          |
+| `PYLINT`                | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                                                                        |
+| `DF12_PYTHON_LINTS_REF` | `4cf41736cce2f7ba2778882a5c629c044568a0e5`                                   | Immutable v0.3.0 revision locked for DF12 lint tooling.                                                                     |
+| `DF12_PYTHON`           | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                                                                       |
+| `DF12_PYLINT_MESSAGES`  | All v0.3.0 message IDs, including `R9112`                                    | Explicit allowlist for the df12 Pylint pass.                                                                                |
+| `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                                                                    |
+| `AMBRLEAKS`             | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                                                                   |
+| `LOCAL_TOOL_ENV`        | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools.                                                  |
+| `UV_ENV`                | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                                                                   |
+| `UV_RUN_ENV`            | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment prefix for locked `uv run` commands and the pinned `uv tool run` commands used by `$(RUFF)` and `$(TY)`. |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -2393,7 +2423,8 @@ a separate house style. The imported policy consists of:
 - A focused Pylint configuration that disables all messages by default, then
   enables only the selected messages that complement Ruff.
 - A PyPy-backed Pylint invocation through the pinned shim repository.
-- Every `df12-python-lints` v0.1.0 message, executed under CPython 3.14.
+- Every `df12-python-lints` v0.3.0 message, including `R9112`, executed under
+  CPython 3.14.
 - `ambrleaks` coverage for both in-package and behavioural Syrupy snapshots.
 
 This means new code should prefer:
@@ -2420,15 +2451,28 @@ for type checking.
 
 The canonical lint configuration lives in `pyproject.toml`:
 
-- `[dependency-groups] dev` pins `ruff==0.14.7`. The pin exists so that Ruff's
+- `[dependency-groups] dev` pins `ruff==0.16.4`. The pin exists so that Ruff's
   version — and therefore its rule set and preview-rule behaviour — is
   reproducible between developer machines and CI; an unpinned Ruff could
-  silently gain or lose findings when a new release ships.
+  silently gain or lose findings when a new release ships. The same version is
+  pinned as `RUFF_VERSION` in the Makefile and in `.github/workflows/ci.yml`;
+  the pin-parity contract test in
+  `cuprum/unittests/test_toolchain_pins.py` keeps the three sites aligned
+  (alongside the matching `ty` pins) without asserting any specific version.
 - `[tool.ruff]` sets line length, preview mode, and target Python version.
-- `[tool.ruff.lint]` selects the active Ruff rule families, including `EM`
-  (require exception messages to be assigned to a variable before `raise`,
-  rather than written inline in the `raise` statement).
-- `[tool.ruff.lint.per-file-ignores]` records test-specific exceptions.
+- `[tool.ruff.lint]` selects the active Ruff rule families; the selection
+  mirrors the `episodic` repository's configuration, including `TD` (require
+  authors and issue links on TODO comments).
+- `[tool.ruff.lint.per-file-ignores]` records test-specific exceptions,
+  including:
+  - `boolean-type-hint-positional-argument` is ignored for `**/test_*.py`
+    because parameters bound by `@pytest.mark.parametrize` or Hypothesis
+    `@given` are data rows, not API flags, and pytest's signature-based
+    binding rules out keyword-only parameters.
+  - `scripts/tests/conftest.py` carries `assert` and `no-self-use`
+    exemptions because it is test-support code outside the test globs,
+    whose stub opener must keep the `OpenerDirector` instance-method
+    shape.
 - `[tool.ruff.lint.flake8-import-conventions]` and
   `[tool.ruff.lint.flake8-import-conventions.aliases]` enforce import aliases
   such as `typing as typ` and `collections.abc as cabc`.
@@ -2440,8 +2484,10 @@ The canonical lint configuration lives in `pyproject.toml`:
   [Docstring consistency gate](#docstring-consistency-gate) below.
 - `[tool.pylint.main]`, `[tool.pylint.design]`, and
   `[tool.pylint."messages control"]` configure the second-tier Pylint pass.
-- `[dependency-groups].dev` pins the df12 plugin used by the CPython 3.14 pass
-  to the same immutable revision as the standalone scanner.
+- `[dependency-groups].dev` pins `df12-python-lints` v0.3.0 at commit
+  `4cf41736cce2f7ba2778882a5c629c044568a0e5`, the same immutable revision as
+  the standalone scanner. The enabled message list includes `R9112`
+  (`prefer-type-statement`).
 - `ambrleaks.toml` contains narrow value allowlists for deterministic public
   fixture data that matches a scanner pattern.
 
@@ -2461,25 +2507,30 @@ against callee-owned deadlines and accidental blocking I/O.
 Two suppressions are scoped as narrowly as possible rather than disabling the
 family:
 
-- **Public API (`# noqa: ASYNC109`).** `SafeCmd.run` and `Pipeline.run` keep
-  their documented `timeout` parameter, which deliberately mirrors
-  `subprocess.run(timeout=...)`. `ASYNC109` would instead have the caller own
-  the deadline through `asyncio.timeout()`, but the parameter is public,
-  documented ergonomics, so each definition carries a per-line
-  `# noqa: ASYNC109` with a rationale comment rather than dropping the
-  parameter. Internal helpers do not take a `timeout` parameter (see
+- **Public API (`# ruff: ignore[async-function-with-timeout]`).** `SafeCmd.run`
+  and `Pipeline.run` keep their documented `timeout` parameter, which
+  deliberately mirrors `subprocess.run(timeout=...)`. `ASYNC109` would instead
+  have the caller own the deadline through `asyncio.timeout()`, but the
+  parameter is public, documented ergonomics, so each definition carries a
+  per-line `# ruff: ignore[async-function-with-timeout]` with a rationale
+  comment rather than dropping the parameter. Internal helpers do not take a
+  `timeout` parameter (see
   [ADR-007](adr-007-subprocess-execution-module-boundaries.md)); only the
   public surface is suppressed.
 - **Test scaffolding (`per-file-ignore`).** `ASYNC109` and `ASYNC240` are
   ignored through `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` for
-  exactly two modules — `cuprum/unittests/test_observe_stdin_early_close.py` and
+  two modules — `cuprum/unittests/test_observe_stdin_early_close.py` and
   `tests/behaviour/_execution_runtime_support.py`. Their async scaffolding
   polls a PID file with asyncio-only helpers, so a `timeout` parameter and
   blocking `pathlib` calls are acceptable there; the async-native path libraries
-  (`trio.Path` / `anyio.Path`) that `ASYNC240` recommends are not in use.
-  Naming the two paths rather than globbing `**/test_*.py` stops unrelated and
-  future async tests inheriting the exemption silently. The rationale is
-  recorded next to the ignore in `pyproject.toml`.
+  (`trio.Path` / `anyio.Path`) that `ASYNC240` recommends are not in use. A
+  third module, `cuprum/unittests/test_pipeline_teardown_cancellation.py`,
+  shares only the `ASYNC240` exemption, for the same reason as the two
+  modules above: it polls a cross-process marker file that no asyncio
+  primitive can observe. Naming these paths rather than globbing
+  `**/test_*.py` stops unrelated and future async tests inheriting the
+  exemption silently. The rationale is recorded next to each ignore in
+  `pyproject.toml`.
 
 When changing either suppression, keep the `pyproject.toml` comments and this
 section in step.
@@ -2498,10 +2549,14 @@ match the signature it documents:
 - `DOC502` — a documented exception is not raised directly in the function
   body (it only propagates from a callee).
 
-`ruff==0.14.7` is pinned in the dev dependency group because the `DOC` rules
+`ruff==0.16.4` is pinned in the dev dependency group because the `DOC` rules
 are preview-only (`[tool.ruff]` sets `preview = true`). An unpinned Ruff could
 change which docstrings pass the gate and make it non-reproducible between
-machines and CI.
+machines and CI. The rule-name suppression comment form used throughout this
+codebase (`# ruff: ignore[rule-name]`, for example
+`# ruff: ignore[docstring-extraneous-exception]`) is itself preview-only in
+Ruff 0.16, so `preview = true` and the pinned Ruff version are load-bearing
+for every suppression in this codebase, not only for the `DOC` gate.
 
 `[tool.ruff.lint.pydoclint]` sets `ignore-one-line-docstrings = true`, so a
 single-line docstring needs no structured sections at all. This drives a
@@ -2525,7 +2580,7 @@ a justification naming where the exception comes from:
     ------
     ForbiddenProgramError
         If the program is not permitted by the active context allowlist.
-    """  # noqa: DOC502 - propagates from the allowlist check
+    """  # ruff: ignore[docstring-extraneous-exception] - propagates from allowlist
 ```
 
 Use only one such suppression per docstring.
@@ -2741,6 +2796,7 @@ must not verify the specific SHA value.
 import re
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
 
 def test_uses_pinned_full_sha(caller_step):
     ref = caller_step["uses"].split("@")[-1]

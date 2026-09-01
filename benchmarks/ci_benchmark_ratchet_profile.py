@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib as pth
-import subprocess  # noqa: S404 - helper intentionally invokes hyperfine
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - helper intentionally invokes hyperfine
 import typing as typ
 
 from benchmarks._validation import (
@@ -51,7 +51,7 @@ def load_plan_payload(full_plan_path: pth.Path) -> cabc.Mapping[str, object]:
         the required structural type.
     ValueError
         If the scenario count does not match the scenario command count.
-    """  # noqa: DOC502 - OSError, JSONDecodeError, and TypeError propagate from the readers and validators
+    """  # ruff: ignore[docstring-extraneous-exception] - OSError, JSONDecodeError, and TypeError propagate from the readers and validators
     payload = json.loads(full_plan_path.read_text(encoding="utf-8"))
     full_payload = _require_mapping(payload, name=f"plan payload from {full_plan_path}")
     scenarios = _require_list(full_payload.get("scenarios"), name="scenarios")
@@ -126,7 +126,7 @@ def select_ci_ratchet_scenarios(
         If the scenario and command sequences are of unequal length (strict
         zip), a scenario field fails validation, or no scenarios are
         selected or the selection omits Rust scenarios.
-    """  # noqa: DOC502 - TypeError and the zip/field ValueErrors propagate from the validators
+    """  # ruff: ignore[docstring-extraneous-exception] - TypeError and the zip/field ValueErrors propagate from the validators
     scenarios = _require_list(full_payload.get("scenarios"), name="scenarios")
     plan_command = _require_list(full_payload.get("command"), name="command")
     scenario_commands = plan_command[_HYPERFINE_PREFIX_ARGUMENT_COUNT:]
@@ -193,7 +193,7 @@ def build_hyperfine_command(
         If a selected scenario's ``name`` is not a string.
     ValueError
         If a selected scenario's ``name`` is empty or whitespace-only.
-    """  # noqa: DOC502 - propagates from _require_non_empty_string
+    """  # ruff: ignore[docstring-extraneous-exception] - propagates from _require_non_empty_string
     return [
         "hyperfine",
         "--export-json",
@@ -290,7 +290,7 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
     ValueError
         If plan loading, scenario selection, or writing the filtered plan
         rejects the payload.
-    """  # noqa: DOC502 - propagate from arg parsing, loader, selection, writer, subprocess
+    """  # ruff: ignore[docstring-extraneous-exception] - propagate from arg parsing, loader, selection, writer, subprocess
     args = _parse_args(argv)
     full_payload = load_plan_payload(args.full_plan)
     selected = select_ci_ratchet_scenarios(full_payload)
@@ -298,7 +298,7 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
         throughput_path=args.throughput,
         selected=selected,
     )
-    subprocess.run(command, check=True)  # noqa: S603 - commands come from our dry-run plan
+    subprocess.run(command, check=True)  # ruff: ignore[subprocess-without-shell-equals-true] - commands come from our dry-run plan
     write_filtered_plan(
         filtered_plan_path=args.filtered_plan,
         full_payload=full_payload,

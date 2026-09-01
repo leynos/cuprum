@@ -53,7 +53,6 @@ class TestPumpStreamDispatch:
         monkeypatch : pytest.MonkeyPatch
             Fixture used to override environment variables and internals.
         """
-        _ = self
         monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
         set_rust_availability_for_testing(is_available=True)
 
@@ -125,7 +124,6 @@ class TestPumpStreamDispatch:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Rust pumping should pause the reader transport before draining."""
-        _ = self
         call_order: list[str] = []
 
         def fake_pause_reader_transport(
@@ -203,7 +201,6 @@ class TestPumpStreamDispatch:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A writer toggle failure must roll back any reader blocking change."""
-        _ = self
         monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
         set_rust_availability_for_testing(is_available=True)
 
@@ -235,10 +232,7 @@ class TestPumpStreamDispatch:
                     a failure partway through the toggle sequence.
                 """
                 if fd == read_fd and blocking is True:
-                    original_set_blocking(
-                        fd,
-                        True,  # noqa: FBT003  # mirrors os API here
-                    )
+                    original_set_blocking(fd, bool(blocking))
                     return
                 # Match on the writer role rather than a fixed descriptor.
                 if fd != read_fd and blocking is True:
@@ -271,7 +265,6 @@ class TestPumpStreamDispatch:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Missing pause/resume hooks should not force a Python fallback."""
-        _ = self
         monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
         set_rust_availability_for_testing(is_available=True)
 
@@ -357,7 +350,6 @@ class TestPumpStreamDispatch:
         monkeypatch : pytest.MonkeyPatch
             Fixture used to override the native pump and FD extraction.
         """
-        _ = self
         received = install_closing_rust_pump(monkeypatch)
         bypass_reader_drain(monkeypatch)
 

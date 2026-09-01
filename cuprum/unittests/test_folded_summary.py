@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import operator
-import subprocess  # noqa: S404 - integration tests exercise fixed CLI commands.
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - integration tests exercise fixed CLI commands.
 import sys
 import typing as typ
 
@@ -229,7 +229,7 @@ def _run_folded_summary_cli(
     *extra_args: str,
 ) -> subprocess.CompletedProcess[str]:
     """Invoke benchmarks.summarize_folded via subprocess and return the result."""
-    return subprocess.run(  # noqa: S603
+    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
         [
             sys.executable,
             "-m",

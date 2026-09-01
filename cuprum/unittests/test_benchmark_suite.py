@@ -93,18 +93,6 @@ def test_render_prefixed_command_with_empty_env_returns_raw_command() -> None:
     )
 
 
-def test_hyperfine_config_rejects_negative_warmup() -> None:
-    """Warmup must be zero or positive."""
-    with pytest.raises(ValueError, match="warmup must be >= 0"):
-        HyperfineConfig(warmup=-1, runs=1)
-
-
-def test_hyperfine_config_rejects_non_positive_runs() -> None:
-    """Runs must be at least one."""
-    with pytest.raises(ValueError, match="runs must be >= 1"):
-        HyperfineConfig(warmup=0, runs=0)
-
-
 @pytest.mark.parametrize(
     ("hyperfine_bin", "error_type"),
     [
@@ -181,25 +169,30 @@ def test_pipeline_benchmark_scenario_rejects_invalid_name(
 @pytest.mark.parametrize(
     ("warmup", "runs", "fragment"),
     [
+        pytest.param(-1, 1, "warmup must be >= 0", id="warmup-negative"),
+        pytest.param(0, 0, "runs must be >= 1", id="runs-non-positive"),
         pytest.param(1001, 1, "warmup must be <= 1000", id="warmup-too-large"),
         pytest.param(0, 1001, "runs must be <= 1000", id="runs-too-large"),
     ],
 )
-def test_hyperfine_config_rejects_excessive_iterations(
+def test_hyperfine_config_rejects_invalid_iterations(
     warmup: int,
     runs: int,
     fragment: str,
 ) -> None:
-    """Hyperfine iteration counts should have a practical upper bound."""
+    """Hyperfine warmup/run counts must stay within the practical bounds."""
     with pytest.raises(ValueError, match=fragment):
         HyperfineConfig(warmup=warmup, runs=runs)
 
 
 def test_pipeline_benchmark_config_coerces_string_paths() -> None:
     """Config path fields accept strings and are normalized to ``Path``."""
+    # The fields are declared as ``pth.Path`` because that is the normalized
+    # attribute type; the casts document the str inputs the constructor
+    # deliberately coerces.
     config = PipelineBenchmarkConfig(
-        output_path="dist/benchmarks/bench.json",  # type: ignore[arg-type]
-        worker_path="benchmarks/pipeline_worker.py",  # type: ignore[arg-type]
+        output_path=typ.cast("pth.Path", "dist/benchmarks/bench.json"),
+        worker_path=typ.cast("pth.Path", "benchmarks/pipeline_worker.py"),
         scenarios=(),
         warmup=0,
         runs=1,
@@ -258,7 +251,7 @@ def test_pipeline_benchmark_config_rejects_non_pathlike_output_path() -> None:
         match=r"output_path must be a pathlib\.Path or path-like value",
     ):
         PipelineBenchmarkConfig(
-            output_path=123,  # type: ignore[arg-type]
+            output_path=typ.cast("pth.Path", 123),
             worker_path=pth.Path("benchmarks/pipeline_worker.py"),
             scenarios=(),
             warmup=0,
@@ -283,7 +276,7 @@ def test_pipeline_benchmark_config_rejects_non_pathlike_output_path() -> None:
         pytest.param(
             {
                 "name": "pipeline-typo",
-                "backend": "pythno",  # type: ignore[arg-type]
+                "backend": "pythno",
                 "payload_bytes": 1024,
                 "stages": 2,
                 "with_line_callbacks": False,
@@ -294,7 +287,7 @@ def test_pipeline_benchmark_config_rejects_non_pathlike_output_path() -> None:
         pytest.param(
             {
                 "name": "pipeline-unhashable",
-                "backend": [],  # type: ignore[arg-type]
+                "backend": [],
                 "payload_bytes": 1024,
                 "stages": 2,
                 "with_line_callbacks": False,

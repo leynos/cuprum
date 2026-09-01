@@ -19,17 +19,16 @@ import dataclasses as dc
 import functools
 import logging
 import os
+import time
 import typing as typ
 
 from cuprum._backend import StreamBackend, get_stream_backend
-from cuprum._pipeline_config import (
-    _PipelineRunConfig as _PipelineRunConfig,
+from cuprum._pipeline_pipe_tasks import (
+    _create_pipe_tasks as _create_pipe_tasks_with_context,
 )
-from cuprum._pipeline_config import (
-    _prepare_pipeline_config as _prepare_pipeline_config,
-)
-from cuprum._pipeline_stage_streams import (
-    _create_stage_capture_tasks as _create_stage_capture_tasks,
+from cuprum._pipeline_stream_cleanup_observation import (
+    _log_native_pump_cleanup_completed,
+    _log_native_pump_cleanup_started,
 )
 from cuprum._pipeline_stream_fds import (
     _BlockingModeGuard,
@@ -39,30 +38,14 @@ from cuprum._pipeline_stream_fds import (
     _resume_reader_transport,
     _suppressed_teardown_failure,
 )
-from cuprum._pipeline_stream_results import (
-    _cancel_stream_tasks as _cancel_stream_tasks,
-)
-from cuprum._pipeline_stream_results import (
-    _collect_pipe_results as _collect_pipe_results,
-)
-from cuprum._pipeline_stream_results import (
-    _flatten_stream_tasks as _flatten_stream_tasks,
-)
-from cuprum._pipeline_stream_results import (
-    _gather_optional_text_tasks as _gather_optional_text_tasks,
-)
-from cuprum._pipeline_stream_results import (
-    _reconcile_pipe_tasks as _reconcile_pipe_tasks,
-)
-from cuprum._pipeline_stream_results import (
-    _surface_unexpected_pipe_failures as _surface_unexpected_pipe_failures,
-)
 from cuprum._streams import _close_stream_writer, _pump_stream
 from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
 from cuprum.pump_observation import _emit_pump_event
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum._pipeline_types import _StageObservation
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -84,6 +67,10 @@ class _PumpStreamDispatchTestHooks:
 
     force_fd_extraction_failure: bool = False
     on_rust_fd_path_attempt: cabc.Callable[[], None] | None = None
+    raw_fd_extractor: (
+        cabc.Callable[[asyncio.StreamReader | asyncio.StreamWriter | None], int | None]
+        | None
+    ) = None
     python_pump: (
         cabc.Callable[
             [asyncio.StreamReader | None, asyncio.StreamWriter | None],
@@ -102,6 +89,7 @@ class _RustPumpState:
     blocking_mode_guard: _BlockingModeGuard
     resume_reader: cabc.Callable[[], None] | None
     was_cancelled: bool = False
+    monotonic_clock: cabc.Callable[[], float] = time.monotonic
 
 
 _PUMP_STREAM_DISPATCH_TEST_HOOKS = _PumpStreamDispatchTestHooks()
@@ -111,6 +99,10 @@ def configure_pump_stream_dispatch_for_testing(
     *,
     force_fd_extraction_failure: bool = False,
     on_rust_fd_path_attempt: cabc.Callable[[], None] | None = None,
+    raw_fd_extractor: (
+        cabc.Callable[[asyncio.StreamReader | asyncio.StreamWriter | None], int | None]
+        | None
+    ) = None,
     python_pump: (
         cabc.Callable[
             [asyncio.StreamReader | None, asyncio.StreamWriter | None],
@@ -124,6 +116,7 @@ def configure_pump_stream_dispatch_for_testing(
         force_fd_extraction_failure
     )
     _PUMP_STREAM_DISPATCH_TEST_HOOKS.on_rust_fd_path_attempt = on_rust_fd_path_attempt
+    _PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor = raw_fd_extractor
     _PUMP_STREAM_DISPATCH_TEST_HOOKS.python_pump = python_pump
 
 
@@ -131,6 +124,7 @@ def reset_pump_stream_dispatch_for_testing() -> None:
     """Reset ``_pump_stream_dispatch`` test hooks to defaults."""
     _PUMP_STREAM_DISPATCH_TEST_HOOKS.force_fd_extraction_failure = False
     _PUMP_STREAM_DISPATCH_TEST_HOOKS.on_rust_fd_path_attempt = None
+    _PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor = None
     _PUMP_STREAM_DISPATCH_TEST_HOOKS.python_pump = None
 
 
@@ -141,7 +135,7 @@ def _restore_rust_pump_state(state: _RustPumpState) -> None:
 
 
 def _complete_rust_pump(
-    completed: asyncio.Future[object],
+    completed: asyncio.Future[int],
     *,
     cleanup_complete: asyncio.Future[None],
     rust_writer_fd: int,
@@ -155,9 +149,36 @@ def _complete_rust_pump(
                 _log_rust_pump_failed_after_cancel(error)
     finally:
         _close_rust_writer_fd(rust_writer_fd)
-        _restore_rust_pump_state(state)
-        if not cleanup_complete.done():
-            cleanup_complete.set_result(None)
+        try:
+            with _suppressed_teardown_failure(
+                _LOGGER,
+                "restore_state",
+                OSError,
+                ValueError,
+            ):
+                _restore_rust_pump_state(state)
+        finally:
+            if not cleanup_complete.done():
+                cleanup_complete.set_result(None)
+
+
+async def _await_native_pump_cleanup(
+    cleanup_complete: asyncio.Future[None],
+    *,
+    monotonic_clock: cabc.Callable[[], float],
+) -> None:
+    """Wait for native cleanup despite repeated cancellation requests."""
+    started_at = monotonic_clock()
+    _log_native_pump_cleanup_started(_LOGGER)
+    try:
+        while not cleanup_complete.done():
+            try:
+                await asyncio.shield(cleanup_complete)
+            except asyncio.CancelledError:
+                continue
+    finally:
+        if cleanup_complete.done():
+            _log_native_pump_cleanup_completed(_LOGGER, monotonic_clock() - started_at)
 
 
 async def _run_rust_pump_with_blocking_fds(
@@ -194,6 +215,15 @@ async def _run_rust_pump_with_blocking_fds(
         await asyncio.shield(native_pump)
     except asyncio.CancelledError:
         state.was_cancelled = True
+        # The enclosing pipeline terminates its stages before collecting this
+        # task, so the native read is released within the caller's bounded
+        # cancellation grace. Keeping this task alive until the callback has
+        # restored the descriptors prevents pipeline teardown from reporting
+        # completion while the executor worker still owns them.
+        await _await_native_pump_cleanup(
+            cleanup_complete,
+            monotonic_clock=state.monotonic_clock,
+        )
         raise
     except BaseException:
         await asyncio.shield(cleanup_complete)
@@ -323,8 +353,10 @@ async def _try_rust_pump(
     if _PUMP_STREAM_DISPATCH_TEST_HOOKS.force_fd_extraction_failure:
         return False
 
-    reader_fd = _extract_stream_fd(reader)
-    writer_fd = _extract_stream_fd(writer)
+    extract_raw_fd = _PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor
+    extractor = _extract_stream_fd if extract_raw_fd is None else extract_raw_fd
+    reader_fd = extractor(reader)
+    writer_fd = extractor(writer)
 
     if reader_fd is None or writer_fd is None:
         _log_rust_pump_declined(RustPumpDeclineReason.RAW_FD_UNAVAILABLE)
@@ -356,14 +388,11 @@ async def _pump_stream_dispatch(
 
 def _create_pipe_tasks(
     processes: list[asyncio.subprocess.Process],
+    observations: tuple[_StageObservation, ...] = (),
 ) -> list[asyncio.Task[None]]:
     """Create streaming tasks between adjacent pipeline stages."""
-    return [
-        asyncio.create_task(
-            _pump_stream_dispatch(
-                processes[idx].stdout,
-                processes[idx + 1].stdin,
-            ),
-        )
-        for idx in range(len(processes) - 1)
-    ]
+    return _create_pipe_tasks_with_context(
+        processes,
+        observations,
+        _pump_stream_dispatch,
+    )

@@ -254,7 +254,7 @@ def test_a_writer_close_that_fails_after_the_pump_is_recorded(
 
     # RUF029: the seam this replaces is awaited by `_run_rust_pump`, so the
     # double must be a coroutine function even though it awaits nothing.
-    async def handled(**_kwargs: object) -> bool:  # noqa: RUF029
+    async def handled(**_kwargs: object) -> bool:  # ruff: ignore[unused-async]
         """Report that the Rust pump took the hop."""
         return True
 

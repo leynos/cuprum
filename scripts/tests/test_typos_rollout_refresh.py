@@ -123,7 +123,9 @@ def test_http_refresh_uses_validators_and_preserves_newer_cache(
         Response
             A fake response for the captured request.
         """
-        assert timeout == 30.0, "the HTTPS fetch must use the configured 30s timeout"
+        assert timeout == pytest.approx(30.0), (
+            "the HTTPS fetch must use the configured 30s timeout"
+        )
         requests.append(request)
         return Response()
 
@@ -333,7 +335,7 @@ def test_https_redirect_downgrade_is_logged_and_counted(
         if getattr(record, "event", None) == "typos_rollout.https_redirect_downgrade"
     ]
     assert records, "the downgrade must emit a structured warning"
-    assert records[0].redirect_scheme == "http", (
+    assert getattr(records[0], "redirect_scheme", None) == "http", (
         "the rejected scheme must be recorded for diagnosis"
     )
     assert "cdn.example.test" not in caplog.text, (

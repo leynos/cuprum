@@ -67,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     ------
     SystemExit
         If ``argv`` is invalid; ``argparse`` exits with status 2.
-    """  # noqa: DOC502 - SystemExit propagates from argparse
+    """  # ruff: ignore[docstring-extraneous-exception] - SystemExit propagates from argparse
     args = _parse_args(argv)
     try:
         report = compare_candidate_backend_results(

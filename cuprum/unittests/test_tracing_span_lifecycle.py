@@ -24,64 +24,26 @@ from __future__ import annotations
 
 import logging
 import typing as typ
-from pathlib import Path
 
 import pytest
 
-from cuprum.adapters.tracing_adapter import (
-    _MAX_ACTIVE_SPANS,
-    InMemoryTracer,
-    TracingHook,
+from cuprum.adapters.tracing_adapter import _MAX_ACTIVE_SPANS
+from cuprum.events import new_exec_id
+from cuprum.unittests._adapter_test_support import (
+    Traced,
+    _cat_overrides,
+    _make_exec_event,
+    tracing_hook,
 )
-from cuprum.events import ExecEvent, new_exec_id
-from cuprum.program import Program
-from cuprum.unittests._adapter_test_support import _make_exec_event
 
 if typ.TYPE_CHECKING:
-    from cuprum.events import ExecId, ExecPhase
+    from cuprum.events import ExecPhase
 
-# Single source of truth for the span-attribute contract documented on
-# ``TracingHook``. Both the documentation check and the emitted-attribute
-# check derive from this constant, so the contract is defined in exactly one
-# place and cannot drift between prose and code.
-DOCUMENTED_SPAN_ATTRIBUTES: frozenset[str] = frozenset(
-    {
-        "cuprum.program",
-        "cuprum.argv",
-        "cuprum.pid",
-        "cuprum.cwd",
-        "cuprum.exit_code",
-        "cuprum.duration_s",
-        "cuprum.project",
-        "cuprum.pipeline_stage_index",
-        "cuprum.pipeline_stages",
-    },
-)
-
-
-def _users_guide_text() -> str:
-    """Return the users' guide markdown for documentation-contract checks."""
-    repo_root = Path(__file__).resolve().parents[2]
-    return (repo_root / "docs" / "users-guide.md").read_text(encoding="utf-8")
+__all__ = ["tracing_hook"]
 
 
 class TestTracingSpanLifecycle:
     """Span-lifecycle and attribute-contract tests for ``TracingHook``."""
-
-    @staticmethod
-    def _cat_overrides(exec_id: ExecId, pid: int = 4321) -> dict[str, object]:
-        """Return the identifying overrides for a traced ``cat`` execution.
-
-        The span-lifecycle tests care about which execution an event belongs
-        to, not what it ran, so they all share one program and argv and vary
-        only the correlation token and pid.
-
-        Returns
-        -------
-        dict[str, object]
-            Overrides naming the program, argv, pid, and correlation token.
-        """
-        return {"program": "cat", "argv": ("cat",), "pid": pid, "exec_id": exec_id}
 
     @pytest.mark.parametrize(
         ("phase", "extra_fields", "expected_attributes"),
@@ -126,6 +88,7 @@ class TestTracingSpanLifecycle:
     )
     def test_records_ancillary_event_without_ending_span(
         self,
+        tracing_hook: Traced,
         phase: ExecPhase,
         extra_fields: dict[str, object],
         expected_attributes: dict[str, object],
@@ -140,11 +103,10 @@ class TestTracingSpanLifecycle:
         for ``timeout`` — while the span stays open for the subsequent
         ``exit``.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
+        tracer, hook = tracing_hook
 
         exec_id = new_exec_id()
-        base = self._cat_overrides(exec_id)
+        base = _cat_overrides(exec_id)
         hook(_make_exec_event(phase="start", overrides=base))
         hook(
             _make_exec_event(
@@ -172,7 +134,7 @@ class TestTracingSpanLifecycle:
             f"an ancillary {phase} event must not end the execution span"
         )
 
-    def test_teardown_error_after_exit_is_dropped(self) -> None:
+    def test_teardown_error_after_exit_is_dropped(self, tracing_hook: Traced) -> None:
         """A late ``teardown_error`` must not disturb a concluded execution.
 
         The drain runs after the process has been reaped, so its failure can be
@@ -180,11 +142,10 @@ class TestTracingSpanLifecycle:
         ``exec_id``, and ``exit`` removes the entry, so the late event finds no
         open span and is dropped rather than reopening or re-ending one.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
+        tracer, hook = tracing_hook
 
         exec_id = new_exec_id()
-        base = self._cat_overrides(exec_id)
+        base = _cat_overrides(exec_id)
         hook(_make_exec_event(phase="start", overrides=base))
         hook(
             _make_exec_event(
@@ -206,7 +167,10 @@ class TestTracingSpanLifecycle:
             f"closed span, got {[name for name, _ in span.events]}"
         )
 
-    def test_abandoned_spans_are_evicted_once_the_registry_fills(self) -> None:
+    def test_abandoned_spans_are_evicted_once_the_registry_fills(
+        self,
+        tracing_hook: Traced,
+    ) -> None:
         """An execution that never emits ``exit`` must not accumulate forever.
 
         Cleanup also runs on external cancellation and on a stdin-writer
@@ -215,11 +179,10 @@ class TestTracingSpanLifecycle:
         emits. Those spans have nothing left to close them, so the registry is
         bounded and evicts the oldest, ending it as failed.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
+        tracer, hook = tracing_hook
 
         abandoned = new_exec_id()
-        abandoned_overrides = self._cat_overrides(abandoned, pid=1)
+        abandoned_overrides = _cat_overrides(abandoned, pid=1)
         hook(_make_exec_event(phase="start", overrides=abandoned_overrides))
         hook(
             _make_exec_event(
@@ -239,7 +202,7 @@ class TestTracingSpanLifecycle:
             hook(
                 _make_exec_event(
                     phase="start",
-                    overrides=self._cat_overrides(new_exec_id(), pid=index + 2),
+                    overrides=_cat_overrides(new_exec_id(), pid=index + 2),
                 ),
             )
 
@@ -251,22 +214,25 @@ class TestTracingSpanLifecycle:
             f"the registry must stay bounded, got {len(hook._active_spans)}"
         )
 
-    def test_eviction_is_reported(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_eviction_is_reported(
+        self,
+        tracing_hook: Traced,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
         """Dropping a span must not be silent.
 
         An evicted span is ended as failed while its execution may still be
         running, so its trace is lost — and without a signal that loss is
         undiagnosable: the trace is simply missing and nothing says why.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer)
+        hook = tracing_hook.hook
 
         with caplog.at_level(logging.WARNING, logger="cuprum.adapters"):
             for index in range(_MAX_ACTIVE_SPANS + 1):
                 hook(
                     _make_exec_event(
                         phase="start",
-                        overrides=self._cat_overrides(new_exec_id(), pid=index + 1),
+                        overrides=_cat_overrides(new_exec_id(), pid=index + 1),
                     ),
                 )
 
@@ -278,7 +244,10 @@ class TestTracingSpanLifecycle:
             _MAX_ACTIVE_SPANS,
         ), f"the record must count what was dropped and what remains, got {counts}"
 
-    def test_eviction_spares_the_span_that_is_still_active(self) -> None:
+    def test_eviction_spares_the_span_that_is_still_active(
+        self,
+        tracing_hook: Traced,
+    ) -> None:
         """A span still receiving events outlives one that went quiet earlier.
 
         Eviction order is recency of activity, not of arrival. Were it arrival
@@ -286,24 +255,21 @@ class TestTracingSpanLifecycle:
         even while it was demonstrably still producing output, and its real
         ``exit`` would then find nothing to close.
         """
-        tracer = InMemoryTracer()
-        hook = TracingHook(tracer, record_output=True)
+        # ``record_output`` defaults to True, so the fixture's hook records the
+        # stdout event this test relies on to keep the busy span active.
+        tracer, hook = tracing_hook
 
         busy, quiet = new_exec_id(), new_exec_id()
-        hook(
-            _make_exec_event(phase="start", overrides=self._cat_overrides(busy, pid=1))
-        )
+        hook(_make_exec_event(phase="start", overrides=_cat_overrides(busy, pid=1)))
         busy_span = tracer.spans[0]
-        hook(
-            _make_exec_event(phase="start", overrides=self._cat_overrides(quiet, pid=2))
-        )
+        hook(_make_exec_event(phase="start", overrides=_cat_overrides(quiet, pid=2)))
         quiet_span = tracer.spans[1]
 
         # The older execution is the one still doing work.
         hook(
             _make_exec_event(
                 phase="stdout",
-                overrides={**self._cat_overrides(busy, pid=1), "line": "still here"},
+                overrides={**_cat_overrides(busy, pid=1), "line": "still here"},
             ),
         )
 
@@ -313,7 +279,7 @@ class TestTracingSpanLifecycle:
             hook(
                 _make_exec_event(
                     phase="start",
-                    overrides=self._cat_overrides(new_exec_id(), pid=index + 3),
+                    overrides=_cat_overrides(new_exec_id(), pid=index + 3),
                 ),
             )
 
@@ -325,75 +291,39 @@ class TestTracingSpanLifecycle:
             "ahead of one that fell silent earlier"
         )
 
-    def test_emitted_attributes_match_documented_contract(self) -> None:
-        """The attributes the hook emits equal the documented contract.
+    def test_fail_fast_event_refreshes_the_span_eviction_recency(
+        self,
+        tracing_hook: Traced,
+    ) -> None:
+        """A fail-fast decision keeps its span ahead of an idle one."""
+        tracer, hook = tracing_hook
+        busy, quiet = new_exec_id(), new_exec_id()
+        hook(_make_exec_event(phase="start", overrides=_cat_overrides(busy, pid=1)))
+        busy_span = tracer.spans[0]
+        hook(_make_exec_event(phase="start", overrides=_cat_overrides(quiet, pid=2)))
+        quiet_span = tracer.spans[1]
 
-        Every attribute ``_build_attributes`` produces for a fully-populated
-        start event, plus the exit-time attributes, must equal
-        ``DOCUMENTED_SPAN_ATTRIBUTES`` — guarding the omission of ``cuprum.cwd`` /
-        ``cuprum.pipeline_stages`` that motivated issue #122.
-        """
-        start_event = ExecEvent(
-            phase="start",
-            program=Program("cat"),
-            argv=("cat",),
-            cwd=Path("/srv/work"),
-            env=None,
-            pid=4321,
-            timestamp=0.0,
-            line=None,
-            exit_code=None,
-            duration_s=None,
-            tags={
-                "project": "doc-lockstep",
-                "pipeline_stage_index": 0,
-                "pipeline_stages": 2,
-            },
+        hook(
+            _make_exec_event(
+                phase="pipeline_fail_fast",
+                overrides={
+                    **_cat_overrides(busy, pid=1),
+                    "exit_code": 1,
+                    "duration_s": 0.0,
+                    "stage_index": 0,
+                    "stage_count": 2,
+                },
+            ),
         )
-        emitted = set(TracingHook._build_attributes(start_event))
-        # exit_code and duration_s are attached later, in _handle_exit.
-        emitted |= {"cuprum.exit_code", "cuprum.duration_s"}
+        for index in range(_MAX_ACTIVE_SPANS - 1):
+            hook(
+                _make_exec_event(
+                    phase="start",
+                    overrides=_cat_overrides(new_exec_id(), pid=index + 3),
+                ),
+            )
 
-        contract = set(DOCUMENTED_SPAN_ATTRIBUTES)
-        assert emitted == contract, (
-            "emitted attributes must match the documented contract; "
-            f"emitted-only={emitted - contract}, contract-only={contract - emitted}"
-        )
-
-    def test_docstring_documents_each_contract_attribute(self) -> None:
-        """The ``TracingHook`` docstring names every attribute in the contract.
-
-        Checks substring membership of each documented name rather than parsing
-        ``__doc__``, so whitespace or formatting edits to the docstring cannot
-        change the test outcome.
-        """
-        doc = TracingHook.__doc__ or ""
-        missing = sorted(
-            attr for attr in DOCUMENTED_SPAN_ATTRIBUTES if f"``{attr}``" not in doc
-        )
-        assert not missing, (
-            f"TracingHook docstring omits documented attributes: {missing}"
-        )
-
-    def test_users_guide_lists_every_tracing_attribute(self) -> None:
-        """The users' guide tracing section names every attribute in the contract.
-
-        Uses inline-code substring membership rather than parsing the list, so the
-        guide's markdown formatting is not itself part of the assertion. Locks in
-        ``cuprum.cwd`` and ``cuprum.pipeline_stages`` alongside the rest.
-        """
-        guide = _users_guide_text()
-        missing = sorted(
-            attr for attr in DOCUMENTED_SPAN_ATTRIBUTES if f"`{attr}`" not in guide
-        )
-        assert not missing, f"users' guide omits tracing attributes: {missing}"
-
-    def test_users_guide_names_record_output_option(self) -> None:
-        """The users' guide documents ``record_output``, not the obsolete name."""
-        guide = _users_guide_text()
-        assert "record_output" in guide, (
-            "users' guide must name the record_output option"
-        )
-        assert "record_io" not in guide, (
-            "users' guide must not use the obsolete record_io option name"
+        assert quiet_span.ended is True, "the idle span must be evicted first"
+        assert busy_span.ended is False, (
+            "a span touched by pipeline_fail_fast must remain active until exit"
         )

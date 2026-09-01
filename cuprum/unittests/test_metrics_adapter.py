@@ -8,67 +8,57 @@ import typing as typ
 
 import pytest
 
-from cuprum import sh
 from cuprum.adapters.metrics_adapter import (
     InMemoryMetrics,
     MetricsHook,
     _UnhandledMetricsPhaseError,
-    metrics_hook,
 )
-from cuprum.context import ScopeConfig, scoped
+from cuprum.adapters.metrics_adapter import metrics_hook as make_metrics_hook
 from cuprum.events import ExecEvent, ExecPhase
 from cuprum.program import Program
 from cuprum.unittests._adapter_test_support import (
+    Metered,
     _LabelRecordingCollector,
     _make_exec_event,
-    _python_builder,
+    _run_observed_python,
+    metrics_hook,
 )
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+__all__ = ["metrics_hook"]
 
 
 class TestMetricsHook:
     """Tests for MetricsHook and InMemoryMetrics."""
 
     @pytest.mark.parametrize(
-        (
-            "command_code",
-            "expected_executions",
-            "expected_failures",
-            "failure_message",
-        ),
+        ("command_code", "expected_counts", "failure_message"),
         [
             (
                 "print('hello')",
-                1.0,
-                0.0,
+                (1.0, 0.0),
                 "successful executions should increment only the executions counter",
             ),
             (
                 "import sys; sys.exit(1)",
-                1.0,
-                1.0,
+                (1.0, 1.0),
                 "failed executions should increment executions and failures counters",
             ),
         ],
     )
     def test_execution_counters(
         self,
+        metrics_hook: Metered,
         command_code: str,
-        expected_executions: float,
-        expected_failures: float,
+        expected_counts: tuple[float, float],
         failure_message: str,
     ) -> None:
         """Hook increments counters for successful and failed executions."""
-        builder, catalogue = _python_builder(project_name="metrics-counters")
-        cmd = builder("-c", command_code)
-
-        metrics = InMemoryMetrics()
-        hook = MetricsHook(metrics)
-
-        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
-            cmd.run_sync()
+        expected_executions, expected_failures = expected_counts
+        metrics, hook = metrics_hook
+        _run_observed_python(hook, "-c", command_code, project_name="metrics-counters")
 
         assert metrics.counters.get("cuprum_executions_total") == pytest.approx(
             expected_executions
@@ -77,22 +67,18 @@ class TestMetricsHook:
             expected_failures
         ), failure_message
 
-    def test_counts_output_lines(self) -> None:
+    def test_counts_output_lines(self, metrics_hook: Metered) -> None:
         """Hook counts stdout and stderr lines."""
-        builder, catalogue = _python_builder(project_name="metrics-lines")
-        cmd = builder(
+        metrics, hook = metrics_hook
+        _run_observed_python(
+            hook,
             "-c",
             """import sys
 print('out1')
 print('out2')
 print('err1', file=sys.stderr)""",
+            project_name="metrics-lines",
         )
-
-        metrics = InMemoryMetrics()
-        hook = MetricsHook(metrics)
-
-        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
-            cmd.run_sync()
 
         assert metrics.counters.get("cuprum_stdout_lines_total") == pytest.approx(
             2.0
@@ -101,43 +87,38 @@ print('err1', file=sys.stderr)""",
             1.0
         ), "stderr events should increment the stderr line counter"
 
-    def test_records_duration_histogram(self) -> None:
+    def test_records_duration_histogram(self, metrics_hook: Metered) -> None:
         """Hook records execution duration in histogram."""
-        builder, catalogue = _python_builder(project_name="metrics-duration")
-        cmd = builder("-c", "print('quick')")
-
-        metrics = InMemoryMetrics()
-        hook = MetricsHook(metrics)
-
-        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
-            cmd.run_sync()
+        metrics, hook = metrics_hook
+        _run_observed_python(
+            hook, "-c", "print('quick')", project_name="metrics-duration"
+        )
 
         durations = metrics.histograms.get("cuprum_duration_seconds", [])
         assert len(durations) == 1, "exit events should record one duration sample"
         assert durations[0] >= 0.0, "duration samples should be non-negative"
 
     @pytest.mark.parametrize(
-        ("phase", "extra_kwargs", "metric_name", "expected_value"),
+        ("phase", "extra_kwargs", "expected_counter"),
         [
             (
                 "stdin_error",
                 {"note": "BrokenPipeError: forced EPIPE"},
-                "cuprum_stdin_errors_total",
-                1.0,
+                ("cuprum_stdin_errors_total", 1.0),
             ),
-            ("stdin", {"byte_count": 7}, "cuprum_stdin_bytes_total", 7.0),
+            ("stdin", {"byte_count": 7}, ("cuprum_stdin_bytes_total", 7.0)),
         ],
     )
     def test_counts_stdin_metrics(
         self,
+        metrics_hook: Metered,
         phase: str,
         extra_kwargs: dict[str, object],
-        metric_name: str,
-        expected_value: float,
+        expected_counter: tuple[str, float],
     ) -> None:
         """Hook increments stdin byte and error counters for stdin events."""
-        metrics = InMemoryMetrics()
-        hook = MetricsHook(metrics)
+        metric_name, expected_value = expected_counter
+        metrics, hook = metrics_hook
         program = Program(sys.executable)
 
         hook(
@@ -188,13 +169,13 @@ print('err1', file=sys.stderr)""",
     )
     def test_counts_timeout_metrics(
         self,
+        metrics_hook: Metered,
         phase: str,
         extra_kwargs: dict[str, object],
         metric_name: str,
     ) -> None:
         """Hook counts timeout, drain failure, and capture-grace diagnostics."""
-        metrics = InMemoryMetrics()
-        hook = MetricsHook(metrics)
+        metrics, hook = metrics_hook
 
         hook(
             _make_exec_event(
@@ -244,13 +225,8 @@ print('err1', file=sys.stderr)""",
     def test_factory_function_returns_hook(self) -> None:
         """metrics_hook() factory returns a valid ExecHook."""
         metrics = InMemoryMetrics()
-        hook = metrics_hook(metrics)
 
-        builder, catalogue = _python_builder()
-        cmd = builder("-c", "print('factory')")
-
-        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
-            cmd.run_sync()
+        _run_observed_python(make_metrics_hook(metrics), "-c", "print('factory')")
 
         assert metrics.counters.get("cuprum_executions_total") == pytest.approx(1.0), (
             "metrics_hook factory should return a hook that counts executions"
@@ -274,7 +250,7 @@ print('err1', file=sys.stderr)""",
         assert metrics.counters == {}, "reset should clear in-memory counters"
         assert metrics.histograms == {}, "reset should clear in-memory histograms"
 
-    def test_plan_phase_does_not_project_labels(self) -> None:
+    def test_plan_phase_does_not_project_labels(self, metrics_hook: Metered) -> None:
         """The plan phase is a no-op without touching event label fields."""
 
         class UnstringableProgram:
@@ -285,8 +261,7 @@ print('err1', file=sys.stderr)""",
                 msg = "unhandled phases must not project metrics labels"
                 raise AssertionError(msg)
 
-        metrics = InMemoryMetrics()
-        hook = MetricsHook(metrics)
+        metrics, hook = metrics_hook
         event = ExecEvent(
             phase="plan",
             program=typ.cast("Program", UnstringableProgram()),
@@ -306,10 +281,12 @@ print('err1', file=sys.stderr)""",
         assert metrics.counters == {}, "plan events should not mutate counters"
         assert metrics.histograms == {}, "plan events should not mutate histograms"
 
-    def test_unknown_phase_raises_structured_error(self) -> None:
+    def test_unknown_phase_raises_structured_error(
+        self,
+        metrics_hook: Metered,
+    ) -> None:
         """Unknown phases expose their value through a structured error."""
-        metrics = InMemoryMetrics()
-        hook = MetricsHook(metrics)
+        metrics, hook = metrics_hook
 
         with pytest.raises(_UnhandledMetricsPhaseError) as exc_info:
             hook(_make_exec_event(phase=typ.cast("ExecPhase", "future_phase")))
@@ -354,7 +331,7 @@ print('err1', file=sys.stderr)""",
             """Run a worker and retain any failure for the main thread."""
             try:
                 target()
-            except BaseException as exc:  # noqa: BLE001 - worker failures must surface.
+            except BaseException as exc:  # ruff: ignore[blind-except] - worker failures must surface.
                 with errors_lock:
                     errors.append(exc)
 
@@ -393,11 +370,7 @@ print('err1', file=sys.stderr)""",
         recorder = _LabelRecordingCollector()
         hook = MetricsHook(recorder)
 
-        builder, catalogue = _python_builder(project_name="label-test")
-        cmd = builder("-c", "print('x')")
-
-        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
-            cmd.run_sync()
+        _run_observed_python(hook, "-c", "print('x')", project_name="label-test")
 
         # Verify at least one call was made with correct labels
         assert recorder.calls, "metrics hook should record labelled metric calls"

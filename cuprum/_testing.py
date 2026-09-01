@@ -13,6 +13,7 @@ from __future__ import annotations
 import typing as typ
 
 from cuprum._backend import _check_rust_available, set_rust_availability_for_testing
+from cuprum._pipeline_config import _prepare_pipeline_config
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
     _collect_hooks,
@@ -20,7 +21,6 @@ from cuprum._pipeline_internals import (
     _run_pipeline,
 )
 from cuprum._pipeline_streams import (
-    _prepare_pipeline_config,
     _pump_stream_dispatch,
     configure_pump_stream_dispatch_for_testing,
     reset_pump_stream_dispatch_for_testing,
@@ -47,18 +47,9 @@ from cuprum.sh import _resolve_timeout
 if typ.TYPE_CHECKING:
     import asyncio
 
-    import pytest
 
-
-def force_python_pump_fallback(
-    _monkeypatch: pytest.MonkeyPatch,
-) -> dict[str, int]:
+def force_python_pump_fallback() -> dict[str, int]:
     """Force dispatch fallback to the Python pump and count fallback calls.
-
-    Parameters
-    ----------
-    _monkeypatch : pytest.MonkeyPatch
-        Unused fixture parameter kept for backwards-compatible call sites.
 
     Returns
     -------

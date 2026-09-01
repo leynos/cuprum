@@ -26,13 +26,41 @@ import typing as typ
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from types import ModuleType
+
+
+class _NativeBackend(typ.Protocol):
+    """Structural view of the optional ``cuprum._rust_backend_native`` module.
+
+    Declaring the two entry points this wrapper uses gives them checked
+    signatures and precise return types, so each call site needs no cast of
+    its own.
+    """
+
+    @staticmethod
+    def rust_pump_stream(
+        reader_fd: int,
+        writer_fd: int,
+        *,
+        buffer_size: int = ...,
+    ) -> int:
+        """Pump bytes from ``reader_fd`` to ``writer_fd``."""
+
+    @staticmethod
+    def rust_consume_stream(reader_fd: int, *, buffer_size: int = ...) -> str:
+        """Drain ``reader_fd`` and decode it as UTF-8."""
 
 
 @functools.lru_cache(maxsize=1)
-def _load_native() -> ModuleType:
+def _load_native() -> _NativeBackend:
     """Import the native Rust backend module."""
-    return importlib.import_module("cuprum._rust_backend_native")
+    # The compiled extension ships no stubs, and ``import_module`` is typed as
+    # returning a bare ``ModuleType`` whose ``__getattr__`` ty does not treat
+    # as satisfying a protocol. One cast here is the whole untyped boundary;
+    # every call through ``_NativeBackend`` is checked from this point on.
+    return typ.cast(
+        "_NativeBackend",
+        importlib.import_module("cuprum._rust_backend_native"),
+    )
 
 
 def _convert_fd_for_platform(fd: int) -> int:
@@ -45,7 +73,7 @@ def _convert_fd_for_platform(fd: int) -> int:
     # Use getattr to avoid cross-platform stub mismatches in type checking.
     get_osfhandle = typ.cast(
         "cabc.Callable[[int], int]",
-        getattr(msvcrt, "get_osfhandle"),  # noqa: B009  # https://github.com/leynos/cuprum/pull/29#discussion_r2743182508
+        getattr(msvcrt, "get_osfhandle"),  # ruff: ignore[get-attr-with-constant]  # https://github.com/leynos/cuprum/pull/29#discussion_r2743182508
     )
     handle = get_osfhandle(fd)
     bit_size = ctypes.sizeof(ctypes.c_void_p) * 8
@@ -132,12 +160,9 @@ def rust_consume_stream(
     1 GiB maximum, and ``OSError`` if an I/O error occurs while reading.
     """
     native = _load_native()
-    return typ.cast(
-        "str",
-        native.rust_consume_stream(
-            _convert_fd_for_platform(reader_fd),
-            buffer_size=buffer_size,
-        ),
+    return native.rust_consume_stream(
+        _convert_fd_for_platform(reader_fd),
+        buffer_size=buffer_size,
     )
 
 

@@ -13,6 +13,7 @@ import re
 import pytest
 
 from tests.helpers import extract_markdown_subsection, read_doc, read_users_guide
+from tests.helpers.docs import assert_documents
 
 _DEV_GUIDE = "docs/developers-guide.md"
 _ADR_007 = "docs/adr-007-subprocess-execution-module-boundaries.md"
@@ -106,7 +107,7 @@ def users_tracing_section(users_guide: str) -> str:
         "ASYNC240",
         "SafeCmd.run",
         "Pipeline.run",
-        "# noqa: ASYNC109",
+        "# ruff: ignore[async-function-with-timeout]",
         "subprocess.run(timeout=...)",
         "per-file-ignore",
         "pyproject.toml",
@@ -121,10 +122,11 @@ def test_developers_guide_documents_async_policy(
     """The developers' guide must document the Ruff ASYNC policy and suppressions.
 
     Covers why the family is selected, the narrowly scoped public-API
-    ``# noqa: ASYNC109`` suppressions on ``SafeCmd.run`` / ``Pipeline.run``, and
-    the test-scaffolding per-file-ignore for ``ASYNC109`` / ``ASYNC240``.
+    ``# ruff: ignore[async-function-with-timeout]`` suppressions on
+    ``SafeCmd.run`` / ``Pipeline.run``, and the test-scaffolding
+    per-file-ignore for ``ASYNC109`` / ``ASYNC240``.
     """
-    assert term in async_policy_section, f"Missing documentation clause: '{term}'"
+    assert_documents(async_policy_section, term)
 
 
 # -- Timeout observability contract -------------------------------------------
@@ -168,9 +170,7 @@ def test_developers_guide_documents_timeout_observability(
     elapsed-versus-immediate timeout mode, and the guarantee that telemetry
     never masks ``TimeoutExpired`` / ``CancelledError``.
     """
-    assert term in timeout_observability_section, (
-        f"Missing documentation clause: '{term}'"
-    )
+    assert_documents(timeout_observability_section, term)
 
 
 # -- Users' guide timeout contract --------------------------------------------
@@ -194,7 +194,7 @@ def test_users_guide_documents_timeout_contract(
     Covers the ``timeout`` parameter, immediate non-positive expiry, and the
     public ``TimeoutExpired`` mapping.
     """
-    assert term in users_timeouts_section, f"Missing documentation clause: '{term}'"
+    assert_documents(users_timeouts_section, term)
 
 
 @pytest.mark.parametrize(
@@ -212,7 +212,7 @@ def test_users_guide_documents_timeout_events(
     users_events_section: str, term: str
 ) -> None:
     """The users' guide structured-events section must document timeout events."""
-    assert term in users_events_section, f"Missing documentation clause: '{term}'"
+    assert_documents(users_events_section, term)
 
 
 @pytest.mark.parametrize(
@@ -228,7 +228,7 @@ def test_users_guide_documents_teardown_error_fields(
     ``operation``/``error_type`` payload and the fact that only unexpected
     (non-``CancelledError``) drain failures are reported.
     """
-    assert term in users_events_section, f"Missing documentation clause: '{term}'"
+    assert_documents(users_events_section, term)
 
 
 @pytest.mark.parametrize(
@@ -253,7 +253,7 @@ def test_users_guide_documents_timeout_log_fields(
     so the logger name, both record messages, the structured ``cuprum_*``
     fields, and the best-effort emission guarantee are part of the contract.
     """
-    assert term in users_timeouts_section, f"Missing documentation clause: '{term}'"
+    assert_documents(users_timeouts_section, term)
 
 
 @pytest.mark.parametrize(
@@ -263,7 +263,7 @@ def test_users_guide_documents_timeout_metrics(
     users_metrics_section: str, term: str
 ) -> None:
     """The users' guide must list the timeout and teardown counters."""
-    assert term in users_metrics_section, f"Missing documentation clause: '{term}'"
+    assert_documents(users_metrics_section, term)
 
 
 @pytest.mark.parametrize(
@@ -285,7 +285,7 @@ def test_users_guide_documents_ancillary_span_events(
     Covers the fields carried, and the span-lifecycle guarantee that an
     ancillary event neither ends nor marks the span.
     """
-    assert term in users_tracing_section, f"Missing documentation clause: '{term}'"
+    assert_documents(users_tracing_section, term)
 
 
 # -- ADR-007 wait-helper addendum ---------------------------------------------
@@ -313,7 +313,7 @@ def test_adr_007_documents_wait_helper_split(adr_007: str, term: str) -> None:
     ``_drain_stream_consumers``, and the invariant that no pending
     stream-consumer task is left behind.
     """
-    assert term in adr_007, f"Missing documentation clause: '{term}'"
+    assert_documents(adr_007, term)
 
 
 # ``cuprum_operation`` is deliberately absent from the term list above. Asserting
