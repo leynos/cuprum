@@ -26,7 +26,7 @@ LINE_ALPHABET = tuple("abcdefghijklmnopqrstuvwxyz0123456789 -_[]*")
 
 
 def _write_fake_formatter(directory: Path) -> tuple[Path, Path]:
-    """Create a formatter fixture that records calls and canonicalises bytes."""
+    """Create a formatter fixture that records calls and canonicalizes bytes."""
     executable = directory / "mdtablefix"
     call_log = directory / "formatter-calls.jsonl"
     executable.write_text(
