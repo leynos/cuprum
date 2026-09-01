@@ -67,6 +67,10 @@ pub fn is_available() -> bool {
 }
 
 #[expect(
+    clippy::allow_attributes,
+    reason = "PyO3 emits the argument-count lint only in some build configurations"
+)]
+#[allow(
     clippy::too_many_arguments,
     reason = "PyO3 generates five-parameter wrappers for these stable Python FFI functions"
 )]
