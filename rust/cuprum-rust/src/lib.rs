@@ -78,9 +78,29 @@ mod stream_pyfunctions {
     //! Contain the Python stream exports and their generated `PyO3` wrappers.
 
     use super::{
-        PyErr, PyResult, Python, ReaderFd, WriterFd, consume_stream, convert_fd, pump_stream,
-        pyfunction, validate_buffer_size,
+        BufferSize, PumpError, PyErr, PyResult, Python, ReaderFd, WriterFd, consume_stream,
+        convert_fd, pump_stream, pyfunction, validate_buffer_size,
     };
+
+    /// Run a prepared stream operation after validating its buffer size.
+    ///
+    /// Keep the common `PyO3` boundary behaviour in one place: validate the
+    /// Python argument, prepare descriptor ownership, release the GIL for I/O,
+    /// and map `PumpError` back to the exported Python exception type.
+    fn run_stream_operation<T, Operation>(
+        py: Python<'_>,
+        buffer_size: i64,
+        prepare_operation: impl FnOnce(BufferSize) -> PyResult<Operation>,
+    ) -> PyResult<T>
+    where
+        T: Send,
+        Operation: FnOnce() -> Result<T, PumpError> + Send,
+    {
+        let validated_buffer_size = validate_buffer_size(buffer_size)?;
+        let operation = prepare_operation(validated_buffer_size)?;
+        let result = py.detach(operation);
+        result.map_err(PyErr::from)
+    }
 
     /// Pump bytes between file descriptors outside the GIL.
     ///
@@ -100,13 +120,11 @@ mod stream_pyfunctions {
         writer_fd: i64,
         buffer_size: i64,
     ) -> PyResult<u64> {
-        let validated_buffer_size = validate_buffer_size(buffer_size)?;
-
-        let reader = ReaderFd(convert_fd(reader_fd)?);
-        let writer = WriterFd(convert_fd(writer_fd)?);
-
-        let result = py.detach(|| pump_stream(reader, writer, validated_buffer_size));
-        result.map_err(PyErr::from)
+        run_stream_operation(py, buffer_size, |validated_buffer_size| {
+            let reader = ReaderFd(convert_fd(reader_fd)?);
+            let writer = WriterFd(convert_fd(writer_fd)?);
+            Ok(move || pump_stream(reader, writer, validated_buffer_size))
+        })
     }
 
     /// Consume a stream and decode it as UTF-8 with replacement semantics.
@@ -131,11 +149,10 @@ mod stream_pyfunctions {
         reader_fd: i64,
         buffer_size: i64,
     ) -> PyResult<String> {
-        let validated_buffer_size = validate_buffer_size(buffer_size)?;
-
-        let reader = ReaderFd(convert_fd(reader_fd)?);
-        let result = py.detach(|| consume_stream(reader, validated_buffer_size));
-        result.map_err(PyErr::from)
+        run_stream_operation(py, buffer_size, |validated_buffer_size| {
+            let reader = ReaderFd(convert_fd(reader_fd)?);
+            Ok(move || consume_stream(reader, validated_buffer_size))
+        })
     }
 }
 

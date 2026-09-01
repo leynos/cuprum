@@ -1771,6 +1771,13 @@ descriptor the Python side still owns is never closed by Rust. `pump_stream` and
 `consume_stream` both route their reader through the helper, keeping the
 "borrow this FD without owning it" rule in a single place.
 
+The private `stream_pyfunctions::run_stream_operation` helper is limited to
+the two PyO3 stream exports. It owns their shared buffer validation, GIL
+release, and `PumpError` conversion; each export must prepare only the
+ownership-specific descriptors and supply its stream operation. Do not reuse
+it outside this FFI adapter boundary or move descriptor ownership into the
+helper, because that would blur the distinct borrow-versus-consume contract.
+
 This supersedes an earlier pattern that reconstructed the handle and called
 `std::mem::forget` after the inner operation returned. Because a panic unwinds
 past the trailing `forget`, that pattern dropped — and therefore closed — the
