@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - integration tests exercise fixed CLI commands.
 import sys
 import typing as typ
@@ -15,6 +16,11 @@ from benchmarks.profile_tee_hotpath import (
     TeeProfileDriverConfig,
     default_tee_profile_scenarios,
     run_profile_plan,
+)
+from benchmarks.tee_profile_scenarios import (
+    _named_scenario,
+    _resolved_read_size,
+    _scenario_by_name,
 )
 from cuprum.unittests.conftest import _VOLATILE_KEYS, redact
 
@@ -44,6 +50,82 @@ _SCENARIO_NAMES_WITHOUT_RUST: list[str] = [
     "echo-devnull-cb-s1",
     "echo-devnull-nocb-s4-python",
 ]
+
+
+def _scenario_config(
+    tmp_path: pth.Path,
+    *,
+    scenario_name: str | None,
+    read_sizes: tuple[int, ...],
+) -> TeeProfileDriverConfig:
+    """Build a minimal config for private scenario-selection tests."""
+    return TeeProfileDriverConfig(
+        fixture_path=tmp_path / "fixture.b64",
+        wrapped_fixture_path=tmp_path / "fixture-wrap76.b64",
+        output_dir=tmp_path / "profiles",
+        profiler="none",
+        read_sizes=read_sizes,
+        scenario_name=scenario_name,
+    )
+
+
+def test_scenario_lookup_explicit_read_size_overrides_configured_values(
+    tmp_path: pth.Path,
+) -> None:
+    """An explicit selection read size overrides a configured sweep."""
+    scenario = _scenario_by_name(
+        _scenario_config(
+            tmp_path,
+            scenario_name="echo-devnull-nocb-s1",
+            read_sizes=(4096, 16384),
+        ),
+        read_size=65536,
+    )
+
+    assert scenario.read_size == 65536, "explicit read size must win"
+
+
+def test_resolved_read_size_requires_one_configured_value(tmp_path: pth.Path) -> None:
+    """Implicit selection rejects a configuration containing a sweep."""
+    config = _scenario_config(
+        tmp_path,
+        scenario_name="echo-devnull-nocb-s1",
+        read_sizes=(4096, 16384),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape("one read size is required outside a sweep"),
+    ):
+        _resolved_read_size(config, read_size=None)
+
+
+def test_named_scenario_requires_name() -> None:
+    """Missing scenario names retain their established error contract."""
+    with pytest.raises(ValueError, match=re.escape("scenario name is required")):
+        _named_scenario((), scenario_name=None)
+
+
+def test_named_scenario_reports_ordered_valid_names(tmp_path: pth.Path) -> None:
+    """Unknown names retain the ordered scenario-list error contract."""
+    config = _scenario_config(
+        tmp_path,
+        scenario_name="does-not-exist",
+        read_sizes=(4096,),
+    )
+    scenarios = default_tee_profile_scenarios(
+        fixture_path=config.fixture_path,
+        wrapped_fixture_path=config.wrapped_fixture_path,
+        repeat_count=config.repeat_count,
+    )
+    valid = ", ".join(scenario.name for scenario in scenarios)
+    expected_message = f"unknown scenario 'does-not-exist'; expected one of: {valid}"
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape(expected_message),
+    ):
+        _named_scenario(scenarios, scenario_name=config.scenario_name)
 
 
 @pytest.mark.parametrize(
