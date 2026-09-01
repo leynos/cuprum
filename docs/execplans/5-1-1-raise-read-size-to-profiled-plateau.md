@@ -5,7 +5,7 @@ This ExecPlan (execution plan) is a living document. The sections
 `Decision log`, `Outcomes & retrospective`, `Conformance basis`, and
 `Verification plan` must be kept up to date as work proceeds.
 
-Status: IN PROGRESS
+Status: COMPLETE
 
 Measurement update (2026-08-29): the 15-round interleaved sweep selected
 65536 bytes. The tee median improvement was 22.9997% (95% paired-bootstrap
@@ -233,8 +233,9 @@ This task is complete only when:
   for the profile scenario-matrix property, whose fixture writes files and
   imports benchmark configuration. Its initial 258 ms cold run exceeded the
   200 ms default but its rerun took 36 ms; the property now remains semantic.
-- [ ] 2026-09-02 Re-run the deterministic gates, publish the correction, and
-  obtain a new CodeRabbit result before returning this ExecPlan to `COMPLETE`.
+- [x] 2026-09-02 Final verification: all deterministic gates passed, commits
+  `18d274fa` and `1e4125c9` were pushed, and `coderabbit review --agent`
+  reported zero findings. This ExecPlan is complete.
 
 ## Surprises & discoveries
 
@@ -657,8 +658,9 @@ cost, not a change in scope. The CRLF boundary fix did not surface an
 additional line-ending question; vertical tab, form feed, U+2028, and NEL
 remain the existing stable separator cases covered by the line-splitting
 properties. The 2026-09-02 V3/V4 correction restored the final integration and
-retuning contracts; its final deterministic-gate and CodeRabbit evidence is
-pending before this outcome is declared complete again.
+retuning contracts. Final deterministic gates passed, and
+`coderabbit review --agent` reported zero findings before the plan returned to
+`COMPLETE`.
 
 ## Context and orientation
 
@@ -1177,8 +1179,8 @@ V3 now executes the near-64 KiB cases through the real two-process pipeline on
 both backends, asserts more than one upstream write, and retains the external
 hexadecimal expected-byte oracle. V4 now asserts the approved 16–64 KiB range
 and names the sweep artefact in its failure message. The roadmap acceptance
-text records these contracts. The ExecPlan is `IN PROGRESS` until the renewed
-deterministic gates and CodeRabbit review pass.
+text records these contracts. The renewed deterministic gates passed, and
+`coderabbit review --agent` reported zero findings; the ExecPlan is complete.
 
 Revision 3, 2026-08-29, after the Stage E sweep and implementation: selected
 65536 bytes from the randomized 15-round curve, recorded the paired bootstrap
