@@ -89,16 +89,18 @@ mod stream_pyfunctions {
     /// and map `PumpError` back to the exported Python exception type.
     fn run_stream_operation<T, Operation>(
         py: Python<'_>,
+        reader_fd: i64,
         buffer_size: i64,
-        prepare_operation: impl FnOnce(BufferSize) -> PyResult<Operation>,
+        prepare_operation: impl FnOnce() -> PyResult<Operation>,
     ) -> PyResult<T>
     where
         T: Send,
-        Operation: FnOnce() -> Result<T, PumpError> + Send,
+        Operation: FnOnce(ReaderFd, BufferSize) -> Result<T, PumpError> + Send,
     {
         let validated_buffer_size = validate_buffer_size(buffer_size)?;
-        let operation = prepare_operation(validated_buffer_size)?;
-        let result = py.detach(operation);
+        let reader = ReaderFd(convert_fd(reader_fd)?);
+        let operation = prepare_operation()?;
+        let result = py.detach(move || operation(reader, validated_buffer_size));
         result.map_err(PyErr::from)
     }
 
@@ -120,10 +122,11 @@ mod stream_pyfunctions {
         writer_fd: i64,
         buffer_size: i64,
     ) -> PyResult<u64> {
-        run_stream_operation(py, buffer_size, |validated_buffer_size| {
-            let reader = ReaderFd(convert_fd(reader_fd)?);
+        run_stream_operation(py, reader_fd, buffer_size, || {
             let writer = WriterFd(convert_fd(writer_fd)?);
-            Ok(move || pump_stream(reader, writer, validated_buffer_size))
+            Ok(move |reader, validated_buffer_size| {
+                pump_stream(reader, writer, validated_buffer_size)
+            })
         })
     }
 
@@ -149,10 +152,7 @@ mod stream_pyfunctions {
         reader_fd: i64,
         buffer_size: i64,
     ) -> PyResult<String> {
-        run_stream_operation(py, buffer_size, |validated_buffer_size| {
-            let reader = ReaderFd(convert_fd(reader_fd)?);
-            Ok(move || consume_stream(reader, validated_buffer_size))
-        })
+        run_stream_operation(py, reader_fd, buffer_size, || Ok(consume_stream))
     }
 }
 
