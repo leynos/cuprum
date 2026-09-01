@@ -66,57 +66,76 @@ pub fn is_available() -> bool {
     true
 }
 
-/// Pump bytes between file descriptors outside the GIL.
-///
-/// # Parameters
-/// - `reader_fd`: File descriptor for the upstream stdout.
-/// - `writer_fd`: File descriptor for the downstream stdin.
-/// - `buffer_size`: Size of the internal transfer buffer in bytes.
-///
-/// # Errors
-/// Returns a Python `ValueError` for invalid buffer sizes and `OSError` for
-/// I/O failures.
-#[pyfunction]
-#[pyo3(signature = (reader_fd, writer_fd, buffer_size = 65536))]
-fn rust_pump_stream(
-    py: Python<'_>,
-    reader_fd: i64,
-    writer_fd: i64,
-    buffer_size: i64,
-) -> PyResult<u64> {
-    let validated_buffer_size = validate_buffer_size(buffer_size)?;
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PyO3 generates five-parameter wrappers for these stable Python FFI functions"
+)]
+mod stream_pyfunctions {
+    //! Contain the Python stream exports and their generated `PyO3` wrappers.
 
-    let reader = ReaderFd(convert_fd(reader_fd)?);
-    let writer = WriterFd(convert_fd(writer_fd)?);
+    use super::{
+        PyErr, PyResult, Python, ReaderFd, WriterFd, consume_stream, convert_fd, pump_stream,
+        pyfunction, validate_buffer_size,
+    };
 
-    let result = py.detach(|| pump_stream(reader, writer, validated_buffer_size));
-    result.map_err(PyErr::from)
+    /// Pump bytes between file descriptors outside the GIL.
+    ///
+    /// # Parameters
+    /// - `reader_fd`: File descriptor for the upstream stdout.
+    /// - `writer_fd`: File descriptor for the downstream stdin.
+    /// - `buffer_size`: Size of the internal transfer buffer in bytes.
+    ///
+    /// # Errors
+    /// Returns a Python `ValueError` for invalid buffer sizes and `OSError` for
+    /// I/O failures.
+    #[pyfunction]
+    #[pyo3(signature = (reader_fd, writer_fd, buffer_size = 65536))]
+    pub(super) fn rust_pump_stream(
+        py: Python<'_>,
+        reader_fd: i64,
+        writer_fd: i64,
+        buffer_size: i64,
+    ) -> PyResult<u64> {
+        let validated_buffer_size = validate_buffer_size(buffer_size)?;
+
+        let reader = ReaderFd(convert_fd(reader_fd)?);
+        let writer = WriterFd(convert_fd(writer_fd)?);
+
+        let result = py.detach(|| pump_stream(reader, writer, validated_buffer_size));
+        result.map_err(PyErr::from)
+    }
+
+    /// Consume a stream and decode it as UTF-8 with replacement semantics.
+    ///
+    /// This helper always uses UTF-8 and replaces invalid sequences with the
+    /// Unicode replacement character.
+    ///
+    /// # Parameters
+    /// - `reader_fd`: File descriptor to read from.
+    /// - `buffer_size`: Size of the internal read buffer in bytes.
+    ///
+    /// # Returns
+    /// The decoded stream content.
+    ///
+    /// # Errors
+    /// Returns a Python `ValueError` for invalid arguments and `OSError` for
+    /// I/O failures.
+    #[pyfunction]
+    #[pyo3(signature = (reader_fd, buffer_size = 65536))]
+    pub(super) fn rust_consume_stream(
+        py: Python<'_>,
+        reader_fd: i64,
+        buffer_size: i64,
+    ) -> PyResult<String> {
+        let validated_buffer_size = validate_buffer_size(buffer_size)?;
+
+        let reader = ReaderFd(convert_fd(reader_fd)?);
+        let result = py.detach(|| consume_stream(reader, validated_buffer_size));
+        result.map_err(PyErr::from)
+    }
 }
 
-/// Consume a stream and decode it as UTF-8 with replacement semantics.
-///
-/// This helper always uses UTF-8 and replaces invalid sequences with the
-/// Unicode replacement character.
-///
-/// # Parameters
-/// - `reader_fd`: File descriptor to read from.
-/// - `buffer_size`: Size of the internal read buffer in bytes.
-///
-/// # Returns
-/// The decoded stream content.
-///
-/// # Errors
-/// Returns a Python `ValueError` for invalid arguments and `OSError` for
-/// I/O failures.
-#[pyfunction]
-#[pyo3(signature = (reader_fd, buffer_size = 65536))]
-fn rust_consume_stream(py: Python<'_>, reader_fd: i64, buffer_size: i64) -> PyResult<String> {
-    let validated_buffer_size = validate_buffer_size(buffer_size)?;
-
-    let reader = ReaderFd(convert_fd(reader_fd)?);
-    let result = py.detach(|| consume_stream(reader, validated_buffer_size));
-    result.map_err(PyErr::from)
-}
+use stream_pyfunctions::{rust_consume_stream, rust_pump_stream};
 
 #[cfg(unix)]
 fn convert_fd(value: i64) -> PyResult<PlatformFd> {
