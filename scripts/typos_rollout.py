@@ -14,9 +14,16 @@ import json
 import tomllib
 import typing as typ
 
-import typos_rollout_cache
-import typos_rollout_dictionary
-import typos_rollout_refresh
+from typos_rollout_cache import atomic_write as _atomic_write
+from typos_rollout_dictionary import (
+    SCHEMA_VERSION,
+    SUFFIX_PAIRS,
+    Dictionary,
+    generate_word_mappings,
+    load_dictionary,
+    merge_dictionaries,
+)
+from typos_rollout_refresh import RefreshResult, refresh_base
 
 if typ.TYPE_CHECKING:
     import pathlib
@@ -36,17 +43,6 @@ __all__ = [
     "write_config",
 ]
 
-_atomic_write = typos_rollout_cache.atomic_write
-
-SCHEMA_VERSION = typos_rollout_dictionary.SCHEMA_VERSION
-SUFFIX_PAIRS = typos_rollout_dictionary.SUFFIX_PAIRS
-Dictionary = typos_rollout_dictionary.Dictionary
-load_dictionary = typos_rollout_dictionary.load_dictionary
-merge_dictionaries = typos_rollout_dictionary.merge_dictionaries
-generate_word_mappings = typos_rollout_dictionary.generate_word_mappings
-
-RefreshResult = typos_rollout_refresh.RefreshResult
-refresh_base = typos_rollout_refresh.refresh_base
 _MARKDOWN_IGNORE_PATTERNS = frozenset((r"`[^`\n]+`", r"(?s)```.*?```"))
 
 
