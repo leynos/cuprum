@@ -118,12 +118,21 @@ DF12_PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv run --isolated \
   --disable=all --load-plugins=df12_python_lints \
   --enable=$(DF12_PYLINT_MESSAGES)
 AMBRLEAKS = $(UV_RUN_ENV) uv run --python $(DF12_PYTHON) ambrleaks
+# Markdown files, excluding build output and tool caches.
+MD_FILES_FIND = find . -type f -name '*.md' \
+	-not -path '*/target/*' -not -path './.venv/*' \
+	-not -path './.vtcode/*' -not -path './memories/*' \
+	-not -path './.pytest_cache/*' \
+	-not -path './.uv-cache/*' \
+	-not -path './.uv-tools/*' \
+	-not -path './.node_modules/*' \
+	-not -path './node_modules/*' -print0
 
 .PHONY: help all clean build build-release lint python-lint rust-lint \
         lint-windows fmt check-fmt \
         markdownlint spelling spelling-config spelling-helper-test \
         _run_spelling_gate nixie test test-python test-rust typecheck \
-        test-extension develop \
+        test-extension test-markdown-format develop \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
 .NOTPARALLEL: lint
@@ -190,7 +199,16 @@ fmt: ruff $(MDFORMAT_ALL) ## Format sources
 check-fmt: ruff ## Verify formatting
 	$(RUFF) format --check
 	cd $(RUST_DIR) && $(CARGO) fmt --all -- --check
-	# mdformat-all doesn't currently do checking
+	@$(MD_FILES_FIND) | xargs -0 sh -c '\
+		if [ "$$#" -gt 0 ]; then \
+			scripts/check-markdown-format.sh "$$@"; \
+		fi' sh
+
+test-markdown-format: ## Validate the Markdown formatter checker
+	@PYTHONPATH=scripts $(UV_RUN_ENV) uv run --no-project --python 3.13 \
+		--with pytest==9.0.2 --with hypothesis==6.151.9 \
+		python -m pytest scripts/tests/test_check_markdown_format.py -c /dev/null \
+		--rootdir=. -p no:cacheprovider
 
 lint: python-lint rust-lint ## Run Python and Rust linters
 

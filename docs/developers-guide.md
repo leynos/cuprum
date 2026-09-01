@@ -2597,6 +2597,31 @@ The short version is:
 - `$(AMBRLEAKS)` scans `cuprum/unittests` and `tests`; exact deterministic
   fixture values that resemble secrets belong in `ambrleaks.toml`.
 
+
+### Markdown formatting
+
+`make fmt` runs `mdformat-all`, which applies `mdtablefix` with
+`--wrap --renumber --breaks --ellipsis --fences --in-place` before applying
+`markdownlint-cli2 --fix`. `mdtablefix` therefore owns table padding and
+paragraph wrapping, while `make markdownlint` verifies the result.
+
+`make check-fmt` passes repository Markdown files to
+`scripts/check-markdown-format.sh`. Because `mdtablefix` has no check-only
+mode, the checker formats temporary copies and compares them with the source
+files; it never modifies the worktree. It accepts exact LF or CRLF output, but
+rejects mixed line endings. Run `make test-markdown-format` after changing the
+checker.
+
+The gate requires the `mdtablefix` version pinned by `MDTABLEFIX_VERSION` in
+`.github/workflows/ci.yml`. Install that version locally so formatter output
+matches CI:
+
+```bash
+MDTABLEFIX_VERSION="$(sed -n "s/.*MDTABLEFIX_VERSION: '\(.*\)'.*/\1/p" \
+  .github/workflows/ci.yml)"
+cargo install --locked mdtablefix --version "$MDTABLEFIX_VERSION"
+```
+
 ### Docstring structure
 
 Public functions, classes, and methods require comprehensive NumPy-style

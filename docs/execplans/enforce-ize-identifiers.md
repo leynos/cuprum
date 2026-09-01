@@ -190,8 +190,8 @@ The final widened `spelling` target must report no unapproved source spelling.
   pattern ignores; accepting their words globally would weaken the gate.
 - Common Changelog repeats `Changed` headings across releases, while the
   repository's Markdown configuration rejects duplicate headings globally. The
-  existing released `Changed` heading now carries a one-line MD024 exception, so
-  the new Unreleased section can use the required conventional heading.
+  existing released `Changed` heading now carries a one-line MD024 exception,
+  so the new Unreleased section can use the required conventional heading.
 
 ## Decision Log
 

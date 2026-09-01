@@ -1268,14 +1268,14 @@ preserving the `SafeCmd.run()` execution contract:
   escalation), and draining the stream consumers exactly once. Its explicit
   drain interface uses `_RunTaskOwnership` to bundle the optional stdin-writer
   task with the stdout and stderr consumer tasks, `_DrainContext` to carry
-  capture and observability settings, and `_reconcile_run_tasks(tasks,
-  context)` to cancel stdin before settling both consumers as one shielded
-  cleanup unit. A capturing drain gives readers a bounded
-  `_CAPTURE_EOF_GRACE_S` window to observe EOF before cancellation, maps an
-  absent reader result to an empty string, and therefore keeps captured timeout
-  output deterministic; non-capturing drains skip the window and retain `None`
-  for absent text. Split out of `_subprocess_execution` so that module stays
-  about orchestration — spawning, wiring streams, assembling the result.
+  capture and observability settings, and
+  `_reconcile_run_tasks(tasks, context)` to cancel stdin before settling both
+  consumers as one shielded cleanup unit. A capturing drain gives readers a
+  bounded `_CAPTURE_EOF_GRACE_S` window to observe EOF before cancellation,
+  maps an absent reader result to an empty string, and therefore keeps captured
+  timeout output deterministic; non-capturing drains skip the window and retain
+  `None` for absent text. Split out of `_subprocess_execution` so that module
+  stays about orchestration — spawning, wiring streams, assembling the result.
 - When that window expires with readers still pending, `_subprocess_wait` uses
   `_timeout_reporting` to emit one correlated `capture_eof_grace_expired`
   `ExecEvent`. The event carries the execution's `exec_id` and `pid`,
@@ -1726,8 +1726,9 @@ design decisions guide these adapters:
   (8.1.3).
 - Events without an `exec_id` (legacy or manually constructed) are ambiguous
   and are ignored: no span is created for such a `start`, and their `stdout`/
-  `stderr`/`stdin_error`/`timeout`/`teardown_error`/ `capture_eof_grace_expired`
-  /`pipeline_fail_fast`/`exit` events are dropped rather than guessed from PID.
+  `stderr`/`stdin_error`/`timeout`/`teardown_error`/
+  `capture_eof_grace_expired` /`pipeline_fail_fast`/`exit` events are dropped
+  rather than guessed from PID.
 - Output lines can optionally be recorded as span events (controlled by
   `record_output` parameter). `stdin_error`, `timeout`, and `teardown_error`
   are also recorded as span events, unconditionally, without ending the span.
