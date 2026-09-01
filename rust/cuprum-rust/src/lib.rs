@@ -141,7 +141,7 @@ mod stream_pyfunctions {
 
 use stream_pyfunctions::{rust_consume_stream, rust_pump_stream};
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn convert_fd(value: i64) -> PyResult<PlatformFd> {
     convert_platform_fd(value).map_err(PyValueError::new_err)
 }
@@ -166,10 +166,6 @@ fn convert_platform_fd(value: i64) -> Result<PlatformFd, &'static str> {
     usize::try_from(value).map_err(|_| "file handle out of range")
 }
 
-#[cfg(windows)]
-fn convert_fd(value: i64) -> PyResult<PlatformFd> {
-    convert_platform_fd(value).map_err(PyValueError::new_err)
-}
 /// Maximum accepted stream buffer size, in bytes (1 GiB).
 ///
 /// This guards against absurd allocations from a bad `buffer_size` while
