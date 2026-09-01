@@ -109,6 +109,7 @@ def test_worker_accumulates_repeat_counters(tmp_path: pth.Path) -> None:
         expected_lines=3,
     )
 
+
 def test_worker_uses_configured_read_size(tmp_path: pth.Path) -> None:
     """Worker results report the configured private stream read size."""
     fixture = tmp_path / "fixture_read_size.b64"
