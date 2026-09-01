@@ -14,6 +14,19 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-007: Subprocess execution module boundaries](adr-007-subprocess-execution-module-boundaries.md)
 - [ADR-009: Enforce Oxford spelling in source](adr-009-enforce-oxford-spelling-in-source.md)
 
+
+## GitHub Actions runner profiles
+
+Repository-owned Linux jobs that do not require a native wheel platform run on
+the shared uncached `namespace-profile-default` profile (Ubuntu 22.04, amd64, 4
+vCPU, and 16 GB). The profile has no cache volume; existing GitHub Actions
+caches remain their own backend during this baseline measurement.
+
+The native-wheel matrix keeps its existing runner selection because it includes
+Linux container and QEMU work plus Windows and macOS targets. The benchmark
+ratchet also remains on its existing `ubicloud-standard-4-ubuntu-2404` runner:
+its Ubuntu 24.04 image and benchmark baseline are part of that contract.
+
 ## Rust availability probing
 
 Stream backend availability is resolved through one cached entry point:

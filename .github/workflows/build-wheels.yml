@@ -14,7 +14,7 @@ env:
 
 jobs:
   build-pure-wheel:
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-default
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
       - uses: ./.github/actions/pure-python-wheel
@@ -108,7 +108,7 @@ jobs:
           path: wheelhouse/*.whl
 
   verify-wheel-install:
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-default
     needs:
       - build-pure-wheel
       - build-native-wheels

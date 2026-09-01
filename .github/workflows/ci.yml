@@ -20,7 +20,7 @@ env:
 
 jobs:
   lint-test:
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-default
     env:
       MBAKE_VERSION: '1.4.6'
       WHITAKER_INSTALLER_VERSION: '0.2.7'
@@ -98,7 +98,7 @@ jobs:
   typecheck-test:
     name: Typecheck and test (Python ${{ matrix.python-label }})
     continue-on-error: ${{ matrix.experimental }}
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-default
     strategy:
       fail-fast: false
       matrix:
@@ -160,7 +160,7 @@ jobs:
 
   extension-tests:
     name: Extension-gated tests (Python/Rust boundary)
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-default
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -222,7 +222,7 @@ jobs:
     # which also uploads the report to CodeScene; guarding here stops
     # coverage being generated twice on main.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-default
     needs:
       - lint-test
       - typecheck-test

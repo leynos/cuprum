@@ -1,0 +1,4 @@
+self-hosted-runner:
+  labels:
+    - namespace-profile-default
+    - ubicloud-standard-4-ubuntu-2404
