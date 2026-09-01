@@ -78,6 +78,65 @@ def _summary_script(workflow_data: Workflow) -> str:
     return script
 
 
+def _execute_summary_script(
+    *,
+    event: str,
+    detector: Detector,
+    summary_path: pth.Path,
+    workflow_data: Workflow,
+) -> subprocess.CompletedProcess[str]:
+    """Execute the checked-in summary script."""
+    completed = subprocess.run(  # noqa: S603 - the checked-in workflow script is trusted
+        ["/usr/bin/env", "bash", "-c", _summary_script(workflow_data)],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "EVENT": event,
+            "BENCH": detector.bench,
+            "DETECTOR": detector.outcome,
+            "GITHUB_STEP_SUMMARY": str(summary_path),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, (
+        f"the summary script must not fail; stderr was:\n{completed.stderr}"
+    )
+    return completed
+
+
+def _parse_summary(*, emitted: str, stdout: str) -> Summary:
+    """Parse the summary table and workflow annotation."""
+    rows = [
+        line
+        for line in emitted.splitlines()
+        if line.startswith("|") and not line.startswith("| ---")
+    ]
+    assert len(rows) == 2, (
+        f"expected a header row and one data row; the script emitted:\n{emitted}"
+    )
+    values = [cell.strip() for cell in rows[1].strip("|").split("|")]
+    assert len(values) == len(_COLUMNS), (
+        f"expected {len(_COLUMNS)} columns, found {values} in:\n{emitted}"
+    )
+    metric_line = next(
+        (line for line in stdout.splitlines() if line.startswith(_METRIC_PREFIX)),
+        None,
+    )
+    assert metric_line is not None, (
+        f"expected {_METRIC_PREFIX!r} in the workflow output; found:\n{stdout}"
+    )
+    metric = dict(
+        label.split("=", maxsplit=1)
+        for label in metric_line.removeprefix(_METRIC_PREFIX).split()
+    )
+    return Summary(
+        fields=dict(zip(_COLUMNS, values, strict=True)),
+        table="\n".join(rows),
+        metric=metric,
+    )
+
+
 def run_summary_script(
     *,
     event: str,
@@ -106,54 +165,12 @@ def run_summary_script(
     """
     summary_path = tmp_path / "step-summary.md"
     summary_path.touch()
-    completed = subprocess.run(  # noqa: S603 - the checked-in workflow script is trusted
-        ["/usr/bin/env", "bash", "-c", _summary_script(workflow_data)],
-        env={
-            "PATH": "/usr/bin:/bin",
-            "EVENT": event,
-            "BENCH": detector.bench,
-            "DETECTOR": detector.outcome,
-            "GITHUB_STEP_SUMMARY": str(summary_path),
-        },
-        capture_output=True,
-        text=True,
-        check=False,
+    completed = _execute_summary_script(
+        event=event,
+        detector=detector,
+        summary_path=summary_path,
+        workflow_data=workflow_data,
     )
-    assert completed.returncode == 0, (
-        f"the summary script must not fail; stderr was:\n{completed.stderr}"
-    )
-
-    emitted = summary_path.read_text(encoding="utf-8")
-    rows = [
-        line
-        for line in emitted.splitlines()
-        if line.startswith("|") and not line.startswith("| ---")
-    ]
-    assert len(rows) == 2, (
-        f"expected a header row and one data row; the script emitted:\n{emitted}"
-    )
-    values = [cell.strip() for cell in rows[1].strip("|").split("|")]
-    assert len(values) == len(_COLUMNS), (
-        f"expected {len(_COLUMNS)} columns, found {values} in:\n{emitted}"
-    )
-    metric_line = next(
-        (
-            line
-            for line in completed.stdout.splitlines()
-            if line.startswith(_METRIC_PREFIX)
-        ),
-        None,
-    )
-    assert metric_line is not None, (
-        f"expected {_METRIC_PREFIX!r} in the workflow output; found:\n"
-        f"{completed.stdout}"
-    )
-    metric = dict(
-        label.split("=", maxsplit=1)
-        for label in metric_line.removeprefix(_METRIC_PREFIX).split()
-    )
-    return Summary(
-        fields=dict(zip(_COLUMNS, values, strict=True)),
-        table="\n".join(rows),
-        metric=metric,
+    return _parse_summary(
+        emitted=summary_path.read_text(encoding="utf-8"), stdout=completed.stdout
     )

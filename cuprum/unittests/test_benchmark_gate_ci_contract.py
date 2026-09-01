@@ -44,6 +44,7 @@ from tests.helpers.workflow import (
     benchmark_runs,
     job,
     mapping,
+    parse_workflow,
     step_named,
     step_with_id,
     steps,
@@ -422,3 +423,40 @@ def test_mapping_rejects_non_string_keys() -> None:
     """Reject YAML mappings whose keys cannot satisfy the helper's model."""
     with pytest.raises(AssertionError, match="string-keyed mapping"):
         mapping({"jobs": {}, 1: "unexpected"}, "string-keyed mapping")
+
+
+def test_parse_workflow_rejects_a_numeric_top_level_key() -> None:
+    """Reject a numeric key rather than treating it as GitHub Actions ``on``."""
+    with pytest.raises(AssertionError, match="must parse to a mapping"):
+        parse_workflow("1: unexpected\n")
+
+
+def test_step_lookups_return_matches_and_explain_missing_steps() -> None:
+    """Look up declared steps by id and name without changing diagnostics."""
+    workflow_data = parse_workflow(
+        """
+        jobs:
+          changes:
+            steps:
+              - id: filter
+                name: Detect relevant changes
+              - id: summary
+                name: Record the decision
+        """
+    )
+
+    assert step_with_id(workflow_data, "changes", "filter") == {
+        "id": "filter",
+        "name": "Detect relevant changes",
+    }
+    assert step_named(workflow_data, "changes", "Record the decision") == {
+        "id": "summary",
+        "name": "Record the decision",
+    }
+    with pytest.raises(AssertionError, match="step with id 'missing'"):
+        step_with_id(workflow_data, "changes", "missing")
+    with pytest.raises(
+        AssertionError,
+        match=r"found \['Detect relevant changes', 'Record the decision'\]",
+    ):
+        step_named(workflow_data, "changes", "missing")

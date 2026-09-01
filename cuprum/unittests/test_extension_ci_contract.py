@@ -74,12 +74,15 @@ def test_the_ci_job_builds_the_extension_before_running_the_gated_tests(
             True,
         ),
         (
-            "cat <<FIRST <<SECOND\nignored first\nFIRST\nmaturin develop\n"
-            "SECOND\nmake develop",
+            (
+                "cat <<FIRST <<SECOND\nignored first\nFIRST\nmaturin develop\n"
+                "SECOND\nmake develop"
+            ),
             "maturin develop",
             False,
         ),
         ("cat <<-EOF\n\tif make develop\n\tEOF\nmake develop", "make develop", True),
+        ("printf '<<' EOF\nmake develop", "make develop", True),
         ("maturin develop", "maturin develop", True),
         ("# maturin develop", "maturin develop", False),
     ],

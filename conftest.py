@@ -1,4 +1,8 @@
-"""Shared pytest fixtures for optional Rust stream tests.
+"""Shared pytest fixtures for workflow contract and optional Rust stream tests.
+
+The ``workflow_data`` fixture parses the checked-in
+``.github/workflows/ci.yml`` model, while ``filter_path_patterns`` exposes its
+benchmark filter paths for workflow contract and behaviour tests.
 
 Use these fixtures to access optional backends without repeating availability
 checks in each test module.

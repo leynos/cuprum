@@ -11,16 +11,11 @@ from .workflow_gate import bench_output, benchmark_runs, matches_filter
 from .workflow_shell import script_runs_command
 from .workflow_types import Job, Step, Workflow
 
-__all__ = (
-    "Job",
-    "Step",
-    "Workflow",
-    "bench_output",
-    "benchmark_runs",
-    "first_step_running",
-    "matches_filter",
-    "script_runs_command",
-)
+# Keep public aliases compact so this module remains below the enforced size limit.
+# fmt: off
+__all__ = ("Job", "Step", "Workflow", "bench_output", "benchmark_runs",
+           "first_step_running", "matches_filter", "script_runs_command")
+# fmt: on
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 CI_WORKFLOW = ".github/workflows/ci.yml"
@@ -38,9 +33,6 @@ def _require(*, condition: bool, message: str) -> None:
 
 def mapping(value: object, message: str) -> dict[str, object]:
     """Narrow a workflow value to a string-keyed mapping.
-
-    YAML parsing produces mappings of unknown key type, which makes every
-    subsequent `.get("…")` a type error rather than a narrowing.
 
     Parameters
     ----------
@@ -104,8 +96,13 @@ def parse_workflow(source: str) -> Workflow:
         If ``source`` is not valid YAML.
     """  # noqa: DOC502 - parser and contract validator exceptions propagate.
     parsed = yaml.safe_load(source)
-    if isinstance(parsed, dict) and True in parsed:
-        parsed["on"] = parsed.pop(True)
+    boolean_on_key = (
+        next((key for key in parsed if key is True), None)
+        if isinstance(parsed, dict)
+        else None
+    )
+    if boolean_on_key is not None:
+        parsed["on"] = parsed.pop(boolean_on_key)
     return typ.cast(
         "Workflow", mapping(parsed, f"{CI_WORKFLOW} must parse to a mapping")
     )
@@ -192,10 +189,7 @@ def step_with_id(
     AssertionError
         If the named job has no steps or no step carries ``step_id``.
     """  # noqa: DOC502 - contract validation delegates to _require.
-    found = next(
-        (step for step in steps(workflow_data, job_name) if step.get("id") == step_id),
-        None,
-    )
+    found, _ = _step_matching(workflow_data, job_name, "id", step_id)
     return mapping(
         found, f"the {job_name!r} job must declare a step with id {step_id!r}"
     )
@@ -225,19 +219,24 @@ def step_named(
     AssertionError
         If the named job has no steps or no step carries ``step_name``.
     """  # noqa: DOC502 - contract validation delegates to _require.
-    found = next(
-        (
-            step
-            for step in steps(workflow_data, job_name)
-            if step.get("name") == step_name
-        ),
-        None,
-    )
-    names = [step.get("name") for step in steps(workflow_data, job_name)]
+    found, declared_steps = _step_matching(workflow_data, job_name, "name", step_name)
+    names = [step.get("name") for step in declared_steps]
     return mapping(
         found,
         f"the {job_name!r} job must declare a step named {step_name!r}; found {names}",
     )
+
+
+def _step_matching(
+    workflow_data: Workflow, job_name: str, field_name: str, requested_value: str
+) -> tuple[dict[str, object] | None, list[dict[str, object]]]:
+    """Return a matching step and the job's declared steps."""
+    declared_steps = steps(workflow_data, job_name)
+    found = next(
+        (step for step in declared_steps if step.get(field_name) == requested_value),
+        None,
+    )
+    return found, declared_steps
 
 
 def script_of(step: cabc.Mapping[str, object]) -> str | None:
@@ -377,6 +376,10 @@ def filter_paths(workflow_data: Workflow) -> frozenset[str]:
     AssertionError
         If the filter step, inputs, or ``bench`` pattern list is malformed or
         absent.
+    KeyError
+        If the filter step does not provide a ``filters`` input.
+    yaml.YAMLError
+        If the ``filters`` input is not valid YAML.
     """  # noqa: DOC502 - contract validation delegates to _require.
     step = step_with_id(workflow_data, CHANGES_JOB, FILTER_STEP_ID)
     inputs = mapping(

@@ -22,9 +22,9 @@ _OPERATORS = frozenset({"&", "&&", ";", "|", "||"})
 _KEYWORDS = frozenset({"if", "then", "elif", "else", "do"})
 
 
-def _shell_tokens(line: str) -> list[str]:
-    """Tokenize one shell line."""
-    lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+def _shell_tokens(line: str, *, preserve_quotes: bool = False) -> list[str]:
+    """Tokenize one shell line, optionally retaining quote delimiters."""
+    lexer = shlex.shlex(line, posix=not preserve_quotes, punctuation_chars=True)
     lexer.whitespace_split = True
     lexer.commenters = "#"
     return list(lexer)
@@ -35,10 +35,26 @@ def _is_command_boundary(shell_word: str, *, is_command_position: bool) -> bool:
     return shell_word in _OPERATORS or (is_command_position and shell_word in _KEYWORDS)
 
 
-def _here_document_delimiters(tokens: list[str]) -> cabc.Iterator[str]:
+def _quoted_heredoc_operator_indices(line: str, tokens: list[str]) -> frozenset[int]:
+    """Return token positions whose ``<<`` spelling came from quoted text."""
+    quoted_tokens = _shell_tokens(line, preserve_quotes=True)
+    if len(tokens) != len(quoted_tokens):
+        return frozenset()
+    return frozenset(
+        index
+        for index, (shell_word, quoted_shell_word) in enumerate(
+            zip(tokens, quoted_tokens, strict=True)
+        )
+        if shell_word == "<<" and quoted_shell_word != "<<"
+    )
+
+
+def _here_document_delimiters(
+    tokens: list[str], quoted_operator_indices: frozenset[int]
+) -> cabc.Iterator[str]:
     """Yield declared here-document delimiters in declaration order."""
     for index, shell_word in enumerate(tokens[:-1]):
-        if shell_word == "<<":
+        if shell_word == "<<" and index not in quoted_operator_indices:
             yield tokens[index + 1]
 
 
@@ -73,7 +89,11 @@ def _command_segments(script: str) -> cabc.Iterator[list[str]]:
             continue
         tokens = _shell_tokens(line)
         yield from _command_segments_from_tokens(tokens)
-        here_document_delimiters.extend(_here_document_delimiters(tokens))
+        here_document_delimiters.extend(
+            _here_document_delimiters(
+                tokens, _quoted_heredoc_operator_indices(line, tokens)
+            )
+        )
 
 
 def _segment_starts_command(segment: list[str], expected: tuple[str, ...]) -> bool:
@@ -98,7 +118,12 @@ def script_runs_command(script: str, command: str) -> bool:
     bool
         Whether a command segment in ``script`` starts with ``command``, after
         leading environment assignments have been ignored.
-    """
+
+    Raises
+    ------
+    ValueError
+        If ``script`` or ``command`` contains unclosed shell quoting.
+    """  # noqa: DOC502 - shlex propagates malformed quoting.
     expected = tuple(shlex.split(command))
     return any(
         _segment_starts_command(segment, expected)
