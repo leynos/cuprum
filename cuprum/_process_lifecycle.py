@@ -31,7 +31,7 @@ import time
 import typing as typ
 
 from cuprum._pipeline_stage_streams import _get_stage_stream_fds
-from cuprum._pipeline_stream_results import _collect_pipe_results
+from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_exit import _await_process_exit
 from cuprum._subprocess_context import _cwd_arg
@@ -150,11 +150,12 @@ async def _cleanup_pipeline_on_error(
     cancel_grace: float,
 ) -> list[object]:
     """Clean up pipeline resources after an error or cancellation."""
-    # Terminates every process and collects the pipe task results, which are
-    # returned for the caller's ``finally`` block. Stream consumer tasks are
+    # Terminate every process, then cancel and collect the pipe tasks owned by
+    # the caller. This delivers cancellation to a native pump before waiting
+    # for it to return descriptor ownership. Stream consumer tasks remain
     # owned by the caller (``_run_pipeline``), not by this helper.
     await _terminate_all_shielded(processes, cancel_grace)
-    return await _collect_pipe_results(pipe_tasks)
+    return await _reconcile_pipe_tasks(pipe_tasks)
 
 
 def _merge_env(

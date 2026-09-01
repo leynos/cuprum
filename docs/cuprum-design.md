@@ -867,9 +867,8 @@ same `TracingHook` on both `sh.observe(hook)` and
 `observe_pump(hook.record_pump_event)`. For an inter-stage hop, each cleanup
 event carries the source stage's existing `ExecId` solely for lookup of its
 open pipeline-stage span; it is not a trace attribute, and the correlation
-does not use a PID. The hook records
-`cuprum.native_pump_cleanup_started` when cleanup begins and
-`cuprum.native_pump_cleanup_completed` when descriptor ownership is released.
+does not use a PID. The hook records `cuprum.cleanup_started` when cleanup
+begins and `cuprum.cleanup_completed` when descriptor ownership is released.
 Both events have `operation="native_pump_cleanup"` and a bounded `outcome`
 (`"started"` or `"completed"`); only completion has `duration_s`, the
 monotonic cleanup wait in seconds. Descriptor numbers, command arguments,

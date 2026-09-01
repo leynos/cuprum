@@ -22,6 +22,14 @@
 - **`observe_pump`:** Register a hook for Rust-pump routing events in the
   current context, returning a detachable `PumpHookRegistration`. The channel
   is separate from `sh.observe`, so an existing observer is untouched.
+- **Native Rust-pump cleanup telemetry:** Add `cleanup_started` and
+  `cleanup_completed` `PumpEvent` phases, with completion-only
+  `PumpEvent.duration_s`, the unlabelled
+  `cuprum_rust_pump_cleanup_total` counter and
+  `cuprum_rust_pump_cleanup_duration_seconds` histogram, and cleanup `DEBUG`
+  records. The native worker retains descriptor ownership until cleanup
+  completes, so these events and records describe the cancellation-cleanup
+  contract.
 - **`PumpEvent`:** The frozen event a pump hook receives, carrying the routing
   `phase` and, for a decline, the `reason` for the decline.
 - **`PumpHook`:** The synchronous callable type a pump observer must satisfy.

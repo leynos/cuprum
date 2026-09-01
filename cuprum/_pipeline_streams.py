@@ -67,6 +67,10 @@ class _PumpStreamDispatchTestHooks:
 
     force_fd_extraction_failure: bool = False
     on_rust_fd_path_attempt: cabc.Callable[[], None] | None = None
+    raw_fd_extractor: (
+        cabc.Callable[[asyncio.StreamReader | asyncio.StreamWriter | None], int | None]
+        | None
+    ) = None
     python_pump: (
         cabc.Callable[
             [asyncio.StreamReader | None, asyncio.StreamWriter | None],
@@ -95,6 +99,10 @@ def configure_pump_stream_dispatch_for_testing(
     *,
     force_fd_extraction_failure: bool = False,
     on_rust_fd_path_attempt: cabc.Callable[[], None] | None = None,
+    raw_fd_extractor: (
+        cabc.Callable[[asyncio.StreamReader | asyncio.StreamWriter | None], int | None]
+        | None
+    ) = None,
     python_pump: (
         cabc.Callable[
             [asyncio.StreamReader | None, asyncio.StreamWriter | None],
@@ -108,6 +116,7 @@ def configure_pump_stream_dispatch_for_testing(
         force_fd_extraction_failure
     )
     _PUMP_STREAM_DISPATCH_TEST_HOOKS.on_rust_fd_path_attempt = on_rust_fd_path_attempt
+    _PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor = raw_fd_extractor
     _PUMP_STREAM_DISPATCH_TEST_HOOKS.python_pump = python_pump
 
 
@@ -115,6 +124,7 @@ def reset_pump_stream_dispatch_for_testing() -> None:
     """Reset ``_pump_stream_dispatch`` test hooks to defaults."""
     _PUMP_STREAM_DISPATCH_TEST_HOOKS.force_fd_extraction_failure = False
     _PUMP_STREAM_DISPATCH_TEST_HOOKS.on_rust_fd_path_attempt = None
+    _PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor = None
     _PUMP_STREAM_DISPATCH_TEST_HOOKS.python_pump = None
 
 
@@ -343,8 +353,10 @@ async def _try_rust_pump(
     if _PUMP_STREAM_DISPATCH_TEST_HOOKS.force_fd_extraction_failure:
         return False
 
-    reader_fd = _extract_stream_fd(reader)
-    writer_fd = _extract_stream_fd(writer)
+    extract_raw_fd = _PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor
+    extractor = _extract_stream_fd if extract_raw_fd is None else extract_raw_fd
+    reader_fd = extractor(reader)
+    writer_fd = extractor(writer)
 
     if reader_fd is None or writer_fd is None:
         _log_rust_pump_declined(RustPumpDeclineReason.RAW_FD_UNAVAILABLE)

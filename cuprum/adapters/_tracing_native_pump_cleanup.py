@@ -44,6 +44,6 @@ class _NativePumpCleanupTracingMixin:
         with active.lock:
             if not active.is_closed:
                 active.span.add_event(
-                    f"cuprum.native_pump_{event.phase}",
+                    f"cuprum.{event.phase}",
                     attributes,
                 )

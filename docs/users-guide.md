@@ -1716,13 +1716,25 @@ the same `TracingHook` with both `sh.observe(hook)` and
 `observe_pump(hook.record_pump_event)`. For each inter-stage hop, the cleanup
 events reuse the source stage's `ExecId` only to find its existing open span;
 the token is not a trace attribute, and no PID is used for correlation. The
-hook emits `cuprum.native_pump_cleanup_started` and
-`cuprum.native_pump_cleanup_completed`. Both events carry the bounded
+hook emits `cuprum.cleanup_started` and `cuprum.cleanup_completed`. Both
+events carry the bounded
 attributes `operation="native_pump_cleanup"` and `outcome` (`"started"` or
 `"completed"`); only the completion event carries `duration_s`, in monotonic
 seconds. No descriptor numbers, command arguments, exception text, or other
 unbounded values are emitted. An event without a matching active span is
 dropped safely; cleanup tracing neither changes span status nor ends the span.
+
+#### Cleanup DEBUG records
+
+Cancellation cleanup also emits `DEBUG` records on the
+`cuprum._pipeline_streams` logger. Each record has
+`cuprum_action="rust_pump_cleanup"` and
+`cuprum_operation="native_pump_cleanup"`; start records have
+`cuprum_outcome="started"`, while completion records have
+`cuprum_outcome="completed"` and the completion-only
+`cuprum_duration_s` field. A completion record is emitted only after the
+native worker has released descriptor ownership. These logs and pump events
+are emitted during cancellation cleanup.
 
 ```python
 from cuprum.adapters.metrics_adapter import InMemoryMetrics

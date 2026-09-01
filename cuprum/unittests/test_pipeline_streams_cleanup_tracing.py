@@ -81,11 +81,11 @@ def test_native_pump_cleanup_uses_the_injected_monotonic_clock(
     span = tracer.spans[0]
     assert span.events == [
         (
-            "cuprum.native_pump_cleanup_started",
+            "cuprum.cleanup_started",
             {"operation": "native_pump_cleanup", "outcome": "started"},
         ),
         (
-            "cuprum.native_pump_cleanup_completed",
+            "cuprum.cleanup_completed",
             {
                 "operation": "native_pump_cleanup",
                 "outcome": "completed",

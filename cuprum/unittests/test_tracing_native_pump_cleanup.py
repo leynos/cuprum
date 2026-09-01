@@ -14,7 +14,7 @@ from cuprum.unittests._adapter_test_support import (
     _make_exec_event,
     tracing_hook,
 )
-from tests.helpers import read_users_guide
+from tests.helpers import read_doc, read_users_guide
 
 __all__ = ["tracing_hook"]
 
@@ -75,11 +75,11 @@ class TestNativePumpCleanupTracing:
 
         assert source_span.events == [
             (
-                "cuprum.native_pump_cleanup_started",
+                "cuprum.cleanup_started",
                 {"operation": "native_pump_cleanup", "outcome": "started"},
             ),
             (
-                "cuprum.native_pump_cleanup_completed",
+                "cuprum.cleanup_completed",
                 {
                     "operation": "native_pump_cleanup",
                     "outcome": "completed",
@@ -112,17 +112,84 @@ class TestNativePumpCleanupTracing:
             "a cleanup event without a matching open span must not create one"
         )
 
+    def test_cleanup_event_without_a_token_ignores_an_unrelated_span(
+        self,
+        tracing_hook: Traced,
+    ) -> None:
+        """An uncorrelated cleanup event cannot select an arbitrary span."""
+        tracer, hook = tracing_hook
+        hook(_make_exec_event(phase="start"))
+
+        hook.record_pump_event(PumpEvent(phase="cleanup_started"))
+
+        assert tracer.spans[0].events == [], (
+            "a cleanup event without a source token must not attach to another span"
+        )
+
+    def test_cleanup_event_after_its_target_span_closes_is_dropped(
+        self,
+        tracing_hook: Traced,
+    ) -> None:
+        """A completed execution cannot receive later cleanup telemetry."""
+        tracer, hook = tracing_hook
+        exec_id = new_exec_id()
+        hook(_make_exec_event(phase="start", overrides={"exec_id": exec_id}))
+        span = tracer.spans[0]
+        hook(
+            _make_exec_event(
+                phase="exit",
+                overrides={"exec_id": exec_id, "exit_code": 0},
+            )
+        )
+
+        hook.record_pump_event(PumpEvent(phase="cleanup_started", exec_id=exec_id))
+
+        assert span.ended is True, "the target span must be closed before the event"
+        assert span.events == [], (
+            "cleanup telemetry must be dropped after its target span closes"
+        )
+
     def test_users_guide_names_the_cleanup_trace_contract(self) -> None:
         """The public guide retains the stable cleanup tracing names."""
         guide = read_users_guide()
         expected = {
-            "cuprum.native_pump_cleanup_started",
-            "cuprum.native_pump_cleanup_completed",
+            "cuprum.cleanup_started",
+            "cuprum.cleanup_completed",
             "observe_pump(hook.record_pump_event)",
             'operation="native_pump_cleanup"',
         }
         missing = sorted(item for item in expected if item not in guide)
         assert not missing, f"users' guide omits cleanup tracing contract: {missing}"
+
+    def test_users_guide_documents_cleanup_debug_records(self) -> None:
+        """The public guide retains the cancellation-cleanup log contract."""
+        guide = read_users_guide()
+        expected = {
+            "cuprum._pipeline_streams",
+            'cuprum_action="rust_pump_cleanup"',
+            'cuprum_operation="native_pump_cleanup"',
+            'cuprum_outcome="started"',
+            'cuprum_outcome="completed"',
+            "cuprum_duration_s",
+        }
+        missing = sorted(item for item in expected if item not in guide)
+        assert not missing, f"users' guide omits cleanup DEBUG contract: {missing}"
+
+    def test_changelog_records_cleanup_telemetry_contract(self) -> None:
+        """The unreleased changelog lists every cleanup telemetry addition."""
+        changelog = read_doc("CHANGELOG.md")
+        expected = {
+            "cleanup_started",
+            "cleanup_completed",
+            "PumpEvent.duration_s",
+            "cuprum_rust_pump_cleanup_total",
+            "cuprum_rust_pump_cleanup_duration_seconds",
+            "cleanup `DEBUG`",
+            "descriptor ownership",
+            "cancellation-cleanup",
+        }
+        missing = sorted(item for item in expected if item not in changelog)
+        assert not missing, f"changelog omits cleanup telemetry contract: {missing}"
 
     def test_emitted_attributes_match_documented_contract(self) -> None:
         """The initial and exit attributes equal the documented contract."""
