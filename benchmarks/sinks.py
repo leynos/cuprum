@@ -155,6 +155,9 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
             )
             self._thread.start()
             drainer_ready.wait()
+            # The drainer now owns this descriptor. Closing it here can race
+            # with its final read and discard bytes that were already written.
+            self._master_fd = None
         except (LookupError, OSError, RuntimeError):
             if slave is None:
                 with contextlib.suppress(OSError):
@@ -225,6 +228,8 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
                     return
                 self._drained_bytes += len(chunk)
         finally:
+            with contextlib.suppress(OSError):
+                os.close(master_fd)
             self._drainer_finished.set()
 
 

@@ -16,12 +16,12 @@ were written. A separate event type, carried on a separate hook registry
 registering for them, and a consumer that does not is untouched.
 """
 
-from __future__ import annotations
-
 import collections.abc as cabc
 import dataclasses as dc
 import enum
 import typing as typ
+
+from cuprum.events import ExecId
 
 
 class RustPumpDeclineReason(enum.StrEnum):
@@ -73,12 +73,12 @@ class PumpEvent:
     """A Rust-pump routing decision reported to registered pump hooks.
 
     The event carries the phase, the closed-set reason for a decline, and the
-    monotonic wait duration for completed native-pump cleanup. It deliberately
-    carries nothing else. Descriptor numbers, command arguments, exception
-    types, and tracebacks are all either unbounded as metric labels or a
-    disclosure risk, and the DEBUG log records emitted alongside these events
-    carry the diagnostic detail — including the pump's traceback — for the
-    cases that need it.
+    monotonic wait duration for completed native-pump cleanup, and the source
+    stage token needed to correlate cleanup tracing. Descriptor numbers,
+    command arguments, exception types, and tracebacks are all either
+    unbounded as metric labels or a disclosure risk, and the DEBUG log records
+    emitted alongside these events carry the diagnostic detail — including the
+    pump's traceback — for the cases that need it.
 
     Attributes
     ----------
@@ -90,6 +90,11 @@ class PumpEvent:
     duration_s:
         Monotonic seconds spent waiting for the native worker's cleanup when
         ``phase`` is ``cleanup_completed``. ``None`` for every other phase.
+    exec_id:
+        The upstream pipeline stage's stable execution token for native-cleanup
+        phases. Tracing observers use it only to locate an existing execution
+        span; it is ``None`` for every other phase and is never a trace
+        attribute or metric label.
 
     Examples
     --------
@@ -115,6 +120,7 @@ class PumpEvent:
     phase: PumpPhase
     reason: RustPumpDeclineReason | None = None
     duration_s: float | None = None
+    exec_id: ExecId | None = None
 
 
 type PumpHook = cabc.Callable[[PumpEvent], None]

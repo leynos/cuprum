@@ -102,12 +102,14 @@ def test_timeout_without_configured_timeout_raises_invariant_error(
         fake_gather_pipeline_outputs,
     )
 
-    # The guarded branch needs only ``spawn.processes`` (consumed by the
-    # pipe-task creation and the timed-out stage termination); an empty
-    # process list keeps both no-ops.
+    # The guarded branch needs only the pipe-task inputs and timed-out stage
+    # termination target. Empty processes and observations keep both no-ops.
     spawn = typ.cast(
         "_PipelineSpawnResult",
-        types.SimpleNamespace(processes=[]),
+        types.SimpleNamespace(
+            processes=[],
+            stages=types.SimpleNamespace(observations=()),
+        ),
     )
     parts = typ.cast("tuple[SafeCmd, ...]", ())
 

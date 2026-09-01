@@ -23,6 +23,9 @@ import time
 import typing as typ
 
 from cuprum._backend import StreamBackend, get_stream_backend
+from cuprum._pipeline_pipe_tasks import (
+    _create_pipe_tasks as _create_pipe_tasks_with_context,
+)
 from cuprum._pipeline_stream_cleanup_observation import (
     _log_native_pump_cleanup_completed,
     _log_native_pump_cleanup_started,
@@ -41,6 +44,8 @@ from cuprum.pump_observation import _emit_pump_event
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum._pipeline_types import _StageObservation
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -371,14 +376,11 @@ async def _pump_stream_dispatch(
 
 def _create_pipe_tasks(
     processes: list[asyncio.subprocess.Process],
+    observations: tuple[_StageObservation, ...] = (),
 ) -> list[asyncio.Task[None]]:
     """Create streaming tasks between adjacent pipeline stages."""
-    return [
-        asyncio.create_task(
-            _pump_stream_dispatch(
-                processes[idx].stdout,
-                processes[idx + 1].stdin,
-            ),
-        )
-        for idx in range(len(processes) - 1)
-    ]
+    return _create_pipe_tasks_with_context(
+        processes,
+        observations,
+        _pump_stream_dispatch,
+    )

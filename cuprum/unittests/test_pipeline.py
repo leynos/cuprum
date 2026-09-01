@@ -179,8 +179,13 @@ def test_pipeline_propagates_cancelled_pipe_task(
         await asyncio.sleep(0)
         raise asyncio.CancelledError
 
-    def create_cancelled_pipe_task(_processes: object) -> list[asyncio.Task[None]]:
+    def create_cancelled_pipe_task(
+        _processes: object,
+        *,
+        observations: object = (),
+    ) -> list[asyncio.Task[None]]:
         """Inject the cancelled pipe task at the pipeline creation boundary."""
+        del observations
         return [asyncio.create_task(cancelled_pipe_task())]
 
     monkeypatch.setattr(
@@ -203,8 +208,13 @@ def test_pipeline_ignores_broken_pipe_task(
         await asyncio.sleep(0)
         raise BrokenPipeError
 
-    def create_broken_pipe_task(_processes: object) -> list[asyncio.Task[None]]:
+    def create_broken_pipe_task(
+        _processes: object,
+        *,
+        observations: object = (),
+    ) -> list[asyncio.Task[None]]:
         """Inject the expected broken-pipe task at the creation boundary."""
+        del observations
         return [asyncio.create_task(broken_pipe_task())]
 
     monkeypatch.setattr(

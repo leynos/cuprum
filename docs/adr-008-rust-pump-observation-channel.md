@@ -199,3 +199,22 @@ histogram are emitted only when native cleanup completes; the duration is the
 monotonic time spent waiting for that cleanup. The extension adds no descriptor
 data, exception text, or unbounded labels. These cleanup events remain on the
 separate synchronous pump-observation channel and do not extend `ExecEvent`.
+
+## Addendum — 2026-09-01
+
+The cleanup-tracing extension keeps cleanup observation on the separate
+synchronous pump-observation channel. A caller opts in by registering the same
+`TracingHook` with both the execution observer and `observe_pump`; it does not
+convert `PumpEvent` into `ExecEvent`. For each inter-stage hop, the cleanup
+events reuse the source pipeline-stage `ExecId` solely to look up the existing
+active span. The token is not a trace attribute, and PID correlation is not
+used.
+
+The extension records `cuprum.native_pump_cleanup_started` and
+`cuprum.native_pump_cleanup_completed`. Both events have the stable
+`operation="native_pump_cleanup"` attribute and an `outcome` of `"started"`
+or `"completed"`; completion additionally has `duration_s`, the monotonic
+cleanup wait in seconds. It adds no descriptor data, command arguments,
+exception text, or unbounded trace attributes. Events without a matching open
+span are dropped safely. Cleanup tracing does not set span status or end the
+span.

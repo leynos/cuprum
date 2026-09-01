@@ -76,6 +76,7 @@ from cuprum.adapters._support import (
     _prefixed,
     _project_tag,
 )
+from cuprum.adapters._tracing_native_pump_cleanup import _NativePumpCleanupTracingMixin
 from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
 from cuprum.adapters.tracing_protocols import Span, Tracer
 
@@ -83,8 +84,7 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook, ExecId
 
 
-# Ancillary span-event fields; the timeout pair distinguishes expiry modes and
-# the grace pair describes the bounded drain outcome without stream contents.
+# Ancillary span-event fields distinguish expiry modes and bounded drain outcomes.
 _SPAN_FIELDS = (
     "line",
     "operation",
@@ -111,7 +111,7 @@ class _ActiveSpan:
     is_closed: bool = False
 
 
-class TracingHook:
+class TracingHook(_NativePumpCleanupTracingMixin):
     """Project correlated execution events onto backend spans.
 
     Events without ``exec_id`` are ignored rather than correlated by a PID.

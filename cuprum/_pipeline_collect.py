@@ -135,7 +135,10 @@ async def _collect_pipeline_inputs(
     if timeout is not None:
         timeout_deadline = time.monotonic() + timeout
 
-    pipe_tasks = _create_pipe_tasks(spawn.processes)
+    pipe_tasks = _create_pipe_tasks(
+        spawn.processes,
+        observations=spawn.stages.observations,
+    )
     try:
         wait_result = await _await_pipeline_wait_result(
             spawn,

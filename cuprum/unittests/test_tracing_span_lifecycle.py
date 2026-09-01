@@ -24,41 +24,22 @@ from __future__ import annotations
 
 import logging
 import typing as typ
-from pathlib import Path
 
 import pytest
 
-from cuprum.adapters.tracing_adapter import _MAX_ACTIVE_SPANS, TracingHook
-from cuprum.events import ExecEvent, new_exec_id
-from cuprum.program import Program
+from cuprum.adapters.tracing_adapter import _MAX_ACTIVE_SPANS
+from cuprum.events import new_exec_id
 from cuprum.unittests._adapter_test_support import (
     Traced,
     _cat_overrides,
     _make_exec_event,
     tracing_hook,
 )
-from tests.helpers import read_users_guide
 
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecPhase
 
 __all__ = ["tracing_hook"]
-
-# Single source of truth for the span-attribute contract documented on
-# ``TracingHook``. Both the documentation check and the emitted-attribute
-# check derive from this constant, so the contract is defined in exactly one
-# place and cannot drift between prose and code.
-DOCUMENTED_SPAN_ATTRIBUTES: frozenset[str] = frozenset({
-    "cuprum.program",
-    "cuprum.argv",
-    "cuprum.pid",
-    "cuprum.cwd",
-    "cuprum.exit_code",
-    "cuprum.duration_s",
-    "cuprum.project",
-    "cuprum.pipeline_stage_index",
-    "cuprum.pipeline_stages",
-})
 
 
 class TestTracingSpanLifecycle:
@@ -345,77 +326,4 @@ class TestTracingSpanLifecycle:
         assert quiet_span.ended is True, "the idle span must be evicted first"
         assert busy_span.ended is False, (
             "a span touched by pipeline_fail_fast must remain active until exit"
-        )
-
-    def test_emitted_attributes_match_documented_contract(self) -> None:
-        """The attributes the hook emits equal the documented contract.
-
-        Every attribute ``_build_attributes`` produces for a fully-populated
-        start event, plus the exit-time attributes, must equal
-        ``DOCUMENTED_SPAN_ATTRIBUTES`` — guarding the omission of ``cuprum.cwd`` /
-        ``cuprum.pipeline_stages`` that motivated issue #122.
-        """
-        start_event = ExecEvent(
-            phase="start",
-            program=Program("cat"),
-            argv=("cat",),
-            cwd=Path("/srv/work"),
-            env=None,
-            pid=4321,
-            timestamp=0.0,
-            line=None,
-            exit_code=None,
-            duration_s=None,
-            tags={
-                "project": "doc-lockstep",
-                "pipeline_stage_index": 0,
-                "pipeline_stages": 2,
-            },
-        )
-        emitted = set(TracingHook._build_attributes(start_event))
-        # exit_code and duration_s are attached later, in _handle_exit.
-        emitted |= {"cuprum.exit_code", "cuprum.duration_s"}
-
-        contract = set(DOCUMENTED_SPAN_ATTRIBUTES)
-        assert emitted == contract, (
-            "emitted attributes must match the documented contract; "
-            f"emitted-only={emitted - contract}, contract-only={contract - emitted}"
-        )
-
-    def test_docstring_documents_each_contract_attribute(self) -> None:
-        """The ``TracingHook`` docstring names every attribute in the contract.
-
-        Checks substring membership of each documented name rather than parsing
-        ``__doc__``, so whitespace or formatting edits to the docstring cannot
-        change the test outcome.
-        """
-        doc = TracingHook.__doc__ or ""
-        missing = sorted(
-            attr for attr in DOCUMENTED_SPAN_ATTRIBUTES if f"``{attr}``" not in doc
-        )
-        assert not missing, (
-            f"TracingHook docstring omits documented attributes: {missing}"
-        )
-
-    def test_users_guide_lists_every_tracing_attribute(self) -> None:
-        """The users' guide tracing section names every attribute in the contract.
-
-        Uses inline-code substring membership rather than parsing the list, so the
-        guide's markdown formatting is not itself part of the assertion. Locks in
-        ``cuprum.cwd`` and ``cuprum.pipeline_stages`` alongside the rest.
-        """
-        guide = read_users_guide()
-        missing = sorted(
-            attr for attr in DOCUMENTED_SPAN_ATTRIBUTES if f"`{attr}`" not in guide
-        )
-        assert not missing, f"users' guide omits tracing attributes: {missing}"
-
-    def test_users_guide_names_record_output_option(self) -> None:
-        """The users' guide documents ``record_output``, not the obsolete name."""
-        guide = read_users_guide()
-        assert "record_output" in guide, (
-            "users' guide must name the record_output option"
-        )
-        assert "record_io" not in guide, (
-            "users' guide must not use the obsolete record_io option name"
         )

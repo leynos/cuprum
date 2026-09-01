@@ -1711,6 +1711,19 @@ monotonic cleanup-wait duration and is set only on `cleanup_completed`. The
 executor worker retains descriptor ownership until it settles, so this cleanup
 must complete before the pipeline can finish tearing down the hop.
 
+Cleanup can also be correlated with the active pipeline-stage span. Register
+the same `TracingHook` with both `sh.observe(hook)` and
+`observe_pump(hook.record_pump_event)`. For each inter-stage hop, the cleanup
+events reuse the source stage's `ExecId` only to find its existing open span;
+the token is not a trace attribute, and no PID is used for correlation. The
+hook emits `cuprum.native_pump_cleanup_started` and
+`cuprum.native_pump_cleanup_completed`. Both events carry the bounded
+attributes `operation="native_pump_cleanup"` and `outcome` (`"started"` or
+`"completed"`); only the completion event carries `duration_s`, in monotonic
+seconds. No descriptor numbers, command arguments, exception text, or other
+unbounded values are emitted. An event without a matching active span is
+dropped safely; cleanup tracing neither changes span status nor ends the span.
+
 ```python
 from cuprum.adapters.metrics_adapter import InMemoryMetrics
 from cuprum.adapters.pump_metrics import PumpMetricsHook
