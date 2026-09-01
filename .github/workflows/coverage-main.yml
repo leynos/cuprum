@@ -25,15 +25,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.13'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
       - name: Install code
         run: make build
@@ -46,7 +46,7 @@ jobs:
       # The pinned action writes a run-specific baseline cache entry and treats
       # changes within one percentage point as measurement noise.
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@4977418856133491c6aa7407d40668744df21818
+        uses: leynos/shared-actions/.github/actions/generate-coverage@00fdcd5ff52c3f9eda64bb8a51869f7dff1b3ecf
         with:
           format: cobertura
           output-path: coverage.xml
@@ -57,7 +57,7 @@ jobs:
         env:
           CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
         if: env.CS_ACCESS_TOKEN != ''
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@18bed1ca49a6de3d8882bd72635a32ae3f023d57
+        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@00fdcd5ff52c3f9eda64bb8a51869f7dff1b3ecf
         with:
           format: cobertura
           path: coverage.xml
