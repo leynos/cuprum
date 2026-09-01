@@ -1,4 +1,10 @@
-"""Unit tests for benchmark artefact redirect argument and header policy."""
+"""Properties and examples for benchmark artefact redirect policy.
+
+The redirect argument binder accepts every valid positional-or-keyword split
+of urllib's five callback arguments, while rejecting malformed call shapes and
+values that violate its runtime type contract. These properties cover those
+open-ended input domains; the finite tests retain readable protocol examples.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +15,8 @@ import urllib.request
 from unittest import mock
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from benchmarks._github_http import (
     _ArtefactArchiveRedirectHandler,
@@ -19,6 +27,46 @@ from benchmarks._github_http import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+
+_REDIRECT_CODES = st.sampled_from((301, 302, 303, 307, 308))
+_REDIRECT_TEXT = st.text(max_size=64)
+_REDIRECT_HEADERS = st.builds(http.client.HTTPMessage)
+_REDIRECT_FILE_POINTERS = st.builds(io.BytesIO, st.binary(max_size=256))
+_REDIRECT_POSITIONAL_COUNTS = st.integers(min_value=0, max_value=5)
+_VALID_REDIRECT_MIXED_CALLS = st.tuples(
+    _REDIRECT_FILE_POINTERS,
+    _REDIRECT_CODES,
+    _REDIRECT_TEXT,
+    _REDIRECT_HEADERS,
+    _REDIRECT_TEXT,
+    _REDIRECT_POSITIONAL_COUNTS,
+)
+_INVALID_REDIRECT_FIELD_VALUES = st.one_of(
+    st.tuples(st.just("code"), st.one_of(st.booleans(), st.none(), _REDIRECT_TEXT)),
+    st.tuples(
+        st.just("msg"),
+        st.one_of(st.none(), st.integers(), st.binary(max_size=64)),
+    ),
+    st.tuples(
+        st.just("headers"),
+        st.one_of(
+            st.none(),
+            st.integers(),
+            st.dictionaries(_REDIRECT_TEXT, _REDIRECT_TEXT, max_size=4),
+        ),
+    ),
+    st.tuples(
+        st.just("newurl"),
+        st.one_of(st.none(), st.integers(), st.binary(max_size=64)),
+    ),
+)
+_MALFORMED_POSITIONAL_ARGUMENTS = st.one_of(
+    st.lists(st.one_of(st.none(), st.integers(), _REDIRECT_TEXT), max_size=4),
+    st.lists(
+        st.one_of(st.none(), st.integers(), _REDIRECT_TEXT), min_size=6, max_size=10
+    ),
+).map(tuple)
 
 
 def _make_github_artefact_request() -> urllib.request.Request:
@@ -110,6 +158,52 @@ def test_redirect_arguments_support_mixed_binding(
     assert actual == values, "Mixed redirect arguments were bound incorrectly"
 
 
+@given(mixed_call=_VALID_REDIRECT_MIXED_CALLS)
+def test_redirect_arguments_bind_every_valid_mixed_call(
+    mixed_call: tuple[io.BytesIO, int, str, http.client.HTTPMessage, str, int],
+) -> None:
+    """Verify that generated valid calls preserve their bound values.
+
+    Parameters
+    ----------
+    mixed_call
+        Generated redirect values and a positional argument count from zero
+        through five.
+
+    Notes
+    -----
+    Every valid positional-or-keyword split must bind the five callback
+    arguments without changing their values or runtime types.
+    """
+    fp, code, msg, headers, newurl, positional_argument_count = mixed_call
+    values: tuple[object, ...] = (fp, code, msg, headers, newurl)
+    names = ("fp", "code", "msg", "headers", "newurl")
+    kwargs = dict(
+        zip(
+            names[positional_argument_count:],
+            values[positional_argument_count:],
+            strict=True,
+        )
+    )
+
+    actual = _redirect_request_arguments(
+        values[:positional_argument_count],
+        kwargs,
+    )
+
+    assert actual[0] is fp, "The response stream should be retained"
+    assert actual[1] == code, "The redirect status code should be retained"
+    assert actual[2] == msg, "The redirect message should be retained"
+    assert actual[3] is headers, "The redirect headers should be retained"
+    assert actual[4] == newurl, "The redirect URL should be retained"
+    assert isinstance(actual[1], int), "The status code should remain an integer"
+    assert isinstance(actual[2], str), "The message should remain a string"
+    assert isinstance(actual[3], http.client.HTTPMessage), (
+        "The headers should remain an HTTPMessage"
+    )
+    assert isinstance(actual[4], str), "The redirect URL should remain a string"
+
+
 @pytest.mark.parametrize(
     ("args", "kwargs"),
     [
@@ -164,6 +258,24 @@ def test_redirect_arguments_reject_invalid_binding_shapes(
         _redirect_request_arguments(args, kwargs)
 
 
+def _assert_redirect_arguments_reject_invalid_field_type(
+    field: str,
+    invalid_value: object,
+) -> None:
+    """Assert invalid redirect field types are rejected."""
+    kwargs: dict[str, object] = {
+        "fp": io.BytesIO(),
+        "code": 302,
+        "msg": "Found",
+        "headers": http.client.HTTPMessage(),
+        "newurl": "https://example.com/archive.zip",
+    }
+    kwargs[field] = invalid_value
+
+    with pytest.raises(TypeError):
+        _redirect_request_arguments((), kwargs)
+
+
 @pytest.mark.parametrize(
     ("name", "invalid_value"),
     [
@@ -179,17 +291,48 @@ def test_redirect_arguments_reject_invalid_types(
     invalid_value: object,
 ) -> None:
     """Redirect argument binding should retain its runtime type contract."""
-    kwargs: dict[str, object] = {
-        "fp": io.BytesIO(),
-        "code": 302,
-        "msg": "Found",
-        "headers": http.client.HTTPMessage(),
-        "newurl": "https://example.com/archive.zip",
-    }
-    kwargs[name] = invalid_value
+    _assert_redirect_arguments_reject_invalid_field_type(name, invalid_value)
 
+
+@given(field_and_value=_INVALID_REDIRECT_FIELD_VALUES)
+def test_redirect_arguments_reject_every_generated_invalid_field_type(
+    field_and_value: tuple[str, object],
+) -> None:
+    """Verify that generated invalid field values are rejected.
+
+    Parameters
+    ----------
+    field_and_value
+        Generated field name and value whose runtime type violates that
+        field's redirect-binding contract.
+
+    Notes
+    -----
+    The binder must raise ``TypeError`` for every generated invalid value.
+    """
+    field, invalid_value = field_and_value
+    _assert_redirect_arguments_reject_invalid_field_type(field, invalid_value)
+
+
+@given(args=_MALFORMED_POSITIONAL_ARGUMENTS)
+def test_redirect_arguments_reject_generated_malformed_arity(
+    args: tuple[object, ...],
+) -> None:
+    """Verify that generated malformed positional calls are rejected.
+
+    Parameters
+    ----------
+    args
+        Generated positional arguments with fewer than five or more than five
+        values.
+
+    Notes
+    -----
+    Calls with malformed positional arity must raise ``TypeError`` during
+    redirect argument binding.
+    """
     with pytest.raises(TypeError):
-        _redirect_request_arguments((), kwargs)
+        _redirect_request_arguments(args, {})
 
 
 @pytest.mark.parametrize(

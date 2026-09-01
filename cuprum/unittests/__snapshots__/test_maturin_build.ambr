@@ -181,6 +181,7 @@
       'cuprum/unittests/test_pump_stream_dispatch_rust_settlement.py',
       'cuprum/unittests/test_pump_stream_dispatch_selection.py',
       'cuprum/unittests/test_ratchet_ratio_properties.py',
+      'cuprum/unittests/test_rust_availability_resolver_property.py',
       'cuprum/unittests/test_rust_consume_integration_guard.py',
       'cuprum/unittests/test_rust_consume_stream.py',
       'cuprum/unittests/test_rust_errno.py',
