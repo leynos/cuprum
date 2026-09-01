@@ -171,6 +171,9 @@ def test_zero_timeout_reconciles_pipe_tasks(
     writes more than a pipe buffer holds and the second never reads, leaving
     the pump genuinely blocked when the deadline fires.
     """
+    # This test owns the deliberately blocked pump until its ownership
+    # assertion. Native-pump cleanup has dedicated lifecycle coverage; forcing
+    # this fixture to the Python path keeps its subprocess reaping local.
     monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "python")
     get_stream_backend.cache_clear()
     catalogue, python_program = python_catalogue()
