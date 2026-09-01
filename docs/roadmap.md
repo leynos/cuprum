@@ -238,14 +238,17 @@ adr-002-additional-rust-components.md Proposal 3.
   read-size sweep rather than assuming the baseline number.
   - Update
     `test_stream_preserves_random_payloads_around_python_read_size_boundary`
-    (`cuprum/unittests/test_stream_property_based.py:120`) to exercise chunk
-    boundaries around the new size.
+    (`cuprum/unittests/test_stream_property_based.py`) to exercise chunk
+    boundaries around the new size through a real two-stage subprocess pipeline
+    on both backends, with more than one upstream write and an external
+    expected-byte oracle.
   - Success: the `tee-devnull-nocb-s1` scenario median wall time is at least 20%
     lower than the same-session 4 KiB control, with no parity regressions, and
     the chosen value plus its benchmark artefact are recorded alongside the
     baseline document. The 15-round sweep selected 64 KiB: the median tee
     improvement was 22.9997% (95% paired-bootstrap interval 22.5508% to
-    23.2037%). See
+    23.2037%). The value remains guarded by the inclusive 16-64 KiB V4 range
+    assertion. See
     `tee-hotpath-read-size-sweep-2026-08-29.md`.
 
 ### 5.2. Make per-line event emission cheap for line-callback workloads

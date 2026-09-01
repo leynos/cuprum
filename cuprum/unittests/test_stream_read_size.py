@@ -42,5 +42,9 @@ def test_crlf_split_at_read_boundary_emits_no_empty_line() -> None:
 
 
 def test_default_read_size_is_profiled_plateau() -> None:
-    """The production default remains the selected 64 KiB plateau."""
-    assert _READ_SIZE == 65536, "The profiled 64 KiB default must not regress."
+    """The production default remains within the profiled plateau range."""
+    assert 16384 <= _READ_SIZE <= 65536, (
+        "docs/tee-hotpath-read-size-sweep-2026-08-29.md requires the "
+        "profiled read size to remain in the approved 16-64 KiB range, got "
+        f"{_READ_SIZE}"
+    )

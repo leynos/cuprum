@@ -216,9 +216,12 @@ def test_stream_preserves_random_payloads_across_random_chunk_boundaries(
 @given(
     case=st.sampled_from(
         (
-            (b"a" * _BOUNDARY_MIN_SIZE, (_BOUNDARY_MIN_SIZE,)),
+            (b"a" * _BOUNDARY_MIN_SIZE, (_BOUNDARY_MIN_SIZE - 1, 1)),
             (b"x" * _READ_SIZE + b"\r\n", (_READ_SIZE, 2)),
-            (b"\xe2\x98\x83" * (_BOUNDARY_MAX_SIZE // 3), (_READ_SIZE,)),
+            (
+                b"\xe2\x98\x83" * (_BOUNDARY_MAX_SIZE // 3),
+                (_READ_SIZE, _BOUNDARY_MAX_SIZE - _READ_SIZE),
+            ),
         ),
     ),
 )
@@ -235,9 +238,12 @@ def test_stream_preserves_random_payloads_around_python_read_size_boundary(
     case : tuple[bytes, tuple[int, ...]]
         Random payload and random chunk partition.
     """
-    payload, _chunk_sizes = case
-    captured = asyncio.run(_consume_at_read_size(payload, read_size=_READ_SIZE))
+    payload, chunk_sizes = case
+    property_case = build_property_pipeline_case(payload, chunk_sizes)
+    result = run_parity_pipeline(property_case.pipeline, property_case.allowlist)
 
-    assert captured == payload.decode("utf-8", errors="replace"), (
-        "the production read boundary must preserve the decoded payload"
+    assert property_case.chunk_count > 1, (
+        "the boundary case must write more than one chunk to exercise the "
+        f"real pipeline, got {property_case.chunk_count}"
     )
+    _assert_pipeline_result(result, property_case)
