@@ -235,7 +235,8 @@ spelling-helper-test: build spelling-config ## Validate the shared spelling-poli
 		scripts/tests/test_typos_rollout_degradation.py \
 		--cov=generate_typos_config --cov=typos_rollout \
 		--cov=typos_rollout_cache --cov=typos_rollout_dictionary \
-		--cov=typos_rollout_refresh --cov-fail-under=90
+		--cov=typos_rollout_refresh --cov=typos_rollout_degradation \
+		--cov-fail-under=90
 
 nixie: ## Validate Mermaid diagrams
 	$(call ensure_tool,nixie)

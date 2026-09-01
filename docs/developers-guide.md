@@ -1064,7 +1064,11 @@ Spelling policy (`scripts/`):
   parsing, and merging; standard library only.
 - `scripts/typos_rollout_refresh.py` — cache freshness policy: HTTP validator
   metadata, local mtime comparison, and the conditional HTTPS fetch with its
-  HTTPS-only redirect handler and stale-cache fallback.
+  stale-cache fallback. Redirect handling and degradation telemetry are owned
+  by `scripts/typos_rollout_degradation.py`.
+- `scripts/typos_rollout_degradation.py` — the HTTPS-only redirect policy and
+  bounded refresh-degradation counters, exposed through
+  `reset_degradations()` and `degradation_snapshot()`.
 - `scripts/typos_rollout.py` remains the rendering module and public façade,
   re-exporting the API so callers keep one entry point.
 
@@ -2331,13 +2335,15 @@ types. The gate also runs the helper's Python 3.13 tests with at least 90% line
 coverage.
 
 The cache refresh in `scripts/typos_rollout_refresh.py` fetches the shared
-dictionary only over HTTPS and rejects any redirect that would downgrade the
-connection to plain HTTP: a dedicated `_HttpsOnlyRedirectHandler` refuses the
-redirect before urllib reissues the request, so a compromised or misconfigured
-upstream cannot silently serve the dictionary in cleartext. Refresh
-degradations — a rejected HTTPS-downgrade redirect, falling back to a stale
-cache after a failed refresh, or reusing the cache in offline mode — are
-counted in a bounded, fixed-key counter and reported through structured
+dictionary only over HTTPS and delegates redirect enforcement to
+`scripts/typos_rollout_degradation.py`. Its dedicated
+`_HttpsOnlyRedirectHandler` refuses any redirect that would downgrade the
+connection to plain HTTP before urllib reissues the request, so a compromised
+or misconfigured upstream cannot silently serve the dictionary in cleartext.
+Refresh degradations — a rejected HTTPS-downgrade redirect, falling back to a
+stale cache after a failed refresh, or reusing the cache in offline mode — are
+counted by the bounded, fixed-key counters in
+`scripts/typos_rollout_degradation.py` and reported through structured
 `logging` warnings (or info, for the offline case). Those log records never
 include the request URL; they carry only the event name and non-sensitive
 context such as the rejected redirect's scheme or the triggering error's type.
