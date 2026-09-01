@@ -17,7 +17,21 @@ from cuprum.unittests._adapter_test_support import _make_exec_event
 from cuprum.unittests._pipeline_wait_support import make_stage_observations
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum.pump_events import PumpEvent
+
+
+async def _await_completed_native_pump_cleanup(
+    monotonic_clock: cabc.Callable[[], float],
+) -> None:
+    """Run the cleanup boundary with an already-settled worker future."""
+    cleanup_complete = asyncio.get_running_loop().create_future()
+    cleanup_complete.set_result(None)
+    await _pipeline_streams._await_native_pump_cleanup(
+        cleanup_complete,
+        monotonic_clock=monotonic_clock,
+    )
 
 
 def test_native_pump_cleanup_uses_the_injected_monotonic_clock(
@@ -36,22 +50,13 @@ def test_native_pump_cleanup_uses_the_injected_monotonic_clock(
         """Return the next controlled cleanup timestamp."""
         return next(clock_values)
 
-    async def await_completed_cleanup() -> None:
-        """Run the cleanup boundary with an already-settled worker future."""
-        cleanup_complete = asyncio.get_running_loop().create_future()
-        cleanup_complete.set_result(None)
-        await _pipeline_streams._await_native_pump_cleanup(
-            cleanup_complete,
-            monotonic_clock=monotonic_clock,
-        )
-
     caplog.set_level(logging.DEBUG, logger=_pipeline_streams.__name__)
     with (
         _correlate_pump_events(exec_id),
         observe_pump(pump_events.append),
         observe_pump(tracing_hook.record_pump_event),
     ):
-        asyncio.run(await_completed_cleanup())
+        asyncio.run(_await_completed_native_pump_cleanup(monotonic_clock))
 
     completed_event = pump_events[-1]
     assert completed_event.phase == "cleanup_completed", (
