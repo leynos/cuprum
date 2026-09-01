@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import logging
 import threading
 import typing as typ
@@ -27,17 +28,28 @@ class _FailingRestoreGuard:
         raise OSError(msg)
 
 
+@dataclasses.dataclass
+class _CancellationState:
+    """Synchronization state for one cancelled native-pump test."""
+
+    worker_started: threading.Event = dataclasses.field(default_factory=threading.Event)
+    worker_finished: threading.Event = dataclasses.field(
+        default_factory=threading.Event
+    )
+    release: threading.Event = dataclasses.field(default_factory=threading.Event)
+    cleanup_futures: list[asyncio.Future[None]] = dataclasses.field(
+        default_factory=list
+    )
+
+
 async def _cancel_pump_with_failing_restore(
-    worker_started: threading.Event,
-    worker_finished: threading.Event,
-    release: threading.Event,
-    cleanup_futures: list[asyncio.Future[None]],
+    state: _CancellationState,
 ) -> None:
     """Cancel a hop and prove it settles within the default grace period."""
     task: asyncio.Task[None] | None = None
     try:
         with owned_fds() as (reader_fd, writer_fd):
-            state = _pipeline_streams._RustPumpState(
+            pump_state = _pipeline_streams._RustPumpState(
                 reader_fd=reader_fd,
                 writer_fd=writer_fd,
                 blocking_mode_guard=typ.cast(
@@ -47,13 +59,13 @@ async def _cancel_pump_with_failing_restore(
                 resume_reader=None,
             )
             task = asyncio.create_task(
-                _pipeline_streams._run_rust_pump_with_blocking_fds(state=state)
+                _pipeline_streams._run_rust_pump_with_blocking_fds(state=pump_state)
             )
-            started = await asyncio.to_thread(worker_started.wait, 5.0)
+            started = await asyncio.to_thread(state.worker_started.wait, 5.0)
             assert started, "the native-pump stand-in must start before cancellation"
             task.cancel()
             await asyncio.sleep(0)
-            release.set()
+            state.release.set()
             done, pending = await asyncio.wait((task,), timeout=0.5)
             assert done == {task}, (
                 "a cancelled hop must settle within the default cancellation grace "
@@ -61,10 +73,10 @@ async def _cancel_pump_with_failing_restore(
             )
             with pytest.raises(asyncio.CancelledError):
                 task.result()
-            finished = await asyncio.to_thread(worker_finished.wait, 5.0)
+            finished = await asyncio.to_thread(state.worker_finished.wait, 5.0)
             assert finished, "the native-pump worker must settle before the hop"
     finally:
-        for cleanup_complete in cleanup_futures:
+        for cleanup_complete in state.cleanup_futures:
             if not cleanup_complete.done():
                 cleanup_complete.set_result(None)
         if task is not None:
@@ -74,19 +86,16 @@ async def _cancel_pump_with_failing_restore(
 
 def _run_cancelled_pump_with_captured_cleanup(
     monkeypatch: pytest.MonkeyPatch,
-    worker_started: threading.Event,
-    worker_finished: threading.Event,
-    release: threading.Event,
-    cleanup_futures: list[asyncio.Future[None]],
+    state: _CancellationState,
 ) -> None:
     """Install the blocked pump double and run its cancellation path."""
 
     def blocking_pump(reader_fd: int, writer_fd: int) -> int:
         """Block until cancellation releases the native-pump stand-in."""
         del reader_fd, writer_fd
-        worker_started.set()
-        release.wait(timeout=5.0)
-        worker_finished.set()
+        state.worker_started.set()
+        state.release.wait(timeout=5.0)
+        state.worker_finished.set()
         return 0
 
     original_await_cleanup = _pipeline_streams._await_native_pump_cleanup
@@ -97,7 +106,7 @@ def _run_cancelled_pump_with_captured_cleanup(
         monotonic_clock: cabc.Callable[[], float],
     ) -> None:
         """Retain cleanup state so a broken implementation remains bounded."""
-        cleanup_futures.append(cleanup_complete)
+        state.cleanup_futures.append(cleanup_complete)
         await original_await_cleanup(
             cleanup_complete,
             monotonic_clock=monotonic_clock,
@@ -109,14 +118,7 @@ def _run_cancelled_pump_with_captured_cleanup(
         "_await_native_pump_cleanup",
         capture_cleanup_future,
     )
-    asyncio.run(
-        _cancel_pump_with_failing_restore(
-            worker_started,
-            worker_finished,
-            release,
-            cleanup_futures,
-        )
-    )
+    asyncio.run(_cancel_pump_with_failing_restore(state))
 
 
 def test_cancellation_settles_when_descriptor_restore_fails(
@@ -124,19 +126,10 @@ def test_cancellation_settles_when_descriptor_restore_fails(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A failed descriptor restore cannot strand a cancelled native pump."""
-    worker_started = threading.Event()
-    worker_finished = threading.Event()
-    release = threading.Event()
-    cleanup_futures: list[asyncio.Future[None]] = []
+    state = _CancellationState()
 
     with caplog.at_level(logging.DEBUG, logger=_pipeline_streams.__name__):
-        _run_cancelled_pump_with_captured_cleanup(
-            monkeypatch,
-            worker_started,
-            worker_finished,
-            release,
-            cleanup_futures,
-        )
+        _run_cancelled_pump_with_captured_cleanup(monkeypatch, state)
 
     teardown_records = [
         record
