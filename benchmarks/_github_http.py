@@ -55,7 +55,7 @@ def _require_type[T](value: object, expected_type: type[T], *, name: str) -> T:
 
 def _redirect_request_arguments(
     args: tuple[object, ...],
-    kwargs: dict[str, object],
+    kwargs: cabc.Mapping[str, object],
 ) -> _RedirectRequestArguments:
     """Normalize the positional and keyword forms supported by urllib."""
     bound_arguments = _REDIRECT_ARGUMENT_SIGNATURE.bind(*args, **kwargs).arguments
