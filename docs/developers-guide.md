@@ -727,6 +727,8 @@ interpreters therefore confirm the contracts rather than skipping them.
 
 Pipeline byte movement is split so each module has one reason to change:
 
+Table 1: pipeline stream modules and their responsibilities
+
 | Module                        | Owns                                               |
 | ----------------------------- | -------------------------------------------------- |
 | `_pipeline_streams.py`        | Backend choice and the Python/Rust pump dispatch   |
@@ -829,6 +831,8 @@ break already-registered `MetricsHook` instances that match that closed set.
 `observe_pump` registers synchronous hooks in a `ContextVar`, and
 `PumpMetricsHook` maps the events to bounded counters and a cleanup-duration
 histogram:
+
+Table 1: metrics emitted by `PumpMetricsHook`
 
 | Metric                                       | Labels   |
 | -------------------------------------------- | -------- |
