@@ -33,8 +33,12 @@ from __future__ import annotations
 import dataclasses as dc
 import json
 import logging
+import os
+import pathlib as pth
 import statistics
+import tempfile
 import typing as typ
+from types import MappingProxyType
 
 from benchmarks._validation import (
     _require_list,
@@ -47,7 +51,6 @@ from benchmarks.benchmark_profile import require_worker_iterations
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    import pathlib as pth
 
 _logger = logging.getLogger(__name__)
 
@@ -70,16 +73,20 @@ _MAD_TO_SIGMA = 1.4826
 #: Widest band the observed spread may open. A window noisier than this is
 #: telling you the benchmark cannot measure what it gates on, and a band that
 #: kept widening with the noise would disable the ratchet silently rather
-#: than say so. At the cap a candidate twice the median still fails.
+#: than say so. At the cap a candidate exactly twice the median passes; only
+#: a candidate strictly slower than twice the median fails.
 MAX_NOISE_TOLERANCE = 1.0
 
-#: Schema version of the history payload, so a later shape change can be
-#: detected rather than misread. An unrecognized schema is treated as no
-#: history at all, which degrades to the previous single-sample behaviour.
+#: Schema version of the history payload, so a later shape change is rejected
+#: rather than misread as an empty history and silently degrading the ratchet.
 HISTORY_SCHEMA = 1
 
 #: Fewest samples that can exhibit a spread. One measurement has none.
 _MIN_SPREAD_SAMPLES = 2
+
+
+class BaselineHistoryReadError(ValueError):
+    """A persisted baseline-history payload could not be read or validated."""
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -126,6 +133,20 @@ class HistorySample:
     benchmark_profile_version: str
     worker_iterations: int
     ratios: cabc.Mapping[str, float]
+
+    def __post_init__(self) -> None:
+        """Freeze a private copy so later caller mutation cannot change a sample."""
+        object.__setattr__(self, "ratios", MappingProxyType(dict(self.ratios)))
+
+    def __hash__(self) -> int:
+        """Hash the immutable mapping by its stable items rather than its proxy."""
+        return hash((
+            self.commit,
+            self.run_id,
+            self.benchmark_profile_version,
+            self.worker_iterations,
+            tuple(sorted(self.ratios.items())),
+        ))
 
     def as_dict(self) -> dict[str, object]:
         """Serialize the sample for JSON output."""
@@ -174,7 +195,7 @@ class BaselineHistory:
 
     @property
     def scenarios(self) -> frozenset[str]:
-        """Return the scenarios the newest sample measured.
+        """Scenarios the newest sample measured.
 
         The newest sample defines the expected shape: a scenario added last
         week should be compared as soon as it has samples, and one removed
@@ -244,25 +265,11 @@ class BaselineHistory:
 
 
 def history_from_payload(payload: cabc.Mapping[str, object]) -> BaselineHistory:
-    """Build a `BaselineHistory` from its JSON payload.
-
-    An unrecognized schema yields an empty history rather than an error: the
-    ratchet then falls back to the single-sample baseline, which is a
-    degraded bar but still a working one.
-
-    Returns
-    -------
-    BaselineHistory
-        The decoded history, or an empty one for an unknown schema.
-    """
+    """Build a `BaselineHistory` from a recognized, validated JSON payload."""
     schema = payload.get("schema")
     if schema != HISTORY_SCHEMA:
-        _logger.warning(
-            "ignoring baseline history with unrecognized schema %r (expected %r)",
-            schema,
-            HISTORY_SCHEMA,
-        )
-        return BaselineHistory()
+        msg = f"baseline history schema must be {HISTORY_SCHEMA!r}, got {schema!r}"
+        raise BaselineHistoryReadError(msg)
     samples = _require_list(payload.get("samples"), name="samples")
     return BaselineHistory(
         samples=tuple(
@@ -272,38 +279,43 @@ def history_from_payload(payload: cabc.Mapping[str, object]) -> BaselineHistory:
     )
 
 
-def load_history(path: pth.Path | None) -> BaselineHistory:
-    """Load a history file, treating an absent or unreadable one as empty.
-
-    A missing history is the ordinary state on the first run after this
-    landed, and on any run whose predecessor's artefact has expired. Neither
-    should fail the job.
-
-    Returns
-    -------
-    BaselineHistory
-        The decoded file contents, or an empty history when unavailable.
-    """
-    if path is None or not path.is_file():
-        return BaselineHistory()
+def load_history(path: pth.Path) -> BaselineHistory:
+    """Load a baseline-history file, raising `BaselineHistoryReadError` on failure."""
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        _logger.warning("ignoring unreadable baseline history %s: %s", path, exc)
-        return BaselineHistory()
+        msg = f"could not read baseline history {path}: {exc}"
+        raise BaselineHistoryReadError(msg) from exc
     if not isinstance(payload, dict):
-        _logger.warning("ignoring baseline history %s: not a JSON object", path)
-        return BaselineHistory()
-    return history_from_payload(typ.cast("dict[str, object]", payload))
+        msg = f"baseline history {path} must contain a JSON object"
+        raise BaselineHistoryReadError(msg)
+    try:
+        return history_from_payload(typ.cast("dict[str, object]", payload))
+    except (TypeError, ValueError) as exc:
+        if isinstance(exc, BaselineHistoryReadError):
+            raise
+        msg = f"invalid baseline history {path}: {exc}"
+        raise BaselineHistoryReadError(msg) from exc
 
 
 def write_history(*, history: BaselineHistory, output_path: pth.Path) -> None:
-    """Write the history payload to ``output_path``."""
+    """Atomically replace ``output_path`` with the serialized history payload."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(history.as_dict(), indent=2, sort_keys=True),
+    with tempfile.NamedTemporaryFile(
+        mode="w",
         encoding="utf-8",
-    )
+        dir=output_path.parent,
+        prefix=f".{output_path.name}.",
+        delete=False,
+    ) as temporary:
+        temporary.write(json.dumps(history.as_dict(), indent=2, sort_keys=True))
+        temporary.flush()
+        os.fsync(temporary.fileno())
+        temporary_path = pth.Path(temporary.name)
+    try:
+        temporary_path.replace(output_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def median_ratio(values: cabc.Sequence[float]) -> float:

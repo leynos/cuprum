@@ -37,12 +37,12 @@ class ScenarioComparison:
 
     @property
     def effective_threshold(self) -> float:
-        """Return the threshold this scenario is actually judged against."""
+        """Threshold this scenario is actually judged against."""
         return max(self.max_regression, self.noise_tolerance)
 
     @property
     def is_regression(self) -> bool:
-        """Return ``True`` when scenario regression exceeds threshold."""
+        """Whether scenario regression exceeds the threshold."""
         return (self.regression_ratio - self.effective_threshold) > _FLOAT_TOLERANCE
 
     def as_dict(self) -> dict[str, object]:
@@ -75,7 +75,7 @@ class ComparisonReport:
 
     @property
     def baseline_sample_count(self) -> int:
-        """Return the smallest window any compared scenario was judged against.
+        """Smallest window any compared scenario was judged against.
 
         Reported so a surprising verdict can be read against the evidence
         behind it: one sample is the old, noise-sensitive bar, and a full
@@ -87,24 +87,24 @@ class ComparisonReport:
 
     @property
     def passed(self) -> bool:
-        """Return ``True`` when no scenario breaches the configured threshold."""
+        """Whether no scenario breaches the configured threshold."""
         return all(not comparison.is_regression for comparison in self.comparisons)
 
     @property
     def regressions(self) -> tuple[ScenarioComparison, ...]:
-        """Return comparisons that breached the regression threshold."""
+        """Comparisons that breached the regression threshold."""
         return tuple(
             comparison for comparison in self.comparisons if comparison.is_regression
         )
 
     @property
     def rust_scenarios_compared(self) -> int:
-        """Return the number of Rust scenarios included in the comparison."""
+        """Number of Rust scenarios included in the comparison."""
         return len(self.comparisons)
 
     @property
     def worst_regression_ratio(self) -> float:
-        """Return the worst regression ratio across all compared scenarios."""
+        """Worst regression ratio across all compared scenarios."""
         if not self.comparisons:
             return 0.0
         return max(comparison.regression_ratio for comparison in self.comparisons)

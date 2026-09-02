@@ -943,12 +943,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # paths-filter reads pull-request changed files through GitHub's API.
       pull-requests: read
     outputs:
       bench: ${{ steps.filter.outputs.bench }}
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          persist-credentials: false
 
       - name: Detect performance-relevant changes
         id: filter
@@ -1351,13 +1354,26 @@ jobs:
             ${{ runner.temp }}/benchmark-ratchet/**/*.json
             ${{ runner.temp }}/benchmark-ratchet/**/*.md
 
+      - name: Check candidate benchmark artefacts
+        id: candidate-artefacts
+        if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        shell: bash
+        run: |
+          artifact_dir="${RUNNER_TEMP}/benchmark-ratchet"
+          if [[ -f "${artifact_dir}/candidate-plan.json" ]] && \
+             [[ -f "${artifact_dir}/candidate-throughput.json" ]]; then
+            echo "available=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "available=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       # Records what this run measured, pass or fail. A window fed only by
       # passing runs is a window of low-biased samples: a measurement faster
       # than the bar is always accepted, while the slower measurements that
       # would correct it are the ones rejected. `!cancelled()` rather than
       # `always()` so an interrupted, half-measured run records nothing.
       - name: Record this run's benchmark sample
-        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.candidate-artefacts.outputs.available == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1372,7 +1388,7 @@ jobs:
             --output "${artifact_dir}/main-baseline-history.json"
 
       - name: Upload main benchmark baseline artifact
-        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.candidate-artefacts.outputs.available == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: benchmark-ratchet-main-baseline

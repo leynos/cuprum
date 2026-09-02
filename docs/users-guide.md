@@ -2160,8 +2160,10 @@ The continuous integration (CI) workflows run the following checks:
   - It benchmarks the current checkout in smoke mode with a release build of
     the Rust extension.
   - It compares each scenario's within-run `rust_mean / python_mean` ratio
-    against the latest successful `main` baseline artefact when one exists, so
-    runner-speed differences between CI jobs cancel out.
+    against compatible rolling history from completed `main` runs when it is
+    available, including runs whose own ratchet failed. If no compatible
+    history exists, it falls back to the latest completed `main` baseline
+    artefact, so runner-speed differences between CI jobs cancel out.
   - It places matched Python/Rust commands next to each other and measures each
     command ten times to reduce temporal runner drift and outlier sensitivity.
   - It drops recorded samples that use an older benchmark profile shape,
@@ -2187,17 +2189,18 @@ The continuous integration (CI) workflows run the following checks:
     the latest one, so a single noisy measurement cannot become the bar.
   - It fails when a scenario pair's
     `(candidate_ratio - baseline_ratio) / baseline_ratio` exceeds both `0.30`
-    and the spread those same samples exhibited, where each ratio is
-    `rust_mean / python_mean` from the same benchmark run. Requiring both
-    keeps a runner-to-runner swing from reading as a regression without
-    letting a consistent slowdown through.
+    and a noise band calculated as `3 * 1.4826 * MAD` from those same samples,
+    expressed relative to their median and capped at `1.00`. Each ratio is
+    `rust_mean / python_mean` from the same benchmark run. Requiring both keeps
+    a runner-to-runner swing from reading as a regression without letting a
+    consistent slowdown through.
   - When a scenario is flagged, it measures again in the same job and fails
     only if the same scenario is flagged twice, so an unlucky runner does not
     fail a change a re-run would have passed. The second benchmark runs only
     on a job that was about to fail.
-  - Every push to `main` records its sample, including runs whose own ratchet
-    failed. If you re-run a failing benchmark job, note that a re-run cannot
-    change the bar: the window only moves when `main` moves.
+  - Every non-cancelled completed `main` run records its sample, including runs
+    whose own ratchet failed. A re-run of a failing benchmark job cannot change
+    the bar: the window only moves when `main` moves.
 
 The workflow summary table is derived from the filtered candidate smoke plan
 and throughput JSON. Rows are matched by the shared scenario label (

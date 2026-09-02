@@ -25,15 +25,22 @@ if typ.TYPE_CHECKING:
 # This literal pins the parser's own ``description``, which is deliberately
 # decoupled from the module docstring so ``--help`` stays a single line.
 EXPECTED_HELP_DESCRIPTION = (
-    "Download the latest successful `main` benchmark baseline artefact."
+    "Download the latest `main` benchmark baseline artefact matching --run-status."
 )
 EXPECTED_CLI_OPTIONS = (
     ("--repository", "GitHub repository in owner/name form."),
     ("--workflow", "Workflow file name or workflow identifier."),
-    ("--artifact-name", "Artefact name to download from the latest successful run."),
+    (
+        "--artifact-name",
+        "Artefact name to download from the latest run matching --run-status.",
+    ),
     ("--output-dir", "Directory that receives the extracted artefact files."),
-    ("--branch", "Branch to query for successful workflow runs."),
-    ("--event", "Workflow event to query for successful runs."),
+    ("--branch", "Branch to query for workflow runs matching --run-status."),
+    ("--event", "Workflow event to query for runs matching --run-status."),
+    (
+        "--run-status",
+        "GitHub run-status filter; use 'completed' for measurement artefacts.",
+    ),
     ("--token-env", "Environment variable containing the GitHub token."),
 )
 REQUIRED_CLI_OPTIONS = ("--repository", "--workflow", "--artifact-name", "--output-dir")
@@ -41,8 +48,8 @@ ARGUMENT_ERROR_EXIT_CODE = 2
 
 
 def _unwrapped(text: str) -> str:
-    """Collapse runs of whitespace so assertions survive argparse rewrapping."""
-    return " ".join(text.split())
+    """Normalize argparse wrapping, including a split long-option spelling."""
+    return " ".join(text.split()).replace("--run- status", "--run-status")
 
 
 def test_cli_help_documents_every_option(

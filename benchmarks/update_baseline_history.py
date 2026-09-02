@@ -24,11 +24,13 @@ import typing as typ
 from benchmarks.benchmark_profile import IncompatibleBenchmarkProfileError
 from benchmarks.ratchet_history import (
     DEFAULT_WINDOW_SIZE,
+    BaselineHistory,
+    BaselineHistoryReadError,
     HistorySample,
     load_history,
     write_history,
 )
-from benchmarks.ratchet_rust_performance import (
+from benchmarks.ratchet_ratios import (
     load_plan,
     load_throughput,
     profile_metadata,
@@ -124,6 +126,14 @@ def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _load_history_or_empty(path: pth.Path | None) -> BaselineHistory:
+    """Load an optional history, treating only its intentional absence as empty."""
+    if path is None or not path.is_file():
+        _logger.info("no baseline history is available; starting a new window")
+        return BaselineHistory()
+    return load_history(path)
+
+
 def main(argv: cabc.Sequence[str] | None = None) -> int:
     """Append this run's sample to the history and return an exit code."""
     logging.basicConfig(
@@ -131,7 +141,11 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
         format="%(levelname)s %(name)s: %(message)s",
     )
     args = _parse_args(argv)
-    history = load_history(args.history)
+    try:
+        history = _load_history_or_empty(args.history)
+    except BaselineHistoryReadError:
+        _logger.exception("failed to load baseline history")
+        return 2
     sample = _candidate_sample(
         plan_path=args.candidate_plan,
         throughput_path=args.candidate_throughput,

@@ -157,6 +157,30 @@ def test_an_unusable_confirmation_leaves_the_first_verdict_standing() -> None:
     assert _names(combined["confirmed_regressions"]) == ["medium-single-nocb"]
 
 
+@pytest.mark.parametrize(
+    "confirmation",
+    [
+        pytest.param({}, id="empty"),
+        pytest.param({"comparison_performed": True}, id="missing-evidence"),
+        pytest.param(
+            {"comparison_performed": True, "comparisons": []},
+            id="empty-evidence",
+        ),
+    ],
+)
+def test_an_incomplete_confirmation_leaves_the_primary_verdict_standing(
+    confirmation: dict[str, object],
+) -> None:
+    """Missing comparison evidence must not implicitly clear a regression."""
+    combined = confirm_regressions(
+        primary=_report("medium-single-nocb"),
+        confirmation=confirmation,
+    )
+
+    assert combined["passed"] is False
+    assert _names(combined["confirmed_regressions"]) == ["medium-single-nocb"]
+
+
 def test_the_combined_report_keeps_the_shape_its_consumers_read() -> None:
     """The workflow summary reads this file; it must stay readable.
 

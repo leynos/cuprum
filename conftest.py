@@ -29,14 +29,41 @@ from tests.helpers.extension_requirement import (
 from tests.helpers.workflow import (
     Workflow,
     filter_paths,
-    parse_workflow,
-    read_workflow_source,
+    workflow,
 )
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
 
 
+"""Shared pytest fixtures for workflow contract and optional Rust stream tests.
+The ``workflow_data`` fixture parses the checked-in
+``.github/workflows/ci.yml`` model, while ``filter_path_patterns`` exposes its
+benchmark filter paths for workflow contract and behaviour tests.
+Use these fixtures to access optional backends without repeating availability
+checks in each test module.
+Example
+-------
+def test_pumps_bytes(rust_streams):
+    rust_streams.rust_pump_stream(reader_fd, writer_fd)
+"""
+if typ.TYPE_CHECKING:
+    from types import ModuleType
+
+
+"""Shared pytest fixtures for workflow contract and optional Rust stream tests.
+The ``workflow_data`` fixture parses the checked-in
+``.github/workflows/ci.yml`` model, while ``filter_path_patterns`` exposes its
+benchmark filter paths for workflow contract and behaviour tests.
+Use these fixtures to access optional backends without repeating availability
+checks in each test module.
+Example
+-------
+def test_pumps_bytes(rust_streams):
+    rust_streams.rust_pump_stream(reader_fd, writer_fd)
+"""
+if typ.TYPE_CHECKING:
+    from types import ModuleType
 """Shared pytest fixtures for workflow contract and optional Rust stream tests.
 The ``workflow_data`` fixture parses the checked-in
 ``.github/workflows/ci.yml`` model, while ``filter_path_patterns`` exposes its
@@ -173,7 +200,7 @@ def workflow_data() -> Workflow:
     Workflow
         Parsed ``ci.yml`` model shared by workflow contract tests.
     """
-    return parse_workflow(read_workflow_source())
+    return workflow()
 
 
 @pytest.fixture(scope="session")
@@ -190,4 +217,5 @@ def filter_path_patterns(workflow_data: Workflow) -> frozenset[str]:
     frozenset[str]
         Performance-relevant filter patterns in declaration order.
     """
-    return filter_paths(workflow_data)
+    del workflow_data
+    return filter_paths()

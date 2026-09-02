@@ -1593,18 +1593,18 @@ Both properties are fixed, and both fixes are needed:
 - The window's **median** is the bar, so one sample cannot be it. The spread
   of those samples then widens the threshold: a candidate must exceed both
   the flat 0.30 and three estimated standard deviations of the observed
-  spread. The estimate comes from the median absolute deviation, because the
-  outlier being tolerated barely moves it but would inflate a standard
-  deviation in proportion to itself. The band is capped at 1.00 — past that
-  the benchmark is telling you it cannot measure what it gates on, and an
-  uncapped band would disable the ratchet silently instead of saying so.
-- **Every completed `main` run records its sample and publishes the
-  artefact**, whichever way its own ratchet went. That is why the recording
-  and upload steps are gated on `!cancelled()` rather than on success, and
-  why the fetch passes `--run-status completed`: publishing from a failing
-  run achieves nothing while the fetch still asks GitHub only for successful
-  ones. `!cancelled()` rather than `always()`, so an interrupted run does not
-  record a half-finished measurement.
+  spread. The estimate is `3 * 1.4826 * MAD` relative to the median, because
+  the outlier being tolerated barely moves the median absolute deviation but
+  would inflate a standard deviation in proportion to itself. The band is
+  capped at 1.00 — past that the benchmark is telling you it cannot measure
+  what it gates on, and an uncapped band would disable the ratchet silently
+  instead of saying so.
+- **Every non-cancelled completed `main` run records its sample and publishes
+  the artefact**, whichever way its own ratchet went. That is why the
+  recording and upload steps are gated on `!cancelled()` rather than on
+  success, and why the fetch passes `--run-status completed`: a run that
+  failed its own ratchet is still part of the compatible history. A cancelled
+  run records no half-finished measurement.
 
 The window makes the *bar* robust to one noisy run. It cannot make the
 *candidate* robust: a pull request is measured once, on whichever runner CI
@@ -1643,10 +1643,10 @@ but the ratchet measures drift from recent `main`, not from a fixed point.
 
 Samples are pruned to those sharing the candidate's `benchmark_profile_version`
 and `worker_iterations`. A window emptied that way, or absent on a first run
-or after the artefact expires, falls back to comparing against the single
-latest `main` run — the pre-window bar, reported in `ratchet-report.json` as
-`baseline_sample_count: 1` so a surprising verdict can be read against the
-evidence behind it.
+or after the artefact expires, falls back to comparing against the latest
+completed `main` baseline artefact as a single sample — the pre-window bar,
+reported in `ratchet-report.json` as `baseline_sample_count: 1` so a
+surprising verdict can be read against the evidence behind it.
 
 ## Profiling harness overview
 

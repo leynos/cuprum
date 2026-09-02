@@ -26,6 +26,7 @@ from benchmarks.ratchet_history import (
     DEFAULT_WINDOW_SIZE,
     MAX_NOISE_TOLERANCE,
     BaselineHistory,
+    BaselineHistoryReadError,
     HistorySample,
     RatchetPolicy,
     history_from_payload,
@@ -93,14 +94,21 @@ def _run(*, ratios: cabc.Mapping[str, float], context_name: str) -> BenchmarkRun
     scenarios: list[dict[str, object]] = []
     results: list[dict[str, object]] = []
     for scenario, ratio in sorted(ratios.items()):
-        scenarios.extend((
-            {"name": f"python-{scenario}", "backend": "python"},
-            {"name": f"rust-{scenario}", "backend": "rust"},
-        ))
-        results.extend((
-            {"command": f"python-{scenario}", "mean": 1.0},
-            {"command": f"rust-{scenario}", "mean": ratio},
-        ))
+        python_scenario: dict[str, object] = {
+            "name": f"python-{scenario}",
+            "backend": "python",
+        }
+        rust_scenario: dict[str, object] = {
+            "name": f"rust-{scenario}",
+            "backend": "rust",
+        }
+        scenarios.extend((python_scenario, rust_scenario))
+        python_result: dict[str, object] = {
+            "command": f"python-{scenario}",
+            "mean": 1.0,
+        }
+        rust_result: dict[str, object] = {"command": f"rust-{scenario}", "mean": ratio}
+        results.extend((python_result, rust_result))
     return BenchmarkRunPayload(
         plan={
             "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
@@ -130,8 +138,8 @@ def _verdict(
 # -- The incident --------------------------------------------------------------
 
 
-def test_one_noisy_main_sample_fails_the_next_pull_request() -> None:
-    """A single-sample baseline reproduces the failure being fixed.
+def _test_one_noisy_main_sample_fails_the_next_pull_request() -> None:
+    """Verify a single-sample baseline reproduces the failure being fixed.
 
     Kept as the control: without it, the test below could pass because the
     numbers are benign rather than because the window did anything.
@@ -144,8 +152,8 @@ def test_one_noisy_main_sample_fails_the_next_pull_request() -> None:
     )
 
 
-def test_the_window_absorbs_one_noisy_main_sample() -> None:
-    """The same candidate passes once the outlier is one sample among many."""
+def _test_the_window_absorbs_one_noisy_main_sample() -> None:
+    """Verify the candidate passes once the outlier is one sample among many."""
     history = _history(*TYPICAL_RATIOS, OUTLIER_RATIO)
 
     assert _verdict(candidate_ratio=CANDIDATE_RATIO, history=history), (
@@ -155,7 +163,7 @@ def test_the_window_absorbs_one_noisy_main_sample() -> None:
     )
 
 
-def test_a_real_regression_still_fails_against_a_noisy_window() -> None:
+def _test_a_real_regression_still_fails_against_a_noisy_window() -> None:
     """Tolerating noise must not mean tolerating a doubling."""
     history = _history(*TYPICAL_RATIOS, OUTLIER_RATIO)
 
@@ -165,8 +173,8 @@ def test_a_real_regression_still_fails_against_a_noisy_window() -> None:
     )
 
 
-def test_a_sustained_regression_fails_before_it_enters_the_window() -> None:
-    """A first regressed measurement fails while the window is still clean."""
+def _test_a_sustained_regression_fails_before_it_enters_the_window() -> None:
+    """Verify a first regressed measurement fails while the window is clean."""
     history = _history(*TYPICAL_RATIOS)
 
     assert not _verdict(candidate_ratio=1.60, history=history), (
@@ -175,11 +183,28 @@ def test_a_sustained_regression_fails_before_it_enters_the_window() -> None:
     )
 
 
+class TestIncident:
+    """The outlier incident the rolling window must prevent."""
+
+    test_one_noisy_main_sample_fails_the_next_pull_request = staticmethod(
+        _test_one_noisy_main_sample_fails_the_next_pull_request
+    )
+    test_the_window_absorbs_one_noisy_main_sample = staticmethod(
+        _test_the_window_absorbs_one_noisy_main_sample
+    )
+    test_a_real_regression_still_fails_against_a_noisy_window = staticmethod(
+        _test_a_real_regression_still_fails_against_a_noisy_window
+    )
+    test_a_sustained_regression_fails_before_it_enters_the_window = staticmethod(
+        _test_a_sustained_regression_fails_before_it_enters_the_window
+    )
+
+
 # -- Threshold composition -----------------------------------------------------
 
 
-def test_the_flat_threshold_still_applies_to_a_wide_window() -> None:
-    """The noise band widens the threshold; it never narrows it."""
+def _test_the_flat_threshold_still_applies_to_a_wide_window() -> None:
+    """Verify the noise band widens the threshold without narrowing it."""
     report = compare_rust_regressions(
         candidate=_run(ratios={SCENARIO: 1.0}, context_name="candidate"),
         history=_history(1.0, 1.0, 1.0),
@@ -196,8 +221,8 @@ def test_the_flat_threshold_still_applies_to_a_wide_window() -> None:
     )
 
 
-def test_the_observed_spread_can_widen_the_threshold() -> None:
-    """A window that disagrees with itself must tolerate more, not less.
+def _test_the_observed_spread_can_widen_the_threshold() -> None:
+    """Verify a window that disagrees with itself tolerates more, not less.
 
     The flat 30% alone would fail this candidate; the samples it is judged
     against span a far wider range than that, so the measurement cannot
@@ -219,8 +244,31 @@ def test_the_observed_spread_can_widen_the_threshold() -> None:
     assert report.passed
 
 
-def test_a_pathological_window_cannot_disable_the_ratchet() -> None:
-    """The noise band is capped, so a hopeless window fails loudly, not open."""
+def _test_the_mad_noise_band_is_serialized_with_its_exact_threshold() -> None:
+    """Verify the report exposes the scaled-MAD calculation behind its verdict."""
+    history = _history(1.0, 2.0, 3.0)
+    report = compare_rust_regressions(
+        candidate=_run(ratios={SCENARIO: 3.4}, context_name="candidate"),
+        history=history,
+        policy=RatchetPolicy(max_regression=0.30, noise_sigmas=1.0),
+    )
+    comparison = report.comparisons[0].as_dict()
+
+    assert median_ratio(history.ratios_for(SCENARIO)) == pytest.approx(2.0)
+    assert noise_tolerance(history.ratios_for(SCENARIO), sigmas=1.0) == pytest.approx(
+        1.4826 / 2.0
+    )
+    assert comparison["noise_tolerance"] == pytest.approx(1.4826 / 2.0)
+    assert comparison["effective_threshold"] == pytest.approx(1.4826 / 2.0)
+
+
+def _test_the_mad_noise_band_caps_at_one() -> None:
+    """Verify a very wide window cannot silently disable the ratchet."""
+    assert noise_tolerance([1.0, 2.0, 3.0], sigmas=3.0) == pytest.approx(1.0)
+
+
+def _test_a_pathological_window_cannot_disable_the_ratchet() -> None:
+    """Verify the capped noise band still rejects a hopeless measurement."""
     history = _history(0.5, 3.0, 0.6, 2.8)
     report = compare_rust_regressions(
         candidate=_run(ratios={SCENARIO: 20.0}, context_name="candidate"),
@@ -236,8 +284,8 @@ def test_a_pathological_window_cannot_disable_the_ratchet() -> None:
     )
 
 
-def test_a_single_sample_window_reports_its_own_weakness() -> None:
-    """A one-sample comparison must say so in the report.
+def _test_a_single_sample_window_reports_its_own_weakness() -> None:
+    """Verify a one-sample comparison says so in the report.
 
     A surprising verdict has to be readable against the evidence behind it,
     and one sample is the old, noise-sensitive bar.
@@ -252,7 +300,7 @@ def test_a_single_sample_window_reports_its_own_weakness() -> None:
     assert report.as_dict()["baseline_sample_count"] == 1
 
 
-def test_noise_sigmas_zero_judges_on_the_flat_threshold_alone() -> None:
+def _test_noise_sigmas_zero_judges_on_the_flat_threshold_alone() -> None:
     """`--noise-sigmas 0` must restore the pre-window decision rule."""
     history = _history(*TYPICAL_RATIOS, OUTLIER_RATIO)
     report = compare_rust_regressions(
@@ -264,11 +312,37 @@ def test_noise_sigmas_zero_judges_on_the_flat_threshold_alone() -> None:
     assert report.comparisons[0].noise_tolerance == pytest.approx(0.0)
 
 
+class TestThresholdComposition:
+    """The flat and observed-noise thresholds compose without failing open."""
+
+    test_the_flat_threshold_still_applies_to_a_wide_window = staticmethod(
+        _test_the_flat_threshold_still_applies_to_a_wide_window
+    )
+    test_the_observed_spread_can_widen_the_threshold = staticmethod(
+        _test_the_observed_spread_can_widen_the_threshold
+    )
+    test_the_mad_noise_band_is_serialized_with_its_exact_threshold = staticmethod(
+        _test_the_mad_noise_band_is_serialized_with_its_exact_threshold
+    )
+    test_the_mad_noise_band_caps_at_one = staticmethod(
+        _test_the_mad_noise_band_caps_at_one
+    )
+    test_a_pathological_window_cannot_disable_the_ratchet = staticmethod(
+        _test_a_pathological_window_cannot_disable_the_ratchet
+    )
+    test_a_single_sample_window_reports_its_own_weakness = staticmethod(
+        _test_a_single_sample_window_reports_its_own_weakness
+    )
+    test_noise_sigmas_zero_judges_on_the_flat_threshold_alone = staticmethod(
+        _test_noise_sigmas_zero_judges_on_the_flat_threshold_alone
+    )
+
+
 # -- Window mechanics ----------------------------------------------------------
 
 
-def test_the_window_keeps_only_the_most_recent_samples() -> None:
-    """Appending past the window drops the oldest sample, not the newest."""
+def _test_the_window_keeps_only_the_most_recent_samples() -> None:
+    """Verify appending past the window drops the oldest sample."""
     history = _history(1.0, 2.0, 3.0)
 
     updated = history.appended(_sample(4.0, run_id="new"), window_size=3)
@@ -276,14 +350,14 @@ def test_the_window_keeps_only_the_most_recent_samples() -> None:
     assert [sample.ratios[SCENARIO] for sample in updated.samples] == [2.0, 3.0, 4.0]
 
 
-def test_appending_rejects_a_window_smaller_than_one() -> None:
-    """A zero-length window would silently discard every sample."""
+def _test_appending_rejects_a_window_smaller_than_one() -> None:
+    """Verify a zero-length window is rejected before discarding samples."""
     with pytest.raises(ValueError, match="window_size must be >= 1"):
         BaselineHistory().appended(_sample(1.0), window_size=0)
 
 
-def test_samples_from_an_older_profile_are_pruned() -> None:
-    """A different sampling protocol measures a different question."""
+def _test_samples_from_an_older_profile_are_pruned() -> None:
+    """Verify a different sampling protocol records a different question."""
     history = BaselineHistory(
         samples=(
             _sample(1.0, profile_version="pipeline-worker-release-ratio-v2"),
@@ -300,8 +374,8 @@ def test_samples_from_an_older_profile_are_pruned() -> None:
     assert [sample.ratios[SCENARIO] for sample in kept.samples] == [1.2]
 
 
-def test_an_empty_window_falls_back_to_the_single_sample_baseline() -> None:
-    """A profile change must degrade to the old bar, not to no bar at all."""
+def _test_an_empty_window_falls_back_to_the_single_sample_baseline() -> None:
+    """Verify a profile change falls back to the old bar, not no bar."""
     history = _history(0.5).compatible_with(
         benchmark_profile_version="pipeline-worker-release-ratio-v2",
         worker_iterations=WORKER_ITERATIONS,
@@ -319,7 +393,7 @@ def test_an_empty_window_falls_back_to_the_single_sample_baseline() -> None:
     )
 
 
-def test_comparison_requires_some_baseline() -> None:
+def _test_comparison_requires_some_baseline() -> None:
     """Neither a window nor a baseline is a programming error, not a pass."""
     with pytest.raises(ValueError, match="baseline run or a non-empty baseline"):
         compare_rust_regressions(
@@ -329,8 +403,8 @@ def test_comparison_requires_some_baseline() -> None:
         )
 
 
-def test_the_window_expects_the_newest_sample_s_scenarios() -> None:
-    """A scenario the newest sample lacks must not be demanded of candidates."""
+def _test_the_window_expects_the_newest_sample_s_scenarios() -> None:
+    """Verify candidates need not report a scenario the newest sample lacks."""
     history = BaselineHistory(
         samples=(
             HistorySample(
@@ -349,11 +423,34 @@ def test_the_window_expects_the_newest_sample_s_scenarios() -> None:
     assert history.ratios_for("retired-scenario") == (1.0,)
 
 
+class TestWindowMechanics:
+    """The window retains comparable, recent benchmark evidence."""
+
+    test_the_window_keeps_only_the_most_recent_samples = staticmethod(
+        _test_the_window_keeps_only_the_most_recent_samples
+    )
+    test_appending_rejects_a_window_smaller_than_one = staticmethod(
+        _test_appending_rejects_a_window_smaller_than_one
+    )
+    test_samples_from_an_older_profile_are_pruned = staticmethod(
+        _test_samples_from_an_older_profile_are_pruned
+    )
+    test_an_empty_window_falls_back_to_the_single_sample_baseline = staticmethod(
+        _test_an_empty_window_falls_back_to_the_single_sample_baseline
+    )
+    test_comparison_requires_some_baseline = staticmethod(
+        _test_comparison_requires_some_baseline
+    )
+    test_the_window_expects_the_newest_sample_s_scenarios = staticmethod(
+        _test_the_window_expects_the_newest_sample_s_scenarios
+    )
+
+
 # -- Persistence ---------------------------------------------------------------
 
 
-def test_history_round_trips_through_json(tmp_path: pth.Path) -> None:
-    """A written window must read back identical."""
+def _test_history_round_trips_through_json(tmp_path: pth.Path) -> None:
+    """Verify a written window reads back identically."""
     history = _history(*TYPICAL_RATIOS)
     path = tmp_path / "main-baseline-history.json"
 
@@ -362,44 +459,110 @@ def test_history_round_trips_through_json(tmp_path: pth.Path) -> None:
     assert load_history(path) == history
 
 
-def test_an_absent_history_reads_as_empty(tmp_path: pth.Path) -> None:
-    """A first run, or an expired artefact, is not an error."""
-    assert load_history(tmp_path / "missing.json") == BaselineHistory()
-    assert load_history(None) == BaselineHistory()
+def _test_history_sample_copies_and_freezes_its_ratios() -> None:
+    """Verify a caller cannot mutate a sample through its input mapping."""
+    ratios = {SCENARIO: 1.0}
+    sample = _sample(1.0)
+    sample_from_ratios = HistorySample(
+        commit="0" * 40,
+        run_id="immutable",
+        benchmark_profile_version=BENCHMARK_PROFILE_VERSION,
+        worker_iterations=WORKER_ITERATIONS,
+        ratios=ratios,
+    )
+    ratios[SCENARIO] = 2.0
+
+    assert sample_from_ratios.ratios[SCENARIO] == pytest.approx(1.0)
+    with pytest.raises(TypeError):
+        typ.cast("dict[str, float]", sample_from_ratios.ratios)[SCENARIO] = 2.0
+    assert isinstance(hash(sample), int)
 
 
 @pytest.mark.parametrize(
     ("content", "reason"),
     [
-        ("not json at all", "unparsable"),
-        ('["not", "an", "object"]', "not a JSON object"),
-        ('{"schema": 99, "samples": []}', "unrecognized schema"),
+        ("not json at all", "could not read baseline history"),
+        ('["not", "an", "object"]', "must contain a JSON object"),
+        ('{"schema": 99, "samples": []}', "schema must be"),
     ],
 )
-def test_an_unusable_history_reads_as_empty(
+def _test_an_unusable_history_raises_a_typed_error(
     tmp_path: pth.Path, content: str, reason: str
 ) -> None:
-    """An unusable window degrades to the single-sample bar, not to a failure.
-
-    The ratchet's job is to report regressions; refusing to run because a
-    cached file is malformed reports nothing at all.
-    """
+    """Corrupt persisted state is distinct from an intentionally absent file."""
     path = tmp_path / "main-baseline-history.json"
     path.write_text(content, encoding="utf-8")
 
-    assert load_history(path) == BaselineHistory(), reason
+    with pytest.raises(BaselineHistoryReadError, match=reason):
+        load_history(path)
 
 
-def test_a_malformed_sample_is_an_error_not_a_silent_drop() -> None:
-    """A recognized schema with a broken sample must not be read as empty.
+def _test_a_malformed_sample_is_an_error_not_a_silent_drop() -> None:
+    """Verify a recognized schema with a broken sample is not read as empty.
 
     Skipping the sample would quietly narrow the window; the caller catches
     this and falls back with the reason logged.
     """
-    payload = json.loads('{"schema": 1, "samples": [{"commit": "abc"}]}')
+    payload = json.loads(
+        """{
+        "schema": 1,
+        "samples": [{
+            "commit": "abc",
+            "benchmark_profile_version": "profile",
+            "worker_iterations": 1,
+            "ratios": {"medium-single-nocb": 1.0}
+        }]
+        }"""
+    )
 
-    with pytest.raises((TypeError, ValueError)):
+    with pytest.raises(TypeError, match=r"samples\[0\]\.run_id"):
         history_from_payload(payload)
+
+
+def _test_a_failed_history_replacement_preserves_the_previous_file(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify failed publication cannot truncate the last complete history."""
+    path = tmp_path / "main-baseline-history.json"
+    existing = _history(1.0)
+    write_history(history=existing, output_path=path)
+
+    class _ReplaceError(OSError):
+        """A simulated failure replacing the published history."""
+
+    def _replace_fails(source: pth.Path, destination: pth.Path) -> None:
+        """Simulate a failure after the temporary history is fully written."""
+        del source, destination
+        raise _ReplaceError
+
+    monkeypatch.setattr(type(path), "replace", _replace_fails)
+
+    with pytest.raises(_ReplaceError):
+        write_history(history=_history(2.0), output_path=path)
+
+    assert load_history(path) == existing
+    assert not list(tmp_path.glob(".main-baseline-history.json.*"))
+
+
+class TestPersistence:
+    """Persisted history stays immutable, validated, and atomically replaceable."""
+
+    test_history_round_trips_through_json = staticmethod(
+        _test_history_round_trips_through_json
+    )
+    test_history_sample_copies_and_freezes_its_ratios = staticmethod(
+        _test_history_sample_copies_and_freezes_its_ratios
+    )
+    test_an_unusable_history_raises_a_typed_error = staticmethod(
+        _test_an_unusable_history_raises_a_typed_error
+    )
+    test_a_malformed_sample_is_an_error_not_a_silent_drop = staticmethod(
+        _test_a_malformed_sample_is_an_error_not_a_silent_drop
+    )
+    test_a_failed_history_replacement_preserves_the_previous_file = staticmethod(
+        _test_a_failed_history_replacement_preserves_the_previous_file
+    )
 
 
 # -- Properties ----------------------------------------------------------------
@@ -412,10 +575,10 @@ _RATIOS = st.floats(min_value=0.5, max_value=2.0, allow_nan=False, allow_infinit
     candidate=_RATIOS,
     max_regression=st.floats(min_value=0.0, max_value=1.0),
 )
-def test_the_effective_threshold_never_undercuts_the_flat_one(
+def _test_the_effective_threshold_never_undercuts_the_flat_one(
     values: list[float], candidate: float, max_regression: float
 ) -> None:
-    """Observed noise may only widen the bar.
+    """Verify observed noise can only widen the bar.
 
     A window that happened to be unusually consistent must not start failing
     changes the flat threshold would have allowed.
@@ -434,10 +597,10 @@ def test_the_effective_threshold_never_undercuts_the_flat_one(
     values=st.lists(_RATIOS, min_size=1, max_size=DEFAULT_WINDOW_SIZE),
     max_regression=st.floats(min_value=0.0, max_value=1.0),
 )
-def test_a_candidate_at_the_median_always_passes(
+def _test_a_candidate_at_the_median_always_passes(
     values: list[float], max_regression: float
 ) -> None:
-    """Measuring exactly what main measures is never a regression."""
+    """Verify measuring exactly what main measures is not a regression."""
     history = _history(*values)
     median = median_ratio(history.ratios_for(SCENARIO))
 
@@ -446,8 +609,8 @@ def test_a_candidate_at_the_median_always_passes(
     )
 
 
-def test_the_comparison_reads_no_more_than_the_window() -> None:
-    """A longer history must be truncated to the window, newest kept.
+def _test_the_comparison_reads_no_more_than_the_window() -> None:
+    """Verify a longer history is truncated to the newest window.
 
     The recorder prunes as it appends, so this only bites when a window is
     shortened or a hand-edited artefact is read — but it decides which
@@ -477,10 +640,10 @@ def test_the_comparison_reads_no_more_than_the_window() -> None:
         max_size=DEFAULT_WINDOW_SIZE - 1,
     ),
 )
-def test_one_arbitrary_sample_cannot_move_the_verdict(
+def _test_one_arbitrary_sample_cannot_move_the_verdict(
     typical: float, outlier: float, others: list[float]
 ) -> None:
-    """A majority of agreeing samples outvotes any single measurement.
+    """Verify a majority of agreeing samples outvotes one measurement.
 
     This is the property the incident violated: one sample *was* the bar, so
     one sample decided every subsequent pull request.
@@ -495,7 +658,7 @@ def test_one_arbitrary_sample_cannot_move_the_verdict(
 
 
 @given(values=st.lists(_RATIOS, min_size=2, max_size=9), sigmas=_RATIOS)
-def test_noise_tolerance_scales_with_the_requested_sigmas(
+def _test_noise_tolerance_scales_with_the_requested_sigmas(
     values: list[float], sigmas: float
 ) -> None:
     """Asking for a wider band must not produce a narrower one."""
@@ -505,7 +668,30 @@ def test_noise_tolerance_scales_with_the_requested_sigmas(
     assert wide >= narrow
 
 
-def test_noise_tolerance_needs_at_least_two_samples() -> None:
+def _test_noise_tolerance_needs_at_least_two_samples() -> None:
     """One measurement has no spread to estimate."""
     assert noise_tolerance([1.0], sigmas=DEFAULT_NOISE_SIGMAS) == pytest.approx(0.0)
     assert noise_tolerance([], sigmas=DEFAULT_NOISE_SIGMAS) == pytest.approx(0.0)
+
+
+class TestProperties:
+    """Properties that must hold across windows and candidate measurements."""
+
+    test_the_effective_threshold_never_undercuts_the_flat_one = staticmethod(
+        _test_the_effective_threshold_never_undercuts_the_flat_one
+    )
+    test_a_candidate_at_the_median_always_passes = staticmethod(
+        _test_a_candidate_at_the_median_always_passes
+    )
+    test_the_comparison_reads_no_more_than_the_window = staticmethod(
+        _test_the_comparison_reads_no_more_than_the_window
+    )
+    test_one_arbitrary_sample_cannot_move_the_verdict = staticmethod(
+        _test_one_arbitrary_sample_cannot_move_the_verdict
+    )
+    test_noise_tolerance_scales_with_the_requested_sigmas = staticmethod(
+        _test_noise_tolerance_scales_with_the_requested_sigmas
+    )
+    test_noise_tolerance_needs_at_least_two_samples = staticmethod(
+        _test_noise_tolerance_needs_at_least_two_samples
+    )

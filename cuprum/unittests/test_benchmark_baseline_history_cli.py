@@ -113,95 +113,90 @@ def _record(
     return record_sample(argv), output
 
 
-def test_a_completed_run_is_appended_with_its_provenance(tmp_path: pth.Path) -> None:
-    """The sample carries the commit and run that measured it."""
-    candidate = _write_candidate(tmp_path, ratio=1.25)
+class TestBaselineHistoryRecorder:
+    """The recorder's append and carry-forward contracts."""
 
-    exit_code, output = _record(tmp_path, candidate=candidate)
+    def test_a_completed_run_is_appended_with_its_provenance(
+        self, tmp_path: pth.Path
+    ) -> None:
+        """The sample carries the commit and run that measured it."""
+        candidate = _write_candidate(tmp_path, ratio=1.25)
 
-    assert exit_code == 0
-    recorded = load_history(output)
-    assert len(recorded.samples) == 1
-    sample = recorded.samples[0]
-    assert sample.ratios == {SCENARIO: pytest.approx(1.25)}
-    assert (sample.commit, sample.run_id) == ("abcdef1234", "987654")
+        exit_code, output = _record(tmp_path, candidate=candidate)
 
+        assert exit_code == 0
+        recorded = load_history(output)
+        assert len(recorded.samples) == 1
+        sample = recorded.samples[0]
+        assert sample.ratios == {SCENARIO: pytest.approx(1.25)}
+        assert (sample.commit, sample.run_id) == ("abcdef1234", "987654")
 
-def test_a_regressed_measurement_is_recorded_like_any_other(
-    tmp_path: pth.Path,
-) -> None:
-    """The recorder has no verdict to consult, and must not acquire one.
+    def test_a_regressed_measurement_is_recorded_like_any_other(
+        self, tmp_path: pth.Path
+    ) -> None:
+        """The recorder has no verdict to consult, and must not acquire one."""
+        history_path = tmp_path / "existing.json"
+        _existing_history(history_path, 1.0, 1.0, 1.0)
+        candidate = _write_candidate(tmp_path, ratio=9.0)
 
-    This is the half of the fix the statistics cannot supply: filtering
-    samples by whether their run passed is what biased the old baseline.
-    """
-    history_path = tmp_path / "existing.json"
-    _existing_history(history_path, 1.0, 1.0, 1.0)
-    candidate = _write_candidate(tmp_path, ratio=9.0)
+        _, output = _record(tmp_path, candidate=candidate, history=history_path)
 
-    _, output = _record(tmp_path, candidate=candidate, history=history_path)
-
-    assert load_history(output).ratios_for(SCENARIO) == (
-        pytest.approx(1.0),
-        pytest.approx(1.0),
-        pytest.approx(1.0),
-        pytest.approx(9.0),
-    )
-
-
-def test_the_window_is_pruned_to_its_size(tmp_path: pth.Path) -> None:
-    """Recording past the window drops the oldest sample."""
-    history_path = tmp_path / "existing.json"
-    _existing_history(history_path, 1.0, 2.0, 3.0)
-    candidate = _write_candidate(tmp_path, ratio=4.0)
-
-    _, output = _record(tmp_path, candidate=candidate, history=history_path, window=3)
-
-    assert load_history(output).ratios_for(SCENARIO) == (
-        pytest.approx(2.0),
-        pytest.approx(3.0),
-        pytest.approx(4.0),
-    )
-
-
-@pytest.mark.parametrize("scenario", ["missing", "malformed"])
-def test_an_unusable_run_carries_the_window_forward(
-    tmp_path: pth.Path,
-    scenario: str,
-) -> None:
-    """A run that measured nothing must not destroy what earlier runs measured.
-
-    Writing no file at all would be worse than writing the old window: the
-    artefact would publish without a history, and the next run would read
-    that as a fresh start.
-    """
-    history_path = tmp_path / "existing.json"
-    existing = _existing_history(history_path, 1.0, 1.1)
-    if scenario == "missing":
-        candidate = Candidate(
-            plan=tmp_path / "absent-plan.json",
-            throughput=tmp_path / "absent-throughput.json",
+        assert load_history(output).ratios_for(SCENARIO) == (
+            pytest.approx(1.0),
+            pytest.approx(1.0),
+            pytest.approx(1.0),
+            pytest.approx(9.0),
         )
-    else:
-        candidate = _write_candidate(tmp_path, ratio=1.0)
-        candidate.plan.write_text("{ not json", encoding="utf-8")
 
-    exit_code, output = _record(tmp_path, candidate=candidate, history=history_path)
+    def test_the_window_is_pruned_to_its_size(self, tmp_path: pth.Path) -> None:
+        """Recording past the window drops the oldest sample."""
+        history_path = tmp_path / "existing.json"
+        _existing_history(history_path, 1.0, 2.0, 3.0)
+        candidate = _write_candidate(tmp_path, ratio=4.0)
 
-    assert exit_code == 0, "an unmeasurable run must not fail the recorder"
-    assert load_history(output) == existing
+        _, output = _record(
+            tmp_path, candidate=candidate, history=history_path, window=3
+        )
 
+        assert load_history(output).ratios_for(SCENARIO) == (
+            pytest.approx(2.0),
+            pytest.approx(3.0),
+            pytest.approx(4.0),
+        )
 
-def test_a_first_run_writes_an_empty_but_valid_history(tmp_path: pth.Path) -> None:
-    """With neither history nor measurement, the output must still parse."""
-    exit_code, output = _record(
-        tmp_path,
-        candidate=Candidate(
-            plan=tmp_path / "absent-plan.json",
-            throughput=tmp_path / "absent-throughput.json",
-        ),
-    )
+    @pytest.mark.parametrize("scenario", ["missing", "malformed"])
+    def test_an_unusable_run_carries_the_window_forward(
+        self, tmp_path: pth.Path, scenario: str
+    ) -> None:
+        """A run that measured nothing must not destroy earlier measurements."""
+        history_path = tmp_path / "existing.json"
+        existing = _existing_history(history_path, 1.0, 1.1)
+        if scenario == "missing":
+            candidate = Candidate(
+                plan=tmp_path / "absent-plan.json",
+                throughput=tmp_path / "absent-throughput.json",
+            )
+        else:
+            candidate = _write_candidate(tmp_path, ratio=1.0)
+            candidate.plan.write_text("{ not json", encoding="utf-8")
 
-    assert exit_code == 0
-    assert output.is_file()
-    assert load_history(output) == BaselineHistory()
+        exit_code, output = _record(tmp_path, candidate=candidate, history=history_path)
+
+        assert exit_code == 0, "an unmeasurable run must not fail the recorder"
+        assert load_history(output) == existing
+
+    def test_a_first_run_writes_an_empty_but_valid_history(
+        self, tmp_path: pth.Path
+    ) -> None:
+        """With neither history nor measurement, the output must still parse."""
+        exit_code, output = _record(
+            tmp_path,
+            candidate=Candidate(
+                plan=tmp_path / "absent-plan.json",
+                throughput=tmp_path / "absent-throughput.json",
+            ),
+        )
+
+        assert exit_code == 0
+        assert output.is_file()
+        assert load_history(output) == BaselineHistory()

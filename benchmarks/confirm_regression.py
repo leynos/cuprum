@@ -59,7 +59,10 @@ def _comparison_performed(report: cabc.Mapping[str, object]) -> bool:
     bool
         Whether the report contains a comparable measurement.
     """
-    return report.get("comparison_performed") is not False
+    if report.get("comparison_performed") is False:
+        return False
+    comparisons = report.get("comparisons")
+    return isinstance(comparisons, list) and bool(comparisons)
 
 
 def confirm_regressions(
@@ -73,10 +76,20 @@ def confirm_regressions(
     every other consumer read it unchanged, with `regressions` narrowed to
     those the second measurement reproduced.
 
+    Parameters
+    ----------
+    primary : cabc.Mapping[str, object]
+        A completed ratchet report with a `regressions` list and its matching
+        `comparisons` evidence.
+    confirmation : cabc.Mapping[str, object]
+        A second ratchet report in the same shape. A missing, empty, or
+        explicitly skipped comparison preserves the primary verdict.
+
     Returns
     -------
     dict[str, object]
-        The primary report shape with only reproduced regressions retained.
+        The primary report shape with only reproduced regressions retained;
+        it additionally records primary, confirmed, and unconfirmed entries.
     """
     flagged = _regressed_scenarios(primary)
     if not _comparison_performed(confirmation):
@@ -127,7 +140,20 @@ def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
 
 
 def main(argv: cabc.Sequence[str] | None = None) -> int:
-    """Write the combined verdict and return the process exit code."""
+    """Write the combined verdict and return the process exit code.
+
+    Parameters
+    ----------
+    argv : cabc.Sequence[str] | None
+        Optional command-line arguments. The process arguments are used when
+        this is `None`.
+
+    Returns
+    -------
+    int
+        `0` when no primary regression was reproduced, `1` when at least one
+        was reproduced, or `2` when a report cannot be read or combined.
+    """
     logging.basicConfig(
         level=logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",

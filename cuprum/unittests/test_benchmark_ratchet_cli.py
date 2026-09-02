@@ -105,5 +105,9 @@ def test_history_only_artefact_does_not_require_fallback_files(
         ],
     )
 
-    assert main() == 0
-    assert json.loads(output.read_text(encoding="utf-8"))["baseline_sample_count"] == 1
+    assert main() == 0, "a compatible history must not require fallback files"
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["baseline_sample_count"] == 1, (
+        "the compatible history must supply one baseline sample; observed "
+        f"{report['baseline_sample_count']!r}"
+    )

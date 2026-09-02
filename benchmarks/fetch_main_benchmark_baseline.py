@@ -1,4 +1,4 @@
-"""Download the latest successful `main` benchmark baseline artefact."""
+"""Download the latest `main` benchmark baseline artefact matching run status."""
 
 from __future__ import annotations
 
@@ -27,7 +27,9 @@ GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_TOKEN_ENV_VAR = "GITHUB_TOKEN"  # ruff: ignore[hardcoded-password-string] - env var name, not a credential
 MAIN_BASELINE_NOT_FOUND_EXIT_CODE = 3
 
-_CLI_DESCRIPTION = "Download the latest successful `main` benchmark baseline artefact."
+_CLI_DESCRIPTION = (
+    "Download the latest `main` benchmark baseline artefact matching --run-status."
+)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -253,7 +255,7 @@ def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
         "--artifact-name",
         dest="artefact_name",
         required=True,
-        help="Artefact name to download from the latest successful run.",
+        help="Artefact name to download from the latest run matching --run-status.",
     )
     parser.add_argument(
         "--output-dir",
@@ -264,12 +266,12 @@ def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--branch",
         default="main",
-        help="Branch to query for successful workflow runs.",
+        help="Branch to query for workflow runs matching --run-status.",
     )
     parser.add_argument(
         "--event",
         default="push",
-        help="Workflow event to query for successful runs.",
+        help="Workflow event to query for runs matching --run-status.",
     )
     parser.add_argument(
         "--run-status",

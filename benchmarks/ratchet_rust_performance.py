@@ -248,7 +248,14 @@ def _parse_args() -> argparse.Namespace:
             "baseline history is available."
         ),
     )
-    parser.add_argument("--baseline-throughput", type=pth.Path)
+    parser.add_argument(
+        "--baseline-throughput",
+        type=pth.Path,
+        help=(
+            "Single-sample fallback baseline throughput, used when no compatible "
+            "baseline history is available."
+        ),
+    )
     parser.add_argument(
         "--baseline-history",
         type=pth.Path,
@@ -300,6 +307,14 @@ def _load_baseline(args: argparse.Namespace) -> BenchmarkRunPayload | None:
     )
 
 
+def _load_history_or_empty(path: pth.Path | None) -> BaselineHistory:
+    """Load an optional history, treating only its intentional absence as empty."""
+    if path is None or not path.is_file():
+        _logger.info("no baseline history is available; using the fallback baseline")
+        return BaselineHistory()
+    return load_history(path)
+
+
 def main() -> int:
     """Execute benchmark ratchet comparison and return process exit code."""
     logging.basicConfig(
@@ -315,7 +330,7 @@ def main() -> int:
         )
         history = _compatible_history_window(
             candidate=candidate,
-            history=load_history(args.baseline_history),
+            history=_load_history_or_empty(args.baseline_history),
             window_size=args.history_window,
         )
         report = compare_rust_regressions(
