@@ -53,7 +53,26 @@ def _load_json(path: pth.Path) -> dict[str, object]:
 
 
 def load_plan(path: pth.Path) -> dict[str, object]:
-    """Load and minimally validate dry-run plan JSON payload."""
+    """Load and minimally validate a dry-run plan JSON payload.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Plan file written by the benchmark profile command.
+
+    Returns
+    -------
+    dict[str, object]
+        Validated plan payload.
+
+    Raises
+    ------
+    OSError, json.JSONDecodeError, TypeError, ValueError
+        If the file cannot be read, is not a JSON object, or lacks required
+        profile and scenario fields.
+    IncompatibleBenchmarkProfileError
+        If its worker-iteration metadata is incompatible.
+    """  # ruff: ignore[docstring-extraneous-exception] - validation and I/O errors propagate from dedicated helpers.
     _logger.debug("loading benchmark plan: path=%s", path)
     payload = _load_json(path)
     validate_profile_version(payload)
@@ -82,7 +101,24 @@ def load_plan(path: pth.Path) -> dict[str, object]:
 
 
 def load_throughput(path: pth.Path) -> dict[str, object]:
-    """Load and minimally validate hyperfine throughput JSON payload."""
+    """Load and minimally validate a Hyperfine throughput JSON payload.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Throughput file written by Hyperfine.
+
+    Returns
+    -------
+    dict[str, object]
+        Validated throughput payload.
+
+    Raises
+    ------
+    OSError, json.JSONDecodeError, TypeError, ValueError
+        If the file cannot be read, is not a JSON object, or has invalid
+        result means.
+    """  # ruff: ignore[docstring-extraneous-exception] - validation and I/O errors propagate from dedicated helpers.
     payload = _load_json(path)
     results = _require_list(payload.get("results"), name="results")
 
@@ -156,7 +192,12 @@ def run_ratios(payload: BenchmarkRunPayload) -> dict[str, float]:
     -------
     dict[str, float]
         Each comparison identifier's Rust-to-Python mean ratio.
-    """
+
+    Raises
+    ------
+    TypeError, ValueError
+        If the payloads do not describe aligned, valid Python and Rust pairs.
+    """  # ruff: ignore[docstring-extraneous-exception] - extraction keeps the malformed-payload errors intact.
     return _extract_validated_rust_python_ratios(
         plan_payload=payload.plan,
         throughput_payload=payload.throughput,
@@ -165,7 +206,25 @@ def run_ratios(payload: BenchmarkRunPayload) -> dict[str, float]:
 
 
 def profile_metadata(plan: dict[str, object]) -> tuple[str, int]:
-    """Return the validated ``(profile version, worker iterations)`` of a plan."""
+    """Return the validated ``(profile version, worker iterations)`` of a plan.
+
+    Parameters
+    ----------
+    plan : dict[str, object]
+        Validated benchmark plan payload.
+
+    Returns
+    -------
+    tuple[str, int]
+        Current profile version and positive worker-iteration count.
+
+    Raises
+    ------
+    IncompatibleBenchmarkProfileError
+        If worker-iteration metadata is absent or invalid.
+    ValueError
+        If the profile version is incompatible.
+    """  # ruff: ignore[docstring-extraneous-exception] - profile validation deliberately propagates its contract error.
     validate_profile_version(plan)
     try:
         worker_iterations = require_worker_iterations(plan)

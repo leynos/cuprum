@@ -38,6 +38,7 @@ extend-ignore-re = [
     "Upload main benchmark baseline artifact",
     "\\(\"ises\", \"izes\"\\)",
     "\\(\"teh\", \"(?:the|ten)\"\\)",
+    "\\\\brust-analyzer\\\\b",
     "\\bbuild_native_wheel_artifact\\b",
     "\\brust-analyzer\\b",
     "`color`",

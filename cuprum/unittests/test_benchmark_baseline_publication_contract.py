@@ -29,6 +29,8 @@ from tests.helpers.workflow import (
     BENCHMARK_JOB,
     CI_WORKFLOW,
     mapping,
+    parse_workflow,
+    read_workflow_source,
     script_of,
     step_named,
 )
@@ -38,6 +40,13 @@ UPLOAD_STEP = "Upload main benchmark baseline artifact"
 FETCH_STEP = "Fetch latest main benchmark baseline"
 BENCHMARK_STEP = "Run throughput benchmarks and ratchet comparison"
 ARTEFACT_CHECK_STEP = "Check candidate benchmark artefacts"
+WORKFLOW = parse_workflow(read_workflow_source())
+
+
+def _step(step_name: str) -> dict[str, object]:
+    """Return a named benchmark-ratchet workflow step."""
+    return step_named(WORKFLOW, BENCHMARK_JOB, step_name)
+
 
 #: The condition both main-branch publication steps must carry. `always()`
 #: would publish from a cancelled, half-measured run; plain `success()` —
@@ -57,7 +66,7 @@ def test_every_main_run_records_its_sample() -> None:
     measurement faster than the bar is always accepted, and the slower
     measurements that would correct it are the ones rejected.
     """
-    condition = step_named(BENCHMARK_JOB, RECORD_STEP).get("if")
+    condition = _step(RECORD_STEP).get("if")
 
     assert condition == PUBLICATION_CONDITION, (
         f"the {RECORD_STEP!r} step must run on every completed main push — "
@@ -68,7 +77,7 @@ def test_every_main_run_records_its_sample() -> None:
 
 def test_the_baseline_artefact_is_published_from_every_main_run() -> None:
     """Publishing only from passing runs discards the corrective samples."""
-    condition = step_named(BENCHMARK_JOB, UPLOAD_STEP).get("if")
+    condition = _step(UPLOAD_STEP).get("if")
 
     assert condition == PUBLICATION_CONDITION, (
         f"the {UPLOAD_STEP!r} step must publish on every completed main push; "
@@ -79,7 +88,7 @@ def test_the_baseline_artefact_is_published_from_every_main_run() -> None:
 def test_the_published_artefact_carries_the_window() -> None:
     """The artefact must contain the history file, not just the latest run."""
     inputs = mapping(
-        step_named(BENCHMARK_JOB, UPLOAD_STEP).get("with"),
+        _step(UPLOAD_STEP).get("with"),
         f"the {UPLOAD_STEP!r} step must declare inputs",
     )
     paths = str(inputs.get("path", ""))
@@ -102,7 +111,7 @@ def test_the_fetch_reads_runs_that_failed_their_own_ratchet() -> None:
     GitHub only for successful ones; the sample would be recorded and then
     never read.
     """
-    script = script_of(step_named(BENCHMARK_JOB, FETCH_STEP))
+    script = script_of(_step(FETCH_STEP))
     assert script is not None, f"the {FETCH_STEP!r} step must run a script"
 
     assert "--run-status" in script, (
@@ -118,7 +127,7 @@ def test_the_fetch_reads_runs_that_failed_their_own_ratchet() -> None:
 
 def test_the_comparison_reads_the_window() -> None:
     """The ratchet invocation must pass the history it is meant to judge against."""
-    script = script_of(step_named(BENCHMARK_JOB, BENCHMARK_STEP))
+    script = script_of(_step(BENCHMARK_STEP))
     assert script is not None, f"the {BENCHMARK_STEP!r} step must run a script"
 
     assert "--baseline-history" in script, (
@@ -133,7 +142,7 @@ def test_a_reported_regression_is_measured_again_before_it_fails() -> None:
     Without the second measurement a single unlucky runner fails the job and
     only a human pressing re-run can undo it.
     """
-    script = script_of(step_named(BENCHMARK_JOB, BENCHMARK_STEP))
+    script = script_of(_step(BENCHMARK_STEP))
     assert script is not None, f"the {BENCHMARK_STEP!r} step must run a script"
 
     assert "confirm_regression.py" in script, (
@@ -154,7 +163,7 @@ def test_the_re_measurement_does_not_overwrite_the_recorded_sample() -> None:
     instead of the primary one, and only for the merges that were about to
     fail — reintroducing a verdict-dependent bias in the samples.
     """
-    script = script_of(step_named(BENCHMARK_JOB, BENCHMARK_STEP))
+    script = script_of(_step(BENCHMARK_STEP))
     assert script is not None, f"the {BENCHMARK_STEP!r} step must run a script"
 
     assert 'run_smoke_benchmarks "${GITHUB_WORKSPACE}" "confirmation"' in script, (
@@ -170,7 +179,7 @@ def test_the_sample_is_staged_before_the_comparison_can_fail() -> None:
     step there. Copying the candidate afterwards would mean a regressed run
     published nothing — the exact sample the window most needs.
     """
-    script = script_of(step_named(BENCHMARK_JOB, BENCHMARK_STEP))
+    script = script_of(_step(BENCHMARK_STEP))
     assert script is not None, f"the {BENCHMARK_STEP!r} step must run a script"
     staged = script.index("main-plan.json")
     compared = script.index("ratchet_rust_performance.py")
@@ -183,7 +192,7 @@ def test_the_sample_is_staged_before_the_comparison_can_fail() -> None:
 
 def test_publication_requires_candidate_measurement_artefacts() -> None:
     """Both publication steps must use the same checked artefact availability."""
-    check_script = script_of(step_named(BENCHMARK_JOB, ARTEFACT_CHECK_STEP))
+    check_script = script_of(_step(ARTEFACT_CHECK_STEP))
     assert check_script is not None, (
         f"the {ARTEFACT_CHECK_STEP!r} step must run a script"
     )
@@ -191,4 +200,11 @@ def test_publication_requires_candidate_measurement_artefacts() -> None:
     for filename in ("candidate-plan.json", "candidate-throughput.json"):
         assert filename in check_script, (
             f"the artefact check must require {filename!r}; found:\n{check_script}"
+        )
+
+    for loader in ("load_plan", "load_throughput"):
+        assert loader in check_script, (
+            f"the artefact check must validate malformed first-run input with "
+            f"{loader}; otherwise it can publish an invalid baseline. Found:\n"
+            f"{check_script}"
         )

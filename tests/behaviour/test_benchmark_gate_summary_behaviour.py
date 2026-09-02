@@ -31,8 +31,6 @@ if typ.TYPE_CHECKING:
 
     from syrupy.assertion import SnapshotAssertion
 
-    from tests.helpers.workflow import Workflow
-
 FEATURE = "../features/benchmark_gate_summary.feature"
 
 
@@ -130,7 +128,7 @@ def given_the_detector_failed() -> Detector:
     target_fixture="summary",
 )
 def when_the_summary_script_runs(
-    detector: Detector, event: str, tmp_path: pth.Path, workflow_data: Workflow
+    detector: Detector, event: str, tmp_path: pth.Path
 ) -> Summary:
     """Run the workflow's summary script for the stated event.
 
@@ -152,7 +150,6 @@ def when_the_summary_script_runs(
         event=event,
         detector=detector,
         tmp_path=tmp_path,
-        workflow_data=workflow_data,
     )
 
 
@@ -245,7 +242,7 @@ def then_the_summary_reports_the_verdict(summary: Summary, verdict: str) -> None
     ],
 )
 def test_the_recorded_decision_matches_the_gate(
-    tmp_path: pth.Path, case: SummaryCase, workflow_data: Workflow
+    tmp_path: pth.Path, case: SummaryCase
 ) -> None:
     """The recorded decision must match what the gate will actually do.
 
@@ -266,7 +263,6 @@ def test_the_recorded_decision_matches_the_gate(
         event=case.event,
         detector=case.detector,
         tmp_path=tmp_path,
-        workflow_data=workflow_data,
     )
 
     assert summary.fields["decision"] == case.decision, (
@@ -304,14 +300,12 @@ def test_the_summary_table_has_a_stable_canonical_form(
     tmp_path: pth.Path,
     case: SummaryCase,
     snapshot: SnapshotAssertion,
-    workflow_data: Workflow,
 ) -> None:
     """The stable summary table renders the three benchmark outcomes."""
     summary = run_summary_script(
         event=case.event,
         detector=case.detector,
         tmp_path=tmp_path,
-        workflow_data=workflow_data,
     )
 
     assert summary.table == snapshot, (

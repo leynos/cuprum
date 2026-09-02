@@ -11,6 +11,7 @@ from benchmarks.benchmark_profile import (
     BENCHMARK_PROFILE_VERSION,
     IncompatibleBenchmarkProfileError,
 )
+from benchmarks.ratchet_history import RatchetPolicy
 from benchmarks.ratchet_ratio_extraction import _extract_scenario_entry
 from benchmarks.ratchet_rust_performance import (
     BenchmarkRunPayload,
@@ -20,13 +21,6 @@ from benchmarks.ratchet_rust_performance import (
     load_throughput,
 )
 
-if typ.TYPE_CHECKING:
-    import pathlib as pth
-
-
-from benchmarks.ratchet_history import RatchetPolicy
-
-"""Unit tests for benchmark CI ratchet comparison helpers."""
 if typ.TYPE_CHECKING:
     import pathlib as pth
 

@@ -1361,9 +1361,22 @@ jobs:
         run: |
           artifact_dir="${RUNNER_TEMP}/benchmark-ratchet"
           if [[ -f "${artifact_dir}/candidate-plan.json" ]] && \
-             [[ -f "${artifact_dir}/candidate-throughput.json" ]]; then
+             [[ -f "${artifact_dir}/candidate-throughput.json" ]] && \
+             UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python - \
+               "${artifact_dir}/candidate-plan.json" \
+               "${artifact_dir}/candidate-throughput.json" <<'PY'
+          import pathlib as pth
+          import sys
+
+          from benchmarks.ratchet_ratios import load_plan, load_throughput
+
+          load_plan(pth.Path(sys.argv[1]))
+          load_throughput(pth.Path(sys.argv[2]))
+          PY
+          then
             echo "available=true" >> "${GITHUB_OUTPUT}"
           else
+            echo "::warning::candidate benchmark artefacts are absent or invalid"
             echo "available=false" >> "${GITHUB_OUTPUT}"
           fi
 

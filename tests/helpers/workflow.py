@@ -361,11 +361,6 @@ def benchmark_gate(workflow_data: Workflow) -> str:
 def filter_paths(workflow_data: Workflow) -> frozenset[str]:
     """Return the path patterns declared by the ``bench`` filter.
 
-    Parameters
-    ----------
-    workflow_data : Workflow
-        Parsed workflow containing the changes job and filter step.
-
     Returns
     -------
     frozenset[str]
@@ -376,8 +371,6 @@ def filter_paths(workflow_data: Workflow) -> frozenset[str]:
     AssertionError
         If the filter step, inputs, or ``bench`` pattern list is malformed or
         absent.
-    KeyError
-        If the filter step does not provide a ``filters`` input.
     yaml.YAMLError
         If the ``filters`` input is not valid YAML.
     """  # ruff: ignore[docstring-extraneous-exception] - contract validation delegates to _require.
@@ -386,8 +379,13 @@ def filter_paths(workflow_data: Workflow) -> frozenset[str]:
         step.get("with"),
         f"the {FILTER_STEP_ID!r} step must pass inputs to the filter action",
     )
+    filters_input = inputs.get("filters")
+    _require(
+        condition=isinstance(filters_input, str),
+        message=f"{CHANGES_JOB!r} {FILTER_STEP_ID!r}: filters must be a string",
+    )
     filters = mapping(
-        yaml.safe_load(str(inputs["filters"])),
+        yaml.safe_load(typ.cast("str", filters_input)),
         "the `filters` input must parse to a mapping",
     )
     patterns = filters.get(FILTER_NAME)

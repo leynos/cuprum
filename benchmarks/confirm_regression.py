@@ -31,7 +31,11 @@ import logging
 import pathlib as pth
 import typing as typ
 
-from benchmarks._validation import _require_list, _require_mapping
+from benchmarks._validation import (
+    _require_list,
+    _require_mapping,
+    _require_non_empty_string,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -43,7 +47,10 @@ def _regressed_scenarios(report: cabc.Mapping[str, object]) -> list[str]:
     """Return the scenario names a ratchet report flagged as regressions."""
     entries = _require_list(report.get("regressions", []), name="regressions")
     return [
-        str(_require_mapping(entry, name="regressions[]").get("scenario_name"))
+        _require_non_empty_string(
+            _require_mapping(entry, name="regressions[]").get("scenario_name"),
+            name="regressions[].scenario_name",
+        )
         for entry in entries
     ]
 
@@ -103,12 +110,14 @@ def confirm_regressions(
         reproduced = set(flagged) & set(_regressed_scenarios(confirmation))
 
     entries = _require_list(primary.get("regressions", []), name="regressions")
-    confirmed = [
-        entry
-        for entry in entries
-        if _require_mapping(entry, name="regressions[]").get("scenario_name")
-        in reproduced
-    ]
+    confirmed = []
+    for entry in entries:
+        mapped_entry = _require_mapping(entry, name="regressions[]")
+        scenario_name = _require_non_empty_string(
+            mapped_entry.get("scenario_name"), name="regressions[].scenario_name"
+        )
+        if scenario_name in reproduced:
+            confirmed.append(entry)
     unconfirmed = [entry for entry in entries if entry not in confirmed]
 
     combined = dict(primary)

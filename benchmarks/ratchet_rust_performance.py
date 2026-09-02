@@ -7,16 +7,12 @@ comparison report. Ratcheting on the within-run ratio rather than absolute
 wall-clock means cancels out runner-speed differences and interpreter
 startup overhead between the CI jobs that produced the runs.
 
-The bar is the median of a rolling window of main-branch samples, and a
-scenario fails only when it exceeds both the configured flat threshold and
-the spread those samples exhibited — see `benchmarks/ratchet_history.py` for
-why. A run with no window falls back to a single-sample baseline, which is
-the bar this ratchet used before the window existed.
+The bar is the median of a rolling window of main-branch samples. A scenario
+fails only when it exceeds both the configured flat threshold and the observed
+spread — see `benchmarks/ratchet_history.py` for why. No window falls back to
+the single-sample bar this ratchet used before the window existed.
 
-Reading runs into ratios lives in `benchmarks/ratchet_ratios.py`; this
-module decides what those ratios mean. `load_plan`, `load_throughput`,
-`run_ratios` and `profile_metadata` are re-exported because callers have
-always reached them here.
+`benchmarks/ratchet_ratios.py` extracts ratios; this module judges them.
 """
 
 from __future__ import annotations
@@ -65,7 +61,6 @@ __all__ = [
     "run_ratios",
     "write_report",
 ]
-
 _logger = logging.getLogger(__name__)
 
 
@@ -200,7 +195,29 @@ def compare_rust_regressions(
     history: BaselineHistory | None = None,
     **options: object,
 ) -> ComparisonReport:
-    """Compare within-run Rust/Python ratios and evaluate the threshold."""
+    """Compare within-run Rust/Python ratios against a baseline window.
+
+    Parameters
+    ----------
+    candidate : BenchmarkRunPayload
+        Pull-request measurement to judge.
+    baseline : BenchmarkRunPayload | None
+        Single-sample fallback when ``history`` is empty.
+    history : BaselineHistory | None
+        Compatible main-branch history used as the preferred baseline.
+    **options : object
+        Optional ``RatchetPolicy`` or legacy ``max_regression`` setting.
+
+    Returns
+    -------
+    ComparisonReport
+        Per-scenario verdicts and their effective thresholds.
+
+    Raises
+    ------
+    TypeError, ValueError
+        If the policy, baseline, or comparison groups are invalid.
+    """  # ruff: ignore[docstring-extraneous-exception] - policy and payload validation intentionally propagate their contract errors.
     resolved = _comparison_policy(options)
     window = _baseline_window(
         baseline=baseline,
@@ -260,8 +277,8 @@ def _parse_args() -> argparse.Namespace:
         "--baseline-history",
         type=pth.Path,
         help=(
-            "Rolling window of recent main-branch samples. An absent or "
-            "unreadable file falls back to the single-sample baseline."
+            "Rolling window of recent main-branch samples. An absent or non-file "
+            "path falls back to the single-sample baseline."
         ),
     )
     parser.add_argument("--candidate-plan", type=pth.Path, required=True)
@@ -316,7 +333,14 @@ def _load_history_or_empty(path: pth.Path | None) -> BaselineHistory:
 
 
 def main() -> int:
-    """Execute benchmark ratchet comparison and return process exit code."""
+    """Execute the benchmark ratchet comparison.
+
+    Returns
+    -------
+    int
+        ``0`` for pass or compatible-profile skip; ``1`` for regression; ``2`` for
+        inputs that cannot be evaluated.
+    """
     logging.basicConfig(
         level=logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",

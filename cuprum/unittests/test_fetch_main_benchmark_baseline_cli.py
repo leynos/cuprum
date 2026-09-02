@@ -86,6 +86,9 @@ def test_cli_applies_optional_argument_defaults(tmp_path: pth.Path) -> None:
     assert arguments.event == "push", (
         f"--event must default to 'push', got {arguments.event!r}"
     )
+    assert arguments.run_status == "success", (
+        f"--run-status must default to 'success', got {arguments.run_status!r}"
+    )
     assert arguments.token_env == GITHUB_TOKEN_ENV_VAR, (
         f"--token-env must default to {GITHUB_TOKEN_ENV_VAR!r}, "
         f"got {arguments.token_env!r}"

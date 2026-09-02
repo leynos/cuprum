@@ -1596,7 +1596,7 @@ Both properties are fixed, and both fixes are needed:
   spread. The estimate is `3 * 1.4826 * MAD` relative to the median, because
   the outlier being tolerated barely moves the median absolute deviation but
   would inflate a standard deviation in proportion to itself. The band is
-  capped at 1.00 — past that the benchmark is telling you it cannot measure
+  capped at 1.00 — past that the benchmark indicates that it cannot measure
   what it gates on, and an uncapped band would disable the ratchet silently
   instead of saying so.
 - **Every non-cancelled completed `main` run records its sample and publishes

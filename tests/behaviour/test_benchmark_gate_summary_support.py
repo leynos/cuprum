@@ -6,7 +6,13 @@ import dataclasses as dc
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - tests run the checked-in workflow script.
 import typing as typ
 
-from tests.helpers.workflow import CHANGES_JOB, script_of, step_named
+from tests.helpers.workflow import (
+    CHANGES_JOB,
+    parse_workflow,
+    read_workflow_source,
+    script_of,
+    step_named,
+)
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -14,6 +20,7 @@ if typ.TYPE_CHECKING:
 SUMMARY_STEP = "Record the benchmark gate decision"
 _COLUMNS = ("event", "detector", "bench", "decision")
 _METRIC_PREFIX = "::notice title=benchmark-gate-decision::"
+_WORKFLOW = parse_workflow(read_workflow_source())
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -73,7 +80,7 @@ class SummaryCase:
 
 def _summary_script() -> str:
     """Return the summary step's script, as `ci.yml` declares it."""
-    script = script_of(step_named(CHANGES_JOB, SUMMARY_STEP))
+    script = script_of(step_named(_WORKFLOW, CHANGES_JOB, SUMMARY_STEP))
     assert script is not None, f"the {SUMMARY_STEP!r} step must run a script"
     return script
 
@@ -85,7 +92,7 @@ def _execute_summary_script(
     summary_path: pth.Path,
 ) -> subprocess.CompletedProcess[str]:
     """Execute the checked-in summary script."""
-    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - the checked-in workflow script is trusted
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - literal vector plus workflow run block; no test input reaches the command line.
         ["/usr/bin/env", "bash", "-c", _summary_script()],
         env={
             "PATH": "/usr/bin:/bin",

@@ -93,9 +93,13 @@ def test_a_regression_that_reproduces_fails() -> None:
         confirmation=_report("medium-single-nocb"),
     )
 
-    assert combined["passed"] is False
-    assert _names(combined["confirmed_regressions"]) == ["medium-single-nocb"]
-    assert combined["unconfirmed_regressions"] == []
+    assert combined["passed"] is False, "a reproduced regression must fail"
+    assert _names(combined["confirmed_regressions"]) == ["medium-single-nocb"], (
+        "only the scenario reproduced by both runs may remain confirmed"
+    )
+    assert combined["unconfirmed_regressions"] == [], (
+        "a reproduced primary regression must not be marked unconfirmed"
+    )
 
 
 def test_a_regression_that_does_not_reproduce_passes() -> None:
@@ -105,9 +109,13 @@ def test_a_regression_that_does_not_reproduce_passes() -> None:
         confirmation=_report(),
     )
 
-    assert combined["passed"] is True
-    assert _names(combined["unconfirmed_regressions"]) == ["medium-single-nocb"]
-    assert combined["confirmed_regressions"] == []
+    assert combined["passed"] is True, "an unconfirmed regression must pass"
+    assert _names(combined["unconfirmed_regressions"]) == ["medium-single-nocb"], (
+        "the primary scenario must remain visible as unconfirmed"
+    )
+    assert combined["confirmed_regressions"] == [], (
+        "a missing confirmation must not become a confirmed failure"
+    )
 
 
 def test_a_flake_that_moves_scenario_does_not_confirm() -> None:
@@ -250,6 +258,30 @@ def test_the_cli_reports_malformed_input_without_passing_it(
     ])
 
     assert exit_code == 2
+
+
+@pytest.mark.parametrize("scenario_name", ["", 1, None])
+def test_the_cli_rejects_an_invalid_regression_scenario_name(
+    tmp_path: pth.Path, scenario_name: object
+) -> None:
+    """A malformed report must not coerce a scenario name into a pass."""
+    primary = _report("medium-single-nocb")
+    primary["regressions"] = [{"scenario_name": scenario_name}]
+    primary_path = tmp_path / "primary.json"
+    confirmation_path = tmp_path / "confirmation.json"
+    primary_path.write_text(json.dumps(primary), encoding="utf-8")
+    confirmation_path.write_text(json.dumps(_report()), encoding="utf-8")
+
+    exit_code = confirm_cli([
+        "--primary-report",
+        str(primary_path),
+        "--confirmation-report",
+        str(confirmation_path),
+        "--output",
+        str(tmp_path / "out.json"),
+    ])
+
+    assert exit_code == 2, "invalid scenario names must fail report validation"
 
 
 _SCENARIO_SETS = st.frozensets(st.sampled_from(SCENARIOS), max_size=len(SCENARIOS))

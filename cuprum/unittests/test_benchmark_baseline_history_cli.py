@@ -124,12 +124,16 @@ class TestBaselineHistoryRecorder:
 
         exit_code, output = _record(tmp_path, candidate=candidate)
 
-        assert exit_code == 0
+        assert exit_code == 0, "a completed benchmark must be recorded successfully"
         recorded = load_history(output)
-        assert len(recorded.samples) == 1
+        assert len(recorded.samples) == 1, "the first completed run adds one sample"
         sample = recorded.samples[0]
-        assert sample.ratios == {SCENARIO: pytest.approx(1.25)}
-        assert (sample.commit, sample.run_id) == ("abcdef1234", "987654")
+        assert sample.ratios == {SCENARIO: pytest.approx(1.25)}, (
+            "the recorder must preserve the measured Rust/Python ratio"
+        )
+        assert (sample.commit, sample.run_id) == ("abcdef1234", "987654"), (
+            "the recorder must preserve commit and workflow-run provenance"
+        )
 
     def test_a_regressed_measurement_is_recorded_like_any_other(
         self, tmp_path: pth.Path
@@ -146,7 +150,7 @@ class TestBaselineHistoryRecorder:
             pytest.approx(1.0),
             pytest.approx(1.0),
             pytest.approx(9.0),
-        )
+        ), "a slow candidate must still become a window sample"
 
     def test_the_window_is_pruned_to_its_size(self, tmp_path: pth.Path) -> None:
         """Recording past the window drops the oldest sample."""
@@ -162,7 +166,7 @@ class TestBaselineHistoryRecorder:
             pytest.approx(2.0),
             pytest.approx(3.0),
             pytest.approx(4.0),
-        )
+        ), "the recorder must retain only the configured newest samples"
 
     @pytest.mark.parametrize("scenario", ["missing", "malformed"])
     def test_an_unusable_run_carries_the_window_forward(
@@ -183,7 +187,9 @@ class TestBaselineHistoryRecorder:
         exit_code, output = _record(tmp_path, candidate=candidate, history=history_path)
 
         assert exit_code == 0, "an unmeasurable run must not fail the recorder"
-        assert load_history(output) == existing
+        assert load_history(output) == existing, (
+            "an unmeasurable run must carry the existing history forward"
+        )
 
     def test_a_first_run_writes_an_empty_but_valid_history(
         self, tmp_path: pth.Path
@@ -197,6 +203,8 @@ class TestBaselineHistoryRecorder:
             ),
         )
 
-        assert exit_code == 0
-        assert output.is_file()
-        assert load_history(output) == BaselineHistory()
+        assert exit_code == 0, "a first unmeasurable run must still succeed"
+        assert output.is_file(), "the recorder must publish a parseable history file"
+        assert load_history(output) == BaselineHistory(), (
+            "the first unmeasurable run must publish an empty valid history"
+        )

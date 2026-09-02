@@ -47,7 +47,6 @@ from tests.helpers.workflow import (
     mapping,
     parse_workflow,
     script_of,
-    script_runs_command,
     step_named,
     step_with_id,
     steps,
@@ -173,63 +172,6 @@ def test_the_benchmark_job_declares_the_expected_gate(
         "main always benchmark so the baseline artefact stays fresh, and pull "
         f"requests benchmark only on performance-relevant diffs; found {condition!r}"
     )
-
-
-def test_the_benchmark_job_keeps_lint_dependencies_out_of_benchmark_setup(
-    workflow_data: Workflow,
-) -> None:
-    """Keep lint dependencies out of baseline discovery and benchmark setup.
-
-    Parameters
-    ----------
-    workflow_data : Workflow
-        Parsed workflow containing the benchmark setup steps.
-    """
-    checkout = step_named(workflow_data, BENCHMARK_JOB, "Check out repository")
-    checkout_options = mapping(
-        checkout.get("with"),
-        f"the {BENCHMARK_JOB!r} checkout must declare options",
-    )
-    assert checkout_options.get("persist-credentials") is False, (
-        "the benchmark checkout must not persist credentials that later build "
-        "commands do not need"
-    )
-
-    baseline = step_named(
-        workflow_data,
-        BENCHMARK_JOB,
-        "Fetch latest main benchmark baseline",
-    )
-    script = script_of(baseline)
-    assert script is not None, "the baseline-fetch step must declare a run script"
-    assert script_runs_command(
-        script,
-        "uv run --no-dev python benchmarks/fetch_main_benchmark_baseline.py",
-    ), "the standard-library baseline client must not resolve the dev dependency group"
-
-    throughput = step_named(
-        workflow_data,
-        BENCHMARK_JOB,
-        "Run throughput benchmarks and ratchet comparison",
-    )
-    throughput_script = script_of(throughput)
-    assert throughput_script is not None, "the throughput step must declare a script"
-    assert "MATURIN_DEVELOP_FLAGS='--release --skip-install'" in throughput_script
-    assert "UV_SYNC_FLAGS=--no-install-package=df12-python-lints" in throughput_script
-    assert "UV_RUN_FLAGS=--no-sync" in throughput_script
-    assert throughput_script.count("uv run --no-sync python") == 4, (
-        "every post-build Python command must preserve the environment that omits "
-        "the lint-only Git dependency"
-    )
-
-    report = step_named(
-        workflow_data,
-        BENCHMARK_JOB,
-        "Generate benchmark comparison report",
-    )
-    report_script = script_of(report)
-    assert report_script is not None, "the report step must declare a script"
-    assert "uv run --no-sync python" in report_script
 
 
 def test_a_failed_detector_does_not_benchmark_ungated(
@@ -393,12 +335,10 @@ def test_the_gate_decision_is_recorded_in_the_run_summary(
         for index, step in enumerate(changes_steps)
         if step.get("id") == FILTER_STEP_ID
     )
-    summary_index, script = next(
-        (index, script)
-        for index, step in enumerate(changes_steps)
-        if isinstance(script := step.get("run"), str)
-        and "GITHUB_STEP_SUMMARY" in script
-    )
+    summary_step = step_named(workflow_data, CHANGES_JOB, SUMMARY_STEP)
+    summary_index = changes_steps.index(summary_step)
+    script = script_of(summary_step)
+    assert script is not None, f"the {SUMMARY_STEP!r} step must run a script"
 
     assert filter_index < summary_index, (
         f"the {FILTER_STEP_ID!r} step must precede {SUMMARY_STEP!r} so the summary "

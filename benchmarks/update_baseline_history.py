@@ -44,6 +44,21 @@ if typ.TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
+class _PositiveWindowArgumentError(argparse.ArgumentTypeError):
+    """Argparse error for a non-positive history window."""
+
+    def __init__(self) -> None:
+        super().__init__("window must be at least 1")
+
+
+def _positive_window(value: str) -> int:
+    """Parse a strictly positive history window for ``argparse``."""
+    window = int(value)
+    if window < 1:
+        raise _PositiveWindowArgumentError
+    return window
+
+
 def _candidate_sample(
     *,
     plan_path: pth.Path,
@@ -118,7 +133,7 @@ def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--window",
-        type=int,
+        type=_positive_window,
         default=DEFAULT_WINDOW_SIZE,
         help="How many of the most recent samples to keep.",
     )

@@ -48,6 +48,7 @@ from benchmarks._validation import (
     _require_positive_float,
 )
 from benchmarks.benchmark_profile import require_worker_iterations
+from benchmarks.errors import BenchmarkError
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -85,8 +86,39 @@ HISTORY_SCHEMA = 1
 _MIN_SPREAD_SAMPLES = 2
 
 
-class BaselineHistoryReadError(ValueError):
-    """A persisted baseline-history payload could not be read or validated."""
+class BaselineHistoryReadError(ValueError, BenchmarkError):
+    """A persisted baseline-history payload could not be read or validated.
+
+    Parameters
+    ----------
+    path : pathlib.Path | None
+        History file involved in the failure, when one was being read.
+    reason : str
+        Stable explanation of the failed read or validation operation.
+    """
+
+    def __init__(self, reason: str, *, path: pth.Path | None = None) -> None:
+        self.path = path
+        self.reason = reason
+        subject = f"baseline history {path}" if path is not None else "baseline history"
+        super().__init__(f"{subject}: {reason}")
+
+    @classmethod
+    def unreadable(cls, path: pth.Path, error: Exception) -> BaselineHistoryReadError:
+        """Build a read failure retaining the low-level cause text."""
+        return cls(f"could not read: {error}", path=path)
+
+    @classmethod
+    def non_object(cls, path: pth.Path) -> BaselineHistoryReadError:
+        """Build a failure for a JSON payload that is not an object."""
+        return cls("must contain a JSON object", path=path)
+
+    @classmethod
+    def invalid_payload(
+        cls, path: pth.Path, error: Exception
+    ) -> BaselineHistoryReadError:
+        """Build a validation failure retaining the underlying reason."""
+        return cls(f"invalid payload: {error}", path=path)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -284,38 +316,37 @@ def load_history(path: pth.Path) -> BaselineHistory:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        msg = f"could not read baseline history {path}: {exc}"
-        raise BaselineHistoryReadError(msg) from exc
+        raise BaselineHistoryReadError.unreadable(path, exc) from exc
     if not isinstance(payload, dict):
-        msg = f"baseline history {path} must contain a JSON object"
-        raise BaselineHistoryReadError(msg)
+        raise BaselineHistoryReadError.non_object(path)
     try:
         return history_from_payload(typ.cast("dict[str, object]", payload))
     except (TypeError, ValueError) as exc:
         if isinstance(exc, BaselineHistoryReadError):
-            raise
-        msg = f"invalid baseline history {path}: {exc}"
-        raise BaselineHistoryReadError(msg) from exc
+            raise BaselineHistoryReadError(exc.reason, path=path) from exc
+        raise BaselineHistoryReadError.invalid_payload(path, exc) from exc
 
 
 def write_history(*, history: BaselineHistory, output_path: pth.Path) -> None:
     """Atomically replace ``output_path`` with the serialized history payload."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        dir=output_path.parent,
-        prefix=f".{output_path.name}.",
-        delete=False,
-    ) as temporary:
-        temporary.write(json.dumps(history.as_dict(), indent=2, sort_keys=True))
-        temporary.flush()
-        os.fsync(temporary.fileno())
-        temporary_path = pth.Path(temporary.name)
+    temporary_path: pth.Path | None = None
     try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=output_path.parent,
+            prefix=f".{output_path.name}.",
+            delete=False,
+        ) as temporary:
+            temporary_path = pth.Path(temporary.name)
+            temporary.write(json.dumps(history.as_dict(), indent=2, sort_keys=True))
+            temporary.flush()
+            os.fsync(temporary.fileno())
         temporary_path.replace(output_path)
     finally:
-        temporary_path.unlink(missing_ok=True)
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def median_ratio(values: cabc.Sequence[float]) -> float:
