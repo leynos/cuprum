@@ -138,10 +138,10 @@ The canonical policy lives in `pyproject.toml`:
 
 ## Addendum (2026-08-31): Ruff, ty, and df12 toolchain pins
 
-The lint estate was upgraded while preserving the two-tier decision above.
-Ruff is pinned to 0.16.4 and ty is pinned to 0.0.74. The
-`df12-python-lints` dependency and standalone lint pass use the controlled
-v0.3.0 release tag.
+The lint estate was upgraded while preserving the two-tier decision above. Ruff
+is pinned to 0.16.4 and ty is pinned to 0.0.74. The `df12-python-lints`
+dependency and standalone lint pass use v0.3.0 at commit
+`4cf41736cce2f7ba2778882a5c629c044568a0e5`.
 
 - `RUFF_VERSION` and `TY_VERSION` are synchronized across the Makefile
   defaults, the workflow-level environment in `.github/workflows/ci.yml`, and
@@ -149,9 +149,10 @@ v0.3.0 release tag.
   `cuprum/unittests/test_toolchain_pins.py` enforces this parity.
 - `$(RUFF)` invokes `uv tool run --from 'ruff==$(RUFF_VERSION)' ruff`, and
   `$(TY)` invokes `uv tool run --from 'ty==$(TY_VERSION)' ty`, with the shared
-  local tool environment. The `typecheck` target runs `$(TY) check --python
-  .venv` so ty analyses the project virtual environment explicitly.
+  local tool environment. The `typecheck` target runs
+  `$(TY) check --python .venv` so ty analyses the project virtual environment
+  explicitly.
 - `DF12_PYTHON_LINTS_REF` and the development dependency use the same
-  controlled df12 release tag. The enabled message list includes `R9112`
+  immutable df12 commit. The enabled message list includes `R9112`
   (`prefer-type-statement`) so the Python 3.12-compatible codebase uses the
   modern type-alias statement syntax.

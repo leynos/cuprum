@@ -2597,7 +2597,6 @@ The short version is:
 - `$(AMBRLEAKS)` scans `cuprum/unittests` and `tests`; exact deterministic
   fixture values that resemble secrets belong in `ambrleaks.toml`.
 
-
 ### Markdown formatting
 
 `make fmt` runs `mdformat-all`, which applies `mdtablefix` with

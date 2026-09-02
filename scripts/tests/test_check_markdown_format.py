@@ -2,7 +2,7 @@
 
 import json
 import os
-import subprocess  # noqa: S404 - the process boundary is under test.
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - the process boundary is under test.
 import sys
 import tempfile
 import textwrap
@@ -92,7 +92,7 @@ def _run_checker(
         "MDTABLEFIX": str(formatter),
         "MDTABLEFIX_CALL_LOG": str(call_log),
     }
-    return subprocess.run(  # noqa: S603 - executes the controlled fixture.
+    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - executes the controlled fixture.
         [str(CHECKER), *(str(file) for file in files)],
         capture_output=True,
         check=False,

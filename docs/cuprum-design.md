@@ -853,8 +853,8 @@ descriptor ownership. The latter carries `PumpEvent.duration_s`, the monotonic
 cleanup wait duration; other phases leave it unset. Cleanup is required because
 the executor worker retains descriptor ownership until it settles.
 
-`PumpMetricsHook` emits `cuprum_rust_pump_cleanup_total` once for each completed
-native cleanup and one observation of
+`PumpMetricsHook` emits `cuprum_rust_pump_cleanup_total` once for each
+completed native cleanup and one observation of
 `cuprum_rust_pump_cleanup_duration_seconds` for each such cleanup. Both cleanup
 metrics are unlabelled and emitted only on completion. `RustPumpDeclineReason`
 bounds the `reason` label on the decline metric, and `PumpMetricsHook` emits
@@ -866,15 +866,14 @@ observation channel, not an extension of `ExecEvent`. A caller registers the
 same `TracingHook` on both `sh.observe(hook)` and
 `observe_pump(hook.record_pump_event)`. For an inter-stage hop, each cleanup
 event carries the source stage's existing `ExecId` solely for lookup of its
-open pipeline-stage span; it is not a trace attribute, and the correlation
-does not use a PID. The hook records `cuprum.cleanup_started` when cleanup
-begins and `cuprum.cleanup_completed` when descriptor ownership is released.
-Both events have `operation="native_pump_cleanup"` and a bounded `outcome`
-(`"started"` or `"completed"`); only completion has `duration_s`, the
-monotonic cleanup wait in seconds. Descriptor numbers, command arguments,
-exception text, and other unbounded values are excluded. Events without a
-matching active span are dropped, and cleanup events neither set span status
-nor end the span.
+open pipeline-stage span; it is not a trace attribute, and the correlation does
+not use a PID. The hook records `cuprum.cleanup_started` when cleanup begins and
+`cuprum.cleanup_completed` when descriptor ownership is released. Both events
+have `operation="native_pump_cleanup"` and a bounded `outcome` (`"started"` or
+`"completed"`); only completion has `duration_s`, the monotonic cleanup wait in
+seconds. Descriptor numbers, command arguments, exception text, and other
+unbounded values are excluded. Events without a matching active span are
+dropped, and cleanup events neither set span status nor end the span.
 
 ### 7.2 Logging via `logging`
 

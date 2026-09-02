@@ -24,12 +24,11 @@
   is separate from `sh.observe`, so an existing observer is untouched.
 - **Native Rust-pump cleanup telemetry:** Add `cleanup_started` and
   `cleanup_completed` `PumpEvent` phases, with completion-only
-  `PumpEvent.duration_s`, the unlabelled
-  `cuprum_rust_pump_cleanup_total` counter and
-  `cuprum_rust_pump_cleanup_duration_seconds` histogram, and cleanup `DEBUG`
-  records. The native worker retains descriptor ownership until cleanup
-  completes, so these events and records describe the cancellation-cleanup
-  contract.
+  `PumpEvent.duration_s`, the unlabelled `cuprum_rust_pump_cleanup_total`
+  counter and `cuprum_rust_pump_cleanup_duration_seconds` histogram, and the
+  cleanup `DEBUG` records. The native worker retains descriptor ownership until
+  cleanup completes, so these events and records describe the
+  cancellation-cleanup contract.
 - **`PumpEvent`:** The frozen event a pump hook receives, carrying the routing
   `phase` and, for a decline, the `reason` for the decline.
 - **`PumpHook`:** The synchronous callable type a pump observer must satisfy.
@@ -69,9 +68,9 @@
 
 - **`ProgramCatalogue.visible_settings` is now a property:** Prefer
   `catalogue.visible_settings` over the former callable spelling. Existing
-  `catalogue.visible_settings()` callers remain supported during the
-  next-minor migration and receive the same cached, read-only mapping of
-  project names to `ProjectSettings`
+  `catalogue.visible_settings()` callers remain supported during the next-minor
+  migration and receive the same cached, read-only mapping of project names to
+  `ProjectSettings`
   ([`079d6698`](https://github.com/leynos/cuprum/commit/079d6698cfdc833928628b0c3278a5cb7d646d9b)).
 - **New `ExecPhase` value (breaking for fail-closed hooks):** `ExecPhase` gains
   `pipeline_fail_fast`. Observe hooks that match exhaustively on phase and
