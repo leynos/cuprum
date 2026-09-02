@@ -17,11 +17,23 @@ env:
 
 jobs:
   build-pure-wheel:
-    runs-on: namespace-profile-default
+    runs-on: namespace-profile-cuprum
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
           persist-credentials: false
+      - name: Set up Namespace cache
+        id: namespace-cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        with:
+          cache: uv
+      - name: Report Namespace cache status
+        if: always()
+        run: |
+          {
+            echo "### Namespace cache"
+            echo "- cache-hit: \`${{ steps.namespace-cache.outputs.cache-hit }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
       - uses: ./.github/actions/pure-python-wheel
         with:
           python-version: ${{ inputs['python-version'] }}
@@ -67,6 +79,18 @@ jobs:
           pytag="cp$(echo "${major_minor}" | tr -d '.')"
           echo "tag=${pytag}" >> "$GITHUB_OUTPUT"
           echo "interpreter=/opt/python/${pytag}-${pytag}/bin/python" >> "$GITHUB_OUTPUT"
+      - name: Cache Linux wheel build dependencies (x86_64)
+        if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'x86_64'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: cuprum-wheel-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ env.MATURIN_VERSION }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            cuprum-wheel-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ env.MATURIN_VERSION }}-
       - name: Build manylinux wheels (Linux x86_64)
         # Maturin action builds inside a manylinux container for PyPI tags.
         if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'x86_64'
@@ -84,6 +108,18 @@ jobs:
         uses: docker/setup-qemu-action@45136fd328ae20ed788d00d3bada68ab496c214c
         with:
           platforms: arm64
+      - name: Cache Linux wheel build dependencies (aarch64)
+        if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'aarch64'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: cuprum-wheel-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ env.MATURIN_VERSION }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            cuprum-wheel-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ env.MATURIN_VERSION }}-
       - name: Build manylinux wheels (Linux aarch64)
         # aarch64 wheels are cross-compiled; use version-only interpreter spec
         # since the container's Python binaries are aarch64 and cannot execute.
@@ -115,7 +151,7 @@ jobs:
           path: wheelhouse/*.whl
 
   verify-wheel-install:
-    runs-on: namespace-profile-default
+    runs-on: namespace-profile-cuprum
     needs:
       - build-pure-wheel
       - build-native-wheels
@@ -185,6 +221,7 @@ jobs:
           )
           ARCH=$(uname -m)
           # Note: NATIVE_WHEEL_DIR_PATTERN must NOT be quoted to allow glob expansion
+          # shellcheck disable=SC2206 # the contract below validates the expanded glob count
           NATIVE_WHEEL_GLOB=(
             ${NATIVE_WHEEL_DIR_PATTERN}/*${PYTAG}*manylinux*${ARCH}*.whl
           )

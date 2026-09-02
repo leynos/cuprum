@@ -34,6 +34,8 @@ concurrency:
 env:
   RUFF_VERSION: '0.16.4'
   TY_VERSION: '0.0.74'
+  MARKDOWNLINT_VERSION: '0.20.0'
+  NEXTEST_VERSION: '0.9.133'
 
 jobs:
   lint-test:
@@ -53,15 +55,25 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
 
+      - name: Cache npm CLI dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: cuprum-npm-cli-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            cuprum-npm-cli-${{ runner.os }}-
+
       - name: Install CLI tools
         run: |
           uv tool install "mbake==${MBAKE_VERSION}"
-          npm install -g markdownlint-cli2
+          npm install -g "markdownlint-cli2@${MARKDOWNLINT_VERSION}"
 
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@074f7d8ba75a6e5d18532b72cbe38fccbda4e9c6
+        uses: leynos/shared-actions/.github/actions/setup-rust@93ad65e414a16e8f8933a1ca114ccd480fdfa87e
         with:
           toolchain: '1.85.0'
+          cache-provider: github
+          use-sccache: 'true'
 
       - name: Cache Whitaker installation
         id: cache-whitaker
@@ -83,9 +95,8 @@ jobs:
                 --version "${WHITAKER_INSTALLER_VERSION}" \
                 whitaker-installer
             else
-              echo "cargo-binstall unavailable; building whitaker-installer from crates.io"
-              cargo install --locked whitaker-installer \
-                --version "${WHITAKER_INSTALLER_VERSION}"
+              echo "cargo-binstall is required for the pinned prebuilt Whitaker installer" >&2
+              exit 1
             fi
           fi
           whitaker-installer --cranelift
@@ -115,7 +126,7 @@ jobs:
   typecheck-test:
     name: Typecheck and test (Python ${{ matrix.python-label }})
     continue-on-error: ${{ matrix.experimental }}
-    runs-on: namespace-profile-default
+    runs-on: namespace-profile-cuprum
     strategy:
       fail-fast: false
       matrix:
@@ -140,6 +151,27 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
+      - name: Set up Namespace cache
+        id: namespace-cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        with:
+          cache: rust,uv
+          path: |
+            ~/.local/bin/sccache
+            ~/.cache/sccache
+            ~/.cargo/bin/cargo-nextest
+
+      - name: Report Namespace cache status
+        if: always()
+        run: |
+          {
+            echo "### Namespace cache"
+            echo "- cache-hit: \`${{ steps.namespace-cache.outputs.cache-hit }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Set up sccache
+        uses: ./.github/actions/setup-sccache
+
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -148,26 +180,21 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+        with:
+          enable-cache: false
 
       - name: Install Rust toolchain
-        run: |
-          rustup toolchain install 1.85.0 \
-            --profile minimal \
-            --component rustfmt \
-            --component clippy
-          rustup default 1.85.0
+        uses: leynos/shared-actions/.github/actions/setup-rust@93ad65e414a16e8f8933a1ca114ccd480fdfa87e
+        with:
+          toolchain: '1.85.0'
+          cache-provider: external
+          use-sccache: 'false'
+          install-binstall: 'false'
 
       - name: Install cargo-nextest
-        run: |
-          # `make test` prefers cargo-nextest and only falls back to
-          # `cargo test` when it is absent. The fallback runs every lib test
-          # in one shared process, which exposes process-global state — the
-          # tracing callsite Interest cache and raw file-descriptor numbers —
-          # to cross-test interference, causing intermittent failures.
-          # nextest isolates each test in its own process, matching the local
-          # and scrutineer gate runners.
-          curl -LsSf https://get.nexte.st/latest/linux \
-            | tar zxf - -C "${HOME}/.cargo/bin"
+        uses: taiki-e/install-action@18b1216eba7f8039b0f8d131d5473787f0edce68 # v2.85.3
+        with:
+          tool: nextest@${{ env.NEXTEST_VERSION }}
 
       - name: Run typechecker
         run: make typecheck
@@ -175,9 +202,13 @@ jobs:
       - name: Run tests
         run: make test
 
+      - name: Show sccache statistics
+        if: always()
+        run: sccache --show-stats || true
+
   extension-tests:
     name: Extension-gated tests (Python/Rust boundary)
-    runs-on: namespace-profile-default
+    runs-on: namespace-profile-cuprum
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -185,6 +216,26 @@ jobs:
           # This job compiles and runs repository code, so the checkout token
           # must not stay in .git/config where that code could reach it.
           persist-credentials: false
+
+      - name: Set up Namespace cache
+        id: namespace-cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        with:
+          cache: rust,uv
+          path: |
+            ~/.local/bin/sccache
+            ~/.cache/sccache
+
+      - name: Report Namespace cache status
+        if: always()
+        run: |
+          {
+            echo "### Namespace cache"
+            echo "- cache-hit: \`${{ steps.namespace-cache.outputs.cache-hit }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Set up sccache
+        uses: ./.github/actions/setup-sccache
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -194,15 +245,18 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
         with:
-          enable-cache: true
+          enable-cache: false
 
       # `make develop` compiles the extension, so this job needs the same
       # pinned toolchain the other Rust-touching jobs use rather than whatever
       # the runner image happens to ship.
       - name: Install Rust toolchain
-        run: |
-          rustup toolchain install 1.85.0 --profile minimal
-          rustup default 1.85.0
+        uses: leynos/shared-actions/.github/actions/setup-rust@93ad65e414a16e8f8933a1ca114ccd480fdfa87e
+        with:
+          toolchain: '1.85.0'
+          cache-provider: external
+          use-sccache: 'false'
+          install-binstall: 'false'
 
       - name: Prepare Cargo dependencies
         run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml
@@ -234,12 +288,16 @@ jobs:
       - name: Run extension-gated tests
         run: make test-extension
 
+      - name: Show sccache statistics
+        if: always()
+        run: sccache --show-stats || true
+
   coverage:
     # Pull requests only. Pushes to main are handled by coverage-main.yml,
     # which also uploads the report to CodeScene; guarding here stops
     # coverage being generated twice on main.
     if: github.event_name == 'pull_request'
-    runs-on: namespace-profile-default
+    runs-on: namespace-profile-cuprum
     needs:
       - lint-test
       - typecheck-test
@@ -255,6 +313,26 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Set up Namespace cache
+        id: namespace-cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        with:
+          cache: rust,uv
+          path: |
+            ~/.local/bin/sccache
+            ~/.cache/sccache
+
+      - name: Report Namespace cache status
+        if: always()
+        run: |
+          {
+            echo "### Namespace cache"
+            echo "- cache-hit: \`${{ steps.namespace-cache.outputs.cache-hit }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Set up sccache
+        uses: ./.github/actions/setup-sccache
+
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -262,22 +340,16 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+        with:
+          enable-cache: false
 
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@18bed1ca49a6de3d8882bd72635a32ae3f023d57
+        uses: leynos/shared-actions/.github/actions/setup-rust@93ad65e414a16e8f8933a1ca114ccd480fdfa87e
         with:
           toolchain: '1.85.0'
-
-      - name: Cache Cargo registry and git data
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-          key: cargo-coverage-${{ runner.os }}-${{ runner.arch }}-namespace-profile-default-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: |
-            cargo-coverage-${{ runner.os }}-${{ runner.arch }}-namespace-profile-default-
+          cache-provider: external
+          use-sccache: 'false'
+          install-binstall: 'false'
 
       - name: Prepare Cargo dependencies
         run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml
@@ -296,11 +368,12 @@ jobs:
       # treats changes within one percentage point as measurement noise.
       #
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@4977418856133491c6aa7407d40668744df21818
+        uses: leynos/shared-actions/.github/actions/generate-coverage@93ad65e414a16e8f8933a1ca114ccd480fdfa87e
         with:
           format: cobertura
           output-path: coverage.xml
           pytest-workers: ''
+          cache-provider: external
           with-ratchet: 'true'
 
       - name: Check coverage against CodeScene gates
@@ -314,6 +387,10 @@ jobs:
           project-url: https://api.codescene.io/v2/projects/74471
           access-token: ${{ env.CS_ACCESS_TOKEN }}
           installer-checksum: ${{ vars.CODESCENE_CLI_SHA256 }}
+
+      - name: Show sccache statistics
+        if: always()
+        run: sccache --show-stats || true
 
   # Detects whether performance-relevant paths changed so that
   # benchmark-ratchet can skip docs-only and Dependabot-batch pull
@@ -414,6 +491,19 @@ jobs:
           # Keep its scoped token out of later build commands.
           persist-credentials: false
 
+      - name: Cache benchmark build dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .uv-cache
+            .uv-tools
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: cuprum-benchmark-${{ runner.os }}-${{ hashFiles('uv.lock', 'rust/Cargo.lock') }}
+          restore-keys: |
+            cuprum-benchmark-${{ runner.os }}-
+
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -421,6 +511,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+        with:
+          enable-cache: false
 
       - name: Install hyperfine
         run: |

@@ -22,10 +22,23 @@ permissions:
 
 jobs:
   coverage-upload:
-    runs-on: namespace-profile-default
+    runs-on: namespace-profile-cuprum
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Namespace cache
+        id: namespace-cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        with:
+          cache: uv
+      - name: Report Namespace cache status
+        if: always()
+        run: |
+          {
+            echo "### Namespace cache"
+            echo "- cache-hit: \`${{ steps.namespace-cache.outputs.cache-hit }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -34,6 +47,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+        with:
+          enable-cache: false
 
       - name: Install code
         run: make build
@@ -46,11 +61,12 @@ jobs:
       # The pinned action writes a run-specific baseline cache entry and treats
       # changes within one percentage point as measurement noise.
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@4977418856133491c6aa7407d40668744df21818
+        uses: leynos/shared-actions/.github/actions/generate-coverage@93ad65e414a16e8f8933a1ca114ccd480fdfa87e
         with:
           format: cobertura
           output-path: coverage.xml
           pytest-workers: ''
+          cache-provider: external
           with-ratchet: 'true'
 
       - name: Upload coverage data to CodeScene

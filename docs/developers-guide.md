@@ -16,19 +16,45 @@ of truth for day-to-day contributor expectations. For the system design, see the
 
 ## GitHub Actions runner profiles
 
-Compatible repository-owned Linux jobs run on the shared uncached
-`namespace-profile-default` profile (Ubuntu 22.04, amd64, 4 vCPU, and 16 GB).
-The profile has no cache volume; existing GitHub Actions caches remain their
-own backend during this baseline measurement.
+Compatible repository-owned Linux jobs target the requested
+`namespace-profile-cuprum` profile: Ubuntu 22.04 on amd64 with 2 vCPU and 4 GB
+of memory, plus a Namespace cache volume. This is the build default: it stays
+within the 4 vCPU/8 GB ceiling and is sized for the repository's deliberately
+serial Cargo and pytest work. The profile is a Namespace-side resource and is
+not provisioned or mutated by this repository; the label and specification are
+the hand-off required from the Namespace administrator.
 
 The lint job remains on `ubuntu-latest`. Whitaker's prebuilt native tooling
 requires a newer GLIBC than the shared Ubuntu 22.04 profile supplies, and cache
 isolation does not make the cold installation compatible.
 
+The delayed PR comment also remains on `ubuntu-latest`: its intentional sleep
+would otherwise hold a metered build runner without doing useful work.
+
 The native-wheel matrix keeps its existing runner selection because it includes
 Linux container and QEMU work plus Windows and macOS targets. The benchmark
 ratchet also remains on its existing `ubicloud-standard-4-ubuntu-2404` runner:
 its Ubuntu 24.04 image and benchmark baseline are part of that contract.
+
+
+### Namespace cache ownership
+
+Namespace jobs establish `namespacelabs/nscloud-cache-action` before installing
+dependencies or building. It is pinned to
+`c5f8dab7560444c4bf8dbc64f1b203431873c547` and owns the Rust, uv, and sccache
+paths for those jobs. Each such job appends the action's `cache-hit` output to
+the GitHub Actions step summary, so a cold cache is visible rather than being
+mistaken for a build regression.
+
+The shared setup-rust action is pinned to PR #421's head,
+`93ad65e414a16e8f8933a1ca114ccd480fdfa87e`, with
+`cache-provider: external` and `use-sccache: 'false'`. This prevents nested
+GitHub archive caches or a second compiler-cache owner. Namespace jobs install
+the pinned, SHA-256-verified sccache release through
+`.github/actions/setup-sccache`, use its local cache volume, and print
+`sccache --show-stats` after Rust work. Native-platform wheel jobs remain on
+their platform runners and use a separate GitHub Actions cache for their Cargo
+and pip paths.
 
 ## Rust availability probing
 
