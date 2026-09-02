@@ -47,6 +47,11 @@ cache. Each such job appends the action's `cache-hit` output to
 the GitHub Actions step summary, so a cold cache is visible rather than being
 mistaken for a build regression.
 
+Installed tools use the parent `~/.local/bin` cache path. Do not mount the
+terminal `~/.local/bin/sccache` file: Namespace creates an empty mount point as
+a directory on a cold cache, so the installer cannot replace it with the
+executable.
+
 The shared setup-rust action is pinned to the merged PR #421 revision,
 `5daae0a332441d170d88ca648c9e71f0bbe96cb3`, with
 `cache-provider: external` and `use-sccache: 'false'`. This prevents nested

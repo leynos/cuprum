@@ -153,6 +153,22 @@ def test_expensive_namespace_jobs_have_one_cache_owner(
         ), f"{workflow_name}:{job_name} must report cache-hit in the summary"
 
 
+@pytest.mark.parametrize("job_name", ["typecheck-test", "extension-tests", "coverage"])
+def test_sccache_jobs_mount_the_installed_tool_parent(job_name: str) -> None:
+    """Prevent Namespace from turning the cached sccache binary into a directory."""
+    steps = _steps("ci.yml", job_name)
+    cache_step = next(step for step in steps if step.get("uses") == NSCLOUD_CACHE)
+    cache_inputs = cache_step.get("with")
+    assert isinstance(cache_inputs, dict), f"ci.yml:{job_name} cache paths are required"
+    cached_paths = str(cache_inputs.get("path", ""))
+    assert "~/.local/bin\n" in f"{cached_paths}\n", (
+        f"ci.yml:{job_name} must mount the installed-tool parent"
+    )
+    assert "~/.local/bin/sccache" not in cached_paths, (
+        f"ci.yml:{job_name} must not mount a binary as a directory"
+    )
+
+
 def test_namespace_rust_jobs_disable_nested_cache_owners() -> None:
     """Ensure setup-rust delegates Cargo and uv ownership to Namespace."""
     for job_name in ("typecheck-test", "extension-tests", "coverage"):

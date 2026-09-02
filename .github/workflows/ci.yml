@@ -161,7 +161,7 @@ jobs:
             ~/.cargo/registry
             ~/.cache/uv
             ~/.local/share/uv
-            ~/.local/bin/sccache
+            ~/.local/bin
             ~/.cache/sccache
 
       - name: Report Namespace cache status
@@ -230,7 +230,7 @@ jobs:
             ~/.cargo/registry
             ~/.cache/uv
             ~/.local/share/uv
-            ~/.local/bin/sccache
+            ~/.local/bin
             ~/.cache/sccache
 
       - name: Report Namespace cache status
@@ -330,7 +330,7 @@ jobs:
             ~/.cargo/registry
             ~/.cache/uv
             ~/.local/share/uv
-            ~/.local/bin/sccache
+            ~/.local/bin
             ~/.cache/sccache
 
       - name: Report Namespace cache status
