@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-import subprocess  # noqa: S404 - invokes a fixed Python/pytest command in a temp dir.
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - invokes a fixed Python/pytest command in a temp dir.
 import sys
 import typing as typ
 import zipfile
@@ -59,7 +59,7 @@ def test_debug_rust_pump_does_not_abort_on_early_exit_or_timeout(
         "CUPRUM_STREAM_BACKEND": "rust",
         "PYTHONPATH": os.pathsep.join((str(extension_root), str(root))),
     }
-    completed = subprocess.run(  # noqa: S603 - fixed test-node argument vector.
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed test-node argument vector.
         [
             sys.executable,
             "-m",

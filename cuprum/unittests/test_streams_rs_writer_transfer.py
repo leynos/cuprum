@@ -22,6 +22,23 @@ class _NativePumpModule(ModuleType):
     rust_pump_stream: cabc.Callable[..., int]
 
 
+class _OneShotBufferSize:
+    """Return a valid index once, then fail if conversion is repeated."""
+
+    def __init__(self, value: int) -> None:
+        """Store the sole value ``__index__`` may return."""
+        self.calls = 0
+        self.value = value
+
+    def __index__(self) -> int:
+        """Return the stored value and reject repeat conversion."""
+        self.calls += 1
+        if self.calls > 1:
+            msg = "buffer size was converted after writer hand-off"
+            raise RuntimeError(msg)
+        return self.value
+
+
 def _native_pump_module(native_pump: cabc.Callable[..., int]) -> ModuleType:
     """Return a native-module double exposing ``native_pump``."""
     native_module = _NativePumpModule("rust_pump_double")
@@ -91,7 +108,7 @@ def test_windows_writer_transfer_releases_the_crt_duplicate(
 
     result = _streams_rs.rust_pump_stream(reader_fd, writer_fd)
 
-    assert result == 7
+    assert result == 7, "expected the native pump result to reach its caller"
     assert closed_fds == [writer_fd], (
         "the duplicated CRT descriptor must be released before Rust owns its handle"
     )
@@ -102,16 +119,67 @@ def test_windows_writer_transfer_releases_the_crt_duplicate(
     )
 
 
-def test_windows_writer_transfer_closes_crt_fd_when_duplicate_handle_fails(
+def test_windows_writer_transfer_passes_the_normalized_buffer_size(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A failed Win32 duplication leaves Python to close the CRT writer."""
+    """A stateful ``__index__`` runs before the writer handle is transferred."""
+    reader_fd = 11
+    writer_fd = 12
+    reader_handle = 101
+    rust_owned_handle = 103
+    native_pump = mock.Mock(return_value=7)
+    closed_fds: list[int] = []
+    kernel32 = mock.Mock()
+    buffer_size = _OneShotBufferSize(1024)
+    _patch_windows_pump(
+        monkeypatch,
+        native_pump=native_pump,
+        kernel32=kernel32,
+        closed_fds=closed_fds,
+    )
+    monkeypatch.setattr(
+        _streams_rs,
+        "_duplicate_windows_handle",
+        lambda _handle: rust_owned_handle,
+    )
+
+    result = _streams_rs.rust_pump_stream(
+        reader_fd,
+        writer_fd,
+        buffer_size=typ.cast("int", buffer_size),
+    )
+
+    assert result == 7, "expected the native pump result to reach its caller"
+    assert buffer_size.calls == 1, (
+        "expected buffer-size conversion before the writer hand-off"
+    )
+    assert closed_fds == [writer_fd], (
+        "expected Python to release the CRT duplicate after successful transfer"
+    )
+    native_pump.assert_called_once_with(
+        reader_handle,
+        rust_owned_handle,
+        buffer_size=1024,
+    )
+
+
+@pytest.mark.parametrize(
+    ("duplicate_succeeds", "error_match"),
+    [(False, "simulated Windows error"), (True, "null handle")],
+    ids=["duplicate-handle-fails", "duplicate-handle-is-null"],
+)
+def test_windows_writer_transfer_closes_crt_fd_when_duplicate_handle_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+    duplicate_succeeds: bool,
+    error_match: str,
+) -> None:
+    """An invalid Win32 duplication leaves Python to close the CRT writer."""
     writer_fd = 12
     native_pump = mock.Mock(return_value=7)
     closed_fds: list[int] = []
     kernel32 = mock.Mock()
     kernel32.GetCurrentProcess.return_value = 1
-    kernel32.DuplicateHandle.return_value = False
+    kernel32.DuplicateHandle.return_value = duplicate_succeeds
     _patch_windows_pump(
         monkeypatch,
         native_pump=native_pump,
@@ -119,34 +187,12 @@ def test_windows_writer_transfer_closes_crt_fd_when_duplicate_handle_fails(
         closed_fds=closed_fds,
     )
 
-    with pytest.raises(OSError, match="simulated Windows error"):
+    with pytest.raises(OSError, match=error_match):
         _streams_rs.rust_pump_stream(11, writer_fd)
 
-    assert closed_fds == [writer_fd]
-    native_pump.assert_not_called()
-
-
-def test_windows_writer_transfer_closes_crt_fd_when_duplicate_handle_is_null(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A null Win32 duplication result leaves Python to close the CRT writer."""
-    writer_fd = 12
-    native_pump = mock.Mock(return_value=7)
-    closed_fds: list[int] = []
-    kernel32 = mock.Mock()
-    kernel32.GetCurrentProcess.return_value = 1
-    kernel32.DuplicateHandle.return_value = True
-    _patch_windows_pump(
-        monkeypatch,
-        native_pump=native_pump,
-        kernel32=kernel32,
-        closed_fds=closed_fds,
+    assert closed_fds == [writer_fd], (
+        "expected Python to close the CRT duplicate after invalid Win32 transfer"
     )
-
-    with pytest.raises(OSError, match="null handle"):
-        _streams_rs.rust_pump_stream(11, writer_fd)
-
-    assert closed_fds == [writer_fd]
     native_pump.assert_not_called()
 
 
@@ -188,8 +234,12 @@ def test_windows_writer_transfer_closes_handle_when_crt_close_fails(
     with pytest.raises(OSError, match="simulated CRT close error"):
         _streams_rs.rust_pump_stream(11, writer_fd)
 
-    assert close_attempts == [writer_fd, writer_fd]
-    assert kernel32.CloseHandle.call_args.args[0].value == rust_owned_handle
+    assert close_attempts == [writer_fd, writer_fd], (
+        "expected the CRT writer close to be retried by pre-native cleanup"
+    )
+    assert kernel32.CloseHandle.call_args.args[0].value == rust_owned_handle, (
+        "expected rollback to close the separately duplicated Win32 handle"
+    )
     native_pump.assert_not_called()
 
 
@@ -213,5 +263,7 @@ def test_windows_invalid_buffer_does_not_transfer_writer_resource(
         _streams_rs.rust_pump_stream(11, 12, buffer_size=buffer_size)
 
     kernel32.DuplicateHandle.assert_not_called()
-    assert closed_fds == [12]
+    assert closed_fds == [12], (
+        "expected pre-native validation to close the still Python-owned writer"
+    )
     native_pump.assert_not_called()

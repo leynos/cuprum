@@ -202,13 +202,14 @@ async def _cancel_before_native_worker_settles(
             )
             await asyncio.wait_for(native_pump.submitted.wait(), timeout=0.5)
             task.cancel()
-
-            with pytest.raises(asyncio.CancelledError):
-                await task
+            await asyncio.sleep(0)
 
             assert cleanup.order == ["pause", "drain"], (
                 "expected FD restoration and reader resumption to wait for native "
                 "worker settlement"
+            )
+            assert not task.done(), (
+                "expected cancellation to await the native worker's cleanup callback"
             )
             assert native_pump.received_fds, (
                 "expected native work to receive a writer duplicate"
@@ -231,5 +232,7 @@ async def _cancel_before_native_worker_settles(
                 os.fstat(write_fd)
                 os.fstat(reused_writer_fd)
                 close_duplicate.assert_not_called()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
             finally:
                 os.close(reused_writer_fd)

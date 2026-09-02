@@ -99,6 +99,8 @@ def _install_recording_native_failure(
 
 
 class TestRustPumpFailures:
+    """Cover native-pump setup and worker failure cleanup."""
+
     def test_run_rust_pump_resumes_reader_when_draining_raises_base_exception(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -221,7 +223,7 @@ class TestRustPumpFailures:
                 future = loop.create_future()
                 try:
                     future.set_result(function(*args))
-                except BaseException as exc:  # noqa: BLE001 - preserve worker errors
+                except BaseException as exc:  # ruff: ignore[blind-except] - preserve worker errors
                     future.set_exception(exc)
                 return future
 

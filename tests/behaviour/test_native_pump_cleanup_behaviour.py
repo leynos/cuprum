@@ -230,8 +230,9 @@ def _assert_cleanup_telemetry(scenario: _CleanupScenario) -> None:
     assert scenario.restores == [True], (
         f"descriptor restoration must occur once, found {scenario.restores}"
     )
-    assert scenario.writer_closes == [True], (
-        f"duplicate writer cleanup must occur once, found {scenario.writer_closes}"
+    assert scenario.writer_closes == [], (
+        "Python must never close the Rust-owned duplicate after submission, found "
+        f"{scenario.writer_closes}"
     )
 
 

@@ -167,8 +167,9 @@ def build_native_wheel_artefact(root: Path, out_dir: Path) -> Path:
     OSError
         If the output directory cannot be created or inspected, or if the
         maturin subprocess cannot be started.
-    """  # noqa: DOC502 - OSError propagates from Path.mkdir and subprocess.run
+    """  # ruff: ignore[docstring-extraneous-exception] - OSError propagates from Path.mkdir and subprocess.run
     return _build_native_wheel_artefact(root, out_dir, release=True)
+
 
 def build_debug_native_wheel_artefact(root: Path, out_dir: Path) -> Path:
     """Build a debug native wheel using the current interpreter's maturin.
@@ -199,8 +200,9 @@ def build_debug_native_wheel_artefact(root: Path, out_dir: Path) -> Path:
         If creating the output directory or starting the maturin subprocess
         fails.
 
-    """  # noqa: DOC502 - exceptions propagate from the shared build helper
+    """  # ruff: ignore[docstring-extraneous-exception] - exceptions propagate from the shared build helper
     return _build_native_wheel_artefact(root, out_dir, release=False)
+
 
 def _build_native_wheel_artefact(root: Path, out_dir: Path, *, release: bool) -> Path:
     """Build one wheel in the requested Cargo profile."""
@@ -219,7 +221,7 @@ def _build_native_wheel_artefact(root: Path, out_dir: Path, *, release: bool) ->
     if release:
         command.insert(4, "--release")
     try:
-        subprocess.run(  # noqa: S603 - trusted paths and pinned maturin
+        subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - trusted paths and pinned maturin
             command,
             check=True,
             cwd=root,

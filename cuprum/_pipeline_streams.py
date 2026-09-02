@@ -135,7 +135,7 @@ def _restore_rust_pump_state(state: _RustPumpState) -> None:
 
 
 def _complete_rust_pump(
-    completed: asyncio.Future[object],
+    completed: asyncio.Future[int],
     *,
     cleanup_complete: asyncio.Future[None],
     state: _RustPumpState,
@@ -147,9 +147,17 @@ def _complete_rust_pump(
             if state.was_cancelled and error is not None:
                 _log_rust_pump_failed_after_cancel(error)
     finally:
-        _restore_rust_pump_state(state)
-        if not cleanup_complete.done():
-            cleanup_complete.set_result(None)
+        try:
+            with _suppressed_teardown_failure(
+                _LOGGER,
+                "restore_state",
+                OSError,
+                ValueError,
+            ):
+                _restore_rust_pump_state(state)
+        finally:
+            if not cleanup_complete.done():
+                cleanup_complete.set_result(None)
 
 
 async def _await_native_pump_cleanup(
@@ -178,9 +186,7 @@ async def _run_rust_pump_with_blocking_fds(
     """Run the native pump while worker settlement owns transport cleanup."""
     from cuprum._streams_rs import rust_pump_stream
 
-    # asyncio owns the original transport descriptor. The submitted shim owns
-    # this duplicate until it invokes Rust, which then consumes and closes its
-    # received resource; neither completion path closes this FD number.
+    # The submitted shim transfers this duplicate to Rust; asyncio keeps original.
     rust_writer_fd = os.dup(state.writer_fd)
     loop = asyncio.get_running_loop()
     cleanup_complete = loop.create_future()
