@@ -208,3 +208,16 @@ class TestBaselineHistoryRecorder:
         assert load_history(output) == BaselineHistory(), (
             "the first unmeasurable run must publish an empty valid history"
         )
+
+    def test_a_directory_history_returns_an_input_error(
+        self, tmp_path: pth.Path
+    ) -> None:
+        """Only an absent history starts a new window; a directory is invalid."""
+        candidate = _write_candidate(tmp_path, ratio=1.0)
+        history = tmp_path / "main-baseline-history"
+        history.mkdir()
+
+        exit_code, output = _record(tmp_path, candidate=candidate, history=history)
+
+        assert exit_code == 2, "a directory history must return input error 2"
+        assert not output.exists(), "a failed history read must not publish a window"

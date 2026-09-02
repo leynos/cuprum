@@ -1,15 +1,8 @@
 """Rolling window of main-branch benchmark samples for the ratchet.
 
-The ratchet used to compare each pull request against the single most recent
-`main` measurement. Two properties of that arrangement made a noisy run
-poison every subsequent pull request:
-
-- one sample is the whole estimate, so its noise is the bar's noise; and
-- the sample was only published when its own run passed, and a run passes
-  whenever it is *faster* than the bar. An anomalously fast measurement was
-  therefore always accepted, while the corrective slower measurements that
-  followed were rejected — a bar biased towards the low tail of the noise
-  distribution, and sticky once it got there.
+The ratchet used to compare each pull request against the latest `main`
+measurement. One sample makes its noise the bar's noise; publishing only
+passing measurements also biases the bar towards the low tail of that noise.
 
 This module holds the window that replaces it. The bar is the median of the
 last `DEFAULT_WINDOW_SIZE` main-branch samples, which a single outlier cannot
@@ -55,16 +48,12 @@ if typ.TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-#: How many recent main-branch runs the window keeps. Seven spans roughly a
-#: week of merges at this repository's rate: long enough that one bad runner
-#: cannot dominate the median, short enough that a deliberate performance
-#: change reaches the bar within a few merges rather than being averaged away.
+#: How many recent main-branch runs the window keeps. Seven lets one bad runner
+#: not dominate the median while admitting deliberate changes within a few merges.
 DEFAULT_WINDOW_SIZE = 7
 
-#: How many estimated standard deviations of observed spread a candidate must
-#: exceed before its regression counts. Three is the conventional outlier
-#: bound; with the spread this benchmark exhibits it is also comfortably wider
-#: than the runner-to-runner swings recorded in issue #219.
+#: Estimated standard deviations of observed spread a candidate must exceed.
+#: Three is a conventional outlier bound wider than the issue #219 runner swings.
 DEFAULT_NOISE_SIGMAS = 3.0
 
 #: Scale factor that makes the median absolute deviation a consistent
@@ -103,22 +92,12 @@ class BaselineHistoryReadError(ValueError, BenchmarkError):
         subject = f"baseline history {path}" if path is not None else "baseline history"
         super().__init__(f"{subject}: {reason}")
 
-    @classmethod
-    def unreadable(cls, path: pth.Path, error: Exception) -> BaselineHistoryReadError:
-        """Build a read failure retaining the low-level cause text."""
-        return cls(f"could not read: {error}", path=path)
 
-    @classmethod
-    def non_object(cls, path: pth.Path) -> BaselineHistoryReadError:
-        """Build a failure for a JSON payload that is not an object."""
-        return cls("must contain a JSON object", path=path)
+class BaselineHistoryNotFoundError(BaselineHistoryReadError):
+    """The optional baseline-history file was not present."""
 
-    @classmethod
-    def invalid_payload(
-        cls, path: pth.Path, error: Exception
-    ) -> BaselineHistoryReadError:
-        """Build a validation failure retaining the underlying reason."""
-        return cls(f"invalid payload: {error}", path=path)
+    def __init__(self, path: pth.Path) -> None:
+        super().__init__("does not exist", path=path)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -312,19 +291,37 @@ def history_from_payload(payload: cabc.Mapping[str, object]) -> BaselineHistory:
 
 
 def load_history(path: pth.Path) -> BaselineHistory:
-    """Load a baseline-history file, raising `BaselineHistoryReadError` on failure."""
+    """Load history, distinguishing an absent file from unreadable content.
+
+    Returns
+    -------
+    BaselineHistory
+        The validated persisted history.
+
+    Raises
+    ------
+    BaselineHistoryNotFoundError
+        If ``path`` does not exist.
+    BaselineHistoryReadError
+        If the path cannot be read or its JSON payload is invalid.
+    """
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise BaselineHistoryNotFoundError(path) from exc
     except (OSError, json.JSONDecodeError) as exc:
-        raise BaselineHistoryReadError.unreadable(path, exc) from exc
+        msg = f"could not read: {exc}"
+        raise BaselineHistoryReadError(msg, path=path) from exc
     if not isinstance(payload, dict):
-        raise BaselineHistoryReadError.non_object(path)
+        msg = "must contain a JSON object"
+        raise BaselineHistoryReadError(msg, path=path)
     try:
         return history_from_payload(typ.cast("dict[str, object]", payload))
     except (TypeError, ValueError) as exc:
         if isinstance(exc, BaselineHistoryReadError):
             raise BaselineHistoryReadError(exc.reason, path=path) from exc
-        raise BaselineHistoryReadError.invalid_payload(path, exc) from exc
+        msg = f"invalid payload: {exc}"
+        raise BaselineHistoryReadError(msg, path=path) from exc
 
 
 def write_history(*, history: BaselineHistory, output_path: pth.Path) -> None:

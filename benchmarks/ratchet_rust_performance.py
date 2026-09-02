@@ -7,12 +7,9 @@ comparison report. Ratcheting on the within-run ratio rather than absolute
 wall-clock means cancels out runner-speed differences and interpreter
 startup overhead between the CI jobs that produced the runs.
 
-The bar is the median of a rolling window of main-branch samples. A scenario
-fails only when it exceeds both the configured flat threshold and the observed
-spread — see `benchmarks/ratchet_history.py` for why. No window falls back to
-the single-sample bar this ratchet used before the window existed.
-
-`benchmarks/ratchet_ratios.py` extracts ratios; this module judges them.
+The bar is a rolling median of main-branch samples. A scenario fails only when
+it exceeds both the flat threshold and observed spread; no window falls back to
+the single-sample bar. `benchmarks/ratchet_ratios.py` extracts ratios.
 """
 
 from __future__ import annotations
@@ -32,6 +29,7 @@ from benchmarks.ratchet_history import (
     DEFAULT_NOISE_SIGMAS,
     DEFAULT_WINDOW_SIZE,
     BaselineHistory,
+    BaselineHistoryNotFoundError,
     RatchetPolicy,
     load_history,
     median_ratio,
@@ -276,10 +274,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--baseline-history",
         type=pth.Path,
-        help=(
-            "Rolling window of recent main-branch samples. An absent or non-file "
-            "path falls back to the single-sample baseline."
-        ),
+        help="History window; an absent path uses the single-sample fallback.",
     )
     parser.add_argument("--candidate-plan", type=pth.Path, required=True)
     parser.add_argument("--candidate-throughput", type=pth.Path, required=True)
@@ -326,10 +321,14 @@ def _load_baseline(args: argparse.Namespace) -> BenchmarkRunPayload | None:
 
 def _load_history_or_empty(path: pth.Path | None) -> BaselineHistory:
     """Load an optional history, treating only its intentional absence as empty."""
-    if path is None or not path.is_file():
+    if path is None:
         _logger.info("no baseline history is available; using the fallback baseline")
         return BaselineHistory()
-    return load_history(path)
+    try:
+        return load_history(path)
+    except BaselineHistoryNotFoundError:
+        _logger.info("no baseline history is available; using the fallback baseline")
+        return BaselineHistory()
 
 
 def main() -> int:

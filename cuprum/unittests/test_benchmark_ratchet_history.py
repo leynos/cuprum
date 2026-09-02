@@ -26,6 +26,7 @@ from benchmarks.ratchet_history import (
     DEFAULT_WINDOW_SIZE,
     MAX_NOISE_TOLERANCE,
     BaselineHistory,
+    BaselineHistoryNotFoundError,
     BaselineHistoryReadError,
     HistorySample,
     RatchetPolicy,
@@ -521,6 +522,19 @@ def _test_an_unusable_history_raises_a_typed_error(
     assert reason in error.value.reason, "the typed error must retain its reason"
 
 
+def _test_a_missing_history_has_a_distinct_typed_error(tmp_path: pth.Path) -> None:
+    """Verify an absent optional artefact has a distinct error."""
+    path = tmp_path / "main-baseline-history.json"
+
+    with pytest.raises(BaselineHistoryNotFoundError) as error:
+        load_history(path)
+
+    assert error.value.path == path, "the not-found error must retain its path"
+    assert error.value.reason == "does not exist", (
+        "the not-found error must expose its stable reason"
+    )
+
+
 def _test_a_malformed_sample_is_an_error_not_a_silent_drop() -> None:
     """Verify a recognized schema with a broken sample is not read as empty.
 
@@ -619,6 +633,12 @@ class TestPersistence:
     def test_a_malformed_sample_is_an_error_not_a_silent_drop(self) -> None:
         """Run the malformed-sample rejection check."""
         _test_a_malformed_sample_is_an_error_not_a_silent_drop()
+
+    def test_a_missing_history_has_a_distinct_typed_error(
+        self, tmp_path: pth.Path
+    ) -> None:
+        """Run the missing-history type check."""
+        _test_a_missing_history_has_a_distinct_typed_error(tmp_path)
 
     def test_a_failed_history_replacement_preserves_the_previous_file(
         self, tmp_path: pth.Path, monkeypatch: pytest.MonkeyPatch

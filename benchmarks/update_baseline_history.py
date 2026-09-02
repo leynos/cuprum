@@ -25,6 +25,7 @@ from benchmarks.benchmark_profile import IncompatibleBenchmarkProfileError
 from benchmarks.ratchet_history import (
     DEFAULT_WINDOW_SIZE,
     BaselineHistory,
+    BaselineHistoryNotFoundError,
     BaselineHistoryReadError,
     HistorySample,
     load_history,
@@ -143,10 +144,14 @@ def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
 
 def _load_history_or_empty(path: pth.Path | None) -> BaselineHistory:
     """Load an optional history, treating only its intentional absence as empty."""
-    if path is None or not path.is_file():
+    if path is None:
         _logger.info("no baseline history is available; starting a new window")
         return BaselineHistory()
-    return load_history(path)
+    try:
+        return load_history(path)
+    except BaselineHistoryNotFoundError:
+        _logger.info("no baseline history is available; starting a new window")
+        return BaselineHistory()
 
 
 def main(argv: cabc.Sequence[str] | None = None) -> int:

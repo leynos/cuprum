@@ -1648,6 +1648,46 @@ completed `main` baseline artefact as a single sample — the pre-window bar,
 reported in `ratchet-report.json` as `baseline_sample_count: 1` so a
 surprising verdict can be read against the evidence behind it.
 
+
+### Benchmark-ratchet implementation boundaries
+
+The ratchet is split by responsibility rather than by the workflow steps that
+invoke it:
+
+- `benchmarks/ratchet_history.py` contains the typed rolling-window model.
+  `HistorySample` records ratios and provenance, `BaselineHistory` filters and
+  appends samples, and `RatchetPolicy` holds the flat and noise thresholds.
+  `median_ratio` and `noise_tolerance` are the statistics used by the policy.
+  `history_from_payload` validates the JSON shape; `load_history` and
+  `write_history` are the file adapter, with the latter replacing the output
+  atomically. `load_history` distinguishes an absent history
+  (`BaselineHistoryNotFoundError`, the only empty-window fallback) from
+  unreadable or invalid data (`BaselineHistoryReadError`).
+- `benchmarks/ratchet_ratios.py` is the benchmark-data adapter. `load_plan`
+  and `load_throughput` validate the two input payloads, `run_ratios` derives
+  the matched Rust/Python ratios, and `profile_metadata` exposes the profile
+  version and worker-iteration contract used for compatibility filtering.
+- `benchmarks/ratchet_rust_performance.py` is the comparison entry point. Its
+  `compare_rust_regressions` function selects a compatible history window (or
+  the single-sample fallback) and returns the typed report; `main` supplies the
+  CLI exit status and `write_report` serializes the result. A malformed input
+  returns status 2, a regression status 1, and a passing or profile-skipped
+  comparison status 0.
+- `benchmarks/confirm_regression.py` is the retry adapter. `confirm_regressions`
+  intersects the primary and confirmation regression lists, preserving the
+  primary verdict when confirmation has no comparison evidence. Its CLI writes
+  the combined report and returns status 1 only for a reproduced regression.
+- `benchmarks/update_baseline_history.py` is the `main`-run recorder. It loads
+  the previous history, derives one sample from the candidate plan and
+  throughput, appends it when valid, and always writes the resulting history
+  file. Missing or malformed candidate measurements carry the existing window
+  forward; an unreadable history or failed write returns status 2.
+
+Keep these boundaries intact when changing the ratchet: ratio extraction must
+remain shared by comparison and recording, while history compatibility and
+regression policy must not be reimplemented in the workflow or in JSON
+callers.
+
 ## Profiling harness overview
 
 The profiling benchmark harness provides deterministic parent-side tee and
