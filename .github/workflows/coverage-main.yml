@@ -61,7 +61,7 @@ jobs:
       # The pinned action writes a run-specific baseline cache entry and treats
       # changes within one percentage point as measurement noise.
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@93ad65e414a16e8f8933a1ca114ccd480fdfa87e
+        uses: leynos/shared-actions/.github/actions/generate-coverage@5daae0a332441d170d88ca648c9e71f0bbe96cb3
         with:
           format: cobertura
           output-path: coverage.xml

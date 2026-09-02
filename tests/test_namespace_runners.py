@@ -20,11 +20,11 @@ NSCLOUD_CACHE = (
 )
 SETUP_RUST = (
     "leynos/shared-actions/.github/actions/setup-rust@"
-    "93ad65e414a16e8f8933a1ca114ccd480fdfa87e"
+    "5daae0a332441d170d88ca648c9e71f0bbe96cb3"
 )
 GENERATE_COVERAGE = (
     "leynos/shared-actions/.github/actions/generate-coverage@"
-    "93ad65e414a16e8f8933a1ca114ccd480fdfa87e"
+    "5daae0a332441d170d88ca648c9e71f0bbe96cb3"
 )
 MIGRATED_JOBS = {
     "build-wheels.yml": ("build-pure-wheel", "verify-wheel-install"),

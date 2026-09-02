@@ -69,7 +69,7 @@ jobs:
           npm install -g "markdownlint-cli2@${MARKDOWNLINT_VERSION}"
 
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@93ad65e414a16e8f8933a1ca114ccd480fdfa87e
+        uses: leynos/shared-actions/.github/actions/setup-rust@5daae0a332441d170d88ca648c9e71f0bbe96cb3
         with:
           toolchain: '1.85.0'
           cache-provider: github
@@ -184,7 +184,7 @@ jobs:
           enable-cache: false
 
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@93ad65e414a16e8f8933a1ca114ccd480fdfa87e
+        uses: leynos/shared-actions/.github/actions/setup-rust@5daae0a332441d170d88ca648c9e71f0bbe96cb3
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -251,7 +251,7 @@ jobs:
       # pinned toolchain the other Rust-touching jobs use rather than whatever
       # the runner image happens to ship.
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@93ad65e414a16e8f8933a1ca114ccd480fdfa87e
+        uses: leynos/shared-actions/.github/actions/setup-rust@5daae0a332441d170d88ca648c9e71f0bbe96cb3
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -344,7 +344,7 @@ jobs:
           enable-cache: false
 
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@93ad65e414a16e8f8933a1ca114ccd480fdfa87e
+        uses: leynos/shared-actions/.github/actions/setup-rust@5daae0a332441d170d88ca648c9e71f0bbe96cb3
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -368,7 +368,7 @@ jobs:
       # treats changes within one percentage point as measurement noise.
       #
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@93ad65e414a16e8f8933a1ca114ccd480fdfa87e
+        uses: leynos/shared-actions/.github/actions/generate-coverage@5daae0a332441d170d88ca648c9e71f0bbe96cb3
         with:
           format: cobertura
           output-path: coverage.xml

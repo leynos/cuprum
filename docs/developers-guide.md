@@ -46,8 +46,8 @@ paths for those jobs. Each such job appends the action's `cache-hit` output to
 the GitHub Actions step summary, so a cold cache is visible rather than being
 mistaken for a build regression.
 
-The shared setup-rust action is pinned to PR #421's head,
-`93ad65e414a16e8f8933a1ca114ccd480fdfa87e`, with
+The shared setup-rust action is pinned to the merged PR #421 revision,
+`5daae0a332441d170d88ca648c9e71f0bbe96cb3`, with
 `cache-provider: external` and `use-sccache: 'false'`. This prevents nested
 GitHub archive caches or a second compiler-cache owner. Namespace jobs install
 the pinned, SHA-256-verified sccache release through
