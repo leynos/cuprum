@@ -42,7 +42,10 @@ its Ubuntu 24.04 image and benchmark baseline are part of that contract.
 Namespace jobs establish `namespacelabs/nscloud-cache-action` before installing
 dependencies or building. It is pinned to
 `c5f8dab7560444c4bf8dbc64f1b203431873c547` and owns the Rust, uv, and sccache
-paths for those jobs. Each such job appends the action's `cache-hit` output to
+paths for those jobs. The workflow supplies explicit paths rather than cache
+modes that execute a tool during planning, and it leaves Cargo's disposable
+`target` directory to sccache rather than mounting it as a second compiler
+cache. Each such job appends the action's `cache-hit` output to
 the GitHub Actions step summary, so a cold cache is visible rather than being
 mistaken for a build regression.
 

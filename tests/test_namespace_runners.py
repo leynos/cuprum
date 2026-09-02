@@ -112,6 +112,17 @@ def test_expensive_namespace_jobs_have_one_cache_owner(
             f"{workflow_name}:{job_name} must have one Namespace cache owner"
         )
         cache_index = steps.index(cache_steps[0])
+        cache_inputs = cache_steps[0].get("with")
+        assert isinstance(cache_inputs, dict), (
+            f"{workflow_name}:{job_name} cache step must declare paths"
+        )
+        assert "cache" not in cache_inputs, (
+            f"{workflow_name}:{job_name} must not use command-dependent cache modes"
+        )
+        cached_paths = str(cache_inputs.get("path", ""))
+        assert "~/.cache/uv" in cached_paths, (
+            f"{workflow_name}:{job_name} must retain uv downloads"
+        )
         work_indices = [
             index
             for index, step in enumerate(steps)

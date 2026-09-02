@@ -155,11 +155,14 @@ jobs:
         id: namespace-cache
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
         with:
-          cache: rust,uv
           path: |
+            ~/.cargo/bin
+            ~/.cargo/git
+            ~/.cargo/registry
+            ~/.cache/uv
+            ~/.local/share/uv
             ~/.local/bin/sccache
             ~/.cache/sccache
-            ~/.cargo/bin/cargo-nextest
 
       - name: Report Namespace cache status
         if: always()
@@ -221,8 +224,12 @@ jobs:
         id: namespace-cache
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
         with:
-          cache: rust,uv
           path: |
+            ~/.cargo/bin
+            ~/.cargo/git
+            ~/.cargo/registry
+            ~/.cache/uv
+            ~/.local/share/uv
             ~/.local/bin/sccache
             ~/.cache/sccache
 
@@ -317,8 +324,12 @@ jobs:
         id: namespace-cache
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
         with:
-          cache: rust,uv
           path: |
+            ~/.cargo/bin
+            ~/.cargo/git
+            ~/.cargo/registry
+            ~/.cache/uv
+            ~/.local/share/uv
             ~/.local/bin/sccache
             ~/.cache/sccache
 
