@@ -258,9 +258,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: cargo-coverage-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          key: cargo-coverage-${{ runner.os }}-${{ runner.arch }}-namespace-profile-default-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: |
-            cargo-coverage-${{ runner.os }}-
+            cargo-coverage-${{ runner.os }}-${{ runner.arch }}-namespace-profile-default-
 
       - name: Prepare Cargo dependencies
         run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml

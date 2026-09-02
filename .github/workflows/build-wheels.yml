@@ -7,6 +7,9 @@ on:
         type: string
         required: true
 
+permissions:
+  contents: read
+
 env:
   # Keep in sync with .github/actions/build-wheels/action.yml and pyproject.toml.
   MATURIN_VERSION: "1.13.3"
@@ -17,6 +20,8 @@ jobs:
     runs-on: namespace-profile-default
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/pure-python-wheel
         with:
           python-version: ${{ inputs['python-version'] }}
@@ -48,6 +53,8 @@ jobs:
             target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          persist-credentials: false
       - name: Compute Python tag for manylinux interpreter path
         if: startsWith(matrix.os, 'ubuntu')
         id: pytag
@@ -114,6 +121,8 @@ jobs:
       - build-native-wheels
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:

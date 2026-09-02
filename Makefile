@@ -38,6 +38,7 @@ TEST_CARGO_BUILD_JOBS ?= 1
 # and parallel batches contend on the Cargo build cache with little benefit.
 PYTEST_WORKERS ?= 0
 PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
+  tests/test_namespace_runners.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
   tests/behaviour/test_[s-z]*.py
