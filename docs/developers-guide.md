@@ -2438,7 +2438,7 @@ Table: Lint-related Makefile variables and their defaults.
 | `PYLINT_VERSION`        | `4.0.7`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.                                                          |
 | `PYLINT_CACHE`          | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                                                                          |
 | `PYLINT`                | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                                                                        |
-| `DF12_PYTHON_LINTS_REF` | `4cf41736cce2f7ba2778882a5c629c044568a0e5`                                   | Immutable v0.3.0 revision locked for DF12 lint tooling.                                                                     |
+| `DF12_PYTHON_LINTS_REF` | `v0.3.0`                                                                     | Controlled release tag selected for DF12 lint tooling.                                                                      |
 | `DF12_PYTHON`           | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                                                                       |
 | `DF12_PYLINT_MESSAGES`  | All v0.3.0 message IDs, including `R9112`                                    | Explicit allowlist for the df12 Pylint pass.                                                                                |
 | `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                                                                    |
@@ -2460,8 +2460,8 @@ Do not change `PYLINT_PYPY_SHIM_REF` casually. Updating the pinned shim
 revision changes the lint runtime and must be reviewed like any other toolchain
 update. Update the `df12-python-lints` development dependency and
 `DF12_PYTHON_LINTS_REF` together so the Pylint plugin and standalone scanner
-remain on the same immutable revision. When adopting a new release, resolve its
-tag to a commit before updating both pins.
+select the same controlled release tag. When adopting a new release, update
+both references to that tag.
 
 ### Episodic lint policy
 
@@ -2536,9 +2536,9 @@ The canonical lint configuration lives in `pyproject.toml`:
   [Docstring consistency gate](#docstring-consistency-gate) below.
 - `[tool.pylint.main]`, `[tool.pylint.design]`, and
   `[tool.pylint."messages control"]` configure the second-tier Pylint pass.
-- `[dependency-groups].dev` pins `df12-python-lints` v0.3.0 at commit
-  `4cf41736cce2f7ba2778882a5c629c044568a0e5`, the same immutable revision as
-  the standalone scanner. The enabled message list includes `R9112`
+- `[dependency-groups].dev` selects the controlled `df12-python-lints` v0.3.0
+  release tag, matching the standalone scanner. The enabled message list
+  includes `R9112`
   (`prefer-type-statement`).
 - `ambrleaks.toml` contains narrow value allowlists for deterministic public
   fixture data that matches a scanner pattern.
