@@ -118,15 +118,8 @@ DF12_PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv run --isolated \
   --disable=all --load-plugins=df12_python_lints \
   --enable=$(DF12_PYLINT_MESSAGES)
 AMBRLEAKS = $(UV_RUN_ENV) uv run --python $(DF12_PYTHON) ambrleaks
-# Markdown files, excluding build output and tool caches.
-MD_FILES_FIND = find . -type f -name '*.md' \
-	-not -path '*/target/*' -not -path './.venv/*' \
-	-not -path './.vtcode/*' -not -path './memories/*' \
-	-not -path './.pytest_cache/*' \
-	-not -path './.uv-cache/*' \
-	-not -path './.uv-tools/*' \
-	-not -path './.node_modules/*' \
-	-not -path './node_modules/*' -print0
+# Tracked Markdown files, NUL-delimited for safe transport to the formatter.
+MD_FILES_FIND = git ls-files -z -- '*.md'
 
 .PHONY: help all clean build build-release lint python-lint rust-lint \
         lint-windows fmt check-fmt \

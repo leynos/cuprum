@@ -1,27 +1,34 @@
 """Exercise the Markdown formatter checker at its process boundary."""
 
+from __future__ import annotations
+
 import json
 import os
+import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - the process boundary is under test.
 import sys
 import tempfile
 import textwrap
+import typing as typ
 from pathlib import Path
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 CHECKER = REPOSITORY_ROOT / "scripts" / "check-markdown-format.sh"
-FORMATTER_FLAGS = [
+FORMATTER_FLAGS = (
     "--in-place",
     "--wrap",
     "--renumber",
     "--breaks",
     "--ellipsis",
     "--fences",
-]
+)
 LINE_ALPHABET = tuple("abcdefghijklmnopqrstuvwxyz0123456789 -_[]*")
 
 
@@ -82,22 +89,117 @@ def formatter(tmp_path: Path) -> tuple[Path, Path]:
     return _write_fake_formatter(tmp_path)
 
 
+def _run_process(
+    command: list[str],
+    environment: cabc.Mapping[str, str],
+    current_directory: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a controlled process with captured output."""
+    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - executes the controlled fixture.
+        command,
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+        cwd=current_directory,
+    )
+
+
 def _run_checker(
     formatter: Path,
     call_log: Path,
     *files: Path,
 ) -> subprocess.CompletedProcess[str]:
     """Run the checker against files with the controlled formatter fixture."""
-    environment = os.environ | {
-        "MDTABLEFIX": str(formatter),
-        "MDTABLEFIX_CALL_LOG": str(call_log),
-    }
-    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - executes the controlled fixture.
+    return _run_process(
         [str(CHECKER), *(str(file) for file in files)],
-        capture_output=True,
-        check=False,
-        env=environment,
-        text=True,
+        os.environ
+        | {
+            "MDTABLEFIX": str(formatter),
+            "MDTABLEFIX_CALL_LOG": str(call_log),
+        },
+    )
+
+
+def _write_successful_command(directory: Path) -> Path:
+    """Create a command stub that accepts every argument."""
+    executable = directory / "successful-command"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    return executable
+
+
+def _write_markdown_checker_stub(directory: Path) -> Path:
+    """Create a checker stub that records its NUL-delimited path arguments."""
+    scripts_directory = directory / "scripts"
+    scripts_directory.mkdir()
+    checker = scripts_directory / "check-markdown-format.sh"
+    checker.write_text(
+        '#!/bin/sh\nprintf \'%s\\0\' "$@" > "$MARKDOWN_CHECKER_CALL_LOG"\n',
+        encoding="utf-8",
+    )
+    checker.chmod(0o755)
+    return checker
+
+
+def _create_format_gate_repository(
+    temporary_directory: Path,
+) -> tuple[Path, tuple[Path, ...], Path]:
+    """Create tracked, ignored, and untracked Markdown sources for the gate."""
+    repository = temporary_directory / "repository"
+    repository.mkdir()
+    tracked_files = (
+        Path("guide.md"),
+        Path("nested") / "tracked with spaces.md",
+        Path("nested") / "tracked\nwith newline.md",
+    )
+    for path in tracked_files:
+        source = repository / path
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("formatted\n", encoding="utf-8")
+    (repository / ".gitignore").write_text("ignored.md\n", encoding="utf-8")
+    (repository / "ignored.md").write_text("formatted\n", encoding="utf-8")
+    (repository / "untracked.md").write_text("formatted\n", encoding="utf-8")
+    (repository / "ruff").touch()
+    _write_markdown_checker_stub(repository)
+    return repository, tracked_files, repository / "checker-paths.bin"
+
+
+def _stage_markdown_sources(repository: Path, tracked_files: tuple[Path, ...]) -> None:
+    """Initialize a Git index containing the formatter's Markdown inputs."""
+    git = shutil.which("git")
+    assert git is not None, "the gate integration test requires Git"
+    initialized = _run_process([git, "init", "-q"], os.environ, repository)
+    assert initialized.returncode == 0, initialized.stdout + initialized.stderr
+    added = _run_process(
+        [git, "add", ".gitignore", *(str(path) for path in tracked_files)],
+        os.environ,
+        repository,
+    )
+    assert added.returncode == 0, added.stdout + added.stderr
+
+
+def _run_check_format_gate(
+    repository: Path,
+    checker_log: Path,
+) -> subprocess.CompletedProcess[str]:
+    """Run the real formatting recipe against the controlled repository."""
+    make = shutil.which("make")
+    assert make is not None, "the gate integration test requires make"
+    command_stub = _write_successful_command(repository)
+    return _run_process(
+        [
+            make,
+            "-f",
+            str(REPOSITORY_ROOT / "Makefile"),
+            "check-fmt",
+            "VENV_TOOLS=",
+            f"RUFF={command_stub}",
+            f"CARGO={command_stub}",
+            "RUST_DIR=.",
+        ],
+        os.environ | {"MARKDOWN_CHECKER_CALL_LOG": str(checker_log)},
+        repository,
     )
 
 
@@ -147,7 +249,7 @@ def test_accepts_lf_and_crlf_without_modifying_sources(
         json.loads(line) for line in call_log.read_text(encoding="utf-8").splitlines()
     ]
     assert len(calls) == 1, "the checker must invoke the formatter once per batch"
-    assert calls[0][: len(FORMATTER_FLAGS)] == FORMATTER_FLAGS, (
+    assert tuple(calls[0][: len(FORMATTER_FLAGS)]) == FORMATTER_FLAGS, (
         "the checker must pass the canonical formatter flags"
     )
     staged_paths = [Path(path) for path in calls[0][len(FORMATTER_FLAGS) :]]
@@ -199,6 +301,20 @@ def test_reports_each_noncanonical_source_without_modifying_it(
     assert len(calls) == 1, "the checker must invoke the formatter once per batch"
     assert len(calls[0]) == len(FORMATTER_FLAGS) + 3, (
         "the formatter must receive every source in the batch"
+    )
+
+
+def test_check_format_passes_only_tracked_markdown_sources(tmp_path: Path) -> None:
+    """Exercise the Makefile gate's tracked, NUL-delimited Markdown discovery."""
+    repository, tracked_files, checker_log = _create_format_gate_repository(tmp_path)
+    _stage_markdown_sources(repository, tracked_files)
+    result = _run_check_format_gate(repository, checker_log)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    recorded_paths = checker_log.read_bytes().removesuffix(b"\0").split(b"\0")
+    expected_paths = sorted(path.as_posix().encode() for path in tracked_files)
+    assert recorded_paths == expected_paths, (
+        "the formatting gate must pass exactly every tracked Markdown source"
     )
 
 
