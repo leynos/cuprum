@@ -76,7 +76,29 @@ def _read_workflow_env(root: pth.Path, name: str) -> str:
     assert isinstance(value, str), f"ci.yml env must pin {name} as a string"
     return value
 
+def _lint_test_job(root: pth.Path) -> dict[str, object]:
+    """Read the lint-test job from the CI workflow."""
+    workflow = yaml.safe_load(
+        (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    )
+    assert isinstance(workflow, dict), "ci.yml must parse to a mapping"
+    jobs = workflow.get("jobs")
+    assert isinstance(jobs, dict), "ci.yml must declare a jobs mapping"
+    job = jobs.get("lint-test")
+    assert isinstance(job, dict), "ci.yml must declare the lint-test job"
+    return job
 
+def _lint_test_step_script(job: dict[str, object], name: str) -> str:
+    """Read the named run script from the lint-test job."""
+    steps = job.get("steps")
+    assert isinstance(steps, list), "the lint-test job must declare steps"
+    for step in steps:
+        if not isinstance(step, dict) or step.get("name") != name:
+            continue
+        script = step.get("run")
+        assert isinstance(script, str), f"the {name!r} step must run a script"
+        return script
+    pytest.fail(f"the lint-test job must declare an {name!r} step")
 def _dev_dependencies(root: pth.Path) -> list[str]:
     """Read the pyproject dev dependency group."""
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
@@ -159,7 +181,17 @@ def test_ruff_and_ty_pins_are_release_versions() -> None:
                 "dotted release version"
             )
 
+def test_mdtablefix_installs_with_its_pinned_rust_toolchain() -> None:
+    """The formatter build uses a toolchain that supports its pinned release."""
+    job = _lint_test_job(repo_root())
+    environment = job.get("env")
+    assert isinstance(environment, dict), "the lint-test job must declare env"
+    toolchain = environment.get("MDTABLEFIX_RUST_TOOLCHAIN")
+    assert toolchain == "1.89.0", "mdtablefix 0.5.0 requires Rust 1.89"
+    script = _lint_test_step_script(job, "Install mdtablefix")
 
+    assert 'rustup toolchain install "${MDTABLEFIX_RUST_TOOLCHAIN}"' in script
+    assert 'cargo +"${MDTABLEFIX_RUST_TOOLCHAIN}" install --locked mdtablefix' in script
 def test_make_lint_and_typecheck_use_the_pinned_tool_commands() -> None:
     """The dry-run recipes invoke Ruff and ty through their synchronized pins."""
     root = repo_root()

@@ -59,6 +59,7 @@ jobs:
     env:
       MBAKE_VERSION: '1.4.6'
       MDTABLEFIX_VERSION: '0.5.0'
+      MDTABLEFIX_RUST_TOOLCHAIN: '1.89.0'
       WHITAKER_INSTALLER_VERSION: '0.2.7'
     steps:
       - name: Check out repository
@@ -163,7 +164,6 @@ jobs:
           path: |
             ~/.cargo/bin/mdtablefix
             ~/.cargo/bin/mdtablefix.exe
-            ~/.cache/cargo-binstall
           key: mdtablefix-${{ runner.os }}-${{ runner.arch }}-${{ env.MDTABLEFIX_VERSION }}
 
       - name: Install mdtablefix
@@ -174,12 +174,9 @@ jobs:
             installed_mdtablefix_version="$(mdtablefix --version 2>/dev/null | tr -d '\r')"
           fi
           if [[ "${installed_mdtablefix_version}" != "${expected_mdtablefix_version}" ]]; then
-            if cargo binstall --version >/dev/null 2>&1; then
-              cargo binstall --no-confirm --locked "mdtablefix@${MDTABLEFIX_VERSION}"
-            else
-              echo "cargo-binstall unavailable; building mdtablefix from crates.io"
-              cargo install --locked mdtablefix --version "${MDTABLEFIX_VERSION}"
-            fi
+            rustup toolchain install "${MDTABLEFIX_RUST_TOOLCHAIN}" --profile minimal
+            cargo +"${MDTABLEFIX_RUST_TOOLCHAIN}" install --locked mdtablefix \
+              --version "${MDTABLEFIX_VERSION}"
           fi
           installed_mdtablefix_version="$(mdtablefix --version | tr -d '\r')"
           if [[ "${installed_mdtablefix_version}" != "${expected_mdtablefix_version}" ]]; then
