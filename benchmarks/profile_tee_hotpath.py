@@ -73,9 +73,11 @@ __all__ = [
     "_line_callback_scenarios",
     "_matrix_exit_status",
     "_multi_stage_backend_scenarios",
+    "_named_scenario",
     "_postprocess_perf",
     "_profiler_for",
     "_require_tool",
+    "_resolved_read_size",
     "_run_perf",
     "_run_py_spy",
     "_run_warmup",
@@ -166,26 +168,46 @@ def _scenario_by_name(
     read_size: int | None = None,
 ) -> TeeProfileScenario:
     """Resolve one scenario from the configured matrix."""
-    if read_size is None:
-        if len(config.read_sizes) != 1:
-            msg = "one read size is required outside a sweep"
-            raise ValueError(msg)
-        read_size = config.read_sizes[0]
+    resolved_read_size = _resolved_read_size(config, read_size=read_size)
     scenarios = default_tee_profile_scenarios(
         fixture_path=config.fixture_path,
         wrapped_fixture_path=config.wrapped_fixture_path,
         repeat_count=config.repeat_count,
-        read_size=read_size,
+        read_size=resolved_read_size,
     )
-    if config.scenario_name is None:
+    return _named_scenario(scenarios, scenario_name=config.scenario_name)
+
+
+def _resolved_read_size(
+    config: TeeProfileDriverConfig,
+    *,
+    read_size: int | None,
+) -> int:
+    """Return an explicit read size or the sole configured value."""
+    if read_size is not None:
+        return read_size
+    if len(config.read_sizes) != 1:
+        msg = "one read size is required outside a sweep"
+        raise ValueError(msg)
+    return config.read_sizes[0]
+
+
+def _named_scenario(
+    scenarios: tuple[TeeProfileScenario, ...],
+    *,
+    scenario_name: str | None,
+) -> TeeProfileScenario:
+    """Return the named scenario from an ordered scenario matrix."""
+    if scenario_name is None:
         msg = "scenario name is required"
         raise ValueError(msg)
-    for scenario in scenarios:
-        if scenario.name == config.scenario_name:
-            return scenario
-    valid = ", ".join(scenario.name for scenario in scenarios)
-    msg = f"unknown scenario {config.scenario_name!r}; expected one of: {valid}"
-    raise ValueError(msg)
+    scenarios_by_name = {scenario.name: scenario for scenario in scenarios}
+    try:
+        return scenarios_by_name[scenario_name]
+    except KeyError:
+        valid = ", ".join(scenario.name for scenario in scenarios)
+        msg = f"unknown scenario {scenario_name!r}; expected one of: {valid}"
+        raise ValueError(msg) from None
 
 
 class _PlanScenarioEntry(typ.TypedDict):
