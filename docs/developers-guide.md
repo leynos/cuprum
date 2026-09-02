@@ -2159,6 +2159,23 @@ steps, and a step's `run:` — so a misspelled key is a type error rather than a
 a second one drifts from the first, and then two suites disagree about what
 the same file says.
 
+### Shared workflow test support
+
+The session-scoped `workflow_data` fixture parses the checked-in
+`.github/workflows/ci.yml` once. `filter_path_patterns` derives the
+performance-relevant paths from that same model. The workflow contract tests
+consume the parsed model directly, while the behavioural tests use both
+fixtures to exercise the gate and its summary against the checked-in
+configuration.
+
+The support is split by responsibility: `workflow_types.py` defines the
+narrow `TypedDict` shapes; `workflow.py` parses the workflow and provides
+queries over its jobs and steps; `workflow_gate.py` contains the pure path
+matching and benchmark-admission model; and `workflow_shell.py` recognizes
+commands in `run:` scripts while ignoring comments and here-document bodies.
+Keep repository access in the fixtures and use these helpers rather than
+creating another workflow parser in a test.
+
 `EXTENSION_TEST_TARGETS` gets two separate checks, because neither implies the
 other:
 
@@ -2818,7 +2835,7 @@ publishes a single `bench` output. `benchmark-ratchet` takes `changes` in
 `needs` and gates on:
 
 ```yaml
-if: github.event_name != 'pull_request' || needs.changes.outputs.bench == 'true'
+if: needs.changes.result == 'success' && (github.event_name != 'pull_request' || needs.changes.outputs.bench == 'true')
 ```
 
 Three properties of that arrangement are load-bearing:

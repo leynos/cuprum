@@ -33,6 +33,11 @@ def test_the_ci_job_builds_the_extension_before_running_the_gated_tests(
 
     `make build` only syncs dependencies, so this ordering is the whole reason
     the job can pass at all, and nothing else asserts it.
+
+    Parameters
+    ----------
+    workflow_data : Workflow
+        Parsed ``ci.yml`` model used to inspect the extension-tests job.
     """
     build, _ = first_step_running(
         workflow_data, "make develop", job_name="extension-tests"
@@ -131,6 +136,11 @@ def test_the_benchmark_job_builds_through_the_develop_target(
 
     Its numbers mean nothing against a debug build, so the flag matters
     as much as the shared target does.
+
+    Parameters
+    ----------
+    workflow_data : Workflow
+        Parsed ``ci.yml`` model used to inspect the benchmark-ratchet job.
     """
     _, script = first_step_running(
         workflow_data, "make develop", job_name="benchmark-ratchet"

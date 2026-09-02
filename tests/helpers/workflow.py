@@ -11,7 +11,6 @@ from .workflow_gate import bench_output, benchmark_runs, matches_filter
 from .workflow_shell import script_runs_command
 from .workflow_types import Job, Step, Workflow
 
-# Keep public aliases compact so this module remains below the enforced size limit.
 # fmt: off
 __all__ = ("Job", "Step", "Workflow", "bench_output", "benchmark_runs",
            "first_step_running", "matches_filter", "script_runs_command")
@@ -26,7 +25,6 @@ FILTER_NAME = "bench"
 
 
 def _require(*, condition: bool, message: str) -> None:
-    """Raise ``AssertionError`` when a shape requirement is unmet."""
     if not condition:
         raise AssertionError(message)
 
@@ -162,6 +160,8 @@ def steps(workflow_data: Workflow, job_name: str) -> list[dict[str, object]]:
         condition=isinstance(declared, list),
         message=f"the {job_name!r} job must declare steps",
     )
+    for step in typ.cast("list[object]", declared):
+        mapping(step, f"the {job_name!r} job must declare mapping steps")
     return typ.cast("list[dict[str, object]]", declared)
 
 
@@ -230,7 +230,6 @@ def step_named(
 def _step_matching(
     workflow_data: Workflow, job_name: str, field_name: str, requested_value: str
 ) -> tuple[dict[str, object] | None, list[dict[str, object]]]:
-    """Return a matching step and the job's declared steps."""
     declared_steps = steps(workflow_data, job_name)
     found = next(
         (step for step in declared_steps if step.get(field_name) == requested_value),
@@ -257,7 +256,6 @@ def script_of(step: cabc.Mapping[str, object]) -> str | None:
 
 
 def _declared_steps(job_payload: object, *, job_name: str) -> list[dict[str, object]]:
-    """Return a job's declared steps, or an empty list when it has none."""
     declared = mapping(job_payload, f"job {job_name!r}").get("steps")
     if not isinstance(declared, list):
         return []
@@ -314,6 +312,8 @@ def first_step_running(
     ------
     AssertionError
         If no step in the named job runs ``command``.
+    ValueError
+        If a step script contains unclosed shell quoting.
     """  # ruff: ignore[docstring-extraneous-exception] - contract validation delegates to _require.
     found = next(
         (

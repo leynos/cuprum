@@ -42,6 +42,7 @@ from tests.helpers.workflow import (
     bench_output,
     benchmark_gate,
     benchmark_runs,
+    first_step_running,
     job,
     mapping,
     parse_workflow,
@@ -460,3 +461,36 @@ def test_step_lookups_return_matches_and_explain_missing_steps() -> None:
         match=r"found \['Detect relevant changes', 'Record the decision'\]",
     ):
         step_named(workflow_data, "changes", "missing")
+
+
+@pytest.mark.parametrize(
+    "invalid_step",
+    [
+        pytest.param("not a mapping", id="scalar"),
+        pytest.param({1: "non-string key"}, id="non-string-key"),
+    ],
+)
+def test_steps_reject_non_mapping_entries(invalid_step: object) -> None:
+    """Reject a declared step that cannot satisfy the narrow mapping model."""
+    workflow_data = typ.cast(
+        "Workflow",
+        {"jobs": {CHANGES_JOB: {"steps": [invalid_step]}}},
+    )
+
+    with pytest.raises(AssertionError, match="must declare mapping steps"):
+        steps(workflow_data, CHANGES_JOB)
+
+
+def test_first_step_running_propagates_malformed_shell_quoting() -> None:
+    """Expose malformed workflow shell syntax instead of treating it as absent."""
+    workflow_data = parse_workflow(
+        """
+        jobs:
+          changes:
+            steps:
+              - run: "make 'develop"
+        """
+    )
+
+    with pytest.raises(ValueError, match="No closing quotation"):
+        first_step_running(workflow_data, "make develop", job_name=CHANGES_JOB)

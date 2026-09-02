@@ -22,6 +22,7 @@ from tests.behaviour.test_benchmark_gate_summary_support import (
     Detector,
     Summary,
     SummaryCase,
+    _parse_summary,
     run_summary_script,
 )
 
@@ -316,6 +317,30 @@ def test_the_summary_table_has_a_stable_canonical_form(
     assert summary.table == snapshot, (
         "the canonical benchmark summary table must match its snapshot; "
         f"found:\n{summary.table}"
+    )
+
+
+def test_the_summary_parser_rejects_a_malformed_metric_label() -> None:
+    """Reject a metric annotation token without a label separator.
+
+    Notes
+    -----
+    The diagnostic retains the emitted workflow output so a malformed
+    annotation can be diagnosed from the failed behavioural test.
+    """
+    emitted = (
+        "| event | detector | performance-relevant changes | benchmark-ratchet |\n"
+    )
+    emitted += "| pull_request | success | true | run |\n"
+    stdout = (
+        "::notice title=benchmark-gate-decision::event_class=pull_request malformed"
+    )
+
+    with pytest.raises(AssertionError, match="metric label") as error:
+        _parse_summary(emitted=emitted, stdout=stdout)
+
+    assert stdout in str(error.value), (
+        "the parse diagnostic must retain workflow output"
     )
 
 

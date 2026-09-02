@@ -117,8 +117,10 @@ class TestSpellingGate:
     ) -> None:
         """The real spelling target generates config before scanning tracked source."""
         event_log = tmp_path / "events.log"
-        generator = tmp_path / "generate.py"
-        scanner = tmp_path / "scan.py"
+        command_directory = tmp_path / "command inputs"
+        command_directory.mkdir()
+        generator = command_directory / "generate.py"
+        scanner = command_directory / "scan.py"
         generator.write_text(
             "from pathlib import Path\n"
             f"Path({str(event_log)!r}).write_text('generate\\n', encoding='utf-8')\n",
@@ -151,8 +153,11 @@ class TestSpellingGate:
                 str(script_directory.parent / "Makefile"),
                 "spelling",
                 "SPELLING_HELPER_TARGET=",
-                f"SPELLING_CONFIG_COMMAND={sys.executable} {generator}",
-                f"TYPOS={sys.executable} {scanner}",
+                (
+                    "SPELLING_CONFIG_COMMAND="
+                    f"{shlex.join((sys.executable, str(generator)))}"
+                ),
+                f"TYPOS={shlex.join((sys.executable, str(scanner)))}",
             ],
             cwd=tmp_path,
             check=False,

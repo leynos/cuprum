@@ -126,10 +126,12 @@ def _parse_summary(*, emitted: str, stdout: str) -> Summary:
     assert metric_line is not None, (
         f"expected {_METRIC_PREFIX!r} in the workflow output; found:\n{stdout}"
     )
-    metric = dict(
-        label.split("=", maxsplit=1)
-        for label in metric_line.removeprefix(_METRIC_PREFIX).split()
+    labels = metric_line.removeprefix(_METRIC_PREFIX).split()
+    assert all("=" in label for label in labels), (
+        "expected every benchmark-gate metric label to contain '='; the workflow "
+        f"emitted:\n{stdout}"
     )
+    metric = dict(label.split("=", maxsplit=1) for label in labels)
     return Summary(
         fields=dict(zip(_COLUMNS, values, strict=True)),
         table="\n".join(rows),
