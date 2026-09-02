@@ -126,7 +126,7 @@ jobs:
   typecheck-test:
     name: Typecheck and test (Python ${{ matrix.python-label }})
     continue-on-error: ${{ matrix.experimental }}
-    runs-on: namespace-profile-cuprum
+    runs-on: namespace-profile-rust-linux-light
     strategy:
       fail-fast: false
       matrix:
@@ -211,7 +211,7 @@ jobs:
 
   extension-tests:
     name: Extension-gated tests (Python/Rust boundary)
-    runs-on: namespace-profile-cuprum
+    runs-on: namespace-profile-rust-linux-ci
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -304,7 +304,7 @@ jobs:
     # which also uploads the report to CodeScene; guarding here stops
     # coverage being generated twice on main.
     if: github.event_name == 'pull_request'
-    runs-on: namespace-profile-cuprum
+    runs-on: namespace-profile-rust-linux-light
     needs:
       - lint-test
       - typecheck-test

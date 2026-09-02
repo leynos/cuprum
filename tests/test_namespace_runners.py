@@ -14,7 +14,8 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-PROFILE = "namespace-profile-cuprum"
+BUILD_PROFILE = "namespace-profile-rust-linux-ci"
+LIGHT_PROFILE = "namespace-profile-rust-linux-light"
 NSCLOUD_CACHE = (
     "namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547"
 )
@@ -26,13 +27,14 @@ GENERATE_COVERAGE = (
     "leynos/shared-actions/.github/actions/generate-coverage@"
     "5daae0a332441d170d88ca648c9e71f0bbe96cb3"
 )
-MIGRATED_JOBS = {
+LIGHT_PROFILE_JOBS = {
     "build-wheels.yml": ("build-pure-wheel", "verify-wheel-install"),
-    "ci.yml": ("typecheck-test", "extension-tests", "coverage"),
+    "ci.yml": ("typecheck-test", "coverage"),
     "coverage-main.yml": ("coverage-upload",),
     "get-codescene-sha.yml": ("refresh-sha",),
     "release.yml": ("publish",),
 }
+BUILD_PROFILE_JOBS = {"ci.yml": ("extension-tests",)}
 CACHED_JOBS = {
     "build-wheels.yml": ("build-pure-wheel",),
     "ci.yml": ("typecheck-test", "extension-tests", "coverage"),
@@ -64,15 +66,29 @@ def _steps(workflow_name: str, job_name: str) -> list[dict[str, object]]:
     return [typ.cast("dict[str, object]", step) for step in steps]
 
 
-@pytest.mark.parametrize(("workflow_name", "job_names"), MIGRATED_JOBS.items())
-def test_compatible_linux_jobs_use_the_shared_namespace_profile(
+@pytest.mark.parametrize(("workflow_name", "job_names"), LIGHT_PROFILE_JOBS.items())
+def test_lightweight_linux_jobs_use_the_shared_light_profile(
     workflow_name: str, job_names: tuple[str, ...]
 ) -> None:
-    """Keep the approved runner assignment from drifting."""
+    """Keep non-intensive jobs on the shared two-vCPU profile."""
     for job_name in job_names:
         actual_runner = _job(workflow_name, job_name).get("runs-on")
-        assert actual_runner == PROFILE, (
-            f"{workflow_name}:{job_name} must run on {PROFILE}, got {actual_runner!r}"
+        assert actual_runner == LIGHT_PROFILE, (
+            f"{workflow_name}:{job_name} must run on {LIGHT_PROFILE}, "
+            f"got {actual_runner!r}"
+        )
+
+
+@pytest.mark.parametrize(("workflow_name", "job_names"), BUILD_PROFILE_JOBS.items())
+def test_native_extension_build_uses_the_shared_build_profile(
+    workflow_name: str, job_names: tuple[str, ...]
+) -> None:
+    """Keep the native extension gate on the bounded four-vCPU profile."""
+    for job_name in job_names:
+        actual_runner = _job(workflow_name, job_name).get("runs-on")
+        assert actual_runner == BUILD_PROFILE, (
+            f"{workflow_name}:{job_name} must run on {BUILD_PROFILE}, "
+            f"got {actual_runner!r}"
         )
 
 

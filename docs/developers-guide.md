@@ -16,17 +16,16 @@ of truth for day-to-day contributor expectations. For the system design, see the
 
 ## GitHub Actions runner profiles
 
-Compatible repository-owned Linux jobs target the requested
-`namespace-profile-cuprum` profile: Ubuntu 22.04 on amd64 with 2 vCPU and 4 GB
-of memory, plus a Namespace cache volume. This is the build default: it stays
-within the 4 vCPU/8 GB ceiling and is sized for the repository's deliberately
-serial Cargo and pytest work. The profile is a Namespace-side resource and is
-not provisioned or mutated by this repository; the label and specification are
-the hand-off required from the Namespace administrator.
+Compatible repository-owned Linux jobs use the shared Ubuntu 24.04 amd64 Rust
+profiles. Ordinary Python, coverage, packaging, and release-plumbing jobs use
+`namespace-profile-rust-linux-light` with 2 vCPU and 4 GB of memory. The native
+extension gate uses `namespace-profile-rust-linux-ci` with 4 vCPU and 8 GB
+because it compiles and exercises the PyO3 boundary. Both profiles attach a
+20 GB Namespace cache volume and remain within the estate ceiling; 2 vCPU and
+4 GB is the default unless measured build work justifies the larger shape.
 
-The lint job remains on `ubuntu-latest`. Whitaker's prebuilt native tooling
-requires a newer GLIBC than the shared Ubuntu 22.04 profile supplies, and cache
-isolation does not make the cold installation compatible.
+The lint job remains on `ubuntu-latest`. It has a separate GitHub cache and its
+Whitaker installation contract is outside the Namespace cache pilot.
 
 The delayed PR comment also remains on `ubuntu-latest`: its intentional sleep
 would otherwise hold a metered build runner without doing useful work.
@@ -35,7 +34,6 @@ The native-wheel matrix keeps its existing runner selection because it includes
 Linux container and QEMU work plus Windows and macOS targets. The benchmark
 ratchet also remains on its existing `ubicloud-standard-4-ubuntu-2404` runner:
 its Ubuntu 24.04 image and benchmark baseline are part of that contract.
-
 
 ### Namespace cache ownership
 

@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   coverage-upload:
-    runs-on: namespace-profile-cuprum
+    runs-on: namespace-profile-rust-linux-light
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
