@@ -88,17 +88,20 @@ def _lint_test_job(root: pth.Path) -> dict[str, object]:
     assert isinstance(job, dict), "ci.yml must declare the lint-test job"
     return job
 
-def _lint_test_step_script(job: dict[str, object], name: str) -> str:
-    """Read the named run script from the lint-test job."""
+def _lint_test_step(job: dict[str, object], name: str) -> dict[str, object]:
+    """Read a named step from the lint-test job."""
     steps = job.get("steps")
     assert isinstance(steps, list), "the lint-test job must declare steps"
     for step in steps:
         if not isinstance(step, dict) or step.get("name") != name:
             continue
-        script = step.get("run")
-        assert isinstance(script, str), f"the {name!r} step must run a script"
-        return script
+        return step
     pytest.fail(f"the lint-test job must declare an {name!r} step")
+def _lint_test_step_script(job: dict[str, object], name: str) -> str:
+    """Read the named run script from the lint-test job."""
+    script = _lint_test_step(job, name).get("run")
+    assert isinstance(script, str), f"the {name!r} step must run a script"
+    return script
 def _dev_dependencies(root: pth.Path) -> list[str]:
     """Read the pyproject dev dependency group."""
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
@@ -182,16 +185,34 @@ def test_ruff_and_ty_pins_are_release_versions() -> None:
             )
 
 def test_mdtablefix_installs_with_its_pinned_rust_toolchain() -> None:
-    """The formatter build uses a toolchain that supports its pinned release."""
+    """The formatter source fallback uses its required Rust toolchain only."""
     job = _lint_test_job(repo_root())
+    toolchain_setup = _lint_test_step(job, "Install Rust toolchain")
+    toolchain_configuration = toolchain_setup.get("with")
+    assert isinstance(toolchain_configuration, dict)
+    assert toolchain_configuration.get("toolchain") == "1.85.0"
+
     environment = job.get("env")
     assert isinstance(environment, dict), "the lint-test job must declare env"
-    toolchain = environment.get("MDTABLEFIX_RUST_TOOLCHAIN")
-    assert toolchain == "1.89.0", "mdtablefix 0.5.0 requires Rust 1.89"
-    script = _lint_test_step_script(job, "Install mdtablefix")
+    assert environment.get("MDTABLEFIX_RUST_VERSION") == "1.89.0"
 
-    assert 'rustup toolchain install "${MDTABLEFIX_RUST_TOOLCHAIN}"' in script
-    assert 'cargo +"${MDTABLEFIX_RUST_TOOLCHAIN}" install --locked mdtablefix' in script
+    script = _lint_test_step_script(job, "Install mdtablefix")
+    assert (
+        'cargo binstall --no-confirm --locked "mdtablefix@${MDTABLEFIX_VERSION}"'
+        in script
+    )
+    assert (
+        'rustup toolchain install --profile minimal "${MDTABLEFIX_RUST_VERSION}"'
+        in script
+    )
+    assert 'cargo +"${MDTABLEFIX_RUST_VERSION}" install --locked mdtablefix' in script
+
+    cache = _lint_test_step(job, "Cache mdtablefix")
+    cache_configuration = cache.get("with")
+    assert isinstance(cache_configuration, dict)
+    cache_key = cache_configuration.get("key")
+    assert isinstance(cache_key, str)
+    assert "${{ env.MDTABLEFIX_RUST_VERSION }}" in cache_key
 def test_make_lint_and_typecheck_use_the_pinned_tool_commands() -> None:
     """The dry-run recipes invoke Ruff and ty through their synchronized pins."""
     root = repo_root()
