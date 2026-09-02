@@ -14,6 +14,22 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-007: Subprocess execution module boundaries](adr-007-subprocess-execution-module-boundaries.md)
 - [ADR-009: Enforce Oxford spelling in source](adr-009-enforce-oxford-spelling-in-source.md)
 
+## GitHub Actions runner profiles
+
+Compatible repository-owned Linux jobs run on the shared uncached
+`namespace-profile-default` profile (Ubuntu 22.04, amd64, 4 vCPU, and 16 GB).
+The profile has no cache volume; existing GitHub Actions caches remain their
+own backend during this baseline measurement.
+
+The lint job remains on `ubuntu-latest`. Whitaker's prebuilt native tooling
+requires a newer GLIBC than the shared Ubuntu 22.04 profile supplies, and cache
+isolation does not make the cold installation compatible.
+
+The native-wheel matrix keeps its existing runner selection because it includes
+Linux container and QEMU work plus Windows and macOS targets. The benchmark
+ratchet also remains on its existing `ubicloud-standard-4-ubuntu-2404` runner:
+its Ubuntu 24.04 image and benchmark baseline are part of that contract.
+
 ## Rust availability probing
 
 Stream backend availability is resolved through one cached entry point:
@@ -1757,6 +1773,14 @@ a normal return and unwinding from a panicking operation alike — so a
 descriptor the Python side still owns is never closed by Rust. `pump_stream` and
 `consume_stream` both route their reader through the helper, keeping the
 "borrow this FD without owning it" rule in a single place.
+
+The private `stream_pyfunctions::run_stream_operation` helper is limited to
+the two PyO3 stream exports. It owns their shared buffer validation, reader
+descriptor preparation, GIL release, and `PumpError` conversion; the pump
+export alone prepares its ownership-consuming writer and both exports supply
+their stream operation. Do not reuse it outside this FFI adapter boundary or
+move writer ownership into the helper, because that would blur the distinct
+borrow-versus-consume contract.
 
 This supersedes an earlier pattern that reconstructed the handle and called
 `std::mem::forget` after the inner operation returned. Because a panic unwinds

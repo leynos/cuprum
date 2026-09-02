@@ -98,7 +98,7 @@ jobs:
   typecheck-test:
     name: Typecheck and test (Python ${{ matrix.python-label }})
     continue-on-error: ${{ matrix.experimental }}
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-default
     strategy:
       fail-fast: false
       matrix:
@@ -160,7 +160,7 @@ jobs:
 
   extension-tests:
     name: Extension-gated tests (Python/Rust boundary)
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-default
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -222,7 +222,7 @@ jobs:
     # which also uploads the report to CodeScene; guarding here stops
     # coverage being generated twice on main.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-default
     needs:
       - lint-test
       - typecheck-test
@@ -258,9 +258,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: cargo-coverage-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          key: cargo-coverage-${{ runner.os }}-${{ runner.arch }}-namespace-profile-default-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: |
-            cargo-coverage-${{ runner.os }}-
+            cargo-coverage-${{ runner.os }}-${{ runner.arch }}-namespace-profile-default-
 
       - name: Prepare Cargo dependencies
         run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml
