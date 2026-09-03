@@ -60,7 +60,6 @@ GITHUB_LABEL = "ubuntu-latest"
 
 CACHE_KEYS_ACTION = "./.github/actions/cache-keys"
 SCCACHE_ACTION = "./.github/actions/setup-sccache"
-NEXTEST_INSTALLER = "taiki-e/install-action@18b1216eba7f8039b0f8d131d5473787f0edce68"
 SETUP_RUST = (
     "leynos/shared-actions/.github/actions/setup-rust@"
     "5daae0a332441d170d88ca648c9e71f0bbe96cb3"
@@ -145,5 +144,5 @@ CACHE_WRITERS: typ.Final[cabc.Mapping[str, tuple[tuple[str, str], ...]]] = {
 ROLLING_KEYS: typ.Final = ("SCCACHE_CACHE_KEY",)
 #: Workflow-level values that render the tool cache key. A job restoring an
 #: archive another workflow wrote can only hit while these agree.
-SHARED_KEY_INPUTS: typ.Final = ("NEXTEST_VERSION", "CACHE_GENERATION", "UBUNTU_RELEASE")
+SHARED_KEY_INPUTS: typ.Final = ("CACHE_GENERATION", "UBUNTU_RELEASE")
 KEY_SHARING_WORKFLOWS: typ.Final = ("ci.yml", "coverage-main.yml")

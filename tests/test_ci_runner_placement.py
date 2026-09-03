@@ -17,7 +17,6 @@ import yaml
 from tests.helpers.ci_runners import (
     GITHUB_HOSTED_JOBS,
     GITHUB_LABEL,
-    NEXTEST_INSTALLER,
     ROOT,
     UBICLOUD_JOBS,
     UBICLOUD_LABEL,
@@ -34,11 +33,9 @@ ACTIONLINT_CONFIG = ROOT / ".github" / "actionlint.yaml"
 MAKEFILE = ROOT / "Makefile"
 VCPU_CONSTANT = "LINUX_RUNNER_VCPUS"
 #: Make variables that carry the runner's vCPU count into the test command.
-PARALLELISM_OVERRIDES = (
-    "TEST_JOBS",
-    "TEST_CARGO_BUILD_JOBS",
-    "PYTEST_CARGO_BUILD_JOBS",
-)
+#: Only the pytest one remains here: the Rust suite moved to the coverage job,
+#: which bounds itself through `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS`.
+PARALLELISM_OVERRIDES = ("PYTEST_CARGO_BUILD_JOBS",)
 
 UBICLOUD_CASES = expand(UBICLOUD_JOBS)
 GITHUB_HOSTED_CASES = expand(GITHUB_HOSTED_JOBS)
@@ -157,8 +154,8 @@ def test_the_vcpu_constant_matches_the_assigned_label() -> None:
     )
 
 
-def test_rust_tests_derive_their_worker_counts_from_that_constant() -> None:
-    """Size nextest and Cargo from the constant rather than from literals."""
+def test_python_tests_derive_their_worker_counts_from_that_constant() -> None:
+    """Size the matrix suite's Cargo work from the constant, not a literal."""
     script = next(
         step["run"]
         for step in steps("ci.yml", "typecheck-test")
@@ -238,19 +235,18 @@ def test_ci_does_not_build_tools_from_source() -> None:
             )
 
 
-def test_nextest_installer_fails_closed() -> None:
-    """Fail the job rather than compiling nextest when no binary is published."""
-    installer = next(
-        step
-        for step in steps("ci.yml", "typecheck-test")
-        if step.get("uses") == NEXTEST_INSTALLER
-    )
-    inputs = step_inputs(
-        installer, "ci.yml:typecheck-test nextest installer must declare inputs"
-    )
-    assert inputs.get("fallback") == "none", (
-        "ci.yml:typecheck-test must disable the install-action source fallback"
-    )
+def test_no_workflow_installs_cargo_nextest() -> None:
+    """Leave the nextest install to the coverage action that now needs it.
+
+    The matrix jobs stopped running the Rust suite, so a nextest installer here
+    would be an unused download, and its `fallback: none` guarantee would no
+    longer describe anything this repository runs.
+    """
+    for workflow_name, source in workflow_sources():
+        assert "tool: nextest@" not in source, (
+            f"{workflow_name} installs cargo-nextest, but only the coverage "
+            "action runs it now"
+        )
 
 
 def test_lint_tool_install_is_version_pinned() -> None:

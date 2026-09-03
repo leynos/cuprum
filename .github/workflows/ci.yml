@@ -35,7 +35,6 @@ env:
   RUFF_VERSION: '0.16.4'
   TY_VERSION: '0.0.74'
   MARKDOWNLINT_VERSION: '0.20.0'
-  NEXTEST_VERSION: '0.9.133'
   # Every Ubicloud job in this workflow runs on `ubicloud-standard-2`, so one
   # constant sizes nextest's test threads and Cargo's build jobs to the vCPUs
   # the job is actually billed for. Raising the label means raising this too.
@@ -62,7 +61,6 @@ jobs:
         uses: ./.github/actions/cache-keys
         with:
           python-version: '3.13'
-          nextest-version: ${{ env.NEXTEST_VERSION }}
           generation: ${{ env.CACHE_GENERATION }}
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
 
@@ -245,22 +243,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `python-suite` is false only for the interpreter the coverage job
+          # already runs pytest on. That leg keeps the typechecker, and its
+          # required check name, without repeating a suite verbatim.
           - python-version: '3.12'
             python-label: '3.12'
             allow-prereleases: false
             experimental: false
+            python-suite: true
           - python-version: '3.13'
             python-label: '3.13'
             allow-prereleases: false
             experimental: false
+            python-suite: false
           - python-version: '3.14'
             python-label: '3.14'
             allow-prereleases: false
             experimental: false
+            python-suite: true
           - python-version: '3.15'
             python-label: '3.15a'
             allow-prereleases: true
             experimental: true
+            python-suite: true
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -269,7 +274,6 @@ jobs:
         uses: ./.github/actions/cache-keys
         with:
           python-version: ${{ matrix.python-version }}
-          nextest-version: ${{ env.NEXTEST_VERSION }}
           generation: ${{ env.CACHE_GENERATION }}
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
 
@@ -357,29 +361,24 @@ jobs:
           use-sccache: 'false'
           install-binstall: 'false'
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@18b1216eba7f8039b0f8d131d5473787f0edce68 # v2.85.3
-        with:
-          tool: nextest@${{ env.NEXTEST_VERSION }}
-          # A missing prebuilt binary must fail the job. The fallback would
-          # otherwise compile nextest from source, which no cache owns.
-          fallback: none
-
       - name: Run typechecker
         run: make typecheck
 
-      # `make test` defaults every Cargo and nextest job count to 1 for a
-      # developer laptop sharing its cores with an editor. On a dedicated
-      # runner the job is billed for `LINUX_RUNNER_VCPUS` vCPUs whether or not
-      # it uses them, so size the compile and the test threads to exactly that
-      # number and no higher. pytest itself stays serial: its batches compile
-      # and reuse the same Cargo target directory, so xdist workers would
-      # contend on one build lock rather than overlap.
+      # `make test-python`, not `make test`: the Rust suite runs exactly once
+      # per event, inside the coverage job, under instrumentation. This step is
+      # also skipped on the interpreter the coverage job already runs, because
+      # that would be the same suite on the same interpreter twice.
+      #
+      # `make test-python` defaults Cargo's job count to 1 for a developer
+      # laptop sharing its cores with an editor. On a dedicated runner the job
+      # is billed for `LINUX_RUNNER_VCPUS` vCPUs whether or not it uses them.
+      # pytest itself stays serial: its batches compile and reuse the same
+      # Cargo target directory, so xdist workers would contend on one build
+      # lock rather than overlap.
       - name: Run tests
+        if: matrix.python-suite
         run: |
-          make test \
-            TEST_JOBS="${LINUX_RUNNER_VCPUS}" \
-            TEST_CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}" \
+          make test-python \
             PYTEST_CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}"
 
       - name: Record compiler-cache effectiveness
@@ -450,7 +449,6 @@ jobs:
         uses: ./.github/actions/cache-keys
         with:
           python-version: '3.13'
-          nextest-version: ${{ env.NEXTEST_VERSION }}
           generation: ${{ env.CACHE_GENERATION }}
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
 
@@ -625,7 +623,6 @@ jobs:
         uses: ./.github/actions/cache-keys
         with:
           python-version: '3.13'
-          nextest-version: ${{ env.NEXTEST_VERSION }}
           generation: ${{ env.CACHE_GENERATION }}
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
 
@@ -732,12 +729,32 @@ jobs:
       #
       - name: Generate coverage
         uses: leynos/shared-actions/.github/actions/generate-coverage@7c9d66030879b504365202df90f439ea419e72bd
+        env:
+          # The same warnings posture and the same core budget the
+          # uninstrumented run used.
+          RUSTFLAGS: -D warnings
+          CARGO_BUILD_JOBS: ${{ env.LINUX_RUNNER_VCPUS }}
+          NEXTEST_TEST_THREADS: ${{ env.LINUX_RUNNER_VCPUS }}
         with:
           format: cobertura
           output-path: coverage.xml
           pytest-workers: ''
           cache-provider: external
           with-ratchet: 'true'
+          # This job is the only execution of the Rust suite for the event.
+          # `language: mixed` and the workspace manifest are what make the
+          # shared action run it: the repository root has no Cargo.toml, so
+          # detection alone would classify Cuprum as Python-only and skip the
+          # Rust tests entirely.
+          #
+          # `all-targets` and `all-features` match the flags the uninstrumented
+          # run used, so nothing silently drops out of the gate. `doctests`
+          # covers what `cargo llvm-cov nextest` skips.
+          language: mixed
+          cargo-manifest: rust/Cargo.toml
+          all-targets: 'true'
+          all-features: 'true'
+          doctests: 'true'
 
       - name: Check coverage against CodeScene gates
         env:
@@ -873,7 +890,6 @@ jobs:
         uses: ./.github/actions/cache-keys
         with:
           python-version: '3.13'
-          nextest-version: ${{ env.NEXTEST_VERSION }}
           generation: ${{ env.CACHE_GENERATION }}
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
 

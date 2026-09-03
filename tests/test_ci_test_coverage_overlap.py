@@ -1,118 +1,201 @@
-"""Contracts recording which CI jobs are, and are not, subsumed by coverage.
+"""Contracts for the rule that each suite executes once per event.
 
-The estate rule is that a test-only job should not run beside a coverage job
-when it adds nothing over it. Applying that rule to Cuprum removes nothing, and
-these tests pin the three facts that make the answer "nothing" rather than
-leaving it to be re-derived, or worse, assumed the other way by someone
-deleting a gate that looks redundant.
+A suite that runs twice costs runner minutes twice and gates nothing extra. The
+rule this module pins is that the coverage job is the *only* place the Rust
+suite runs, and that no interpreter runs the Python suite both there and in the
+matrix.
 
-The measured comparison is recorded in the developers' guide. In short: the
-coverage lane detects Cuprum as a Python project, so it runs no Rust tests at
-all, and it runs without the compiled extension, so the extension-gated modules
-skip inside it.
+None of it is visible from a green run: a workflow that runs the Rust tests
+twice, or that stops running them at all because the coverage lane silently
+detected a Python-only project, still reports success. The reasoning behind
+each assertion is recorded under "One execution per suite" in the developers'
+guide.
 """
 
 from __future__ import annotations
+
+import typing as typ
 
 import pytest
 
 from tests.helpers.ci_runners import (
     GENERATE_COVERAGE,
     ROOT,
+    expand,
+    job,
     step_inputs,
     steps,
 )
 
-#: The two jobs that run the shared coverage action.
+if typ.TYPE_CHECKING:
+    from tests.helpers.workflow_types import Step
+
+#: The jobs that run the shared coverage action, one per event type.
 COVERAGE_JOBS = (("ci.yml", "coverage"), ("coverage-main.yml", "coverage-upload"))
-#: Inputs the coverage action may receive. `language` is absent deliberately:
-#: detection must stay automatic, because pinning it to `mixed` would silently
-#: change which suites the lane executes and therefore this whole analysis.
-ALLOWED_COVERAGE_INPUTS = frozenset({
-    "format",
-    "output-path",
-    "pytest-workers",
-    "cache-provider",
-    "with-ratchet",
-})
+#: Inputs that make the shared action execute the Rust suite. Detection alone
+#: would not: Cuprum's workspace lives under `rust/`, so the repository root has
+#: no `Cargo.toml` and the action would classify the project as Python-only and
+#: skip the Rust tests entirely.
+RUST_EXECUTION_INPUTS: typ.Final = {
+    "language": "mixed",
+    "cargo-manifest": "rust/Cargo.toml",
+    "all-targets": "true",
+    "all-features": "true",
+    "doctests": "true",
+}
+#: The interpreter the coverage job runs pytest on. The matrix leg for this
+#: version must not run the Python suite as well.
+COVERED_PYTHON_VERSION = "3.13"
 
 
-@pytest.mark.parametrize(("workflow_name", "job_name"), COVERAGE_JOBS)
-def test_the_coverage_lane_stays_python_only(workflow_name: str, job_name: str) -> None:
-    """Pin the detection inputs that decide which suites coverage executes.
+def _coverage_step(workflow_name: str, job_name: str) -> Step:
+    """Return the shared coverage action step declared by one job.
 
-    The shared action classifies a project by its repository-root manifest.
-    Cuprum's Rust workspace lives under `rust/`, so the root has no
-    `Cargo.toml` and the action detects `python`: it skips `cargo-llvm-cov`,
-    `cargo nextest`, and its Rust coverage script entirely. Nothing may pin
-    `language` to override that without revisiting which jobs it subsumes.
+    Parameters
+    ----------
+    workflow_name : str
+        File name of the workflow under ``.github/workflows``.
+    job_name : str
+        Identifier of the coverage job.
+
+    Returns
+    -------
+    Step
+        The step invoking the shared coverage action.
     """
-    assert not (ROOT / "Cargo.toml").exists(), (
-        "a repository-root Cargo.toml would make the coverage action detect a "
-        "mixed project and start running the Rust suite, which changes which "
-        "jobs it subsumes; revisit the analysis in the developers' guide"
-    )
-    coverage_step = next(
+    return next(
         step
         for step in steps(workflow_name, job_name)
         if step.get("uses") == GENERATE_COVERAGE
     )
-    declared = set(
-        step_inputs(coverage_step, f"{workflow_name}:{job_name} coverage inputs")
+
+
+@pytest.mark.parametrize(("workflow_name", "job_name"), COVERAGE_JOBS)
+def test_coverage_executes_the_rust_suite(workflow_name: str, job_name: str) -> None:
+    """Keep the Rust suite running, and running under instrumentation."""
+    inputs = step_inputs(
+        _coverage_step(workflow_name, job_name),
+        f"{workflow_name}:{job_name} coverage must declare inputs",
     )
-    unexpected = sorted(declared - ALLOWED_COVERAGE_INPUTS)
-    assert not unexpected, (
-        f"{workflow_name}:{job_name} passes {unexpected} to the coverage "
-        "action; a new input may change the suites it runs"
+    wrong = {
+        name: inputs.get(name)
+        for name, expected in RUST_EXECUTION_INPUTS.items()
+        if inputs.get(name) != expected
+    }
+    assert not wrong, (
+        f"{workflow_name}:{job_name} is the only execution of the Rust suite, "
+        f"so it must pass {RUST_EXECUTION_INPUTS}; got {wrong}"
     )
 
 
-def test_the_rust_suite_keeps_a_dedicated_gate() -> None:
-    """Keep the Rust tests gated, since the coverage lane never runs them.
+@pytest.mark.parametrize(("workflow_name", "job_name"), COVERAGE_JOBS)
+def test_coverage_keeps_the_warnings_posture_and_core_budget(
+    workflow_name: str, job_name: str
+) -> None:
+    """Carry the flags the uninstrumented run enforced into the surviving one."""
+    environment = _coverage_step(workflow_name, job_name).get("env")
+    assert isinstance(environment, dict), (
+        f"{workflow_name}:{job_name} coverage must declare env"
+    )
+    assert environment.get("RUSTFLAGS") == "-D warnings", (
+        f"{workflow_name}:{job_name} must keep denying warnings now that this "
+        "is the only Rust execution"
+    )
+    for name in ("CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS"):
+        assert "LINUX_RUNNER_VCPUS" in str(environment.get(name)), (
+            f"{workflow_name}:{job_name} must bound {name} by the runner's "
+            f"vCPU count, got {environment.get(name)!r}"
+        )
 
-    `typecheck-test` is the only job that executes the Rust suite. Its test
-    step must keep invoking the Make target that runs nextest; dropping the
-    step as "already covered" would silently stop running 104 Rust tests.
+
+def test_no_other_job_executes_the_rust_suite() -> None:
+    """Fail if an uninstrumented Rust run reappears anywhere.
+
+    `make test` still runs both suites, which is what a contributor wants
+    locally. CI must call `make test-python`, never `make test`, outside the
+    coverage jobs.
     """
-    script = next(
-        step["run"]
+    offenders: list[str] = []
+    for workflow_name, job_name in expand({
+        "ci.yml": ("lint-test", "typecheck-test", "extension-tests"),
+        "coverage-main.yml": (),
+    }):
+        for step in steps(workflow_name, job_name):
+            script = str(step.get("run", ""))
+            if "make test-python" in script or "make test-extension" in script:
+                continue
+            if "make test" in script or "nextest run" in script:
+                offenders.append(f"{workflow_name}:{job_name}:{step.get('name')}")
+    assert not offenders, (
+        "the coverage job is the only execution of the Rust suite; these run "
+        f"it again uninstrumented: {offenders}"
+    )
+
+
+def test_the_covered_interpreter_does_not_repeat_the_python_suite() -> None:
+    """Run pytest once per interpreter, counting the coverage job's run."""
+    matrix_job = job("ci.yml", "typecheck-test")
+    strategy = matrix_job.get("strategy")
+    assert isinstance(strategy, dict), "typecheck-test must declare a strategy"
+    matrix = strategy.get("matrix")
+    assert isinstance(matrix, dict), "typecheck-test must declare a matrix"
+    include = matrix.get("include")
+    assert isinstance(include, list), "typecheck-test must list its legs"
+    by_version = {leg["python-version"]: leg["python-suite"] for leg in include}
+    assert by_version.get(COVERED_PYTHON_VERSION) is False, (
+        f"the {COVERED_PYTHON_VERSION} leg must not run the Python suite: the "
+        "coverage job already runs it on that interpreter"
+    )
+    others = {
+        version: runs
+        for version, runs in by_version.items()
+        if version != COVERED_PYTHON_VERSION
+    }
+    assert all(others.values()), (
+        f"every other interpreter must keep its own run; got {others}"
+    )
+    run_step = next(
+        step
         for step in steps("ci.yml", "typecheck-test")
         if step.get("name") == "Run tests"
     )
-    assert isinstance(script, str), "ci.yml:typecheck-test must run a test script"
-    assert "make test" in script, (
-        "ci.yml:typecheck-test must keep invoking `make test`, the only "
-        "execution of the Rust suite anywhere in CI"
-    )
-    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-    test_target = makefile.split("\ntest:", 1)[1].split("\n\n", 1)[0]
-    assert "nextest run" in test_target, (
-        "`make test` must keep running the Rust suite; the coverage lane is "
-        "Python-only and cannot gate it"
+    assert run_step.get("if") == "matrix.python-suite", (
+        "the test step must be gated on the matrix flag rather than on a "
+        "version literal, so adding an interpreter cannot silently duplicate it"
     )
 
 
-def test_the_extension_gate_builds_the_extension_first() -> None:
-    """Record why `extension-tests` is not subsumed by the coverage lane.
+def test_the_extension_gate_is_not_a_duplicate_run() -> None:
+    """Record why `extension-tests` survives the deduplication.
 
-    Coverage runs without the compiled extension, so the extension-gated
-    modules skip inside it: the pull-request run logged its `rust-backend`
-    cases as SKIPPED. Only this job builds the extension and then fails when it
-    is absent, so only this job actually exercises the Python/Rust boundary.
+    It runs the same interpreter as the coverage job, but with the compiled
+    extension present. Coverage runs without it, and the gated modules skip
+    there; run 33752095108 logged its `rust-backend` cases as SKIPPED. The two
+    runs therefore execute different code.
     """
     names = [str(step.get("name", "")) for step in steps("ci.yml", "extension-tests")]
     assert "Build the native extension" in names, (
-        "ci.yml:extension-tests must build the extension, which is the whole "
-        "reason the coverage lane does not subsume it"
+        "ci.yml:extension-tests must build the extension, which is what makes "
+        "it a different execution from the coverage job's pytest run"
     )
-    build_index = names.index("Build the native extension")
-    test_index = names.index("Run extension-gated tests")
-    assert build_index < test_index, (
-        "ci.yml:extension-tests must build the extension before running the "
-        "gated modules, or they skip exactly as they do under coverage"
-    )
+    assert names.index("Build the native extension") < names.index(
+        "Run extension-gated tests"
+    ), "the extension must be built before the gated modules run"
     coverage_names = [str(step.get("name", "")) for step in steps("ci.yml", "coverage")]
     assert "Build the native extension" not in coverage_names, (
-        "if the coverage lane ever builds the extension, it starts covering "
-        "the boundary and the subsumption analysis must be redone"
+        "if the coverage job ever builds the extension it starts covering the "
+        "boundary, and `extension-tests` becomes a duplicate run"
+    )
+
+
+def test_make_keeps_both_suites_available_locally() -> None:
+    """Keep `make test` running everything, whatever CI splits apart."""
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    assert "\ntest: test-python test-rust" in makefile, (
+        "`make test` must still run both suites for contributors, even though "
+        "CI calls the halves separately"
+    )
+    rust_target = makefile.split("\ntest-rust:", 1)[1].split("\n\n", 1)[0]
+    assert "nextest run" in rust_target, (
+        "`make test-rust` must keep running the Rust suite"
     )

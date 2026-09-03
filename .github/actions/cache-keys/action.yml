@@ -10,9 +10,6 @@ inputs:
       specific tool environments, so a 3.12 archive must never restore onto
       3.14.
     required: true
-  nextest-version:
-    description: Pinned cargo-nextest release carried in the tool cache.
-    required: true
   generation:
     description: >-
       Schema generation shared by every key family, so the whole family can be
@@ -35,7 +32,6 @@ runs:
         GENERATION: ${{ inputs.generation }}
         UBUNTU_RELEASE: ${{ inputs.ubuntu-release }}
         PYTHON_VERSION: ${{ inputs.python-version }}
-        NEXTEST_VERSION: ${{ inputs.nextest-version }}
         RUNNER_ENVIRONMENT: ${{ runner.environment }}
         # The Cargo families follow the resolved dependency graph and the
         # toolchain that compiled it. `target` is deliberately absent from
@@ -55,7 +51,7 @@ runs:
         # separation checkable instead of merely true.
         scope="${GENERATION}-${RUNNER_OS}-${RUNNER_ARCH}-${RUNNER_ENVIRONMENT}"
         image_scope="${scope}-${UBUNTU_RELEASE}"
-        tool_prefix="tool-${image_scope}-py${PYTHON_VERSION}-nextest${NEXTEST_VERSION}-"
+        tool_prefix="tool-${image_scope}-py${PYTHON_VERSION}-"
         # The compiler cache is a rolling generation, not a content address.
         # Its contents depend on the source that was compiled, which no hash of
         # the lockfile captures, so a content-addressed key would hit forever
