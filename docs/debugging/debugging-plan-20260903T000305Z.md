@@ -1,0 +1,172 @@
+# Debugging Plan: benchmark runner cannot fetch df12-python-lints
+
+**Generated**: 2026-09-03T00:03:05Z
+**Issue ID**: PR #289, CI run 33678861823
+**Severity**: High
+**Falsification sub-agent**: alchemist
+**Planning agent boundary**: This document was prepared by the planning agent.
+Falsification must be executed by the named sub-agent, not by the planning
+agent.
+
+## Problem Statement
+
+The `benchmark-ratchet` job fails while its baseline-fetch step creates the
+project environment. `uv run` tries to fetch the public
+`leynos/df12-python-lints` dependency at the commit resolved from `v0.3.0`, but
+Git reports that it cannot read a GitHub username with terminal prompts
+disabled. The job should fetch the baseline and run the benchmark. All other
+jobs in the same workflow pass, so this failure alone consumes paid-runner time
+without producing a comparison.
+
+## Context Summary
+
+| Aspect              | Details                                                            |
+| ------------------- | ------------------------------------------------------------------ |
+| First observed      | Run 33646570001 at commit `7e56bef1`, before the tag change        |
+| Reproduction rate   | Both post-rebase benchmark runs failed in the same step            |
+| Affected components | Ubicloud `benchmark-ratchet` job, `uv`, and the Git dependency     |
+| Recent changes      | Rebase onto `origin/main`; later replace the SHA ref with `v0.3.0` |
+
+### Error Artefacts
+
+```plaintext
+Failed to download and build `df12-python-lints`
+failed to fetch commit `4cf41736cce2f7ba2778882a5c629c044568a0e5`
+fatal: could not read Username for 'https://github.com': terminal prompts disabled
+```
+
+The failed SHA-based and tag-based runs have the same error. GitHub reports
+`leynos/df12-python-lints` as public, and `refs/tags/v0.3.0` advertises the
+resolved commit `4cf41736cce2f7ba2778882a5c629c044568a0e5`.
+
+### Information Gaps
+
+- The failing runner's effective Git configuration was not printed.
+- The runner image and checkout credential state may have changed between the
+  successful 2026-09-01 run and the failures on 2026-09-02.
+- The workflow does not distinguish an anonymous fetch failure from a fetch
+  carrying checkout's repository-scoped authorization header.
+
+### Falsification Results
+
+- **H1 not falsified.** With fresh isolated environments, the default `uv run`
+  installed all 54 packages and included `df12-python-lints`. Adding `--no-dev`
+  installed only Cuprum, started the baseline client's help path, and exited
+  successfully.
+- **H2 has direct supporting evidence pending the hosted test.** The failed
+  job's checkout log records `persist-credentials: true` and writes
+  `http.https://github.com/.extraheader` before `uv` launches Git. The proposed
+  correction disables persisted credentials; the next workflow run is the
+  falsification test for whether an anonymous sibling fetch succeeds.
+- **H3 falsified.** The public `refs/tags/v0.3.0` advertises the exact commit in
+  `uv.lock`, and the same failure occurred before the configuration switched
+  from that commit SHA to the tag.
+
+______________________________________________________________________
+
+## Hypotheses
+
+### H1: Baseline fetching needlessly resolves the development dependency group
+
+**Claim**: `uv run python benchmarks/fetch_main_benchmark_baseline.py` performs
+the default development-group sync, so an unrelated lint-only Git dependency
+can prevent the standard-library-only baseline client from starting.
+
+**Plausibility**: High — the failure occurs while `uv run` creates `.venv`, and
+its own diagnostic says `cuprum:dev` brought in `df12-python-lints`.
+
+**Prediction**: If this hypothesis holds, an isolated `uv run --no-dev` of the
+client excludes `df12-python-lints` while the default invocation includes it.
+
+#### H1 Falsification Plan
+
+| Step | Action                                                                                                | Expected Negative Result                              |
+| ---- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| 1    | Compare isolated, frozen `uv run` resolution with and without `--no-dev` using fresh temporary caches | `df12-python-lints` is still resolved by `--no-dev`   |
+| 2    | Run the baseline client's `--help` path with `--no-dev`                                               | The client cannot start without the development group |
+
+**Tooling**: `uv`, fresh directories under `/tmp`, and the checked-in lockfile.
+
+**Confidence on falsification**: Decisive for the baseline step's dependency
+boundary, but not for the later benchmark build, which deliberately uses the
+development group.
+
+______________________________________________________________________
+
+### H2: Checkout credentials poison the sibling public-repository fetch
+
+**Claim**: The failing runner's Git configuration supplies the current
+repository's authorization header to the sibling repository. GitHub rejects
+that repository-scoped credential instead of serving the public dependency
+anonymously.
+
+**Plausibility**: Medium — the error is an authentication prompt rather than an
+unknown ref, and the same public commit fetched successfully on an earlier run.
+
+**Prediction**: If this hypothesis holds, the effective Git configuration
+contains an authorization header or credential rewrite, and clearing it makes
+an otherwise identical fresh fetch succeed.
+
+#### H2 Falsification Plan
+
+| Step | Action                                                                                  | Expected Negative Result                                           |
+| ---- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| 1    | Capture redacted effective Git credential and URL configuration on the benchmark runner | No credential helper, authorization header, or URL rewrite applies |
+| 2    | Fetch `refs/tags/v0.3.0` and its commit with those entries disabled                     | The anonymous fetch fails identically                              |
+
+**Tooling**: A temporary diagnostic workflow step, `git config --show-origin`,
+and redaction that never prints credential values.
+
+**Confidence on falsification**: High if the anonymous fetch succeeds or no
+credential configuration applies.
+
+______________________________________________________________________
+
+### H3: The tag or resolved commit is unavailable
+
+**Claim**: `v0.3.0` does not advertise the lockfile's resolved commit to an
+anonymous Git client.
+
+**Plausibility**: Low — the SHA-based run failed first, the repository is
+public, and `git ls-remote` currently maps the tag to the exact lockfile commit.
+
+**Prediction**: If this hypothesis holds, an anonymous `ls-remote` or fresh
+fetch cannot observe the tag-to-commit mapping.
+
+#### H3 Falsification Plan
+
+| Step | Action                                              | Expected Negative Result                                      |
+| ---- | --------------------------------------------------- | ------------------------------------------------------------- |
+| 1    | Query the public tag without GitHub CLI credentials | The tag advertises `4cf41736cce2f7ba2778882a5c629c044568a0e5` |
+
+**Tooling**: `git ls-remote` with credential helpers and authorization headers
+disabled.
+
+**Confidence on falsification**: Decisive. An advertised, fetchable mapping
+rules out a missing or moved tag.
+
+______________________________________________________________________
+
+## Recommended Execution Order
+
+1. **H1** — cheapest local test and directly isolates the failing baseline
+   command's dependency boundary.
+2. **H3** — cheap anonymous Git test that eliminates tag availability.
+3. **H2** — requires a temporary hosted-runner diagnostic if local tests do not
+   explain the runner-specific authentication response.
+
+## Termination Criteria
+
+- **Root cause identified**: H1 explains why the unrelated dependency is
+  installed, and either H2 explains the runner-specific fetch failure or a
+  retry proves that failure transient. The final correction must also account
+  for the later `make develop` sync.
+- **Escalation trigger**: H1 and H3 are falsified, and a redacted H2 diagnostic
+  shows no applicable Git credential state.
+
+## Notes for Executing Agent
+
+Execute only H1 first. Do not modify tracked files or run repository-wide
+gates. Use fresh, explicit temporary directories and report whether the
+dependency appears in each resolution path, whether the client starts, and
+whether H1 is falsified, not falsified, or inconclusive.

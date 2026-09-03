@@ -2853,6 +2853,13 @@ Three properties of that arrangement are load-bearing:
   dependency bump or a change to how the benchmark is invoked can move the
   numbers as readily as a change to the code being measured.
 
+The benchmark checkout sets `persist-credentials: false`. Its build resolves
+the public `df12-python-lints` Git dependency, and checkout's Cuprum-scoped
+authorization header must not leak into that sibling-repository fetch. The
+baseline client itself uses only the standard library and therefore runs with
+`uv run --no-dev`; lint-only dependencies cannot prevent artefact discovery
+from starting.
+
 The `changes` job also writes the decision — event, detector status, filter
 verdict, and whether the benchmark ran or was skipped — to
 `$GITHUB_STEP_SUMMARY` on every run. A skipped job and a broken gate are

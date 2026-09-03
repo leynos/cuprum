@@ -410,6 +410,10 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
           fetch-depth: 0
+          # The benchmark installs a public sibling Git repository. Do not
+          # leave this repository's scoped token in Git configuration, where
+          # the sibling fetch would inherit and GitHub would reject it.
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -435,7 +439,7 @@ jobs:
           baseline_dir="${artifact_dir}/main-baseline"
           mkdir -p "${artifact_dir}"
 
-          if UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+          if UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run --no-dev python \
             benchmarks/fetch_main_benchmark_baseline.py \
             --repository "${GITHUB_REPOSITORY}" \
             --workflow "ci.yml" \

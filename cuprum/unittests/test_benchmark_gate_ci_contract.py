@@ -46,6 +46,8 @@ from tests.helpers.workflow import (
     job,
     mapping,
     parse_workflow,
+    script_of,
+    script_runs_command,
     step_named,
     step_with_id,
     steps,
@@ -171,6 +173,39 @@ def test_the_benchmark_job_declares_the_expected_gate(
         "main always benchmark so the baseline artefact stays fresh, and pull "
         f"requests benchmark only on performance-relevant diffs; found {condition!r}"
     )
+
+
+def test_the_benchmark_job_keeps_lint_dependencies_out_of_baseline_fetching(
+    workflow_data: Workflow,
+) -> None:
+    """Keep repository credentials and lint dependencies out of baseline setup.
+
+    Parameters
+    ----------
+    workflow_data : Workflow
+        Parsed workflow containing the benchmark checkout and baseline steps.
+    """
+    checkout = step_named(workflow_data, BENCHMARK_JOB, "Check out repository")
+    checkout_options = mapping(
+        checkout.get("with"),
+        f"the {BENCHMARK_JOB!r} checkout must declare options",
+    )
+    assert checkout_options.get("persist-credentials") is False, (
+        "the benchmark checkout must not persist its repository-scoped token; "
+        "the public df12-python-lints fetch must remain anonymous"
+    )
+
+    baseline = step_named(
+        workflow_data,
+        BENCHMARK_JOB,
+        "Fetch latest main benchmark baseline",
+    )
+    script = script_of(baseline)
+    assert script is not None, "the baseline-fetch step must declare a run script"
+    assert script_runs_command(
+        script,
+        "uv run --no-dev python benchmarks/fetch_main_benchmark_baseline.py",
+    ), "the standard-library baseline client must not resolve the dev dependency group"
 
 
 def test_a_failed_detector_does_not_benchmark_ungated(
