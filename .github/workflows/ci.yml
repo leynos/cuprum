@@ -1163,7 +1163,7 @@ jobs:
             status=$?
             if [[ "${status}" -eq 3 ]]; then
               echo "baseline_available=false" >> "${GITHUB_OUTPUT}"
-              echo "No previous successful main benchmark baseline artifact is available."
+              echo "No previous completed main benchmark baseline artifact is available."
             else
               exit "${status}"
             fi

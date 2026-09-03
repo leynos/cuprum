@@ -2194,10 +2194,11 @@ The continuous integration (CI) workflows run the following checks:
     `rust_mean / python_mean` from the same benchmark run. Requiring both keeps
     a runner-to-runner swing from reading as a regression without letting a
     consistent slowdown through.
-  - When a scenario is flagged, it measures again in the same job and fails
-    only if the same scenario is flagged twice, so an unlucky runner does not
-    fail a change a re-run would have passed. The second benchmark runs only
-    on a job that was about to fail.
+  - When a scenario is flagged, it measures again in the same job and normally
+    fails only if the same scenario is flagged twice, so an unlucky runner does
+    not fail a change a re-run would have passed. A confirmation that cannot
+    perform a comparison leaves the primary verdict standing. The second
+    benchmark runs only on a job that was about to fail.
   - Every non-cancelled completed `main` run records its sample, including runs
     whose own ratchet failed. A re-run of a failing benchmark job cannot change
     the bar: the window only moves when `main` moves.

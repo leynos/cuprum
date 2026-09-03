@@ -2,27 +2,17 @@
 
 from __future__ import annotations
 
-import json
 import typing as typ
 
 import pytest
 
-from benchmarks.benchmark_profile import (
-    BENCHMARK_PROFILE_VERSION,
-    IncompatibleBenchmarkProfileError,
-)
-from benchmarks.ratchet_history import RatchetPolicy
-from benchmarks.ratchet_ratio_extraction import _extract_scenario_entry
+from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+from benchmarks.ratchet_history import BaselineHistory, HistorySample, RatchetPolicy
 from benchmarks.ratchet_rust_performance import (
     BenchmarkRunPayload,
     ComparisonReport,
     compare_rust_regressions,
-    load_plan,
-    load_throughput,
 )
-
-if typ.TYPE_CHECKING:
-    import pathlib as pth
 
 
 def _scenario_payload(*, name: str, backend: str) -> dict[str, object]:
@@ -61,18 +51,6 @@ def _throughput_payload(*, python_mean: float, rust_mean: float) -> dict[str, ob
     }
 
 
-def _write_json(
-    *,
-    tmp_path: pth.Path,
-    filename: str,
-    payload: dict[str, object],
-) -> pth.Path:
-    """Write a JSON payload to a temp file."""
-    path = tmp_path / filename
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    return path
-
-
 class _RunMeans(typ.NamedTuple):
     """Python and Rust mean runtimes for one benchmark run."""
 
@@ -108,93 +86,37 @@ def _run_comparison(
     )
 
 
-def test_load_plan_rejects_missing_scenarios(tmp_path: pth.Path) -> None:
-    """Plan payloads must include a scenarios list."""
-    path = _write_json(
-        tmp_path=tmp_path,
-        filename="plan.json",
-        payload={
-            "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
-            "dry_run": True,
-            "worker_iterations": 20,
-            "command": ["hyperfine"],
-        },
-    )
-
-    with pytest.raises(TypeError, match="scenarios"):
-        load_plan(path)
-
-
-def test_load_plan_rejects_legacy_profile_metadata(tmp_path: pth.Path) -> None:
-    """Old single-run benchmark plans are incompatible with batched results."""
-    path = _write_json(
-        tmp_path=tmp_path,
-        filename="plan.json",
-        payload={
-            "dry_run": True,
-            "rust_available": True,
-            "command": ["hyperfine", "placeholder"],
-            "scenarios": [
-                _scenario_payload(name="rust-small-single-nocb", backend="rust"),
-            ],
-        },
-    )
-
-    with pytest.raises(IncompatibleBenchmarkProfileError, match="missing"):
-        load_plan(path)
-
-
-@pytest.mark.parametrize(
-    "profile_version",
-    [
-        pytest.param("pipeline-worker-single-run-v1", id="old_profile_version"),
-        pytest.param(
-            "pipeline-worker-release-ratio-v3",
-            id="immediate_predecessor_profile_version",
+def _comparison_with_options(**options: object) -> ComparisonReport:
+    """Compare two simple runs through the public options boundary."""
+    return compare_rust_regressions(
+        baseline=BenchmarkRunPayload(
+            plan=_plan_payload(),
+            throughput=_throughput_payload(python_mean=1.0, rust_mean=1.0),
+            context_name="baseline",
         ),
-    ],
-)
-def test_load_plan_rejects_incompatible_profile_version(
-    tmp_path: pth.Path, profile_version: str
-) -> None:
-    """Old and superseded benchmark profile versions are incompatible.
-
-    Baselines collected under ``pipeline-worker-release-ratio-v3`` recorded raw
-    worker command strings in ``results[*].command``, so the current v4 ratchet
-    must reject them even though the version string differs by a single
-    revision from an older, unrelated version.
-    """
-    payload = _plan_payload()
-    payload["benchmark_profile_version"] = profile_version
-    path = _write_json(tmp_path=tmp_path, filename="plan.json", payload=payload)
-
-    with pytest.raises(IncompatibleBenchmarkProfileError, match="incompatible"):
-        load_plan(path)
-
-
-def test_load_plan_rejects_single_run_worker_iteration_metadata(
-    tmp_path: pth.Path,
-) -> None:
-    """Legacy single-run worker-iteration metadata is incompatible."""
-    payload = _plan_payload()
-    payload.pop("worker_iterations")
-    payload["worker_iteration"] = 1
-    path = _write_json(tmp_path=tmp_path, filename="plan.json", payload=payload)
-
-    with pytest.raises(IncompatibleBenchmarkProfileError, match="worker_iterations"):
-        load_plan(path)
-
-
-def test_load_throughput_rejects_missing_results(tmp_path: pth.Path) -> None:
-    """Throughput payloads must include a results list."""
-    path = _write_json(
-        tmp_path=tmp_path,
-        filename="throughput.json",
-        payload={"meta": {}},
+        candidate=BenchmarkRunPayload(
+            plan=_plan_payload(),
+            throughput=_throughput_payload(python_mean=1.0, rust_mean=1.1),
+            context_name="candidate",
+        ),
+        **typ.cast("typ.Any", options),
     )
 
-    with pytest.raises(TypeError, match="results"):
-        load_throughput(path)
+
+def _history(*ratios: float) -> BaselineHistory:
+    """Build compatible main-branch history samples for policy tests."""
+    return BaselineHistory(
+        samples=tuple(
+            HistorySample(
+                commit=str(index),
+                run_id=str(index),
+                benchmark_profile_version=BENCHMARK_PROFILE_VERSION,
+                worker_iterations=20,
+                ratios={"small-single-nocb": ratio},
+            )
+            for index, ratio in enumerate(ratios)
+        )
+    )
 
 
 def test_compare_rust_regressions_passes_within_threshold() -> None:
@@ -211,6 +133,82 @@ def test_compare_rust_regressions_passes_within_threshold() -> None:
     assert report.comparisons[0].baseline_ratio == pytest.approx(2.0)
     assert report.comparisons[0].candidate_ratio == pytest.approx(2.2)
     assert report.comparisons[0].regression_ratio == pytest.approx(0.10)
+
+
+def test_compare_rust_regressions_rejects_unsupported_policy_option() -> None:
+    """Only the policy and legacy threshold options are accepted."""
+    with pytest.raises(TypeError, match="unsupported comparison option\\(s\\): extra"):
+        _comparison_with_options(extra=0.30)
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        pytest.param(
+            {"policy": object()}, "policy must be a RatchetPolicy", id="policy"
+        ),
+        pytest.param(
+            {"max_regression": 1}, "max_regression must be a float", id="integer"
+        ),
+    ],
+)
+def test_compare_rust_regressions_rejects_invalid_policy_options(
+    options: dict[str, object], message: str
+) -> None:
+    """Policy options are type-checked through the public comparison API."""
+    with pytest.raises(TypeError, match=message):
+        _comparison_with_options(**options)
+
+
+def test_compare_rust_regressions_rejects_simultaneous_policy_and_legacy_option() -> (
+    None
+):
+    """The two policy configurations must not silently disagree."""
+    with pytest.raises(
+        ValueError, match="pass either policy or max_regression, not both"
+    ):
+        _comparison_with_options(
+            policy=RatchetPolicy(max_regression=0.30), max_regression=0.30
+        )
+
+
+def test_compare_rust_regressions_honours_the_legacy_threshold_option() -> None:
+    """The legacy threshold option continues to select the report threshold."""
+    report = _comparison_with_options(max_regression=0.20)
+
+    assert report.comparisons[0].max_regression == pytest.approx(0.20), (
+        "the legacy max_regression option must construct the requested policy"
+    )
+
+
+def test_compare_rust_regressions_preserves_a_supplied_policy() -> None:
+    """A supplied policy keeps its threshold, noise scale, and window size."""
+    policy = RatchetPolicy(max_regression=0.10, noise_sigmas=0.50, window_size=2)
+    report = compare_rust_regressions(
+        baseline=BenchmarkRunPayload(
+            plan=_plan_payload(),
+            throughput=_throughput_payload(python_mean=1.0, rust_mean=1.0),
+            context_name="baseline",
+        ),
+        candidate=BenchmarkRunPayload(
+            plan=_plan_payload(),
+            throughput=_throughput_payload(python_mean=1.0, rust_mean=1.1),
+            context_name="candidate",
+        ),
+        history=_history(1.0, 3.0, 4.0),
+        policy=policy,
+    )
+    comparison = report.comparisons[0]
+
+    assert comparison.max_regression == pytest.approx(policy.max_regression), (
+        "the supplied policy's flat threshold must reach the comparison"
+    )
+    assert comparison.baseline_sample_count == policy.window_size, (
+        "the supplied policy's window size must limit history samples"
+    )
+    assert comparison.noise_tolerance == pytest.approx(0.1059), (
+        "the supplied policy's noise scale must determine the MAD band"
+    )
 
 
 def test_compare_rust_regressions_pairs_command_names_with_raw_commands() -> None:
@@ -270,35 +268,6 @@ def test_compare_rust_regressions_pairs_command_names_with_raw_commands() -> Non
     assert report.comparisons[0].regression_ratio == pytest.approx(0.0)
 
 
-def test_extract_scenario_entry_accepts_matching_command() -> None:
-    """A result command may carry the logical name of its paired scenario."""
-    entry = _extract_scenario_entry(
-        index=0,
-        scenario_value={"name": "rust-small", "backend": "rust"},
-        result_value={"command": "rust-small", "mean": 1.5},
-    )
-
-    assert entry == ("small", "rust", 1.5), (
-        "matching logical names must preserve comparison extraction"
-    )
-
-
-def test_extract_scenario_entry_rejects_mismatched_command() -> None:
-    """A result command must identify the same scenario as the paired entry."""
-    with pytest.raises(
-        ValueError,
-        match=(
-            r"results\[0\]\.command 'python-small' must match "
-            r"scenarios\[0\]\.name 'rust-small'"
-        ),
-    ):
-        _extract_scenario_entry(
-            index=0,
-            scenario_value={"name": "rust-small", "backend": "rust"},
-            result_value={"command": "python-small", "mean": 1.5},
-        )
-
-
 def test_compare_rust_regressions_rejects_mismatched_result_command() -> None:
     """The comparison must validate result commands through its public path."""
     with pytest.raises(ValueError, match=r"results\[0\]\.command .* must match"):
@@ -319,30 +288,6 @@ def test_compare_rust_regressions_rejects_mismatched_result_command() -> None:
                 context_name="candidate",
             ),
             policy=RatchetPolicy(max_regression=0.10),
-        )
-
-
-@pytest.mark.parametrize(
-    ("result_value", "expected_exception"),
-    [
-        pytest.param({"mean": 1.5}, TypeError, id="missing"),
-        pytest.param({"command": 7, "mean": 1.5}, TypeError, id="non-string"),
-        pytest.param({"command": "", "mean": 1.5}, ValueError, id="empty"),
-    ],
-)
-def test_extract_scenario_entry_rejects_invalid_command(
-    result_value: dict[str, object],
-    expected_exception: type[Exception],
-) -> None:
-    """Result commands must be present, string typed, and non-empty."""
-    with pytest.raises(
-        expected_exception,
-        match=r"results\[0\]\.command must be a non-empty string",
-    ):
-        _extract_scenario_entry(
-            index=0,
-            scenario_value={"name": "rust-small", "backend": "rust"},
-            result_value=result_value,
         )
 
 

@@ -29,8 +29,8 @@ from tests.helpers.extension_requirement import (
 from tests.helpers.workflow import (
     Workflow,
     filter_paths,
-    read_workflow_source,
     parse_workflow,
+    read_workflow_source,
 )
 
 if typ.TYPE_CHECKING:

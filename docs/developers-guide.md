@@ -1648,7 +1648,6 @@ completed `main` baseline artefact as a single sample — the pre-window bar,
 reported in `ratchet-report.json` as `baseline_sample_count: 1` so a
 surprising verdict can be read against the evidence behind it.
 
-
 ### Benchmark-ratchet implementation boundaries
 
 The ratchet is split by responsibility rather than by the workflow steps that

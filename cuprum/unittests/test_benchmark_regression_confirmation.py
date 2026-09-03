@@ -260,6 +260,32 @@ def test_the_cli_reports_malformed_input_without_passing_it(
     assert exit_code == 2
 
 
+@pytest.mark.parametrize("report_name", ["primary", "confirmation"])
+def test_the_cli_rejects_a_report_without_regressions(
+    tmp_path: pth.Path, report_name: str
+) -> None:
+    """Reports that compare must explicitly declare their regression list."""
+    primary = _report()
+    confirmation = _report()
+    target = primary if report_name == "primary" else confirmation
+    target.pop("regressions")
+    primary_path = tmp_path / "primary.json"
+    confirmation_path = tmp_path / "confirmation.json"
+    primary_path.write_text(json.dumps(primary), encoding="utf-8")
+    confirmation_path.write_text(json.dumps(confirmation), encoding="utf-8")
+
+    exit_code = confirm_cli([
+        "--primary-report",
+        str(primary_path),
+        "--confirmation-report",
+        str(confirmation_path),
+        "--output",
+        str(tmp_path / "out.json"),
+    ])
+
+    assert exit_code == 2, "a comparison report without regressions is invalid"
+
+
 @pytest.mark.parametrize("scenario_name", ["", 1, None])
 def test_the_cli_rejects_an_invalid_regression_scenario_name(
     tmp_path: pth.Path, scenario_name: object

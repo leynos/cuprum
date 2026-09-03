@@ -45,7 +45,7 @@ _logger = logging.getLogger(__name__)
 
 def _regressed_scenarios(report: cabc.Mapping[str, object]) -> list[str]:
     """Return the scenario names a ratchet report flagged as regressions."""
-    entries = _require_list(report.get("regressions", []), name="regressions")
+    entries = _require_list(report.get("regressions"), name="regressions")
     return [
         _require_non_empty_string(
             _require_mapping(entry, name="regressions[]").get("scenario_name"),
@@ -109,7 +109,7 @@ def confirm_regressions(
     else:
         reproduced = set(flagged) & set(_regressed_scenarios(confirmation))
 
-    entries = _require_list(primary.get("regressions", []), name="regressions")
+    entries = _require_list(primary.get("regressions"), name="regressions")
     confirmed = []
     for entry in entries:
         mapped_entry = _require_mapping(entry, name="regressions[]")

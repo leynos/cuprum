@@ -19,6 +19,7 @@ import typing as typ
 
 import pytest
 
+import benchmarks.update_baseline_history as history_recorder
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 from benchmarks.ratchet_history import BaselineHistory, HistorySample, load_history
 from benchmarks.update_baseline_history import main as record_sample
@@ -221,3 +222,35 @@ class TestBaselineHistoryRecorder:
 
         assert exit_code == 2, "a directory history must return input error 2"
         assert not output.exists(), "a failed history read must not publish a window"
+
+    @pytest.mark.parametrize("window", [0, -1])
+    def test_an_invalid_window_fails_before_reading_or_writing(
+        self, tmp_path: pth.Path, monkeypatch: pytest.MonkeyPatch, window: int
+    ) -> None:
+        """Argument parsing rejects invalid windows before touching artefacts."""
+        candidate = Candidate(
+            plan=tmp_path / "absent-plan.json",
+            throughput=tmp_path / "absent-throughput.json",
+        )
+        output = tmp_path / "main-baseline-history.json"
+
+        def _unexpected_candidate_read(**_: object) -> None:
+            """Fail if invalid arguments reach candidate processing."""
+            pytest.fail("invalid --window must not read candidate files")
+
+        def _unexpected_history_write(**_: object) -> None:
+            """Fail if invalid arguments reach history publication."""
+            pytest.fail("invalid --window must not write history")
+
+        monkeypatch.setattr(
+            history_recorder, "_candidate_sample", _unexpected_candidate_read
+        )
+        monkeypatch.setattr(
+            history_recorder, "write_history", _unexpected_history_write
+        )
+
+        with pytest.raises(SystemExit) as error:
+            _record(tmp_path, candidate=candidate, window=window)
+
+        assert error.value.code == 2, "invalid --window must use argparse exit code 2"
+        assert not output.exists(), "invalid --window must not create a history file"

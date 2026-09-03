@@ -88,23 +88,7 @@ def _baseline_window(
     history: BaselineHistory | None,
     window_size: int,
 ) -> dict[str, tuple[float, ...]]:
-    """Return the per-scenario main-branch samples the candidate is judged against.
-
-    The window is preferred whenever it holds a compatible sample. The
-    single-sample baseline is the fallback for a first run, an expired
-    artefact, or a window emptied by a benchmark-profile change — a worse bar
-    than the window, but the one this ratchet used before the window existed.
-
-    Returns
-    -------
-    dict[str, tuple[float, ...]]
-        The samples used to judge every scenario.
-
-    Raises
-    ------
-    ValueError
-        If neither a compatible history nor a fallback baseline is available.
-    """
+    """Return compatible history samples, falling back to a single baseline."""
     recent = _compatible_history_window(
         candidate=candidate,
         history=history,
@@ -163,13 +147,25 @@ def _compare_scenario(
     )
 
 
-def _comparison_policy(options: dict[str, object]) -> RatchetPolicy:
-    """Resolve supported policy keywords, including the legacy threshold."""
+def _policy_options(
+    options: dict[str, object],
+) -> tuple[RatchetPolicy | None, float | None]:
+    """Consume and return the supported comparison-policy options."""
     policy = options.pop("policy", None)
     max_regression = options.pop("max_regression", None)
     if options:
         msg = f"unsupported comparison option(s): {', '.join(sorted(options))}"
         raise TypeError(msg)
+    return (
+        typ.cast("RatchetPolicy | None", policy),
+        typ.cast("float | None", max_regression),
+    )
+
+
+def _validate_policy_options(
+    *, policy: RatchetPolicy | None, max_regression: float | None
+) -> None:
+    """Validate the policy options without constructing a policy."""
     if policy is not None and not isinstance(policy, RatchetPolicy):
         msg = "policy must be a RatchetPolicy"
         raise TypeError(msg)
@@ -179,6 +175,12 @@ def _comparison_policy(options: dict[str, object]) -> RatchetPolicy:
     if policy is not None and max_regression is not None:
         msg = "pass either policy or max_regression, not both"
         raise ValueError(msg)
+
+
+def _comparison_policy(options: dict[str, object]) -> RatchetPolicy:
+    """Resolve supported policy keywords, including the legacy threshold."""
+    policy, max_regression = _policy_options(options)
+    _validate_policy_options(policy=policy, max_regression=max_regression)
     if policy is not None:
         return policy
     if max_regression is not None:

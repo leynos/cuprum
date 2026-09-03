@@ -16,9 +16,8 @@ spread. The outlier this window exists to tolerate would inflate a standard
 deviation — widening the band in proportion to the very sample it should
 ignore — whereas it moves the median absolute deviation barely at all.
 
-Samples are appended by every main-branch run, passing or failing. That is
-the half of the fix the statistics cannot supply: a window fed only by
-passing runs is a window of low-biased samples.
+Samples are appended by every main-branch run, passing or failing, so the
+window is not biased towards low-tail measurements.
 """
 
 from __future__ import annotations
@@ -102,11 +101,9 @@ class BaselineHistoryNotFoundError(BaselineHistoryReadError):
 
 @dc.dataclass(frozen=True, slots=True)
 class RatchetPolicy:
-    """The thresholds a candidate is judged against.
+    """Thresholds for how much slower than recent `main` a change may measure.
 
-    Grouped rather than passed separately because they are one decision:
-    how much slower than recent `main` a change may measure before the
-    ratchet calls it a regression. The defaults are the ones CI uses.
+    The ratchet calls measurements beyond the combined thresholds regressions.
     """
 
     max_regression: float = 0.30
@@ -290,6 +287,33 @@ def history_from_payload(payload: cabc.Mapping[str, object]) -> BaselineHistory:
     )
 
 
+def _read_history_payload(path: pth.Path) -> object:
+    """Read and JSON-decode a persisted history payload."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise BaselineHistoryNotFoundError(path) from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        msg = f"could not read: {exc}"
+        raise BaselineHistoryReadError(msg, path=path) from exc
+
+
+def _history_from_payload_at_path(
+    *, payload: object, path: pth.Path
+) -> BaselineHistory:
+    """Validate a decoded history payload while retaining its source path."""
+    if not isinstance(payload, dict):
+        msg = "must contain a JSON object"
+        raise BaselineHistoryReadError(msg, path=path)
+    try:
+        return history_from_payload(typ.cast("dict[str, object]", payload))
+    except BaselineHistoryReadError as exc:
+        raise BaselineHistoryReadError(exc.reason, path=path) from exc
+    except (TypeError, ValueError) as exc:
+        msg = f"invalid payload: {exc}"
+        raise BaselineHistoryReadError(msg, path=path) from exc
+
+
 def load_history(path: pth.Path) -> BaselineHistory:
     """Load history, distinguishing an absent file from unreadable content.
 
@@ -304,24 +328,9 @@ def load_history(path: pth.Path) -> BaselineHistory:
         If ``path`` does not exist.
     BaselineHistoryReadError
         If the path cannot be read or its JSON payload is invalid.
-    """
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise BaselineHistoryNotFoundError(path) from exc
-    except (OSError, json.JSONDecodeError) as exc:
-        msg = f"could not read: {exc}"
-        raise BaselineHistoryReadError(msg, path=path) from exc
-    if not isinstance(payload, dict):
-        msg = "must contain a JSON object"
-        raise BaselineHistoryReadError(msg, path=path)
-    try:
-        return history_from_payload(typ.cast("dict[str, object]", payload))
-    except (TypeError, ValueError) as exc:
-        if isinstance(exc, BaselineHistoryReadError):
-            raise BaselineHistoryReadError(exc.reason, path=path) from exc
-        msg = f"invalid payload: {exc}"
-        raise BaselineHistoryReadError(msg, path=path) from exc
+    """  # ruff: ignore[docstring-extraneous-exception] - helpers raise the documented typed errors.
+    payload = _read_history_payload(path)
+    return _history_from_payload_at_path(payload=payload, path=path)
 
 
 def write_history(*, history: BaselineHistory, output_path: pth.Path) -> None:

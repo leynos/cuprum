@@ -110,6 +110,8 @@
       'cuprum/unittests/test_benchmark_gate_ci_contract.py',
       'cuprum/unittests/test_benchmark_ratchet_cli.py',
       'cuprum/unittests/test_benchmark_ratchet_history.py',
+      'cuprum/unittests/test_benchmark_ratchet_payload_loading.py',
+      'cuprum/unittests/test_benchmark_ratio_extraction.py',
       'cuprum/unittests/test_benchmark_regression_confirmation.py',
       'cuprum/unittests/test_benchmark_suite.py',
       'cuprum/unittests/test_build_final_results_property.py',

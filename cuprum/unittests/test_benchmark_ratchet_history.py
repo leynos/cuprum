@@ -501,14 +501,6 @@ def _test_history_sample_copies_and_freezes_its_ratios() -> None:
     assert isinstance(hash(sample), int)
 
 
-@pytest.mark.parametrize(
-    ("content", "reason"),
-    [
-        ("not json at all", "could not read"),
-        ('["not", "an", "object"]', "must contain a JSON object"),
-        ('{"schema": 99, "samples": []}', "schema must be"),
-    ],
-)
 def _test_an_unusable_history_raises_a_typed_error(
     tmp_path: pth.Path, content: str, reason: str
 ) -> None:
@@ -579,8 +571,12 @@ def _test_a_failed_history_replacement_preserves_the_previous_file(
     with pytest.raises(_ReplaceError):
         write_history(history=_history(2.0), output_path=path)
 
-    assert load_history(path) == existing
-    assert not list(tmp_path.glob(".main-baseline-history.json.*"))
+    assert load_history(path) == existing, (
+        "a failed replacement must preserve the last complete history"
+    )
+    assert not list(tmp_path.glob(".main-baseline-history.json.*")), (
+        "a failed replacement must remove its unpublished temporary history"
+    )
 
 
 def _test_a_failed_history_sync_removes_the_temporary_file(
@@ -675,7 +671,9 @@ def _test_the_comparison_reads_no_more_than_the_window() -> None:
     )
     comparison = report.comparisons[0]
 
-    assert comparison.baseline_sample_count == DEFAULT_WINDOW_SIZE
+    assert comparison.baseline_sample_count == DEFAULT_WINDOW_SIZE, (
+        "the comparison must use no more than the configured history window"
+    )
     assert comparison.baseline_ratio == pytest.approx(1.0), (
         "the two newest samples plus the five 1.0s that fit the window put "
         "the median at 1.0"
@@ -684,8 +682,12 @@ def _test_the_comparison_reads_no_more_than_the_window() -> None:
 
 def _test_noise_tolerance_needs_at_least_two_samples() -> None:
     """One measurement has no spread to estimate."""
-    assert noise_tolerance([1.0], sigmas=DEFAULT_NOISE_SIGMAS) == pytest.approx(0.0)
-    assert noise_tolerance([], sigmas=DEFAULT_NOISE_SIGMAS) == pytest.approx(0.0)
+    assert noise_tolerance([1.0], sigmas=DEFAULT_NOISE_SIGMAS) == pytest.approx(0.0), (
+        "a one-sample window has no observed spread"
+    )
+    assert noise_tolerance([], sigmas=DEFAULT_NOISE_SIGMAS) == pytest.approx(0.0), (
+        "an empty window has no observed spread"
+    )
 
 
 class TestProperties:
@@ -705,7 +707,9 @@ class TestProperties:
             history=_history(*values),
             policy=RatchetPolicy(max_regression=max_regression),
         )
-        assert report.comparisons[0].effective_threshold >= max_regression
+        assert report.comparisons[0].effective_threshold >= max_regression, (
+            "the effective threshold must never undercut the flat threshold"
+        )
 
     @given(
         values=st.lists(_RATIOS, min_size=1, max_size=DEFAULT_WINDOW_SIZE),
@@ -719,7 +723,7 @@ class TestProperties:
         median = median_ratio(history.ratios_for(SCENARIO))
         assert _verdict(
             candidate_ratio=median, history=history, max_regression=max_regression
-        )
+        ), "a candidate at the baseline median must pass"
 
     def test_the_comparison_reads_no_more_than_the_window(self) -> None:
         """Run the history-window truncation check."""

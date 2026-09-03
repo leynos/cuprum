@@ -73,6 +73,22 @@ def test_every_main_run_records_its_sample() -> None:
         f"{PUBLICATION_CONDITION} — so a run that measured a slowdown still "
         f"records it; found {condition!r}"
     )
+    script = script_of(_step(RECORD_STEP))
+    assert script is not None, f"the {RECORD_STEP!r} step must run a script"
+
+    for required in (
+        "benchmarks/update_baseline_history.py",
+        "candidate-plan.json",
+        "candidate-throughput.json",
+        "main-baseline/main-baseline-history.json",
+        "${GITHUB_SHA}",
+        "${GITHUB_RUN_ID}",
+        "main-baseline-history.json",
+    ):
+        assert required in script, (
+            f"the {RECORD_STEP!r} step must pass {required!r} to preserve "
+            f"the recorded main-branch sample contract. Found:\n{script}"
+        )
 
 
 def test_the_baseline_artefact_is_published_from_every_main_run() -> None:
@@ -91,7 +107,10 @@ def test_the_published_artefact_carries_the_window() -> None:
         _step(UPLOAD_STEP).get("with"),
         f"the {UPLOAD_STEP!r} step must declare inputs",
     )
-    paths = str(inputs.get("path", ""))
+    paths = inputs.get("path")
+    assert isinstance(paths, str), (
+        f"the {UPLOAD_STEP!r} step must declare a string `path` input; found {paths!r}"
+    )
 
     assert "main-baseline-history.json" in paths, (
         f"the {UPLOAD_STEP!r} step must upload main-baseline-history.json; "
@@ -114,14 +133,10 @@ def test_the_fetch_reads_runs_that_failed_their_own_ratchet() -> None:
     script = script_of(_step(FETCH_STEP))
     assert script is not None, f"the {FETCH_STEP!r} step must run a script"
 
-    assert "--run-status" in script, (
-        f"the {FETCH_STEP!r} step must pass `--run-status`, or the samples "
-        "recorded by failing main runs are dropped at fetch time instead. "
-        f"Found:\n{script}"
-    )
-    assert "completed" in script, (
-        f"the {FETCH_STEP!r} step must ask for `completed` runs, not only "
-        f"successful ones. Found:\n{script}"
+    assert '--run-status "completed"' in script, (
+        f"the {FETCH_STEP!r} step must pass exactly `--run-status completed`, "
+        "or the samples recorded by failing main runs are dropped at fetch "
+        f"time. Found:\n{script}"
     )
 
 

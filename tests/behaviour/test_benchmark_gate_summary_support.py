@@ -8,8 +8,6 @@ import typing as typ
 
 from tests.helpers.workflow import (
     CHANGES_JOB,
-    parse_workflow,
-    read_workflow_source,
     script_of,
     step_named,
 )
@@ -17,10 +15,11 @@ from tests.helpers.workflow import (
 if typ.TYPE_CHECKING:
     import pathlib as pth
 
+    from tests.helpers.workflow import Workflow
+
 SUMMARY_STEP = "Record the benchmark gate decision"
 _COLUMNS = ("event", "detector", "bench", "decision")
 _METRIC_PREFIX = "::notice title=benchmark-gate-decision::"
-_WORKFLOW = parse_workflow(read_workflow_source())
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -78,9 +77,9 @@ class SummaryCase:
     decision: str
 
 
-def _summary_script() -> str:
+def _summary_script(workflow_data: Workflow) -> str:
     """Return the summary step's script, as `ci.yml` declares it."""
-    script = script_of(step_named(_WORKFLOW, CHANGES_JOB, SUMMARY_STEP))
+    script = script_of(step_named(workflow_data, CHANGES_JOB, SUMMARY_STEP))
     assert script is not None, f"the {SUMMARY_STEP!r} step must run a script"
     return script
 
@@ -90,10 +89,11 @@ def _execute_summary_script(
     event: str,
     detector: Detector,
     summary_path: pth.Path,
+    workflow_data: Workflow,
 ) -> subprocess.CompletedProcess[str]:
     """Execute the checked-in summary script."""
     completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - literal vector plus workflow run block; no test input reaches the command line.
-        ["/usr/bin/env", "bash", "-c", _summary_script()],
+        ["/usr/bin/env", "bash", "-c", _summary_script(workflow_data)],
         env={
             "PATH": "/usr/bin:/bin",
             "EVENT": event,
@@ -150,6 +150,7 @@ def run_summary_script(
     event: str,
     detector: Detector,
     tmp_path: pth.Path,
+    workflow_data: Workflow,
 ) -> Summary:
     """Execute the real summary script and parse its durable outputs.
 
@@ -161,6 +162,8 @@ def run_summary_script(
         Detector status and path verdict exposed to the workflow script.
     tmp_path : pathlib.Path
         Pytest temporary directory in which to capture the step summary.
+    workflow_data : tests.helpers.workflow.Workflow
+        Parsed workflow fixture, supplied at test execution rather than import.
 
     Returns
     -------
@@ -174,6 +177,7 @@ def run_summary_script(
         event=event,
         detector=detector,
         summary_path=summary_path,
+        workflow_data=workflow_data,
     )
     return _parse_summary(
         emitted=summary_path.read_text(encoding="utf-8"), stdout=completed.stdout
