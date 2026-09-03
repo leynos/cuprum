@@ -91,6 +91,7 @@ jobs:
           if [ "${{ steps.cache-whitaker.outputs.cache-hit }}" != "true" ]; then
             if cargo binstall --version >/dev/null 2>&1; then
               cargo binstall --no-confirm --locked \
+                --disable-strategies compile \
                 --git https://github.com/leynos/whitaker \
                 --version "${WHITAKER_INSTALLER_VERSION}" \
                 whitaker-installer
@@ -163,6 +164,8 @@ jobs:
             ~/.local/share/uv
             ~/.local/bin
             ~/.cache/sccache
+            .uv-cache
+            .uv-tools
 
       - name: Report Namespace cache status
         if: always()
@@ -198,6 +201,9 @@ jobs:
         uses: taiki-e/install-action@18b1216eba7f8039b0f8d131d5473787f0edce68 # v2.85.3
         with:
           tool: nextest@${{ env.NEXTEST_VERSION }}
+          # A missing prebuilt binary must fail the job. The fallback would
+          # otherwise compile nextest from source, which no cache owns.
+          fallback: none
 
       - name: Run typechecker
         run: make typecheck
@@ -232,6 +238,8 @@ jobs:
             ~/.local/share/uv
             ~/.local/bin
             ~/.cache/sccache
+            .uv-cache
+            .uv-tools
 
       - name: Report Namespace cache status
         if: always()
@@ -332,6 +340,8 @@ jobs:
             ~/.local/share/uv
             ~/.local/bin
             ~/.cache/sccache
+            .uv-cache
+            .uv-tools
 
       - name: Report Namespace cache status
         if: always()

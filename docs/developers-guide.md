@@ -52,6 +52,25 @@ terminal `~/.local/bin/sccache` file: Namespace creates an empty mount point as
 a directory on a cold cache, so the installer cannot replace it with the
 executable.
 
+Jobs that install dependencies through Make also mount `.uv-cache` and
+`.uv-tools`. The `Makefile` pins `UV_CACHE_DIR` and `UV_TOOL_DIR` to that
+worktree-local pair, so uv's standard `~/.cache/uv` and `~/.local/share/uv`
+directories stay empty for those jobs and caching them alone would leave every
+Make-driven install cold.
+
+`.github/actions/setup-sccache` pins the release version, the archive SHA-256,
+and the SHA-256 of the executable inside it. A restored `~/.local/bin/sccache`
+is reused only when its digest equals that pin; anything else is replaced from
+the verified archive. The cache volume is writable by every job that mounts it
+and the binary becomes `RUSTC_WRAPPER`, so being executable is not sufficient
+evidence of provenance. Bumping the version or digest inputs therefore also
+replaces a stale cached binary.
+
+Prebuilt tool installers fail closed. `taiki-e/install-action` sets
+`fallback: none` and `cargo binstall` runs with `--disable-strategies compile`,
+so a missing published binary fails the job instead of starting a source build
+that no cache owns.
+
 The shared setup-rust action is pinned to the merged PR #421 revision,
 `5daae0a332441d170d88ca648c9e71f0bbe96cb3`, with
 `cache-provider: external` and `use-sccache: 'false'`. This prevents nested

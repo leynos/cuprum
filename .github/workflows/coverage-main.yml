@@ -26,6 +26,10 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          # Coverage generation runs project code; the scoped token must not
+          # stay in .git/config where that code could read it.
+          persist-credentials: false
 
       - name: Set up Namespace cache
         id: namespace-cache
@@ -34,6 +38,9 @@ jobs:
           path: |
             ~/.cache/uv
             ~/.local/share/uv
+            .uv-cache
+            .uv-tools
+
       - name: Report Namespace cache status
         if: always()
         run: |
