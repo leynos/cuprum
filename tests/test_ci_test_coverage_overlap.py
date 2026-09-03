@@ -63,11 +63,18 @@ def _coverage_step(workflow_name: str, job_name: str) -> Step:
     Step
         The step invoking the shared coverage action.
     """
-    return next(
+    matches = [
         step
         for step in steps(workflow_name, job_name)
         if step.get("uses") == GENERATE_COVERAGE
+    ]
+    # Exactly one, not merely a first. A second invocation would run the whole
+    # suite again, and checking only the first would report that as clean.
+    assert len(matches) == 1, (
+        f"{workflow_name}:{job_name} must invoke the coverage action exactly "
+        f"once, found {len(matches)}"
     )
+    return matches[0]
 
 
 @pytest.mark.parametrize(("workflow_name", "job_name"), COVERAGE_JOBS)
@@ -169,20 +176,33 @@ def test_the_extension_gate_is_not_a_duplicate_run() -> None:
     """Record why `extension-tests` survives the deduplication.
 
     It runs the same interpreter as the coverage job, but with the compiled
-    extension present. Coverage runs without it, and the gated modules skip
+    extension present. Coverage runs without it and the gated modules skip
     there; run 33752095108 logged its `rust-backend` cases as SKIPPED. The two
     runs therefore execute different code.
+
+    Selection is by what the steps run, not by what they are called. A step
+    labelled "Build the native extension" that no longer builds it would
+    otherwise satisfy this contract.
     """
-    names = [str(step.get("name", "")) for step in steps("ci.yml", "extension-tests")]
-    assert "Build the native extension" in names, (
-        "ci.yml:extension-tests must build the extension, which is what makes "
-        "it a different execution from the coverage job's pytest run"
+    scripts = [str(step.get("run", "")) for step in steps("ci.yml", "extension-tests")]
+    builds = [index for index, run in enumerate(scripts) if "make develop" in run]
+    gated = [index for index, run in enumerate(scripts) if "make test-extension" in run]
+    assert len(builds) == 1, (
+        "ci.yml:extension-tests must build the extension exactly once, "
+        f"found {len(builds)} steps running `make develop`"
     )
-    assert names.index("Build the native extension") < names.index(
-        "Run extension-gated tests"
-    ), "the extension must be built before the gated modules run"
-    coverage_names = [str(step.get("name", "")) for step in steps("ci.yml", "coverage")]
-    assert "Build the native extension" not in coverage_names, (
+    assert len(gated) == 1, (
+        "ci.yml:extension-tests must run the gated modules exactly once, "
+        f"found {len(gated)} steps running `make test-extension`"
+    )
+    assert builds[0] < gated[0], (
+        "the extension must be built before the gated modules run, or they "
+        "skip exactly as they do under coverage"
+    )
+    coverage_scripts = [
+        str(step.get("run", "")) for step in steps("ci.yml", "coverage")
+    ]
+    assert not any("make develop" in run for run in coverage_scripts), (
         "if the coverage job ever builds the extension it starts covering the "
         "boundary, and `extension-tests` becomes a duplicate run"
     )

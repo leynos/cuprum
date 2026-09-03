@@ -48,17 +48,20 @@ def _mapping(value: object, message: str) -> dict[str, object]:
     return typ.cast("dict[str, object]", value)
 
 
-def workflow_document(workflow_name: str) -> dict[str, object]:
+def workflow_document(workflow_name: str) -> dict[object, object]:
     """Parse one repository workflow, without narrowing its top-level keys."""
     path = WORKFLOW_DIR / workflow_name
     # YAML 1.1 reads the `on:` trigger key as the boolean `True`, so the
-    # document itself is not string-keyed. Only the mappings below are narrowed.
+    # document is genuinely not string-keyed and the return type says so.
+    # Claiming `dict[str, object]` here would be a false contract that hides
+    # the one key a caller cannot reach by name. Callers that need a
+    # string-keyed mapping narrow one of its values through `_mapping`.
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
     _require(
         condition=isinstance(document, dict),
         message=f"{workflow_name} must parse to a mapping",
     )
-    return typ.cast("dict[str, object]", document)
+    return typ.cast("dict[object, object]", document)
 
 
 def workflow_env(workflow_name: str) -> dict[str, object]:
