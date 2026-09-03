@@ -149,11 +149,24 @@ Concretely, this means:
 - the shared `generate-coverage` action runs with `cache-provider: external`,
   which disables its whole-`target` archive;
 - the native and manylinux wheel builds cache pip and the Cargo registry but
-  not `rust/target`. sccache does not reach inside the manylinux container, so
-  those legs simply have no compiler cache; their measured cold duration is
-  about one to two minutes, which is the cost of that decision.
+  not `rust/target`.
+
+The wheel legs are a **documented exception** to the rule that every expensive
+build has a compiler cache. sccache does not reach inside the manylinux
+container that `maturin-action` builds in, and the Windows and macOS legs run
+on GitHub-hosted runners with their own cache service, so dropping
+`rust/target` leaves those five legs with no compiler cache at all. That is
+accepted rather than fixed: their cold duration in run 33752095108 was 47 to
+110 seconds each, which bounds the cost, and re-introducing a `target` archive
+to save part of it would reintroduce the ownership problem the rule exists to
+prevent. Revisit only if a wheel leg becomes a critical-path gate.
 
 ### The compiler cache
+
+Cuprum runs the local-directory backend as a deliberate A/B against Whitaker,
+rstest-bdd, and Netsuke, which use the GitHub Actions backend with the
+credential re-export; the warm-run comparison of hit rate, restore and save
+seconds, and write errors decides the estate default.
 
 `.github/actions/setup-sccache` pins the release version, the archive SHA-256,
 and the SHA-256 of the executable inside it. A restored `~/.local/bin/sccache`
