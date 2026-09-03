@@ -38,8 +38,8 @@ jobs:
           path: |
             ~/.cache/uv
             ~/.local/share/uv
-            .uv-cache
-            .uv-tools
+            ${{ github.workspace }}/.uv-cache
+            ${{ github.workspace }}/.uv-tools
 
       - name: Report Namespace cache status
         if: always()

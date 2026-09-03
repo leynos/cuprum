@@ -52,11 +52,13 @@ terminal `~/.local/bin/sccache` file: Namespace creates an empty mount point as
 a directory on a cold cache, so the installer cannot replace it with the
 executable.
 
-Jobs that install dependencies through Make also mount `.uv-cache` and
-`.uv-tools`. The `Makefile` pins `UV_CACHE_DIR` and `UV_TOOL_DIR` to that
-worktree-local pair, so uv's standard `~/.cache/uv` and `~/.local/share/uv`
-directories stay empty for those jobs and caching them alone would leave every
-Make-driven install cold.
+Jobs that install dependencies through Make also mount the workspace's
+`.uv-cache` and `.uv-tools` directories. The `Makefile` pins `UV_CACHE_DIR` and
+`UV_TOOL_DIR` to that worktree-local pair, so uv's standard `~/.cache/uv` and
+`~/.local/share/uv` directories stay empty for those jobs and caching them
+alone would leave every Make-driven install cold. Both are spelled with
+`${{ github.workspace }}`: the cache action forwards each path to `nsc`
+without resolving it against the working directory.
 
 `.github/actions/setup-sccache` pins the release version, the archive SHA-256,
 and the SHA-256 of the executable inside it. A restored `~/.local/bin/sccache`

@@ -61,7 +61,12 @@ MAKE_DRIVEN_JOBS: typ.Final = types.MappingProxyType({
     "ci.yml": ("typecheck-test", "extension-tests", "coverage"),
     "coverage-main.yml": ("coverage-upload",),
 })
-MAKE_UV_PATHS: typ.Final = (".uv-cache", ".uv-tools")
+# The cache action forwards each path to `nsc` unresolved, so these are
+# spelled absolutely rather than relying on the job's working directory.
+MAKE_UV_PATHS: typ.Final = (
+    "${{ github.workspace }}/.uv-cache",
+    "${{ github.workspace }}/.uv-tools",
+)
 
 
 def _mapping(value: object, message: str) -> dict[str, object]:

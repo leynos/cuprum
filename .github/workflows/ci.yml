@@ -164,8 +164,8 @@ jobs:
             ~/.local/share/uv
             ~/.local/bin
             ~/.cache/sccache
-            .uv-cache
-            .uv-tools
+            ${{ github.workspace }}/.uv-cache
+            ${{ github.workspace }}/.uv-tools
 
       - name: Report Namespace cache status
         if: always()
@@ -238,8 +238,8 @@ jobs:
             ~/.local/share/uv
             ~/.local/bin
             ~/.cache/sccache
-            .uv-cache
-            .uv-tools
+            ${{ github.workspace }}/.uv-cache
+            ${{ github.workspace }}/.uv-tools
 
       - name: Report Namespace cache status
         if: always()
@@ -340,8 +340,8 @@ jobs:
             ~/.local/share/uv
             ~/.local/bin
             ~/.cache/sccache
-            .uv-cache
-            .uv-tools
+            ${{ github.workspace }}/.uv-cache
+            ${{ github.workspace }}/.uv-tools
 
       - name: Report Namespace cache status
         if: always()
