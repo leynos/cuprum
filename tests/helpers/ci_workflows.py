@@ -213,6 +213,31 @@ def cache_paths(step: Step, message: str) -> list[str]:
     return paths
 
 
+def _steps_using(
+    workflow_name: str, job_name: str, actions: cabc.Collection[str]
+) -> list[Step]:
+    """Return the steps of one job that invoke any of ``actions``.
+
+    Parameters
+    ----------
+    workflow_name : str
+        File name of the workflow under ``.github/workflows``.
+    job_name : str
+        Identifier of the job to search.
+    actions : cabc.Collection[str]
+        Pinned action references to match against each step's ``uses``.
+
+    Returns
+    -------
+    list[Step]
+        The matching steps in declaration order.
+    """
+    wanted = frozenset(actions)
+    return [
+        step for step in steps(workflow_name, job_name) if step.get("uses") in wanted
+    ]
+
+
 def restore_steps(workflow_name: str, job_name: str) -> list[Step]:
     """Return the cache restore steps declared by one job, in order.
 
@@ -228,11 +253,7 @@ def restore_steps(workflow_name: str, job_name: str) -> list[Step]:
     list[Step]
         The job's restore steps in declaration order.
     """
-    return [
-        step
-        for step in steps(workflow_name, job_name)
-        if step.get("uses") == CACHE_RESTORE
-    ]
+    return _steps_using(workflow_name, job_name, (CACHE_RESTORE,))
 
 
 def save_steps(workflow_name: str, job_name: str) -> list[Step]:
@@ -250,11 +271,7 @@ def save_steps(workflow_name: str, job_name: str) -> list[Step]:
     list[Step]
         The job's save steps in declaration order.
     """
-    return [
-        step
-        for step in steps(workflow_name, job_name)
-        if step.get("uses") == CACHE_SAVE
-    ]
+    return _steps_using(workflow_name, job_name, (CACHE_SAVE,))
 
 
 def cache_steps(workflow_name: str, job_name: str) -> list[Step]:
@@ -272,10 +289,9 @@ def cache_steps(workflow_name: str, job_name: str) -> list[Step]:
     list[Step]
         Restore, save, and whole-action cache steps, in declaration order.
     """
-    owners = {CACHE_RESTORE, CACHE_SAVE, CACHE_PLAIN}
-    return [
-        step for step in steps(workflow_name, job_name) if step.get("uses") in owners
-    ]
+    return _steps_using(
+        workflow_name, job_name, (CACHE_RESTORE, CACHE_SAVE, CACHE_PLAIN)
+    )
 
 
 def expand(manifest: cabc.Mapping[str, tuple[str, ...]]) -> list[tuple[str, str]]:
