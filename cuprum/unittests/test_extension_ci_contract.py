@@ -129,13 +129,14 @@ def test_only_boundary_jobs_build_the_extension(workflow_data: Workflow) -> None
     )
 
 
-def test_the_benchmark_job_builds_through_the_develop_target(
+def test_the_benchmark_job_builds_in_place_through_the_develop_target(
     workflow_data: Workflow,
 ) -> None:
-    """`benchmark-ratchet` must reach an optimized build via `make develop`.
+    """Require an optimized in-place benchmark build via `make develop`.
 
-    Its numbers mean nothing against a debug build, so the flag matters
-    as much as the shared target does.
+    Its numbers mean nothing against a debug build, while installing the mixed
+    project would resolve lint-only dependencies that the benchmark does not
+    use. Both flags matter as much as the shared target does.
 
     Parameters
     ----------
@@ -146,10 +147,11 @@ def test_the_benchmark_job_builds_through_the_develop_target(
         workflow_data, "make develop", job_name="benchmark-ratchet"
     )
 
-    assert "make develop MATURIN_DEVELOP_FLAGS=--release" in script, (
+    assert "MATURIN_DEVELOP_FLAGS='--release --skip-install'" in script, (
         "the benchmark-ratchet job must build with `make develop "
-        "MATURIN_DEVELOP_FLAGS=--release`; without the flag the ratchet "
-        "compares debug builds and its thresholds mean nothing"
+        "MATURIN_DEVELOP_FLAGS='--release --skip-install'`; without these "
+        "flags the ratchet either compares debug builds or installs unrelated "
+        "dependencies"
     )
 
 

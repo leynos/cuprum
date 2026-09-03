@@ -2104,11 +2104,13 @@ wheel build is not one of them: `.github/workflows/build-wheels.yml` runs
 `maturin build` to produce a distributable artefact rather than installing it
 into a virtual environment, so it neither uses nor needs this target.
 
-The `benchmark-ratchet` job needs an optimized build, and that is the only
-thing it needs differently, so it passes
-`make develop MATURIN_DEVELOP_FLAGS=--release` rather than restating the
-three-step sequence. Keep it that way: a second copy of the sequence is how
-the two drift, and the ratchet then measures a build nobody maintains.
+The `benchmark-ratchet` job needs an optimized, in-place build of the mixed
+Python/Rust project. It passes
+`make develop MATURIN_DEVELOP_FLAGS='--release --skip-install'` rather than
+restating the three-step sequence. `--skip-install` avoids Maturin's
+unnecessary editable dependency install while still building the extension in
+place. Keep it that way: a second copy of the sequence is how the two drift,
+and the ratchet then measures a build nobody maintains.
 `MATURIN_DEVELOP_FLAGS` is empty by default, because a debug build is what
 contributors and the `extension-tests` job want.
 
@@ -2856,13 +2858,14 @@ Three properties of that arrangement are load-bearing:
 The benchmark checkout sets `persist-credentials: false`, keeping the
 repository-scoped token out of the checked-out code's Git configuration. The
 benchmark needs Maturin and the development benchmark tooling, but not the
-lint-only `df12-python-lints` dependency, so its optimized build calls the
-shared target with
+lint-only `df12-python-lints` dependency, so its optimized, in-place build
+calls the shared target with
 `UV_SYNC_FLAGS=--no-install-package=df12-python-lints`:
 
 ```bash
-make develop MATURIN_DEVELOP_FLAGS=--release \
-  UV_SYNC_FLAGS=--no-install-package=df12-python-lints
+make develop MATURIN_DEVELOP_FLAGS='--release --skip-install' \
+  UV_SYNC_FLAGS=--no-install-package=df12-python-lints \
+  UV_RUN_FLAGS=--no-sync
 ```
 
 The baseline client itself uses only the standard library and therefore runs

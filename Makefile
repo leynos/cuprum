@@ -25,6 +25,9 @@ MATURIN_DEVELOP_FLAGS ?=
 # Extra flags for the dependency sync performed by the `build` target. The
 # benchmark uses this to omit lint-only tooling from its paid runner.
 UV_SYNC_FLAGS ?=
+# Extra flags for the `uv run` commands in the `develop` target. The benchmark
+# uses `--no-sync` after preparing its narrower development environment.
+UV_RUN_FLAGS ?=
 # The Windows arm of the extension's `cfg` branches. `make lint` only ever sees
 # the host's arm, and the Windows wheel build compiles without `-D warnings`,
 # so warn-level regressions behind `#[cfg(windows)]` — dead code left by a
@@ -134,8 +137,8 @@ build: uv .venv ## Build virtual-env and install deps
 # Why this exists and why `ensurepip` comes first: see "Building the
 # extension for tests" in docs/developers-guide.md.
 develop: build ## Build the native extension into the dev virtual-env
-	$(UV_RUN_ENV) uv run python -m ensurepip --upgrade
-	$(UV_RUN_ENV) uv run maturin develop $(MATURIN_DEVELOP_FLAGS) --manifest-path $(RUST_DIR)/cuprum-rust/Cargo.toml
+	$(UV_RUN_ENV) uv run $(UV_RUN_FLAGS) python -m ensurepip --upgrade
+	$(UV_RUN_ENV) uv run $(UV_RUN_FLAGS) maturin develop $(MATURIN_DEVELOP_FLAGS) --manifest-path $(RUST_DIR)/cuprum-rust/Cargo.toml
 
 build-release: ## Build artefacts (sdist & wheel)
 	python -m build --sdist --wheel

@@ -214,7 +214,9 @@ def test_the_benchmark_job_keeps_lint_dependencies_out_of_benchmark_setup(
     )
     throughput_script = script_of(throughput)
     assert throughput_script is not None, "the throughput step must declare a script"
+    assert "MATURIN_DEVELOP_FLAGS='--release --skip-install'" in throughput_script
     assert "UV_SYNC_FLAGS=--no-install-package=df12-python-lints" in throughput_script
+    assert "UV_RUN_FLAGS=--no-sync" in throughput_script
     assert throughput_script.count("uv run --no-sync python") == 4, (
         "every post-build Python command must preserve the environment that omits "
         "the lint-only Git dependency"

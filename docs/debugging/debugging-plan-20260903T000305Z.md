@@ -65,6 +65,12 @@ resolved commit `4cf41736cce2f7ba2778882a5c629c044568a0e5`.
 - **H5 not falsified.** A fresh dev-group sync with
   `--no-install-package df12-python-lints` installed the other 53 packages,
   including Maturin 1.13.3, without fetching or installing the lint plugin.
+- **H6 falsified.** Passing `--no-sync` through both `uv run` commands stopped
+  the outer resync, but Maturin's editable installation performed its own
+  dependency installation and fetched the plugin.
+- **H7 not falsified.** With `--skip-install`, the fresh release build completed
+  without fetching or installing df12, and the resulting environment imported
+  `cuprum._rust_backend_native`.
 
 ______________________________________________________________________
 
@@ -184,6 +190,39 @@ plugin, and Maturin 1.13.3 remained available.
 
 ______________________________________________________________________
 
+### H6: The shared develop target must preserve the selective sync
+
+**Claim**: Passing `--no-sync` through `make develop` prevents its `ensurepip`
+and Maturin invocations from undoing the selective dependency sync.
+
+**Prediction**: A fresh `make develop` with both the df12 exclusion and
+`--no-sync` builds the extension without fetching the plugin.
+
+**Falsification test**: Run that target with fresh uv directories and query the
+built extension from the resulting environment.
+
+**Result**: Falsified. The target built and the extension imported, but
+Maturin's editable-install path still fetched and installed the plugin.
+
+______________________________________________________________________
+
+### H7: An in-place build avoids Maturin's dependency installation
+
+**Claim**: Maturin's `--skip-install` mode builds Cuprum's mixed-project native
+module in place without running the editable installation that resolves df12.
+
+**Prediction**: A fresh release build with `--skip-install`, the selective
+sync, and the outer `--no-sync` flags imports the native module without any
+df12 fetch.
+
+**Falsification test**: Run the exact `make develop` invocation in a fresh uv
+environment, inspect the log for df12, and import `cuprum._rust_backend_native`.
+
+**Result**: Not falsified. The fresh release build completed without any df12
+fetch or install, and the native module imported successfully.
+
+______________________________________________________________________
+
 ## Recommended Execution Order
 
 1. **H1** — cheapest local test and directly isolates the failing baseline
@@ -192,6 +231,8 @@ ______________________________________________________________________
 3. **H2** — inspect the hosted checkout credential state.
 4. **H4** — retry unchanged to distinguish a transient failure.
 5. **H5** — isolate the benchmark from the lint-only Git dependency.
+6. **H6** — preserve the selective sync within the shared develop target.
+7. **H7** — build the mixed-project extension in place without installation.
 
 ## Termination Criteria
 
@@ -204,5 +245,7 @@ ______________________________________________________________________
 ## Notes for Executing Agent
 
 H1 and H5 were not falsified. H2 and H3 were falsified. H4 was inconclusive
-because the GitHub integration could not rerun the failed job. Validate the H5
-correction in a new hosted workflow run.
+because the GitHub integration could not rerun the failed job. The hosted H5
+run exposed the internal `uv run` resync. H6 then exposed Maturin's own
+editable-install sync. H7 avoided both paths and preserved the native module;
+validate it in the next hosted workflow run.
