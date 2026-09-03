@@ -38,6 +38,21 @@ if typ.TYPE_CHECKING:
 KEY_RENDERER_SOURCE = ROOT / ".github" / "actions" / "cache-keys" / "action.yml"
 SCCACHE_ACTION_SOURCE = ROOT / ".github" / "actions" / "setup-sccache" / "action.yml"
 KEY_FAMILIES = ("CARGO_CACHE_KEY", "TOOL_CACHE_KEY", "SCCACHE_CACHE_KEY")
+#: Steps that can invoke the compiler. The report must come after the last of
+#: them, or the statistics describe a window that ends before the work they
+#: claim to measure. Some entries also match steps that compile nothing, such
+#: as `Check out repository`; that is harmless because only the last index is
+#: used, and the lower bound is enforced by the reset's adjacency to setup.
+MEASURED_STEP_PREFIXES = (
+    "install",
+    "build",
+    "run",
+    "generate",
+    "prepare",
+    "check",
+    "validate",
+    "lint",
+)
 
 
 @pytest.mark.parametrize(("workflow_name", "job_name"), SCCACHE_JOBS)
@@ -75,8 +90,19 @@ def test_every_rust_job_installs_the_wrapper_and_reports_its_counters(
         f"the measured window; reset is at {reset_index}, setup at "
         f"{setup_indices[0]}"
     )
-    assert reset_index < stats_index, (
-        f"{workflow_name}:{job_name} must zero the counters before reporting"
+    measured = [
+        index
+        for index, step in enumerate(job_steps)
+        if str(step.get("name", "")).lower().startswith(MEASURED_STEP_PREFIXES)
+    ]
+    assert measured, f"{workflow_name}:{job_name} must do some measurable work"
+    # The lower bound is already covered, and more strictly, by the adjacency
+    # assertion above: nothing at all sits between the wrapper and the reset.
+    # This is the upper bound, so no compilation happens after the report.
+    assert stats_index > max(measured), (
+        f"{workflow_name}:{job_name} must report the counters after "
+        f"{job_steps[max(measured)].get('name')!r}, the last step that can "
+        "invoke the compiler"
     )
     stats = job_steps[stats_index]
     assert stats.get("if") == "always()", (
