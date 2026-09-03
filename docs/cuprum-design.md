@@ -2122,7 +2122,11 @@ The availability probe is separate from the stream shim. The Python module
 `cuprum._rust_backend_native`, returns `False` when that native module is
 missing, and re-raises other import failures after logging a warning. The
 cached resolver in `cuprum._backend._check_rust_available()` wraps that probe
-for `cuprum.rust.is_rust_available()` and `get_stream_backend()`.
+for `cuprum.rust.is_rust_available()` and — through the
+`_probe_rust_availability()` seam — `get_stream_backend()`. Section 13.4
+describes the full `_parse_backend_value` → `_probe_rust_availability` →
+`_resolve_backend` resolution; `get_stream_backend()` does not delegate to
+`_check_rust_available()` directly.
 
 For screen readers: The following flowchart shows how Cuprum selects between
 the Python and Rust stream pathways based on environment configuration and
