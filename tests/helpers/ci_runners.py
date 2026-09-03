@@ -62,15 +62,18 @@ CACHE_KEYS_ACTION = "./.github/actions/cache-keys"
 SCCACHE_ACTION = "./.github/actions/setup-sccache"
 SETUP_RUST = (
     "leynos/shared-actions/.github/actions/setup-rust@"
-    "0eceaef0ba362fd6a1e24d14d838d59dc5ac8cea"
+    "7d46a399558914f5a05074e55a560fec0269fd0d"
 )
 #: Both shared actions are pinned to the same revision. It drops `target` from
 #: their own caches, so the no-target-archive rule holds even if a caller ever
-#: switches back to `cache-provider: github`, and it adds the `all-features`,
-#: `all-targets`, and `doctests` inputs the coverage jobs depend on.
+#: switches back to `cache-provider: github`; it adds the `all-features`,
+#: `all-targets`, and `doctests` inputs the coverage jobs depend on; and it
+#: installs cargo-nextest from checksummed official release archives with no
+#: source-build fallback, which matters because the coverage job is now the
+#: only place nextest runs.
 GENERATE_COVERAGE = (
     "leynos/shared-actions/.github/actions/generate-coverage@"
-    "0eceaef0ba362fd6a1e24d14d838d59dc5ac8cea"
+    "7d46a399558914f5a05074e55a560fec0269fd0d"
 )
 OBSERVATION_STEP = "Record cache observations"
 

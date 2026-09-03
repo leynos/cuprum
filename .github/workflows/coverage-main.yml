@@ -133,7 +133,7 @@ jobs:
       # same pinned toolchain the pull-request coverage job uses rather than
       # whatever the runner image ships.
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@0eceaef0ba362fd6a1e24d14d838d59dc5ac8cea
+        uses: leynos/shared-actions/.github/actions/setup-rust@7d46a399558914f5a05074e55a560fec0269fd0d
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -151,7 +151,7 @@ jobs:
       # The pinned action writes a run-specific baseline cache entry and treats
       # changes within one percentage point as measurement noise.
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@0eceaef0ba362fd6a1e24d14d838d59dc5ac8cea
+        uses: leynos/shared-actions/.github/actions/generate-coverage@7d46a399558914f5a05074e55a560fec0269fd0d
         env:
           # The same warnings posture and the same core budget the
           # uninstrumented run used.

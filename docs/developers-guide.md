@@ -288,10 +288,16 @@ cranelift; the coverage gate cannot, because cranelift has no
 
 ### Tool installation
 
-Prebuilt tool installers fail closed. `taiki-e/install-action` sets
-`fallback: none` and `cargo binstall` runs with `--disable-strategies compile`,
-so a missing published binary fails the job instead of starting a source build
-that no cache owns.
+Prebuilt tool installers fail closed, so a missing published binary fails the
+job instead of starting a source build that no cache owns. In this repository
+that means `cargo binstall` running with `--disable-strategies compile` when
+the lint gate installs Whitaker.
+
+cargo-nextest is no longer installed here at all. The coverage job is the only
+place it runs, and the shared action installs it from checksummed official
+release archives with no source-build fallback of its own. A contract test
+rejects a nextest installer reappearing in these workflows, because it would be
+an unused download whose failure mode nothing here exercises.
 
 ## Rust availability probing
 
