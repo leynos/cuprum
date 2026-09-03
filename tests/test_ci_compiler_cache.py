@@ -12,6 +12,8 @@ run 33748907011 recorded for the lint gate.
 
 from __future__ import annotations
 
+import typing as typ
+
 import pytest
 
 from tests.helpers.ci_runners import (
@@ -29,6 +31,9 @@ from tests.helpers.ci_runners import (
     steps,
     workflow_sources,
 )
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 KEY_RENDERER_SOURCE = ROOT / ".github" / "actions" / "cache-keys" / "action.yml"
 SCCACHE_ACTION_SOURCE = ROOT / ".github" / "actions" / "setup-sccache" / "action.yml"
@@ -137,20 +142,34 @@ def test_every_key_names_the_runner_lane_that_wrote_it() -> None:
         assert name in text, f"{name} must be rendered by the shared action"
 
 
-def test_no_job_archives_a_target_directory() -> None:
-    """Leave compiler output to sccache; a `target` archive has no owner here."""
+def _declared_cache_paths() -> cabc.Iterator[tuple[str, str, str]]:
+    """Yield the workflow, job, and path of every cached path in the estate."""
     for workflow_name, job_name in expand(CACHED_JOBS):
         for step in cache_steps(workflow_name, job_name):
             message = f"{workflow_name}:{job_name} cache step"
             for path in cache_paths(step, message):
-                assert path not in FORBIDDEN_CACHE_PATHS, (
-                    f"{workflow_name}:{job_name} must not archive {path}"
-                )
-    for workflow_name, source in workflow_sources():
-        for line in source.splitlines():
-            assert line.strip() not in FORBIDDEN_CACHE_PATHS, (
-                f"{workflow_name} must not archive a target tree"
-            )
+                yield workflow_name, job_name, path
+
+
+def test_no_cache_step_owns_a_target_directory() -> None:
+    """Leave compiler output to sccache; a `target` archive has no owner here."""
+    offenders = [
+        f"{workflow_name}:{job_name} archives {path}"
+        for workflow_name, job_name, path in _declared_cache_paths()
+        if path in FORBIDDEN_CACHE_PATHS
+    ]
+    assert not offenders, f"no job may archive a target tree: {offenders}"
+
+
+def test_no_workflow_lists_a_target_path_at_all() -> None:
+    """Catch a target path added to a cache step this manifest does not know."""
+    offenders = [
+        f"{workflow_name}: {line.strip()}"
+        for workflow_name, source in workflow_sources()
+        for line in source.splitlines()
+        if line.strip() in FORBIDDEN_CACHE_PATHS
+    ]
+    assert not offenders, f"no workflow may name a target tree as a path: {offenders}"
 
 
 def test_every_lane_pins_the_intercepted_cache_action() -> None:
