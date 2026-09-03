@@ -7,11 +7,17 @@ remain on their existing runners until an equivalent profile is measured.
 
 from __future__ import annotations
 
+import types
 import typing as typ
 from pathlib import Path
 
 import pytest
 import yaml
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    from tests.helpers.workflow_types import Job, Step
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_PROFILE = "namespace-profile-rust-linux-ci"
@@ -19,6 +25,7 @@ LIGHT_PROFILE = "namespace-profile-rust-linux-light"
 NSCLOUD_CACHE = (
     "namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547"
 )
+NEXTEST_INSTALLER = "taiki-e/install-action@18b1216eba7f8039b0f8d131d5473787f0edce68"
 SETUP_RUST = (
     "leynos/shared-actions/.github/actions/setup-rust@"
     "5daae0a332441d170d88ca648c9e71f0bbe96cb3"
@@ -27,69 +34,135 @@ GENERATE_COVERAGE = (
     "leynos/shared-actions/.github/actions/generate-coverage@"
     "5daae0a332441d170d88ca648c9e71f0bbe96cb3"
 )
-LIGHT_PROFILE_JOBS = {
-    "build-wheels.yml": ("build-pure-wheel", "verify-wheel-install"),
-    "ci.yml": ("typecheck-test", "coverage"),
-    "coverage-main.yml": ("coverage-upload",),
-    "get-codescene-sha.yml": ("refresh-sha",),
-    "release.yml": ("publish",),
-}
-BUILD_PROFILE_JOBS = {"ci.yml": ("extension-tests",)}
-CACHED_JOBS = {
+CACHE_STEP_ID = "namespace-cache"
+CACHE_REPORT_STEP = "Report Namespace cache status"
+
+# Module-level manifests are read by several tests in one process, so they are
+# published as read-only views rather than shared mutable state.
+MIGRATED_JOBS: typ.Final = types.MappingProxyType({
+    LIGHT_PROFILE: types.MappingProxyType({
+        "build-wheels.yml": ("build-pure-wheel", "verify-wheel-install"),
+        "ci.yml": ("typecheck-test", "coverage"),
+        "coverage-main.yml": ("coverage-upload",),
+        "get-codescene-sha.yml": ("refresh-sha",),
+        "release.yml": ("publish",),
+    }),
+    BUILD_PROFILE: types.MappingProxyType({"ci.yml": ("extension-tests",)}),
+})
+CACHED_JOBS: typ.Final = types.MappingProxyType({
     "build-wheels.yml": ("build-pure-wheel",),
     "ci.yml": ("typecheck-test", "extension-tests", "coverage"),
     "coverage-main.yml": ("coverage-upload",),
-}
+})
+# Jobs whose dependency installation runs through Make. `Makefile` pins
+# `UV_CACHE_DIR=.uv-cache` and `UV_TOOL_DIR=.uv-tools`, so uv's standard
+# directories stay empty and only the worktree-local pair is worth mounting.
+MAKE_DRIVEN_JOBS: typ.Final = types.MappingProxyType({
+    "ci.yml": ("typecheck-test", "extension-tests", "coverage"),
+    "coverage-main.yml": ("coverage-upload",),
+})
+MAKE_UV_PATHS: typ.Final = (".uv-cache", ".uv-tools")
+
+
+def _mapping(value: object, message: str) -> dict[str, object]:
+    """Narrow a parsed YAML value to a string-keyed mapping."""
+    assert isinstance(value, dict), message
+    assert all(isinstance(key, str) for key in value), message
+    return typ.cast("dict[str, object]", value)
 
 
 def _jobs(workflow_name: str) -> dict[str, object]:
     """Load the jobs mapping from one repository workflow."""
     path = ROOT / ".github" / "workflows" / workflow_name
-    workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert isinstance(workflow, dict), f"{workflow_name} must parse to a mapping"
-    jobs = workflow.get("jobs")
-    assert isinstance(jobs, dict), f"{workflow_name} must declare jobs"
-    return jobs
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    # YAML 1.1 reads the `on:` trigger key as the boolean ``True``, so the
+    # document itself is not string-keyed. Only the jobs mapping is narrowed.
+    assert isinstance(document, dict), f"{workflow_name} must parse to a mapping"
+    return _mapping(document.get("jobs"), f"{workflow_name} must declare jobs")
 
 
-def _job(workflow_name: str, job_name: str) -> dict[str, object]:
+def _job(workflow_name: str, job_name: str) -> Job:
     """Return one named job from a repository workflow."""
-    job = _jobs(workflow_name).get(job_name)
-    assert isinstance(job, dict), f"{workflow_name} must define {job_name}"
-    return typ.cast("dict[str, object]", job)
+    job = _mapping(
+        _jobs(workflow_name).get(job_name),
+        f"{workflow_name} must define {job_name}",
+    )
+    return typ.cast("Job", job)
 
 
-def _steps(workflow_name: str, job_name: str) -> list[dict[str, object]]:
-    """Return the steps for one workflow job."""
+def _steps(workflow_name: str, job_name: str) -> list[Step]:
+    """Return the validated steps for one workflow job."""
     steps = _job(workflow_name, job_name).get("steps")
     assert isinstance(steps, list), f"{workflow_name}:{job_name} must declare steps"
-    return [typ.cast("dict[str, object]", step) for step in steps]
-
-
-@pytest.mark.parametrize(("workflow_name", "job_names"), LIGHT_PROFILE_JOBS.items())
-def test_lightweight_linux_jobs_use_the_shared_light_profile(
-    workflow_name: str, job_names: tuple[str, ...]
-) -> None:
-    """Keep non-intensive jobs on the shared two-vCPU profile."""
-    for job_name in job_names:
-        actual_runner = _job(workflow_name, job_name).get("runs-on")
-        assert actual_runner == LIGHT_PROFILE, (
-            f"{workflow_name}:{job_name} must run on {LIGHT_PROFILE}, "
-            f"got {actual_runner!r}"
+    return [
+        typ.cast(
+            "Step",
+            _mapping(
+                step, f"{workflow_name}:{job_name} step {index} must be a mapping"
+            ),
         )
+        for index, step in enumerate(steps)
+    ]
 
 
-@pytest.mark.parametrize(("workflow_name", "job_names"), BUILD_PROFILE_JOBS.items())
-def test_native_extension_build_uses_the_shared_build_profile(
-    workflow_name: str, job_names: tuple[str, ...]
+def _step_inputs(step: Step, message: str) -> dict[str, object]:
+    """Return the ``with`` mapping declared by one workflow step."""
+    return _mapping(step.get("with"), message)
+
+
+def _cache_step(workflow_name: str, job_name: str) -> Step:
+    """Return the single Namespace cache owner declared by one job."""
+    cache_steps = [
+        step
+        for step in _steps(workflow_name, job_name)
+        if step.get("uses") == NSCLOUD_CACHE
+    ]
+    assert len(cache_steps) == 1, (
+        f"{workflow_name}:{job_name} must have one Namespace cache owner"
+    )
+    return cache_steps[0]
+
+
+def _cached_paths(workflow_name: str, job_name: str) -> list[str]:
+    """Return the paths mounted by one job's Namespace cache owner."""
+    cache_inputs = _step_inputs(
+        _cache_step(workflow_name, job_name),
+        f"{workflow_name}:{job_name} cache step must declare paths",
+    )
+    paths = cache_inputs.get("path", "")
+    assert isinstance(paths, str), (
+        f"{workflow_name}:{job_name} cache paths must be a newline-delimited string"
+    )
+    return [line.strip() for line in paths.splitlines() if line.strip()]
+
+
+def _expand(manifest: cabc.Mapping[str, tuple[str, ...]]) -> list[tuple[str, str]]:
+    """Flatten a workflow-to-job-names manifest into per-job cases."""
+    return [
+        (workflow_name, job_name)
+        for workflow_name, job_names in manifest.items()
+        for job_name in job_names
+    ]
+
+
+CACHED_JOB_CASES = _expand(CACHED_JOBS)
+MAKE_DRIVEN_JOB_CASES = _expand(MAKE_DRIVEN_JOBS)
+PROFILE_CASES = [
+    (profile, workflow_name, job_name)
+    for profile, manifest in MIGRATED_JOBS.items()
+    for workflow_name, job_name in _expand(manifest)
+]
+
+
+@pytest.mark.parametrize(("profile", "workflow_name", "job_name"), PROFILE_CASES)
+def test_migrated_jobs_use_their_assigned_shared_profile(
+    profile: str, workflow_name: str, job_name: str
 ) -> None:
-    """Keep the native extension gate on the bounded four-vCPU profile."""
-    for job_name in job_names:
-        actual_runner = _job(workflow_name, job_name).get("runs-on")
-        assert actual_runner == BUILD_PROFILE, (
-            f"{workflow_name}:{job_name} must run on {BUILD_PROFILE}, "
-            f"got {actual_runner!r}"
-        )
+    """Keep each migrated job on the shared profile its workload was sized for."""
+    actual_runner = _job(workflow_name, job_name).get("runs-on")
+    assert actual_runner == profile, (
+        f"{workflow_name}:{job_name} must run on {profile}, got {actual_runner!r}"
+    )
 
 
 def test_specialized_jobs_retain_compatible_runners() -> None:
@@ -116,52 +189,80 @@ def test_specialized_jobs_retain_compatible_runners() -> None:
     )
 
 
-@pytest.mark.parametrize(("workflow_name", "job_names"), CACHED_JOBS.items())
+@pytest.mark.parametrize(("workflow_name", "job_name"), CACHED_JOB_CASES)
 def test_expensive_namespace_jobs_have_one_cache_owner(
-    workflow_name: str, job_names: tuple[str, ...]
+    workflow_name: str, job_name: str
 ) -> None:
     """Keep external cache setup ahead of dependency and build work."""
-    for job_name in job_names:
-        steps = _steps(workflow_name, job_name)
-        cache_steps = [step for step in steps if step.get("uses") == NSCLOUD_CACHE]
-        assert len(cache_steps) == 1, (
-            f"{workflow_name}:{job_name} must have one Namespace cache owner"
+    steps = _steps(workflow_name, job_name)
+    cache_step = _cache_step(workflow_name, job_name)
+    cache_inputs = _step_inputs(
+        cache_step, f"{workflow_name}:{job_name} cache step must declare paths"
+    )
+    assert "cache" not in cache_inputs, (
+        f"{workflow_name}:{job_name} must not use command-dependent cache modes"
+    )
+    assert "~/.cache/uv" in _cached_paths(workflow_name, job_name), (
+        f"{workflow_name}:{job_name} must retain uv downloads"
+    )
+    work_indices = [
+        index
+        for index, step in enumerate(steps)
+        if str(step.get("name", "")).lower().startswith(("install", "build", "run"))
+    ]
+    if work_indices:
+        assert steps.index(cache_step) < min(work_indices), (
+            f"{workflow_name}:{job_name} must mount its cache before work"
         )
-        cache_index = steps.index(cache_steps[0])
-        cache_inputs = cache_steps[0].get("with")
-        assert isinstance(cache_inputs, dict), (
-            f"{workflow_name}:{job_name} cache step must declare paths"
+
+
+@pytest.mark.parametrize(("workflow_name", "job_name"), CACHED_JOB_CASES)
+def test_namespace_jobs_report_the_cache_hit_in_the_summary(
+    workflow_name: str, job_name: str
+) -> None:
+    """Make a cold volume readable from the run summary rather than inferred."""
+    assert _cache_step(workflow_name, job_name).get("id") == CACHE_STEP_ID, (
+        f"{workflow_name}:{job_name} cache step must be identified as "
+        f"{CACHE_STEP_ID} so the summary can reference its output"
+    )
+    report_steps = [
+        step
+        for step in _steps(workflow_name, job_name)
+        if step.get("name") == CACHE_REPORT_STEP
+    ]
+    assert len(report_steps) == 1, (
+        f"{workflow_name}:{job_name} must report cache-hit in the summary"
+    )
+    script = report_steps[0].get("run")
+    assert isinstance(script, str), (
+        f"{workflow_name}:{job_name} cache report must run a script"
+    )
+    assert f"steps.{CACHE_STEP_ID}.outputs.cache-hit" in script, (
+        f"{workflow_name}:{job_name} cache report must read the cache-hit output"
+    )
+    assert "GITHUB_STEP_SUMMARY" in script, (
+        f"{workflow_name}:{job_name} cache report must write the step summary"
+    )
+
+
+@pytest.mark.parametrize(("workflow_name", "job_name"), MAKE_DRIVEN_JOB_CASES)
+def test_make_driven_jobs_cache_the_worktree_uv_directories(
+    workflow_name: str, job_name: str
+) -> None:
+    """Cache the uv directories Make pins rather than uv's default locations."""
+    cached_paths = _cached_paths(workflow_name, job_name)
+    for expected in MAKE_UV_PATHS:
+        assert expected in cached_paths, (
+            f"{workflow_name}:{job_name} installs through Make, so it must mount "
+            f"{expected}; got {cached_paths}"
         )
-        assert "cache" not in cache_inputs, (
-            f"{workflow_name}:{job_name} must not use command-dependent cache modes"
-        )
-        cached_paths = str(cache_inputs.get("path", ""))
-        assert "~/.cache/uv" in cached_paths, (
-            f"{workflow_name}:{job_name} must retain uv downloads"
-        )
-        work_indices = [
-            index
-            for index, step in enumerate(steps)
-            if str(step.get("name", "")).lower().startswith(("install", "build", "run"))
-        ]
-        if work_indices:
-            assert cache_index < min(work_indices), (
-                f"{workflow_name}:{job_name} must mount its cache before work"
-            )
-        assert any(
-            step.get("name") == "Report Namespace cache status" for step in steps
-        ), f"{workflow_name}:{job_name} must report cache-hit in the summary"
 
 
 @pytest.mark.parametrize("job_name", ["typecheck-test", "extension-tests", "coverage"])
 def test_sccache_jobs_mount_the_installed_tool_parent(job_name: str) -> None:
     """Prevent Namespace from turning the cached sccache binary into a directory."""
-    steps = _steps("ci.yml", job_name)
-    cache_step = next(step for step in steps if step.get("uses") == NSCLOUD_CACHE)
-    cache_inputs = cache_step.get("with")
-    assert isinstance(cache_inputs, dict), f"ci.yml:{job_name} cache paths are required"
-    cached_paths = str(cache_inputs.get("path", ""))
-    assert "~/.local/bin\n" in f"{cached_paths}\n", (
+    cached_paths = _cached_paths("ci.yml", job_name)
+    assert "~/.local/bin" in cached_paths, (
         f"ci.yml:{job_name} must mount the installed-tool parent"
     )
     assert "~/.local/bin/sccache" not in cached_paths, (
@@ -175,9 +276,8 @@ def test_namespace_rust_jobs_disable_nested_cache_owners() -> None:
         steps = _steps("ci.yml", job_name)
         setup_steps = [step for step in steps if step.get("uses") == SETUP_RUST]
         assert len(setup_steps) == 1, f"ci.yml:{job_name} must use shared setup-rust"
-        with_values = setup_steps[0].get("with")
-        assert isinstance(with_values, dict), (
-            f"ci.yml:{job_name} setup-rust must declare inputs"
+        with_values = _step_inputs(
+            setup_steps[0], f"ci.yml:{job_name} setup-rust must declare inputs"
         )
         assert with_values.get("cache-provider") == "external", (
             f"ci.yml:{job_name} must delegate cache ownership externally"
@@ -200,13 +300,31 @@ def test_coverage_delegates_archive_cache_ownership(
         for step in _steps(workflow_name, job_name)
         if step.get("uses") == GENERATE_COVERAGE
     )
-    with_values = coverage_step.get("with")
-    assert isinstance(with_values, dict), (
-        f"{workflow_name}:{job_name} coverage must declare inputs"
+    with_values = _step_inputs(
+        coverage_step, f"{workflow_name}:{job_name} coverage must declare inputs"
     )
     assert with_values.get("cache-provider") == "external", (
         f"{workflow_name}:{job_name} must delegate cache ownership externally"
     )
+
+
+def test_coverage_checkouts_do_not_persist_credentials() -> None:
+    """Keep the scoped token out of .git/config where project code could read it."""
+    for workflow_name, job_name in (
+        ("ci.yml", "coverage"),
+        ("coverage-main.yml", "coverage-upload"),
+    ):
+        checkout = next(
+            step
+            for step in _steps(workflow_name, job_name)
+            if str(step.get("uses", "")).startswith("actions/checkout@")
+        )
+        with_values = _step_inputs(
+            checkout, f"{workflow_name}:{job_name} checkout must declare inputs"
+        )
+        assert with_values.get("persist-credentials") is False, (
+            f"{workflow_name}:{job_name} must set persist-credentials: false"
+        )
 
 
 def test_ci_does_not_build_tools_from_source() -> None:
@@ -219,16 +337,34 @@ def test_ci_does_not_build_tools_from_source() -> None:
         assert "get.nexte.st/latest" not in content, (
             f"{workflow_path.name} must pin the nextest binary version"
         )
+        if "cargo binstall" in content:
+            assert "--disable-strategies compile" in content, (
+                f"{workflow_path.name} must stop cargo-binstall falling back to "
+                "a source build"
+            )
+
+
+def test_nextest_installer_fails_closed() -> None:
+    """Fail the job rather than compiling nextest when no binary is published."""
+    installer = next(
+        step
+        for step in _steps("ci.yml", "typecheck-test")
+        if step.get("uses") == NEXTEST_INSTALLER
+    )
+    with_values = _step_inputs(
+        installer, "ci.yml:typecheck-test nextest installer must declare inputs"
+    )
+    assert with_values.get("fallback") == "none", (
+        "ci.yml:typecheck-test must disable the install-action source fallback"
+    )
 
 
 def test_lint_tool_install_is_version_pinned() -> None:
     """Keep the npm Markdown linter on a reproducible release."""
-    steps = _job("ci.yml", "lint-test").get("steps")
-    assert isinstance(steps, list), "ci.yml:lint-test must declare steps"
     install_step = next(
         step
-        for step in steps
-        if isinstance(step, dict) and step.get("name") == "Install CLI tools"
+        for step in _steps("ci.yml", "lint-test")
+        if step.get("name") == "Install CLI tools"
     )
     script = install_step.get("run")
     assert isinstance(script, str), "ci.yml:Install CLI tools must run a script"
