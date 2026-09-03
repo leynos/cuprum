@@ -155,7 +155,20 @@ def _load_history_or_empty(path: pth.Path | None) -> BaselineHistory:
 
 
 def main(argv: cabc.Sequence[str] | None = None) -> int:
-    """Append this run's sample to the history and return an exit code."""
+    """Append this run's sample to the history and return an exit code.
+
+    Parameters
+    ----------
+    argv : collections.abc.Sequence[str] | None
+        Command-line arguments. When ``None``, parse the process command line.
+
+    Returns
+    -------
+    int
+        ``0`` after writing the updated history, including an unchanged history
+        when a candidate measurement is invalid. ``2`` if history loading or
+        output writing fails.
+    """
     logging.basicConfig(
         level=logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",

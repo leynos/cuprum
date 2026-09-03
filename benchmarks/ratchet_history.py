@@ -1,23 +1,8 @@
-"""Rolling window of main-branch benchmark samples for the ratchet.
+"""Rolling main-branch benchmark samples used by the ratchet.
 
-The ratchet used to compare each pull request against the latest `main`
-measurement. One sample makes its noise the bar's noise; publishing only
-passing measurements also biases the bar towards the low tail of that noise.
-
-This module holds the window that replaces it. The bar is the median of the
-last `DEFAULT_WINDOW_SIZE` main-branch samples, which a single outlier cannot
-move, and the noise band is estimated from those same samples rather than
-guessed: a candidate must exceed both the configured flat threshold and
-`DEFAULT_NOISE_SIGMAS` standard deviations of the observed spread before it
-counts as a regression.
-
-The median absolute deviation, not the standard deviation, estimates that
-spread. The outlier this window exists to tolerate would inflate a standard
-deviation — widening the band in proportion to the very sample it should
-ignore — whereas it moves the median absolute deviation barely at all.
-
-Samples are appended by every main-branch run, passing or failing, so the
-window is not biased towards low-tail measurements.
+The median resists one outlier. A MAD-derived noise band and the flat threshold
+must both be exceeded before a candidate regresses; every completed main run
+contributes a sample, avoiding low-tail bias.
 """
 
 from __future__ import annotations
@@ -47,27 +32,19 @@ if typ.TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-#: How many recent main-branch runs the window keeps. Seven lets one bad runner
-#: not dominate the median while admitting deliberate changes within a few merges.
+#: Recent main-branch runs retained; seven resists one outlier.
 DEFAULT_WINDOW_SIZE = 7
 
-#: Estimated standard deviations of observed spread a candidate must exceed.
-#: Three is a conventional outlier bound wider than the issue #219 runner swings.
+#: MAD-derived standard deviations a candidate must exceed.
 DEFAULT_NOISE_SIGMAS = 3.0
 
-#: Scale factor that makes the median absolute deviation a consistent
-#: estimator of the standard deviation for normally distributed samples.
+#: MAD-to-standard-deviation scale for normally distributed samples.
 _MAD_TO_SIGMA = 1.4826
 
-#: Widest band the observed spread may open. A window noisier than this is
-#: telling you the benchmark cannot measure what it gates on, and a band that
-#: kept widening with the noise would disable the ratchet silently rather
-#: than say so. At the cap a candidate exactly twice the median passes; only
-#: a candidate strictly slower than twice the median fails.
+#: Widest noise band; at the cap, only a candidate slower than twice the median fails.
 MAX_NOISE_TOLERANCE = 1.0
 
-#: Schema version of the history payload, so a later shape change is rejected
-#: rather than misread as an empty history and silently degrading the ratchet.
+#: Schema version; later shapes fail rather than silently becoming empty history.
 HISTORY_SCHEMA = 1
 
 #: Fewest samples that can exhibit a spread. One measurement has none.
@@ -79,10 +56,17 @@ class BaselineHistoryReadError(ValueError, BenchmarkError):
 
     Parameters
     ----------
-    path : pathlib.Path | None
-        History file involved in the failure, when one was being read.
     reason : str
         Stable explanation of the failed read or validation operation.
+    path : pathlib.Path | None
+        History file involved in the failure, when one was being read.
+
+    Attributes
+    ----------
+    reason : str
+        Stable explanation supplied to the constructor.
+    path : pathlib.Path | None
+        File supplied to the constructor, if the failure involved one.
     """
 
     def __init__(self, reason: str, *, path: pth.Path | None = None) -> None:
@@ -93,7 +77,14 @@ class BaselineHistoryReadError(ValueError, BenchmarkError):
 
 
 class BaselineHistoryNotFoundError(BaselineHistoryReadError):
-    """The optional baseline-history file was not present."""
+    """The optional baseline-history file was not present.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Missing history file, exposed through ``path``; ``reason`` is
+        ``"does not exist"``.
+    """
 
     def __init__(self, path: pth.Path) -> None:
         super().__init__("does not exist", path=path)
@@ -103,7 +94,14 @@ class BaselineHistoryNotFoundError(BaselineHistoryReadError):
 class RatchetPolicy:
     """Thresholds for how much slower than recent `main` a change may measure.
 
-    The ratchet calls measurements beyond the combined thresholds regressions.
+    Attributes
+    ----------
+    max_regression : float
+        Finite, non-negative flat fractional slowdown tolerated by the gate.
+    noise_sigmas : float
+        Finite, non-negative MAD-derived spread multiplier.
+    window_size : int
+        Positive count of recent compatible main samples retained in the bar.
     """
 
     max_regression: float = 0.30
@@ -111,16 +109,7 @@ class RatchetPolicy:
     window_size: int = DEFAULT_WINDOW_SIZE
 
     def __post_init__(self) -> None:
-        """Reject thresholds that cannot describe a comparison.
-
-        A NaN threshold compares false against everything, so validating it
-        by ``< 0`` would accept it and then silently pass every candidate.
-
-        Raises
-        ------
-        ValueError
-            If a threshold is negative, non-finite, or the window is empty.
-        """
+        """Reject thresholds that cannot describe a comparison."""
         _require_non_negative_float(self.max_regression, name="max_regression")
         _require_non_negative_float(self.noise_sigmas, name="noise_sigmas")
         if self.window_size < 1:
@@ -134,6 +123,20 @@ class HistorySample:
 
     `commit` and `run_id` are provenance only: they make a surprising bar
     traceable to the run that set it. Comparisons never read them.
+
+    Attributes
+    ----------
+    commit : str
+        Commit provenance, serialized unchanged; payload loading requires it.
+    run_id : str
+        Workflow-run provenance, serialized unchanged; payload loading requires it.
+    benchmark_profile_version : str
+        Benchmark protocol version; payload loading requires it for compatibility.
+    worker_iterations : int
+        Per-scenario worker count; payload loading requires a positive value.
+    ratios : collections.abc.Mapping[str, float]
+        Scenario ratios copied into an immutable mapping proxy; payload loading
+        requires non-empty names and finite positive values.
     """
 
     commit: str
@@ -197,18 +200,19 @@ def _sample_from_payload(value: object, *, index: int) -> HistorySample:
 
 @dc.dataclass(frozen=True, slots=True)
 class BaselineHistory:
-    """The last N main-branch samples, oldest first."""
+    """The last N main-branch samples, oldest first.
+
+    Attributes
+    ----------
+    samples : tuple[HistorySample, ...]
+        Immutable, ordered samples; appending retains only the configured window.
+    """
 
     samples: tuple[HistorySample, ...] = ()
 
     @property
     def scenarios(self) -> frozenset[str]:
-        """Scenarios the newest sample measured.
-
-        The newest sample defines the expected shape: a scenario added last
-        week should be compared as soon as it has samples, and one removed
-        should stop being required even though older samples still carry it.
-        """
+        """Scenarios the newest sample measured, defining the expected shape."""
         if not self.samples:
             return frozenset()
         return frozenset(self.samples[-1].ratios)
@@ -227,11 +231,7 @@ class BaselineHistory:
         benchmark_profile_version: str,
         worker_iterations: int,
     ) -> BaselineHistory:
-        """Return the samples that are comparable with the current profile.
-
-        Different sampling protocols produce different ratios for unchanged
-        code, so a sample from an older profile is not a smaller amount of
-        evidence — it is evidence about a different question.
+        """Return samples comparable with the current sampling protocol.
 
         Returns
         -------

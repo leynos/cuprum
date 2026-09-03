@@ -188,6 +188,12 @@ def run_ratios(payload: BenchmarkRunPayload) -> dict[str, float]:
     and a compared candidate are derived by the same code rather than by two
     implementations that agree until one is edited.
 
+    Parameters
+    ----------
+    payload : BenchmarkRunPayload
+        One run's plan and throughput payloads, whose paired Python and Rust
+        scenarios must be aligned and valid, plus context for error messages.
+
     Returns
     -------
     dict[str, float]
