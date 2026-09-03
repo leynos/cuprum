@@ -14,6 +14,7 @@ guide.
 
 from __future__ import annotations
 
+import re
 import typing as typ
 
 import pytest
@@ -46,6 +47,17 @@ RUST_EXECUTION_INPUTS: typ.Final = {
 #: The interpreter the coverage job runs pytest on. The matrix leg for this
 #: version must not run the Python suite as well.
 COVERED_PYTHON_VERSION = "3.13"
+#: The exact expression a runner-bounded env value must carry.
+VCPU_EXPRESSION = "${{ env.LINUX_RUNNER_VCPUS }}"
+#: Commands that execute the Rust suite. `make test-python` and
+#: `make test-extension` are absent by construction: `\btest\b(?!-)` does not
+#: match a hyphenated target, so the allowed ones need no special case.
+FORBIDDEN_TEST_COMMANDS = (
+    re.compile(r"\bmake\s+test\b(?!-)"),
+    re.compile(r"\bmake\s+test-rust\b"),
+    re.compile(r"\bnextest\s+run\b"),
+    re.compile(r"\bcargo\s+test\b"),
+)
 
 
 def _coverage_step(workflow_name: str, job_name: str) -> Step:
@@ -109,9 +121,12 @@ def test_coverage_keeps_the_warnings_posture_and_core_budget(
         "is the only Rust execution"
     )
     for name in ("CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS"):
-        assert "LINUX_RUNNER_VCPUS" in str(environment.get(name)), (
-            f"{workflow_name}:{job_name} must bound {name} by the runner's "
-            f"vCPU count, got {environment.get(name)!r}"
+        # The whole expression, not a substring of it: `NOT_LINUX_RUNNER_VCPUS`
+        # contains the constant's name and would satisfy a containment check
+        # while binding something else entirely.
+        assert environment.get(name) == VCPU_EXPRESSION, (
+            f"{workflow_name}:{job_name} must bound {name} by {VCPU_EXPRESSION}, "
+            f"got {environment.get(name)!r}"
         )
 
 
@@ -129,10 +144,18 @@ def test_no_other_job_executes_the_rust_suite() -> None:
     }):
         for step in steps(workflow_name, job_name):
             script = str(step.get("run", ""))
-            if "make test-python" in script or "make test-extension" in script:
-                continue
-            if "make test" in script or "nextest run" in script:
-                offenders.append(f"{workflow_name}:{job_name}:{step.get('name')}")
+            # Each forbidden command is matched on its own. Skipping the rest
+            # of a script because it also contains an allowed target would let
+            # `make test-python && make test` through.
+            hits = [
+                pattern.pattern
+                for pattern in FORBIDDEN_TEST_COMMANDS
+                if pattern.search(script)
+            ]
+            if hits:
+                offenders.append(
+                    f"{workflow_name}:{job_name}:{step.get('name')} {hits}"
+                )
     assert not offenders, (
         "the coverage job is the only execution of the Rust suite; these run "
         f"it again uninstrumented: {offenders}"
@@ -148,18 +171,24 @@ def test_the_covered_interpreter_does_not_repeat_the_python_suite() -> None:
     assert isinstance(matrix, dict), "typecheck-test must declare a matrix"
     include = matrix.get("include")
     assert isinstance(include, list), "typecheck-test must list its legs"
-    by_version = {leg["python-version"]: leg["python-suite"] for leg in include}
-    assert by_version.get(COVERED_PYTHON_VERSION) is False, (
-        f"the {COVERED_PYTHON_VERSION} leg must not run the Python suite: the "
-        "coverage job already runs it on that interpreter"
+    # Every leg, not a mapping keyed by version: two legs naming the same
+    # interpreter would collapse, and the survivor could report `false` while
+    # the other one ran the suite.
+    wrong = [
+        leg
+        for leg in include
+        if leg["python-suite"] is not (leg["python-version"] != COVERED_PYTHON_VERSION)
+    ]
+    assert not wrong, (
+        f"every leg on {COVERED_PYTHON_VERSION} must set python-suite false, "
+        f"because the coverage job already runs pytest there, and every other "
+        f"leg must set it true; wrong legs: {wrong}"
     )
-    others = {
-        version: runs
-        for version, runs in by_version.items()
-        if version != COVERED_PYTHON_VERSION
-    }
-    assert all(others.values()), (
-        f"every other interpreter must keep its own run; got {others}"
+    covered = [
+        leg for leg in include if leg["python-version"] == COVERED_PYTHON_VERSION
+    ]
+    assert len(covered) == 1, (
+        f"expected exactly one {COVERED_PYTHON_VERSION} leg, found {len(covered)}"
     )
     run_step = next(
         step

@@ -25,6 +25,7 @@ from tests.helpers.ci_runners import (
     job,
     step_inputs,
     steps,
+    workflow_document,
     workflow_env,
     workflow_sources,
 )
@@ -32,6 +33,16 @@ from tests.helpers.ci_runners import (
 ACTIONLINT_CONFIG = ROOT / ".github" / "actionlint.yaml"
 MAKEFILE = ROOT / "Makefile"
 VCPU_CONSTANT = "LINUX_RUNNER_VCPUS"
+#: Any spelling of the tool, so `nextest@` and `cargo-nextest@` both match.
+NEXTEST_TOOL_NAME = "nextest"
+#: Shell fragments that mean "fetch a binary" rather than "run one".
+INSTALL_VERBS = ("install", "curl", "wget")
+#: The upstream install host. Its name does not contain "nextest", so it needs
+#: its own token, and it only ever appears in an install command.
+NEXTEST_INSTALL_HOST = "get.nexte.st"
+#: Steps invoking a shared action are exempt: the coverage action installs
+#: nextest on purpose, and that is the only sanctioned place.
+SHARED_ACTION_PREFIX = "leynos/shared-actions/"
 #: Make variables that carry the runner's vCPU count into the test command.
 #: Only the pytest one remains here: the Rust suite moved to the coverage job,
 #: which bounds itself through `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS`.
@@ -238,15 +249,56 @@ def test_ci_does_not_build_tools_from_source() -> None:
 def test_no_workflow_installs_cargo_nextest() -> None:
     """Leave the nextest install to the coverage action that now needs it.
 
-    The matrix jobs stopped running the Rust suite, so a nextest installer here
-    would be an unused download, and its `fallback: none` guarantee would no
-    longer describe anything this repository runs.
+    The matrix jobs stopped running the Rust suite, so an installer here would
+    be an unused download whose failure mode nothing in this repository
+    exercises.
+
+    Checked structurally rather than by one literal string. A `tool:` input
+    naming either spelling, a different installer action, or a shell command
+    that fetches nextest would all pass a check for `tool: nextest@`.
     """
-    for workflow_name, source in workflow_sources():
-        assert "tool: nextest@" not in source, (
-            f"{workflow_name} installs cargo-nextest, but only the coverage "
-            "action runs it now"
+    offenders: list[str] = []
+    for workflow_name, _ in workflow_sources():
+        document = workflow_document(workflow_name)
+        jobs_mapping = document.get("jobs")
+        if not isinstance(jobs_mapping, dict):
+            continue
+        for job_name in jobs_mapping:
+            offenders.extend(
+                _nextest_installers(workflow_name, str(job_name)),
+            )
+    assert not offenders, (
+        f"only the shared coverage action may install cargo-nextest; found {offenders}"
+    )
+
+
+def _nextest_installers(workflow_name: str, job_name: str) -> list[str]:
+    """Return descriptions of steps in one job that would install nextest."""
+    found: list[str] = []
+    try:
+        job_steps = steps(workflow_name, job_name)
+    except AssertionError:
+        # A job that calls a reusable workflow declares no steps of its own.
+        return found
+    for step in job_steps:
+        where = f"{workflow_name}:{job_name}:{step.get('name') or step.get('uses')}"
+        uses = str(step.get("uses", ""))
+        if uses.startswith(SHARED_ACTION_PREFIX):
+            # The coverage action installs nextest deliberately; that is the
+            # one place it is meant to happen.
+            continue
+        inputs = step.get("with")
+        if isinstance(inputs, dict) and any(
+            NEXTEST_TOOL_NAME in str(value).lower() for value in inputs.values()
+        ):
+            found.append(f"{where} (installer input)")
+        script = str(step.get("run", "")).lower()
+        fetches = NEXTEST_TOOL_NAME in script and any(
+            verb in script for verb in INSTALL_VERBS
         )
+        if fetches or NEXTEST_INSTALL_HOST in script:
+            found.append(f"{where} (install command)")
+    return found
 
 
 def test_lint_tool_install_is_version_pinned() -> None:
