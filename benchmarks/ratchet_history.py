@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import dataclasses as dc
 import json
-import logging
 import os
 import pathlib as pth
 import statistics
@@ -29,8 +28,6 @@ from benchmarks.errors import BenchmarkError
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-_logger = logging.getLogger(__name__)
 
 #: Recent main-branch runs retained; seven resists one outlier.
 DEFAULT_WINDOW_SIZE = 7
@@ -244,12 +241,6 @@ class BaselineHistory:
             if sample.benchmark_profile_version == benchmark_profile_version
             and sample.worker_iterations == worker_iterations
         )
-        if len(kept) != len(self.samples):
-            _logger.info(
-                "pruned %d baseline sample(s) recorded under an older benchmark "
-                "profile",
-                len(self.samples) - len(kept),
-            )
         return BaselineHistory(samples=kept)
 
     def appended(
@@ -388,12 +379,4 @@ def noise_tolerance(
     deviations = [abs(value - median) for value in values]
     sigma = _MAD_TO_SIGMA * statistics.median(deviations)
     tolerance = sigmas * sigma / median
-    if tolerance > MAX_NOISE_TOLERANCE:
-        _logger.warning(
-            "baseline window spread implies a %.2f noise band, capped at %.2f; "
-            "the benchmark is too noisy to gate on at this scale",
-            tolerance,
-            MAX_NOISE_TOLERANCE,
-        )
-        return MAX_NOISE_TOLERANCE
-    return tolerance
+    return min(tolerance, MAX_NOISE_TOLERANCE)

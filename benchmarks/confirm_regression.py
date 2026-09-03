@@ -100,11 +100,6 @@ def confirm_regressions(
     """
     flagged = _regressed_scenarios(primary)
     if not _comparison_performed(confirmation):
-        _logger.warning(
-            "confirmation run did not compare; keeping the primary verdict for "
-            "%d flagged scenario(s)",
-            len(flagged),
-        )
         reproduced = set(flagged)
     else:
         reproduced = set(flagged) & set(_regressed_scenarios(confirmation))

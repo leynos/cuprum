@@ -1,16 +1,4 @@
-"""Compare baseline and candidate benchmark runs for Rust regressions.
-
-This module loads dry-run plan JSON and hyperfine throughput JSON from a
-candidate benchmark run, compares the Rust-to-Python mean ratio for each
-matched scenario pair against the main-branch bar, and writes a structured
-comparison report. Ratcheting on the within-run ratio rather than absolute
-wall-clock means cancels out runner-speed differences and interpreter
-startup overhead between the CI jobs that produced the runs.
-
-The bar is a rolling median of main-branch samples. A scenario fails only when
-it exceeds both the flat threshold and observed spread; no window falls back to
-the single-sample bar. `benchmarks/ratchet_ratios.py` extracts ratios.
-"""
+"""Compare Rust/Python run ratios against rolling main-branch baselines."""
 
 from __future__ import annotations
 
@@ -52,12 +40,8 @@ if typ.TYPE_CHECKING:
 
 __all__ = [
     "compare_rust_regressions",
-    "load_plan",
-    "load_throughput",
-    "main",
-    "profile_metadata",
-    "run_ratios",
-    "write_report",
+    *("load_plan", "load_throughput", "main"),
+    *("profile_metadata", "run_ratios", "write_report"),
 ]
 _logger = logging.getLogger(__name__)
 
@@ -149,38 +133,55 @@ def _compare_scenario(
 
 def _policy_options(
     options: dict[str, object],
-) -> tuple[RatchetPolicy | None, float | None]:
+) -> tuple[object | None, object | None]:
     """Consume and return the supported comparison-policy options."""
     policy = options.pop("policy", None)
     max_regression = options.pop("max_regression", None)
     if options:
         msg = f"unsupported comparison option(s): {', '.join(sorted(options))}"
         raise TypeError(msg)
-    return (
-        typ.cast("RatchetPolicy | None", policy),
-        typ.cast("float | None", max_regression),
-    )
+    return policy, max_regression
 
 
-def _validate_policy_options(
-    *, policy: RatchetPolicy | None, max_regression: float | None
-) -> None:
-    """Validate the policy options without constructing a policy."""
+def _validated_policy_option(policy: object | None) -> RatchetPolicy | None:
     if policy is not None and not isinstance(policy, RatchetPolicy):
         msg = "policy must be a RatchetPolicy"
         raise TypeError(msg)
+    return policy
+
+
+def _validated_max_regression_option(max_regression: object | None) -> float | None:
     if max_regression is not None and not isinstance(max_regression, float):
         msg = "max_regression must be a float"
         raise TypeError(msg)
+    return max_regression
+
+
+def _validate_exclusive_policy_options(
+    *, policy: RatchetPolicy | None, max_regression: float | None
+) -> None:
     if policy is not None and max_regression is not None:
         msg = "pass either policy or max_regression, not both"
         raise ValueError(msg)
 
 
+def _validate_policy_options(
+    *, policy: object | None, max_regression: object | None
+) -> tuple[RatchetPolicy | None, float | None]:
+    """Type-check policy options before enforcing their mutual exclusion."""
+    valid_policy = _validated_policy_option(policy)
+    valid_max = _validated_max_regression_option(max_regression)
+    _validate_exclusive_policy_options(policy=valid_policy, max_regression=valid_max)
+    return valid_policy, valid_max
+
+
 def _comparison_policy(options: dict[str, object]) -> RatchetPolicy:
     """Resolve supported policy keywords, including the legacy threshold."""
     policy, max_regression = _policy_options(options)
-    _validate_policy_options(policy=policy, max_regression=max_regression)
+    policy, max_regression = _validate_policy_options(
+        policy=policy,
+        max_regression=max_regression,
+    )
     if policy is not None:
         return policy
     if max_regression is not None:
@@ -339,8 +340,7 @@ def main() -> int:
     Returns
     -------
     int
-        ``0`` for pass or compatible-profile skip; ``1`` for regression; ``2`` for
-        inputs that cannot be evaluated.
+        ``0`` for pass/skip, ``1`` for regression, or ``2`` for invalid inputs.
     """
     logging.basicConfig(
         level=logging.WARNING,

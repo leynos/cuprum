@@ -130,8 +130,10 @@ def test_a_flake_that_moves_scenario_does_not_confirm() -> None:
         confirmation=_report("small-single-nocb"),
     )
 
-    assert combined["passed"] is True
-    assert combined["confirmed_regressions"] == []
+    assert combined["passed"] is True, "a regression in another scenario is noise"
+    assert combined["confirmed_regressions"] == [], (
+        "only the primary scenario may be confirmed"
+    )
 
 
 def test_the_confirmation_cannot_introduce_a_new_failure() -> None:
@@ -145,8 +147,10 @@ def test_the_confirmation_cannot_introduce_a_new_failure() -> None:
         confirmation=_report("medium-single-nocb", "small-single-nocb"),
     )
 
-    assert combined["passed"] is True
-    assert combined["confirmed_regressions"] == []
+    assert combined["passed"] is True, "confirmation must not introduce a failure"
+    assert combined["confirmed_regressions"] == [], (
+        "a confirmation-only scenario must remain unconfirmed"
+    )
 
 
 def test_an_unusable_confirmation_leaves_the_first_verdict_standing() -> None:
@@ -161,8 +165,12 @@ def test_an_unusable_confirmation_leaves_the_first_verdict_standing() -> None:
         confirmation=_skip_report(),
     )
 
-    assert combined["passed"] is False
-    assert _names(combined["confirmed_regressions"]) == ["medium-single-nocb"]
+    assert combined["passed"] is False, (
+        "an unusable confirmation must preserve the primary failure"
+    )
+    assert _names(combined["confirmed_regressions"]) == ["medium-single-nocb"], (
+        "the primary regression must remain confirmed without retry evidence"
+    )
 
 
 @pytest.mark.parametrize(
@@ -185,8 +193,12 @@ def test_an_incomplete_confirmation_leaves_the_primary_verdict_standing(
         confirmation=confirmation,
     )
 
-    assert combined["passed"] is False
-    assert _names(combined["confirmed_regressions"]) == ["medium-single-nocb"]
+    assert combined["passed"] is False, (
+        "incomplete confirmation evidence must preserve the primary failure"
+    )
+    assert _names(combined["confirmed_regressions"]) == ["medium-single-nocb"], (
+        "the primary regression must remain confirmed without comparison evidence"
+    )
 
 
 def test_the_combined_report_keeps_the_shape_its_consumers_read() -> None:
@@ -200,8 +212,12 @@ def test_the_combined_report_keeps_the_shape_its_consumers_read() -> None:
         confirmation=_report(),
     )
 
-    assert combined["rust_scenarios_compared"] == len(SCENARIOS)
-    assert _names(combined["primary_regressions"]) == ["medium-single-nocb"]
+    assert combined["rust_scenarios_compared"] == len(SCENARIOS), (
+        "the combined report must retain the comparison count consumers read"
+    )
+    assert _names(combined["primary_regressions"]) == ["medium-single-nocb"], (
+        "the combined report must retain its primary regression evidence"
+    )
 
 
 @pytest.mark.parametrize(
@@ -235,8 +251,10 @@ def test_the_cli_writes_a_report_the_summary_can_read(
         str(output),
     ])
 
-    assert exit_code == expected_exit
-    assert load_ratchet_report(output).status == expected_status
+    assert exit_code == expected_exit, "the CLI exit code must match the verdict"
+    assert load_ratchet_report(output).status == expected_status, (
+        "the CLI report must expose the summary consumer's expected status"
+    )
 
 
 def test_the_cli_reports_malformed_input_without_passing_it(
@@ -257,7 +275,7 @@ def test_the_cli_reports_malformed_input_without_passing_it(
         str(tmp_path / "out.json"),
     ])
 
-    assert exit_code == 2
+    assert exit_code == 2, "malformed input must be reported as a CLI input error"
 
 
 @pytest.mark.parametrize("report_name", ["primary", "confirmation"])
@@ -323,9 +341,13 @@ def test_confirmation_only_ever_narrows_the_failure(
         confirmation=_report(*confirmation),
     )
 
-    assert set(_names(combined["confirmed_regressions"])) <= set(primary)
+    assert set(_names(combined["confirmed_regressions"])) <= set(primary), (
+        "confirmation must only narrow the primary failure set"
+    )
     if not primary:
-        assert combined["passed"] is True
+        assert combined["passed"] is True, (
+            "an empty primary failure set must remain a passing verdict"
+        )
 
 
 @given(regressed=_SCENARIO_SETS)
@@ -340,5 +362,9 @@ def test_a_reproduced_verdict_is_the_primary_verdict(
     report = _report(*regressed)
     combined = confirm_regressions(primary=report, confirmation=report)
 
-    assert combined["passed"] == report["passed"]
-    assert set(_names(combined["confirmed_regressions"])) == set(regressed)
+    assert combined["passed"] == report["passed"], (
+        "identical primary and confirmation reports must preserve the verdict"
+    )
+    assert set(_names(combined["confirmed_regressions"])) == set(regressed), (
+        "identical reports must confirm every primary regression"
+    )

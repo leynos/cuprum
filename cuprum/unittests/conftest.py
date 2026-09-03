@@ -12,7 +12,11 @@ import typing as typ
 import hypothesis_crosshair_provider  # ruff: ignore[unused-import]  # Registers CrossHair backend provider on import.
 from hypothesis import settings
 
+from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     import pytest
 
 settings.register_profile(
@@ -31,6 +35,41 @@ _VOLATILE_KEYS: frozenset[str] = frozenset({
     "profile_dir",
     "worker_command",
 })
+
+
+def benchmark_run_payloads(
+    ratios: cabc.Mapping[str, float], *, worker_iterations: int = 20
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Build matching dry-run and Hyperfine payloads for scenario ratios."""
+    scenarios: list[dict[str, object]] = []
+    results: list[dict[str, object]] = []
+    for scenario, ratio in sorted(ratios.items()):
+        python_scenario: dict[str, object] = {
+            "name": f"python-{scenario}",
+            "backend": "python",
+        }
+        rust_scenario: dict[str, object] = {
+            "name": f"rust-{scenario}",
+            "backend": "rust",
+        }
+        scenarios.extend((python_scenario, rust_scenario))
+        python_result: dict[str, object] = {
+            "command": f"python-{scenario}",
+            "mean": 1.0,
+        }
+        rust_result: dict[str, object] = {
+            "command": f"rust-{scenario}",
+            "mean": ratio,
+        }
+        results.extend((python_result, rust_result))
+    return (
+        {
+            "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+            "worker_iterations": worker_iterations,
+            "scenarios": scenarios,
+        },
+        {"results": results},
+    )
 
 
 def redact(obj: object, keys: frozenset[str] = _VOLATILE_KEYS) -> object:

@@ -54,6 +54,8 @@ from tests.helpers.workflow import (
 
 PATHS_FILTER_ACTION = "dorny/paths-filter@"
 SUMMARY_STEP = "Record the benchmark gate decision"
+CHECKOUT_STEP = "Check out repository"
+THROUGHPUT_STEP = "Run throughput benchmarks and ratchet comparison"
 #: The gate, verbatim. Pinning the whole expression rather than probing it for
 #: substrings is what makes an inverted or half-deleted condition a failure:
 #: `needs.changes.outputs.bench != 'true'` contains every operand the loose
@@ -133,6 +135,68 @@ def test_the_changes_job_runs_on_a_github_hosted_runner(
     assert runner == "ubuntu-latest", (
         f"the {CHANGES_JOB!r} job must run on ubuntu-latest so that deciding "
         f"whether to spend paid runner minutes costs none; found {runner!r}"
+    )
+
+
+def test_the_changes_job_has_only_the_permissions_its_filter_needs(
+    workflow_data: Workflow,
+) -> None:
+    """Paths-filter needs changed-file read access without write authority."""
+    permissions = mapping(
+        job(workflow_data, CHANGES_JOB).get("permissions"),
+        f"the {CHANGES_JOB!r} job must declare narrow permissions",
+    )
+
+    assert permissions == {"contents": "read", "pull-requests": "read"}, (
+        f"the {CHANGES_JOB!r} job must retain only the filter's read permissions; "
+        f"found {permissions!r}"
+    )
+
+
+def test_the_changes_checkout_does_not_persist_credentials(
+    workflow_data: Workflow,
+) -> None:
+    """The cheap detector must not write its token into Git configuration."""
+    checkout = step_named(workflow_data, CHANGES_JOB, CHECKOUT_STEP)
+    checkout_options = mapping(
+        checkout.get("with"),
+        f"the {CHANGES_JOB!r} checkout must declare explicit options",
+    )
+
+    assert checkout_options.get("persist-credentials") is False, (
+        f"the {CHANGES_JOB!r} checkout must disable credential persistence; "
+        f"found {checkout_options.get('persist-credentials')!r}"
+    )
+
+
+def test_the_paid_benchmark_checkout_does_not_persist_credentials(
+    workflow_data: Workflow,
+) -> None:
+    """The paid job fetches its baseline explicitly instead of retaining a token."""
+    checkout = step_named(workflow_data, BENCHMARK_JOB, CHECKOUT_STEP)
+    checkout_options = mapping(
+        checkout.get("with"),
+        f"the {BENCHMARK_JOB!r} checkout must declare explicit options",
+    )
+
+    assert checkout_options.get("persist-credentials") is False, (
+        f"the {BENCHMARK_JOB!r} checkout must disable credential persistence; "
+        f"found {checkout_options.get('persist-credentials')!r}"
+    )
+
+
+def test_the_paid_benchmark_uses_the_shared_optimized_setup(
+    workflow_data: Workflow,
+) -> None:
+    """The paid runner builds once through the local contributor target."""
+    script = script_of(step_named(workflow_data, BENCHMARK_JOB, THROUGHPUT_STEP))
+    assert script is not None, f"the {THROUGHPUT_STEP!r} step must run a script"
+
+    assert "make develop MATURIN_DEVELOP_FLAGS='--release --skip-install'" in script, (
+        "the benchmark must use the shared optimized extension-build target"
+    )
+    assert "UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python" in script, (
+        "the benchmark scripts must reuse checkout-local uv caches and tools"
     )
 
 

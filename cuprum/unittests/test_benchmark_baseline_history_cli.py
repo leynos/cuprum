@@ -23,6 +23,7 @@ import benchmarks.update_baseline_history as history_recorder
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 from benchmarks.ratchet_history import BaselineHistory, HistorySample, load_history
 from benchmarks.update_baseline_history import main as record_sample
+from cuprum.unittests.conftest import benchmark_run_payloads
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -43,26 +44,11 @@ def _write_candidate(directory: pth.Path, *, ratio: float) -> Candidate:
     """Write candidate plan and throughput JSON realizing one ratio."""
     plan_path = directory / "candidate-plan.json"
     throughput_path = directory / "candidate-throughput.json"
-    plan_path.write_text(
-        json.dumps({
-            "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
-            "worker_iterations": WORKER_ITERATIONS,
-            "scenarios": [
-                {"name": f"python-{SCENARIO}", "backend": "python"},
-                {"name": f"rust-{SCENARIO}", "backend": "rust"},
-            ],
-        }),
-        encoding="utf-8",
+    plan, throughput = benchmark_run_payloads(
+        {SCENARIO: ratio}, worker_iterations=WORKER_ITERATIONS
     )
-    throughput_path.write_text(
-        json.dumps({
-            "results": [
-                {"command": f"python-{SCENARIO}", "mean": 1.0},
-                {"command": f"rust-{SCENARIO}", "mean": ratio},
-            ],
-        }),
-        encoding="utf-8",
-    )
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    throughput_path.write_text(json.dumps(throughput), encoding="utf-8")
     return Candidate(plan=plan_path, throughput=throughput_path)
 
 

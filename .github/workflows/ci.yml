@@ -1037,6 +1037,7 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # No resource sampler here, deliberately. This job times commands that
       # run for about half a second and compares the ratio of two of them, so

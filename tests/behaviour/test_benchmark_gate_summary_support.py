@@ -18,7 +18,13 @@ if typ.TYPE_CHECKING:
     from tests.helpers.workflow import Workflow
 
 SUMMARY_STEP = "Record the benchmark gate decision"
-_COLUMNS = ("event", "detector", "bench", "decision")
+_COLUMNS = (
+    "event",
+    "detector",
+    "performance-relevant changes",
+    "benchmark-ratchet",
+)
+_FIELD_NAMES = ("event", "detector", "bench", "decision")
 _METRIC_PREFIX = "::notice title=benchmark-gate-decision::"
 
 
@@ -121,6 +127,10 @@ def _parse_summary(*, emitted: str, stdout: str) -> Summary:
     assert len(rows) == 2, (
         f"expected a header row and one data row; the script emitted:\n{emitted}"
     )
+    columns = [cell.strip() for cell in rows[0].strip("|").split("|")]
+    assert columns == list(_COLUMNS), (
+        f"expected columns {_COLUMNS!r}, found {columns!r} in:\n{emitted}"
+    )
     values = [cell.strip() for cell in rows[1].strip("|").split("|")]
     assert len(values) == len(_COLUMNS), (
         f"expected {len(_COLUMNS)} columns, found {values} in:\n{emitted}"
@@ -139,7 +149,7 @@ def _parse_summary(*, emitted: str, stdout: str) -> Summary:
     )
     metric = dict(label.split("=", maxsplit=1) for label in labels)
     return Summary(
-        fields=dict(zip(_COLUMNS, values, strict=True)),
+        fields=dict(zip(_FIELD_NAMES, values, strict=True)),
         table="\n".join(rows),
         metric=metric,
     )

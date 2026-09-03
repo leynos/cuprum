@@ -15,6 +15,14 @@ from benchmarks.ratchet_rust_performance import (
 )
 
 
+class _ComparisonOptions(typ.TypedDict, total=False):
+    """Keyword shapes exercised at the public comparison-options boundary."""
+
+    policy: object
+    max_regression: object
+    extra: object
+
+
 def _scenario_payload(*, name: str, backend: str) -> dict[str, object]:
     """Return a scenario payload dict."""
     return {
@@ -86,7 +94,9 @@ def _run_comparison(
     )
 
 
-def _comparison_with_options(**options: object) -> ComparisonReport:
+def _comparison_with_options(
+    **options: typ.Unpack[_ComparisonOptions],
+) -> ComparisonReport:
     """Compare two simple runs through the public options boundary."""
     return compare_rust_regressions(
         baseline=BenchmarkRunPayload(
@@ -99,7 +109,7 @@ def _comparison_with_options(**options: object) -> ComparisonReport:
             throughput=_throughput_payload(python_mean=1.0, rust_mean=1.1),
             context_name="candidate",
         ),
-        **typ.cast("typ.Any", options),
+        **options,
     )
 
 
@@ -150,10 +160,20 @@ def test_compare_rust_regressions_rejects_unsupported_policy_option() -> None:
         pytest.param(
             {"max_regression": 1}, "max_regression must be a float", id="integer"
         ),
+        pytest.param(
+            {"policy": object(), "max_regression": 1},
+            "policy must be a RatchetPolicy",
+            id="invalid-policy-first",
+        ),
+        pytest.param(
+            {"policy": RatchetPolicy(), "max_regression": 1},
+            "max_regression must be a float",
+            id="invalid-legacy-option-second",
+        ),
     ],
 )
 def test_compare_rust_regressions_rejects_invalid_policy_options(
-    options: dict[str, object], message: str
+    options: _ComparisonOptions, message: str
 ) -> None:
     """Policy options are type-checked through the public comparison API."""
     with pytest.raises(TypeError, match=message):

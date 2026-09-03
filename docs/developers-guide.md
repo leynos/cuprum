@@ -3357,21 +3357,17 @@ Three properties of that arrangement are load-bearing:
 
 The benchmark checkout sets `persist-credentials: false`, keeping the
 repository-scoped token out of the checked-out code's Git configuration. The
-benchmark needs Maturin and the development benchmark tooling, but not the
-lint-only `df12-python-lints` dependency, so its optimized, in-place build
-calls the shared target with
-`UV_SYNC_FLAGS=--no-install-package=df12-python-lints`:
+benchmark needs Maturin and the development benchmark tooling, so its
+optimized, in-place build calls the shared target with the runner's job limit:
 
 ```bash
-make develop MATURIN_DEVELOP_FLAGS='--release --skip-install' \
-  UV_SYNC_FLAGS=--no-install-package=df12-python-lints \
-  UV_RUN_FLAGS=--no-sync
+CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}" make develop MATURIN_DEVELOP_FLAGS=--release
 ```
 
-The baseline client itself uses only the standard library and therefore runs
-with `uv run --no-dev`. Subsequent benchmark commands use `uv run --no-sync` so
-they reuse that prepared environment without resyncing dependencies or bringing
-the lint-only Git dependency into the paid benchmark.
+The baseline client and benchmark scripts are invoked directly with
+`UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python ...`, keeping the
+`uv` caches and tools local to the checkout while using the prepared project
+environment.
 
 The `changes` job also writes the decision — event, detector status, filter
 verdict, and whether the benchmark ran or was skipped — to
