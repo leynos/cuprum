@@ -129,6 +129,13 @@ jobs:
       - name: Set up sccache
         uses: ./.github/actions/setup-sccache
 
+      # Immediately after the wrapper exists, so nothing between setup and
+      # the build can compile outside the measured window. `lint-test` built
+      # the cranelift Whitaker suite before this ran, and those requests were
+      # zeroed away before the report.
+      - name: Reset compiler-cache counters
+        run: sccache --zero-stats
+
       - name: Install CLI tools
         run: |
           uv tool install "mbake==${MBAKE_VERSION}"
@@ -170,9 +177,6 @@ jobs:
             fi
           fi
           whitaker-installer --cranelift
-
-      - name: Reset compiler-cache counters
-        run: sccache --zero-stats
 
       - name: Validate Makefile
         run: mbake validate Makefile
@@ -327,6 +331,13 @@ jobs:
       - name: Set up sccache
         uses: ./.github/actions/setup-sccache
 
+      # Immediately after the wrapper exists, so nothing between setup and
+      # the build can compile outside the measured window. `lint-test` built
+      # the cranelift Whitaker suite before this ran, and those requests were
+      # zeroed away before the report.
+      - name: Reset compiler-cache counters
+        run: sccache --zero-stats
+
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -353,9 +364,6 @@ jobs:
           # A missing prebuilt binary must fail the job. The fallback would
           # otherwise compile nextest from source, which no cache owns.
           fallback: none
-
-      - name: Reset compiler-cache counters
-        run: sccache --zero-stats
 
       - name: Run typechecker
         run: make typecheck
@@ -504,6 +512,13 @@ jobs:
       - name: Set up sccache
         uses: ./.github/actions/setup-sccache
 
+      # Immediately after the wrapper exists, so nothing between setup and
+      # the build can compile outside the measured window. `lint-test` built
+      # the cranelift Whitaker suite before this ran, and those requests were
+      # zeroed away before the report.
+      - name: Reset compiler-cache counters
+        run: sccache --zero-stats
+
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -531,9 +546,6 @@ jobs:
       # `make build` only syncs dependencies; `make develop` compiles the PyO3
       # extension into the same virtual environment. It is the target
       # contributors run locally, so this job cannot drift from local setup.
-      - name: Reset compiler-cache counters
-        run: sccache --zero-stats
-
       - name: Build the native extension
         run: CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}" make develop
 
@@ -677,6 +689,13 @@ jobs:
       - name: Set up sccache
         uses: ./.github/actions/setup-sccache
 
+      # Immediately after the wrapper exists, so nothing between setup and
+      # the build can compile outside the measured window. `lint-test` built
+      # the cranelift Whitaker suite before this ran, and those requests were
+      # zeroed away before the report.
+      - name: Reset compiler-cache counters
+        run: sccache --zero-stats
+
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -698,9 +717,6 @@ jobs:
       - name: Prepare Cargo dependencies
         run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml
 
-      - name: Reset compiler-cache counters
-        run: sccache --zero-stats
-
       - name: Install code
         run: make build
 
@@ -715,7 +731,7 @@ jobs:
       # treats changes within one percentage point as measurement noise.
       #
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@5daae0a332441d170d88ca648c9e71f0bbe96cb3
+        uses: leynos/shared-actions/.github/actions/generate-coverage@7c9d66030879b504365202df90f439ea419e72bd
         with:
           format: cobertura
           output-path: coverage.xml
@@ -919,6 +935,13 @@ jobs:
       - name: Set up sccache
         uses: ./.github/actions/setup-sccache
 
+      # Immediately after the wrapper exists, so nothing between setup and
+      # the build can compile outside the measured window. `lint-test` built
+      # the cranelift Whitaker suite before this ran, and those requests were
+      # zeroed away before the report.
+      - name: Reset compiler-cache counters
+        run: sccache --zero-stats
+
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -928,9 +951,6 @@ jobs:
         uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
         with:
           enable-cache: false
-
-      - name: Reset compiler-cache counters
-        run: sccache --zero-stats
 
       - name: Install hyperfine
         run: |

@@ -49,9 +49,13 @@ SETUP_RUST = (
     "leynos/shared-actions/.github/actions/setup-rust@"
     "5daae0a332441d170d88ca648c9e71f0bbe96cb3"
 )
+#: Interim pin. This revision drops `target` from the action's own cache, which
+#: is what lets the caller hold it to `cache-provider: external` without the
+#: shared action re-adding a compiler-output archive. The nextest
+#: no-source-fallback change is still open upstream, so a further repin follows.
 GENERATE_COVERAGE = (
     "leynos/shared-actions/.github/actions/generate-coverage@"
-    "5daae0a332441d170d88ca648c9e71f0bbe96cb3"
+    "7c9d66030879b504365202df90f439ea419e72bd"
 )
 OBSERVATION_STEP = "Record cache observations"
 

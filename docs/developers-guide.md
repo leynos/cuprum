@@ -213,6 +213,56 @@ Cuprum's Ubicloud cache listing was empty before this migration, because
 entries with `ubi gh leynos/cuprum list-cache-entries` to confirm the archives
 land in Ubicloud's store rather than GitHub's.
 
+### Which test jobs overlap, and why none were removed
+
+The estate rule is that a test-only job should not run beside a coverage job
+when it adds nothing over it. Cuprum was measured against that rule and nothing
+was removed. The reason is that its coverage lane is Python-only, so the usual
+premise, that coverage already runs the Rust suite and only doctests are
+missing, does not hold here.
+
+What each test-executing job actually runs, on Linux amd64:
+
+| Job                          | Python                  | Rust suite                                                  | Python suite                                                      | Extension |
+| ---------------------------- | ----------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------- | --------- |
+| `typecheck-test` (four legs) | 3.12, 3.13, 3.14, 3.15a | `cargo nextest run --all-targets --all-features`, 104 tests | 173 files, dev virtual environment, serial                        | absent    |
+| `extension-tests`            | 3.13                    | none                                                        | 12 gated modules, `CUPRUM_REQUIRE_RUST_EXTENSION=1`               | **built** |
+| `coverage` (pull requests)   | 3.13                    | **none**                                                    | default collection, 1,639 items, `.venv-coverage` under slipcover | absent    |
+| `coverage-upload` (`main`)   | 3.13                    | **none**                                                    | as `coverage`, plus the CodeScene upload                          | absent    |
+
+The evidence is from run 33752095108, not inference. The coverage step logged
+`DETECTED_LANG: python`; its `cargo-cache`, `cargo-binstall`, `cargo-llvm-cov`,
+`cargo-nextest`, and Rust coverage steps all reported `outcome=skipped`; and
+the run it did perform was
+`python -m slipcover --branch --xml --out coverage.xml -m pytest -v`.
+
+Three conclusions follow:
+
+- **`typecheck-test` is not subsumed.** Its pytest half is a subset of what
+  coverage collects, 173 files against 204, the only difference being a support
+  module that defines no tests. But it also runs 104 Rust tests and the
+  typechecker, neither of which the coverage lane executes at all. Removing it
+  would silently stop running the Rust suite.
+- **The other three matrix legs are not subsumed** because coverage runs only
+  on Python 3.13.
+- **`extension-tests` is not subsumed.** Coverage runs without the compiled
+  extension, so the extension-gated modules skip inside it; the same run logged
+  its `rust-backend` cases as `SKIPPED`. Only `extension-tests` builds the
+  extension and fails when it is missing.
+
+Two overlaps are real but were left alone, because removing either would change
+what a protected lane validates rather than deleting redundant work:
+
+- the pytest half of `typecheck-test` on 3.13 duplicates coverage's collection,
+  but `make test` runs pytest and nextest as one target, so the step cannot be
+  halved without splitting that target; and
+- all four legs run the same 104 Rust tests, which do not depend on the Python
+  version, but the rule protects lanes that differ by interpreter.
+
+`tests/test_ci_test_coverage_overlap.py` pins the three facts this rests on, so
+a later change that makes coverage mixed-language, or that drops the Rust half
+of `make test`, fails rather than quietly widening the gap.
+
 ### Concurrency
 
 `ci.yml` declares one constant, `LINUX_RUNNER_VCPUS`, equal to the vCPU count of

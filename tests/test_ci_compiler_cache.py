@@ -65,9 +65,18 @@ def test_every_rust_job_installs_the_wrapper_and_reports_its_counters(
         for index, step in enumerate(job_steps)
         if step.get("name") == "Record compiler-cache effectiveness"
     )
-    assert setup_indices[0] < reset_index < stats_index, (
-        f"{workflow_name}:{job_name} must install the wrapper, zero the "
-        "counters, then report them"
+    # Immediately after setup, not merely somewhere before the report. Any step
+    # in between may compile: `lint-test` builds the cranelift Whitaker suite
+    # while installing it, and those requests were zeroed away before the
+    # report while a weaker ordering assertion still passed.
+    assert reset_index == setup_indices[0] + 1, (
+        f"{workflow_name}:{job_name} must zero the counters in the step "
+        f"immediately after installing the wrapper, so no compilation escapes "
+        f"the measured window; reset is at {reset_index}, setup at "
+        f"{setup_indices[0]}"
+    )
+    assert reset_index < stats_index, (
+        f"{workflow_name}:{job_name} must zero the counters before reporting"
     )
     stats = job_steps[stats_index]
     assert stats.get("if") == "always()", (
