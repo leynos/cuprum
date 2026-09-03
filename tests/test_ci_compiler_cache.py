@@ -92,8 +92,7 @@ def test_sccache_uses_a_caller_owned_directory_not_the_github_backend() -> None:
     required = ("SCCACHE_DIR=", "SCCACHE_CACHE_SIZE=", "default: 4G")
     missing = [fragment for fragment in required if fragment not in text]
     assert not missing, (
-        f"the sccache action must declare a capped cache directory; missing "
-        f"{missing}"
+        f"the sccache action must declare a capped cache directory; missing {missing}"
     )
 
 

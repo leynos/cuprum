@@ -130,12 +130,11 @@ oversight, and a contract test enforces it.
 sccache is the single owner of compiler output for every build shape. The
 repository produces three: the objects the lint gate builds through its
 alternative code generator and linker, the ordinary debug objects the test
-gates build, and the
-`-C instrument-coverage` objects the coverage gate builds. sccache hashes the
-compiler flags into its cache key, so all three coexist in one store without
-colliding; run 33677926269 recorded zero non-cacheable compilations with the
-cranelift-built Whitaker lints, and Whitaker's instrumented coverage build
-reports the same.
+gates build, and the `-C instrument-coverage` objects the coverage gate builds.
+sccache hashes the compiler flags into its cache key, so all three coexist in
+one store without colliding; run 33677926269 recorded zero non-cacheable
+compilations with the cranelift-built Whitaker lints, and Whitaker's
+instrumented coverage build reports the same.
 
 A `target` tree, by contrast, is invalidated by any source change, so its
 archive is rewritten far more often than the registry it would sit beside and
