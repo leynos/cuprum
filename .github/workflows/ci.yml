@@ -36,6 +36,17 @@ env:
   TY_VERSION: '0.0.74'
   MARKDOWNLINT_VERSION: '0.20.0'
   NEXTEST_VERSION: '0.9.133'
+  # Every Ubicloud job in this workflow runs on `ubicloud-standard-2`, so one
+  # constant sizes nextest's test threads and Cargo's build jobs to the vCPUs
+  # the job is actually billed for. Raising the label means raising this too.
+  LINUX_RUNNER_VCPUS: '2'
+  # Schema generation for every cache key family below. Bump it to invalidate
+  # the whole family deliberately rather than by editing individual keys.
+  CACHE_GENERATION: v1
+  # Ubicloud's default image is Ubuntu 24.04 (glibc 2.39). Compiled tools
+  # restored from a 22.04 archive would fail at run time, so the release is
+  # part of every key that carries an executable.
+  UBUNTU_RELEASE: ubuntu2404
 
 jobs:
   lint-test:
@@ -127,7 +138,8 @@ jobs:
   typecheck-test:
     name: Typecheck and test (Python ${{ matrix.python-label }})
     continue-on-error: ${{ matrix.experimental }}
-    runs-on: namespace-profile-rust-linux-light
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -152,31 +164,74 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
-      - name: Set up Namespace cache
-        id: namespace-cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+      - name: Compute cache keys
+        uses: ./.github/actions/cache-keys
+        with:
+          python-version: ${{ matrix.python-version }}
+          nextest-version: ${{ env.NEXTEST_VERSION }}
+          generation: ${{ env.CACHE_GENERATION }}
+          ubuntu-release: ${{ env.UBUNTU_RELEASE }}
+
+      - name: Restore the Cargo registry
+        id: cargo-cache
+        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ env.CARGO_CACHE_KEY }}
+          restore-keys: ${{ env.CARGO_CACHE_PREFIX }}
+
+      - name: Restore the installed tools
+        id: tool-cache
+        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
         with:
           path: |
             ~/.cargo/bin
-            ~/.cargo/git
-            ~/.cargo/registry
+            ~/.local/bin
             ~/.cache/uv
             ~/.local/share/uv
-            ~/.local/bin
-            ~/.cache/sccache
-            ${{ github.workspace }}/.uv-cache
-            ${{ github.workspace }}/.uv-tools
+            .uv-cache
+            .uv-tools
+          key: ${{ env.TOOL_CACHE_KEY }}
+          restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
 
-      - name: Report Namespace cache status
+      - name: Restore the local compiler cache
+        id: sccache-dir
+        if: vars.SCCACHE_LOCAL_CACHE == 'true'
+        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        with:
+          path: ~/.cache/sccache
+          key: ${{ env.SCCACHE_CACHE_KEY }}
+          restore-keys: ${{ env.SCCACHE_CACHE_PREFIX }}
+
+      # Record the rendered key beside its result, so a reviewer can explain
+      # any miss from the run summary alone rather than by re-deriving the
+      # key from the workflow source.
+      - name: Record cache observations
         if: always()
+        shell: bash
+        env:
+          CARGO_CACHE_HIT: ${{ steps.cargo-cache.outputs.cache-hit }}
+          TOOL_CACHE_HIT: ${{ steps.tool-cache.outputs.cache-hit }}
+          SCCACHE_CACHE_HIT: ${{ steps.sccache-dir.outputs.cache-hit }}
         run: |
+          set -euo pipefail
           {
-            echo "### Namespace cache"
-            echo "- cache-hit: \`${{ steps.namespace-cache.outputs.cache-hit }}\`"
+            printf '### Cache observations\n\n'
+            printf '| cache | key | hit |\n| --- | --- | --- |\n'
+            printf '| registry | %s | %s |\n' \
+              "${CARGO_CACHE_KEY}" "${CARGO_CACHE_HIT:-false}"
+            printf '| tools | %s | %s |\n' \
+              "${TOOL_CACHE_KEY}" "${TOOL_CACHE_HIT:-false}"
+            printf '| sccache | %s | %s |\n' \
+              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-disabled}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up sccache
         uses: ./.github/actions/setup-sccache
+        with:
+          backend: ${{ vars.SCCACHE_LOCAL_CACHE == 'true' && 'local' || 'gha' }}
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -205,19 +260,64 @@ jobs:
           # otherwise compile nextest from source, which no cache owns.
           fallback: none
 
+      - name: Reset compiler-cache counters
+        run: sccache --zero-stats
+
       - name: Run typechecker
         run: make typecheck
 
+      # `make test` defaults every Cargo and nextest job count to 1 for a
+      # developer laptop sharing its cores with an editor. On a dedicated
+      # runner the job is billed for `LINUX_RUNNER_VCPUS` vCPUs whether or not
+      # it uses them, so size the compile and the test threads to exactly that
+      # number and no higher. pytest itself stays serial: its batches compile
+      # and reuse the same Cargo target directory, so xdist workers would
+      # contend on one build lock rather than overlap.
       - name: Run tests
-        run: make test
+        run: |
+          make test \
+            TEST_JOBS="${LINUX_RUNNER_VCPUS}" \
+            TEST_CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}" \
+            PYTEST_CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}"
 
-      - name: Show sccache statistics
+      - name: Record compiler-cache effectiveness
         if: always()
-        run: sccache --show-stats || true
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --show-stats | tee sccache-stats.txt
+          sccache --show-stats --stats-format json > sccache-stats.json
+          fence='```'
+          {
+            printf '### sccache\n\n%stext\n' "${fence}"
+            cat sccache-stats.txt
+            printf '%s\n' "${fence}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # One writer per key. This matrix is the only job that installs the whole
+      # tool set (nextest included) on every supported interpreter, so it owns
+      # the tool archive; every other job restores it. Saving only on `main`,
+      # and only after a miss, keeps pull requests from racing each other for a
+      # key they are not trusted to publish.
+      - name: Save the installed tools
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          steps.tool-cache.outputs.cache-hit != 'true'
+        uses: ubicloud/cache/save@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.local/bin
+            ~/.cache/uv
+            ~/.local/share/uv
+            .uv-cache
+            .uv-tools
+          key: ${{ env.TOOL_CACHE_KEY }}
 
   extension-tests:
     name: Extension-gated tests (Python/Rust boundary)
-    runs-on: namespace-profile-rust-linux-ci
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -226,31 +326,74 @@ jobs:
           # must not stay in .git/config where that code could reach it.
           persist-credentials: false
 
-      - name: Set up Namespace cache
-        id: namespace-cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+      - name: Compute cache keys
+        uses: ./.github/actions/cache-keys
+        with:
+          python-version: '3.13'
+          nextest-version: ${{ env.NEXTEST_VERSION }}
+          generation: ${{ env.CACHE_GENERATION }}
+          ubuntu-release: ${{ env.UBUNTU_RELEASE }}
+
+      - name: Restore the Cargo registry
+        id: cargo-cache
+        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ env.CARGO_CACHE_KEY }}
+          restore-keys: ${{ env.CARGO_CACHE_PREFIX }}
+
+      - name: Restore the installed tools
+        id: tool-cache
+        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
         with:
           path: |
             ~/.cargo/bin
-            ~/.cargo/git
-            ~/.cargo/registry
+            ~/.local/bin
             ~/.cache/uv
             ~/.local/share/uv
-            ~/.local/bin
-            ~/.cache/sccache
-            ${{ github.workspace }}/.uv-cache
-            ${{ github.workspace }}/.uv-tools
+            .uv-cache
+            .uv-tools
+          key: ${{ env.TOOL_CACHE_KEY }}
+          restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
 
-      - name: Report Namespace cache status
+      - name: Restore the local compiler cache
+        id: sccache-dir
+        if: vars.SCCACHE_LOCAL_CACHE == 'true'
+        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        with:
+          path: ~/.cache/sccache
+          key: ${{ env.SCCACHE_CACHE_KEY }}
+          restore-keys: ${{ env.SCCACHE_CACHE_PREFIX }}
+
+      # Record the rendered key beside its result, so a reviewer can explain
+      # any miss from the run summary alone rather than by re-deriving the
+      # key from the workflow source.
+      - name: Record cache observations
         if: always()
+        shell: bash
+        env:
+          CARGO_CACHE_HIT: ${{ steps.cargo-cache.outputs.cache-hit }}
+          TOOL_CACHE_HIT: ${{ steps.tool-cache.outputs.cache-hit }}
+          SCCACHE_CACHE_HIT: ${{ steps.sccache-dir.outputs.cache-hit }}
         run: |
+          set -euo pipefail
           {
-            echo "### Namespace cache"
-            echo "- cache-hit: \`${{ steps.namespace-cache.outputs.cache-hit }}\`"
+            printf '### Cache observations\n\n'
+            printf '| cache | key | hit |\n| --- | --- | --- |\n'
+            printf '| registry | %s | %s |\n' \
+              "${CARGO_CACHE_KEY}" "${CARGO_CACHE_HIT:-false}"
+            printf '| tools | %s | %s |\n' \
+              "${TOOL_CACHE_KEY}" "${TOOL_CACHE_HIT:-false}"
+            printf '| sccache | %s | %s |\n' \
+              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-disabled}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up sccache
         uses: ./.github/actions/setup-sccache
+        with:
+          backend: ${{ vars.SCCACHE_LOCAL_CACHE == 'true' && 'local' || 'gha' }}
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -279,8 +422,11 @@ jobs:
       # `make build` only syncs dependencies; `make develop` compiles the PyO3
       # extension into the same virtual environment. It is the target
       # contributors run locally, so this job cannot drift from local setup.
+      - name: Reset compiler-cache counters
+        run: sccache --zero-stats
+
       - name: Build the native extension
-        run: make develop
+        run: CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}" make develop
 
       # These modules are gated on `cuprum._rust_backend_native` being
       # importable and skip silently without it, so before this job existed a
@@ -303,16 +449,52 @@ jobs:
       - name: Run extension-gated tests
         run: make test-extension
 
-      - name: Show sccache statistics
+      - name: Record compiler-cache effectiveness
         if: always()
-        run: sccache --show-stats || true
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --show-stats | tee sccache-stats.txt
+          sccache --show-stats --stats-format json > sccache-stats.json
+          fence='```'
+          {
+            printf '### sccache\n\n%stext\n' "${fence}"
+            cat sccache-stats.txt
+            printf '%s\n' "${fence}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # This is the heaviest Rust gate that runs on `main`: it resolves the
+      # locked graph and compiles the extension. It therefore owns the Cargo
+      # registry key, and the local compiler-cache key when that backend is
+      # selected. Every other job restores both.
+      - name: Save the Cargo registry
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: ubicloud/cache/save@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ env.CARGO_CACHE_KEY }}
+
+      - name: Save the local compiler cache
+        if: >-
+          vars.SCCACHE_LOCAL_CACHE == 'true' &&
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          steps.sccache-dir.outputs.cache-hit != 'true'
+        uses: ubicloud/cache/save@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        with:
+          path: ~/.cache/sccache
+          key: ${{ env.SCCACHE_CACHE_KEY }}
 
   coverage:
     # Pull requests only. Pushes to main are handled by coverage-main.yml,
     # which also uploads the report to CodeScene; guarding here stops
     # coverage being generated twice on main.
     if: github.event_name == 'pull_request'
-    runs-on: namespace-profile-rust-linux-light
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 45
     needs:
       - lint-test
       - typecheck-test
@@ -328,31 +510,76 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up Namespace cache
-        id: namespace-cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+      - name: Compute cache keys
+        uses: ./.github/actions/cache-keys
+        with:
+          python-version: '3.13'
+          nextest-version: ${{ env.NEXTEST_VERSION }}
+          generation: ${{ env.CACHE_GENERATION }}
+          ubuntu-release: ${{ env.UBUNTU_RELEASE }}
+
+      # Pull requests only, so this job never saves: it reads the generation
+      # that the `main` writers published and publishes nothing of its own.
+      - name: Restore the Cargo registry
+        id: cargo-cache
+        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ env.CARGO_CACHE_KEY }}
+          restore-keys: ${{ env.CARGO_CACHE_PREFIX }}
+
+      - name: Restore the installed tools
+        id: tool-cache
+        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
         with:
           path: |
             ~/.cargo/bin
-            ~/.cargo/git
-            ~/.cargo/registry
+            ~/.local/bin
             ~/.cache/uv
             ~/.local/share/uv
-            ~/.local/bin
-            ~/.cache/sccache
-            ${{ github.workspace }}/.uv-cache
-            ${{ github.workspace }}/.uv-tools
+            .uv-cache
+            .uv-tools
+          key: ${{ env.TOOL_CACHE_KEY }}
+          restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
 
-      - name: Report Namespace cache status
+      - name: Restore the local compiler cache
+        id: sccache-dir
+        if: vars.SCCACHE_LOCAL_CACHE == 'true'
+        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        with:
+          path: ~/.cache/sccache
+          key: ${{ env.SCCACHE_CACHE_KEY }}
+          restore-keys: ${{ env.SCCACHE_CACHE_PREFIX }}
+
+      # Record the rendered key beside its result, so a reviewer can explain
+      # any miss from the run summary alone rather than by re-deriving the
+      # key from the workflow source.
+      - name: Record cache observations
         if: always()
+        shell: bash
+        env:
+          CARGO_CACHE_HIT: ${{ steps.cargo-cache.outputs.cache-hit }}
+          TOOL_CACHE_HIT: ${{ steps.tool-cache.outputs.cache-hit }}
+          SCCACHE_CACHE_HIT: ${{ steps.sccache-dir.outputs.cache-hit }}
         run: |
+          set -euo pipefail
           {
-            echo "### Namespace cache"
-            echo "- cache-hit: \`${{ steps.namespace-cache.outputs.cache-hit }}\`"
+            printf '### Cache observations\n\n'
+            printf '| cache | key | hit |\n| --- | --- | --- |\n'
+            printf '| registry | %s | %s |\n' \
+              "${CARGO_CACHE_KEY}" "${CARGO_CACHE_HIT:-false}"
+            printf '| tools | %s | %s |\n' \
+              "${TOOL_CACHE_KEY}" "${TOOL_CACHE_HIT:-false}"
+            printf '| sccache | %s | %s |\n' \
+              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-disabled}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up sccache
         uses: ./.github/actions/setup-sccache
+        with:
+          backend: ${{ vars.SCCACHE_LOCAL_CACHE == 'true' && 'local' || 'gha' }}
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -374,6 +601,9 @@ jobs:
 
       - name: Prepare Cargo dependencies
         run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml
+
+      - name: Reset compiler-cache counters
+        run: sccache --zero-stats
 
       - name: Install code
         run: make build
@@ -409,9 +639,19 @@ jobs:
           access-token: ${{ env.CS_ACCESS_TOKEN }}
           installer-checksum: ${{ vars.CODESCENE_CLI_SHA256 }}
 
-      - name: Show sccache statistics
+      - name: Record compiler-cache effectiveness
         if: always()
-        run: sccache --show-stats || true
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --show-stats | tee sccache-stats.txt
+          sccache --show-stats --stats-format json > sccache-stats.json
+          fence='```'
+          {
+            printf '### sccache\n\n%stext\n' "${fence}"
+            cat sccache-stats.txt
+            printf '%s\n' "${fence}"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
   # Detects whether performance-relevant paths changed so that
   # benchmark-ratchet can skip docs-only and Dependabot-batch pull
@@ -492,7 +732,12 @@ jobs:
             "::notice title=benchmark-gate-decision::event_class=${event_class} detector_status=${detector_status} decision=${decision}"
 
   benchmark-ratchet:
-    runs-on: ubicloud-standard-4-ubuntu-2404
+    # The ratchet compares each scenario's within-run `rust_mean / python_mean`
+    # ratio between the baseline and the candidate, so runner speed cancels out
+    # of the comparison and the job does not need a fixed or larger shape. It
+    # therefore starts at the estate default like every other Linux gate.
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 60
     needs:
       - lint-test
       - typecheck-test
@@ -512,18 +757,69 @@ jobs:
           # Keep its scoped token out of later build commands.
           persist-credentials: false
 
-      - name: Cache benchmark build dependencies
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Compute cache keys
+        uses: ./.github/actions/cache-keys
+        with:
+          python-version: '3.13'
+          nextest-version: ${{ env.NEXTEST_VERSION }}
+          generation: ${{ env.CACHE_GENERATION }}
+          ubuntu-release: ${{ env.UBUNTU_RELEASE }}
+
+      - name: Restore the Cargo registry
+        id: cargo-cache
+        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
         with:
           path: |
-            .uv-cache
-            .uv-tools
             ~/.cargo/registry
             ~/.cargo/git
-            rust/target
-          key: cuprum-benchmark-${{ runner.os }}-${{ hashFiles('uv.lock', 'rust/Cargo.lock') }}
-          restore-keys: |
-            cuprum-benchmark-${{ runner.os }}-
+          key: ${{ env.CARGO_CACHE_KEY }}
+          restore-keys: ${{ env.CARGO_CACHE_PREFIX }}
+
+      - name: Restore the installed tools
+        id: tool-cache
+        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.local/bin
+            ~/.cache/uv
+            ~/.local/share/uv
+            .uv-cache
+            .uv-tools
+          key: ${{ env.TOOL_CACHE_KEY }}
+          restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
+
+      # This job is the only owner of `rust/target`. It builds `--release`,
+      # which shares nothing with the debug artefacts the test gates produce,
+      # and it is the only job that would benefit from keeping them. The
+      # compiler-cache gates use sccache instead and leave `target` disposable.
+      - name: Restore the benchmark build directory
+        id: bench-target-cache
+        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        with:
+          path: rust/target
+          key: ${{ env.BENCH_TARGET_CACHE_KEY }}
+          restore-keys: ${{ env.BENCH_TARGET_CACHE_PREFIX }}
+
+      - name: Record cache observations
+        if: always()
+        shell: bash
+        env:
+          CARGO_CACHE_HIT: ${{ steps.cargo-cache.outputs.cache-hit }}
+          TOOL_CACHE_HIT: ${{ steps.tool-cache.outputs.cache-hit }}
+          BENCH_TARGET_CACHE_HIT: ${{ steps.bench-target-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          {
+            printf '### Cache observations\n\n'
+            printf '| cache | key | hit |\n| --- | --- | --- |\n'
+            printf '| registry | %s | %s |\n' \
+              "${CARGO_CACHE_KEY}" "${CARGO_CACHE_HIT:-false}"
+            printf '| tools | %s | %s |\n' \
+              "${TOOL_CACHE_KEY}" "${TOOL_CACHE_HIT:-false}"
+            printf '| benchmark target | %s | %s |\n' \
+              "${BENCH_TARGET_CACHE_KEY}" "${BENCH_TARGET_CACHE_HIT:-false}"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -591,7 +887,8 @@ jobs:
             # commands used. The benchmark needs maturin, but not the
             # lint-only df12 plugin; later commands preserve this prepared
             # environment instead of triggering another sync.
-            make develop MATURIN_DEVELOP_FLAGS='--release --skip-install' \
+            CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}" \
+              make develop MATURIN_DEVELOP_FLAGS='--release --skip-install' \
               UV_SYNC_FLAGS=--no-install-package=df12-python-lints \
               UV_RUN_FLAGS=--no-sync
 
@@ -700,6 +997,15 @@ jobs:
           path: |
             ${{ runner.temp }}/benchmark-ratchet/main-plan.json
             ${{ runner.temp }}/benchmark-ratchet/main-throughput.json
+
+      - name: Save the benchmark build directory
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          steps.bench-target-cache.outputs.cache-hit != 'true'
+        uses: ubicloud/cache/save@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        with:
+          path: rust/target
+          key: ${{ env.BENCH_TARGET_CACHE_KEY }}
 
   build-wheels:
     uses: ./.github/workflows/build-wheels.yml

@@ -1,5 +1,9 @@
 name: Set up sccache
-description: Install the pinned Linux sccache binary and select its local cache.
+description: >-
+  Install the pinned Linux sccache binary and select its storage backend. The
+  GitHub Actions backend is the default; the local-directory backend is the
+  documented fallback for when the GHA backend's write errors show it is
+  competing for GitHub's per-repository cache quota.
 inputs:
   version:
     description: sccache release version
@@ -13,6 +17,19 @@ inputs:
     description: SHA-256 for the sccache executable inside the pinned archive
     required: false
     default: e381a9675f971082a522907b8381c1054777ea60511043e4c67de5dfddff3029
+  backend:
+    description: >-
+      Storage backend: `gha` for the GitHub Actions cache service, or `local`
+      for a cached directory owned by the calling workflow.
+    required: false
+    default: gha
+  cache-size:
+    description: >-
+      Ceiling for the local-directory backend. Ignored by the GHA backend. The
+      archive is restored and re-saved whole, so this bounds the transfer as
+      well as the disk.
+    required: false
+    default: 2G
 runs:
   using: composite
   steps:
@@ -22,27 +39,37 @@ runs:
         SCCACHE_VERSION: ${{ inputs.version }}
         SCCACHE_SHA256: ${{ inputs.sha256 }}
         SCCACHE_BINARY_SHA256: ${{ inputs.binary-sha256 }}
+        SCCACHE_BACKEND: ${{ inputs.backend }}
+        SCCACHE_LOCAL_CACHE_SIZE: ${{ inputs.cache-size }}
       run: |
         set -euo pipefail
         if [ "${RUNNER_OS}" != "Linux" ] || [ "${RUNNER_ARCH}" != "X64" ]; then
-          echo "This action supports only Linux x86_64 Namespace builders" >&2
+          echo "This action supports only Linux x86_64 runners" >&2
           exit 1
         fi
+        case "${SCCACHE_BACKEND}" in
+          gha|local) ;;
+          *)
+            echo "Unknown sccache backend '${SCCACHE_BACKEND}'" >&2
+            exit 1
+            ;;
+        esac
         install_dir="${HOME}/.local/bin"
         binary="${install_dir}/sccache"
         mkdir -p "${install_dir}" "${HOME}/.cache/sccache"
         if [ -d "${binary}" ]; then
           rmdir "${binary}" || {
-            echo "The former sccache file mount left a non-empty directory" >&2
+            echo "A former file-shaped cache mount left a non-empty directory" >&2
             exit 1
           }
         fi
-        # The Namespace cache volume is writable by every job that mounts it,
-        # and this binary becomes RUSTC_WRAPPER, so Cargo executes it on
-        # every build. Executability is not provenance: reuse a restored file
-        # only when its digest equals the pin. Bumping `version` or the digest
-        # inputs therefore also replaces a cached binary, because the restored
-        # file no longer matches the requested release.
+        # `~/.local/bin` is restored from a cache archive that any job in the
+        # repository can have written, and this binary becomes RUSTC_WRAPPER,
+        # so Cargo executes it on every build. Executability is not
+        # provenance: reuse a restored file only when its digest equals the
+        # pin. Bumping `version` or the digest inputs therefore also replaces a
+        # cached binary, because the restored file no longer matches the
+        # requested release.
         needs_install=yes
         if [ -f "${binary}" ]; then
           if printf '%s  %s\n' "${SCCACHE_BINARY_SHA256}" "${binary}" \
@@ -77,5 +104,36 @@ runs:
         "${binary}" --version | grep --fixed-strings -- "${SCCACHE_VERSION}"
         echo "${install_dir}" >> "${GITHUB_PATH}"
         echo "RUSTC_WRAPPER=${binary}" >> "${GITHUB_ENV}"
-        echo "SCCACHE_DIR=${HOME}/.cache/sccache" >> "${GITHUB_ENV}"
-        echo "SCCACHE_GHA_ENABLED=false" >> "${GITHUB_ENV}"
+        # Exactly one backend. Combining them makes the statistics
+        # uninterpretable and leaves two owners for the compiler cache.
+        if [ "${SCCACHE_BACKEND}" = local ]; then
+          {
+            echo "SCCACHE_GHA_ENABLED=false"
+            echo "SCCACHE_DIR=${HOME}/.cache/sccache"
+            echo "SCCACHE_CACHE_SIZE=${SCCACHE_LOCAL_CACHE_SIZE}"
+          } >> "${GITHUB_ENV}"
+        else
+          echo "SCCACHE_GHA_ENABLED=true" >> "${GITHUB_ENV}"
+        fi
+
+    # The runner injects the cache service address and its short-lived token
+    # into JavaScript action steps only, so `sccache` started from a `run:`
+    # step cannot see them and silently falls back to `Local disk` with zero
+    # compile requests. Re-export them from an action step, which is how every
+    # published sccache setup action enables this backend. The token is scoped
+    # to this run's cache and artefact services and expires with the job.
+    - name: Export the Actions cache service credentials
+      if: inputs.backend == 'gha'
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v7
+      with:
+        script: |
+          for (const name of [
+            'ACTIONS_RESULTS_URL',
+            'ACTIONS_CACHE_URL',
+            'ACTIONS_RUNTIME_TOKEN',
+          ]) {
+            const value = process.env[name]
+            if (value) {
+              core.exportVariable(name, value)
+            }
+          }

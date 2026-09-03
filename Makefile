@@ -12,7 +12,11 @@ RUSTDOC_FLAGS ?= -D warnings
 CARGO_FLAGS ?= --all-targets --all-features
 CLIPPY_FLAGS ?= $(CARGO_FLAGS) -- $(RUST_FLAGS)
 DOC_FLAGS ?= --jobs 1
-TEST_FLAGS ?= $(CARGO_FLAGS) --jobs 1
+# nextest's test-thread count. One by default so a developer's laptop keeps a
+# core for the editor; CI raises it to the vCPU count of the runner the job is
+# billed for, and never above it.
+TEST_JOBS ?= 1
+TEST_FLAGS ?= $(CARGO_FLAGS) --jobs $(TEST_JOBS)
 TEST_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
 WHITAKER_CARGO_FLAGS ?= $(CARGO_FLAGS) --jobs 1
 WHITAKER_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
@@ -44,7 +48,7 @@ TEST_CARGO_BUILD_JOBS ?= 1
 # and parallel batches contend on the Cargo build cache with little benefit.
 PYTEST_WORKERS ?= 0
 PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
-  tests/test_namespace_runners.py \
+  tests/test_ci_*.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
   tests/behaviour/test_[s-z]*.py

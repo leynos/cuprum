@@ -20,9 +20,19 @@ on:
 permissions:
   contents: read
 
+# These three values render the tool cache key. They must match ci.yml exactly,
+# because this job restores the archive that ci.yml's `typecheck-test` writes;
+# a contract test pins the equality so a bump in one file cannot silently make
+# every run here cold.
+env:
+  NEXTEST_VERSION: '0.9.133'
+  CACHE_GENERATION: v1
+  UBUNTU_RELEASE: ubuntu2404
+
 jobs:
   coverage-upload:
-    runs-on: namespace-profile-rust-linux-light
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -31,22 +41,43 @@ jobs:
           # stay in .git/config where that code could read it.
           persist-credentials: false
 
-      - name: Set up Namespace cache
-        id: namespace-cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+      - name: Compute cache keys
+        uses: ./.github/actions/cache-keys
+        with:
+          python-version: '3.13'
+          nextest-version: ${{ env.NEXTEST_VERSION }}
+          generation: ${{ env.CACHE_GENERATION }}
+          ubuntu-release: ${{ env.UBUNTU_RELEASE }}
+
+      # Restore only. This workflow and ci.yml both fire on a push to `main`,
+      # so letting this job save the tool key as well would give one key two
+      # writers racing in the same event; ci.yml's `typecheck-test` owns it.
+      - name: Restore the installed tools
+        id: tool-cache
+        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
         with:
           path: |
+            ~/.cargo/bin
+            ~/.local/bin
             ~/.cache/uv
             ~/.local/share/uv
-            ${{ github.workspace }}/.uv-cache
-            ${{ github.workspace }}/.uv-tools
+            .uv-cache
+            .uv-tools
+          key: ${{ env.TOOL_CACHE_KEY }}
+          restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
 
-      - name: Report Namespace cache status
+      - name: Record cache observations
         if: always()
+        shell: bash
+        env:
+          TOOL_CACHE_HIT: ${{ steps.tool-cache.outputs.cache-hit }}
         run: |
+          set -euo pipefail
           {
-            echo "### Namespace cache"
-            echo "- cache-hit: \`${{ steps.namespace-cache.outputs.cache-hit }}\`"
+            printf '### Cache observations\n\n'
+            printf '| cache | key | hit |\n| --- | --- | --- |\n'
+            printf '| tools | %s | %s |\n' \
+              "${TOOL_CACHE_KEY}" "${TOOL_CACHE_HIT:-false}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up Python

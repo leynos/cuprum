@@ -1,15 +1,14 @@
 self-hosted-runner:
   # Labels of self-hosted runner in array of strings.
   labels:
-    - namespace-profile-rust-linux-ci
-    - namespace-profile-rust-linux-light
-    - ubicloud-standard-4-ubuntu-2404
+    - ubicloud-standard-2
 
 # Configuration variables in array of strings defined in your repository or
 # organization. `null` means disabling configuration variables check.
-# Empty array means no configuration variable is allowed. Listing the one
-# variable the workflows read makes a typo in a `vars.*` reference an
+# Empty array means no configuration variable is allowed. Listing only the
+# variables the workflows read makes a typo in a `vars.*` reference an
 # actionlint error rather than an empty string at run time.
 
 config-variables:
   - CODESCENE_CLI_SHA256
+  - SCCACHE_LOCAL_CACHE

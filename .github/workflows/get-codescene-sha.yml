@@ -5,7 +5,11 @@ on:
 
 jobs:
   refresh-sha:
-    runs-on: namespace-profile-rust-linux-light
+    # Administrative and API-bound: it downloads one script, hashes it, and
+    # writes a repository variable. There is nothing to build, so it gains
+    # nothing from a paid Linux runner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       actions: write
     steps:

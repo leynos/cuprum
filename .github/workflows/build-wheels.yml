@@ -16,26 +16,19 @@ env:
   MANYLINUX_AARCH64_CONTAINER: ghcr.io/rust-cross/manylinux_2_28-cross@sha256:4864c3e931d790def6dba05cbf133b236b242d0c732f77546c68663c7923116e # ghcr.io/rust-cross/manylinux_2_28-cross:aarch64
 
 jobs:
+  # Deliberately uncached. Its only work is `uv build`, which resolves the
+  # build backend and nothing else, and the composite action checks the
+  # repository out again, so any workspace-scoped restore would be deleted
+  # before it was read. Caching the uv store here would also give
+  # `~/.cache/uv` a second writer alongside ci.yml's tool cache for a job that
+  # would save less time than the archive costs to move.
   build-pure-wheel:
-    runs-on: namespace-profile-rust-linux-light
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
           persist-credentials: false
-      - name: Set up Namespace cache
-        id: namespace-cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
-        with:
-          path: |
-            ~/.cache/uv
-            ~/.local/share/uv
-      - name: Report Namespace cache status
-        if: always()
-        run: |
-          {
-            echo "### Namespace cache"
-            echo "- cache-hit: \`${{ steps.namespace-cache.outputs.cache-hit }}\`"
-          } >> "${GITHUB_STEP_SUMMARY}"
       - uses: ./.github/actions/pure-python-wheel
         with:
           python-version: ${{ inputs['python-version'] }}
@@ -152,8 +145,11 @@ jobs:
           name: wheels-native-${{ matrix.os }}-${{ matrix.arch }}
           path: wheelhouse/*.whl
 
+  # Also uncached: it installs published wheels into a throwaway virtual
+  # environment and imports them. There is nothing expensive to keep.
   verify-wheel-install:
-    runs-on: namespace-profile-rust-linux-light
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 20
     needs:
       - build-pure-wheel
       - build-native-wheels
