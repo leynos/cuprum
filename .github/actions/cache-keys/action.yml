@@ -1,8 +1,8 @@
 name: Compute cache keys
 description: >-
-  Render the repository's Ubicloud cache keys once so every job that restores a
-  path and every job that saves it agree on the key, and so a reviewer can
-  explain a miss from the rendered value in the run summary.
+  Render the repository's cache keys once so every job that restores a path and
+  every job that saves it agree on the key, and so a reviewer can explain a miss
+  from the rendered value in the run summary.
 inputs:
   python-version:
     description: >-
@@ -38,9 +38,8 @@ runs:
         NEXTEST_VERSION: ${{ inputs.nextest-version }}
         RUNNER_ENVIRONMENT: ${{ runner.environment }}
         # The Cargo families follow the resolved dependency graph and the
-        # toolchain that compiled it. `target` is deliberately absent: sccache
-        # owns compiler outputs and a `target` archive is invalidated far more
-        # often than the registry.
+        # toolchain that compiled it. `target` is deliberately absent from
+        # every family: sccache is the single owner of compiler output.
         CARGO_HASH: ${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
         # The tool family follows everything that decides which executables and
         # uv environments end up on disk, including the pinned sccache release
@@ -50,17 +49,24 @@ runs:
           '.github/actions/setup-sccache/action.yml') }}
       run: |
         set -euo pipefail
-        scope="${GENERATION}-${RUNNER_OS}-${RUNNER_ARCH}"
-        image_scope="${scope}-${RUNNER_ENVIRONMENT}-${UBUNTU_RELEASE}"
+        # `runner.environment` is in every scope. The Ubicloud lane and the
+        # GitHub-hosted lane read different cache services, so an archive can
+        # never cross between them; naming the lane in the key makes that
+        # separation checkable instead of merely true.
+        scope="${GENERATION}-${RUNNER_OS}-${RUNNER_ARCH}-${RUNNER_ENVIRONMENT}"
+        image_scope="${scope}-${UBUNTU_RELEASE}"
         tool_prefix="tool-${image_scope}-py${PYTHON_VERSION}-nextest${NEXTEST_VERSION}-"
+        # The compiler cache is a rolling generation, not a content address.
+        # Its contents depend on the source that was compiled, which no hash of
+        # the lockfile captures, so a content-addressed key would hit forever
+        # and never absorb a new object. Each writing run publishes a fresh
+        # entry seeded from the newest entry the prefix matches.
+        sccache_prefix="sccache-${image_scope}-"
         {
           printf 'CARGO_CACHE_PREFIX=cargo-%s-\n' "${scope}"
           printf 'CARGO_CACHE_KEY=cargo-%s-%s\n' "${scope}" "${CARGO_HASH}"
           printf 'TOOL_CACHE_PREFIX=%s\n' "${tool_prefix}"
           printf 'TOOL_CACHE_KEY=%s%s\n' "${tool_prefix}" "${TOOL_HASH}"
-          printf 'SCCACHE_CACHE_PREFIX=sccache-%s-\n' "${scope}"
-          printf 'SCCACHE_CACHE_KEY=sccache-%s-%s\n' "${scope}" "${CARGO_HASH}"
-          printf 'BENCH_TARGET_CACHE_PREFIX=bench-target-%s-\n' "${image_scope}"
-          printf 'BENCH_TARGET_CACHE_KEY=bench-target-%s-%s\n' \
-            "${image_scope}" "${CARGO_HASH}"
+          printf 'SCCACHE_CACHE_PREFIX=%s\n' "${sccache_prefix}"
+          printf 'SCCACHE_CACHE_KEY=%s%s\n' "${sccache_prefix}" "${GITHUB_RUN_ID}"
         } >> "${GITHUB_ENV}"

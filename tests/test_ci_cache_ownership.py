@@ -23,13 +23,12 @@ from tests.helpers.ci_runners import (
     MAKE_DRIVEN_JOBS,
     MAKE_UV_PATHS,
     OBSERVATION_STEP,
-    SCCACHE_ACTION,
-    SCCACHE_JOBS,
-    SETUP_RUST,
+    ROLLING_KEYS,
     SHARED_KEY_INPUTS,
-    UBICLOUD_JOBS,
     cache_paths,
+    cache_steps,
     expand,
+    job,
     restore_steps,
     save_steps,
     step_inputs,
@@ -45,15 +44,15 @@ MAKE_DRIVEN_CASES = expand(MAKE_DRIVEN_JOBS)
 #: Steps that consume a cache. A restore declared after any of them has already
 #: missed the work it was meant to avoid.
 WORK_STEP_PREFIXES = ("install", "build", "run", "generate", "prepare", "set up")
-#: The one expression that chooses between the two sccache backends.
-BACKEND_SWITCH = "${{ vars.SCCACHE_LOCAL_CACHE == 'true' && 'local' || 'gha' }}"
-#: Every clause a save step must carry. Together they keep the trusted
-#: generation writable only by a trunk run that actually missed.
+#: Every clause a save step must carry, so the trusted generation is writable
+#: only from trunk.
 SAVE_GUARD_CLAUSES = (
     "github.event_name == 'push'",
     "github.ref == 'refs/heads/main'",
-    "outputs.cache-hit != 'true'",
 )
+#: The additional clause a content-addressed key carries, so a run that already
+#: hit does not re-upload what it just downloaded.
+MISS_GUARD_CLAUSE = "outputs.cache-hit != 'true'"
 
 
 def _key_of(step: Step, message: str) -> str:
@@ -77,10 +76,7 @@ def test_each_cached_path_has_exactly_one_owner(
 ) -> None:
     """Give every mutable path one key, so two steps cannot fight over it."""
     owners: dict[str, str] = {}
-    job_steps = restore_steps(workflow_name, job_name) + save_steps(
-        workflow_name, job_name
-    )
-    for step in job_steps:
+    for step in cache_steps(workflow_name, job_name):
         message = f"{workflow_name}:{job_name} cache step must declare paths"
         key = _key_of(step, message)
         for path in cache_paths(step, message):
@@ -151,35 +147,46 @@ def test_every_restore_falls_back_to_its_generation_prefix(
         )
 
 
-def test_each_key_has_exactly_one_writer() -> None:
-    """Stop two jobs racing to publish one cold key on the same push."""
+def _observed_writers() -> dict[str, list[tuple[str, str]]]:
+    """Return every save step in the estate, grouped by the key it publishes."""
     observed: dict[str, list[tuple[str, str]]] = {}
-    for workflow_name, job_name in expand(UBICLOUD_JOBS):
+    for workflow_name, job_name in expand(CACHED_JOBS):
         for step in save_steps(workflow_name, job_name):
             message = f"{workflow_name}:{job_name} save must declare inputs"
             observed.setdefault(_key_name(_key_of(step, message)), []).append((
                 workflow_name,
                 job_name,
             ))
-    assert {key: writers[0] for key, writers in observed.items()} == dict(
-        CACHE_WRITERS
-    ), f"cache writers drifted from the manifest: {observed}"
+    return observed
+
+
+def test_each_key_has_exactly_one_writer_per_lane() -> None:
+    """Stop two jobs racing to publish one cold key on the same push."""
+    observed = _observed_writers()
+    assert {key: tuple(sorted(writers)) for key, writers in observed.items()} == {
+        key: tuple(sorted(writers)) for key, writers in CACHE_WRITERS.items()
+    }, f"cache writers drifted from the manifest: {observed}"
     for key, writers in observed.items():
-        assert len(writers) == 1, f"{key} has more than one writer: {writers}"
+        lanes = [job(workflow, name).get("runs-on") for workflow, name in writers]
+        assert len(set(lanes)) == len(lanes), (
+            f"{key} has two writers on one runner lane: {writers} on {lanes}"
+        )
 
 
 def test_saves_happen_only_on_trunk_and_only_after_a_miss() -> None:
     """Keep pull requests reading the trusted generation without writing to it."""
-    for workflow_name, job_name in expand(UBICLOUD_JOBS):
+    for workflow_name, job_name in expand(CACHED_JOBS):
         for step in save_steps(workflow_name, job_name):
             condition = step.get("if")
             assert isinstance(condition, str), (
                 f"{workflow_name}:{job_name} save must be conditional"
             )
             collapsed = " ".join(condition.split())
-            missing = [
-                clause for clause in SAVE_GUARD_CLAUSES if clause not in collapsed
-            ]
+            message = f"{workflow_name}:{job_name} save must declare inputs"
+            required = list(SAVE_GUARD_CLAUSES)
+            if _key_name(_key_of(step, message)) not in ROLLING_KEYS:
+                required.append(MISS_GUARD_CLAUSE)
+            missing = [clause for clause in required if clause not in collapsed]
             assert not missing, (
                 f"{workflow_name}:{job_name} save must be guarded by {missing}; "
                 f"got {collapsed!r}"
@@ -248,74 +255,21 @@ def test_make_driven_jobs_cache_the_worktree_uv_directories(
         )
 
 
-@pytest.mark.parametrize("job_name", SCCACHE_JOBS)
-def test_sccache_jobs_cache_the_installed_tool_parent(job_name: str) -> None:
+@pytest.mark.parametrize(("workflow_name", "job_name"), MAKE_DRIVEN_CASES)
+def test_tool_caching_uses_the_installed_tool_parent(
+    workflow_name: str, job_name: str
+) -> None:
     """Cache the directory, never the executable: a cold mount shadows the file."""
     mounted = {
         path
-        for step in restore_steps("ci.yml", job_name)
-        for path in cache_paths(step, f"ci.yml:{job_name} restore")
+        for step in restore_steps(workflow_name, job_name)
+        for path in cache_paths(step, f"{workflow_name}:{job_name} restore")
     }
     assert "~/.local/bin" in mounted, (
-        f"ci.yml:{job_name} must cache the installed-tool parent"
+        f"{workflow_name}:{job_name} must cache the installed-tool parent"
     )
     assert "~/.local/bin/sccache" not in mounted, (
-        f"ci.yml:{job_name} must not cache a binary as a directory"
-    )
-
-
-@pytest.mark.parametrize("job_name", SCCACHE_JOBS)
-def test_sccache_selects_one_backend_and_reports_its_counters(job_name: str) -> None:
-    """Zero the counters before the work and publish them after, without masking."""
-    job_steps = steps("ci.yml", job_name)
-    setup = next(step for step in job_steps if step.get("uses") == SCCACHE_ACTION)
-    backend = step_inputs(setup, f"ci.yml:{job_name} sccache setup").get("backend")
-    assert backend == BACKEND_SWITCH, (
-        f"ci.yml:{job_name} must choose one backend through the "
-        f"SCCACHE_LOCAL_CACHE variable, got {backend!r}"
-    )
-    reset_index = next(
-        index
-        for index, step in enumerate(job_steps)
-        if step.get("name") == "Reset compiler-cache counters"
-    )
-    stats_index = next(
-        index
-        for index, step in enumerate(job_steps)
-        if step.get("name") == "Record compiler-cache effectiveness"
-    )
-    assert reset_index < stats_index, (
-        f"ci.yml:{job_name} must zero the counters before the work it measures"
-    )
-    stats = job_steps[stats_index]
-    assert stats.get("if") == "always()", (
-        f"ci.yml:{job_name} must report the counters even when the build fails"
-    )
-    script = stats.get("run")
-    assert isinstance(script, str), (
-        f"ci.yml:{job_name} compiler-cache report must run a script"
-    )
-    assert "|| true" not in script, (
-        f"ci.yml:{job_name} must not mask a failing compiler-cache probe"
-    )
-    assert "--stats-format json" in script, (
-        f"ci.yml:{job_name} must record machine-readable compiler-cache stats"
-    )
-
-
-@pytest.mark.parametrize("job_name", SCCACHE_JOBS)
-def test_shared_rust_setup_owns_no_cache_of_its_own(job_name: str) -> None:
-    """Leave one owner per path: this workflow's steps, not the shared action's."""
-    setup_steps = [
-        step for step in steps("ci.yml", job_name) if step.get("uses") == SETUP_RUST
-    ]
-    assert len(setup_steps) == 1, f"ci.yml:{job_name} must use shared setup-rust once"
-    inputs = step_inputs(setup_steps[0], f"ci.yml:{job_name} setup-rust inputs")
-    assert inputs.get("cache-provider") == "external", (
-        f"ci.yml:{job_name} must delegate cache ownership to the caller"
-    )
-    assert inputs.get("use-sccache") == "false", (
-        f"ci.yml:{job_name} must disable the shared action's compiler cache"
+        f"{workflow_name}:{job_name} must not cache a binary as a directory"
     )
 
 

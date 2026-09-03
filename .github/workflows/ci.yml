@@ -58,6 +58,53 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
+      - name: Compute cache keys
+        uses: ./.github/actions/cache-keys
+        with:
+          python-version: '3.13'
+          nextest-version: ${{ env.NEXTEST_VERSION }}
+          generation: ${{ env.CACHE_GENERATION }}
+          ubuntu-release: ${{ env.UBUNTU_RELEASE }}
+
+      # This job is GitHub-hosted, so these archives live in GitHub's cache
+      # service rather than Ubicloud's. Every key carries `runner.environment`,
+      # so the two lanes cannot restore each other's entries even though they
+      # share a family name, and each lane has its own single writer.
+      - name: Restore the Cargo registry
+        id: cargo-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ env.CARGO_CACHE_KEY }}
+          restore-keys: ${{ env.CARGO_CACHE_PREFIX }}
+
+      - name: Restore the compiler cache
+        id: sccache-dir
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: ${{ env.SCCACHE_CACHE_KEY }}
+          restore-keys: ${{ env.SCCACHE_CACHE_PREFIX }}
+
+      - name: Record cache observations
+        if: always()
+        shell: bash
+        env:
+          CARGO_CACHE_HIT: ${{ steps.cargo-cache.outputs.cache-hit }}
+          SCCACHE_CACHE_HIT: ${{ steps.sccache-dir.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          {
+            printf '### Cache observations\n\n'
+            printf '| cache | key | hit |\n| --- | --- | --- |\n'
+            printf '| registry | %s | %s |\n' \
+              "${CARGO_CACHE_KEY}" "${CARGO_CACHE_HIT:-false}"
+            printf '| sccache | %s | %s |\n' \
+              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-false}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -74,21 +121,32 @@ jobs:
           restore-keys: |
             cuprum-npm-cli-${{ runner.os }}-
 
+      # The checksum-verified installer, not the shared action's, so that
+      # `RUSTC_WRAPPER` reaches `make lint` and the cranelift-built Whitaker
+      # suite the same way it reaches the test gates. Run 33748907011 recorded
+      # zero compile requests and `Local disk` here, meaning the wrapper never
+      # reached the clippy and Whitaker builds at all.
+      - name: Set up sccache
+        uses: ./.github/actions/setup-sccache
+
       - name: Install CLI tools
         run: |
           uv tool install "mbake==${MBAKE_VERSION}"
           npm install -g "markdownlint-cli2@${MARKDOWNLINT_VERSION}"
 
+      # `cache-provider: external`, so the shared action archives neither the
+      # Cargo registry nor `target/${BUILD_PROFILE}`. This job owns the
+      # registry; nothing owns `target`, because sccache owns compiler output.
       - name: Install Rust toolchain
         uses: leynos/shared-actions/.github/actions/setup-rust@5daae0a332441d170d88ca648c9e71f0bbe96cb3
         with:
           toolchain: '1.85.0'
-          cache-provider: github
-          use-sccache: 'true'
+          cache-provider: external
+          use-sccache: 'false'
 
       - name: Cache Whitaker installation
         id: cache-whitaker
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/bin/whitaker-installer
@@ -113,6 +171,9 @@ jobs:
           fi
           whitaker-installer --cranelift
 
+      - name: Reset compiler-cache counters
+        run: sccache --zero-stats
+
       - name: Validate Makefile
         run: mbake validate Makefile
 
@@ -134,6 +195,42 @@ jobs:
 
       - name: Lint the Windows cfg branches
         run: make lint-windows
+
+      - name: Record compiler-cache effectiveness
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --show-stats | tee sccache-stats.txt
+          sccache --show-stats --stats-format json > sccache-stats.json
+          fence='```'
+          {
+            printf '### sccache\n\n%stext\n' "${fence}"
+            cat sccache-stats.txt
+            printf '%s\n' "${fence}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # Single writer for the GitHub-hosted lane, mirroring `typecheck-test`
+      # on the Ubicloud lane. It is the only Linux gate here and the only one
+      # that compiles, so there is nothing to race with.
+      - name: Save the Cargo registry
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ env.CARGO_CACHE_KEY }}
+
+      - name: Save the compiler cache
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: ${{ env.SCCACHE_CACHE_KEY }}
 
   typecheck-test:
     name: Typecheck and test (Python ${{ matrix.python-label }})
@@ -174,7 +271,7 @@ jobs:
 
       - name: Restore the Cargo registry
         id: cargo-cache
-        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -184,7 +281,7 @@ jobs:
 
       - name: Restore the installed tools
         id: tool-cache
-        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/bin
@@ -196,10 +293,9 @@ jobs:
           key: ${{ env.TOOL_CACHE_KEY }}
           restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
 
-      - name: Restore the local compiler cache
+      - name: Restore the compiler cache
         id: sccache-dir
-        if: vars.SCCACHE_LOCAL_CACHE == 'true'
-        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/sccache
           key: ${{ env.SCCACHE_CACHE_KEY }}
@@ -225,13 +321,11 @@ jobs:
             printf '| tools | %s | %s |\n' \
               "${TOOL_CACHE_KEY}" "${TOOL_CACHE_HIT:-false}"
             printf '| sccache | %s | %s |\n' \
-              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-disabled}"
+              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-false}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up sccache
         uses: ./.github/actions/setup-sccache
-        with:
-          backend: ${{ vars.SCCACHE_LOCAL_CACHE == 'true' && 'local' || 'gha' }}
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -303,7 +397,7 @@ jobs:
         if: >-
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
           steps.tool-cache.outputs.cache-hit != 'true'
-        uses: ubicloud/cache/save@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/bin
@@ -313,6 +407,24 @@ jobs:
             .uv-cache
             .uv-tools
           key: ${{ env.TOOL_CACHE_KEY }}
+
+      # This is the heaviest Rust gate on `main`: it compiles the workspace
+      # with every target and feature under `-D warnings`, and it issued an
+      # order of magnitude more compile requests than any other job in the
+      # measured run. It therefore owns the compiler cache for this lane.
+      #
+      # One matrix leg writes, so the four legs cannot race for the key. The
+      # entry is a rolling generation named after the run, so there is no
+      # cache-hit guard to skip: the key is new every time, and a run that
+      # restored the previous generation republishes it with whatever it added.
+      - name: Save the compiler cache
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          matrix.python-version == '3.13'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: ${{ env.SCCACHE_CACHE_KEY }}
 
   extension-tests:
     name: Extension-gated tests (Python/Rust boundary)
@@ -336,7 +448,7 @@ jobs:
 
       - name: Restore the Cargo registry
         id: cargo-cache
-        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -346,7 +458,7 @@ jobs:
 
       - name: Restore the installed tools
         id: tool-cache
-        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/bin
@@ -358,10 +470,9 @@ jobs:
           key: ${{ env.TOOL_CACHE_KEY }}
           restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
 
-      - name: Restore the local compiler cache
+      - name: Restore the compiler cache
         id: sccache-dir
-        if: vars.SCCACHE_LOCAL_CACHE == 'true'
-        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/sccache
           key: ${{ env.SCCACHE_CACHE_KEY }}
@@ -387,13 +498,11 @@ jobs:
             printf '| tools | %s | %s |\n' \
               "${TOOL_CACHE_KEY}" "${TOOL_CACHE_HIT:-false}"
             printf '| sccache | %s | %s |\n' \
-              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-disabled}"
+              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-false}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up sccache
         uses: ./.github/actions/setup-sccache
-        with:
-          backend: ${{ vars.SCCACHE_LOCAL_CACHE == 'true' && 'local' || 'gha' }}
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -471,22 +580,12 @@ jobs:
         if: >-
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
           steps.cargo-cache.outputs.cache-hit != 'true'
-        uses: ubicloud/cache/save@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
           key: ${{ env.CARGO_CACHE_KEY }}
-
-      - name: Save the local compiler cache
-        if: >-
-          vars.SCCACHE_LOCAL_CACHE == 'true' &&
-          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-          steps.sccache-dir.outputs.cache-hit != 'true'
-        uses: ubicloud/cache/save@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
-        with:
-          path: ~/.cache/sccache
-          key: ${{ env.SCCACHE_CACHE_KEY }}
 
   coverage:
     # Pull requests only. Pushes to main are handled by coverage-main.yml,
@@ -522,7 +621,7 @@ jobs:
       # that the `main` writers published and publishes nothing of its own.
       - name: Restore the Cargo registry
         id: cargo-cache
-        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -532,7 +631,7 @@ jobs:
 
       - name: Restore the installed tools
         id: tool-cache
-        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/bin
@@ -544,10 +643,9 @@ jobs:
           key: ${{ env.TOOL_CACHE_KEY }}
           restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
 
-      - name: Restore the local compiler cache
+      - name: Restore the compiler cache
         id: sccache-dir
-        if: vars.SCCACHE_LOCAL_CACHE == 'true'
-        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/sccache
           key: ${{ env.SCCACHE_CACHE_KEY }}
@@ -573,13 +671,11 @@ jobs:
             printf '| tools | %s | %s |\n' \
               "${TOOL_CACHE_KEY}" "${TOOL_CACHE_HIT:-false}"
             printf '| sccache | %s | %s |\n' \
-              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-disabled}"
+              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-false}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up sccache
         uses: ./.github/actions/setup-sccache
-        with:
-          backend: ${{ vars.SCCACHE_LOCAL_CACHE == 'true' && 'local' || 'gha' }}
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -767,7 +863,7 @@ jobs:
 
       - name: Restore the Cargo registry
         id: cargo-cache
-        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -777,7 +873,7 @@ jobs:
 
       - name: Restore the installed tools
         id: tool-cache
-        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/bin
@@ -789,17 +885,16 @@ jobs:
           key: ${{ env.TOOL_CACHE_KEY }}
           restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
 
-      # This job is the only owner of `rust/target`. It builds `--release`,
-      # which shares nothing with the debug artefacts the test gates produce,
-      # and it is the only job that would benefit from keeping them. The
-      # compiler-cache gates use sccache instead and leave `target` disposable.
-      - name: Restore the benchmark build directory
-        id: bench-target-cache
-        uses: ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
+      # No `target` archive. sccache owns compiler output for every build
+      # shape in this repository, including this job's `--release` shape, so
+      # `rust/target` stays disposable here as it is everywhere else.
+      - name: Restore the compiler cache
+        id: sccache-dir
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: rust/target
-          key: ${{ env.BENCH_TARGET_CACHE_KEY }}
-          restore-keys: ${{ env.BENCH_TARGET_CACHE_PREFIX }}
+          path: ~/.cache/sccache
+          key: ${{ env.SCCACHE_CACHE_KEY }}
+          restore-keys: ${{ env.SCCACHE_CACHE_PREFIX }}
 
       - name: Record cache observations
         if: always()
@@ -807,7 +902,7 @@ jobs:
         env:
           CARGO_CACHE_HIT: ${{ steps.cargo-cache.outputs.cache-hit }}
           TOOL_CACHE_HIT: ${{ steps.tool-cache.outputs.cache-hit }}
-          BENCH_TARGET_CACHE_HIT: ${{ steps.bench-target-cache.outputs.cache-hit }}
+          SCCACHE_CACHE_HIT: ${{ steps.sccache-dir.outputs.cache-hit }}
         run: |
           set -euo pipefail
           {
@@ -817,9 +912,12 @@ jobs:
               "${CARGO_CACHE_KEY}" "${CARGO_CACHE_HIT:-false}"
             printf '| tools | %s | %s |\n' \
               "${TOOL_CACHE_KEY}" "${TOOL_CACHE_HIT:-false}"
-            printf '| benchmark target | %s | %s |\n' \
-              "${BENCH_TARGET_CACHE_KEY}" "${BENCH_TARGET_CACHE_HIT:-false}"
+            printf '| sccache | %s | %s |\n' \
+              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-false}"
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Set up sccache
+        uses: ./.github/actions/setup-sccache
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -830,6 +928,9 @@ jobs:
         uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
         with:
           enable-cache: false
+
+      - name: Reset compiler-cache counters
+        run: sccache --zero-stats
 
       - name: Install hyperfine
         run: |
@@ -980,6 +1081,20 @@ jobs:
             cat "${artifact_dir}/comparison-summary.md" >> "${GITHUB_STEP_SUMMARY}"
           fi
 
+      - name: Record compiler-cache effectiveness
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --show-stats | tee sccache-stats.txt
+          sccache --show-stats --stats-format json > sccache-stats.json
+          fence='```'
+          {
+            printf '### sccache\n\n%stext\n' "${fence}"
+            cat sccache-stats.txt
+            printf '%s\n' "${fence}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Upload benchmark ratchet artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -997,15 +1112,6 @@ jobs:
           path: |
             ${{ runner.temp }}/benchmark-ratchet/main-plan.json
             ${{ runner.temp }}/benchmark-ratchet/main-throughput.json
-
-      - name: Save the benchmark build directory
-        if: >-
-          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-          steps.bench-target-cache.outputs.cache-hit != 'true'
-        uses: ubicloud/cache/save@92361f338d82d2c58a98875f1b5c95cd14cd6b2a # v4.1.2
-        with:
-          path: rust/target
-          key: ${{ env.BENCH_TARGET_CACHE_KEY }}
 
   build-wheels:
     uses: ./.github/workflows/build-wheels.yml

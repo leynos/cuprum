@@ -51,70 +51,64 @@ scenario's within-run `rust_mean / python_mean` ratio between the baseline and
 the candidate, so runner speed cancels out of the comparison and the job needs
 neither a fixed nor a larger shape.
 
-`lint-test` is the documented exception among Linux gates. It installs
-Whitaker, keeps its own GitHub Actions caches for npm and the Whitaker suite,
-and delegates Cargo caching to the shared `setup-rust` action with
-`cache-provider: github`. Moving it would mean re-owning three more caches on a
-different cache service in the same change, so it stays where its cache wiring
-already works.
+`lint-test` stays on `ubuntu-latest`. It installs Whitaker and keeps its own
+npm and Whitaker archives on GitHub's cache service, which is a different store
+from Ubicloud's. It owns its Cargo registry and compiler caches on that side
+exactly as the Ubicloud jobs own theirs.
 
 The native-wheel matrix keeps its platform runners. Ubicloud has no Windows or
 macOS capacity, and its Linux legs build inside manylinux containers and under
-QEMU emulation. Those legs use `actions/cache` with per-OS, per-architecture,
-per-target keys against GitHub's cache service, which is a different store from
-Ubicloud's; the two never see each other's archives.
+QEMU emulation.
 
 Every Ubicloud job declares `timeout-minutes` so a wedged runner cannot bill
 for GitHub's six-hour default.
 
 ### Cache ownership
 
-Ubicloud's cache is an object store beside the runners, reached through
-`ubicloud/cache` pinned to `92361f338d82d2c58a98875f1b5c95cd14cd6b2a` (v4.1.2).
-It is a separate store from GitHub's: an Ubicloud job never sees an archive a
-GitHub-hosted job wrote, and never writes one a GitHub-hosted job could read.
+Caching goes through `actions/cache` pinned to
+`55cc8345863c7cc4c66a329aec7e433d2d1c52a9` (v6.1.0), split into its `restore`
+and `save` sub-actions. Ubicloud's transparent cache intercepts that version,
+so a Linux archive written on an Ubicloud runner lands in Ubicloud's store
+rather than GitHub's; v4.3.0 left nothing there. Verified against the Ubicloud
+console listings on 2026-09-03. The deprecated `ubicloud/cache` fork is
+therefore unnecessary, and one cache action serves both lanes.
 
 Every key is rendered once by `.github/actions/cache-keys`, which exports the
 key and its restore-key prefix as environment values. A restore and its save
-therefore cannot disagree, and the rendered key is printed into the run summary
-so any miss can be explained from the run alone.
+cannot disagree, and the rendered key is printed into the run summary so any
+miss can be explained from the run alone.
 
-| Key family      | Paths                                                                                        | Key inputs                                                                                                                                                     | Writer                     |
-| --------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
-| `cargo-`        | `~/.cargo/registry`, `~/.cargo/git`                                                          | generation, OS, arch, hash of `rust/Cargo.lock` and `rust/rust-toolchain.toml`                                                                                 | `ci.yml:extension-tests`   |
-| `tool-`         | `~/.cargo/bin`, `~/.local/bin`, `~/.cache/uv`, `~/.local/share/uv`, `.uv-cache`, `.uv-tools` | generation, OS, arch, runner environment, Ubuntu release, Python version, nextest pin, hash of `uv.lock`, `pyproject.toml`, `Makefile`, and the sccache action | `ci.yml:typecheck-test`    |
-| `sccache-`      | `~/.cache/sccache`                                                                           | same as `cargo-`                                                                                                                                               | `ci.yml:extension-tests`   |
-| `bench-target-` | `rust/target`                                                                                | same as `cargo-` plus runner environment and Ubuntu release                                                                                                    | `ci.yml:benchmark-ratchet` |
+| Key family | Paths                                                                                        | Key inputs                                                                                                                          | Writer                                                       |
+| ---------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `cargo-`   | `~/.cargo/registry`, `~/.cargo/git`                                                          | generation, OS, arch, runner environment, hash of `rust/Cargo.lock` and `rust/rust-toolchain.toml`                                  | `extension-tests`, and `lint-test` on the GitHub-hosted lane |
+| `tool-`    | `~/.cargo/bin`, `~/.local/bin`, `~/.cache/uv`, `~/.local/share/uv`, `.uv-cache`, `.uv-tools` | the above plus Ubuntu release, Python version, nextest pin, hash of `uv.lock`, `pyproject.toml`, `Makefile`, and the sccache action | `typecheck-test`                                             |
+| `sccache-` | `~/.cache/sccache`                                                                           | generation, OS, arch, runner environment, Ubuntu release, run identifier                                                            | `typecheck-test`, and `lint-test` on the GitHub-hosted lane  |
 
-Three rules hold that table together:
+Four rules hold that table together, each with a contract test:
 
 - **One owner per path.** No two cache steps in a job list the same path.
-  `target` is absent from the `cargo-` family deliberately: sccache owns
-  compiler outputs, and a `target` archive is invalidated far more often than
-  the registry. `rust/target` appears only under `bench-target-`, because the
-  benchmark builds `--release` and shares nothing with the debug artefacts the
-  test gates produce.
-- **One writer per key.** Saves are guarded by
-  `github.event_name == 'push' && github.ref == 'refs/heads/main'` and skipped
-  after a hit. Pull requests restore and never save, so they cannot race for a
-  key they are not trusted to publish. `coverage-upload` runs on the same push
-  to `main` as `typecheck-test` and restores the tool archive without saving
-  it, which is why `coverage-main.yml` repeats ci.yml's `NEXTEST_VERSION`,
-  `CACHE_GENERATION`, and `UBUNTU_RELEASE`; a contract test pins the equality.
+- **One writer per key per lane.** Saves are guarded by
+  `github.event_name == 'push' && github.ref == 'refs/heads/main'`. Pull
+  requests restore and never save, so they cannot race for a key they are not
+  trusted to publish. Every key carries `runner.environment`, so the two lanes
+  render different values and a key named in both has one writer on each side.
 - **Restore before work.** Every restore precedes the first install, build, or
   test step in its job.
+- **No `target` archive.** See below.
+
+`coverage-upload` runs on the same push to `main` as `typecheck-test` and
+restores the tool archive without saving it, which is why `coverage-main.yml`
+repeats ci.yml's `NEXTEST_VERSION`, `CACHE_GENERATION`, and `UBUNTU_RELEASE`; a
+contract test pins the equality.
 
 Compiled tools carry the runner environment and the Ubuntu release in their
-key. A binary built against Ubuntu 24.04's glibc 2.39 fails on the 22.04 image,
-and `runner.environment` separates the Ubicloud lane from any GitHub-hosted
-Linux fallback.
+key. A binary built against Ubuntu 24.04's glibc 2.39 fails on the 22.04 image.
 
 `build-pure-wheel` and `verify-wheel-install` cache nothing on purpose. The
 first runs `uv build` and then checks the repository out again inside its
 composite action, which would delete any workspace-scoped restore before it was
 read; caching the uv store there would also give `~/.cache/uv` a second writer.
 The second installs published wheels into a throwaway virtual environment.
-Neither would save more time than the archive costs to move.
 
 Installed tools use the parent `~/.local/bin` cache path. Do not cache the
 terminal `~/.local/bin/sccache` file: a restore creates an empty directory at a
@@ -124,9 +118,41 @@ executable.
 Jobs that install dependencies through Make also cache the workspace's
 `.uv-cache` and `.uv-tools` directories. The `Makefile` pins `UV_CACHE_DIR` and
 `UV_TOOL_DIR` to that worktree-local pair, so uv's standard `~/.cache/uv` and
-`~/.local/share/uv` directories stay empty for those commands and caching them
-alone would leave every Make-driven install cold. Both are cached anyway,
-because the shared coverage action and `uv build` do use uv's defaults.
+`~/.local/share/uv` directories stay empty for those commands. Both are cached
+anyway, because the shared coverage action and `uv build` do use uv's defaults.
+
+### `target` is deliberately never cached
+
+No job in this repository archives `target`, `rust/target`, or
+`target/${BUILD_PROFILE}`. That is a deliberate estate-wide rule, not an
+oversight, and a contract test enforces it.
+
+sccache is the single owner of compiler output for every build shape. The
+repository produces three: the objects the lint gate builds through its
+alternative code generator and linker, the ordinary debug objects the test
+gates build, and the
+`-C instrument-coverage` objects the coverage gate builds. sccache hashes the
+compiler flags into its cache key, so all three coexist in one store without
+colliding; run 33677926269 recorded zero non-cacheable compilations with the
+cranelift-built Whitaker lints, and Whitaker's instrumented coverage build
+reports the same.
+
+A `target` tree, by contrast, is invalidated by any source change, so its
+archive is rewritten far more often than the registry it would sit beside and
+carries stale intermediates the next run discards. Two shapes would also need
+two trees, and a tree built under one set of flags poisons a run using another.
+
+Concretely, this means:
+
+- the shared `setup-rust` action runs with `cache-provider: external` in every
+  job, which is what disables its `target/${BUILD_PROFILE}` archive as well as
+  its registry archive;
+- the shared `generate-coverage` action runs with `cache-provider: external`,
+  which disables its whole-`target` archive;
+- the native and manylinux wheel builds cache pip and the Cargo registry but
+  not `rust/target`. sccache does not reach inside the manylinux container, so
+  those legs simply have no compiler cache; their measured cold duration is
+  about one to two minutes, which is the cost of that decision.
 
 ### The compiler cache
 
@@ -138,32 +164,42 @@ the binary becomes `RUSTC_WRAPPER`, so being executable is not evidence of
 provenance. Bumping the version or digest inputs therefore also replaces a
 stale cached binary, and changes the tool cache key.
 
-The action selects one backend and only one:
+The action points sccache at `~/.cache/sccache` with a 4 GB ceiling, sized to
+hold two build shapes. The GitHub Actions backend is deliberately not used:
+Ubicloud console listings on 2026-09-03 showed sccache's GHA traffic landing in
+GitHub's cache rather than Ubicloud's, where it competes with the Windows and
+macOS lanes for GitHub's per-repository quota. A directory the caller caches
+goes to the same store as every other archive and appears in the same listing.
 
-- **`gha` (default).** `SCCACHE_GHA_ENABLED=true`, using the GitHub Actions
-  cache service. The runner injects that service's address and its short-lived
-  token into JavaScript action steps only, so the action re-exports them; a
-  `run:` step that cannot see them silently falls back to `Local disk` and
-  reports zero compile requests, which is a failed integration rather than a
-  cold cache.
-- **`local`.** `SCCACHE_DIR=~/.cache/sccache` with a 2 GB ceiling, cached under
-  the `sccache-` key family. This is the documented fallback for when the GHA
-  backend's write errors show it competing for GitHub's per-repository quota.
-  Its trade-off is that the archive is restored and re-saved whole even when
-  only a few objects changed.
+The `sccache-` key names the run rather than the content it holds. A compiler
+cache depends on the source that was compiled, which no lockfile hash captures,
+so a content-addressed key would hit forever and absorb nothing new. Each
+writing run publishes a fresh entry seeded from the newest entry its prefix
+matches, and the save therefore carries no cache-hit guard.
 
-One repository variable switches between them. Setting `SCCACHE_LOCAL_CACHE` to
-`true` selects the local backend and enables the `sccache-` restore and save
-steps; anything else keeps the GHA backend and leaves those steps skipped.
+`typecheck-test` writes it for the Ubicloud lane. It is the heaviest Rust gate
+on `main`, compiling the workspace with every target and feature under
+`-D warnings`, and it issued an order of magnitude more compile requests than
+any other job in the measured run. One matrix leg writes, so the four legs
+cannot race. `lint-test` writes the GitHub-hosted lane's entry. One consequence
+is worth stating: the release objects `benchmark-ratchet` produces are restored
+but never republished, because only the writing jobs save.
 
-Each sccache job zeroes the counters before its build and writes
-`sccache --show-stats`, plus the JSON form, into the step summary afterwards.
-The probe is not masked with `|| true`: a compiler cache that cannot report is
-a broken compiler cache.
+Every job that compiles Rust installs the wrapper and reports its counters:
+`lint-test`, `typecheck-test`, `extension-tests`, `coverage`,
+`benchmark-ratchet`, and `coverage-upload`. Each zeroes the counters before its
+build and writes `sccache --show-stats`, plus the JSON form, into the step
+summary afterwards. The probe is not masked with `|| true`: a compiler cache
+that cannot report is a broken compiler cache, and a job reporting zero compile
+requests is a failed integration rather than a cold cache. Run 33748907011
+recorded exactly that for `lint-test`, whose wrapper never reached the clippy
+and Whitaker builds; it now uses the same checksum-verified installer as the
+rest.
 
-The shared `setup-rust` and `generate-coverage` actions run with
-`cache-provider: external` and, for `setup-rust`, `use-sccache: 'false'`. The
-caller owns every path, so the shared actions must not become a second owner.
+Cuprum's Ubicloud cache listing was empty before this migration, because
+`benchmark-ratchet` was its only Ubicloud job. Check the first `main` run's
+entries with `ubi gh leynos/cuprum list-cache-entries` to confirm the archives
+land in Ubicloud's store rather than GitHub's.
 
 ### Concurrency
 
@@ -178,6 +214,10 @@ runs with `pytest-workers: ''`, because the batches compile and reuse the same
 Cargo target directory and xdist workers would contend on one build lock rather
 than overlap. `-n auto` is rejected outright: it reads the host's core count,
 not the two cores the job is billed for.
+
+Codegen selection stays per job. The lint gate builds its Whitaker suite with
+cranelift; the coverage gate cannot, because cranelift has no
+`-C instrument-coverage`.
 
 ### Tool installation
 

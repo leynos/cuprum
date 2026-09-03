@@ -33,8 +33,15 @@ UBICLOUD_LABEL = "ubicloud-standard-2"
 UBICLOUD_VCPUS = 2
 GITHUB_LABEL = "ubuntu-latest"
 
-CACHE_RESTORE = "ubicloud/cache/restore@92361f338d82d2c58a98875f1b5c95cd14cd6b2a"
-CACHE_SAVE = "ubicloud/cache/save@92361f338d82d2c58a98875f1b5c95cd14cd6b2a"
+#: Ubicloud's transparent cache intercepts `actions/cache` at this version, so
+#: a Linux archive written on an Ubicloud runner lands in Ubicloud's store
+#: rather than GitHub's. Verified against the Ubicloud console listings on
+#: 2026-09-03; v4.3.0 left nothing there. The deprecated `ubicloud/cache` fork
+#: is therefore unnecessary.
+CACHE_ACTION_PIN = "55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+CACHE_RESTORE = f"actions/cache/restore@{CACHE_ACTION_PIN}"
+CACHE_SAVE = f"actions/cache/save@{CACHE_ACTION_PIN}"
+CACHE_PLAIN = f"actions/cache@{CACHE_ACTION_PIN}"
 CACHE_KEYS_ACTION = "./.github/actions/cache-keys"
 SCCACHE_ACTION = "./.github/actions/setup-sccache"
 NEXTEST_INSTALLER = "taiki-e/install-action@18b1216eba7f8039b0f8d131d5473787f0edce68"
@@ -64,9 +71,15 @@ GITHUB_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     "get-codescene-sha.yml": ("refresh-sha",),
     "release.yml": ("publish",),
 }
-#: Ubicloud jobs that restore at least one cache.
+#: Jobs that restore at least one cache through the shared renderer.
 CACHED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
-    "ci.yml": ("typecheck-test", "extension-tests", "coverage", "benchmark-ratchet"),
+    "ci.yml": (
+        "lint-test",
+        "typecheck-test",
+        "extension-tests",
+        "coverage",
+        "benchmark-ratchet",
+    ),
     "coverage-main.yml": ("coverage-upload",),
 }
 #: Jobs whose dependency installation runs through Make. `Makefile` pins
@@ -77,18 +90,39 @@ MAKE_DRIVEN_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     "coverage-main.yml": ("coverage-upload",),
 }
 MAKE_UV_PATHS: typ.Final = (".uv-cache", ".uv-tools")
-#: Jobs that configure sccache and must therefore report its counters.
-SCCACHE_JOBS: typ.Final = ("typecheck-test", "extension-tests", "coverage")
+#: Every job that compiles Rust. sccache is the single owner of compiler
+#: output for every build shape in this repository, so each of these installs
+#: the wrapper and reports its counters, and none of them archives `target`.
+SCCACHE_JOBS: typ.Final = (
+    ("ci.yml", "lint-test"),
+    ("ci.yml", "typecheck-test"),
+    ("ci.yml", "extension-tests"),
+    ("ci.yml", "coverage"),
+    ("ci.yml", "benchmark-ratchet"),
+    ("coverage-main.yml", "coverage-upload"),
+)
+#: Paths no cache step may ever carry. A `target` tree is invalidated far more
+#: often than the registry beside it, and sccache already holds the objects it
+#: would preserve, keyed by the flags that distinguish the debug, cranelift,
+#: and coverage-instrumented shapes.
+FORBIDDEN_CACHE_PATHS: typ.Final = ("target", "rust/target", "target/debug")
 
 #: One writer per key. Every other job restores. Pull requests never save: a
 #: pull-request branch cannot publish the trusted generation, and the attempt
 #: only produces `Unable to reserve cache` noise and wasted upload time.
-CACHE_WRITERS: typ.Final[cabc.Mapping[str, tuple[str, str]]] = {
-    "CARGO_CACHE_KEY": ("ci.yml", "extension-tests"),
-    "SCCACHE_CACHE_KEY": ("ci.yml", "extension-tests"),
-    "TOOL_CACHE_KEY": ("ci.yml", "typecheck-test"),
-    "BENCH_TARGET_CACHE_KEY": ("ci.yml", "benchmark-ratchet"),
+#: One writer per key *per lane*. Every key carries `runner.environment`, so
+#: the GitHub-hosted lane and the Ubicloud lane render different values and
+#: read different cache services; a key with two writers has one on each side.
+CACHE_WRITERS: typ.Final[cabc.Mapping[str, tuple[tuple[str, str], ...]]] = {
+    "CARGO_CACHE_KEY": (("ci.yml", "extension-tests"), ("ci.yml", "lint-test")),
+    "SCCACHE_CACHE_KEY": (("ci.yml", "typecheck-test"), ("ci.yml", "lint-test")),
+    "TOOL_CACHE_KEY": (("ci.yml", "typecheck-test"),),
 }
+#: Keys naming the run rather than the content they hold. A compiler cache
+#: depends on the source that was compiled, which no lockfile hash captures, so
+#: a content-addressed key would hit forever and absorb nothing new. These
+#: therefore carry no cache-hit guard on save: the key is new every run.
+ROLLING_KEYS: typ.Final = ("SCCACHE_CACHE_KEY",)
 #: Workflow-level values that render the tool cache key. A job restoring an
 #: archive another workflow wrote can only hit while these agree.
 SHARED_KEY_INPUTS: typ.Final = ("NEXTEST_VERSION", "CACHE_GENERATION", "UBUNTU_RELEASE")
@@ -210,6 +244,14 @@ def save_steps(workflow_name: str, job_name: str) -> list[Step]:
         step
         for step in steps(workflow_name, job_name)
         if step.get("uses") == CACHE_SAVE
+    ]
+
+
+def cache_steps(workflow_name: str, job_name: str) -> list[Step]:
+    """Return every step of one job that owns a cached path."""
+    owners = {CACHE_RESTORE, CACHE_SAVE, CACHE_PLAIN}
+    return [
+        step for step in steps(workflow_name, job_name) if step.get("uses") in owners
     ]
 
 

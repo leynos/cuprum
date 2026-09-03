@@ -131,8 +131,9 @@ def test_actionlint_registers_exactly_the_self_hosted_labels_in_use() -> None:
         "actionlint must list every self-hosted label the workflows use and no "
         f"others; declared {declared}, used {sorted(used)}"
     )
-    assert "SCCACHE_LOCAL_CACHE" in config["config-variables"], (
-        "the sccache backend switch must be a declared configuration variable"
+    assert config["config-variables"] == ["CODESCENE_CLI_SHA256"], (
+        "list only the configuration variables the workflows read, so a typo "
+        f"in a vars.* reference fails lint; got {config['config-variables']}"
     )
 
 

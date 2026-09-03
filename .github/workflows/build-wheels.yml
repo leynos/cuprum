@@ -74,6 +74,10 @@ jobs:
           pytag="cp$(echo "${major_minor}" | tr -d '.')"
           echo "tag=${pytag}" >> "$GITHUB_OUTPUT"
           echo "interpreter=/opt/python/${pytag}-${pytag}/bin/python" >> "$GITHUB_OUTPUT"
+      # No `target` archive here either. sccache is the single owner of
+      # compiler output in this repository, and these legs build inside a
+      # manylinux container that sccache does not reach, so their compiler
+      # output is simply not cached. The registry and pip archives remain.
       - name: Cache Linux wheel build dependencies (x86_64)
         if: startsWith(matrix.os, 'ubuntu') && matrix.arch == 'x86_64'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -82,7 +86,6 @@ jobs:
             ~/.cache/pip
             ~/.cargo/registry
             ~/.cargo/git
-            rust/target
           key: cuprum-wheel-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ env.MATURIN_VERSION }}-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: |
             cuprum-wheel-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ env.MATURIN_VERSION }}-
@@ -111,7 +114,6 @@ jobs:
             ~/.cache/pip
             ~/.cargo/registry
             ~/.cargo/git
-            rust/target
           key: cuprum-wheel-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ env.MATURIN_VERSION }}-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: |
             cuprum-wheel-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ env.MATURIN_VERSION }}-
