@@ -139,69 +139,49 @@ def _verdict(
 # -- The incident --------------------------------------------------------------
 
 
-def _test_one_noisy_main_sample_fails_the_next_pull_request() -> None:
-    """Verify a single-sample baseline reproduces the failure being fixed.
-
-    Kept as the control: without it, the test below could pass because the
-    numbers are benign rather than because the window did anything.
-    """
-    assert not _verdict(
-        candidate_ratio=CANDIDATE_RATIO, history=_history(OUTLIER_RATIO)
-    ), (
-        "expected the incident to reproduce against a one-sample baseline: "
-        f"{CANDIDATE_RATIO} against {OUTLIER_RATIO} is a 46% regression"
-    )
-
-
-def _test_the_window_absorbs_one_noisy_main_sample() -> None:
-    """Verify the candidate passes once the outlier is one sample among many."""
-    history = _history(*TYPICAL_RATIOS, OUTLIER_RATIO)
-
-    assert _verdict(candidate_ratio=CANDIDATE_RATIO, history=history), (
-        f"a candidate of {CANDIDATE_RATIO} must pass against a window whose "
-        f"other samples are {TYPICAL_RATIOS}; the {OUTLIER_RATIO} sample is "
-        "one measurement, not a new bar"
-    )
-
-
-def _test_a_real_regression_still_fails_against_a_noisy_window() -> None:
-    """Tolerating noise must not mean tolerating a doubling."""
-    history = _history(*TYPICAL_RATIOS, OUTLIER_RATIO)
-
-    assert not _verdict(candidate_ratio=2.0, history=history), (
-        "a candidate twice as slow as the window median must fail however "
-        "wide the observed spread is"
-    )
-
-
-def _test_a_sustained_regression_fails_before_it_enters_the_window() -> None:
-    """Verify a first regressed measurement fails while the window is clean."""
-    history = _history(*TYPICAL_RATIOS)
-
-    assert not _verdict(candidate_ratio=1.60, history=history), (
-        "a 55% slowdown against a window of consistent samples must fail; "
-        "the noise band is narrow when the measurements agree"
-    )
-
-
 class TestIncident:
     """The outlier incident the rolling window must prevent."""
 
     def test_one_noisy_main_sample_fails_the_next_pull_request(self) -> None:
-        """Run the one-sample incident control."""
-        _test_one_noisy_main_sample_fails_the_next_pull_request()
+        """Verify a single-sample baseline reproduces the failure being fixed.
+
+        Kept as the control: without it, the test below could pass because the
+        numbers are benign rather than because the window did anything.
+        """
+        assert not _verdict(
+            candidate_ratio=CANDIDATE_RATIO, history=_history(OUTLIER_RATIO)
+        ), (
+            "expected the incident to reproduce against a one-sample baseline: "
+            f"{CANDIDATE_RATIO} against {OUTLIER_RATIO} is a 46% regression"
+        )
 
     def test_the_window_absorbs_one_noisy_main_sample(self) -> None:
-        """Run the rolling-window incident regression."""
-        _test_the_window_absorbs_one_noisy_main_sample()
+        """Verify the candidate passes once the outlier is one sample among many."""
+        history = _history(*TYPICAL_RATIOS, OUTLIER_RATIO)
+
+        assert _verdict(candidate_ratio=CANDIDATE_RATIO, history=history), (
+            f"a candidate of {CANDIDATE_RATIO} must pass against a window whose "
+            f"other samples are {TYPICAL_RATIOS}; the {OUTLIER_RATIO} sample is "
+            "one measurement, not a new bar"
+        )
 
     def test_a_real_regression_still_fails_against_a_noisy_window(self) -> None:
-        """Run the genuine-regression incident check."""
-        _test_a_real_regression_still_fails_against_a_noisy_window()
+        """Tolerating noise must not mean tolerating a doubling."""
+        history = _history(*TYPICAL_RATIOS, OUTLIER_RATIO)
+
+        assert not _verdict(candidate_ratio=2.0, history=history), (
+            "a candidate twice as slow as the window median must fail however "
+            "wide the observed spread is"
+        )
 
     def test_a_sustained_regression_fails_before_it_enters_the_window(self) -> None:
-        """Run the sustained-regression incident check."""
-        _test_a_sustained_regression_fails_before_it_enters_the_window()
+        """Verify a first regressed measurement fails while the window is clean."""
+        history = _history(*TYPICAL_RATIOS)
+
+        assert not _verdict(candidate_ratio=1.60, history=history), (
+            "a 55% slowdown against a window of consistent samples must fail; "
+            "the noise band is narrow when the measurements agree"
+        )
 
 
 # -- Threshold composition -----------------------------------------------------
