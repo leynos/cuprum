@@ -118,13 +118,24 @@ MAKE_UV_PATHS: typ.Final = (".uv-cache", ".uv-tools")
 #: Every job that compiles Rust. sccache is the single owner of compiler
 #: output for every build shape in this repository, so each of these installs
 #: the wrapper and reports its counters, and none of them archives `target`.
+#: `typecheck-test` is absent: one of its legs only typechecks, so the wrapper
+#: is installed conditionally there and a job-wide contract cannot describe it.
+#: `test_the_typecheck_only_leg_installs_no_wrapper` covers that case instead.
 SCCACHE_JOBS: typ.Final = (
     ("ci.yml", "lint-test"),
-    ("ci.yml", "typecheck-test"),
     ("ci.yml", "extension-tests"),
     ("ci.yml", "coverage"),
     ("ci.yml", "benchmark-ratchet"),
     ("coverage-main.yml", "coverage-upload"),
+)
+#: Steps in the interpreter matrix that must follow the Python suite, because
+#: without it the job compiles nothing and the wrapper would report zero
+#: requests, which reads as a broken integration rather than as no work.
+SUITE_GATED_STEPS: typ.Final = (
+    "Restore the compiler cache",
+    "Set up sccache",
+    "Reset compiler-cache counters",
+    "Record compiler-cache effectiveness",
 )
 #: Paths no cache step may ever carry. A `target` tree is invalidated far more
 #: often than the registry beside it, and sccache already holds the objects it
@@ -140,7 +151,14 @@ FORBIDDEN_CACHE_PATHS: typ.Final = ("target", "rust/target", "target/debug")
 #: read different cache services; a key with two writers has one on each side.
 CACHE_WRITERS: typ.Final[cabc.Mapping[str, tuple[tuple[str, str], ...]]] = {
     "CARGO_CACHE_KEY": (("ci.yml", "extension-tests"), ("ci.yml", "lint-test")),
-    "SCCACHE_CACHE_KEY": (("ci.yml", "typecheck-test"), ("ci.yml", "lint-test")),
+    # The compiler cache is written by whichever job actually compiles. On the
+    # Ubicloud lane that is the coverage job, which runs the whole Rust suite
+    # under instrumentation; the interpreter matrix compiles almost nothing now
+    # that the suite lives there.
+    "SCCACHE_CACHE_KEY": (
+        ("coverage-main.yml", "coverage-upload"),
+        ("ci.yml", "lint-test"),
+    ),
     "TOOL_CACHE_KEY": (("ci.yml", "typecheck-test"),),
 }
 #: Keys naming the run rather than the content they hold. A compiler cache

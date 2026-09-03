@@ -301,8 +301,13 @@ jobs:
           key: ${{ env.TOOL_CACHE_KEY }}
           restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
 
+      # The compiler cache follows the Python suite. The leg that only
+      # typechecks compiles nothing, so installing the wrapper there would
+      # report zero compile requests, which reads as a broken integration
+      # rather than as a job with nothing to compile.
       - name: Restore the compiler cache
         id: sccache-dir
+        if: matrix.python-suite
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/sccache
@@ -329,10 +334,11 @@ jobs:
             printf '| tools | %s | %s |\n' \
               "${TOOL_CACHE_KEY}" "${TOOL_CACHE_HIT:-false}"
             printf '| sccache | %s | %s |\n' \
-              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-false}"
+              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-not installed}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up sccache
+        if: matrix.python-suite
         uses: ./.github/actions/setup-sccache
 
       # Immediately after the wrapper exists, so nothing between setup and
@@ -340,6 +346,7 @@ jobs:
       # the cranelift Whitaker suite before this ran, and those requests were
       # zeroed away before the report.
       - name: Reset compiler-cache counters
+        if: matrix.python-suite
         run: sccache --zero-stats
 
       - name: Set up Python
@@ -382,7 +389,7 @@ jobs:
             PYTEST_CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}"
 
       - name: Record compiler-cache effectiveness
-        if: always()
+        if: always() && matrix.python-suite
         shell: bash
         run: |
           set -euo pipefail
@@ -415,23 +422,6 @@ jobs:
             .uv-tools
           key: ${{ env.TOOL_CACHE_KEY }}
 
-      # This is the heaviest Rust gate on `main`: it compiles the workspace
-      # with every target and feature under `-D warnings`, and it issued an
-      # order of magnitude more compile requests than any other job in the
-      # measured run. It therefore owns the compiler cache for this lane.
-      #
-      # One matrix leg writes, so the four legs cannot race for the key. The
-      # entry is a rolling generation named after the run, so there is no
-      # cache-hit guard to skip: the key is new every time, and a run that
-      # restored the previous generation republishes it with whatever it added.
-      - name: Save the compiler cache
-        if: >-
-          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-          matrix.python-version == '3.13'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/sccache
-          key: ${{ env.SCCACHE_CACHE_KEY }}
 
   extension-tests:
     name: Extension-gated tests (Python/Rust boundary)

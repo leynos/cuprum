@@ -188,24 +188,32 @@ so a content-addressed key would hit forever and absorb nothing new. Each
 writing run publishes a fresh entry seeded from the newest entry its prefix
 matches, and the save therefore carries no cache-hit guard.
 
-`typecheck-test` writes it for the Ubicloud lane. It is the heaviest Rust gate
-on `main`, compiling the workspace with every target and feature under
-`-D warnings`, and it issued an order of magnitude more compile requests than
-any other job in the measured run. One matrix leg writes, so the four legs
-cannot race. `lint-test` writes the GitHub-hosted lane's entry. One consequence
-is worth stating: the release objects `benchmark-ratchet` produces are restored
-but never republished, because only the writing jobs save.
+`coverage-upload` writes it for the Ubicloud lane, and `lint-test` writes the
+GitHub-hosted lane's entry. The writer has to be a job that actually compiles,
+or the rolling generation freezes: it would restore the previous entry and
+republish it unchanged for ever, never absorbing a new object while still
+reporting hits. That is not hypothetical. The writer was briefly the 3.13
+interpreter leg, which the deduplication had just reduced to a typechecker.
+
+One consequence is worth stating: the release objects `benchmark-ratchet`
+produces are restored but never republished, because only the writing jobs save.
 
 Every job that compiles Rust installs the wrapper and reports its counters:
-`lint-test`, `typecheck-test`, `extension-tests`, `coverage`,
-`benchmark-ratchet`, and `coverage-upload`. Each zeroes the counters before its
-build and writes `sccache --show-stats`, plus the JSON form, into the step
-summary afterwards. The probe is not masked with `|| true`: a compiler cache
-that cannot report is a broken compiler cache, and a job reporting zero compile
-requests is a failed integration rather than a cold cache. Run 33748907011
-recorded exactly that for `lint-test`, whose wrapper never reached the clippy
-and Whitaker builds; it now uses the same checksum-verified installer as the
-rest.
+`lint-test`, `extension-tests`, `coverage`, `benchmark-ratchet`,
+`coverage-upload`, and the `typecheck-test` legs that run the Python suite.
+
+The 3.13 leg is the exception, and its steps are gated on `matrix.python-suite`
+for a reason worth keeping: a job that installs sccache and then reports zero
+compile requests looks exactly like one whose `RUSTC_WRAPPER` never reached the
+compiler, which is a failure this repository has already had. The leg that only
+typechecks therefore reports nothing rather than zero. Each zeroes the counters
+before its build and writes `sccache --show-stats`, plus the JSON form, into
+the step summary afterwards. The probe is not masked with `|| true`: a compiler
+cache that cannot report is a broken compiler cache, and a job reporting zero
+compile requests is a failed integration rather than a cold cache. Run
+33748907011 recorded exactly that for `lint-test`, whose wrapper never reached
+the clippy and Whitaker builds; it now uses the same checksum-verified
+installer as the rest.
 
 Cuprum's Ubicloud cache listing was empty before this migration, because
 `benchmark-ratchet` was its only Ubicloud job. Check the first `main` run's

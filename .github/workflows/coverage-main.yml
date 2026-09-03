@@ -203,3 +203,18 @@ jobs:
             cat sccache-stats.txt
             printf '%s\n' "${fence}"
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      # This job owns the compiler cache for the Ubicloud lane. It runs the
+      # whole Rust suite under instrumentation, so on `main` it is by a wide
+      # margin the heaviest compiler in the estate; the interpreter matrix
+      # compiles almost nothing now that the Rust suite lives here.
+      #
+      # The entry is a rolling generation named after the run, so there is no
+      # cache-hit guard to skip: the key is new every time, and a run that
+      # restored the previous generation republishes it with what it added.
+      - name: Save the compiler cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: ${{ env.SCCACHE_CACHE_KEY }}

@@ -24,6 +24,7 @@ from tests.helpers.ci_runners import (
     SCCACHE_ACTION,
     SCCACHE_JOBS,
     SETUP_RUST,
+    SUITE_GATED_STEPS,
     cache_paths,
     cache_steps,
     expand,
@@ -220,3 +221,49 @@ def test_every_lane_pins_the_intercepted_cache_action() -> None:
         assert "ubicloud/cache" not in source, (
             f"{workflow_name} must not use the deprecated ubicloud/cache fork"
         )
+
+
+def test_the_typecheck_only_leg_installs_no_wrapper() -> None:
+    """Skip the compiler cache on the leg that compiles nothing.
+
+    A job that installs sccache and reports zero compile requests is
+    indistinguishable in the log from one whose wrapper never reached the
+    compiler, which is a failure this repository has already had. The leg that
+    only typechecks therefore reports nothing rather than zero.
+    """
+    job_steps = steps("ci.yml", "typecheck-test")
+    by_name = {str(step.get("name", "")): step for step in job_steps}
+    for name in SUITE_GATED_STEPS:
+        assert name in by_name, f"ci.yml:typecheck-test must declare {name!r}"
+        condition = " ".join(str(by_name[name].get("if", "")).split())
+        assert "matrix.python-suite" in condition, (
+            f"ci.yml:typecheck-test step {name!r} must follow the Python "
+            f"suite, got if: {condition!r}"
+        )
+
+
+def test_the_compiler_cache_is_written_by_a_job_that_compiles() -> None:
+    """Keep the rolling generation from freezing.
+
+    The writer used to be the interpreter leg that the deduplication left with
+    only a typechecker. It would have restored the previous generation and
+    republished it unchanged for ever, so the cache would never absorb a new
+    object while still reporting hits.
+    """
+    writers = [
+        step
+        for workflow_name, job_name in expand(CACHED_JOBS)
+        for step in steps(workflow_name, job_name)
+        if str(step.get("name", "")) == "Save the compiler cache"
+    ]
+    assert writers, "some job must publish the compiler cache on trunk"
+    matrix_writers = [
+        step
+        for step in steps("ci.yml", "typecheck-test")
+        if str(step.get("name", "")) == "Save the compiler cache"
+    ]
+    assert not matrix_writers, (
+        "the interpreter matrix must not own the compiler cache: its legs "
+        "either typecheck only or compile a fraction of what the coverage job "
+        "does, so the generation they publish would go stale"
+    )
