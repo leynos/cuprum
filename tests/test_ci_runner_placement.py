@@ -10,6 +10,7 @@ the declarations back against the manifests in `tests/helpers/ci_runners.py`.
 from __future__ import annotations
 
 import re
+import typing as typ
 
 import pytest
 import yaml
@@ -29,6 +30,9 @@ from tests.helpers.ci_runners import (
     workflow_env,
     workflow_sources,
 )
+
+if typ.TYPE_CHECKING:
+    from tests.helpers.workflow_types import Step
 
 ACTIONLINT_CONFIG = ROOT / ".github" / "actionlint.yaml"
 MAKEFILE = ROOT / "Makefile"
@@ -272,33 +276,43 @@ def test_no_workflow_installs_cargo_nextest() -> None:
     )
 
 
+def _declares_own_steps(workflow_name: str, job_name: str) -> bool:
+    """Report whether a job runs steps rather than calling a reusable workflow."""
+    return isinstance(job(workflow_name, job_name).get("steps"), list)
+
+
+def _installs_nextest_by_input(step: Step) -> bool:
+    """Report whether a step asks an installer action for cargo-nextest."""
+    if str(step.get("uses", "")).startswith(SHARED_ACTION_PREFIX):
+        # The coverage action installs nextest deliberately; that is the one
+        # place it is meant to happen.
+        return False
+    inputs = step.get("with")
+    if not isinstance(inputs, dict):
+        return False
+    return any(NEXTEST_TOOL_NAME in str(value).lower() for value in inputs.values())
+
+
+def _installs_nextest_by_script(step: Step) -> bool:
+    """Report whether a step's script fetches cargo-nextest rather than runs it."""
+    script = str(step.get("run", "")).lower()
+    named = NEXTEST_TOOL_NAME in script and any(
+        verb in script for verb in INSTALL_VERBS
+    )
+    # The install host needs its own token: its name does not contain
+    # "nextest", and it only ever appears in an install command.
+    return named or NEXTEST_INSTALL_HOST in script
+
+
 def _nextest_installers(workflow_name: str, job_name: str) -> list[str]:
     """Return descriptions of steps in one job that would install nextest."""
-    found: list[str] = []
-    try:
-        job_steps = steps(workflow_name, job_name)
-    except AssertionError:
-        # A job that calls a reusable workflow declares no steps of its own.
-        return found
-    for step in job_steps:
-        where = f"{workflow_name}:{job_name}:{step.get('name') or step.get('uses')}"
-        uses = str(step.get("uses", ""))
-        if uses.startswith(SHARED_ACTION_PREFIX):
-            # The coverage action installs nextest deliberately; that is the
-            # one place it is meant to happen.
-            continue
-        inputs = step.get("with")
-        if isinstance(inputs, dict) and any(
-            NEXTEST_TOOL_NAME in str(value).lower() for value in inputs.values()
-        ):
-            found.append(f"{where} (installer input)")
-        script = str(step.get("run", "")).lower()
-        fetches = NEXTEST_TOOL_NAME in script and any(
-            verb in script for verb in INSTALL_VERBS
-        )
-        if fetches or NEXTEST_INSTALL_HOST in script:
-            found.append(f"{where} (install command)")
-    return found
+    if not _declares_own_steps(workflow_name, job_name):
+        return []
+    return [
+        f"{workflow_name}:{job_name}:{step.get('name') or step.get('uses')}"
+        for step in steps(workflow_name, job_name)
+        if _installs_nextest_by_input(step) or _installs_nextest_by_script(step)
+    ]
 
 
 def test_lint_tool_install_is_version_pinned() -> None:
