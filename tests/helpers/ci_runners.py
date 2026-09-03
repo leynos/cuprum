@@ -62,7 +62,7 @@ CACHE_KEYS_ACTION = "./.github/actions/cache-keys"
 SCCACHE_ACTION = "./.github/actions/setup-sccache"
 SETUP_RUST = (
     "leynos/shared-actions/.github/actions/setup-rust@"
-    "7d46a399558914f5a05074e55a560fec0269fd0d"
+    "f6d4d5f549655c118f86f371b8d55c200d3efa50"
 )
 #: Both shared actions are pinned to the same revision. It drops `target` from
 #: their own caches, so the no-target-archive rule holds even if a caller ever
@@ -70,10 +70,13 @@ SETUP_RUST = (
 #: `all-targets`, and `doctests` inputs the coverage jobs depend on; and it
 #: installs cargo-nextest from checksummed official release archives with no
 #: source-build fallback, which matters because the coverage job is now the
-#: only place nextest runs.
+#: only place nextest runs. The revision itself is estate-wide rather than
+#: Cuprum-specific: its most recent change is to `install-whitaker`, which this
+#: repository does not consume, and both actions here are byte-identical to the
+#: previous pin. Holding one SHA across the estate is the point.
 GENERATE_COVERAGE = (
     "leynos/shared-actions/.github/actions/generate-coverage@"
-    "7d46a399558914f5a05074e55a560fec0269fd0d"
+    "f6d4d5f549655c118f86f371b8d55c200d3efa50"
 )
 OBSERVATION_STEP = "Record cache observations"
 

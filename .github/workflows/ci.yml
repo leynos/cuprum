@@ -143,7 +143,7 @@ jobs:
       # Cargo registry nor `target/${BUILD_PROFILE}`. This job owns the
       # registry; nothing owns `target`, because sccache owns compiler output.
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@7d46a399558914f5a05074e55a560fec0269fd0d
+        uses: leynos/shared-actions/.github/actions/setup-rust@f6d4d5f549655c118f86f371b8d55c200d3efa50
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -354,7 +354,7 @@ jobs:
           enable-cache: false
 
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@7d46a399558914f5a05074e55a560fec0269fd0d
+        uses: leynos/shared-actions/.github/actions/setup-rust@f6d4d5f549655c118f86f371b8d55c200d3efa50
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -531,7 +531,7 @@ jobs:
       # pinned toolchain the other Rust-touching jobs use rather than whatever
       # the runner image happens to ship.
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@7d46a399558914f5a05074e55a560fec0269fd0d
+        uses: leynos/shared-actions/.github/actions/setup-rust@f6d4d5f549655c118f86f371b8d55c200d3efa50
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -704,7 +704,7 @@ jobs:
           enable-cache: false
 
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@7d46a399558914f5a05074e55a560fec0269fd0d
+        uses: leynos/shared-actions/.github/actions/setup-rust@f6d4d5f549655c118f86f371b8d55c200d3efa50
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -728,7 +728,7 @@ jobs:
       # treats changes within one percentage point as measurement noise.
       #
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@7d46a399558914f5a05074e55a560fec0269fd0d
+        uses: leynos/shared-actions/.github/actions/generate-coverage@f6d4d5f549655c118f86f371b8d55c200d3efa50
         env:
           # The same warnings posture and the same core budget the
           # uninstrumented run used.
