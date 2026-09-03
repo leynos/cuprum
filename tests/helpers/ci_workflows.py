@@ -39,13 +39,7 @@ def _require(*, condition: bool, message: str) -> None:
 
 
 def _mapping(value: object, message: str) -> dict[str, object]:
-    """Narrow a parsed YAML value to a string-keyed mapping.
-
-    Returns
-    -------
-    dict[str, object]
-        The narrowed mapping.
-    """
+    """Narrow a parsed YAML value to a string-keyed mapping."""
     _require(
         condition=isinstance(value, dict)
         and all(isinstance(key, str) for key in value),
@@ -55,17 +49,10 @@ def _mapping(value: object, message: str) -> dict[str, object]:
 
 
 def workflow_document(workflow_name: str) -> dict[str, object]:
-    """Parse one repository workflow.
-
-    YAML 1.1 reads the ``on:`` trigger key as the boolean ``True``, so the
-    document itself is not string-keyed and is returned without narrowing.
-
-    Returns
-    -------
-    dict[str, object]
-        The parsed workflow document.
-    """
+    """Parse one repository workflow, without narrowing its top-level keys."""
     path = WORKFLOW_DIR / workflow_name
+    # YAML 1.1 reads the `on:` trigger key as the boolean `True`, so the
+    # document itself is not string-keyed. Only the mappings below are narrowed.
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
     _require(
         condition=isinstance(document, dict),
@@ -75,18 +62,7 @@ def workflow_document(workflow_name: str) -> dict[str, object]:
 
 
 def workflow_env(workflow_name: str) -> dict[str, object]:
-    """Return the workflow-level ``env`` mapping.
-
-    Parameters
-    ----------
-    workflow_name : str
-        File name of the workflow under ``.github/workflows``.
-
-    Returns
-    -------
-    dict[str, object]
-        The declared workflow-level environment.
-    """
+    """Return the workflow-level ``env`` mapping."""
     return _mapping(
         workflow_document(workflow_name).get("env"),
         f"{workflow_name} must declare workflow-level env",
@@ -94,18 +70,7 @@ def workflow_env(workflow_name: str) -> dict[str, object]:
 
 
 def jobs(workflow_name: str) -> dict[str, object]:
-    """Load the jobs mapping from one repository workflow.
-
-    Parameters
-    ----------
-    workflow_name : str
-        File name of the workflow under ``.github/workflows``.
-
-    Returns
-    -------
-    dict[str, object]
-        The workflow's jobs, keyed by job identifier.
-    """
+    """Load the jobs mapping from one repository workflow."""
     return _mapping(
         workflow_document(workflow_name).get("jobs"),
         f"{workflow_name} must declare jobs",
@@ -113,20 +78,7 @@ def jobs(workflow_name: str) -> dict[str, object]:
 
 
 def job(workflow_name: str, job_name: str) -> Job:
-    """Return one named job from a repository workflow.
-
-    Parameters
-    ----------
-    workflow_name : str
-        File name of the workflow under ``.github/workflows``.
-    job_name : str
-        Identifier of the job to return.
-
-    Returns
-    -------
-    Job
-        The named job payload.
-    """
+    """Return one named job from a repository workflow."""
     payload = _mapping(
         jobs(workflow_name).get(job_name),
         f"{workflow_name} must define {job_name}",
@@ -135,20 +87,7 @@ def job(workflow_name: str, job_name: str) -> Job:
 
 
 def steps(workflow_name: str, job_name: str) -> list[Step]:
-    """Return the validated steps for one workflow job.
-
-    Parameters
-    ----------
-    workflow_name : str
-        File name of the workflow under ``.github/workflows``.
-    job_name : str
-        Identifier of the job whose steps are required.
-
-    Returns
-    -------
-    list[Step]
-        The job's steps in declaration order.
-    """
+    """Return the validated steps for one workflow job."""
     declared = job(workflow_name, job_name).get("steps")
     _require(
         condition=isinstance(declared, list),
@@ -166,38 +105,12 @@ def steps(workflow_name: str, job_name: str) -> list[Step]:
 
 
 def step_inputs(step: Step, message: str) -> dict[str, object]:
-    """Return the ``with`` mapping declared by one workflow step.
-
-    Parameters
-    ----------
-    step : Step
-        Step whose inputs are read.
-    message : str
-        Diagnostic prefix identifying the workflow and job.
-
-    Returns
-    -------
-    dict[str, object]
-        The step's declared inputs.
-    """
+    """Return the ``with`` mapping declared by one workflow step."""
     return _mapping(step.get("with"), message)
 
 
 def cache_paths(step: Step, message: str) -> list[str]:
-    """Return the paths a cache step owns, one per line.
-
-    Parameters
-    ----------
-    step : Step
-        Cache step whose ``with.path`` input is read.
-    message : str
-        Diagnostic prefix identifying the workflow and job.
-
-    Returns
-    -------
-    list[str]
-        The declared paths, stripped, in declaration order.
-    """
+    """Return the paths a cache step owns, one per line."""
     declared = step_inputs(step, message).get("path")
     _require(
         condition=isinstance(declared, str),
@@ -216,22 +129,7 @@ def cache_paths(step: Step, message: str) -> list[str]:
 def _steps_using(
     workflow_name: str, job_name: str, actions: cabc.Collection[str]
 ) -> list[Step]:
-    """Return the steps of one job that invoke any of ``actions``.
-
-    Parameters
-    ----------
-    workflow_name : str
-        File name of the workflow under ``.github/workflows``.
-    job_name : str
-        Identifier of the job to search.
-    actions : cabc.Collection[str]
-        Pinned action references to match against each step's ``uses``.
-
-    Returns
-    -------
-    list[Step]
-        The matching steps in declaration order.
-    """
+    """Return the steps of one job that invoke any of ``actions``."""
     wanted = frozenset(actions)
     return [
         step for step in steps(workflow_name, job_name) if step.get("uses") in wanted
@@ -239,74 +137,24 @@ def _steps_using(
 
 
 def restore_steps(workflow_name: str, job_name: str) -> list[Step]:
-    """Return the cache restore steps declared by one job, in order.
-
-    Parameters
-    ----------
-    workflow_name : str
-        File name of the workflow under ``.github/workflows``.
-    job_name : str
-        Identifier of the job to search.
-
-    Returns
-    -------
-    list[Step]
-        The job's restore steps in declaration order.
-    """
+    """Return the cache restore steps declared by one job, in order."""
     return _steps_using(workflow_name, job_name, (CACHE_RESTORE,))
 
 
 def save_steps(workflow_name: str, job_name: str) -> list[Step]:
-    """Return the cache save steps declared by one job, in order.
-
-    Parameters
-    ----------
-    workflow_name : str
-        File name of the workflow under ``.github/workflows``.
-    job_name : str
-        Identifier of the job to search.
-
-    Returns
-    -------
-    list[Step]
-        The job's save steps in declaration order.
-    """
+    """Return the cache save steps declared by one job, in order."""
     return _steps_using(workflow_name, job_name, (CACHE_SAVE,))
 
 
 def cache_steps(workflow_name: str, job_name: str) -> list[Step]:
-    """Return every step of one job that owns a cached path.
-
-    Parameters
-    ----------
-    workflow_name : str
-        File name of the workflow under ``.github/workflows``.
-    job_name : str
-        Identifier of the job to search.
-
-    Returns
-    -------
-    list[Step]
-        Restore, save, and whole-action cache steps, in declaration order.
-    """
+    """Return every step of one job that owns a cached path."""
     return _steps_using(
         workflow_name, job_name, (CACHE_RESTORE, CACHE_SAVE, CACHE_PLAIN)
     )
 
 
 def expand(manifest: cabc.Mapping[str, tuple[str, ...]]) -> list[tuple[str, str]]:
-    """Flatten a workflow-to-job-names manifest into per-job cases.
-
-    Parameters
-    ----------
-    manifest : cabc.Mapping[str, tuple[str, ...]]
-        Workflow file names mapped to the job names they declare.
-
-    Returns
-    -------
-    list[tuple[str, str]]
-        One ``(workflow, job)`` pair per job.
-    """
+    """Flatten a workflow-to-job-names manifest into per-job cases."""
     return [
         (workflow_name, job_name)
         for workflow_name, job_names in manifest.items()
@@ -315,13 +163,7 @@ def expand(manifest: cabc.Mapping[str, tuple[str, ...]]) -> list[tuple[str, str]
 
 
 def workflow_sources() -> list[tuple[str, str]]:
-    """Return every workflow's name and source text.
-
-    Returns
-    -------
-    list[tuple[str, str]]
-        One ``(file name, source)`` pair per workflow, sorted by name.
-    """
+    """Return every workflow's name and source text."""
     return [
         (path.name, path.read_text(encoding="utf-8"))
         for path in sorted(WORKFLOW_DIR.glob("*.yml"))

@@ -38,8 +38,8 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 # Re-exported so the manifests and the readers arrive from one import in every
-# contract test, while the module that holds them stays within the file-size
-# limit.
+# contract test. The split is by responsibility: this module declares what the
+# workflows are meant to contain, `ci_workflows` reads what they do contain.
 # fmt: off
 __all__ = (
     "CACHE_ACTION_PIN", "CACHE_PLAIN", "CACHE_RESTORE", "CACHE_SAVE",

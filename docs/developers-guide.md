@@ -261,8 +261,10 @@ Two jobs survive that look like duplicates and are not:
   modules skip there; run 33752095108 logged its `rust-backend` cases as
   `SKIPPED`. The two runs execute different code.
 - **`typecheck-test` on 3.13** keeps the typechecker and its required check
-  name while running neither suite. The other three legs keep their Python run
-  because coverage does not run those interpreters.
+  name while running neither suite. Dropping its pytest run is only safe
+  because the typechecker stands alone: `make typecheck` depends on `build`,
+  the dependency sync, and on nothing the test run produces. The other three
+  legs keep their Python run because coverage does not run those interpreters.
 
 The nextest installer is gone from this repository. Nothing here runs nextest
 directly any more; the coverage action installs its own.
