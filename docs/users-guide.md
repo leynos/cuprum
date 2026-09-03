@@ -2105,7 +2105,14 @@ The continuous integration (CI) workflows run the following checks:
   to fail.
 - Formatting and lint checks run on Python 3.13.
 - Coverage upload (artefact + optional CodeScene upload) runs on Python 3.13.
-- Benchmark ratchet runs on pull requests and pushes to `main`:
+- Benchmark ratchet runs on every push to `main`, and on pull requests that
+  change performance-relevant paths (`cuprum/`, `rust/`, `benchmarks/`,
+  `conftest.py`, `Makefile`, `pyproject.toml`, `uv.lock`, or the CI workflow
+  itself). Pull requests touching only documentation skip it; pushes to `main`
+  are never skipped when detection succeeds because that run publishes the
+  baseline artefact. If the path detector fails, every event skips the paid
+  benchmark without a path verdict, including pushes to `main`. Each run
+  records the detector status and gate decision in its workflow summary.
   - It benchmarks the current checkout in smoke mode with a release build of
     the Rust extension.
   - It compares each scenario's within-run `rust_mean / python_mean` ratio

@@ -22,8 +22,8 @@ accepted ADR and the developers' guide.
   renames must remain private, test-local, or function-local.
 - Preserve spellings required by external APIs. Any unavoidable exception must
   be narrowly anchored in `typos.local.toml` and documented beside the pattern.
-- Do not globally accept `normalise`, `serialise`, `summarise`, or related
-  `-ise` terms because that would disable identifier enforcement.
+- Do not globally accept `-ise` spellings for normal, serial, summary, or
+  related terms because that would disable identifier enforcement.
 - Generate `typos.toml` through `scripts/generate_typos_config.py`; never edit
   the generated file by hand.
 - Run gates sequentially and capture full outputs under `/tmp`. Run all
@@ -181,7 +181,7 @@ The final widened `spelling` target must report no unapproved source spelling.
   changes were restored before validation and are not part of this issue.
 - Widening the gate exposed 211 findings rather than only the anticipated
   `-ise` prose. Most were repository-owned Oxford/British spelling drift. A
-  large cluster used GitHub Actions' external `artifact` vocabulary: internal
+  large cluster used GitHub Actions' external `artefact` vocabulary: internal
   names moved to `artefact`, while the `"artifacts"` wire key, `/artifacts` URL
   path, and established `--artifact-name` CLI option remain unchanged via
   documented anchored patterns.

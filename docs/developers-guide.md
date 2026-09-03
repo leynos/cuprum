@@ -2104,11 +2104,13 @@ wheel build is not one of them: `.github/workflows/build-wheels.yml` runs
 `maturin build` to produce a distributable artefact rather than installing it
 into a virtual environment, so it neither uses nor needs this target.
 
-The `benchmark-ratchet` job needs an optimized build, and that is the only
-thing it needs differently, so it passes
-`make develop MATURIN_DEVELOP_FLAGS=--release` rather than restating the
-three-step sequence. Keep it that way: a second copy of the sequence is how
-the two drift, and the ratchet then measures a build nobody maintains.
+The `benchmark-ratchet` job needs an optimized, in-place build of the mixed
+Python/Rust project. It passes
+`make develop MATURIN_DEVELOP_FLAGS='--release --skip-install'` rather than
+restating the three-step sequence. `--skip-install` avoids Maturin's
+unnecessary editable dependency install while still building the extension in
+place. Keep it that way: a second copy of the sequence is how the two drift,
+and the ratchet then measures a build nobody maintains.
 `MATURIN_DEVELOP_FLAGS` is empty by default, because a debug build is what
 contributors and the `extension-tests` job want.
 
@@ -2150,9 +2152,31 @@ as well.
 `test_extension_ci_contract.py` covers `ci.yml`: that the `extension-tests`
 job runs `make develop` before `make test-extension`, that `benchmark-ratchet`
 builds through the same target with `--release`, and that no job reintroduces
-a second copy of the build sequence. It declares the workflow shapes it reads
-— jobs, steps, and a step's `run:` — so that a misspelled key is a type error
-rather than a `None` that quietly satisfies the assertion above it.
+a second copy of the build sequence.
+
+It reads the workflow through `tests/helpers/workflow.py`, which is the one
+place `ci.yml` is parsed. That helper declares the shapes it reads — jobs,
+steps, and a step's `run:` — so a misspelled key is a type error rather than a
+`None` that quietly satisfies the assertion above it. Keep it the only parser:
+a second one drifts from the first, and then two suites disagree about what
+the same file says.
+
+### Shared workflow test support
+
+The session-scoped `workflow_data` fixture parses the checked-in
+`.github/workflows/ci.yml` once. `filter_path_patterns` derives the
+performance-relevant paths from that same model. The workflow contract tests
+consume the parsed model directly, while the behavioural tests use both
+fixtures to exercise the gate and its summary against the checked-in
+configuration.
+
+The support is split by responsibility: `workflow_types.py` defines the
+narrow `TypedDict` shapes; `workflow.py` parses the workflow and provides
+queries over its jobs and steps; `workflow_gate.py` contains the pure path
+matching and benchmark-admission model; and `workflow_shell.py` recognizes
+commands in `run:` scripts while ignoring comments and here-document bodies.
+Keep repository access in the fixtures and use these helpers rather than
+creating another workflow parser in a test.
 
 `EXTENSION_TEST_TARGETS` gets two separate checks, because neither implies the
 other:
@@ -2416,7 +2440,7 @@ Table: Lint-related Makefile variables and their defaults.
 | `PYLINT_VERSION`        | `4.0.7`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.                                                          |
 | `PYLINT_CACHE`          | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                                                                          |
 | `PYLINT`                | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                                                                        |
-| `DF12_PYTHON_LINTS_REF` | `4cf41736cce2f7ba2778882a5c629c044568a0e5`                                   | Immutable v0.3.0 revision locked for DF12 lint tooling.                                                                     |
+| `DF12_PYTHON_LINTS_REF` | `v0.3.0`                                                                     | Controlled release tag selected for DF12 lint tooling.                                                                      |
 | `DF12_PYTHON`           | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                                                                       |
 | `DF12_PYLINT_MESSAGES`  | All v0.3.0 message IDs, including `R9112`                                    | Explicit allowlist for the df12 Pylint pass.                                                                                |
 | `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                                                                    |
@@ -2438,8 +2462,8 @@ Do not change `PYLINT_PYPY_SHIM_REF` casually. Updating the pinned shim
 revision changes the lint runtime and must be reviewed like any other toolchain
 update. Update the `df12-python-lints` development dependency and
 `DF12_PYTHON_LINTS_REF` together so the Pylint plugin and standalone scanner
-remain on the same immutable revision. When adopting a new release, resolve its
-tag to a commit before updating both pins.
+select the same controlled release tag. When adopting a new release, update
+both references to that tag.
 
 ### Episodic lint policy
 
@@ -2514,9 +2538,9 @@ The canonical lint configuration lives in `pyproject.toml`:
   [Docstring consistency gate](#docstring-consistency-gate) below.
 - `[tool.pylint.main]`, `[tool.pylint.design]`, and
   `[tool.pylint."messages control"]` configure the second-tier Pylint pass.
-- `[dependency-groups].dev` pins `df12-python-lints` v0.3.0 at commit
-  `4cf41736cce2f7ba2778882a5c629c044568a0e5`, the same immutable revision as
-  the standalone scanner. The enabled message list includes `R9112`
+- `[dependency-groups].dev` selects the controlled `df12-python-lints` v0.3.0
+  release tag, matching the standalone scanner. The enabled message list
+  includes `R9112`
   (`prefer-type-statement`).
 - `ambrleaks.toml` contains narrow value allowlists for deterministic public
   fixture data that matches a scanner pattern.
@@ -2800,6 +2824,127 @@ link, and are lifted once the upstream fix lands.
   pytest 9.0.x until `pytest-bdd` migrates to the node-based fixture API. Track
   [pytest-bdd#823](https://github.com/pytest-dev/pytest-bdd/issues/823); remove
   the pin and this note once a released `pytest-bdd` supports pytest 9.1.
+
+## Gating the paid benchmark job
+
+`benchmark-ratchet` is the only job in `ci.yml` that runs on a paid runner
+(`ubicloud-standard-4-ubuntu-2404`, declared to `actionlint` in
+`.github/actionlint.yaml` alongside the one configuration variable the
+workflows read). Most pull requests — documentation edits, Dependabot
+`github-actions` batches — cannot change pipeline throughput, so a cheap
+GitHub-hosted `changes` job classifies the diff with `dorny/paths-filter` and
+publishes a single `bench` output. `benchmark-ratchet` takes `changes` in
+`needs` and gates on:
+
+```yaml
+if: needs.changes.result == 'success' && (github.event_name != 'pull_request' || needs.changes.outputs.bench == 'true')
+```
+
+Three properties of that arrangement are load-bearing:
+
+- **`changes` runs on every event, not only pull requests.** A skipped
+  dependency skips its dependants, so gating `changes` itself would stop
+  pushes to `main` from benchmarking.
+- **Non-pull-request events are never gated.** The run on `main` republishes
+  the `benchmark-ratchet-main-baseline` artefact that pull-request runs
+  compare against. Gating it fails open: the baseline ages, and regressions
+  stop being detected rather than being reported.
+- **The filter watches inputs, not just sources.** `cuprum/**`, `rust/**` and
+  `benchmarks/**` are the obvious entries; `uv.lock`, `pyproject.toml`,
+  `Makefile`, `conftest.py` and `.github/workflows/ci.yml` are there because a
+  dependency bump or a change to how the benchmark is invoked can move the
+  numbers as readily as a change to the code being measured.
+
+The benchmark checkout sets `persist-credentials: false`, keeping the
+repository-scoped token out of the checked-out code's Git configuration. The
+benchmark needs Maturin and the development benchmark tooling, but not the
+lint-only `df12-python-lints` dependency, so its optimized, in-place build
+calls the shared target with
+`UV_SYNC_FLAGS=--no-install-package=df12-python-lints`:
+
+```bash
+make develop MATURIN_DEVELOP_FLAGS='--release --skip-install' \
+  UV_SYNC_FLAGS=--no-install-package=df12-python-lints \
+  UV_RUN_FLAGS=--no-sync
+```
+
+The baseline client itself uses only the standard library and therefore runs
+with `uv run --no-dev`. Subsequent benchmark commands use `uv run --no-sync`
+so they reuse that prepared environment without resyncing dependencies or
+bringing the lint-only Git dependency into the paid benchmark.
+
+The `changes` job also writes the decision — event, detector status, filter
+verdict, and whether the benchmark ran or was skipped — to
+`$GITHUB_STEP_SUMMARY` on every run. A skipped job and a broken gate are
+indistinguishable in the run list, so that table is where a maintainer
+auditing paid-runner spend, or wondering why a pull request has no benchmark
+report, reads what happened. Every field is a closed set, so the summaries
+stay countable across runs; `benchmark-ratchet` is exactly one of `run`,
+`skip`, or `skip-detector-failed`.
+
+That step carries `if: ${{ !cancelled() }}` rather than inheriting the
+implicit `success()`. A failed detector is the case most worth recording,
+because the benchmark then skips for a reason that has nothing to do with the
+diff, and a summary that stops being written exactly when the gate misbehaves
+documents only the runs that needed no explanation. When the detector did not
+produce a verdict the table says `unknown` rather than `false`: recording
+`false` would assert "no performance-relevant changes", which is a claim
+nothing measured.
+
+The workflow declares `concurrency: ci-${{ github.ref }}` with
+`cancel-in-progress` true only for pull requests. A superseded pull-request
+run only spends benchmark minutes on a diff nobody will merge; a cancelled
+`main` run, by contrast, abandons the baseline upload, so `main` runs are left
+to finish.
+
+Be precise about what that does *not* buy. GitHub replaces a pending run when
+a newer one arrives and promises nothing about the order runs complete in, so
+two merges in quick succession may still publish baselines out of commit
+order, and a superseded pending run publishes nothing at all. Concurrency is
+not an ordering mechanism; anything that needs monotonic baselines has to
+enforce it where the artefact is written.
+
+The gate deliberately names no status function. GitHub inserts an implicit
+`success()` into a job's `if:` unless the expression already names one, so a
+failed `changes` job skips `benchmark-ratchet` rather than running it. Adding
+`always()` reads as a harmless robustness tweak and is the single edit that
+turns a broken detector into an unconditional paid run, so a test pins its
+absence.
+
+None of this is exercised by ordinary tests — invert the condition and the
+suite still passes — so two suites read it back, split by what they assert
+rather than by what they parse. Both go through `tests/helpers/workflow.py`,
+which owns the parsing and the path model, so neither can pass against a gate
+the other does not see:
+
+- `cuprum/unittests/test_benchmark_gate_ci_contract.py` pins the
+  *declarations*: the `bench` output wiring, the `needs` edge, the gate
+  expression verbatim, the absent status function, the exact filter path set,
+  the runner `changes` uses, the summary step's condition, and the concurrency
+  policy. Property tests over sampled changed-path sets then check the rule
+  those declarations encode — any watched path benchmarks however it is mixed
+  with docs, a diff touching nothing watched skips, and a non-pull-request
+  event always benchmarks.
+- `tests/behaviour/test_benchmark_path_gate_behaviour.py`, with
+  `tests/features/benchmark_path_gate.feature`, states the *decision* for pull
+  requests a maintainer would recognize: docs-only, a Rust change, a
+  dependency bump, a mixed diff, an empty diff, and a push to `main`.
+- `tests/behaviour/test_benchmark_gate_summary_behaviour.py`, with
+  `tests/features/benchmark_gate_summary.feature`, extracts the summary step's
+  script from `ci.yml` and *runs* it under `bash` for each combination of
+  event and detector state, then reads back the row it emitted. Asserting that
+  the script mentions the right words is not enough: one that emitted nothing,
+  or the opposite verdict, would contain the same words. The script touches
+  only `$GITHUB_STEP_SUMMARY` and its own environment variables, which is what
+  makes running it outside Actions evidence rather than simulation.
+
+The path model handles the two pattern forms the filter is allowed to use — a
+literal path, and a `dir/**` prefix — and a companion test fails if a pattern
+outside those forms is added, so the model cannot silently stop describing the
+filter. Pinning the gate expression verbatim is what keeps the model honest
+about the other half: the property and behavioural tests reason with
+`benchmark_runs`, which is only evidence about `ci.yml` because the expression
+it mirrors is asserted character for character.
 
 ## Workflow pins and Dependabot
 

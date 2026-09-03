@@ -11,21 +11,31 @@ Roadmap reference: `docs/roadmap.md` item `4.4.3`.
 ## Purpose / big picture
 
 Roadmap item `4.4.3` requires a continuous integration (CI) benchmark job that
-runs on pull requests and pushes to `main`, persists JavaScript Object Notation
-(JSON) benchmark artefacts, and fails when Rust pathway performance regresses
-by more than 10%.
+runs on performance-relevant pull requests and pushes to `main`, persists
+JavaScript Object Notation (JSON) benchmark artefacts, and fails when Rust
+pathway performance regresses by more than 30%. The workflow's inexpensive
+`changes` job runs for every event. A successful pull-request detector runs the
+paid benchmark only when a watched path changed; a successful non-pull-request
+event, including a push to `main`, runs regardless of the filter result so that
+the baseline artefact stays fresh. A detector failure skips the paid benchmark
+for every event.
 
 After this work, contributors can observe benchmark evidence directly from CI
 artefacts and get deterministic pass/fail signalling when Rust throughput gets
 slower beyond the agreed threshold. Pure Python remains first-class: the job
-must continue collecting Python scenario results and keep Rust-vs-Python
-scenarios in the same matrix.
+continues collecting Python scenario results and keeps Rust-vs-Python scenarios
+in the same matrix whenever the paid benchmark runs.
 
 This task is complete only when:
 
 - CI runs a benchmark ratchet job on `pull_request` and `push` to `main`.
+- Pull requests run the benchmark only when the successful `changes` detector
+  reports a performance-relevant path change.
+- Successful non-pull-request events, including pushes to `main`, run the
+  benchmark regardless of the filter result; a detector failure skips the
+  benchmark on every event.
 - The job uploads JSON artefacts for baseline and candidate benchmark runs.
-- A Rust regression guard fails the job when any Rust scenario exceeds a 10%
+- A Rust regression guard fails the job when any Rust scenario exceeds a 30%
   slowdown versus baseline.
 - Unit tests (`pytest`) and behavioural tests (`pytest-bdd`) cover the new
   ratchet logic and workflow-facing behaviour.
@@ -56,6 +66,10 @@ This task is complete only when:
   `benchmarks/pipeline_throughput.py`.
 - Use the existing scenario matrix contract from `4.4.2` without changing its
   naming format.
+- Keep the `changes` detector on every workflow event. Gate the paid benchmark
+  on its successful performance-path result for pull requests, while allowing
+  successful non-pull-request events to refresh the main baseline regardless of
+  the filter result. A detector failure must skip the paid benchmark.
 - Keep docs aligned in `docs/cuprum-design.md`, `docs/users-guide.md`, and
   `docs/roadmap.md`.
 - Keep Python changes compliant with `.rules/python-*.md`, Ruff, and typing
@@ -82,8 +96,13 @@ This task is complete only when:
 
 - Risk: CI hardware variance can cause false positives near the threshold.
   Severity: high. Likelihood: medium. Mitigation: compare baseline and
-  candidate in the same workflow run, keep scenario set deterministic, and use
-  a 10% tolerance on per-scenario means.
+  candidate using the same deterministic scenario set, and use the configured
+  30% tolerance on per-scenario means.
+
+- Risk: a failed path detector could accidentally spend paid-runner time or
+  leave the main baseline stale. Severity: high. Likelihood: low. Mitigation:
+  keep the detector ungated, require its successful result in the benchmark job
+  condition, and record `skip-detector-failed` in the run summary.
 
 - Risk: Rust extension might not be available in the benchmark job,
   invalidating Rust regression checks. Severity: high. Likelihood: medium.
@@ -113,7 +132,7 @@ This task is complete only when:
 - [x] (2026-03-04 00:29Z) Stage C: added `benchmark-ratchet` job in
   `.github/workflows/ci.yml` for pull requests and pushes to `main`, including
   baseline/candidate smoke throughput runs, ratchet enforcement, and JSON
-  artefact upload.
+  artefact upload. The later path-gating amendment refined when that job runs.
 - [x] (2026-03-04 00:34Z) Stage D: updated `docs/cuprum-design.md` and
   `docs/users-guide.md` with ratchet behaviour/artefacts and marked roadmap item
   `4.4.3` done in `docs/roadmap.md`.
@@ -130,10 +149,12 @@ This task is complete only when:
   claims and keep that alignment explicit.
 
 - Observation: exactly-at-threshold comparisons can evaluate as
-  `0.10000000000000009` because of floating-point representation. Evidence:
-  Stage B tests failed when candidate Rust mean was `1.10` vs baseline `1.00`
-  with threshold `0.10`. Impact: ratchet comparison uses a small tolerance for
-  equality-at-threshold semantics.
+  `0.30000000000000004` because of floating-point representation. This is a
+  superseded observation from the original 10% threshold. Evidence: Stage B
+  tests failed when candidate Rust mean was `1.10` vs baseline `1.00` with the
+  original threshold `0.10`. Impact: ratchet comparison uses a small tolerance
+  for equality-at-threshold semantics; the current workflow uses
+  `--max-regression 0.30`.
 
 - Observation: local `make test` can fail with many Rust-path failures if a
   generated native module (`cuprum/_rust_backend_native*.so`) is present in the
@@ -182,20 +203,44 @@ This task is complete only when:
 Implementation completed successfully.
 
 - Added `benchmarks/ratchet_rust_performance.py` with JSON contract validation,
-  Rust-only scenario extraction, 10% threshold comparison, JSON report writing,
+  Rust-only scenario extraction, 30% threshold comparison, JSON report writing,
   and CLI exit codes (`0` pass, `1` regression breach, `2` input/contract
   failure).
 - Added unit tests in `cuprum/unittests/test_benchmark_ci_ratchet.py` and
   behavioural tests in `tests/behaviour/test_benchmark_ci_ratchet_behaviour.py`
   with `tests/features/benchmark_ci_ratchet.feature`.
-- Added `benchmark-ratchet` CI job in `.github/workflows/ci.yml` for
-  `pull_request` and `push` (main), producing baseline/candidate JSON and
-  failing on Rust regressions above 10%.
+- Added `benchmark-ratchet` CI job in `.github/workflows/ci.yml`. Successful
+  pull requests run it only when performance-relevant paths change; successful
+  non-pull-request events, including pushes to `main`, run it regardless of the
+  filter result to produce the next baseline. A failed detector skips the job
+  for every event. The job produces baseline/candidate JSON and fails on Rust
+  regressions above 30%.
 - Updated documentation in `docs/cuprum-design.md` and `docs/users-guide.md`,
   and marked `docs/roadmap.md` item `4.4.3` as done.
 - Final quality gates passed:
   `make check-fmt`, `make typecheck`, `make lint`, `make test`,
   `make markdownlint`, and `make nixie`.
+
+### Later amendment: gating the job on changed paths
+
+A July 2026 audit of Ubicloud usage found this job — the repository's only paid
+job — running on all 420 CI runs that month, including documentation edits and
+Dependabot `github-actions` batches. A `changes` job now classifies the diff
+with `dorny/paths-filter`, and `benchmark-ratchet` runs on pull requests only
+when a performance-relevant path changed. The `push`-to-`main` trigger stated
+above is deliberately not filtered by the path result: successful runs publish
+the baseline artefact every later comparison reads. The detector itself remains
+ungated, but a detector failure skips the paid job for every event rather than
+running it without a trustworthy decision. `.github/actionlint.yaml` declares
+the Ubicloud runner label so `actionlint` can check the workflow.
+
+Both test styles cover the gate, as this plan's constraints require:
+`cuprum/unittests/test_benchmark_gate_ci_contract.py` pins the declarations and
+property-tests the rule they encode, while
+`tests/behaviour/test_benchmark_path_gate_behaviour.py` and
+`tests/features/benchmark_path_gate.feature` state the decision for
+recognizable pull requests. See "Gating the paid benchmark job" in
+`docs/developers-guide.md`.
 
 ## Context and orientation
 
@@ -227,6 +272,12 @@ Terminology used in this plan:
 - Baseline: benchmark JSON fetched from the latest successful `main` run in the
   artefact store.
 - Candidate: benchmark JSON produced from the commit under test (`github.sha`).
+- Performance-relevant path: a path matched by the `bench` filter in the
+  workflow (`cuprum/**`, `rust/**`, `benchmarks/**`, `conftest.py`, `Makefile`,
+  `pyproject.toml`, `uv.lock`, or `.github/workflows/ci.yml`).
+- Detector failure: a non-successful `changes` job result; it skips
+  `benchmark-ratchet` for every event and is recorded as `skip-detector-failed`
+  in the workflow summary.
 - Regression ratio: `(candidate_mean - baseline_mean) / baseline_mean` for the
   same Rust scenario. Positive values mean slower candidate performance.
 
@@ -238,7 +289,9 @@ Add unit tests for a new benchmark-ratchet comparison module that validates:
 JSON loading, scenario/result mapping, Rust-only filtering, threshold
 comparison, and fail-fast error messages for malformed inputs. Add behavioural
 scenarios that run the ratchet CLI against fixture JSON pairs and assert pass
-and fail outcomes.
+and fail outcomes. Add workflow-contract and behavioural coverage for the
+`changes` detector, including successful pull-request path decisions,
+successful non-pull-request baseline refreshes, and detector-failure skips.
 
 Go/no-go: proceed only after new tests fail against missing implementation.
 
@@ -249,7 +302,7 @@ Create a dedicated module (for example
 
 - loads baseline/candidate dry-run plan JSON and throughput JSON;
 - maps scenario names to measured means;
-- compares Rust scenarios against the 10% threshold;
+- compares Rust scenarios against the 30% threshold;
 - writes a JSON comparison report;
 - exits non-zero on regression breach or contract mismatch.
 
@@ -261,13 +314,17 @@ and behavioural tests are green.
 Stage C: implement CI benchmark ratchet job.
 
 Add a job in `.github/workflows/ci.yml` (or a new workflow called from it) that
-runs on `pull_request` and `push` to `main` and does the following:
+keeps the detector on every event and runs the paid benchmark on successful
+pull requests only when performance-relevant paths changed. Successful
+non-pull-request events, including pushes to `main`, run regardless of the
+filter result. Detector failure skips the paid benchmark on every event. The
+job does the following when it runs:
 
 - fetches the baseline artefact from the latest successful `main` run;
 - builds dependencies and the Rust extension for the candidate commit under
   test;
 - runs smoke benchmark commands to emit candidate JSON outputs;
-- runs the ratchet comparison CLI with `--max-regression 0.10`;
+- runs the ratchet comparison CLI with `--max-regression 0.30`;
 - uploads JSON artefacts (baseline, candidate, and comparison report).
 
 Ensure the job fails when the ratchet CLI returns non-zero.
@@ -281,7 +338,9 @@ Update design and users docs to describe:
 
 - when the benchmark ratchet job runs;
 - which JSON artefacts are retained;
-- how the 10% Rust regression threshold is calculated;
+- how the 30% Rust regression threshold is calculated;
+- how successful non-pull-request events refresh the baseline and how detector
+  failures skip the paid job;
 - what failure means for contributors.
 
 Then mark roadmap item `4.4.3` as done.
@@ -343,7 +402,7 @@ UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
   --baseline-throughput /tmp/4-4-3-baseline-throughput.json \
   --candidate-plan /tmp/4-4-3-baseline-plan.json \
   --candidate-throughput /tmp/4-4-3-baseline-throughput.json \
-  --max-regression 0.10 \
+  --max-regression 0.30 \
   --output /tmp/4-4-3-ratchet-report.json 2>&1 | \
   tee /tmp/4-4-3-ratchet.log
 ```
@@ -371,17 +430,20 @@ set -o pipefail; make nixie 2>&1 | tee /tmp/4-4-3-nixie.log
 
 Acceptance is behaviour-based:
 
-- A benchmark CI job executes on pull requests and on pushes to `main`.
+- A successful benchmark CI job executes on pull requests only when the
+  `changes` detector reports a performance-relevant path, and on successful
+  non-pull-request events regardless of the filter result. Detector failure
+  skips the benchmark job for every event.
 - The job emits and uploads JSON artefacts for:
   - baseline dry-run plan;
   - baseline throughput benchmark result;
   - candidate dry-run plan;
   - candidate throughput benchmark result;
   - ratchet comparison report.
-- The ratchet comparison fails if any Rust scenario slowdown exceeds 10%:
-  `regression_ratio > 0.10`.
+- The ratchet comparison fails if any Rust scenario slowdown exceeds 30%:
+  `regression_ratio > 0.30`.
 - The ratchet comparison passes when all Rust scenario regressions are at or
-  below 10%.
+  below 30%.
 - Unit tests verify parsing, mapping, threshold logic, and error contracts.
 - Behavioural tests verify CLI pass/fail outcomes with fixture inputs.
 - Docs explain ratchet semantics and artefact paths.
@@ -393,6 +455,8 @@ Quality criteria:
 - `make typecheck` passes.
 - `make lint` passes.
 - `make test` passes.
+- `make markdownlint` passes, including the spelling gate.
+- `make nixie` passes for Mermaid diagrams.
 
 ## Idempotence and recovery
 
@@ -401,7 +465,9 @@ Quality criteria:
 - CI workspace preparation should use fresh directories per run to avoid
   cross-run contamination.
 - If baseline artefact fetch fails for a given event payload, stop and log the
-  missing artefact contract before retrying with corrected event handling.
+  missing artefact contract before retrying with corrected event handling. If
+  no previous successful main baseline exists, write a passing bootstrap report
+  and publish the candidate as the next main baseline.
 - If benchmark output schema mismatches expected keys, fail fast with explicit
   error messages and preserve offending JSON as artefacts.
 
@@ -429,7 +495,7 @@ Expected CI JSON artefacts (naming may include run metadata):
 
 ## Interfaces and dependencies
 
-Planned additions and edits:
+Current additions and edits:
 
 1. New comparison module:
    `benchmarks/ratchet_rust_performance.py`.
@@ -447,20 +513,32 @@ Planned additions and edits:
    - `--baseline-throughput`
    - `--candidate-plan`
    - `--candidate-throughput`
-   - `--max-regression` (default `0.10`)
+   - `--max-regression` (default `0.30`)
    - `--output`
 
-2. New unit tests:
+2. Workflow gate contract in `.github/workflows/ci.yml`:
+
+   - The `changes` job runs for every workflow event and exposes the `bench`
+     filter result.
+   - A successful pull-request detector result runs `benchmark-ratchet` only
+     when `bench` is `true`.
+   - A successful non-pull-request detector result runs `benchmark-ratchet`
+     regardless of `bench`, including on pushes to `main` so the baseline
+     artefact is refreshed.
+   - A detector failure skips `benchmark-ratchet` for every event and the
+     summary records `skip-detector-failed`.
+
+3. New unit tests:
    `cuprum/unittests/test_benchmark_ci_ratchet.py`.
 
-3. New behavioural tests:
+4. New behavioural tests:
    `tests/features/benchmark_ci_ratchet.feature` and
    `tests/behaviour/test_benchmark_ci_ratchet_behaviour.py`.
 
-4. CI workflow edit:
+5. CI workflow edit:
    `.github/workflows/ci.yml` benchmark job for PR and `main` push events.
 
-5. Documentation updates:
+6. Documentation updates:
    `docs/cuprum-design.md`, `docs/users-guide.md`, and `docs/roadmap.md`.
 
 No new third-party dependencies are expected.

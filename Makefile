@@ -22,6 +22,12 @@ WHITAKER_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
 # build is the *only* thing it needs differently, so it passes `--release`
 # here rather than restating the three-step build sequence inline.
 MATURIN_DEVELOP_FLAGS ?=
+# Extra flags for the dependency sync performed by the `build` target. The
+# benchmark uses this to omit lint-only tooling from its paid runner.
+UV_SYNC_FLAGS ?=
+# Extra flags for the `uv run` commands in the `develop` target. The benchmark
+# uses `--no-sync` after preparing its narrower development environment.
+UV_RUN_FLAGS ?=
 # The Windows arm of the extension's `cfg` branches. `make lint` only ever sees
 # the host's arm, and the Windows wheel build compiles without `-D warnings`,
 # so warn-level regressions behind `#[cfg(windows)]` — dead code left by a
@@ -96,10 +102,9 @@ PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) \
   --from '$(PYLINT_PYPY_SHIM)' --with 'pylint==$(PYLINT_VERSION)' pylint-pypy
 SPELLING_CONFIG_COMMAND ?= $(UV_RUN_ENV) uv run scripts/generate_typos_config.py
 SPELLING_HELPER_TARGET ?= spelling-helper-test
-# The v0.3.0 release tag, pinned by SHA so the gate cannot drift if the tag
-# is moved. Keep in step with the df12-python-lints dev dependency in
-# pyproject.toml.
-DF12_PYTHON_LINTS_REF ?= 4cf41736cce2f7ba2778882a5c629c044568a0e5
+# Use the controlled v0.3.0 release tag. Keep in step with the
+# df12-python-lints dev dependency in pyproject.toml.
+DF12_PYTHON_LINTS_REF ?= v0.3.0
 DF12_PYTHON_LINTS = git+https://github.com/leynos/df12-python-lints.git@$(DF12_PYTHON_LINTS_REF)
 DF12_PYTHON ?= 3.14
 DF12_PYLINT_MESSAGES = R9101,C9102,R9103,R9104,C9105,C9106,C9107,R9108,R9109,R9110,R9111,C9112,R9112
@@ -127,13 +132,13 @@ all: build check-fmt lint typecheck test
 	$(UV_RUN_ENV) uv venv --clear
 
 build: uv .venv ## Build virtual-env and install deps
-	$(UV_RUN_ENV) uv sync --group dev
+	$(UV_RUN_ENV) uv sync --group dev $(UV_SYNC_FLAGS)
 
 # Why this exists and why `ensurepip` comes first: see "Building the
 # extension for tests" in docs/developers-guide.md.
 develop: build ## Build the native extension into the dev virtual-env
-	$(UV_RUN_ENV) uv run python -m ensurepip --upgrade
-	$(UV_RUN_ENV) uv run maturin develop $(MATURIN_DEVELOP_FLAGS) --manifest-path $(RUST_DIR)/cuprum-rust/Cargo.toml
+	$(UV_RUN_ENV) uv run $(UV_RUN_FLAGS) python -m ensurepip --upgrade
+	$(UV_RUN_ENV) uv run $(UV_RUN_FLAGS) maturin develop $(MATURIN_DEVELOP_FLAGS) --manifest-path $(RUST_DIR)/cuprum-rust/Cargo.toml
 
 build-release: ## Build artefacts (sdist & wheel)
 	python -m build --sdist --wheel

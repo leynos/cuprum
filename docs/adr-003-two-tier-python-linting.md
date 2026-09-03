@@ -3,7 +3,7 @@
 ## Status
 
 Accepted on 2026-05-15 and amended on 2026-07-31. Cuprum adopts Ruff as the
-first lint tier, PyPy-backed Pylint for selected built-in checks, and a pinned
+first lint tier, PyPy-backed Pylint for selected built-in checks, and a
 `df12-python-lints` pass under CPython 3.14. The companion `ambrleaks` scanner
 covers Syrupy snapshots.
 
@@ -98,9 +98,8 @@ The canonical policy lives in `pyproject.toml`:
   `typing.*` aliases.
 - `[tool.pylint.main]`, `[tool.pylint.design]`, and
   `[tool.pylint."messages control"]` define the focused second tier.
-- The development dependency pins the `df12-python-lints` v0.3.0 release at an
-  immutable commit; the Makefile's `DF12_PYTHON_LINTS_REF` pins the standalone
-  `ambrleaks` tool to the same commit.
+- The development dependency and Makefile's `DF12_PYTHON_LINTS_REF` select the
+  controlled `df12-python-lints` v0.3.0 release tag.
 - `ambrleaks.toml` records exact deterministic fixture values that resemble
   paths without weakening any scanner rule.
 
@@ -141,8 +140,8 @@ The canonical policy lives in `pyproject.toml`:
 
 The lint estate was upgraded while preserving the two-tier decision above.
 Ruff is pinned to 0.16.4 and ty is pinned to 0.0.74. The
-`df12-python-lints` dependency and standalone lint pass use v0.3.0 at commit
-`4cf41736cce2f7ba2778882a5c629c044568a0e5`.
+`df12-python-lints` dependency and standalone lint pass use the controlled
+v0.3.0 release tag.
 
 - `RUFF_VERSION` and `TY_VERSION` are synchronized across the Makefile
   defaults, the workflow-level environment in `.github/workflows/ci.yml`, and
@@ -153,6 +152,6 @@ Ruff is pinned to 0.16.4 and ty is pinned to 0.0.74. The
   local tool environment. The `typecheck` target runs `$(TY) check --python
   .venv` so ty analyses the project virtual environment explicitly.
 - `DF12_PYTHON_LINTS_REF` and the development dependency use the same
-  immutable df12 commit. The enabled message list includes `R9112`
+  controlled df12 release tag. The enabled message list includes `R9112`
   (`prefer-type-statement`) so the Python 3.12-compatible codebase uses the
   modern type-alias statement syntax.

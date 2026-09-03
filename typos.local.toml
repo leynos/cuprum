@@ -14,7 +14,7 @@ accepted = []
 ignore = [
   # GitHub's Actions API and the established CLI expose these literal names.
   '"artifacts"',
-  '/artifacts(?:[/?#]|$)',
+  '/artifacts(?:[/?#"`]|$)',
   '--artifact-name(?:[=\s"`]|$)',
   # Spelling-policy tests must contain the deliberately invalid input tokens.
   'mappings\["organise"\]',
@@ -22,9 +22,14 @@ ignore = [
   '\("ises", "izes"\)',
   # This byte-splitting fixture deliberately divides "second" after "sec".
   'b"ond\\n"',
-  # Inline code spans quote identifiers verbatim (`color`, `--artifact-name`);
-  # their spelling is the quoted API's, not this repository's prose policy.
-  '`[^`\n]+`',
+  # The shared base no longer exempts inline code spans wholesale, so the
+  # identifiers below — a helper name, a third-party command-line flag, and
+  # the style guide's own US-spelled API example — are exempted one at a time.
+  # Prefer another narrow pattern to reinstating a blanket rule: prose inside
+  # backticks should still be spell-checked.
+  '\bbuild_native_wheel_artifact\b',
+  '--artifact-server-path(?:[=\s"`]|$)',
+  '`color`',
 ]
 
 [files]

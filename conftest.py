@@ -1,4 +1,8 @@
-"""Shared pytest fixtures for optional Rust stream tests.
+"""Shared pytest fixtures for workflow contract and optional Rust stream tests.
+
+The ``workflow_data`` fixture parses the checked-in
+``.github/workflows/ci.yml`` model, while ``filter_path_patterns`` exposes its
+benchmark filter paths for workflow contract and behaviour tests.
 
 Use these fixtures to access optional backends without repeating availability
 checks in each test module.
@@ -21,6 +25,12 @@ from cuprum._backend import _check_rust_available, get_stream_backend
 from tests.helpers.extension_requirement import (
     REQUIRE_EXTENSION_ENV,
     missing_extension_message,
+)
+from tests.helpers.workflow import (
+    Workflow,
+    filter_paths,
+    parse_workflow,
+    read_workflow_source,
 )
 
 if typ.TYPE_CHECKING:
@@ -137,3 +147,32 @@ def _clear_backend_cache() -> None:
     """
     _check_rust_available.cache_clear()
     get_stream_backend.cache_clear()
+
+
+@pytest.fixture(scope="session")
+def workflow_data() -> Workflow:
+    """Provide the checked-in Continuous Integration workflow model.
+
+    Returns
+    -------
+    Workflow
+        Parsed ``ci.yml`` model shared by workflow contract tests.
+    """
+    return parse_workflow(read_workflow_source())
+
+
+@pytest.fixture(scope="session")
+def filter_path_patterns(workflow_data: Workflow) -> frozenset[str]:
+    """Provide the performance-relevant paths declared in ``ci.yml``.
+
+    Parameters
+    ----------
+    workflow_data : Workflow
+        Parsed Continuous Integration workflow model.
+
+    Returns
+    -------
+    frozenset[str]
+        Performance-relevant filter patterns in declaration order.
+    """
+    return filter_paths(workflow_data)

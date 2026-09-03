@@ -17,9 +17,9 @@ Repository = "https://github.com/leynos/cuprum"
 [dependency-groups]
 dev = [
     "crosshair-tool",
-    # The v0.3.0 release tag, pinned by SHA; keep in step with
+    # Use the controlled v0.3.0 release tag; keep in step with
     # DF12_PYTHON_LINTS_REF in the Makefile.
-    "df12-python-lints @ git+https://github.com/leynos/df12-python-lints.git@4cf41736cce2f7ba2778882a5c629c044568a0e5",
+    "df12-python-lints @ git+https://github.com/leynos/df12-python-lints.git@v0.3.0",
     "hypothesis",
     "hypothesis-crosshair",
     "interrogate",

@@ -1,0 +1,19 @@
+# serializer version: 1
+# name: test_the_summary_table_has_a_stable_canonical_form[run]
+  '''
+  | event | detector | performance-relevant changes | benchmark-ratchet |
+  | pull_request | success | true | run |
+  '''
+# ---
+# name: test_the_summary_table_has_a_stable_canonical_form[skip-detector-failed]
+  '''
+  | event | detector | performance-relevant changes | benchmark-ratchet |
+  | pull_request | failure | unknown | skip-detector-failed |
+  '''
+# ---
+# name: test_the_summary_table_has_a_stable_canonical_form[skip]
+  '''
+  | event | detector | performance-relevant changes | benchmark-ratchet |
+  | pull_request | success | false | skip |
+  '''
+# ---

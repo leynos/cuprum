@@ -14,9 +14,9 @@ release-version shape; they deliberately do not assert a specific version,
 so routine bump commits touching all sites together pass without editing
 this module.
 
-The df12-python-lints git ref is pinned twice — ``DF12_PYTHON_LINTS_REF``
+The df12-python-lints git ref is selected twice — ``DF12_PYTHON_LINTS_REF``
 in the Makefile and the git URL in the pyproject dev group — and gets the
-same parity treatment.
+same parity treatment. Both must use the controlled ``v0.3.0`` release tag.
 """
 
 from __future__ import annotations
@@ -46,9 +46,6 @@ _TOOL_PIN_SITES = (
 )
 
 _MAKEFILE_PIN_RE_TEMPLATE = r"^{name}\s*\?=\s*(\S+)\s*$"
-
-#: A full 40-character lowercase hex commit SHA.
-_GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
 
 _DF12_PYPROJECT_REF_RE = re.compile(
     r"df12-python-lints @ git\+https://github\.com/leynos/df12-python-lints"
@@ -179,7 +176,7 @@ def test_make_lint_and_typecheck_use_the_pinned_tool_commands() -> None:
 
 
 def _read_df12_refs(root: pth.Path) -> dict[str, str]:
-    """Read the df12-python-lints git ref from both pinned locations."""
+    """Read the df12-python-lints git ref from both configured locations."""
     df12_deps = [
         match.group(1)
         for dep in _dev_dependencies(root)
@@ -199,10 +196,10 @@ def test_df12_python_lints_refs_are_synchronized() -> None:
     _assert_pins_agree(_read_df12_refs(repo_root()), "df12-python-lints")
 
 
-def test_df12_python_lints_refs_are_commit_shas() -> None:
-    """Both df12-python-lints refs are immutable full commit SHAs."""
+def test_df12_python_lints_refs_use_the_controlled_release_tag() -> None:
+    """Both df12-python-lints refs select the controlled v0.3.0 tag."""
     for site, ref in _read_df12_refs(repo_root()).items():
-        assert _GIT_SHA_RE.fullmatch(ref), (
-            f"{site} pins df12-python-lints at {ref!r}, which is not a full "
-            "40-character lowercase hex commit SHA"
+        assert ref == "v0.3.0", (
+            f"{site} selects df12-python-lints at {ref!r}, not the controlled "
+            "v0.3.0 release tag"
         )

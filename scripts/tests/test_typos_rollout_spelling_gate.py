@@ -117,8 +117,10 @@ class TestSpellingGate:
     ) -> None:
         """The real spelling target generates config before scanning tracked source."""
         event_log = tmp_path / "events.log"
-        generator = tmp_path / "generate.py"
-        scanner = tmp_path / "scan.py"
+        command_directory = tmp_path / "command inputs"
+        command_directory.mkdir()
+        generator = command_directory / "generate.py"
+        scanner = command_directory / "scan.py"
         generator.write_text(
             "from pathlib import Path\n"
             f"Path({str(event_log)!r}).write_text('generate\\n', encoding='utf-8')\n",
@@ -137,22 +139,25 @@ class TestSpellingGate:
         tracked_files = ("guide.md", "module.py", "crate.rs")
         for filename in tracked_files:
             (tmp_path / filename).write_text("organize\n", encoding="utf-8")
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)  # ruff: ignore[start-process-with-partial-path] - the integration test drives the real git/make on PATH
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)  # ruff: ignore[start-process-with-partial-path] - fixed git executable with a test-owned temporary path
         subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - the argument list is literal; no shell is involved
-            ["git", "add", *tracked_files],  # ruff: ignore[start-process-with-partial-path] - the integration test drives the real git/make on PATH
+            ["git", "add", *tracked_files],  # ruff: ignore[start-process-with-partial-path] - fixed git executable with a test-owned temporary path
             cwd=tmp_path,
             check=True,
         )
 
         result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - the argument list is literal; no shell is involved
-            [  # ruff: ignore[start-process-with-partial-path] - the integration test drives the real git/make on PATH
+            [  # ruff: ignore[start-process-with-partial-path] - fixed make executable with a test-owned temporary path
                 "make",
                 "-f",
                 str(script_directory.parent / "Makefile"),
                 "spelling",
                 "SPELLING_HELPER_TARGET=",
-                f"SPELLING_CONFIG_COMMAND={sys.executable} {generator}",
-                f"TYPOS={sys.executable} {scanner}",
+                (
+                    "SPELLING_CONFIG_COMMAND="
+                    f"{shlex.join((sys.executable, str(generator)))}"
+                ),
+                f"TYPOS={shlex.join((sys.executable, str(scanner)))}",
             ],
             cwd=tmp_path,
             check=False,
@@ -171,7 +176,19 @@ class TestSpellingGate:
     @pytest.mark.parametrize(
         ("suffix", "content"),
         [
+            (
+                ".md",
+                _spelling_fixture(
+                    "Pass `--arti",
+                    "fact-server-path-organi",
+                    "se` to the external client.\n",
+                ),
+            ),
             (".md", _spelling_fixture("organi", "se\n")),
+            (
+                ".md",
+                _spelling_fixture("Call `organi", "se` on the upstream handle.\n"),
+            ),
             (
                 ".py",
                 _spelling_fixture("def organi", "se_value() -> None:\n    pass\n"),
@@ -201,11 +218,10 @@ class TestSpellingGate:
         ("suffix", "content"),
         [
             (".md", "Use `--artifact-name` to organize output.\n"),
-            (
-                ".md",
-                _spelling_fixture("Call `organi", "se` on the upstream handle.\n"),
-            ),
             (".md", _spelling_fixture("```text\norgani", "se\n```\n")),
+            (".md", "The API returns a `color` value.\n"),
+            (".py", "build_native_wheel_artifact()\n"),
+            (".md", "Pass `--artifact-server-path` to the external client.\n"),
             (
                 ".py",
                 'url = "https://api.github.test/actions/runs/1/artifacts?per_page=1"\n',
