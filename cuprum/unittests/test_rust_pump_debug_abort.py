@@ -74,6 +74,7 @@ def test_debug_rust_pump_does_not_abort_on_early_exit_or_timeout(
         capture_output=True,
         check=False,
         text=True,
+        timeout=120,
     )
 
     assert completed.returncode not in {-6, -11}, (

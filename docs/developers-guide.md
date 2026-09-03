@@ -739,8 +739,8 @@ Table 1: pipeline stream modules and their responsibilities
 
 Routing an inter-stage hop through the Rust pump means taking the raw pipe
 descriptors back from asyncio for the duration of the transfer.
-`cuprum/_pipeline_stream_fds.py` owns that hand-off, keeping its
-partial-failure paths in one place rather than inlined in the pump:
+`cuprum/_pipeline_stream_fds.py` owns that hand-off, keeping its partial-failure
+paths in one place rather than inlined in the pump:
 
 - `_extract_stream_fd` pulls the raw descriptor out of an asyncio transport,
   returning `None` when the transport does not expose one.
@@ -758,13 +758,14 @@ partial-failure paths in one place rather than inlined in the pump:
   `resume_reading()` answers `False`: pausing it could not be undone.
 
 Cancellation is handled explicitly. `run_in_executor` cannot interrupt the
-worker thread running the Rust pump, and that thread still owns both
-descriptors. `_run_rust_pump_with_blocking_fds` shields the executor future and
-re-raises `CancelledError` after cleanup; its completion callback closes the
-native writer duplicate and restores descriptor and transport state once the
-worker settles. Pipeline teardown remains coupled to that cleanup, so restoring
-blocking mode or resuming the transport earlier cannot hand descriptors back to
-asyncio while native code is still mid-transfer.
+worker thread running the Rust pump. The native worker borrows the reader
+descriptor and owns only the duplicated writer resource: `_streams_rs` transfers
+the duplicate after executor submission, and Rust closes it.
+`_run_rust_pump_with_blocking_fds` shields the executor future and re-raises
+`CancelledError` after cleanup; its completion callback only restores descriptor
+and transport state once the worker settles. Pipeline teardown remains coupled
+to that cleanup, so restoring blocking mode or resuming the transport earlier
+cannot hand descriptors back to asyncio while native code is still mid-transfer.
 
 During cancellation, `_await_native_pump_cleanup` emits structured `DEBUG`
 records at cleanup start and completion. Both records carry

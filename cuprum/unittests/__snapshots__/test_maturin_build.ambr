@@ -164,6 +164,7 @@
       'cuprum/unittests/test_pipeline_streams_cancellation.py',
       'cuprum/unittests/test_pipeline_streams_cleanup_failure.py',
       'cuprum/unittests/test_pipeline_streams_cleanup_tracing.py',
+      'cuprum/unittests/test_pipeline_streams_duplicate_setup.py',
       'cuprum/unittests/test_pipeline_streams_fd_lifecycle.py',
       'cuprum/unittests/test_pipeline_streams_observability.py',
       'cuprum/unittests/test_pipeline_teardown_cancellation.py',

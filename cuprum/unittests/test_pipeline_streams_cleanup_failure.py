@@ -46,7 +46,7 @@ async def _cancel_pump_with_failing_restore(
     state: _CancellationState,
 ) -> None:
     """Cancel a hop and prove it settles within the default grace period."""
-    task: asyncio.Task[None] | None = None
+    task: asyncio.Task[bool] | None = None
     try:
         with owned_fds() as (reader_fd, writer_fd):
             pump_state = _pipeline_streams._RustPumpState(

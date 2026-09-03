@@ -131,10 +131,11 @@ def _install_blocked_native_pump(
 
     def blocked_native_pump(reader_fd: int, writer_fd: int) -> int:
         """Retain worker descriptor ownership until the test releases it."""
-        del reader_fd, writer_fd
+        del reader_fd
         scenario.worker_started.set()
         released = scenario.release_worker.wait(timeout=5.0)
         assert released, "the test must release the fake native worker"
+        os.close(writer_fd)
         scenario.worker_released.set()
         return 0
 
