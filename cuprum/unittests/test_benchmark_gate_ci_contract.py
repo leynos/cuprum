@@ -175,15 +175,15 @@ def test_the_benchmark_job_declares_the_expected_gate(
     )
 
 
-def test_the_benchmark_job_keeps_lint_dependencies_out_of_baseline_fetching(
+def test_the_benchmark_job_keeps_lint_dependencies_out_of_benchmark_setup(
     workflow_data: Workflow,
 ) -> None:
-    """Keep repository credentials and lint dependencies out of baseline setup.
+    """Keep lint dependencies out of baseline discovery and benchmark setup.
 
     Parameters
     ----------
     workflow_data : Workflow
-        Parsed workflow containing the benchmark checkout and baseline steps.
+        Parsed workflow containing the benchmark setup steps.
     """
     checkout = step_named(workflow_data, BENCHMARK_JOB, "Check out repository")
     checkout_options = mapping(
@@ -191,8 +191,8 @@ def test_the_benchmark_job_keeps_lint_dependencies_out_of_baseline_fetching(
         f"the {BENCHMARK_JOB!r} checkout must declare options",
     )
     assert checkout_options.get("persist-credentials") is False, (
-        "the benchmark checkout must not persist its repository-scoped token; "
-        "the public df12-python-lints fetch must remain anonymous"
+        "the benchmark checkout must not persist credentials that later build "
+        "commands do not need"
     )
 
     baseline = step_named(
@@ -206,6 +206,28 @@ def test_the_benchmark_job_keeps_lint_dependencies_out_of_baseline_fetching(
         script,
         "uv run --no-dev python benchmarks/fetch_main_benchmark_baseline.py",
     ), "the standard-library baseline client must not resolve the dev dependency group"
+
+    throughput = step_named(
+        workflow_data,
+        BENCHMARK_JOB,
+        "Run throughput benchmarks and ratchet comparison",
+    )
+    throughput_script = script_of(throughput)
+    assert throughput_script is not None, "the throughput step must declare a script"
+    assert "UV_SYNC_FLAGS=--no-install-package=df12-python-lints" in throughput_script
+    assert throughput_script.count("uv run --no-sync python") == 4, (
+        "every post-build Python command must preserve the environment that omits "
+        "the lint-only Git dependency"
+    )
+
+    report = step_named(
+        workflow_data,
+        BENCHMARK_JOB,
+        "Generate benchmark comparison report",
+    )
+    report_script = script_of(report)
+    assert report_script is not None, "the report step must declare a script"
+    assert "uv run --no-sync python" in report_script
 
 
 def test_a_failed_detector_does_not_benchmark_ungated(

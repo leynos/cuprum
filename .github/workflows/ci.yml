@@ -410,9 +410,8 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
           fetch-depth: 0
-          # The benchmark installs a public sibling Git repository. Do not
-          # leave this repository's scoped token in Git configuration, where
-          # the sibling fetch would inherit and GitHub would reject it.
+          # The benchmark does not need repository credentials after checkout.
+          # Keep its scoped token out of later build commands.
           persist-credentials: false
 
       - name: Set up Python
@@ -476,16 +475,19 @@ jobs:
             # instead of restating the sequence. This runs after `pushd
             # "${workspace}"`, so the target's relative UV_CACHE_DIR and
             # UV_TOOL_DIR resolve against the same directory the inline
-            # commands used.
-            make develop MATURIN_DEVELOP_FLAGS=--release
+            # commands used. The benchmark needs maturin, but not the
+            # lint-only df12 plugin; later commands preserve this prepared
+            # environment instead of triggering another sync.
+            make develop MATURIN_DEVELOP_FLAGS=--release \
+              UV_SYNC_FLAGS=--no-install-package=df12-python-lints
 
-            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run --no-sync python \
               benchmarks/pipeline_throughput.py \
               --smoke \
               --dry-run \
               --output "${artifact_dir}/${prefix}-full-plan.json"
 
-            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run --no-sync python \
               benchmarks/ci_benchmark_ratchet_profile.py \
               --full-plan "${artifact_dir}/${prefix}-full-plan.json" \
               --filtered-plan "${artifact_dir}/${prefix}-plan.json" \
@@ -498,7 +500,7 @@ jobs:
 
           if [[ "${{ steps.baseline-artifact.outputs.baseline_available }}" == "true" ]]; then
             pushd "${GITHUB_WORKSPACE}" >/dev/null
-            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run --no-sync python \
               benchmarks/ratchet_rust_performance.py \
               --baseline-plan "${artifact_dir}/main-baseline/main-plan.json" \
               --baseline-throughput "${artifact_dir}/main-baseline/main-throughput.json" \
@@ -509,7 +511,7 @@ jobs:
             popd >/dev/null
           else
             REPORT_PATH="${artifact_dir}/ratchet-report.json" \
-            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python - <<'PY'
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run --no-sync python - <<'PY'
           import json
           import os
           import pathlib as pth
@@ -545,7 +547,7 @@ jobs:
           if [[ -f "${artifact_dir}/candidate-plan.json" ]] && \
              [[ -f "${artifact_dir}/candidate-throughput.json" ]] && \
              [[ -f "${artifact_dir}/ratchet-report.json" ]]; then
-            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run --no-sync python \
               benchmarks/python_vs_rust_comparison_report.py \
               --plan "${artifact_dir}/candidate-plan.json" \
               --throughput "${artifact_dir}/candidate-throughput.json" \

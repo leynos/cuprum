@@ -2853,12 +2853,22 @@ Three properties of that arrangement are load-bearing:
   dependency bump or a change to how the benchmark is invoked can move the
   numbers as readily as a change to the code being measured.
 
-The benchmark checkout sets `persist-credentials: false`. Its build resolves
-the public `df12-python-lints` Git dependency, and checkout's Cuprum-scoped
-authorization header must not leak into that sibling-repository fetch. The
-baseline client itself uses only the standard library and therefore runs with
-`uv run --no-dev`; lint-only dependencies cannot prevent artefact discovery
-from starting.
+The benchmark checkout sets `persist-credentials: false`, keeping the
+repository-scoped token out of the checked-out code's Git configuration. The
+benchmark needs Maturin and the development benchmark tooling, but not the
+lint-only `df12-python-lints` dependency, so its optimized build calls the
+shared target with
+`UV_SYNC_FLAGS=--no-install-package=df12-python-lints`:
+
+```bash
+make develop MATURIN_DEVELOP_FLAGS=--release \
+  UV_SYNC_FLAGS=--no-install-package=df12-python-lints
+```
+
+The baseline client itself uses only the standard library and therefore runs
+with `uv run --no-dev`. Subsequent benchmark commands use `uv run --no-sync`
+so they reuse that prepared environment without resyncing dependencies or
+bringing the lint-only Git dependency into the paid benchmark.
 
 The `changes` job also writes the decision — event, detector status, filter
 verdict, and whether the benchmark ran or was skipped — to

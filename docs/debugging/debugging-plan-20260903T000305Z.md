@@ -53,14 +53,18 @@ resolved commit `4cf41736cce2f7ba2778882a5c629c044568a0e5`.
   installed all 54 packages and included `df12-python-lints`. Adding `--no-dev`
   installed only Cuprum, started the baseline client's help path, and exited
   successfully.
-- **H2 has direct supporting evidence pending the hosted test.** The failed
-  job's checkout log records `persist-credentials: true` and writes
-  `http.https://github.com/.extraheader` before `uv` launches Git. The proposed
-  correction disables persisted credentials; the next workflow run is the
-  falsification test for whether an anonymous sibling fetch succeeds.
+- **H2 falsified.** A hosted run with `persist-credentials: false` showed
+  checkout removing `http.https://github.com/.extraheader` before the failing
+  fetch. The baseline step passed, but the later dev-group sync received the
+  same authentication-style error.
 - **H3 falsified.** The public `refs/tags/v0.3.0` advertises the exact commit in
   `uv.lock`, and the same failure occurred before the configuration switched
   from that commit SHA to the tag.
+- **H4 inconclusive.** GitHub rejected `gh run rerun --failed` with `Resource
+  not accessible by integration`, so no unchanged hosted retry was available.
+- **H5 not falsified.** A fresh dev-group sync with
+  `--no-install-package df12-python-lints` installed the other 53 packages,
+  including Maturin 1.13.3, without fetching or installing the lint plugin.
 
 ______________________________________________________________________
 
@@ -147,26 +151,58 @@ rules out a missing or moved tag.
 
 ______________________________________________________________________
 
+### H4: The anonymous GitHub failure is transient
+
+**Claim**: The Ubicloud runner received a transient authentication-style error
+from GitHub while fetching the otherwise public dependency.
+
+**Prediction**: Rerunning the unchanged failed job succeeds. An identical
+second failure falsifies this hypothesis.
+
+**Falsification test**: Run `gh run rerun --failed`, then observe the unchanged
+job with `gh run watch --exit-status`.
+
+**Result**: Inconclusive because the GitHub integration cannot rerun jobs.
+
+______________________________________________________________________
+
+### H5: The benchmark does not need the lint-only Git dependency
+
+**Claim**: `df12-python-lints` is incidental to the benchmark's use of the
+development group. Excluding that package leaves the extension toolchain
+available while removing the failing Git fetch.
+
+**Prediction**: A fresh dev sync with
+`--no-install-package df12-python-lints` neither fetches nor installs the plugin
+and still installs Maturin.
+
+**Falsification test**: Sync the dev group into fresh cache, tool, and virtual
+environment directories with that exclusion, then query Maturin directly.
+
+**Result**: Not falsified. The sync installed 53 packages without fetching the
+plugin, and Maturin 1.13.3 remained available.
+
+______________________________________________________________________
+
 ## Recommended Execution Order
 
 1. **H1** — cheapest local test and directly isolates the failing baseline
    command's dependency boundary.
 2. **H3** — cheap anonymous Git test that eliminates tag availability.
-3. **H2** — requires a temporary hosted-runner diagnostic if local tests do not
-   explain the runner-specific authentication response.
+3. **H2** — inspect the hosted checkout credential state.
+4. **H4** — retry unchanged to distinguish a transient failure.
+5. **H5** — isolate the benchmark from the lint-only Git dependency.
 
 ## Termination Criteria
 
-- **Root cause identified**: H1 explains why the unrelated dependency is
-  installed, and either H2 explains the runner-specific fetch failure or a
-  retry proves that failure transient. The final correction must also account
-  for the later `make develop` sync.
+- **Root cause identified**: H1 and H5 explain why the unrelated dependency was
+  installed by both baseline discovery and the later `make develop` sync. The
+  correction must exclude it at both boundaries without removing Maturin.
 - **Escalation trigger**: H1 and H3 are falsified, and a redacted H2 diagnostic
   shows no applicable Git credential state.
 
 ## Notes for Executing Agent
 
-Execute only H1 first. Do not modify tracked files or run repository-wide
-gates. Use fresh, explicit temporary directories and report whether the
-dependency appears in each resolution path, whether the client starts, and
-whether H1 is falsified, not falsified, or inconclusive.
+H1 and H5 were not falsified. H2 and H3 were falsified. H4 was inconclusive
+because the GitHub integration could not rerun the failed job. Validate the H5
+correction in a new hosted workflow run.

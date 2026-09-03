@@ -22,6 +22,9 @@ WHITAKER_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
 # build is the *only* thing it needs differently, so it passes `--release`
 # here rather than restating the three-step build sequence inline.
 MATURIN_DEVELOP_FLAGS ?=
+# Extra flags for the dependency sync performed by the `build` target. The
+# benchmark uses this to omit lint-only tooling from its paid runner.
+UV_SYNC_FLAGS ?=
 # The Windows arm of the extension's `cfg` branches. `make lint` only ever sees
 # the host's arm, and the Windows wheel build compiles without `-D warnings`,
 # so warn-level regressions behind `#[cfg(windows)]` — dead code left by a
@@ -126,7 +129,7 @@ all: build check-fmt lint typecheck test
 	$(UV_RUN_ENV) uv venv --clear
 
 build: uv .venv ## Build virtual-env and install deps
-	$(UV_RUN_ENV) uv sync --group dev
+	$(UV_RUN_ENV) uv sync --group dev $(UV_SYNC_FLAGS)
 
 # Why this exists and why `ensurepip` comes first: see "Building the
 # extension for tests" in docs/developers-guide.md.
