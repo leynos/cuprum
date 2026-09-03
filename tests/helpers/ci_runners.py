@@ -62,15 +62,15 @@ CACHE_KEYS_ACTION = "./.github/actions/cache-keys"
 SCCACHE_ACTION = "./.github/actions/setup-sccache"
 SETUP_RUST = (
     "leynos/shared-actions/.github/actions/setup-rust@"
-    "5daae0a332441d170d88ca648c9e71f0bbe96cb3"
+    "0eceaef0ba362fd6a1e24d14d838d59dc5ac8cea"
 )
-#: Interim pin. This revision drops `target` from the action's own cache, which
-#: is what lets the caller hold it to `cache-provider: external` without the
-#: shared action re-adding a compiler-output archive. The nextest
-#: no-source-fallback change is still open upstream, so a further repin follows.
+#: Both shared actions are pinned to the same revision. It drops `target` from
+#: their own caches, so the no-target-archive rule holds even if a caller ever
+#: switches back to `cache-provider: github`, and it adds the `all-features`,
+#: `all-targets`, and `doctests` inputs the coverage jobs depend on.
 GENERATE_COVERAGE = (
     "leynos/shared-actions/.github/actions/generate-coverage@"
-    "7c9d66030879b504365202df90f439ea419e72bd"
+    "0eceaef0ba362fd6a1e24d14d838d59dc5ac8cea"
 )
 OBSERVATION_STEP = "Record cache observations"
 

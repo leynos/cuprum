@@ -143,11 +143,10 @@ two trees, and a tree built under one set of flags poisons a run using another.
 
 Concretely, this means:
 
-- the shared `setup-rust` action runs with `cache-provider: external` in every
-  job, which is what disables its `target/${BUILD_PROFILE}` archive as well as
-  its registry archive;
-- the shared `generate-coverage` action runs with `cache-provider: external`,
-  which disables its whole-`target` archive;
+- both shared actions are pinned to a revision that archives no `target` tree
+  of its own, so the rule holds even if a caller ever switches back to
+  `cache-provider: github`; they still run with `cache-provider: external` in
+  every job, which leaves the registry archive to the caller as well;
 - the native and manylinux wheel builds cache pip and the Cargo registry but
   not `rust/target`.
 
