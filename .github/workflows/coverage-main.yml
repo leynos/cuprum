@@ -232,15 +232,31 @@ jobs:
       # cache-hit guard to skip: the key is new every time, and a run that
       # restored the previous generation republishes it with what it added.
       # `llvm-cov`'s target tree has no consumer once the report is written,
-      # and it is the second tree on a volume that a sibling repository
-      # exhausted on this shape. Removed before any cache save, so no archive
-      # carries it and the sampler's least-free figure reflects the job's real
-      # high-water mark rather than scratch that was about to be discarded.
+      # and it is the second tree on a volume this job leaves 89% full.
+      # Removed before any cache save, so no archive carries it and the
+      # sampler's least-free figure reflects the job's real high-water mark
+      # rather than scratch that was about to be discarded.
       - name: Discard the instrumented build tree
         if: always()
+        shell: bash
         run: |
+          set -uo pipefail
           df -h .
-          rm --recursive --force target/llvm-cov-target target/llvm-cov
+          # `cargo llvm-cov` builds beside the manifest it was given, which is
+          # `rust/Cargo.toml` here and not the repository root. Locating the
+          # tree rather than naming it keeps the reclaim correct if the
+          # manifest moves, and reporting the size keeps a run that reclaimed
+          # nothing distinguishable from one that had nothing to reclaim.
+          found=0
+          while IFS= read -r tree; do
+            found=1
+            du -sh "${tree}" || true
+            rm --recursive --force "${tree}"
+          done < <(find . -maxdepth 4 -type d \
+            \( -name llvm-cov-target -o -name llvm-cov \) -prune -print)
+          if [ "${found}" -eq 0 ]; then
+            echo "No instrumented build tree found to discard"
+          fi
           df -h .
 
       - name: Save the compiler cache

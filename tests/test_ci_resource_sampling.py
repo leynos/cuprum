@@ -100,6 +100,13 @@ def test_coverage_jobs_discard_the_instrumented_tree_before_saving() -> None:
             f"{workflow_name}:{job_name} must print `df -h` either side of the "
             "deletion, so the reclaim is a measurement rather than a claim"
         )
+        # Run 33857764655 removed nothing while reporting success, because the
+        # tree is built beside `rust/Cargo.toml` and the step named a
+        # repository-root path. Searching for it cannot go stale that way.
+        assert "find ." in script, (
+            f"{workflow_name}:{job_name} must locate the instrumented tree "
+            "rather than name a path that moves with the Cargo manifest"
+        )
         saves = [
             index
             for index, step in enumerate(job_steps)
