@@ -44,6 +44,7 @@ from cuprum.catalogue import (
     ProjectSettings,
 )
 from cuprum.catalogue import UnknownProgramError as UnknownProgramError
+from cuprum.context import _validate_timeout
 from cuprum.context import current_context as current_context
 from cuprum.context import observe as observe
 from cuprum.context import scoped as scoped
@@ -60,6 +61,7 @@ type _EnvMapping = cabc.Mapping[str, str] | None
 type _CwdType = str | Path | None
 
 _DEFAULT_CANCEL_GRACE = 0.5
+_DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
 # Names the aggregate raised when draining observe-hook tasks fails while a
 # single-command execution is already unwinding.
 _COMMAND_FINALIZATION_ERROR = "command finalization failed"
@@ -236,6 +238,9 @@ class ExecutionContext:
         Working directory for the subprocess.
     cancel_grace:
         Seconds to wait after SIGTERM before escalating to SIGKILL.
+    native_pump_cleanup_grace:
+        Seconds to wait for a cancelled native-pump worker before its
+        descriptor cleanup is deferred to its completion callback.
     timeout:
         Optional runtime timeout in seconds. ``None`` means no override.
     stdout_sink:
@@ -254,12 +259,21 @@ class ExecutionContext:
     env: _EnvMapping = None
     cwd: _CwdType = None
     cancel_grace: float = _DEFAULT_CANCEL_GRACE
+    native_pump_cleanup_grace: float = _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE
     timeout: float | None = None
     stdout_sink: typ.IO[str] | None = None
     stderr_sink: typ.IO[str] | None = None
     encoding: str = _DEFAULT_ENCODING
     errors: str = _DEFAULT_ERROR_HANDLING
     tags: cabc.Mapping[str, object] | None = None
+
+    def __post_init__(self) -> None:
+        """Validate the native-pump cleanup grace after initialization."""
+        cleanup_grace = _validate_timeout(
+            self.native_pump_cleanup_grace,
+            "ExecutionContext native_pump_cleanup_grace",
+        )
+        object.__setattr__(self, "native_pump_cleanup_grace", cleanup_grace)
 
 
 class TimeoutExpired(TimeoutError):  # ruff: ignore[error-suffix-on-exception-name] - match subprocess.TimeoutExpired naming.

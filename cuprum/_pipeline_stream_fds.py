@@ -242,6 +242,18 @@ def _close_rust_writer_fd(writer_fd: int) -> None:
         os.close(writer_fd)
 
 
+def _close_rust_reader_fd(reader_fd: int) -> None:
+    """Close a native-pump reader duplicate after its worker has settled."""
+    with contextlib.suppress(OSError):
+        os.close(reader_fd)
+
+
+def _close_rust_state_fd(fd: int) -> None:
+    """Close a callback-owned duplicate after descriptor restoration."""
+    with contextlib.suppress(OSError):
+        os.close(fd)
+
+
 @contextlib.contextmanager
 def _suppressed_teardown_failure(
     logger: logging.Logger,

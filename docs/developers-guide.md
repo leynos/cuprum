@@ -783,21 +783,21 @@ partial-failure paths in one place rather than inlined in the pump:
   `resume_reading()` answers `False`: pausing it could not be undone.
 
 Cancellation is handled explicitly. `run_in_executor` cannot interrupt the
-worker thread running the Rust pump. The native worker borrows the reader
-descriptor and owns only the duplicated writer resource: `_streams_rs`
-transfers the duplicate after executor submission, and Rust closes it.
-`_run_rust_pump_with_blocking_fds` shields the executor future and re-raises
-`CancelledError` after cleanup; its completion callback only restores
-descriptor and transport state once the worker settles. Pipeline teardown
-remains coupled to that cleanup, so restoring blocking mode or resuming the
-transport earlier cannot hand descriptors back to asyncio while native code is
-still mid-transfer.
+worker thread running the Rust pump. `_run_rust_pump_with_blocking_fds` gives
+native I/O and its completion callback duplicated FDs, so pipeline teardown
+cannot close or reuse a worker-owned descriptor. It shields cleanup only until
+`ExecutionContext.native_pump_cleanup_grace`; expiry re-raises the caller's
+original `CancelledError` and retains the executor future. Its one completion
+callback later closes the worker writer, restores callback-owned descriptor
+state, closes those duplicates, and resumes the reader. This ordering preserves
+the no-double-close and no-premature-reader-resumption invariants.
 
 During cancellation, `_await_native_pump_cleanup` emits structured `DEBUG`
-records at cleanup start and completion. Both records carry
-`cuprum_action=rust_pump_cleanup`, `cuprum_operation=native_pump_cleanup`, and
-an outcome of `started` or `completed`; completion also carries the monotonic
-`cuprum_duration_s`.
+records at cleanup start, normal completion, grace expiry, and deferred
+completion. All records carry `cuprum_action=rust_pump_cleanup`,
+`cuprum_operation=native_pump_cleanup`, and an outcome of `started`,
+`completed`, `grace_expired`, or `deferred`; normal completion carries monotonic
+`cuprum_duration_s`, while grace expiry carries `cuprum_elapsed_s`.
 
 The module's reuse policy is narrow: further descriptor-lifecycle concerns for
 this hand-off belong here, but the seams are not a general-purpose descriptor
@@ -861,13 +861,15 @@ histogram:
 
 Table 1: metrics emitted by `PumpMetricsHook`
 
-| Metric                                       | Labels    |
-| -------------------------------------------- | --------- |
-| `cuprum_rust_pump_declined_total`            | `reason`  |
-| `cuprum_rust_pump_failed_after_cancel_total` | none      |
-| `cuprum_rust_pump_cleanup_total`             | none      |
-| `cuprum_rust_pump_cleanup_duration_seconds`  | none      |
-| `cuprum_rust_pump_handoff_total`             | `outcome` |
+| Metric                                         | Labels    |
+| ---------------------------------------------- | --------- |
+| `cuprum_rust_pump_declined_total`              | `reason`  |
+| `cuprum_rust_pump_failed_after_cancel_total`   | none      |
+| `cuprum_rust_pump_cleanup_total`               | none      |
+| `cuprum_rust_pump_cleanup_duration_seconds`    | none      |
+| `cuprum_rust_pump_cleanup_grace_expired_total` | none      |
+| `cuprum_rust_pump_cleanup_deferred_total`      | none      |
+| `cuprum_rust_pump_handoff_total`               | `outcome` |
 
 `RustPumpDeclineReason` bounds the decline label to its four declared values.
 The `outcome` label is also closed: it is exactly `submitted`,
@@ -2376,35 +2378,19 @@ beyond the Kani model once that model is complete, lives in issue `#89`.
 
 ### Python-side native pump descriptor lifetime
 
-`_run_rust_pump` keeps the asyncio transport's writer descriptor in Python's
-ownership. It gives `rust_pump_stream` a duplicate instead, because the native
-pump consumes and closes the descriptor it receives. Python retains ownership
-of the duplicate through blocking-mode setup and executor submission. If either
-step fails, Python closes it. Once submission succeeds, the `_streams_rs` shim
-owns the hand-off: it closes the duplicate if native loading or platform
-preparation fails, otherwise it transfers an independently owned resource to
-Rust, which closes that resource after the native call. On Windows, the shim
-transfers a duplicated Win32 handle and closes the duplicate CRT descriptor
-before invoking Rust. The native-future completion callback must not close the
-writer resource. asyncio keeps and closes the original transport descriptor
-after the worker settles. No descriptor number may be closed by both owners.
-The reader transport remains paused, and the original descriptor modes are
-restored, until that same completion boundary. This prevents cancellation
-cleanup from racing with native I/O on a descriptor that is still in use.
+`_run_rust_pump` keeps asyncio transport descriptors separate from the
+duplicates supplied to `rust_pump_stream`. Callback-owned duplicates retain the
+blocking-mode state and survive a caller whose cleanup grace expires. The
+executor future is strongly retained until its done callback closes the native
+writer, restores and closes callback-owned state, and resumes the reader. The
+Rust worker is uninterruptible; the caller receives `CancelledError` at the
+grace boundary, never a premature descriptor hand-back.
 
-Executor-side failures while creating the duplicate or submitting the executor
-work are re-raised after rollback and recorded at `DEBUG` on the
-`cuprum._pipeline_streams` logger. Shim-side failures while preparing the
-reader or transferring the platform writer are recorded at `DEBUG` on the
-`cuprum._streams_rs` logger. These records use
-`cuprum_action="rust_pump_handoff_failed"`, a fixed hand-off phase, the
-exception class, and `errno` when available; they contain no descriptor number
-or exception text. Duplicate-creation failure emits `duplicate_writer_failed`,
-and reader-preparation failure emits `reader_preparation_failed`. Executor
-rejection emits `executor_submission_rejected` before it is re-raised.
-Blocking-mode failure selects the Python fallback and emits
-`blocking_setup_failed`. The outcome events are counted by
-`cuprum_rust_pump_handoff_total` as described above.
+The native worker owns the handed-off writer resource after submission. Before
+that boundary, Python rolls back duplicate-creation and executor-submission
+failures; the shim owns native-load and platform-transfer rollback. The bounded
+`RustPumpHandoffOutcome` vocabulary records those boundaries without exposing
+descriptor or handle values as metric labels.
 
 ## Rust splice-loop and drain contract
 

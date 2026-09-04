@@ -72,6 +72,16 @@ class TestNativePumpCleanupTracing:
                 exec_id=source_exec_id,
             )
         )
+        hook.record_pump_event(
+            PumpEvent(
+                phase="cleanup_grace_expired",
+                elapsed_s=0.5,
+                exec_id=source_exec_id,
+            )
+        )
+        hook.record_pump_event(
+            PumpEvent(phase="cleanup_deferred", exec_id=source_exec_id)
+        )
 
         assert source_span.events == [
             (
@@ -85,6 +95,18 @@ class TestNativePumpCleanupTracing:
                     "outcome": "completed",
                     "duration_s": 2.5,
                 },
+            ),
+            (
+                "cuprum.cleanup_grace_expired",
+                {
+                    "operation": "native_pump_cleanup",
+                    "outcome": "grace_expired",
+                    "elapsed_s": 0.5,
+                },
+            ),
+            (
+                "cuprum.cleanup_deferred",
+                {"operation": "native_pump_cleanup", "outcome": "deferred"},
             ),
         ], f"cleanup events must attach to the source stage, found {source_span.events}"
         assert downstream_span.events == [], (

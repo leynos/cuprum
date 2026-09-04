@@ -70,13 +70,15 @@ def _install_value_error_recovery_doubles(
         await asyncio.sleep(0)
 
     original_set_blocking = os.set_blocking
+    reader_inode = os.fstat(scenario.read_fd).st_ino
 
     def fail_writer_toggle(fd: int, is_blocking: object) -> None:
         """Change the reader mode then reject the writer mode change."""
-        if fd == scenario.read_fd and is_blocking is True:
+        is_reader = os.fstat(fd).st_ino == reader_inode
+        if is_reader and is_blocking is True:
             original_set_blocking(fd, bool(is_blocking))
             return
-        if fd == scenario.write_fd and is_blocking is True:
+        if not is_reader and is_blocking is True:
             raise ValueError(_WRITER_TOGGLE_VALUE_ERROR)
         original_set_blocking(fd, bool(is_blocking))
 
@@ -89,7 +91,7 @@ def _install_value_error_recovery_doubles(
             scenario.read_fd if stream is scenario.reader else scenario.write_fd
         ),
     )
-    monkeypatch.setattr(_pipeline_streams.os, "set_blocking", fail_writer_toggle)
+    monkeypatch.setattr(os, "set_blocking", fail_writer_toggle)
     configure_pump_stream_dispatch_for_testing(
         python_pump=lambda fallback_reader, fallback_writer: _fake_python_fallback(
             fallback_reader,
