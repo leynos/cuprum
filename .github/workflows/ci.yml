@@ -174,7 +174,7 @@ jobs:
           installed_mdtablefix_version=$(mdtablefix --version 2>/dev/null | tr -d '\r')
           fi
           if [[ "${installed_mdtablefix_version}" != "${expected_mdtablefix_version}" ]]; then
-            if cargo binstall --version >/dev/null 2>&1; then
+            if cargo binstall -V >/dev/null 2>&1; then
               cargo binstall --no-confirm --locked "mdtablefix@${MDTABLEFIX_VERSION}"
             else
               echo "cargo-binstall unavailable; building mdtablefix from crates.io"
@@ -203,7 +203,7 @@ jobs:
       - name: Install Whitaker
         run: |
           if [ "${{ steps.cache-whitaker.outputs.cache-hit }}" != "true" ]; then
-            if cargo binstall --version >/dev/null 2>&1; then
+            if cargo binstall -V >/dev/null 2>&1; then
               cargo binstall --no-confirm --locked \
                 --disable-strategies compile \
                 --git https://github.com/leynos/whitaker \

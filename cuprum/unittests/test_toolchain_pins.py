@@ -250,6 +250,9 @@ def test_mdtablefix_installs_with_its_pinned_rust_toolchain() -> None:
         'cargo binstall --no-confirm --locked "mdtablefix@${MDTABLEFIX_VERSION}"'
         in script
     ), "the Install mdtablefix CI step must retain the cargo binstall fast path"
+    assert "cargo binstall -V >/dev/null 2>&1" in script, (
+        "the Install mdtablefix CI step must probe cargo binstall with -V"
+    )
     assert (
         'rustup toolchain install --profile minimal "${MDTABLEFIX_RUST_VERSION}"'
         in script
@@ -270,6 +273,11 @@ def test_mdtablefix_installs_with_its_pinned_rust_toolchain() -> None:
     assert "${{ env.MDTABLEFIX_RUST_VERSION }}" in cache_key, (
         "the Cache mdtablefix CI mapping must include MDTABLEFIX_RUST_VERSION "
         "in with.key"
+    )
+
+    whitaker_script = _lint_test_step_script(job, "Install Whitaker")
+    assert "cargo binstall -V >/dev/null 2>&1" in whitaker_script, (
+        "the Install Whitaker CI step must probe cargo binstall with -V"
     )
 
 

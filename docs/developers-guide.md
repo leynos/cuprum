@@ -2619,10 +2619,17 @@ The gate requires the `mdtablefix` version pinned by `MDTABLEFIX_VERSION` in
 `.github/workflows/ci.yml`. Install that version locally so formatter output
 matches CI:
 
+`mdtablefix` 0.5.0 requires Rust 1.89.0 when built from source. Cuprum's
+project toolchain remains Rust 1.85.0; CI uses `MDTABLEFIX_RUST_VERSION` to
+select Rust 1.89.0 only for this formatter fallback.
+
 ```bash
 MDTABLEFIX_VERSION="$(sed -n "s/.*MDTABLEFIX_VERSION: '\(.*\)'.*/\1/p" \
   .github/workflows/ci.yml)"
-cargo install --locked mdtablefix --version "$MDTABLEFIX_VERSION"
+MDTABLEFIX_RUST_VERSION="$(sed -n "s/.*MDTABLEFIX_RUST_VERSION: '\(.*\)'.*/\1/p" \
+  .github/workflows/ci.yml)"
+cargo +"$MDTABLEFIX_RUST_VERSION" install --locked mdtablefix \
+  --version "$MDTABLEFIX_VERSION"
 ```
 
 ### Docstring structure

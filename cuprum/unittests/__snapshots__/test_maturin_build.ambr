@@ -143,6 +143,7 @@
       'cuprum/unittests/test_maturin_build.py',
       'cuprum/unittests/test_maturin_pins.py',
       'cuprum/unittests/test_maturin_toolchain.py',
+      'cuprum/unittests/test_mdtablefix_ci_installer.py',
       'cuprum/unittests/test_metrics_adapter.py',
       'cuprum/unittests/test_metrics_adapter_stateful.py',
       'cuprum/unittests/test_native_pump_cleanup_stateful.py',

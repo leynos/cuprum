@@ -192,10 +192,15 @@ fmt: ruff $(MDFORMAT_ALL) ## Format sources
 check-fmt: ruff ## Verify formatting
 	$(RUFF) format --check
 	cd $(RUST_DIR) && $(CARGO) fmt --all -- --check
-	@$(MD_FILES_FIND) | xargs -0 sh -c '\
+	@markdown_files="$$(mktemp)" || exit $$?; \
+	trap 'rm -f "$$markdown_files"' 0; \
+	if ! $(MD_FILES_FIND) > "$$markdown_files"; then \
+		exit 1; \
+	fi; \
+	xargs -0 sh -c '\
 		if [ "$$#" -gt 0 ]; then \
 			scripts/check-markdown-format.sh "$$@"; \
-		fi' sh
+		fi' sh < "$$markdown_files"
 
 test-markdown-format: ## Validate the Markdown formatter checker
 	@PYTHONPATH=scripts $(UV_RUN_ENV) uv run --no-project --python 3.13 \

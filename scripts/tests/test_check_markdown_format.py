@@ -1,4 +1,9 @@
-"""Exercise the Markdown formatter checker at its process boundary."""
+"""Exercise the Markdown formatter checker at its process boundary.
+
+The tests invoke ``scripts/check-markdown-format.sh`` through the Makefile's
+``check-fmt`` gate seam. They cover batching, LF and CRLF line endings, source
+preservation, formatter errors, and argument validation.
+"""
 
 from __future__ import annotations
 
@@ -182,11 +187,15 @@ def _stage_markdown_sources(repository: Path, tracked_files: tuple[Path, ...]) -
 def _run_check_format_gate(
     repository: Path,
     checker_log: Path,
+    markdown_discovery: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the real formatting recipe against the controlled repository."""
     make = shutil.which("make")
     assert make is not None, "the gate integration test requires make"
     command_stub = _write_successful_command(repository)
+    discovery_override = (
+        [] if markdown_discovery is None else [f"MD_FILES_FIND={markdown_discovery}"]
+    )
     return _run_process(
         [
             make,
@@ -197,6 +206,7 @@ def _run_check_format_gate(
             f"RUFF={command_stub}",
             f"CARGO={command_stub}",
             "RUST_DIR=.",
+            *discovery_override,
         ],
         os.environ | {"MARKDOWN_CHECKER_CALL_LOG": str(checker_log)},
         repository,
@@ -331,6 +341,19 @@ def test_check_format_passes_only_tracked_markdown_sources(tmp_path: Path) -> No
     expected_paths = sorted(path.as_posix().encode() for path in tracked_files)
     assert recorded_paths == expected_paths, (
         "the formatting gate must pass exactly every tracked Markdown source"
+    )
+
+
+def test_check_format_rejects_markdown_discovery_failure(tmp_path: Path) -> None:
+    """Fail closed when Git cannot enumerate tracked Markdown sources."""
+    repository, tracked_files, checker_log = _create_format_gate_repository(tmp_path)
+    _stage_markdown_sources(repository, tracked_files)
+
+    result = _run_check_format_gate(repository, checker_log, markdown_discovery="false")
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert not checker_log.exists(), (
+        "the formatting checker must not run after Markdown discovery fails"
     )
 
 
