@@ -3072,7 +3072,6 @@ uv run pytest cuprum/unittests/test_maturin_build.py \
     --snapshot-update -k test_maturin_wheel_build_snapshot
 ```
 
-
 ### Debug Rust-pump early-exit regression
 
 `cuprum/unittests/test_rust_pump_debug_abort.py` checks the Rust pump's writer
