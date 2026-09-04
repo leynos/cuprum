@@ -184,38 +184,11 @@ async def _run_rust_pump_with_blocking_fds(
     state: _RustPumpState,
 ) -> bool:
     """Run the native pump or decline after duplicate setup rollback."""
-    from cuprum._streams_rs import rust_pump_stream
-
     loop = asyncio.get_running_loop()
     cleanup_complete = loop.create_future()
-    rust_writer_fd: int | None = None
-    try:
-        rust_writer_fd = os.dup(state.writer_fd)
-    except (OSError, ValueError):
-        _restore_rust_pump_state(state)
-        raise
-
-    try:
-        os.set_blocking(rust_writer_fd, True)
-    except (OSError, ValueError):
-        _close_rust_writer_fd(rust_writer_fd)
-        _restore_rust_pump_state(state)
-        _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
+    native_pump = _submit_rust_pump(loop=loop, state=state)
+    if native_pump is None:
         return False
-
-    submitted = False
-    try:
-        native_pump = loop.run_in_executor(
-            None,
-            rust_pump_stream,
-            state.reader_fd,
-            rust_writer_fd,
-        )
-        submitted = True
-    finally:
-        if not submitted:
-            _close_rust_writer_fd(rust_writer_fd)
-            _restore_rust_pump_state(state)
     native_pump.add_done_callback(
         functools.partial(
             _complete_rust_pump,
@@ -237,6 +210,41 @@ async def _run_rust_pump_with_blocking_fds(
         raise
     await asyncio.shield(cleanup_complete)
     return True
+
+
+def _submit_rust_pump(
+    *,
+    loop: asyncio.AbstractEventLoop,
+    state: _RustPumpState,
+) -> asyncio.Future[int] | None:
+    """Prepare and submit native work, transferring writer ownership on success."""
+    from cuprum._streams_rs import rust_pump_stream
+
+    try:
+        rust_writer_fd = os.dup(state.writer_fd)
+    except (OSError, ValueError):
+        _restore_rust_pump_state(state)
+        raise
+
+    try:
+        os.set_blocking(rust_writer_fd, True)
+    except (OSError, ValueError):
+        _close_rust_writer_fd(rust_writer_fd)
+        _restore_rust_pump_state(state)
+        _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
+        return None
+
+    try:
+        return loop.run_in_executor(
+            None,
+            rust_pump_stream,
+            state.reader_fd,
+            rust_writer_fd,
+        )
+    except BaseException:
+        _close_rust_writer_fd(rust_writer_fd)
+        _restore_rust_pump_state(state)
+        raise
 
 
 def _log_rust_pump_failed_after_cancel(error: BaseException) -> None:
@@ -291,7 +299,6 @@ async def _pump_over_raw_fds(
     except BaseException:
         _resume_reader_transport(reader_pause.resume)
         raise
-
     try:
         blocking_mode_guard = _BlockingModeGuard.engage(
             reader_fd=reader_fd,
@@ -301,7 +308,6 @@ async def _pump_over_raw_fds(
         _resume_reader_transport(reader_pause.resume)
         _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
         return False
-
     state = _RustPumpState(
         reader_fd=reader_fd,
         writer_fd=writer_fd,
@@ -351,19 +357,15 @@ async def _try_rust_pump(
     rust_fd_attempt_hook = _PUMP_STREAM_DISPATCH_TEST_HOOKS.on_rust_fd_path_attempt
     if rust_fd_attempt_hook is not None:
         rust_fd_attempt_hook()
-
     if _PUMP_STREAM_DISPATCH_TEST_HOOKS.force_fd_extraction_failure:
         return False
-
     extract_raw_fd = _PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor
     extractor = _extract_stream_fd if extract_raw_fd is None else extract_raw_fd
     reader_fd = extractor(reader)
     writer_fd = extractor(writer)
-
     if reader_fd is None or writer_fd is None:
         _log_rust_pump_declined(RustPumpDeclineReason.RAW_FD_UNAVAILABLE)
         return False
-
     return await _run_rust_pump(
         reader=reader,
         writer=writer,
@@ -380,11 +382,9 @@ async def _pump_stream_dispatch(
     if reader is None:
         await _run_python_pump(reader, writer)
         return
-
     backend = get_stream_backend()
     if backend is StreamBackend.RUST and await _try_rust_pump(reader, writer):
         return
-
     await _run_python_pump(reader, writer)
 
 
