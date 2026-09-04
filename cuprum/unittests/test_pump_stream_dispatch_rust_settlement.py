@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import os
 import typing as typ
 from unittest import mock
@@ -107,6 +108,17 @@ class _CleanupOrder:
         )
 
 
+@dataclasses.dataclass(frozen=True)
+class _CancelledPumpSettlement:
+    """Values shared by one cancelled native-pump settlement."""
+
+    native_pump: _HeldNativePump
+    cleanup: _CleanupOrder
+    close_duplicate: mock.Mock
+    write_fd: int
+    task: asyncio.Task[bool]
+
+
 class TestRustPumpSettlement:
     """Regression tests for completion-owned native-pump cleanup."""
 
@@ -158,32 +170,27 @@ class TestRustPumpSettlement:
 
 
 async def _settle_cancelled_native_pump_and_verify_descriptor_ownership(
-    *,
-    native_pump: _HeldNativePump,
-    cleanup: _CleanupOrder,
-    close_duplicate: mock.Mock,
-    write_fd: int,
-    task: asyncio.Task[bool],
+    settlement: _CancelledPumpSettlement,
 ) -> None:
     """Settle native work and verify it never closes asyncio's writer."""
-    native_pump.close_received_writer()
-    os.fstat(write_fd)
+    settlement.native_pump.close_received_writer()
+    os.fstat(settlement.write_fd)
     reused_writer_fd = os.open(os.devnull, os.O_WRONLY)
     try:
-        assert reused_writer_fd == native_pump.received_fds[0], (
+        assert reused_writer_fd == settlement.native_pump.received_fds[0], (
             "the native duplicate's numeric slot should be available for reuse"
         )
-        native_pump.future.set_result(0)
-        await asyncio.wait_for(cleanup.finished.wait(), timeout=0.5)
+        settlement.native_pump.future.set_result(0)
+        await asyncio.wait_for(settlement.cleanup.finished.wait(), timeout=0.5)
 
-        assert cleanup.order == ["pause", "drain", "restore", "resume"], (
+        assert settlement.cleanup.order == ["pause", "drain", "restore", "resume"], (
             "expected settlement to restore descriptors before resuming reader"
         )
-        os.fstat(write_fd)
+        os.fstat(settlement.write_fd)
         os.fstat(reused_writer_fd)
-        close_duplicate.assert_not_called()
+        settlement.close_duplicate.assert_not_called()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            await settlement.task
     finally:
         os.close(reused_writer_fd)
 
@@ -248,9 +255,11 @@ async def _cancel_before_native_worker_settles(
             os.fstat(native_pump.received_fds[0])
 
             await _settle_cancelled_native_pump_and_verify_descriptor_ownership(
-                native_pump=native_pump,
-                cleanup=cleanup,
-                close_duplicate=close_duplicate,
-                write_fd=write_fd,
-                task=task,
+                _CancelledPumpSettlement(
+                    native_pump=native_pump,
+                    cleanup=cleanup,
+                    close_duplicate=close_duplicate,
+                    write_fd=write_fd,
+                    task=task,
+                )
             )
