@@ -301,10 +301,14 @@ cranelift; the coverage gate cannot, because cranelift has no
 
 ### Tool installation
 
-Prebuilt tool installers fail closed, so a missing published binary fails the
-job instead of starting a source build that no cache owns. In this repository
-that means `cargo binstall` running with `--disable-strategies compile` when
-the lint gate installs Whitaker.
+The lint job installs Nixie and Whitaker through the pinned
+`leynos/shared-actions` installers. Nixie's installer also provisions Merman;
+the bootstrap uses Rust `1.95.0` because Merman CLI `0.7.0` requires that
+compiler. The job then restores Rust `1.85.0`, the project's supported
+toolchain, before installing Whitaker and running the project gates. The
+Whitaker action receives `WHITAKER_INSTALLER_VERSION` from the job environment
+(`0.2.7` at present). The shared-actions revision is kept identical for these
+installer calls and the other `setup-rust` calls by a CI contract test.
 
 cargo-nextest is no longer installed here at all. The coverage job is the only
 place it runs, and the shared action installs it from checksummed official
@@ -3499,15 +3503,24 @@ the purpose of automated dependency updates and turns a routine bump into a
 manual chore.
 
 Contract tests may still verify the *shape* of a reusable-workflow caller. They
-must not verify the specific SHA value.
+must not verify the specific SHA value, except for a narrowly scoped repository
+policy that deliberately requires every call into one shared-action repository
+to use the same revision. Cuprum's CI has that policy for
+`leynos/shared-actions`: its contract test compares the calls with one shared
+constant so an installer or toolchain action cannot silently drift from the
+others. This exception is about consistency across those calls, not about
+blocking routine Dependabot updates; update the single constant with the
+workflow pins when Dependabot changes the revision.
 
 - Do assert the workflow references the correct reusable workflow path.
 - Do assert the ref is pinned to a full 40-character commit SHA, not a
   mutable branch such as `main` or `rolling`.
 - Do assert the expected `on:` triggers, least-privilege `permissions:`, and
   the inputs the caller relies on.
-- Do not hard-code the current SHA value as an expected string. Match it with
-  a pattern instead.
+- Do not hard-code the current SHA value as an expected string for ordinary
+  reusable-workflow callers. For the narrowly scoped shared-actions consistency
+  policy above, use one named constant rather than repeating the SHA in each
+  assertion.
 - Do not fail a test purely because Dependabot bumped the pinned SHA.
 
 ```python

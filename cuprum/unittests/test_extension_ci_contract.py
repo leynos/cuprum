@@ -16,11 +16,15 @@ front of the same workflow's benchmark job.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
+from tests.helpers.ci_workflows import workflow_sources
 from tests.helpers.workflow import (
     Workflow,
     first_step_running,
+    job,
     run_scripts,
     script_runs_command,
     step_named,
@@ -28,6 +32,7 @@ from tests.helpers.workflow import (
 )
 
 SHARED_ACTIONS_SHA = "794e4801babcf68065c660fdf4781ad62be5d061"
+SHARED_ACTIONS_REFERENCE = re.compile(r"leynos/shared-actions/[^\s@]+@([0-9a-f]{40})")
 
 
 def test_the_ci_job_builds_the_extension_before_running_the_gated_tests(
@@ -219,11 +224,55 @@ def test_lint_job_uses_shared_tooling_installers(workflow_data: Workflow) -> Non
         "cache-provider": "external",
         "use-sccache": "false",
     }
+    whitaker_installer = step_named(workflow_data, "lint-test", "Install Whitaker")
+    assert whitaker_installer.get("with") == {
+        "installer-version": "${{ env.WHITAKER_INSTALLER_VERSION }}"
+    }
+
+    lint_environment = job(workflow_data, "lint-test").get("env")
+    assert isinstance(lint_environment, dict), "lint-test must declare an environment"
+    assert lint_environment.get("WHITAKER_INSTALLER_VERSION") == "0.2.7"
 
     step_names = [step.get("name") for step in steps(workflow_data, "lint-test")]
+    nixie_gate, _ = first_step_running(
+        workflow_data, "make nixie", job_name="lint-test"
+    )
     assert (
         step_names.index("Install Rust toolchain for Nixie")
         < step_names.index("Install Nixie")
         < step_names.index("Install project Rust toolchain")
         < step_names.index("Install Whitaker")
+        < nixie_gate
+    )
+    assert "Cache Whitaker installation" not in step_names
+
+    legacy_whitaker_commands = [
+        script
+        for job_name, script in run_scripts(workflow_data)
+        if job_name == "lint-test"
+        and ("cargo binstall" in script or "whitaker-installer" in script)
+    ]
+    assert not legacy_whitaker_commands, (
+        "lint-test must install Whitaker through the shared action, not "
+        f"manual commands: {legacy_whitaker_commands}"
+    )
+
+
+def test_workflows_pin_shared_actions_to_one_revision() -> None:
+    """Every reusable shared-actions consumer must use the contract revision."""
+    references = [
+        f"{workflow_name}:{match.group(0)}"
+        for workflow_name, source in workflow_sources()
+        for match in SHARED_ACTIONS_REFERENCE.finditer(source)
+    ]
+    assert references, "the workflow estate must consume shared actions"
+
+    outdated = [
+        reference
+        for reference in references
+        if not reference.endswith(f"@{SHARED_ACTIONS_SHA}")
+    ]
+    assert not outdated, (
+        "every shared-actions workflow reference must use "
+        f"{SHARED_ACTIONS_SHA}; found {outdated}"
     )
