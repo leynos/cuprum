@@ -98,6 +98,50 @@ names a matrix value. This matters because the `env` name a step writes is not
 the archive it publishes: five jobs name `SCCACHE_CACHE_KEY` and write five
 disjoint archives.
 
+## When to split a family, and when not to
+
+Splitting a compiler-cache family is not free and not automatically right. Two
+numbers decide it, and both must be measured rather than estimated:
+
+1. What the split saves. Run the job cold, run it again warm over an unchanged
+   tree, and compare the wall time of the step that compiles. Hit counts alone
+   overstate the case: seventeen cacheable compiles sounds like a lot and costs
+   a few seconds.
+2. What the split costs. Read the archive size from the `Cache saved with key`
+   step in the writer's log. Do not infer it from the size of the archive being
+   replaced.
+
+Split when the saving is worth the archive. Collapse when it is not. Record
+both numbers wherever the decision is written down, so the next person can
+re-derive it rather than inherit it.
+
+The worked example is this repository's own split, measured on 2026-09-04
+between the cold writer[^4] and a warm dispatch[^5] over an unchanged tree.
+
+| Job | Compiling step | Cold | Warm | Saved |
+| --- | --- | --- | --- | --- |
+| `typecheck-test` 3.12 | Run tests | 112 s | 101 s | 11 s |
+| `typecheck-test` 3.14 | Run tests | 99 s | 90 s | 9 s |
+| `typecheck-test` 3.15a | Run tests | 98 s | 88 s | 10 s |
+| `extension-tests` | Build the native extension | 13 s | 7 s | 6 s |
+| `benchmark-ratchet` | benchmarks and ratchet | 59 s | 54 s | 5 s |
+
+_Table 3: What each family saves its reader on a warm run. The
+`typecheck-test` step also runs the Python suite, so its wall time is dominated
+by pytest rather than by compilation; `extension-tests` is the compile-only
+signal._
+
+The estimate that justified the split was wrong by a factor of seven, which is
+the reason this section exists. Six families were expected to cost about 1 GB
+per generation against the single 287 MB archive they replaced. Measured, the
+five Ubicloud families total about 101 MB, at 19.8 to 20.5 MB each, and the
+instrumented coverage family is 286 MB on its own. The old archive was large
+because it held one job's instrumented workspace objects, which is precisely
+why it served nobody else. The split added about 100 MB per generation, so the
+real trade is roughly 35 s of paid runner time per run against about 81 MB per
+merge push, against a 30 GB weekly quota. On those numbers the split is worth
+keeping; on the numbers that were assumed, it would not have been.
+
 ## Rolling keys
 
 The compiler key ends in the run identifier, so it never matches exactly and
@@ -153,3 +197,11 @@ reclaimed nothing while reporting success[^3].
 [^3]: Cuprum CI run
     [33857764655](https://github.com/leynos/cuprum/actions/runs/33857764655),
     the first run carrying the resource sampler, 2026-09-04.
+
+[^4]: Cuprum CI run
+    [33898839149](https://github.com/leynos/cuprum/actions/runs/33898839149),
+    the merge push that first wrote all six families, 2026-09-04.
+
+[^5]: Cuprum CI run
+    [33900410222](https://github.com/leynos/cuprum/actions/runs/33900410222), a
+    `workflow_dispatch` reading them back over an unchanged tree, 2026-09-04.
