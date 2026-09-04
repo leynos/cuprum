@@ -232,13 +232,22 @@ def test_the_typecheck_only_leg_installs_no_wrapper() -> None:
     only typechecks therefore reports nothing rather than zero.
     """
     job_steps = steps("ci.yml", "typecheck-test")
-    by_name = {str(step.get("name", "")): step for step in job_steps}
-    for name in SUITE_GATED_STEPS:
-        assert name in by_name, f"ci.yml:typecheck-test must declare {name!r}"
-        condition = " ".join(str(by_name[name].get("if", "")).split())
-        assert "matrix.python-suite" in condition, (
-            f"ci.yml:typecheck-test step {name!r} must follow the Python "
-            f"suite, got if: {condition!r}"
+    for name, expected in SUITE_GATED_STEPS:
+        # Matched as a list, not through a name-indexed mapping: a duplicate
+        # step would be hidden by the later one, and the surviving entry could
+        # carry the condition while the earlier one installed the wrapper
+        # regardless.
+        matches = [step for step in job_steps if str(step.get("name", "")) == name]
+        assert len(matches) == 1, (
+            f"ci.yml:typecheck-test must declare {name!r} exactly once, "
+            f"found {len(matches)}"
+        )
+        # Compared whole, not by containment: `matrix.python-suite || true`
+        # contains the flag and would let the leg install sccache anyway.
+        condition = " ".join(str(matches[0].get("if", "")).split())
+        assert condition == expected, (
+            f"ci.yml:typecheck-test step {name!r} must carry if: {expected!r}, "
+            f"got {condition!r}"
         )
 
 

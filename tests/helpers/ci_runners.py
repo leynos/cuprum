@@ -131,11 +131,13 @@ SCCACHE_JOBS: typ.Final = (
 #: Steps in the interpreter matrix that must follow the Python suite, because
 #: without it the job compiles nothing and the wrapper would report zero
 #: requests, which reads as a broken integration rather than as no work.
+#: Each entry pairs a step name with the exact condition it must carry. The
+#: report keeps its `always()` so a failed build still says what it compiled.
 SUITE_GATED_STEPS: typ.Final = (
-    "Restore the compiler cache",
-    "Set up sccache",
-    "Reset compiler-cache counters",
-    "Record compiler-cache effectiveness",
+    ("Restore the compiler cache", "matrix.python-suite"),
+    ("Set up sccache", "matrix.python-suite"),
+    ("Reset compiler-cache counters", "matrix.python-suite"),
+    ("Record compiler-cache effectiveness", "always() && matrix.python-suite"),
 )
 #: Paths no cache step may ever carry. A `target` tree is invalidated far more
 #: often than the registry beside it, and sccache already holds the objects it

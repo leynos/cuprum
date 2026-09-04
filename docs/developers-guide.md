@@ -191,12 +191,12 @@ matches, and the save therefore carries no cache-hit guard.
 `coverage-upload` writes it for the Ubicloud lane, and `lint-test` writes the
 GitHub-hosted lane's entry. The writer has to be a job that actually compiles,
 or the rolling generation freezes: it would restore the previous entry and
-republish it unchanged for ever, never absorbing a new object while still
+republish it unchanged forever, never absorbing a new object while still
 reporting hits. That is not hypothetical. The writer was briefly the 3.13
 interpreter leg, which the deduplication had just reduced to a typechecker.
 
 One consequence is worth stating: the release objects `benchmark-ratchet`
-produces are restored but never republished, because only the writing jobs save.
+produces are restored but never republished because only the writing jobs save.
 
 Every job that compiles Rust installs the wrapper and reports its counters:
 `lint-test`, `extension-tests`, `coverage`, `benchmark-ratchet`,
