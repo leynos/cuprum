@@ -59,6 +59,7 @@ UBICLOUD_VCPUS = 2
 GITHUB_LABEL = "ubuntu-latest"
 
 CACHE_KEYS_ACTION = "./.github/actions/cache-keys"
+CACHE_KEYS_ACTION_FILE = ROOT / ".github" / "actions" / "cache-keys" / "action.yml"
 SCCACHE_ACTION = "./.github/actions/setup-sccache"
 SETUP_RUST = (
     "leynos/shared-actions/.github/actions/setup-rust@"
@@ -153,15 +154,73 @@ FORBIDDEN_CACHE_PATHS: typ.Final = ("target", "rust/target", "target/debug")
 #: read different cache services; a key with two writers has one on each side.
 CACHE_WRITERS: typ.Final[cabc.Mapping[str, tuple[tuple[str, str], ...]]] = {
     "CARGO_CACHE_KEY": (("ci.yml", "extension-tests"), ("ci.yml", "lint-test")),
-    # The compiler cache is written by whichever job actually compiles. On the
-    # Ubicloud lane that is the coverage job, which runs the whole Rust suite
-    # under instrumentation; the interpreter matrix compiles almost nothing now
-    # that the suite lives there.
+    # The compiler cache is written by whichever job actually compiles, and
+    # each compile shape is its own family. See CACHE_FAMILY_WRITERS: this
+    # mapping only says which jobs hold a save step, not which archive each
+    # one publishes.
     "SCCACHE_CACHE_KEY": (
-        ("coverage-main.yml", "coverage-upload"),
+        ("ci.yml", "benchmark-ratchet"),
+        ("ci.yml", "extension-tests"),
         ("ci.yml", "lint-test"),
+        ("ci.yml", "typecheck-test"),
+        ("coverage-main.yml", "coverage-upload"),
     ),
     "TOOL_CACHE_KEY": (("ci.yml", "typecheck-test"),),
+}
+#: One writer per rendered family, which is the invariant that actually
+#: matters: five jobs name ``SCCACHE_CACHE_KEY`` and publish five disjoint
+#: archives, because the rendered key carries the lane, the interpreter and the
+#: build shape. Each entry is
+#: ``(key, lane, scope...) -> (workflow, job)``.
+#:
+#: The compiler split was measured on 2026-09-04. Before it, one instrumented
+#: 3.13 archive served every Ubicloud job: the 3.13 reader took 14 of its 17
+#: cacheable compiles and the 3.12, 3.14 and 3.15a readers took none, because
+#: `pyo3` is declared without `abi3` and an extension compiled against one
+#: CPython serves no other. `benchmark-ratchet` builds with `--release` and the
+#: coverage jobs build under instrumentation, so neither can share an archive
+#: with an unoptimized build either.
+#:
+#: The typecheck-only leg is absent by construction: it compiles nothing, its
+#: save step is gated on ``matrix.python-suite``, and `extension-tests` owns
+#: the 3.13 unoptimized family instead.
+CACHE_FAMILY_WRITERS: typ.Final[
+    cabc.Mapping[tuple[str, str, tuple[str, ...]], tuple[str, str]]
+] = {
+    ("CARGO_CACHE_KEY", "self-hosted", ()): ("ci.yml", "extension-tests"),
+    ("CARGO_CACHE_KEY", "github-hosted", ()): ("ci.yml", "lint-test"),
+    ("TOOL_CACHE_KEY", "self-hosted", ("3.12",)): ("ci.yml", "typecheck-test"),
+    ("TOOL_CACHE_KEY", "self-hosted", ("3.13",)): ("ci.yml", "typecheck-test"),
+    ("TOOL_CACHE_KEY", "self-hosted", ("3.14",)): ("ci.yml", "typecheck-test"),
+    ("TOOL_CACHE_KEY", "self-hosted", ("3.15",)): ("ci.yml", "typecheck-test"),
+    ("SCCACHE_CACHE_KEY", "github-hosted", ("3.13", "lint")): (
+        "ci.yml",
+        "lint-test",
+    ),
+    ("SCCACHE_CACHE_KEY", "self-hosted", ("3.12", "debug")): (
+        "ci.yml",
+        "typecheck-test",
+    ),
+    ("SCCACHE_CACHE_KEY", "self-hosted", ("3.13", "debug")): (
+        "ci.yml",
+        "extension-tests",
+    ),
+    ("SCCACHE_CACHE_KEY", "self-hosted", ("3.14", "debug")): (
+        "ci.yml",
+        "typecheck-test",
+    ),
+    ("SCCACHE_CACHE_KEY", "self-hosted", ("3.15", "debug")): (
+        "ci.yml",
+        "typecheck-test",
+    ),
+    ("SCCACHE_CACHE_KEY", "self-hosted", ("3.13", "release")): (
+        "ci.yml",
+        "benchmark-ratchet",
+    ),
+    ("SCCACHE_CACHE_KEY", "self-hosted", ("3.13", "coverage")): (
+        "coverage-main.yml",
+        "coverage-upload",
+    ),
 }
 #: Keys naming the run rather than the content they hold. A compiler cache
 #: depends on the source that was compiled, which no lockfile hash captures, so

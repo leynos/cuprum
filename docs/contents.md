@@ -19,6 +19,9 @@ open each document.
   spelling, structure, Markdown, roadmap, RFC, and ADR rules.
 - [Scripting standards](scripting-standards.md) - conventions for project helper
   scripts, command execution, path handling, and command mocking.
+- [CI cache ownership](ci-cache-ownership.md) - which job writes each CI cache
+  family, why the compiler cache is split by interpreter and build shape, and
+  how resource use is sampled on the paid Linux runners.
 
 ## Design and decisions
 

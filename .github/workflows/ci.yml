@@ -69,6 +69,7 @@ jobs:
           python-version: '3.13'
           generation: ${{ env.CACHE_GENERATION }}
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
+          compiler-shape: lint
 
       # This job is GitHub-hosted, so these archives live in GitHub's cache
       # service rather than Ubicloud's. Every key carries `runner.environment`,
@@ -233,6 +234,18 @@ jobs:
           key: ${{ env.CARGO_CACHE_KEY }}
 
       - name: Save the compiler cache
+        # The only GitHub-hosted job that compiles, so it owns the whole
+        # `github-hosted` compiler-cache scope; its Cranelift lint build is
+        # also a shape no other job produces. Its archive lands in GitHub's
+        # cache rather than Ubicloud's, which is the other reason the lane is
+        # named in the key.
+        #
+        # The entry is a rolling generation named after the run, so there is
+        # no cache-hit guard to skip: the key is new every time, and a run
+        # that restored the previous generation republishes it with whatever
+        # it added. The event guard is what keeps a pull request, or a
+        # dispatch measuring warm caches, from publishing into a family it is
+        # not trusted to own.
         if: >-
           github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -276,12 +289,22 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
+      # Started before the first cache restore, so the archive downloads and
+      # every build below fall inside the measured window. `ubicloud-standard-2`
+      # starts with about 31 GB free, and disk, not memory, is what kills a job
+      # on this shape.
+      - name: Start resource sampler
+        uses: ./.github/actions/resource-sampler
+        with:
+          mode: start
+          vcpus: ${{ env.LINUX_RUNNER_VCPUS }}
       - name: Compute cache keys
         uses: ./.github/actions/cache-keys
         with:
           python-version: ${{ matrix.python-version }}
           generation: ${{ env.CACHE_GENERATION }}
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
+          compiler-shape: debug
 
       - name: Restore the Cargo registry
         id: cargo-cache
@@ -428,6 +451,36 @@ jobs:
             .uv-tools
           key: ${{ env.TOOL_CACHE_KEY }}
 
+      - name: Save the compiler cache
+        # Each leg that runs the Python suite compiles the extension against
+        # its own interpreter, and `pyo3` is built without `abi3`, so those
+        # objects serve no other leg. The interpreter is part of the key, so
+        # each leg is the sole writer of its own family rather than four legs
+        # racing for one. The typecheck-only leg compiles nothing and has no
+        # compiler cache to save.
+        #
+        # The entry is a rolling generation named after the run, so there is
+        # no cache-hit guard to skip: the key is new every time, and a run
+        # that restored the previous generation republishes it with whatever
+        # it added. The event guard is what keeps a pull request, or a
+        # dispatch measuring warm caches, from publishing into a family it is
+        # not trusted to own.
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          matrix.python-suite
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: ${{ env.SCCACHE_CACHE_KEY }}
+
+      # Last, and unconditional, so a job that failed on disk still reports the
+      # high-water mark that explains why.
+      - name: Report peak resource use
+        if: always()
+        uses: ./.github/actions/resource-sampler
+        with:
+          mode: report
+          vcpus: ${{ env.LINUX_RUNNER_VCPUS }}
 
   extension-tests:
     name: Extension-gated tests (Python/Rust boundary)
@@ -441,12 +494,22 @@ jobs:
           # must not stay in .git/config where that code could reach it.
           persist-credentials: false
 
+      # Started before the first cache restore, so the archive downloads and
+      # every build below fall inside the measured window. `ubicloud-standard-2`
+      # starts with about 31 GB free, and disk, not memory, is what kills a job
+      # on this shape.
+      - name: Start resource sampler
+        uses: ./.github/actions/resource-sampler
+        with:
+          mode: start
+          vcpus: ${{ env.LINUX_RUNNER_VCPUS }}
       - name: Compute cache keys
         uses: ./.github/actions/cache-keys
         with:
           python-version: '3.13'
           generation: ${{ env.CACHE_GENERATION }}
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
+          compiler-shape: debug
 
       - name: Restore the Cargo registry
         id: cargo-cache
@@ -580,8 +643,7 @@ jobs:
 
       # This is the heaviest Rust gate that runs on `main`: it resolves the
       # locked graph and compiles the extension. It therefore owns the Cargo
-      # registry key, and the local compiler-cache key when that backend is
-      # selected. Every other job restores both.
+      # registry key. Every other job restores it.
       - name: Save the Cargo registry
         if: >-
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
@@ -592,6 +654,34 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           key: ${{ env.CARGO_CACHE_KEY }}
+
+      - name: Save the compiler cache
+        # This job is the only one that builds the unoptimized extension
+        # against Python 3.13, so it owns the `py3.13-debug` compiler-cache
+        # family. Before this step existed the family had no writer at all
+        # and every reader of it was permanently cold.
+        #
+        # The entry is a rolling generation named after the run, so there is
+        # no cache-hit guard to skip: the key is new every time, and a run
+        # that restored the previous generation republishes it with whatever
+        # it added. The event guard is what keeps a pull request, or a
+        # dispatch measuring warm caches, from publishing into a family it is
+        # not trusted to own.
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: ${{ env.SCCACHE_CACHE_KEY }}
+
+      # Last, and unconditional, so a job that failed on disk still reports the
+      # high-water mark that explains why.
+      - name: Report peak resource use
+        if: always()
+        uses: ./.github/actions/resource-sampler
+        with:
+          mode: report
+          vcpus: ${{ env.LINUX_RUNNER_VCPUS }}
 
   coverage:
     # Pull requests only. Pushes to main are handled by coverage-main.yml,
@@ -615,12 +705,22 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Started before the first cache restore, so the archive downloads and
+      # every build below fall inside the measured window. `ubicloud-standard-2`
+      # starts with about 31 GB free, and disk, not memory, is what kills a job
+      # on this shape.
+      - name: Start resource sampler
+        uses: ./.github/actions/resource-sampler
+        with:
+          mode: start
+          vcpus: ${{ env.LINUX_RUNNER_VCPUS }}
       - name: Compute cache keys
         uses: ./.github/actions/cache-keys
         with:
           python-version: '3.13'
           generation: ${{ env.CACHE_GENERATION }}
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
+          compiler-shape: coverage
 
       # Pull requests only, so this job never saves: it reads the generation
       # that the `main` writers published and publishes nothing of its own.
@@ -778,6 +878,43 @@ jobs:
             printf '%s\n' "${fence}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
+      # `llvm-cov`'s target tree has no consumer once the report is written,
+      # and it is the second tree on a volume this job leaves 89% full.
+      # Removed before any cache save, so no archive carries it and the
+      # sampler's least-free figure reflects the job's real high-water mark
+      # rather than scratch that was about to be discarded.
+      - name: Discard the instrumented build tree
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          df -h .
+          # `cargo llvm-cov` builds beside the manifest it was given, which is
+          # `rust/Cargo.toml` here and not the repository root. Locating the
+          # tree rather than naming it keeps the reclaim correct if the
+          # manifest moves, and reporting the size keeps a run that reclaimed
+          # nothing distinguishable from one that had nothing to reclaim.
+          found=0
+          while IFS= read -r tree; do
+            found=1
+            du -sh "${tree}" || true
+            rm --recursive --force "${tree}"
+          done < <(find . -maxdepth 4 -type d \
+            \( -name llvm-cov-target -o -name llvm-cov \) -prune -print)
+          if [ "${found}" -eq 0 ]; then
+            echo "No instrumented build tree found to discard"
+          fi
+          df -h .
+
+      # Last, and unconditional, so a job that failed on disk still reports the
+      # high-water mark that explains why.
+      - name: Report peak resource use
+        if: always()
+        uses: ./.github/actions/resource-sampler
+        with:
+          mode: report
+          vcpus: ${{ env.LINUX_RUNNER_VCPUS }}
+
   # Detects whether performance-relevant paths changed so that
   # benchmark-ratchet can skip docs-only and Dependabot-batch pull
   # requests. Runs on every event (cheap, GitHub-hosted) so that the
@@ -882,12 +1019,21 @@ jobs:
           # Keep its scoped token out of later build commands.
           persist-credentials: false
 
+      # No resource sampler here, deliberately. This job times commands that
+      # run for about half a second and compares the ratio of two of them, so
+      # a background loop waking every 15 s to shell out to `free` and `df` is
+      # interference in the measurement rather than an observation of it. Its
+      # disk figure was taken once, in run 33857764655: 62.1 GB used with
+      # 11.0 GB free on the 72 GB volume, the same envelope as the other
+      # Ubicloud jobs.
+
       - name: Compute cache keys
         uses: ./.github/actions/cache-keys
         with:
           python-version: '3.13'
           generation: ${{ env.CACHE_GENERATION }}
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
+          compiler-shape: release
 
       - name: Restore the Cargo registry
         id: cargo-cache
@@ -1144,6 +1290,25 @@ jobs:
           path: |
             ${{ runner.temp }}/benchmark-ratchet/main-plan.json
             ${{ runner.temp }}/benchmark-ratchet/main-throughput.json
+
+      - name: Save the compiler cache
+        # This is the only job that builds the extension with `--release`, so
+        # it owns the `py3.13-release` compiler-cache family. An optimized
+        # object cannot serve an unoptimized build, which is why the shape is
+        # part of the key rather than shared with `extension-tests`.
+        #
+        # The entry is a rolling generation named after the run, so there is
+        # no cache-hit guard to skip: the key is new every time, and a run
+        # that restored the previous generation republishes it with whatever
+        # it added. The event guard is what keeps a pull request, or a
+        # dispatch measuring warm caches, from publishing into a family it is
+        # not trusted to own.
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: ${{ env.SCCACHE_CACHE_KEY }}
 
   build-wheels:
     uses: ./.github/workflows/build-wheels.yml
