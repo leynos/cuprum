@@ -42,21 +42,27 @@ def test_every_ubicloud_job_measures_its_resource_use() -> None:
     """
     for workflow_name, job_name in expand(UBICLOUD_JOBS):
         job_steps = steps(workflow_name, job_name)
-        sampler = {
-            str(step_inputs(step, f"{workflow_name}:{job_name} sampler").get("mode")): (
-                index,
-                step,
-            )
+        # Collected as a list first. Two `start` steps would each leave a
+        # background sampler running while the single `report` kills only the
+        # most recent, and a mapping built directly would hide the duplicate.
+        message = f"{workflow_name}:{job_name} sampler"
+        sampler_steps = [
+            (str(step_inputs(step, message).get("mode")), index, step)
             for index, step in enumerate(job_steps)
             if step.get("uses") == RESOURCE_SAMPLER
-        }
-        if not sampler:
+        ]
+        sampler = {mode: (index, step) for mode, index, step in sampler_steps}
+        if not sampler_steps:
             # Jobs that neither compile nor test have no high-water mark worth
             # sampling; the manifest below names the ones that do.
             assert (workflow_name, job_name) not in SAMPLED_JOBS, (
                 f"{workflow_name}:{job_name} must sample its resource use"
             )
             continue
+        assert len(sampler_steps) == len(sampler), (
+            f"{workflow_name}:{job_name} declares a sampler mode twice; each "
+            "extra start leaves a sampler the single report cannot kill"
+        )
         assert set(sampler) == {"start", "report"}, (
             f"{workflow_name}:{job_name} must both start and report the sampler"
         )

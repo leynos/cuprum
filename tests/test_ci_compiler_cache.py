@@ -279,10 +279,17 @@ def test_the_compiler_cache_is_written_by_a_job_that_compiles() -> None:
         "each interpreter leg owns the compiler-cache family for its own "
         "interpreter, so the matrix declares exactly one save step"
     )
+    # Compared whole, not by containment: `matrix.python-suite || true`
+    # contains the flag and would let the typecheck-only leg publish the
+    # `py3.13-debug` family that `extension-tests` owns.
     condition = " ".join(str(matrix_writers[0].get("if", "")).split())
-    assert "matrix.python-suite" in condition, (
+    expected = (
+        "github.event_name == 'push' && github.ref == 'refs/heads/main' && "
+        "matrix.python-suite"
+    )
+    assert condition == expected, (
         "the leg that only typechecks compiles nothing, so it must not "
-        f"republish a generation; got if: {condition!r}"
+        f"republish a generation; must carry if: {expected!r}, got {condition!r}"
     )
 
 

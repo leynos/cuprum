@@ -188,15 +188,20 @@ so a content-addressed key would hit forever and absorb nothing new. Each
 writing run publishes a fresh entry seeded from the newest entry its prefix
 matches, and the save therefore carries no cache-hit guard.
 
-`coverage-upload` writes it for the Ubicloud lane, and `lint-test` writes the
-GitHub-hosted lane's entry. The writer has to be a job that actually compiles,
-or the rolling generation freezes: it would restore the previous entry and
-republish it unchanged forever, never absorbing a new object while still
-reporting hits. That is not hypothetical. The writer was briefly the 3.13
-interpreter leg, which the deduplication had just reduced to a typechecker.
+The key also names the interpreter and the build shape, so there is one family
+per compile shape and one writer for each:
+[CI cache ownership](ci-cache-ownership.md) lists them and records the
+measurement that forced the split. In outline, `extension-tests` writes the
+3.13 unoptimized family, each `typecheck-test` leg that runs a suite writes its
+own interpreter's, `benchmark-ratchet` writes the 3.13 release family,
+`coverage-upload` writes the instrumented one, and `lint-test` writes the
+GitHub-hosted lint family.
 
-One consequence is worth stating: the release objects `benchmark-ratchet`
-produces are restored but never republished because only the writing jobs save.
+The writer has to be a job that actually compiles, or the rolling generation
+freezes: it would restore the previous entry and republish it unchanged
+forever, never absorbing a new object while still reporting hits. That is not
+hypothetical. The writer was briefly the 3.13 interpreter leg, which the
+deduplication had just reduced to a typechecker.
 
 Every job that compiles Rust installs the wrapper and reports its counters:
 `lint-test`, `extension-tests`, `coverage`, `benchmark-ratchet`,

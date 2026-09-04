@@ -60,7 +60,19 @@ def _require(*, condition: bool, message: str) -> None:
 
 
 class CacheFamily(typ.NamedTuple):
-    """One rendered cache family: what a single archive key identifies."""
+    """One rendered cache family: what a single archive key identifies.
+
+    Attributes
+    ----------
+    key_name:
+        The ``env`` name the key renders from, such as ``SCCACHE_CACHE_KEY``.
+    lane:
+        ``self-hosted`` or ``github-hosted``, the value ``runner.environment``
+        renders to. The two lanes read different cache services.
+    scope:
+        The ``cache-keys`` inputs this family is scoped by, in the order
+        :data:`KEY_SCOPES` declares them.
+    """
 
     key_name: str
     lane: str
@@ -82,7 +94,26 @@ def _lane(workflow_name: str, job_name: str) -> str:
 
 
 def matrix_legs(workflow_name: str, job_name: str) -> list[dict[str, object]]:
-    """Return one mapping per matrix leg, or a single empty leg when there is none."""
+    """Expand one job's matrix into the legs it runs as.
+
+    Parameters
+    ----------
+    workflow_name:
+        Workflow file name, such as ``ci.yml``.
+    job_name:
+        Job key within that workflow.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        One mapping per ``include`` entry, or a single empty mapping when the
+        job declares no matrix, so callers can iterate uniformly.
+
+    Notes
+    -----
+    Fails the contract, through :func:`_require`, when the job declares a
+    matrix without an ``include`` list, which this reader cannot expand.
+    """
     strategy = job(workflow_name, job_name).get("strategy")
     if not isinstance(strategy, dict):
         return [{}]
@@ -182,7 +213,28 @@ def _writes_on_leg(step: Step, leg: cabc.Mapping[str, object]) -> bool:
 
 
 def writer_families(workflow_name: str, job_name: str) -> set[CacheFamily]:
-    """Return every cache family one job publishes, expanded over its matrix."""
+    """Resolve every cache family one job publishes.
+
+    Parameters
+    ----------
+    workflow_name:
+        Workflow file name, such as ``ci.yml``.
+    job_name:
+        Job key within that workflow.
+
+    Returns
+    -------
+    set[CacheFamily]
+        One entry per archive the job's save steps publish, with matrix legs
+        expanded and legs excluded by a matrix-valued save condition omitted.
+
+    Notes
+    -----
+    Fails the contract, through :func:`_require`, when the job renders its keys
+    other than exactly once through the shared renderer, when a save step names
+    a key with no declared scope, when a scoping input is left to the action's
+    default, or when the job publishes one family from more than one save step.
+    """
     inputs = _renderer_inputs(workflow_name, job_name)
     lane = _lane(workflow_name, job_name)
     families: set[CacheFamily] = set()
@@ -208,5 +260,14 @@ def writer_families(workflow_name: str, job_name: str) -> set[CacheFamily]:
             scope = tuple(
                 _resolve(inputs[name], leg, message) for name in KEY_SCOPES[key_name]
             )
-            families.add(CacheFamily(key_name, lane, scope))
+            family = CacheFamily(key_name, lane, scope)
+            # Rejected here rather than deduplicated by the set. Two save steps
+            # in one job that render the same family are the same collision the
+            # caller's contract exists to catch, and a set would silently make
+            # them one element and report the job as a sole writer.
+            _require(
+                condition=family not in families,
+                message=f"{message}: publishes {family} more than once",
+            )
+            families.add(family)
     return families
