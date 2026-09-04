@@ -53,12 +53,20 @@ RUST_PUMP_CLEANUP_TOTAL = "cuprum_rust_pump_cleanup_total"
 RUST_PUMP_CLEANUP_DURATION_SECONDS = "cuprum_rust_pump_cleanup_duration_seconds"
 """Monotonic wait durations for completed native-pump cleanup."""
 
+RUST_PUMP_CLEANUP_GRACE_EXPIRED_TOTAL = "cuprum_rust_pump_cleanup_grace_expired_total"
+"""Caller-facing cleanup waits that exhausted their configured grace."""
+
+RUST_PUMP_CLEANUP_DEFERRED_TOTAL = "cuprum_rust_pump_cleanup_deferred_total"
+"""Deferred native-pump cleanups completed after the caller had returned."""
+
 # One counter per phase, keyed by phase so the metric names have exactly one
 # definition. Read-only so an importing module cannot rewrite them at runtime.
 _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
     "declined": RUST_PUMP_DECLINED_TOTAL,
     "failed_after_cancel": RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL,
     "cleanup_completed": RUST_PUMP_CLEANUP_TOTAL,
+    "cleanup_grace_expired": RUST_PUMP_CLEANUP_GRACE_EXPIRED_TOTAL,
+    "cleanup_deferred": RUST_PUMP_CLEANUP_DEFERRED_TOTAL,
 })
 
 UNKNOWN_DECLINE_REASON = "unknown"
@@ -119,6 +127,10 @@ class PumpMetricsHook:
       native-pump cleanup that completed after cancellation.
     - ``cuprum_rust_pump_cleanup_duration_seconds``: observed once,
       unlabelled, with the completed cleanup's monotonic wait duration.
+    - ``cuprum_rust_pump_cleanup_grace_expired_total``: incremented once,
+      unlabelled, when the caller-facing cleanup grace expires.
+    - ``cuprum_rust_pump_cleanup_deferred_total``: incremented once,
+      unlabelled, when that worker later completes its deferred cleanup.
 
     A successful hand-off increments nothing; there is no pump event for it.
 
@@ -204,7 +216,9 @@ def pump_metrics_hook(collector: MetricsCollector) -> PumpHook:
 
 
 __all__ = [
+    "RUST_PUMP_CLEANUP_DEFERRED_TOTAL",
     "RUST_PUMP_CLEANUP_DURATION_SECONDS",
+    "RUST_PUMP_CLEANUP_GRACE_EXPIRED_TOTAL",
     "RUST_PUMP_CLEANUP_TOTAL",
     "RUST_PUMP_DECLINED_TOTAL",
     "RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL",

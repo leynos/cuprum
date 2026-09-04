@@ -20,6 +20,7 @@
       'cuprum/_pipeline_stage_streams.py',
       'cuprum/_pipeline_stream_cleanup_observation.py',
       'cuprum/_pipeline_stream_fds.py',
+      'cuprum/_pipeline_stream_native_cleanup.py',
       'cuprum/_pipeline_stream_results.py',
       'cuprum/_pipeline_streams.py',
       'cuprum/_pipeline_types.py',

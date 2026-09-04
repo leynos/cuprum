@@ -16,6 +16,7 @@ from cuprum.context._policy import (
     _resolve_narrowed_timeout,
     _validate_timeout,
 )
+from cuprum.sh import ExecutionContext
 from cuprum.unittests import strategies as cuprum_st
 
 # Run the symbolic backend for these tests with:
@@ -185,6 +186,34 @@ def test_validate_timeout_rejects_negative_integers(timeout: int) -> None:
     """Property: negative integer timeouts are rejected."""
     with pytest.raises(ValueError, match="timeout must be non-negative"):
         _validate_timeout(typ.cast("float", timeout), "Test")
+
+
+@pytest.mark.parametrize(
+    "cleanup_grace",
+    [
+        pytest.param(0, id="zero"),
+        pytest.param(0.25, id="fractional"),
+    ],
+)
+def test_execution_context_validates_native_pump_cleanup_grace(
+    cleanup_grace: float,
+) -> None:
+    """The native-pump grace accepts finite, non-negative values."""
+    context = ExecutionContext(native_pump_cleanup_grace=cleanup_grace)
+
+    assert context.native_pump_cleanup_grace == pytest.approx(float(cleanup_grace)), (
+        "ExecutionContext must retain the validated cleanup grace, found "
+        f"{context.native_pump_cleanup_grace!r}"
+    )
+
+
+@pytest.mark.parametrize("cleanup_grace", [float("inf"), -0.1])
+def test_execution_context_rejects_invalid_native_pump_cleanup_grace(
+    cleanup_grace: float,
+) -> None:
+    """The native-pump grace rejects non-finite and negative values."""
+    with pytest.raises(ValueError, match="native_pump_cleanup_grace"):
+        ExecutionContext(native_pump_cleanup_grace=cleanup_grace)
 
 
 @pytest.mark.crosshair

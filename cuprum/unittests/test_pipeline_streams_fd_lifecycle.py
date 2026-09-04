@@ -254,8 +254,11 @@ def test_run_rust_pump_falls_back_and_resumes_when_blocking_fails(
             _pipeline_streams._run_rust_pump(
                 reader=reader,
                 writer=None,
-                reader_fd=reader_fd,
-                writer_fd=writer_fd,
+                handoff=_pipeline_streams._RustPumpHandoff(
+                    reader_fd=reader_fd,
+                    writer_fd=writer_fd,
+                    cleanup_grace_s=0.5,
+                ),
             )
         )
 
@@ -290,8 +293,11 @@ def test_pump_over_raw_fds_falls_back_when_pause_fails(
             _pipeline_streams._pump_over_raw_fds(
                 reader=reader,
                 writer=None,
-                reader_fd=reader_fd,
-                writer_fd=writer_fd,
+                handoff=_pipeline_streams._RustPumpHandoff(
+                    reader_fd=reader_fd,
+                    writer_fd=writer_fd,
+                    cleanup_grace_s=0.5,
+                ),
             )
         )
 

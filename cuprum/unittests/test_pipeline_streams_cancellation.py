@@ -22,7 +22,11 @@ import typing as typ
 
 import pytest
 
-from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum import (
+    _pipeline_stream_fds,
+    _pipeline_stream_native_cleanup,
+    _pipeline_streams,
+)
 from cuprum.pump_observation import observe_pump
 
 if typ.TYPE_CHECKING:
@@ -41,6 +45,24 @@ class _RecordingGuard:
     def restore(self) -> None:
         """Record the restore so its ordering can be asserted."""
         self.events.append("restored")
+
+
+class _FailingDeferredGuard:
+    """Guard double that records a deferred restore failure."""
+
+    def __init__(self, events: list[str], worker_finished: threading.Event) -> None:
+        """Retain the order evidence needed for the deferred callback test."""
+        self.events = events
+        self.worker_finished = worker_finished
+
+    def restore(self) -> None:
+        """Fail only after the delayed worker has stopped using descriptors."""
+        assert self.worker_finished.is_set(), (
+            "deferred restoration must wait for native worker completion"
+        )
+        self.events.append("restore_failed")
+        msg = "the deferred descriptor restore failed"
+        raise OSError(msg)
 
 
 @dc.dataclass
@@ -77,7 +99,7 @@ async def _cancel_mid_transfer(
     """Start a pipeline pump, cancel it mid-transfer, then release its worker."""
     reader_fd, writer_fd = os.pipe()
     try:
-        state = _pipeline_streams._RustPumpState(
+        state = _pipeline_stream_native_cleanup._RustPumpState(
             reader_fd=reader_fd,
             writer_fd=writer_fd,
             blocking_mode_guard=typ.cast(
@@ -232,6 +254,156 @@ def test_cancellation_records_native_pump_cleanup_lifecycle(
         record.__dict__.get("cuprum_operation") == "native_pump_cleanup"
         for record in cleanup_records
     ), f"cleanup logs must name their operation, found {cleanup_records}"
+
+
+async def _cancel_until_cleanup_grace_expires(
+    context: _MidTransferContext,
+    *,
+    guard: _RecordingGuard | _FailingDeferredGuard,
+) -> tuple[_pipeline_stream_native_cleanup._RustPumpState, asyncio.Task[None]]:
+    """Return caller cancellation before releasing a held native worker."""
+    reader_fd, writer_fd = os.pipe()
+    state = _pipeline_stream_native_cleanup._RustPumpState(
+        reader_fd=reader_fd,
+        writer_fd=writer_fd,
+        blocking_mode_guard=typ.cast("_pipeline_stream_fds._BlockingModeGuard", guard),
+        resume_reader=None,
+        cleanup_grace_s=0.01,
+    )
+    task = asyncio.create_task(
+        _pipeline_streams._run_rust_pump_with_blocking_fds(state=state)
+    )
+    started = await asyncio.to_thread(context.worker_started.wait, 5.0)
+    assert started, "the native worker must start before grace expiry is exercised"
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not context.worker_finished.is_set(), (
+        "caller cancellation must return at grace expiry before worker completion"
+    )
+    return state, task
+
+
+async def _release_deferred_worker(
+    context: _MidTransferContext,
+    *,
+    reader_fd: int,
+    writer_fd: int,
+) -> None:
+    """Release a deferred worker and leave its callback one loop turn to run."""
+    context.release.set()
+    finished = await asyncio.to_thread(context.worker_finished.wait, 5.0)
+    assert finished, "the test must release the native worker after caller return"
+    await asyncio.sleep(0)
+    with contextlib.suppress(OSError):
+        os.close(reader_fd)
+    with contextlib.suppress(OSError):
+        os.close(writer_fd)
+
+
+def test_grace_expiry_defers_worker_owned_descriptor_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Grace expiry returns cancellation before a held worker releases FDs."""
+    events: list[str] = []
+    context = _MidTransferContext(
+        events=events,
+        worker_started=threading.Event(),
+        worker_finished=threading.Event(),
+        release=threading.Event(),
+    )
+    pump_events: list[PumpEvent] = []
+
+    def blocking_pump(reader_fd: int, writer_fd: int) -> int:
+        """Hold native descriptors until the test explicitly releases them."""
+        del reader_fd, writer_fd
+        context.worker_started.set()
+        context.release.wait(timeout=5.0)
+        context.worker_finished.set()
+        return 0
+
+    _install_fake_pump(monkeypatch, blocking_pump)
+
+    async def exercise() -> None:
+        """Assert both the bounded caller result and eventual callback cleanup."""
+        guard = _RecordingGuard(events)
+        state, _task = await _cancel_until_cleanup_grace_expires(
+            context,
+            guard=guard,
+        )
+        assert state.was_deferred, "grace expiry must mark cleanup as deferred"
+        assert events == [], (
+            "worker-owned descriptors must not restore before late completion, "
+            f"found {events}"
+        )
+        await _release_deferred_worker(
+            context,
+            reader_fd=state.reader_fd,
+            writer_fd=state.writer_fd,
+        )
+
+    with observe_pump(pump_events.append):
+        asyncio.run(exercise())
+
+    assert events == ["restored"], (
+        f"late completion must restore descriptor state exactly once, found {events}"
+    )
+    assert [event.phase for event in pump_events] == [
+        "cleanup_started",
+        "cleanup_grace_expired",
+        "cleanup_deferred",
+    ], f"grace expiry must defer the terminal callback, found {pump_events}"
+    assert pump_events[1].elapsed_s is not None, (
+        "grace expiry must report the bounded monotonic elapsed time"
+    )
+
+
+def test_deferred_callback_suppresses_descriptor_restore_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A late callback retains cancellation semantics if restoration fails."""
+    events: list[str] = []
+    context = _MidTransferContext(
+        events=events,
+        worker_started=threading.Event(),
+        worker_finished=threading.Event(),
+        release=threading.Event(),
+    )
+
+    def blocking_pump(reader_fd: int, writer_fd: int) -> int:
+        """Hold native descriptors until the caller grace has expired."""
+        del reader_fd, writer_fd
+        context.worker_started.set()
+        context.release.wait(timeout=5.0)
+        context.worker_finished.set()
+        return 0
+
+    _install_fake_pump(monkeypatch, blocking_pump)
+
+    async def exercise() -> None:
+        """Run the deferred cleanup through a restore failure."""
+        guard = _FailingDeferredGuard(events, context.worker_finished)
+        state, _task = await _cancel_until_cleanup_grace_expires(
+            context,
+            guard=guard,
+        )
+        await _release_deferred_worker(
+            context,
+            reader_fd=state.reader_fd,
+            writer_fd=state.writer_fd,
+        )
+
+    with caplog.at_level(logging.DEBUG, logger=_pipeline_streams.__name__):
+        asyncio.run(exercise())
+
+    assert events == ["restore_failed"], (
+        f"deferred callback must attempt exactly one restore, found {events}"
+    )
+    assert any(
+        record.__dict__.get("cuprum_site") == "restore_state"
+        for record in caplog.records
+    ), "deferred restore failure must retain teardown diagnostics"
 
 
 def _assert_cancelled_pump_failure_reported(

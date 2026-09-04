@@ -1699,29 +1699,36 @@ The channel counts declines, post-cancellation failures, and native-pump
 cleanup. A successful hand-off emits no event, deliberately: there is no
 per-hop counter and no total-hop counter to divide by. So the decline counter
 gives the *number* of hops that left the fast path, not the *fraction* that
-stayed on it. To report that fraction, pair the decline counter with a hop
-total measured independently — for example, a separately maintained counter
+stayed on it. To report that fraction, pair the decline counter with a hop total
+measured independently — for example, a separately maintained counter
 incremented once per submitted inter-stage hop.
 
+Set `ExecutionContext(native_pump_cleanup_grace=seconds)` to bound how long a
+cancelled pipeline waits for native-pump cleanup. The default is 0.5 seconds.
+When the grace expires, the caller receives its original `CancelledError`; it
+does not receive a timeout or a descriptor error. The Rust worker remains
+uninterruptible, and its duplicated descriptors stay quarantined until its
+completion callback runs.
+
 Cancellation emits `PumpEvent.phase="cleanup_started"` when it starts waiting
-for native worker cleanup. It emits `PumpEvent.phase="cleanup_completed"` when
-that cleanup releases descriptor ownership. `PumpEvent.duration_s` is the
-monotonic cleanup-wait duration and is set only on `cleanup_completed`. The
-executor worker retains descriptor ownership until it settles, so this cleanup
-must complete before the pipeline can finish tearing down the hop.
+for native worker cleanup. Normal completion emits `cleanup_completed` with
+`PumpEvent.duration_s`. Grace expiry emits `cleanup_grace_expired` with
+`PumpEvent.elapsed_s`; eventual callback cleanup then emits `cleanup_deferred`.
+The callback alone closes and restores worker-owned state, so it never double
+closes a writer or resumes a reader while native I/O can still use it.
 
 Cleanup can also be correlated with the active pipeline-stage span. Register
 the same `TracingHook` with both `sh.observe(hook)` and
 `observe_pump(hook.record_pump_event)`. For each inter-stage hop, the cleanup
 events reuse the source stage's `ExecId` only to find its existing open span;
 the token is not a trace attribute, and no PID is used for correlation. The
-hook emits `cuprum.cleanup_started` and `cuprum.cleanup_completed`. Both events
-carry the bounded attributes `operation="native_pump_cleanup"` and `outcome`
-(`"started"` or `"completed"`); only the completion event carries `duration_s`,
-in monotonic seconds. No descriptor numbers, command arguments, exception text,
-or other unbounded values are emitted. An event without a matching active span
-is dropped safely; cleanup tracing neither changes span status nor ends the
-span.
+hook emits `cuprum.cleanup_started`, `cuprum.cleanup_completed`,
+`cuprum.cleanup_grace_expired`, and `cuprum.cleanup_deferred`. All events carry
+bounded `operation="native_pump_cleanup"` and `outcome` attributes. Normal
+completion carries `duration_s`; grace expiry carries `elapsed_s`, both in
+monotonic seconds. No descriptor numbers, command arguments, exception text, or
+other unbounded values are emitted. An event without a matching active span is
+dropped safely; cleanup tracing neither changes span status nor ends the span.
 
 #### Cleanup DEBUG records
 
@@ -1729,11 +1736,11 @@ Cancellation cleanup also emits `DEBUG` records on the
 `cuprum._pipeline_streams` logger. Each record has
 `cuprum_action="rust_pump_cleanup"` and
 `cuprum_operation="native_pump_cleanup"`; start records have
-`cuprum_outcome="started"`, while completion records have
-`cuprum_outcome="completed"` and the completion-only `cuprum_duration_s` field.
-A completion record is emitted only after the native worker has released
-descriptor ownership. These logs and pump events are emitted during
-cancellation cleanup.
+`cuprum_outcome="started"`; normal completion records have
+`cuprum_outcome="completed"` and `cuprum_duration_s`. Grace expiry has
+`cuprum_outcome="grace_expired"` and `cuprum_elapsed_s`, while the eventual
+callback has `cuprum_outcome="deferred"`. The callback record is emitted only
+after the native worker has released descriptor ownership.
 
 ```python
 from cuprum.adapters.metrics_adapter import InMemoryMetrics
@@ -1761,19 +1768,23 @@ with sh.observe(MetricsHook(metrics)), observe_pump(PumpMetricsHook(metrics)):
 
 Table 2: counters emitted by `PumpMetricsHook`
 
-| Counter                                      | Labels   | Incremented when                                                 |
-| -------------------------------------------- | -------- | ---------------------------------------------------------------- |
-| `cuprum_rust_pump_declined_total`            | `reason` | a hop fell back from the Rust pump to the Python pump            |
-| `cuprum_rust_pump_failed_after_cancel_total` | none     | a cancelled hop's Rust worker failure was consumed and recorded  |
-| `cuprum_rust_pump_cleanup_total`             | none     | native cleanup completed after cancellation                      |
-| `cuprum_rust_pump_cleanup_duration_seconds`  | none     | one monotonic duration was observed for completed native cleanup |
+| Counter                                        | Labels   | Incremented when                                                 |
+| ---------------------------------------------- | -------- | ---------------------------------------------------------------- |
+| `cuprum_rust_pump_declined_total`              | `reason` | a hop fell back from the Rust pump to the Python pump            |
+| `cuprum_rust_pump_failed_after_cancel_total`   | none     | a cancelled hop's Rust worker failure was consumed and recorded  |
+| `cuprum_rust_pump_cleanup_total`               | none     | native cleanup completed after cancellation                      |
+| `cuprum_rust_pump_cleanup_duration_seconds`    | none     | one monotonic duration was observed for completed native cleanup |
+| `cuprum_rust_pump_cleanup_grace_expired_total` | none     | caller-facing cleanup grace expired                              |
+| `cuprum_rust_pump_cleanup_deferred_total`      | none     | deferred callback cleanup completed                              |
 
 The cleanup metrics are emitted only when callers register
 `observe_pump(PumpMetricsHook(metrics))`. `cuprum_rust_pump_cleanup_total` is
 incremented once for every completed native cleanup, and
 `cuprum_rust_pump_cleanup_duration_seconds` records one duration observation
-for each such cleanup. Both metrics are unlabelled. The `reason` label on the
-decline counter retains the bounded cardinality described below.
+for each normal cleanup. The grace-expiry and deferred-cleanup counters each
+increment once for their respective outcome. All cleanup metrics are
+unlabelled. The `reason` label on the decline counter retains the bounded
+cardinality described below.
 
 The `reason` label takes exactly the values in Table 1, plus `unknown`, and
 nothing else. Table 1's values are published as the `RustPumpDeclineReason`

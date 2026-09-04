@@ -22,7 +22,12 @@ class _NativePumpCleanupTracingMixin:
             recorded; every other event is ignored.
 
         """
-        if event.phase not in {"cleanup_started", "cleanup_completed"}:
+        if event.phase not in {
+            "cleanup_started",
+            "cleanup_completed",
+            "cleanup_grace_expired",
+            "cleanup_deferred",
+        }:
             return
         if event.exec_id is None:
             return
@@ -41,6 +46,8 @@ class _NativePumpCleanupTracingMixin:
         }
         if event.phase == "cleanup_completed" and event.duration_s is not None:
             attributes["duration_s"] = event.duration_s
+        if event.phase == "cleanup_grace_expired" and event.elapsed_s is not None:
+            attributes["elapsed_s"] = event.elapsed_s
         with active.lock:
             if not active.is_closed:
                 active.span.add_event(

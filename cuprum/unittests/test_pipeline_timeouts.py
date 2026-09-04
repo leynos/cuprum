@@ -178,9 +178,14 @@ def test_zero_timeout_reconciles_pipe_tasks() -> None:
         processes: list[asyncio.subprocess.Process],
         *,
         observations: tuple[_StageObservation, ...],
+        native_pump_cleanup_grace: float,
     ) -> list[asyncio.Task[None]]:
         """Record the pumps the pipeline creates so they can be inspected."""
-        tasks = real_create(processes, observations=observations)
+        tasks = real_create(
+            processes,
+            observations=observations,
+            native_pump_cleanup_grace=native_pump_cleanup_grace,
+        )
         created.extend(tasks)
         return tasks
 

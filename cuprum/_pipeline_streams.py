@@ -14,35 +14,33 @@ responsible for moving and collecting bytes once those streams exist.
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses as dc
 import functools
 import logging
-import os
-import time
 import typing as typ
 
 from cuprum._backend import StreamBackend, get_stream_backend
 from cuprum._pipeline_pipe_tasks import (
     _create_pipe_tasks as _create_pipe_tasks_with_context,
 )
-from cuprum._pipeline_stream_cleanup_observation import (
-    _log_native_pump_cleanup_completed,
-    _log_native_pump_cleanup_started,
-)
 from cuprum._pipeline_stream_fds import (
-    _BlockingModeGuard,
-    _close_rust_writer_fd,
     _extract_stream_fd,
     _pause_reader_transport,
     _resume_reader_transport,
     _suppressed_teardown_failure,
+)
+from cuprum._pipeline_stream_native_cleanup import (
+    _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE,
+    _create_rust_pump_state,
+    _run_rust_pump_with_blocking_fds,
+    _RustPumpHandoff,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
 from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
 from cuprum.pump_observation import _emit_pump_event
 
 if typ.TYPE_CHECKING:
+    import asyncio
     import collections.abc as cabc
 
     from cuprum._pipeline_types import _StageObservation
@@ -78,18 +76,6 @@ class _PumpStreamDispatchTestHooks:
         ]
         | None
     ) = None
-
-
-@dc.dataclass(slots=True)
-class _RustPumpState:
-    """Capture transport-owned state that native pumping must restore."""
-
-    reader_fd: int
-    writer_fd: int
-    blocking_mode_guard: _BlockingModeGuard
-    resume_reader: cabc.Callable[[], None] | None
-    was_cancelled: bool = False
-    monotonic_clock: cabc.Callable[[], float] = time.monotonic
 
 
 _PUMP_STREAM_DISPATCH_TEST_HOOKS = _PumpStreamDispatchTestHooks()
@@ -128,132 +114,17 @@ def reset_pump_stream_dispatch_for_testing() -> None:
     _PUMP_STREAM_DISPATCH_TEST_HOOKS.python_pump = None
 
 
-def _restore_rust_pump_state(state: _RustPumpState) -> None:
-    """Restore pipe state before returning reader transport control to asyncio."""
-    state.blocking_mode_guard.restore()
-    _resume_reader_transport(state.resume_reader)
-
-
-def _complete_rust_pump(
-    completed: asyncio.Future[int],
-    *,
-    cleanup_complete: asyncio.Future[None],
-    rust_writer_fd: int,
-    state: _RustPumpState,
-) -> None:
-    """Release native-pump resources after its executor worker settles."""
-    try:
-        if not completed.cancelled():
-            error = completed.exception()
-            if state.was_cancelled and error is not None:
-                _log_rust_pump_failed_after_cancel(error)
-    finally:
-        _close_rust_writer_fd(rust_writer_fd)
-        try:
-            with _suppressed_teardown_failure(
-                _LOGGER,
-                "restore_state",
-                OSError,
-                ValueError,
-            ):
-                _restore_rust_pump_state(state)
-        finally:
-            if not cleanup_complete.done():
-                cleanup_complete.set_result(None)
-
-
-async def _await_native_pump_cleanup(
-    cleanup_complete: asyncio.Future[None],
-    *,
-    monotonic_clock: cabc.Callable[[], float],
-) -> None:
-    """Wait for native cleanup despite repeated cancellation requests."""
-    started_at = monotonic_clock()
-    _log_native_pump_cleanup_started(_LOGGER)
-    try:
-        while not cleanup_complete.done():
-            try:
-                await asyncio.shield(cleanup_complete)
-            except asyncio.CancelledError:
-                continue
-    finally:
-        if cleanup_complete.done():
-            _log_native_pump_cleanup_completed(_LOGGER, monotonic_clock() - started_at)
-
-
-async def _run_rust_pump_with_blocking_fds(
-    *,
-    state: _RustPumpState,
-) -> None:
-    """Run the native pump while its executor future owns cleanup."""
-    from cuprum._streams_rs import rust_pump_stream
-
-    # Rust consumes this duplicate; asyncio keeps the transport descriptor.
-    rust_writer_fd = os.dup(state.writer_fd)
-    loop = asyncio.get_running_loop()
-    cleanup_complete = loop.create_future()
-    try:
-        native_pump = loop.run_in_executor(
-            None,
-            rust_pump_stream,
-            state.reader_fd,
-            rust_writer_fd,
-        )
-    except BaseException:
-        _close_rust_writer_fd(rust_writer_fd)
-        _restore_rust_pump_state(state)
-        raise
-    native_pump.add_done_callback(
-        functools.partial(
-            _complete_rust_pump,
-            cleanup_complete=cleanup_complete,
-            rust_writer_fd=rust_writer_fd,
-            state=state,
-        )
-    )
-    try:
-        await asyncio.shield(native_pump)
-    except asyncio.CancelledError:
-        state.was_cancelled = True
-        # The enclosing pipeline terminates its stages before collecting this
-        # task, so the native read is released within the caller's bounded
-        # cancellation grace. Keeping this task alive until the callback has
-        # restored the descriptors prevents pipeline teardown from reporting
-        # completion while the executor worker still owns them.
-        await _await_native_pump_cleanup(
-            cleanup_complete,
-            monotonic_clock=state.monotonic_clock,
-        )
-        raise
-    except BaseException:
-        await asyncio.shield(cleanup_complete)
-        raise
-    await asyncio.shield(cleanup_complete)
-
-
-def _log_rust_pump_failed_after_cancel(error: BaseException) -> None:
-    """Record a native-pump failure masked by caller-requested cancellation."""
-    _LOGGER.debug(
-        "Rust pump failed while its hop was being cancelled",
-        exc_info=error,
-        extra={"cuprum_action": "rust_pump_failed_after_cancel"},
-    )
-    _emit_pump_event(PumpEvent(phase="failed_after_cancel"))
-
-
 async def _run_rust_pump(
     *,
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter | None,
-    reader_fd: int,
-    writer_fd: int,
+    handoff: _RustPumpHandoff,
 ) -> bool:
     """Run the Rust pump while the executor future owns native cleanup."""
     handled = await _pump_over_raw_fds(
         reader=reader,
         writer=writer,
-        reader_fd=reader_fd,
-        writer_fd=writer_fd,
+        handoff=handoff,
     )
     if not handled:
         return False
@@ -268,8 +139,7 @@ async def _pump_over_raw_fds(
     *,
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter | None,
-    reader_fd: int,
-    writer_fd: int,
+    handoff: _RustPumpHandoff,
 ) -> bool:
     """Transfer a hop after acquiring the reader and descriptor hand-off."""
     # Flush any bytes asyncio already buffered in the StreamReader
@@ -287,21 +157,15 @@ async def _pump_over_raw_fds(
         raise
 
     try:
-        blocking_mode_guard = _BlockingModeGuard.engage(
-            reader_fd=reader_fd,
-            writer_fd=writer_fd,
-        )
+        # These duplicates outlive the caller-facing task. They carry the
+        # blocking-mode state that only the completion callback may restore
+        # after native I/O has stopped.
+        state = _create_rust_pump_state(handoff, reader_pause.resume)
     except (OSError, ValueError):
         _resume_reader_transport(reader_pause.resume)
         _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
         return False
 
-    state = _RustPumpState(
-        reader_fd=reader_fd,
-        writer_fd=writer_fd,
-        blocking_mode_guard=blocking_mode_guard,
-        resume_reader=reader_pause.resume,
-    )
     await _run_rust_pump_with_blocking_fds(state=state)
     return True
 
@@ -344,6 +208,8 @@ async def _run_python_pump(
 async def _try_rust_pump(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter | None,
+    *,
+    cleanup_grace_s: float = _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE,
 ) -> bool:
     """Attempt to route the pipe hop through the Rust pump."""
     rust_fd_attempt_hook = _PUMP_STREAM_DISPATCH_TEST_HOOKS.on_rust_fd_path_attempt
@@ -365,14 +231,19 @@ async def _try_rust_pump(
     return await _run_rust_pump(
         reader=reader,
         writer=writer,
-        reader_fd=reader_fd,
-        writer_fd=writer_fd,
+        handoff=_RustPumpHandoff(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+            cleanup_grace_s=cleanup_grace_s,
+        ),
     )
 
 
 async def _pump_stream_dispatch(
     reader: asyncio.StreamReader | None,
     writer: asyncio.StreamWriter | None,
+    *,
+    cleanup_grace_s: float = _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE,
 ) -> None:
     """Route inter-stage pump to the Rust or Python implementation."""
     if reader is None:
@@ -380,7 +251,11 @@ async def _pump_stream_dispatch(
         return
 
     backend = get_stream_backend()
-    if backend is StreamBackend.RUST and await _try_rust_pump(reader, writer):
+    if backend is StreamBackend.RUST and await _try_rust_pump(
+        reader,
+        writer,
+        cleanup_grace_s=cleanup_grace_s,
+    ):
         return
 
     await _run_python_pump(reader, writer)
@@ -389,10 +264,14 @@ async def _pump_stream_dispatch(
 def _create_pipe_tasks(
     processes: list[asyncio.subprocess.Process],
     observations: tuple[_StageObservation, ...] = (),
+    native_pump_cleanup_grace: float = _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE,
 ) -> list[asyncio.Task[None]]:
     """Create streaming tasks between adjacent pipeline stages."""
     return _create_pipe_tasks_with_context(
         processes,
         observations,
-        _pump_stream_dispatch,
+        functools.partial(
+            _pump_stream_dispatch,
+            cleanup_grace_s=native_pump_cleanup_grace,
+        ),
     )
