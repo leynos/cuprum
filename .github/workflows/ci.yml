@@ -164,7 +164,7 @@ jobs:
           path: |
             ~/.cargo/bin/mdtablefix
             ~/.cargo/bin/mdtablefix.exe
-          key: mdtablefix-${{ runner.os }}-${{ runner.arch }}-${{ env.MDTABLEFIX_VERSION }}-${{ env.MDTABLEFIX_RUST_VERSION }}
+          key: mdtablefix-${{ runner.os }}-${{ runner.arch }}-${{ env.UBUNTU_RELEASE }}-${{ env.CACHE_GENERATION }}-${{ env.MDTABLEFIX_VERSION }}-${{ env.MDTABLEFIX_RUST_VERSION }}
 
       - name: Install mdtablefix
         run: |

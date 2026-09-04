@@ -270,10 +270,15 @@ def test_mdtablefix_installs_with_its_pinned_rust_toolchain() -> None:
     assert isinstance(cache_key, str), (
         "the Cache mdtablefix CI mapping must declare with.key as a string"
     )
-    assert "${{ env.MDTABLEFIX_RUST_VERSION }}" in cache_key, (
-        "the Cache mdtablefix CI mapping must include MDTABLEFIX_RUST_VERSION "
-        "in with.key"
-    )
+    for name in (
+        "MDTABLEFIX_VERSION",
+        "MDTABLEFIX_RUST_VERSION",
+        "UBUNTU_RELEASE",
+        "CACHE_GENERATION",
+    ):
+        assert f"${{{{ env.{name} }}}}" in cache_key, (
+            f"the Cache mdtablefix CI mapping must include {name} in with.key"
+        )
 
     whitaker_script = _lint_test_step_script(job, "Install Whitaker")
     assert "cargo binstall -V >/dev/null 2>&1" in whitaker_script, (

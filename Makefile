@@ -118,8 +118,10 @@ DF12_PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv run --isolated \
   --disable=all --load-plugins=df12_python_lints \
   --enable=$(DF12_PYLINT_MESSAGES)
 AMBRLEAKS = $(UV_RUN_ENV) uv run --python $(DF12_PYTHON) ambrleaks
-# Tracked Markdown files, NUL-delimited for safe transport to the formatter.
-MD_FILES_FIND = git ls-files -z -- '*.md'
+# Existing tracked Markdown files, NUL-delimited for safe transport to the
+# formatter. `pipefail` preserves the check-fmt gate's fail-closed behaviour
+# when Git cannot enumerate its index.
+MD_FILES_FIND = bash -o pipefail -c 'git ls-files -z -- "$$1" | while IFS= read -r -d "" markdown_file; do if [ -e "$$markdown_file" ]; then printf "%s\0" "$$markdown_file"; fi; done' -- '*.md'
 
 .PHONY: help all clean build build-release lint python-lint rust-lint \
         lint-windows fmt check-fmt \
