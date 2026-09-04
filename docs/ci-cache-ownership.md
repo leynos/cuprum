@@ -137,10 +137,24 @@ per generation against the single 287 MB archive they replaced. Measured, the
 five Ubicloud families total about 101 MB, at 19.8 to 20.5 MB each, and the
 instrumented coverage family is 286 MB on its own. The old archive was large
 because it held one job's instrumented workspace objects, which is precisely
-why it served nobody else. The split added about 100 MB per generation, so the
-real trade is roughly 35 s of paid runner time per run against about 81 MB per
-merge push, against a 30 GB weekly quota. On those numbers the split is worth
-keeping; on the numbers that were assumed, it would not have been.
+why it served nobody else.
+
+Two comparisons follow from those numbers, and they have different bases. Say
+which one you mean.
+
+Against no split at all, the five Ubicloud families cost about 100 MB per
+generation more than the single archive they replaced, and they save the whole
+41 s in the table above, because every one of those jobs was getting nothing
+from the old archive.
+
+Against keeping only the 3.13 unoptimized family, which is the smallest split
+that still serves `extension-tests`, the other four families cost about 81 MB
+per generation and save 35 s: 11 s, 9 s and 10 s on the three `typecheck-test`
+legs and 5 s on `benchmark-ratchet`. `extension-tests`' own 6 s is excluded
+because it keeps its cache either way.
+
+Both are worth it against a 30 GB weekly quota, so the six families stay. On
+the numbers that were assumed rather than measured, neither would have been.
 
 ## Rolling keys
 
