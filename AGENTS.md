@@ -189,13 +189,14 @@ working on the Rust portions of the project:
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
     cargo clippy --all-targets --all-features -- -D warnings
     RUSTFLAGS="-D warnings" whitaker --all -- --all-targets --all-features
-    yamllint .github/workflows
+    yamllint --config-file .yamllint.yml .github/workflows
     actionlint
     ```
 
     linting every target with all features enabled, denying all Clippy
     warnings, and validating GitHub Actions workflows. Keep `.yamllint.yml`
-    compatible with GitHub's unquoted `on` trigger key. CI must install
+    compatible with GitHub's unquoted `on` trigger key and require each
+    workflow to begin with `---`. CI must install
     yamllint with `uv tool` and use the pinned, checksum-verified actionlint
     binary before invoking `make lint`.
   - `make test` executes `cargo nextest run` when `cargo-nextest` is available,

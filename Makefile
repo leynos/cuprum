@@ -227,7 +227,7 @@ rust-lint: ## Run Rust documentation, Clippy, Whitaker, and spelling checks
 	+$(MAKE) spelling
 
 github-actions-lint: $(YAMLLINT) $(ACTIONLINT) ## Validate GitHub Actions workflows
-	$(YAMLLINT) .github/workflows
+	$(YAMLLINT) --config-file .yamllint.yml .github/workflows
 	$(ACTIONLINT)
 
 lint-windows: ## Lint the Rust extension's Windows cfg branches (cross-target)
