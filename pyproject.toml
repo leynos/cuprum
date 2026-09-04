@@ -33,7 +33,7 @@ dev = [
     # Keep the ruff and ty pins in step with RUFF_VERSION and TY_VERSION in
     # the Makefile and .github/workflows/ci.yml; the pin-parity contract test
     # in cuprum/unittests/test_toolchain_pins.py enforces the parity.
-    "ruff==0.16.4",
+    "ruff==0.16.5",
     "pyright",
     "pytest-timeout",
     "pytest-xdist",
