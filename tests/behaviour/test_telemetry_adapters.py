@@ -1,15 +1,4 @@
-"""Behavioural tests for telemetry adapter modules.
-
-Note on type casting
---------------------
-This module uses ``typ.cast()`` when accessing pytest-bdd fixture values from
-dictionaries. This pattern is necessary because pytest-bdd fixtures return
-``object`` types, and the dict-based fixture approach used here (returning
-``dict[str, object]``) loses type information. More specific types (e.g.
-``"ExecHook"``, ``"InMemoryMetrics"``) are used when the target type is known;
-``"typ.Any"`` is used otherwise. The casts reduce type safety but are confined
-to test code where runtime behaviour is verified by assertions.
-"""
+"""Behavioural tests for telemetry adapter modules."""
 
 from __future__ import annotations
 
@@ -23,30 +12,31 @@ from cuprum import sh
 from cuprum.adapters.logging_adapter import structured_logging_hook
 from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
 from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
+from cuprum.pump_span_events import (
+    PUMP_HOP_OUTCOME_ATTRIBUTE,
+    PUMP_HOP_TOTAL_BYTES_ATTRIBUTE,
+)
+from tests.behaviour import _telemetry_adapter_tracing_steps as _tracing_steps
+from tests.behaviour._rust_pump_span_support import (
+    run_cancelled_hop,
+    run_successful_hop,
+)
 from tests.behaviour._telemetry_adapter_support import (
+    _FAILURE_SCRIPT,
+    _OUTPUT_SCRIPT,
+    _STDOUT_STDERR_SCRIPT,
+    _SUCCESS_SCRIPT,
     HookFixture,
     PythonCommandFixture,
     _run_command_with_hook,
 )
 from tests.helpers.catalogue import python_catalogue
 
-_STDOUT_STDERR_SCRIPT = "\n".join(
-    (
-        "import sys",
-        "print('stdout-line')",
-        "print('stderr-line', file=sys.stderr)",
-    ),
+then("the span has program and exit code attributes")(
+    _tracing_steps.assert_span_attributes
 )
-
-_SUCCESS_SCRIPT = "print('ok')"
-_FAILURE_SCRIPT = "import sys; sys.exit(1)"
-_OUTPUT_SCRIPT = "\n".join(
-    (
-        "import sys",
-        "print('traced-output')",
-        "print('traced-error', file=sys.stderr)",
-    ),
-)
+then("the span records output as events")(_tracing_steps.assert_span_events)
+then("the span status indicates an error")(_tracing_steps.assert_span_error_status)
 
 
 @scenario(
@@ -87,6 +77,22 @@ def test_tracing_hook_creates_spans() -> None:
 )
 def test_tracing_hook_error_status() -> None:
     """Behavioural coverage for tracing adapter failure path."""
+
+
+@scenario(
+    "../features/telemetry_adapters.feature",
+    "Rust-pump hop tracing records a successful executor hop",
+)
+def test_rust_pump_hop_span_success() -> None:
+    """Behavioural coverage for successful executor-hop tracing."""
+
+
+@scenario(
+    "../features/telemetry_adapters.feature",
+    "Rust-pump hop tracing records cancellation cleanup",
+)
+def test_rust_pump_hop_span_cancellation() -> None:
+    """Behavioural coverage for cancellation executor-hop tracing."""
 
 
 @pytest.fixture
@@ -204,6 +210,12 @@ def given_tracer(behaviour_state: dict[str, object]) -> dict[str, object]:
     return {"tracer": tracer, "hook": hook}
 
 
+@given("an in-memory pump-hop tracer")
+def given_pump_hop_tracer(behaviour_state: dict[str, object]) -> None:
+    """Install an in-memory tracer for the executor-hop span scenarios."""
+    behaviour_state["pump_hop_tracer"] = InMemoryTracer()
+
+
 @when("I run a command that writes to stdout and stderr")
 def when_run_stdout_stderr(
     behaviour_state: dict[str, object],
@@ -262,6 +274,26 @@ def when_run_with_output(
     _run_command_with_hook(
         behaviour_state, python_cmd_fixture, tracer_fixture, _OUTPUT_SCRIPT
     )
+
+
+@when("I run a successful Rust-pump executor hop")
+def when_run_successful_rust_pump_hop(
+    behaviour_state: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run the Rust-pump executor seam with a successful worker double."""
+    tracer = typ.cast("InMemoryTracer", behaviour_state["pump_hop_tracer"])
+    run_successful_hop(tracer, monkeypatch)
+
+
+@when("I cancel a Rust-pump executor hop while its worker owns descriptors")
+def when_cancel_rust_pump_hop(
+    behaviour_state: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancel the executor task before its worker returns its descriptors."""
+    tracer = typ.cast("InMemoryTracer", behaviour_state["pump_hop_tracer"])
+    behaviour_state["pump_hop_order"] = run_cancelled_hop(tracer, monkeypatch)
 
 
 @then("the logger receives records for all execution phases")
@@ -332,30 +364,34 @@ def then_span_created(behaviour_state: dict[str, object]) -> None:
     assert span.ended is True, "Span should be ended"
 
 
-@then("the span has program and exit code attributes")
-def then_span_attributes(behaviour_state: dict[str, object]) -> None:
-    """Verify span has expected attributes."""
-    tracer = typ.cast("InMemoryTracer", behaviour_state["tracer"])
+@then("the pump-hop span is successful and records transferred bytes")
+def then_successful_pump_hop_span(behaviour_state: dict[str, object]) -> None:
+    """Assert the successful span's bounded terminal data."""
+    tracer = typ.cast("InMemoryTracer", behaviour_state["pump_hop_tracer"])
+    assert len(tracer.spans) == 1, f"expected one hop span, found {tracer.spans}"
     span = tracer.spans[0]
-    assert "cuprum.program" in span.attributes, "Missing cuprum.program attribute"
-    assert "cuprum.exit_code" in span.attributes, "Missing cuprum.exit_code attribute"
-    assert span.attributes["cuprum.exit_code"] == 0, "Exit code should be 0"
+    assert span.ended is True, "successful hop span must end"
+    assert span.status_ok is True, "successful hop span must be marked ok"
+    assert span.attributes[PUMP_HOP_OUTCOME_ATTRIBUTE] == "succeeded", (
+        f"unexpected hop outcome {span.attributes}"
+    )
+    assert span.attributes[PUMP_HOP_TOTAL_BYTES_ATTRIBUTE] == 29, (
+        f"unexpected transferred-byte count {span.attributes}"
+    )
 
 
-@then("the span records output as events")
-def then_span_events(behaviour_state: dict[str, object]) -> None:
-    """Verify span has output events."""
-    tracer = typ.cast("InMemoryTracer", behaviour_state["tracer"])
+@then("the pump-hop span is cancelled after the worker returns")
+def then_cancelled_pump_hop_span(behaviour_state: dict[str, object]) -> None:
+    """Assert cancellation spans include the worker-owned cleanup window."""
+    tracer = typ.cast("InMemoryTracer", behaviour_state["pump_hop_tracer"])
+    order = typ.cast("list[str]", behaviour_state["pump_hop_order"])
+    assert len(tracer.spans) == 1, f"expected one hop span, found {tracer.spans}"
     span = tracer.spans[0]
-    event_names = [name for name, _ in span.events]
-    assert "cuprum.stdout" in event_names, "Missing cuprum.stdout event"
-    assert "cuprum.stderr" in event_names, "Missing cuprum.stderr event"
-
-
-@then("the span status indicates an error")
-def then_span_error_status(behaviour_state: dict[str, object]) -> None:
-    """Verify span status indicates failure."""
-    tracer = typ.cast("InMemoryTracer", behaviour_state["tracer"])
-    span = tracer.spans[0]
-    assert span.status_ok is False, "Span status should indicate error"
-    assert span.attributes.get("cuprum.exit_code") == 1, "Exit code should be 1"
+    assert span.ended is True, "cancelled hop span must end"
+    assert span.attributes[PUMP_HOP_OUTCOME_ATTRIBUTE] == "cancelled", (
+        f"unexpected hop outcome {span.attributes}"
+    )
+    assert span.status_ok is None, "only successful spans may be marked ok"
+    assert order.index("worker_returned") < order.index("restored"), (
+        f"worker must return before descriptors restore: {order}"
+    )

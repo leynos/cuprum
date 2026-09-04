@@ -28,6 +28,7 @@ from cuprum._backend import StreamBackend, get_stream_backend
 from cuprum._pipeline_pipe_tasks import (
     _create_pipe_tasks as _create_pipe_tasks_with_context,
 )
+from cuprum._pipeline_rust_pump_completion import _RustPumpCompletion
 from cuprum._pipeline_stream_fds import (
     _BlockingModeGuard,
     _close_rust_writer_fd,
@@ -39,6 +40,15 @@ from cuprum._pipeline_stream_fds import (
 from cuprum._streams import _close_stream_writer, _pump_stream
 from cuprum.pump_events import RustPumpDeclineReason, RustPumpHandoffOutcome
 from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
+from cuprum.pump_span_events import (
+    PUMP_HOP_BUFFER_SIZE_ATTRIBUTE,
+    PUMP_HOP_OPERATION_ATTRIBUTE,
+)
+from cuprum.pump_span_observation import (
+    _close_pump_hop_spans,
+    _open_pump_hop_spans,
+    _PumpHopSpans,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -130,16 +140,33 @@ def _restore_rust_pump_state(state: _RustPumpState) -> None:
 def _complete_rust_pump(
     completed: asyncio.Future[int],
     *,
-    cleanup_complete: asyncio.Future[None],
-    state: _RustPumpState,
+    completion: _RustPumpCompletion,
 ) -> None:
     """Release native-pump resources after its executor worker settles."""
+    state = typ.cast("_RustPumpState", completion.state)
+    total_bytes: int | None = None
+    outcome = "cancelled"
     try:
-        if not completed.cancelled():
+        if completed.cancelled():
+            outcome = "cancelled"
+        else:
             error = completed.exception()
-            if state.was_cancelled and error is not None:
-                _pump_obs._log_native_pump_failed_after_cancel(_LOGGER, error)
+            if error is not None:
+                outcome = "failed_after_cancel" if state.was_cancelled else "failed"
+                if state.was_cancelled:
+                    _pump_obs._log_native_pump_failed_after_cancel(_LOGGER, error)
+            elif state.was_cancelled:
+                outcome = "cancelled"
+            else:
+                outcome = "succeeded"
+                total_bytes = completed.result()
     finally:
+        _close_pump_hop_spans(
+            completion.pump_hop_spans,
+            outcome=outcome,
+            total_bytes=total_bytes,
+        )
+        _close_rust_writer_fd(completion.rust_writer_fd)
         try:
             with _suppressed_teardown_failure(
                 _LOGGER,
@@ -149,8 +176,8 @@ def _complete_rust_pump(
             ):
                 _restore_rust_pump_state(state)
         finally:
-            if not cleanup_complete.done():
-                cleanup_complete.set_result(None)
+            if not completion.cleanup_complete.done():
+                completion.cleanup_complete.set_result(None)
 
 
 async def _await_native_pump_cleanup(
@@ -180,16 +207,13 @@ async def _run_rust_pump_with_blocking_fds(
     """Run the native pump or decline after duplicate setup rollback."""
     loop = asyncio.get_running_loop()
     cleanup_complete = loop.create_future()
-    native_pump = _submit_rust_pump(loop=loop, state=state)
+    native_pump = _submit_rust_pump(
+        cleanup_complete=cleanup_complete,
+        loop=loop,
+        state=state,
+    )
     if native_pump is None:
         return False
-    native_pump.add_done_callback(
-        functools.partial(
-            _complete_rust_pump,
-            cleanup_complete=cleanup_complete,
-            state=state,
-        )
-    )
     try:
         await asyncio.shield(native_pump)
     except asyncio.CancelledError:
@@ -210,9 +234,13 @@ def _submit_rust_pump(
     *,
     loop: asyncio.AbstractEventLoop,
     state: _RustPumpState,
+    cleanup_complete: asyncio.Future[None] | None = None,
 ) -> asyncio.Future[int] | None:
     """Prepare and submit native work, transferring writer ownership on success."""
     from cuprum._streams_rs import rust_pump_stream
+
+    if cleanup_complete is None:
+        cleanup_complete = loop.create_future()
 
     try:
         rust_writer_fd = os.dup(state.writer_fd)
@@ -231,7 +259,14 @@ def _submit_rust_pump(
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED)
         return None
 
+    pump_hop_spans = _PumpHopSpans()
     try:
+        pump_hop_spans = _open_pump_hop_spans(
+            {
+                PUMP_HOP_OPERATION_ATTRIBUTE: "rust_pump",
+                PUMP_HOP_BUFFER_SIZE_ATTRIBUTE: 65_536,
+            }
+        )
         context = contextvars.copy_context()
         native_pump = loop.run_in_executor(
             None,
@@ -241,6 +276,11 @@ def _submit_rust_pump(
             rust_writer_fd,
         )
     except BaseException as error:
+        _close_pump_hop_spans(
+            pump_hop_spans,
+            outcome="failed",
+            total_bytes=None,
+        )
         _pump_obs._log_native_pump_handoff_failed(_LOGGER, "executor_submission", error)
         _close_rust_writer_fd(rust_writer_fd)
         _restore_rust_pump_state(state)
@@ -248,6 +288,17 @@ def _submit_rust_pump(
             RustPumpHandoffOutcome.EXECUTOR_SUBMISSION_REJECTED
         )
         raise
+    native_pump.add_done_callback(
+        functools.partial(
+            _complete_rust_pump,
+            completion=_RustPumpCompletion(
+                cleanup_complete=cleanup_complete,
+                pump_hop_spans=pump_hop_spans,
+                rust_writer_fd=rust_writer_fd,
+                state=state,
+            ),
+        )
+    )
     _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.SUBMITTED)
     return native_pump
 
