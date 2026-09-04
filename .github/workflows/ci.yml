@@ -1191,7 +1191,7 @@ jobs:
             # UV_TOOL_DIR resolve against the same directory the inline
             # commands used.
             CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}" \
-              make develop MATURIN_DEVELOP_FLAGS=--release
+              make develop MATURIN_DEVELOP_FLAGS='--release --skip-install'
 
             UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
               benchmarks/pipeline_throughput.py \
@@ -1332,20 +1332,6 @@ jobs:
             cat "${artifact_dir}/comparison-summary.md" >> "${GITHUB_STEP_SUMMARY}"
           fi
 
-      - name: Record compiler-cache effectiveness
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          sccache --show-stats | tee sccache-stats.txt
-          sccache --show-stats --stats-format json > sccache-stats.json
-          fence='```'
-          {
-            printf '### sccache\n\n%stext\n' "${fence}"
-            cat sccache-stats.txt
-            printf '%s\n' "${fence}"
-          } >> "${GITHUB_STEP_SUMMARY}"
-
       - name: Upload benchmark ratchet artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -1380,6 +1366,20 @@ jobs:
             echo "::warning::candidate benchmark artefacts are absent or invalid"
             echo "available=false" >> "${GITHUB_OUTPUT}"
           fi
+
+      - name: Record compiler-cache effectiveness
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --show-stats | tee sccache-stats.txt
+          sccache --show-stats --stats-format json > sccache-stats.json
+          fence='```'
+          {
+            printf '### sccache\n\n%stext\n' "${fence}"
+            cat sccache-stats.txt
+            printf '%s\n' "${fence}"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       # Records what this run measured, pass or fail. A window fed only by
       # passing runs is a window of low-biased samples: a measurement faster

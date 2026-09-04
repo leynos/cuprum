@@ -3361,7 +3361,7 @@ benchmark needs Maturin and the development benchmark tooling, so its
 optimized, in-place build calls the shared target with the runner's job limit:
 
 ```bash
-CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}" make develop MATURIN_DEVELOP_FLAGS=--release
+CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}" make develop MATURIN_DEVELOP_FLAGS='--release --skip-install'
 ```
 
 The baseline client and benchmark scripts are invoked directly with
