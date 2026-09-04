@@ -1019,15 +1019,14 @@ jobs:
           # Keep its scoped token out of later build commands.
           persist-credentials: false
 
-      # Started before the first cache restore, so the archive downloads and
-      # every build below fall inside the measured window. `ubicloud-standard-2`
-      # starts with about 31 GB free, and disk, not memory, is what kills a job
-      # on this shape.
-      - name: Start resource sampler
-        uses: ./.github/actions/resource-sampler
-        with:
-          mode: start
-          vcpus: ${{ env.LINUX_RUNNER_VCPUS }}
+      # No resource sampler here, deliberately. This job times commands that
+      # run for about half a second and compares the ratio of two of them, so
+      # a background loop waking every 15 s to shell out to `free` and `df` is
+      # interference in the measurement rather than an observation of it. Its
+      # disk figure was taken once, in run 33857764655: 62.1 GB used with
+      # 11.0 GB free on the 72 GB volume, the same envelope as the other
+      # Ubicloud jobs.
+
       - name: Compute cache keys
         uses: ./.github/actions/cache-keys
         with:
@@ -1310,15 +1309,6 @@ jobs:
         with:
           path: ~/.cache/sccache
           key: ${{ env.SCCACHE_CACHE_KEY }}
-
-      # Last, and unconditional, so a job that failed on disk still reports the
-      # high-water mark that explains why.
-      - name: Report peak resource use
-        if: always()
-        uses: ./.github/actions/resource-sampler
-        with:
-          mode: report
-          vcpus: ${{ env.LINUX_RUNNER_VCPUS }}
 
   build-wheels:
     uses: ./.github/workflows/build-wheels.yml

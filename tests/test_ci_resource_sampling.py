@@ -15,13 +15,16 @@ from tests.helpers.ci_runners import UBICLOUD_JOBS, expand, step_inputs, steps
 
 RESOURCE_SAMPLER = "./.github/actions/resource-sampler"
 #: Paid Linux jobs whose peak memory and disk are worth recording: every one
-#: that compiles or runs a suite. The two wheel jobs in `build-wheels.yml`
-#: unpack an artefact someone else built and have no high-water mark to find.
+#: that compiles or runs a suite, less the one whose numbers a sampler would
+#: change. The two wheel jobs in `build-wheels.yml` unpack an artefact someone
+#: else built and have no high-water mark to find. `benchmark-ratchet` times
+#: half-second commands and compares their ratio, so a background loop waking
+#: every 15 s is interference rather than observation; its disk figure was
+#: taken once, in run 33857764655.
 SAMPLED_JOBS: typ.Final = (
     ("ci.yml", "typecheck-test"),
     ("ci.yml", "extension-tests"),
     ("ci.yml", "coverage"),
-    ("ci.yml", "benchmark-ratchet"),
     ("coverage-main.yml", "coverage-upload"),
 )
 #: Jobs that build an instrumented tree, which is scratch the moment its report

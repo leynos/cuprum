@@ -119,14 +119,26 @@ it just downloaded.
 
 ## Resource sampling
 
-`ubicloud-standard-2` carries a 72 GB volume with roughly 31 GB free at job
-start. Disk, not memory, is what kills a job on that shape, and it does so
-silently. Every paid Linux job that compiles or runs a suite therefore brackets
-its work with `.github/actions/resource-sampler`, which records peak memory,
-peak disk and least-free disk to the log as well as to the step summary. The
-log matters because the jobs API exposes it and does not expose the summary.
+`ubicloud-standard-2` presents a 72 GB volume that is already 85 to 89 % full
+while a job runs, leaving 8 to 11 GB free rather than the roughly 31 GB the
+estate's earlier notes assumed. Disk, not memory, is what kills a job on that
+shape, and it does so silently. Jobs that compile or run a suite therefore
+bracket their work with `.github/actions/resource-sampler`, which records peak
+memory, peak disk, and least-free disk to the log as well as to the step
+summary. The log matters because the jobs API exposes it and does not expose
+the summary.
 
-The coverage jobs additionally discard `target/llvm-cov-target` once the report
-is written, printing `df -h` either side. It has no later consumer, it is the
-second tree on the volume, and removing it before any cache save keeps it out
-of the archives and out of the measured high-water mark.
+`benchmark-ratchet` is the exception, and deliberately so. It times commands
+that run for about half a second and compares the ratio of two of them, so a
+background loop waking every 15 s to shell out to `free` and `df` would be
+interference in the measurement rather than an observation of it. Its disk
+figure was taken once instead, in run 33857764655: 62.1 GB used with 11.0 GB
+free, the same envelope as every other Ubicloud job here.
+
+The coverage jobs additionally discard the instrumented build tree once the
+report is written, printing `df -h` either side. It has no later consumer, it
+is the second tree on the volume, and removing it before any cache save keeps
+it out of the archives and out of the measured high-water mark. The step
+searches for the tree rather than naming it: `cargo llvm-cov` builds beside the
+manifest it is given, and an earlier version named a repository-root path and
+reclaimed nothing while reporting success.
