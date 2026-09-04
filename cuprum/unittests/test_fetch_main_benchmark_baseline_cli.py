@@ -148,6 +148,13 @@ def test_main_returns_not_found_when_no_baseline_available(
         lambda **_: None,
     )
 
+    exit_code = main(main_cli_args(tmp_path))
+
+    assert exit_code == MAIN_BASELINE_NOT_FOUND_EXIT_CODE, (
+        f"a missing baseline must exit {MAIN_BASELINE_NOT_FOUND_EXIT_CODE} "
+        f"so CI can bootstrap, got {exit_code}"
+    )
+
 
 def test_main_forwards_the_requested_run_status(
     monkeypatch: pytest.MonkeyPatch,
@@ -175,13 +182,6 @@ def test_main_forwards_the_requested_run_status(
     assert captured[0].run_status == "completed", (
         "--run-status must reach ArtefactQuery unchanged; observed "
         f"{captured[0].run_status!r}"
-    )
-
-    exit_code = main(main_cli_args(tmp_path))
-
-    assert exit_code == MAIN_BASELINE_NOT_FOUND_EXIT_CODE, (
-        f"a missing baseline must exit {MAIN_BASELINE_NOT_FOUND_EXIT_CODE} "
-        f"so CI can bootstrap, got {exit_code}"
     )
 
 

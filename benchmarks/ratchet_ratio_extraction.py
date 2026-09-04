@@ -9,12 +9,17 @@ input loading, report writing, and orchestration.
 
 from __future__ import annotations
 
+import typing as typ
+
 from benchmarks._validation import (
     _require_list,
     _require_mapping,
     _require_non_empty_string,
     _require_positive_float,
 )
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 
 def _validate_backend(backend: str, *, index: int) -> None:
@@ -175,8 +180,8 @@ def _extract_rust_python_ratios(
 
 def _validate_matching_comparison_groups(
     *,
-    baseline_ratios: dict[str, float],
-    candidate_ratios: dict[str, float],
+    baseline_ratios: cabc.Mapping[str, object],
+    candidate_ratios: cabc.Mapping[str, object],
 ) -> None:
     """Validate that baseline and candidate have the same comparison groups."""
     baseline_names = set(baseline_ratios)

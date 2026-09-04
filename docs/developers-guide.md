@@ -1385,9 +1385,10 @@ Benchmarks (`benchmarks/`):
   helper for benchmark GitHub transfers; keep general-purpose HTTP concerns
   outside this private module.
 - `benchmarks/ratchet_ratio_extraction.py` — extracts within-run Rust/Python
-  ratio maps and validates that baseline and candidate comparison groups match.
-  `benchmarks/ratchet_rust_performance.py` owns report-value construction; this
-  module owns ratio extraction and ratio-map validation.
+  ratio maps and owns validation that baseline and candidate comparison groups
+  match. `benchmarks/ratchet_rust_performance.py` consumes that validation while
+  orchestrating comparisons; this module owns ratio extraction and its
+  comparison-group validation.
 - `benchmarks/_tee_profile_worker_backend.py` — backend selection for the tee
   hot-path profiling worker (`_EnvBackendSelector` and its supporting state).
 
@@ -1610,11 +1611,12 @@ The window makes the *bar* robust to one noisy run. It cannot make the
 *candidate* robust: a pull request is measured once, on whichever runner CI
 gave it. So when the comparison reports a regression, the job measures again
 under the `confirmation` prefix, compares again against the same window, and
-`benchmarks/confirm_regression.py` intersects the two verdicts — a scenario
-fails only if it regressed both times. A flake has to land on the same
-scenario twice to survive, which turns a one-in-N false failure into roughly
-one-in-N². The second benchmark is only ever spent on a run that was about to
-fail, so ordinary runs cost exactly what they did before.
+`benchmarks/ratchet_confirmation.py` performs the typed intersection while
+`benchmarks/confirm_regression.py` adapts the reports and CLI — a scenario
+fails only if it regressed both times. A flake has to land on the same scenario
+twice to survive, which turns a one-in-N false failure into roughly one-in-N².
+The second benchmark is only ever spent on a run that was about to fail, so
+ordinary runs cost exactly what they did before.
 
 Three properties of that pass are load-bearing:
 
@@ -1668,14 +1670,17 @@ invoke it:
   version and worker-iteration contract used for compatibility filtering.
 - `benchmarks/ratchet_rust_performance.py` is the comparison entry point. Its
   `compare_rust_regressions` function selects a compatible history window (or
-  the single-sample fallback) and returns the typed report; `main` supplies the
+  the single-sample fallback), consumes comparison-group validation from
+  `ratchet_ratio_extraction`, and returns the typed report; `main` supplies the
   CLI exit status and `write_report` serializes the result. A malformed input
   returns status 2, a regression status 1, and a passing or profile-skipped
   comparison status 0.
-- `benchmarks/confirm_regression.py` is the retry adapter. `confirm_regressions`
-  intersects the primary and confirmation regression lists, preserving the
-  primary verdict when confirmation has no comparison evidence. Its CLI writes
-  the combined report and returns status 1 only for a reproduced regression.
+- `benchmarks/ratchet_confirmation.py` is the pure typed retry policy.
+  `confirm_regressions` intersects the primary and confirmation regression
+  lists, preserving the primary verdict when confirmation has no comparison
+  evidence. `benchmarks/confirm_regression.py` is the JSON/CLI adapter: it
+  writes the combined report and returns status 1 only for a reproduced
+  regression.
 - `benchmarks/update_baseline_history.py` is the `main`-run recorder. It loads
   the previous history, derives one sample from the candidate plan and
   throughput, appends it when valid, and always writes the resulting history

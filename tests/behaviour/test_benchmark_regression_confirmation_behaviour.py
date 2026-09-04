@@ -7,14 +7,16 @@ regression, the same scenario named once is a runner.
 
 from __future__ import annotations
 
+import json
 import typing as typ
 
 from pytest_bdd import given, parsers, scenario, then, when
 
-from benchmarks.confirm_regression import confirm_regressions
+from benchmarks.confirm_regression import main as confirm_cli
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    import pathlib as pth
 
 FEATURE = "../features/benchmark_regression_confirmation.feature"
 SCENARIOS = ("small-single-nocb", "medium-single-nocb", "medium-single-cb")
@@ -75,6 +77,37 @@ def _report(*regressed: str) -> dict[str, object]:
     }
 
 
+def _combine_with_cli(
+    *,
+    tmp_path: pth.Path,
+    primary: dict[str, object],
+    confirmation: dict[str, object],
+) -> dict[str, object]:
+    """Execute the confirmation CLI and return its persisted report."""
+    primary_path = tmp_path / "primary.json"
+    confirmation_path = tmp_path / "confirmation.json"
+    output_path = tmp_path / "combined.json"
+    primary_path.write_text(json.dumps(primary), encoding="utf-8")
+    confirmation_path.write_text(json.dumps(confirmation), encoding="utf-8")
+
+    exit_code = confirm_cli([
+        "--primary-report",
+        str(primary_path),
+        "--confirmation-report",
+        str(confirmation_path),
+        "--output",
+        str(output_path),
+    ])
+    verdict = typ.cast(
+        "dict[str, object]", json.loads(output_path.read_text(encoding="utf-8"))
+    )
+
+    assert exit_code == int(not verdict["passed"]), (
+        "the confirmation CLI exit code must match its persisted verdict"
+    )
+    return verdict
+
+
 # -- Given steps ---------------------------------------------------------------
 
 
@@ -95,18 +128,24 @@ def given_the_first_measurement(names: str) -> dict[str, object]:
     target_fixture="verdict",
 )
 def when_a_second_measurement(
-    primary: dict[str, object], names: str
+    primary: dict[str, object], names: str, tmp_path: pth.Path
 ) -> cabc.Mapping[str, object]:
-    """Combine the second measurement's verdict with the first."""
-    return confirm_regressions(primary=primary, confirmation=_report(*_flagged(names)))
+    """Combine two measurements through the confirmation CLI."""
+    return _combine_with_cli(
+        tmp_path=tmp_path,
+        primary=primary,
+        confirmation=_report(*_flagged(names)),
+    )
 
 
 @when("a second measurement cannot be compared", target_fixture="verdict")
 def when_a_second_measurement_cannot_compare(
     primary: dict[str, object],
+    tmp_path: pth.Path,
 ) -> cabc.Mapping[str, object]:
-    """Combine with a run that produced a skip report rather than a comparison."""
-    return confirm_regressions(
+    """Combine with a skip report through the confirmation CLI."""
+    return _combine_with_cli(
+        tmp_path=tmp_path,
         primary=primary,
         confirmation={
             "baseline_available": True,

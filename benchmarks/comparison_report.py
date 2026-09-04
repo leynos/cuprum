@@ -23,7 +23,7 @@ def _ratchet_skip_detail(report: cabc.Mapping[str, object]) -> str:
     """Return the human-readable skip-reason string for a skipped ratchet run."""
     if report.get("reason") == _BOOTSTRAP_SKIP_REASON:
         return (
-            "Rust regression ratchet skipped: no previous successful main "
+            "Rust regression ratchet skipped: no previous completed main "
             "baseline artefact."
         )
     return "Rust regression ratchet skipped."

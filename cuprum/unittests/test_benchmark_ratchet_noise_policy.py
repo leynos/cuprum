@@ -39,7 +39,9 @@ def _run(*, ratios: cabc.Mapping[str, float], context_name: str) -> BenchmarkRun
         ratios, worker_iterations=WORKER_ITERATIONS
     )
     return BenchmarkRunPayload(
-        plan=plan, throughput=throughput, context_name=context_name
+        plan=dict(plan),
+        throughput=dict(throughput),
+        context_name=context_name,
     )
 
 

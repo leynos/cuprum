@@ -257,7 +257,7 @@ def test_load_ratchet_report_rejects_non_boolean_field(
             RatchetStatus(
                 status="skipped",
                 detail=(
-                    "Rust regression ratchet skipped: no previous successful "
+                    "Rust regression ratchet skipped: no previous completed "
                     "main baseline artefact."
                 ),
             ),

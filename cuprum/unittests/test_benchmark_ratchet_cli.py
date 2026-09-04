@@ -11,63 +11,19 @@ import pytest
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 from benchmarks.ratchet_history import BaselineHistory, HistorySample, write_history
 from benchmarks.ratchet_rust_performance import main
+from cuprum.unittests.conftest import SCENARIO, WORKER_ITERATIONS
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
-
-SCENARIO = "medium-single-nocb"
-WORKER_ITERATIONS = 20
-
-
-def _write_json(
-    *,
-    tmp_path: pth.Path,
-    filename: str,
-    payload: dict[str, object],
-) -> pth.Path:
-    """Write one ratchet CLI input file."""
-    path = tmp_path / filename
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    return path
-
-
-def _candidate_plan() -> dict[str, object]:
-    """Return a candidate plan with one matching Rust/Python scenario pair."""
-    return {
-        "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
-        "worker_iterations": WORKER_ITERATIONS,
-        "scenarios": [
-            {"name": f"python-{SCENARIO}", "backend": "python"},
-            {"name": f"rust-{SCENARIO}", "backend": "rust"},
-        ],
-    }
-
-
-def _candidate_throughput() -> dict[str, object]:
-    """Return matching one-second Python and Rust measurements."""
-    return {
-        "results": [
-            {"command": f"python-{SCENARIO}", "mean": 1.0},
-            {"command": f"rust-{SCENARIO}", "mean": 1.0},
-        ],
-    }
 
 
 def test_history_only_artefact_does_not_require_fallback_files(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
+    candidate_artefacts: tuple[pth.Path, pth.Path],
 ) -> None:
     """A compatible history must remain usable after a failed main benchmark."""
-    candidate_plan = _write_json(
-        tmp_path=tmp_path,
-        filename="candidate-plan.json",
-        payload=_candidate_plan(),
-    )
-    candidate_throughput = _write_json(
-        tmp_path=tmp_path,
-        filename="candidate-throughput.json",
-        payload=_candidate_throughput(),
-    )
+    candidate_plan, candidate_throughput = candidate_artefacts
     history = tmp_path / "main-baseline-history.json"
     write_history(
         history=BaselineHistory(
@@ -116,18 +72,10 @@ def test_history_only_artefact_does_not_require_fallback_files(
 def test_a_directory_baseline_history_returns_an_input_error(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
+    candidate_artefacts: tuple[pth.Path, pth.Path],
 ) -> None:
     """Only an absent history falls back; a directory is an invalid input."""
-    candidate_plan = _write_json(
-        tmp_path=tmp_path,
-        filename="candidate-plan.json",
-        payload=_candidate_plan(),
-    )
-    candidate_throughput = _write_json(
-        tmp_path=tmp_path,
-        filename="candidate-throughput.json",
-        payload=_candidate_throughput(),
-    )
+    candidate_plan, candidate_throughput = candidate_artefacts
     history = tmp_path / "main-baseline-history"
     history.mkdir()
 
@@ -153,18 +101,10 @@ def test_a_directory_baseline_history_returns_an_input_error(
 def test_cli_applies_non_default_history_policy_options(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
+    candidate_artefacts: tuple[pth.Path, pth.Path],
 ) -> None:
     """The CLI must serialize policy values supplied through history options."""
-    candidate_plan = _write_json(
-        tmp_path=tmp_path,
-        filename="candidate-plan.json",
-        payload=_candidate_plan(),
-    )
-    candidate_throughput = _write_json(
-        tmp_path=tmp_path,
-        filename="candidate-throughput.json",
-        payload=_candidate_throughput(),
-    )
+    candidate_plan, candidate_throughput = candidate_artefacts
     history = tmp_path / "main-baseline-history.json"
     write_history(
         history=BaselineHistory(

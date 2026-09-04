@@ -130,6 +130,61 @@ class ComparisonReport:
 
 
 @dc.dataclass(frozen=True, slots=True)
+class ReportedRegression:
+    """One scenario named in a ratchet report's regression list.
+
+    Attributes
+    ----------
+    scenario_name : str
+        Non-empty comparison-group identifier validated by the report adapter.
+    """
+
+    scenario_name: str
+
+
+@dc.dataclass(frozen=True, slots=True)
+class ConfirmationReport:
+    """Typed confirmation evidence consumed by the retry policy.
+
+    Attributes
+    ----------
+    regressions : tuple[ReportedRegression, ...]
+        Scenarios the measurement reported as regressions, in report order.
+    comparison_performed : bool
+        Whether the report contains usable comparison evidence. An unavailable
+        confirmation preserves the primary verdict.
+    """
+
+    regressions: tuple[ReportedRegression, ...]
+    comparison_performed: bool
+
+
+@dc.dataclass(frozen=True, slots=True)
+class ConfirmationResult:
+    """The primary regressions that a confirmation measurement resolved.
+
+    Attributes
+    ----------
+    primary_regressions : tuple[ReportedRegression, ...]
+        Every regression from the first measurement, in report order.
+    confirmed_regressions : tuple[ReportedRegression, ...]
+        Primary scenarios confirmed by the retry, or all primary scenarios
+        when the retry supplied no comparison evidence.
+    unconfirmed_regressions : tuple[ReportedRegression, ...]
+        Primary scenarios the retry did not reproduce.
+    """
+
+    primary_regressions: tuple[ReportedRegression, ...]
+    confirmed_regressions: tuple[ReportedRegression, ...]
+    unconfirmed_regressions: tuple[ReportedRegression, ...]
+
+    @property
+    def passed(self) -> bool:
+        """Whether no primary regression remained confirmed."""
+        return not self.confirmed_regressions
+
+
+@dc.dataclass(frozen=True, slots=True)
 class BenchmarkRunPayload:
     """Benchmark payload pair for one context (baseline or candidate)."""
 

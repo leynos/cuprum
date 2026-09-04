@@ -7,9 +7,11 @@ declares the matching pytest marker for symbolic helper-property checks.
 
 from __future__ import annotations
 
+import json
 import typing as typ
 
 import hypothesis_crosshair_provider  # ruff: ignore[unused-import]  # Registers CrossHair backend provider on import.
+import pytest
 from hypothesis import settings
 
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
@@ -17,8 +19,7 @@ from benchmarks.ratchet_history import BaselineHistory, HistorySample
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-    import pytest
+    import pathlib as pth
 
 settings.register_profile(
     "crosshair",
@@ -42,9 +43,37 @@ WORKER_ITERATIONS = 20
 TYPICAL_RATIOS = (1.013, 1.001, 1.069, 0.916, 1.105)
 
 
+class ScenarioPayload(typ.TypedDict):
+    """One planned backend scenario fixture entry."""
+
+    name: str
+    backend: str
+
+
+class PlanPayload(typ.TypedDict):
+    """Dry-run plan fixture payload."""
+
+    benchmark_profile_version: str
+    worker_iterations: int
+    scenarios: list[ScenarioPayload]
+
+
+class ResultPayload(typ.TypedDict):
+    """One Hyperfine result fixture entry."""
+
+    command: str
+    mean: float
+
+
+class ThroughputPayload(typ.TypedDict):
+    """Hyperfine throughput fixture payload."""
+
+    results: list[ResultPayload]
+
+
 def benchmark_run_payloads(
     ratios: cabc.Mapping[str, float], *, worker_iterations: int = 20
-) -> tuple[dict[str, object], dict[str, object]]:
+) -> tuple[PlanPayload, ThroughputPayload]:
     """Build matching dry-run and Hyperfine payloads for scenario ratios.
 
     Parameters
@@ -56,26 +85,26 @@ def benchmark_run_payloads(
 
     Returns
     -------
-    tuple[dict[str, object], dict[str, object]]
+    tuple[PlanPayload, ThroughputPayload]
         Matching dry-run plan and Hyperfine throughput payloads.
     """
-    scenarios: list[dict[str, object]] = []
-    results: list[dict[str, object]] = []
+    scenarios: list[ScenarioPayload] = []
+    results: list[ResultPayload] = []
     for scenario, ratio in sorted(ratios.items()):
-        python_scenario: dict[str, object] = {
+        python_scenario: ScenarioPayload = {
             "name": f"python-{scenario}",
             "backend": "python",
         }
-        rust_scenario: dict[str, object] = {
+        rust_scenario: ScenarioPayload = {
             "name": f"rust-{scenario}",
             "backend": "rust",
         }
         scenarios.extend((python_scenario, rust_scenario))
-        python_result: dict[str, object] = {
+        python_result: ResultPayload = {
             "command": f"python-{scenario}",
             "mean": 1.0,
         }
-        rust_result: dict[str, object] = {
+        rust_result: ResultPayload = {
             "command": f"rust-{scenario}",
             "mean": ratio,
         }
@@ -87,6 +116,31 @@ def benchmark_run_payloads(
             "scenarios": scenarios,
         },
         {"results": results},
+    )
+
+
+def _write_json(*, tmp_path: pth.Path, filename: str, payload: object) -> pth.Path:
+    """Write one JSON fixture payload."""
+    path = tmp_path / filename
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def candidate_artefacts(tmp_path: pth.Path) -> tuple[pth.Path, pth.Path]:
+    """Write one matching candidate plan and throughput artefact pair."""
+    plan, throughput = benchmark_run_payloads({SCENARIO: 1.0})
+    return (
+        _write_json(
+            tmp_path=tmp_path,
+            filename="candidate-plan.json",
+            payload=plan,
+        ),
+        _write_json(
+            tmp_path=tmp_path,
+            filename="candidate-throughput.json",
+            payload=throughput,
+        ),
     )
 
 

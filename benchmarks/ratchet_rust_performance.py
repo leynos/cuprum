@@ -1,7 +1,17 @@
 """Orchestrate the Rust/Python benchmark ratchet against `main` baselines.
 
-`ratchet_ratios` loads validated payloads; candidates compare against history
-or its single-sample fallback, and the CLI writes verdicts and CI exit codes.
+`benchmarks.ratchet_ratios` loads and validates plan and throughput payloads,
+then invokes the canonical ratio extractor to derive within-run Rust/Python
+ratios.
+
+`compare_rust_regressions` selects compatible rolling history or a
+single-sample fallback. `RatchetPolicy`, median baselines, and MAD-derived
+tolerance determine each regression threshold.
+
+The orchestration produces `ComparisonReport` and `ScenarioComparison` values.
+`write_report` and `main` adapt them to JSON and process status: `0` passes or
+intentionally does not compare, `1` reports a regression, and `2` reports
+invalid input or processing failure.
 """
 
 from __future__ import annotations
@@ -10,7 +20,6 @@ import argparse
 import json
 import logging
 import pathlib as pth
-import typing as typ
 
 from benchmarks.benchmark_profile import (
     IncompatibleBenchmarkProfileError,
@@ -27,6 +36,7 @@ from benchmarks.ratchet_history import (
     median_ratio,
     noise_tolerance,
 )
+from benchmarks.ratchet_ratio_extraction import _validate_matching_comparison_groups
 from benchmarks.ratchet_ratios import (
     load_plan,
     load_throughput,
@@ -39,34 +49,12 @@ from benchmarks.ratchet_types import (
     ScenarioComparison,
 )
 
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
 __all__ = [
     "compare_rust_regressions",
     *("load_plan", "load_throughput", "main"),
     *("profile_metadata", "run_ratios", "write_report"),
 ]
 _logger = logging.getLogger(__name__)
-
-
-def _validate_matching_comparison_groups(
-    *,
-    baseline_ratios: cabc.Mapping[str, object],
-    candidate_ratios: cabc.Mapping[str, object],
-) -> None:
-    """Validate that baseline and candidate have the same comparison groups."""
-    baseline_names = set(baseline_ratios)
-    candidate_names = set(candidate_ratios)
-    if baseline_names != candidate_names:
-        missing_from_candidate = sorted(baseline_names - candidate_names)
-        missing_from_baseline = sorted(candidate_names - baseline_names)
-        msg = (
-            "comparison groups must match across baseline and candidate runs: "
-            f"missing_from_candidate={missing_from_candidate}, "
-            f"missing_from_baseline={missing_from_baseline}"
-        )
-        raise ValueError(msg)
 
 
 def _baseline_window(
@@ -255,9 +243,13 @@ def write_report(*, report: ComparisonReport, output_path: pth.Path) -> None:
     output_path : pathlib.Path
         JSON destination; missing parent directories are created.
 
-    I/O and serialization errors propagate to the CLI, which reports an input
-    error without publishing a partial verdict.
-    """
+    Raises
+    ------
+    OSError, TypeError
+        If the destination cannot be prepared or written, or serialization
+        fails. The CLI reports the failure without publishing a partial
+        verdict.
+    """  # ruff: ignore[docstring-extraneous-exception] - file and JSON operations deliberately propagate their errors.
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(report.as_dict(), indent=2, sort_keys=True)
     output_path.write_text(payload, encoding="utf-8")

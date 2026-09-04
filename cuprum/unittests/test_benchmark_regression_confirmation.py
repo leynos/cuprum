@@ -22,8 +22,14 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from benchmarks.comparison_report import load_ratchet_report
-from benchmarks.confirm_regression import confirm_regressions
+from benchmarks.confirm_regression import (
+    combine_report_payloads,
+    confirmation_report_from_payload,
+    confirmation_result_to_payload,
+)
 from benchmarks.confirm_regression import main as confirm_cli
+from benchmarks.ratchet_confirmation import confirm_regressions
+from benchmarks.ratchet_types import ReportedRegression
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -78,6 +84,13 @@ def _skip_report() -> dict[str, object]:
     }
 
 
+def _combine(
+    *, primary: dict[str, object], confirmation: dict[str, object]
+) -> dict[str, object]:
+    """Combine serialized reports through the JSON adapter boundary."""
+    return combine_report_payloads(primary=primary, confirmation=confirmation)
+
+
 def _names(entries: object) -> list[str]:
     """Return the scenario names of a list of comparison entries."""
     return [
@@ -88,7 +101,7 @@ def _names(entries: object) -> list[str]:
 
 def test_a_regression_that_reproduces_fails() -> None:
     """The same scenario flagged twice is signal, not noise."""
-    combined = confirm_regressions(
+    combined = _combine(
         primary=_report("medium-single-nocb"),
         confirmation=_report("medium-single-nocb"),
     )
@@ -104,7 +117,7 @@ def test_a_regression_that_reproduces_fails() -> None:
 
 def test_a_regression_that_does_not_reproduce_passes() -> None:
     """One unlucky measurement must not fail a pull request on its own."""
-    combined = confirm_regressions(
+    combined = _combine(
         primary=_report("medium-single-nocb"),
         confirmation=_report(),
     )
@@ -125,7 +138,7 @@ def test_a_flake_that_moves_scenario_does_not_confirm() -> None:
     runner noise looks like; treating it as confirmation would defeat the
     re-measurement.
     """
-    combined = confirm_regressions(
+    combined = _combine(
         primary=_report("medium-single-nocb"),
         confirmation=_report("small-single-nocb"),
     )
@@ -142,7 +155,7 @@ def test_the_confirmation_cannot_introduce_a_new_failure() -> None:
     Otherwise re-measuring would be a second chance to fail, doubling the
     false-failure rate it exists to halve.
     """
-    combined = confirm_regressions(
+    combined = _combine(
         primary=_report(),
         confirmation=_report("medium-single-nocb", "small-single-nocb"),
     )
@@ -160,7 +173,7 @@ def test_an_unusable_confirmation_leaves_the_first_verdict_standing() -> None:
     that could not compare says something went wrong with the retry — not
     that the regression was noise.
     """
-    combined = confirm_regressions(
+    combined = _combine(
         primary=_report("medium-single-nocb"),
         confirmation=_skip_report(),
     )
@@ -188,7 +201,7 @@ def test_an_incomplete_confirmation_leaves_the_primary_verdict_standing(
     confirmation: dict[str, object],
 ) -> None:
     """Missing comparison evidence must not implicitly clear a regression."""
-    combined = confirm_regressions(
+    combined = _combine(
         primary=_report("medium-single-nocb"),
         confirmation=confirmation,
     )
@@ -207,7 +220,7 @@ def test_the_combined_report_keeps_the_shape_its_consumers_read() -> None:
     `load_ratchet_report` is the real consumer, so the check is that it
     reports the combined verdict rather than that particular keys exist.
     """
-    combined = confirm_regressions(
+    combined = _combine(
         primary=_report("medium-single-nocb"),
         confirmation=_report(),
     )
@@ -336,7 +349,7 @@ def test_confirmation_only_ever_narrows_the_failure(
     primary: cabc.Set[str], confirmation: cabc.Set[str]
 ) -> None:
     """Whatever the second run measures, it cannot widen the first verdict."""
-    combined = confirm_regressions(
+    combined = _combine(
         primary=_report(*primary),
         confirmation=_report(*confirmation),
     )
@@ -360,11 +373,65 @@ def test_a_reproduced_verdict_is_the_primary_verdict(
     measurement adds nothing; the verdict must then be untouched by it.
     """
     report = _report(*regressed)
-    combined = confirm_regressions(primary=report, confirmation=report)
+    combined = _combine(primary=report, confirmation=report)
 
     assert combined["passed"] == report["passed"], (
         "identical primary and confirmation reports must preserve the verdict"
     )
     assert set(_names(combined["confirmed_regressions"])) == set(regressed), (
         "identical reports must confirm every primary regression"
+    )
+
+
+def test_a_valid_report_payload_decodes_to_typed_confirmation_evidence() -> None:
+    """The JSON adapter preserves ordered primary regression names."""
+    report = confirmation_report_from_payload(_report("medium-single-nocb"))
+
+    assert report.comparison_performed is True, (
+        "a normal ratchet report must provide comparison evidence"
+    )
+    assert report.regressions == (ReportedRegression("medium-single-nocb"),), (
+        "the adapter must retain the reported scenario name"
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"regressions": [{}]}, id="invalid-regression-entry"),
+        pytest.param(
+            {"regressions": [{"scenario_name": ""}]},
+            id="invalid-scenario-name",
+        ),
+    ],
+)
+def test_report_payload_adapter_rejects_invalid_regressions(
+    payload: dict[str, object],
+) -> None:
+    """Typed conversion rejects incomplete regression evidence."""
+    with pytest.raises((TypeError, ValueError)):
+        confirmation_report_from_payload(payload)
+
+
+def test_a_typed_confirmation_result_serializes_to_the_existing_shape() -> None:
+    """The serializer preserves the combined-report compatibility contract."""
+    primary = _report("medium-single-nocb")
+    confirmation = _report("medium-single-nocb")
+    result = confirm_regressions(
+        primary=confirmation_report_from_payload(primary),
+        confirmation=confirmation_report_from_payload(confirmation),
+    )
+
+    payload = confirmation_result_to_payload(
+        primary_payload=primary,
+        confirmation_payload=confirmation,
+        result=result,
+    )
+
+    assert payload["passed"] is False, "a confirmed typed regression must fail"
+    assert _names(payload["regressions"]) == ["medium-single-nocb"], (
+        "the serialized regressions must expose confirmed primary scenarios"
+    )
+    assert _names(payload["primary_regressions"]) == ["medium-single-nocb"], (
+        "the serialized report must preserve the primary evidence"
     )

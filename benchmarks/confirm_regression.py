@@ -6,9 +6,9 @@ once on an unlucky runner still reports whatever that runner produced, and
 the only recourse is a human deciding to press re-run.
 
 So when the first comparison reports a regression, CI measures again and
-compares again, and this module intersects the two verdicts. A scenario
-fails only if it regressed both times. A flake has to land on the same
-scenario twice to survive, which turns a one-in-N false failure into
+compares again. `benchmarks.ratchet_confirmation` intersects typed evidence:
+a scenario fails only if it regressed both times. A flake has to land on the
+same scenario twice to survive, which turns a one-in-N false failure into
 roughly one-in-N².
 
 Two asymmetries are deliberate:
@@ -21,11 +21,16 @@ Two asymmetries are deliberate:
   verdict standing. Failing closed is right here: the primary comparison
   succeeded on the same inputs, so an unusable confirmation is a fault in
   the retry, not evidence about the candidate.
+
+This module is the JSON and command-line adapter around that policy. It
+decodes persisted reports, writes the established combined-report shape, and
+maps successful, regressed, and invalid-input outcomes to process statuses.
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses as dc
 import json
 import logging
 import pathlib as pth
@@ -36,6 +41,12 @@ from benchmarks._validation import (
     _require_mapping,
     _require_non_empty_string,
 )
+from benchmarks.ratchet_confirmation import confirm_regressions
+from benchmarks.ratchet_types import (
+    ConfirmationReport,
+    ConfirmationResult,
+    ReportedRegression,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -43,19 +54,16 @@ if typ.TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
-def _regressed_scenarios(report: cabc.Mapping[str, object]) -> list[str]:
-    """Return the scenario names a ratchet report flagged as regressions."""
-    entries = _require_list(report.get("regressions"), name="regressions")
-    return [
-        _require_non_empty_string(
-            _require_mapping(entry, name="regressions[]").get("scenario_name"),
-            name="regressions[].scenario_name",
-        )
-        for entry in entries
-    ]
+@dc.dataclass(frozen=True, slots=True)
+class _DecodedConfirmationReport:
+    """Validated JSON adapter values for one confirmation report."""
+
+    report: ConfirmationReport
+    payload: dict[str, object]
+    regression_entries: tuple[dict[str, object], ...]
 
 
-def _comparison_performed(report: cabc.Mapping[str, object]) -> bool:
+def _comparison_performed(payload: cabc.Mapping[str, object]) -> bool:
     """Return whether a ratchet report actually compared anything.
 
     A skip report — no baseline yet, or an incompatible benchmark profile —
@@ -66,66 +74,140 @@ def _comparison_performed(report: cabc.Mapping[str, object]) -> bool:
     bool
         Whether the report contains a comparable measurement.
     """
-    if report.get("comparison_performed") is False:
+    if payload.get("comparison_performed") is False:
         return False
-    comparisons = report.get("comparisons")
+    comparisons = payload.get("comparisons")
     return isinstance(comparisons, list) and bool(comparisons)
 
 
-def confirm_regressions(
-    *,
-    primary: cabc.Mapping[str, object],
-    confirmation: cabc.Mapping[str, object],
-) -> dict[str, object]:
-    """Combine two ratchet reports into one verdict.
+def _regression_entries(
+    payload: cabc.Mapping[str, object],
+) -> tuple[dict[str, object], ...]:
+    """Validate and copy the serialized regression entries."""
+    entries = _require_list(payload.get("regressions"), name="regressions")
+    return tuple(
+        dict(_require_mapping(entry, name="regressions[]")) for entry in entries
+    )
 
-    The result keeps the primary report's shape, so the workflow summary and
-    every other consumer read it unchanged, with `regressions` narrowed to
-    those the second measurement reproduced.
+
+def _decoded_report_from_payload(
+    payload: cabc.Mapping[str, object], *, require_regressions: bool
+) -> _DecodedConfirmationReport:
+    """Decode JSON-shaped report data into typed confirmation evidence."""
+    performed = _comparison_performed(payload)
+    if not require_regressions and not performed:
+        entries: tuple[dict[str, object], ...] = ()
+    else:
+        entries = _regression_entries(payload)
+    regressions = tuple(
+        ReportedRegression(
+            scenario_name=_require_non_empty_string(
+                entry.get("scenario_name"), name="regressions[].scenario_name"
+            )
+        )
+        for entry in entries
+    )
+    return _DecodedConfirmationReport(
+        report=ConfirmationReport(
+            regressions=regressions,
+            comparison_performed=performed,
+        ),
+        payload=dict(payload),
+        regression_entries=entries,
+    )
+
+
+def confirmation_report_from_payload(
+    payload: cabc.Mapping[str, object],
+) -> ConfirmationReport:
+    """Decode a complete ratchet report into typed confirmation evidence.
 
     Parameters
     ----------
-    primary : cabc.Mapping[str, object]
-        A completed ratchet report with a `regressions` list and its matching
-        `comparisons` evidence.
-    confirmation : cabc.Mapping[str, object]
-        A second ratchet report in the same shape. A missing, empty, or
-        explicitly skipped comparison preserves the primary verdict.
+    payload : collections.abc.Mapping[str, object]
+        JSON-shaped ratchet report containing a `regressions` list.
+
+    Returns
+    -------
+    ConfirmationReport
+        Validated regression names and whether comparison evidence exists.
+
+    Raises
+    ------
+    TypeError, ValueError
+        If the report does not contain valid regression entries.
+    """  # ruff: ignore[docstring-extraneous-exception] - validation errors are part of the adapter contract.
+    return _decoded_report_from_payload(payload, require_regressions=True).report
+
+
+def confirmation_result_to_payload(
+    *,
+    primary_payload: cabc.Mapping[str, object],
+    confirmation_payload: cabc.Mapping[str, object],
+    result: ConfirmationResult,
+) -> dict[str, object]:
+    """Adapt a typed confirmation result to the established JSON report.
+
+    Parameters
+    ----------
+    primary_payload : collections.abc.Mapping[str, object]
+        Original primary report whose fields and regression entries are kept.
+    confirmation_payload : collections.abc.Mapping[str, object]
+        Original confirmation report supplying serialized comparison evidence.
+    result : ConfirmationResult
+        Pure confirmation-policy decision to serialize.
 
     Returns
     -------
     dict[str, object]
-        The primary report shape with only reproduced regressions retained;
-        it additionally records primary, confirmed, and unconfirmed entries.
+        Existing combined report shape consumed by workflow-report readers.
     """
-    flagged = _regressed_scenarios(primary)
-    if not _comparison_performed(confirmation):
-        reproduced = set(flagged)
-    else:
-        reproduced = set(flagged) & set(_regressed_scenarios(confirmation))
-
-    entries = _require_list(primary.get("regressions"), name="regressions")
-    confirmed = []
-    for entry in entries:
-        mapped_entry = _require_mapping(entry, name="regressions[]")
-        scenario_name = _require_non_empty_string(
-            mapped_entry.get("scenario_name"), name="regressions[].scenario_name"
+    primary = _decoded_report_from_payload(primary_payload, require_regressions=True)
+    confirmed_names = {entry.scenario_name for entry in result.confirmed_regressions}
+    confirmed = [
+        entry
+        for regression, entry in zip(
+            primary.report.regressions, primary.regression_entries, strict=True
         )
-        if scenario_name in reproduced:
-            confirmed.append(entry)
-    unconfirmed = [entry for entry in entries if entry not in confirmed]
-
-    combined = dict(primary)
+        if regression.scenario_name in confirmed_names
+    ]
+    unconfirmed = [
+        entry
+        for regression, entry in zip(
+            primary.report.regressions, primary.regression_entries, strict=True
+        )
+        if regression.scenario_name not in confirmed_names
+    ]
+    combined = dict(primary.payload)
     combined.update({
-        "passed": not confirmed,
+        "passed": result.passed,
         "confirmation_performed": True,
         "confirmed_regressions": confirmed,
         "unconfirmed_regressions": unconfirmed,
         "regressions": confirmed,
-        "primary_regressions": entries,
-        "confirmation_comparisons": confirmation.get("comparisons", []),
+        "primary_regressions": list(primary.regression_entries),
+        "confirmation_comparisons": confirmation_payload.get("comparisons", []),
     })
     return combined
+
+
+def combine_report_payloads(
+    *, primary: cabc.Mapping[str, object], confirmation: cabc.Mapping[str, object]
+) -> dict[str, object]:
+    """Decode, combine, and serialize two ratchet report payloads."""
+    primary_report = _decoded_report_from_payload(primary, require_regressions=True)
+    confirmation_report = _decoded_report_from_payload(
+        confirmation, require_regressions=False
+    )
+    result = confirm_regressions(
+        primary=primary_report.report,
+        confirmation=confirmation_report.report,
+    )
+    return confirmation_result_to_payload(
+        primary_payload=primary_report.payload,
+        confirmation_payload=confirmation_report.payload,
+        result=result,
+    )
 
 
 def _load_report(path: pth.Path) -> dict[str, object]:
@@ -164,7 +246,7 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
     )
     args = _parse_args(argv)
     try:
-        combined = confirm_regressions(
+        combined = combine_report_payloads(
             primary=_load_report(args.primary_report),
             confirmation=_load_report(args.confirmation_report),
         )
@@ -177,19 +259,24 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
         _logger.exception("failed to combine ratchet reports")
         return 2
 
-    unconfirmed = combined["unconfirmed_regressions"]
+    unconfirmed = _require_list(
+        combined["unconfirmed_regressions"], name="unconfirmed_regressions"
+    )
+    confirmed = _require_list(
+        combined["confirmed_regressions"], name="confirmed_regressions"
+    )
     if unconfirmed:
         _logger.info(
             "%d regression(s) did not reproduce on a second measurement and are "
             "treated as runner noise",
-            len(typ.cast("list[object]", unconfirmed)),
+            len(unconfirmed),
         )
     if combined["passed"]:
         return 0
 
     _logger.error(
         "benchmark ratchet failed: %d regression(s) reproduced on a second measurement",
-        len(typ.cast("list[object]", combined["confirmed_regressions"])),
+        len(confirmed),
     )
     return 1
 
