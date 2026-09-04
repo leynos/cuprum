@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import stat
-import subprocess  # noqa: S404 - runs fixed Makefile targets under test.
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed Makefile targets.
 import typing as typ
 
 import yaml
@@ -26,22 +26,34 @@ _CI_WORKFLOW = ".github/workflows/ci.yml"
 _WORKFLOW_DIRECTORY = ".github/workflows"
 _ACTIONLINT_INSTALLER_LINES = (
     "readonly ACTIONLINT_VERSION='1.7.12'",
-    "readonly ACTIONLINT_SHA256="
-    "'8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8'",
+    (
+        "readonly ACTIONLINT_SHA256="
+        "'8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8'"
+    ),
     "readonly ACTIONLINT_INSTALLER_COMMIT='914e7df21a07ef503a81201c76d2b11c789d3fca'",
     'readonly ACTIONLINT_ARCHIVE="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"',
     "readonly ACTIONLINT_RAW_BASE='https://raw.githubusercontent.com/rhysd/actionlint'",
     "readonly ACTIONLINT_SCRIPT='scripts/download-actionlint.bash'",
-    'readonly ACTIONLINT_INSTALLER_URL="${ACTIONLINT_RAW_BASE}/'
-    '${ACTIONLINT_INSTALLER_COMMIT}/${ACTIONLINT_SCRIPT}"',
-    "readonly ACTIONLINT_RELEASE_ROOT="
-    "'https://github.com/rhysd/actionlint/releases/download'",
-    'readonly ACTIONLINT_RELEASE_BASE="${ACTIONLINT_RELEASE_ROOT}/'
-    'v${ACTIONLINT_VERSION}"',
-    'readonly ACTIONLINT_RELEASE_URL="${ACTIONLINT_RELEASE_BASE}/'
-    '${ACTIONLINT_ARCHIVE}"',
-    "command curl --fail --location --show-error --output "
-    '"${ACTIONLINT_INSTALLER_PATH}"',
+    (
+        'readonly ACTIONLINT_INSTALLER_URL="${ACTIONLINT_RAW_BASE}/'
+        '${ACTIONLINT_INSTALLER_COMMIT}/${ACTIONLINT_SCRIPT}"'
+    ),
+    (
+        "readonly ACTIONLINT_RELEASE_ROOT="
+        "'https://github.com/rhysd/actionlint/releases/download'"
+    ),
+    (
+        'readonly ACTIONLINT_RELEASE_BASE="${ACTIONLINT_RELEASE_ROOT}/'
+        'v${ACTIONLINT_VERSION}"'
+    ),
+    (
+        'readonly ACTIONLINT_RELEASE_URL="${ACTIONLINT_RELEASE_BASE}/'
+        '${ACTIONLINT_ARCHIVE}"'
+    ),
+    (
+        "command curl --fail --location --show-error --output "
+        '"${ACTIONLINT_INSTALLER_PATH}"'
+    ),
     'command curl --fail --location --show-error --output "${ACTIONLINT_ARCHIVE_PATH}"',
     "sha256sum --check --",
     'bash "${ACTIONLINT_INSTALLER_PATH}" "${ACTIONLINT_VERSION}"',
@@ -116,8 +128,8 @@ def _run_make(
     *targets: str, environment: dict[str, str]
 ) -> subprocess.CompletedProcess[str]:
     """Run fixed Makefile targets and capture their outcome."""
-    return subprocess.run(  # noqa: S603 - fixed Makefile test command.
-        ["make", *targets],  # noqa: S607 - `make` resolves from the test PATH.
+    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed command.
+        ["make", *targets],  # ruff: ignore[start-process-with-partial-path] - test PATH.
         capture_output=True,
         check=False,
         cwd=repo_root(),
@@ -147,6 +159,7 @@ def _step_named(name: str) -> _Step:
     )
     return matches[0]
 
+
 def _assert_yamllint_provisioning() -> None:
     """Assert that CI installs the pinned yamllint executable on PATH."""
     environment = _lint_job().get("env")
@@ -165,6 +178,7 @@ def _assert_yamllint_provisioning() -> None:
     assert isinstance(yamllint_install, str), "Install yamllint must run a script"
     assert 'uv tool install "yamllint==${YAMLLINT_VERSION}"' in yamllint_install
     assert 'echo "${UV_TOOL_BIN_DIR}" >> "$GITHUB_PATH"' in yamllint_install
+
 
 def _assert_actionlint_provisioning() -> None:
     """Assert that CI verifies actionlint before its installer can run."""
@@ -192,6 +206,7 @@ def _assert_actionlint_provisioning() -> None:
         'bash "${ACTIONLINT_INSTALLER_PATH}" "${ACTIONLINT_VERSION}"'
     )
 
+
 def _assert_linter_step_order() -> None:
     """Assert that CI provisions both linters before invoking Make."""
     step_names = [
@@ -211,6 +226,8 @@ def _assert_linter_step_order() -> None:
         for name in step_names
     ]
     assert positions == sorted(positions)
+
+
 def test_the_workflow_lint_target_runs_both_linters(tmp_path: pth.Path) -> None:
     """The target validates YAML policy before GitHub Actions semantics."""
     environment, invocation_log = _make_environment(
@@ -237,6 +254,7 @@ def test_the_workflow_lint_target_rejects_a_missing_linter(tmp_path: pth.Path) -
     assert "Error: 'yamllint' is required, but not installed" in completed.stderr
     assert not invocation_log.exists(), "actionlint ran after yamllint was missing"
 
+
 def test_the_workflow_lint_target_rejects_actionlint_failure(
     tmp_path: pth.Path,
 ) -> None:
@@ -256,6 +274,7 @@ def test_the_workflow_lint_target_rejects_actionlint_failure(
         "actionlint",
     ]
 
+
 def test_all_workflows_declare_yaml_document_starts() -> None:
     """The shared YAML policy has a compatible marker in every workflow."""
     workflow_paths = sorted((repo_root() / _WORKFLOW_DIRECTORY).glob("*.yml"))
@@ -266,6 +285,8 @@ def test_all_workflows_declare_yaml_document_starts() -> None:
             f"{workflow_path.relative_to(repo_root())} must begin with a YAML "
             "document start"
         )
+
+
 def test_ci_provisions_the_pinned_workflow_linters() -> None:
     """CI caches and verifies the exact linters used by its trusted Make run."""
     policy = yaml.safe_load((repo_root() / ".yamllint.yml").read_text(encoding="utf-8"))

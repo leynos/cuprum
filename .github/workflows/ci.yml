@@ -161,8 +161,8 @@ jobs:
           readonly ACTIONLINT_RELEASE_ROOT='https://github.com/rhysd/actionlint/releases/download'
           readonly ACTIONLINT_RELEASE_BASE="${ACTIONLINT_RELEASE_ROOT}/v${ACTIONLINT_VERSION}"
           readonly ACTIONLINT_RELEASE_URL="${ACTIONLINT_RELEASE_BASE}/${ACTIONLINT_ARCHIVE}"
-          ACTIONLINT_INSTALLER_PATH="$(mktemp)"
-          ACTIONLINT_ARCHIVE_PATH="$(mktemp)"
+          ACTIONLINT_INSTALLER_PATH=$(mktemp)
+          ACTIONLINT_ARCHIVE_PATH=$(mktemp)
           trap 'rm -f "${ACTIONLINT_INSTALLER_PATH}" "${ACTIONLINT_ARCHIVE_PATH}"' EXIT
           # Feed the verified archive to the reviewed installer without a second download.
           curl() {
@@ -1070,10 +1070,11 @@ jobs:
             printf '| %s | %s | %s | %s |\n' \
               "${EVENT}" "${detector}" "${BENCH:-unknown}" "${decision}"
           } >> "${GITHUB_STEP_SUMMARY}"
-          printf '%s\n' \
-            "::notice title=benchmark-gate-decision::event_class=${event_class}"\
-            " detector_status=${detector_status}"\
-            " decision=${decision}"
+          notice_title='::notice title=benchmark-gate-decision::'
+          notice="${notice_title}event_class=${event_class}"
+          notice+=" detector_status=${detector_status}"
+          notice+=" decision=${decision}"
+          printf '%s\n' "${notice}"
 
   benchmark-ratchet:
     # The ratchet compares each scenario's within-run `rust_mean / python_mean`
