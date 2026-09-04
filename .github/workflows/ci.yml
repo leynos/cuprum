@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual runs exist to measure warm caches on `main` without a code change.
+  # A dispatch restores every cache and saves none, because the save guards
+  # require a `push` event, so repeated dispatches read the trusted generation
+  # instead of churning it. `coverage` stays pull-request-only; the trunk
+  # coverage run has its own dispatchable workflow.
+  workflow_dispatch:
 
 permissions:
   actions: read

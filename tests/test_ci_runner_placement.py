@@ -326,3 +326,20 @@ def test_lint_tool_install_is_version_pinned() -> None:
     assert "markdownlint-cli2@${MARKDOWNLINT_VERSION}" in script, (
         "ci.yml:Install CLI tools must pin markdownlint-cli2"
     )
+
+
+def test_ci_can_be_dispatched_for_warm_cache_measurement() -> None:
+    """Keep a way to re-run CI on trunk without inventing a code change.
+
+    Warm-cache evidence needs the same workflow run twice over an unchanged
+    tree. A dispatch restores every cache and saves none, because every save
+    guard requires a `push` event, so repeated dispatches read the trusted
+    generation rather than churning it.
+    """
+    document = workflow_document("ci.yml")
+    triggers = document.get("on", document.get(True))
+    assert isinstance(triggers, dict), "ci.yml must declare its triggers"
+    assert "workflow_dispatch" in triggers, (
+        "ci.yml must stay dispatchable: without it the only way to produce a "
+        "warm run on `main` is to push a change, which is not the same tree"
+    )
