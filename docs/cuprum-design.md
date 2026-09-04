@@ -2839,9 +2839,8 @@ closed for every event, including pushes to `main`, so an unknown path verdict
 cannot spend paid-runner time. The gate summary records both the detector
 status and the resulting benchmark decision. The gate and its rationale are
 described under "Gating the paid benchmark job" in the developers' guide. The
-job executes smoke-mode throughput benchmarks for the
-current checkout (with a release build of the Rust extension) and compares
-each scenario's within-run
+job executes smoke-mode throughput benchmarks for the current checkout (with a
+release build of the Rust extension) and compares each scenario's within-run
 Rust-to-Python mean ratio against the latest successful `main` baseline
 artefact. The CI profile measures ten runs per command and orders matched
 Python/Rust commands adjacently so time-dependent runner load is less likely to

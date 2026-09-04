@@ -1084,11 +1084,11 @@ only on the `Tracer` and `Span` protocols from
 plugged in. `tracing_adapter` re-exports `Span` and `Tracer` as its public
 integration boundary. The legacy `cuprum.adapters._tracing_protocols` module is
 a compatibility re-export only and does not define a second protocol contract.
-`cuprum/adapters/tracing_memory.py` supplies
-`InMemoryTracer` and `InMemorySpan`, the reference doubles used by tests and
-examples: `InMemoryTracer` collects spans in memory and protects its span store
-through the shared `_LockedStore` lock (its mutators, and `reset()`, run under
-that lock), while `InMemorySpan` is a plain mutable record that provides no
+`cuprum/adapters/tracing_memory.py` supplies `InMemoryTracer` and
+`InMemorySpan`, the reference doubles used by tests and examples:
+`InMemoryTracer` collects spans in memory and protects its span store through
+the shared `_LockedStore` lock (its mutators, and `reset()`, run under that
+lock), while `InMemorySpan` is a plain mutable record that provides no
 synchronization of its own.
 
 **Phase dispatch.** `TracingHook.__call__` matches every `ExecEvent.phase` in a

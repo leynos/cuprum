@@ -53,6 +53,47 @@ _DF12_PYPROJECT_REF_RE = re.compile(
 )
 
 
+class StepInputs(typ.TypedDict, total=False):
+    """Inputs read from a CI workflow step."""
+
+    key: str
+    toolchain: str
+
+
+# `with` is a Python keyword, so declare that TypedDict key functionally.
+_StepWith = typ.TypedDict("_StepWith", {"with": StepInputs}, total=False)
+
+
+class Step(_StepWith, total=False):
+    """Fields read from a CI workflow step."""
+
+    name: str
+    run: str
+
+
+class Job(typ.TypedDict, total=False):
+    """Fields read from the lint-test CI job."""
+
+    env: dict[str, str]
+    steps: list[Step]
+
+
+class Workflow(typ.TypedDict, total=False):
+    """Fields read from the CI workflow document."""
+
+    env: dict[str, str]
+    jobs: dict[str, Job]
+
+
+def _ci_workflow(root: pth.Path) -> Workflow:
+    """Read the CI workflow after verifying its outer mapping shape."""
+    workflow = yaml.safe_load(
+        (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    )
+    assert isinstance(workflow, dict), "ci.yml must parse to a mapping"
+    return typ.cast("Workflow", workflow)
+
+
 def _read_makefile_pin(root: pth.Path, name: str) -> str:
     """Read a `NAME ?= value` default from the repository Makefile."""
     makefile = (root / "Makefile").read_text(encoding="utf-8")
@@ -67,41 +108,42 @@ def _read_makefile_pin(root: pth.Path, name: str) -> str:
 
 def _read_workflow_env(root: pth.Path, name: str) -> str:
     """Read a workflow-level env value from ci.yml."""
-    workflow = yaml.safe_load(
-        (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    )
+    workflow = _ci_workflow(root)
     env = workflow.get("env")
     assert isinstance(env, dict), "ci.yml must declare a workflow-level env block"
     value = env.get(name)
     assert isinstance(value, str), f"ci.yml env must pin {name} as a string"
     return value
 
-def _lint_test_job(root: pth.Path) -> dict[str, object]:
+
+def _lint_test_job(root: pth.Path) -> Job:
     """Read the lint-test job from the CI workflow."""
-    workflow = yaml.safe_load(
-        (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    )
-    assert isinstance(workflow, dict), "ci.yml must parse to a mapping"
+    workflow = _ci_workflow(root)
     jobs = workflow.get("jobs")
     assert isinstance(jobs, dict), "ci.yml must declare a jobs mapping"
     job = jobs.get("lint-test")
     assert isinstance(job, dict), "ci.yml must declare the lint-test job"
     return job
 
-def _lint_test_step(job: dict[str, object], name: str) -> dict[str, object]:
+
+def _lint_test_step(job: Job, name: str) -> Step:
     """Read a named step from the lint-test job."""
     steps = job.get("steps")
     assert isinstance(steps, list), "the lint-test job must declare steps"
-    for step in steps:
+    for step in typ.cast("list[object]", steps):
         if not isinstance(step, dict) or step.get("name") != name:
             continue
-        return step
+        return typ.cast("Step", step)
     pytest.fail(f"the lint-test job must declare an {name!r} step")
-def _lint_test_step_script(job: dict[str, object], name: str) -> str:
+
+
+def _lint_test_step_script(job: Job, name: str) -> str:
     """Read the named run script from the lint-test job."""
     script = _lint_test_step(job, name).get("run")
     assert isinstance(script, str), f"the {name!r} step must run a script"
     return script
+
+
 def _dev_dependencies(root: pth.Path) -> list[str]:
     """Read the pyproject dev dependency group."""
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
@@ -184,35 +226,53 @@ def test_ruff_and_ty_pins_are_release_versions() -> None:
                 "dotted release version"
             )
 
+
 def test_mdtablefix_installs_with_its_pinned_rust_toolchain() -> None:
     """The formatter source fallback uses its required Rust toolchain only."""
     job = _lint_test_job(repo_root())
     toolchain_setup = _lint_test_step(job, "Install Rust toolchain")
     toolchain_configuration = toolchain_setup.get("with")
-    assert isinstance(toolchain_configuration, dict)
-    assert toolchain_configuration.get("toolchain") == "1.85.0"
+    assert isinstance(toolchain_configuration, dict), (
+        "the Install Rust toolchain CI mapping must declare a with field"
+    )
+    assert toolchain_configuration.get("toolchain") == "1.85.0", (
+        "the Install Rust toolchain CI mapping must keep with.toolchain at 1.85.0"
+    )
 
     environment = job.get("env")
     assert isinstance(environment, dict), "the lint-test job must declare env"
-    assert environment.get("MDTABLEFIX_RUST_VERSION") == "1.89.0"
+    assert environment.get("MDTABLEFIX_RUST_VERSION") == "1.89.0", (
+        "the lint-test CI mapping must set env.MDTABLEFIX_RUST_VERSION to 1.89.0"
+    )
 
     script = _lint_test_step_script(job, "Install mdtablefix")
     assert (
         'cargo binstall --no-confirm --locked "mdtablefix@${MDTABLEFIX_VERSION}"'
         in script
-    )
+    ), "the Install mdtablefix CI step must retain the cargo binstall fast path"
     assert (
         'rustup toolchain install --profile minimal "${MDTABLEFIX_RUST_VERSION}"'
         in script
-    )
-    assert 'cargo +"${MDTABLEFIX_RUST_VERSION}" install --locked mdtablefix' in script
+    ), "the Install mdtablefix CI step must install the dedicated formatter toolchain"
+    assert (
+        'cargo +"${MDTABLEFIX_RUST_VERSION}" install --locked mdtablefix' in script
+    ), "the Install mdtablefix CI step must build with the formatter toolchain"
 
     cache = _lint_test_step(job, "Cache mdtablefix")
     cache_configuration = cache.get("with")
-    assert isinstance(cache_configuration, dict)
+    assert isinstance(cache_configuration, dict), (
+        "the Cache mdtablefix CI mapping must declare a with field"
+    )
     cache_key = cache_configuration.get("key")
-    assert isinstance(cache_key, str)
-    assert "${{ env.MDTABLEFIX_RUST_VERSION }}" in cache_key
+    assert isinstance(cache_key, str), (
+        "the Cache mdtablefix CI mapping must declare with.key as a string"
+    )
+    assert "${{ env.MDTABLEFIX_RUST_VERSION }}" in cache_key, (
+        "the Cache mdtablefix CI mapping must include MDTABLEFIX_RUST_VERSION "
+        "in with.key"
+    )
+
+
 def test_make_lint_and_typecheck_use_the_pinned_tool_commands() -> None:
     """The dry-run recipes invoke Ruff and ty through their synchronized pins."""
     root = repo_root()
