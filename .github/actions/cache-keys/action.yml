@@ -23,6 +23,16 @@ inputs:
       an executable.
     required: false
     default: ubuntu2404
+  compiler-shape:
+    description: >-
+      Build shape the compiler cache holds. Objects are only interchangeable
+      between jobs that compile the same way, so each shape gets its own
+      family and its own single writer. `debug` is an unoptimized
+      `maturin develop` build, `release` is the same build with `--release`,
+      `coverage` is the instrumented `cargo llvm-cov` build, and `lint` is the
+      Cranelift-backed lint build. See docs/ci-cache-ownership.md.
+    required: false
+    default: debug
 runs:
   using: composite
   steps:
@@ -32,6 +42,7 @@ runs:
         GENERATION: ${{ inputs.generation }}
         UBUNTU_RELEASE: ${{ inputs.ubuntu-release }}
         PYTHON_VERSION: ${{ inputs.python-version }}
+        COMPILER_SHAPE: ${{ inputs.compiler-shape }}
         RUNNER_ENVIRONMENT: ${{ runner.environment }}
         # The Cargo families follow the resolved dependency graph and the
         # toolchain that compiled it. `target` is deliberately absent from
@@ -57,7 +68,22 @@ runs:
         # the lockfile captures, so a content-addressed key would hit forever
         # and never absorb a new object. Each writing run publishes a fresh
         # entry seeded from the newest entry the prefix matches.
-        sccache_prefix="sccache-${image_scope}-"
+        # The compiler cache is scoped by everything that decides whether one
+        # job's objects can serve another's. Two dimensions beyond the image
+        # scope matter here, and both were measured on 2026-09-04.
+        #
+        # The interpreter: `pyo3` is declared with `extension-module` and
+        # without `abi3`, so the extension is compiled against one specific
+        # CPython version and its objects are useless to another. Runs
+        # 33853599399 and 33854076859 showed this exactly. Every Ubicloud job
+        # restored the same archive, which a 3.13 job had written; the 3.13
+        # reader took 14 of its 17 cacheable compiles, and the 3.12, 3.14 and
+        # 3.15a readers took none at all.
+        #
+        # The build shape: an optimized build, an instrumented build and an
+        # unoptimized one produce different objects from the same source, so
+        # they cannot share an entry either.
+        sccache_prefix="sccache-${image_scope}-py${PYTHON_VERSION}-${COMPILER_SHAPE}-"
         {
           printf 'CARGO_CACHE_PREFIX=cargo-%s-\n' "${scope}"
           printf 'CARGO_CACHE_KEY=cargo-%s-%s\n' "${scope}" "${CARGO_HASH}"

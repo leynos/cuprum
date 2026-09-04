@@ -1,9 +1,10 @@
 """Contract tests for the single compiler-output owner across every build shape.
 
 This repository archives no `target` tree anywhere. sccache holds the objects a
-`target` archive would preserve, keyed by the flags that distinguish the debug,
-cranelift, and coverage-instrumented shapes, so all three coexist in one store
-and no job needs a tree that is invalidated on every source change.
+`target` archive would preserve, and the archive key names the interpreter and
+the build shape, so the debug, cranelift, release and coverage-instrumented
+shapes coexist without any of them overwriting or starving another, and no job
+needs a tree that is invalidated on every source change.
 
 None of that is visible from a green run: a job whose `RUSTC_WRAPPER` never
 reaches the compiler still passes while caching nothing, which is exactly what
@@ -18,6 +19,7 @@ import pytest
 
 from tests.helpers.ci_runners import (
     CACHE_ACTION_PIN,
+    CACHE_KEYS_ACTION_FILE,
     CACHED_JOBS,
     FORBIDDEN_CACHE_PATHS,
     ROOT,
@@ -254,10 +256,12 @@ def test_the_typecheck_only_leg_installs_no_wrapper() -> None:
 def test_the_compiler_cache_is_written_by_a_job_that_compiles() -> None:
     """Keep the rolling generation from freezing.
 
-    The writer used to be the interpreter leg that the deduplication left with
-    only a typechecker. It would have restored the previous generation and
-    republished it unchanged for ever, so the cache would never absorb a new
-    object while still reporting hits.
+    A leg that compiles nothing would restore the previous generation and
+    republish it unchanged for ever, so the cache would never absorb a new
+    object while still reporting hits. The interpreter matrix contains exactly
+    one such leg, the one the coverage job already runs the suite for, and its
+    save must therefore carry the same ``matrix.python-suite`` guard as the
+    rest of its compiler-cache steps.
     """
     writers = [
         step
@@ -271,8 +275,48 @@ def test_the_compiler_cache_is_written_by_a_job_that_compiles() -> None:
         for step in steps("ci.yml", "typecheck-test")
         if str(step.get("name", "")) == "Save the compiler cache"
     ]
-    assert not matrix_writers, (
-        "the interpreter matrix must not own the compiler cache: its legs "
-        "either typecheck only or compile a fraction of what the coverage job "
-        "does, so the generation they publish would go stale"
+    assert len(matrix_writers) == 1, (
+        "each interpreter leg owns the compiler-cache family for its own "
+        "interpreter, so the matrix declares exactly one save step"
+    )
+    condition = " ".join(str(matrix_writers[0].get("if", "")).split())
+    assert "matrix.python-suite" in condition, (
+        "the leg that only typechecks compiles nothing, so it must not "
+        f"republish a generation; got if: {condition!r}"
+    )
+
+
+def test_the_compiler_cache_key_names_the_interpreter_and_the_build_shape() -> None:
+    """Keep objects that cannot serve each other in separate archives.
+
+    Measured on 2026-09-04, before the key carried either component: one
+    instrumented Python 3.13 archive served every Ubicloud job, the 3.13 reader
+    took 14 of its 17 cacheable compiles, and the 3.12, 3.14 and 3.15a readers
+    took none at all. `pyo3` is declared with `extension-module` and without
+    `abi3`, so an extension compiled against one CPython is useless to another,
+    and an optimized or instrumented object is useless to an unoptimized build.
+    """
+    source = CACHE_KEYS_ACTION_FILE.read_text(encoding="utf-8")
+    prefix = next(line for line in source.splitlines() if "sccache_prefix=" in line)
+    for component in ("${PYTHON_VERSION}", "${COMPILER_SHAPE}"):
+        assert component in prefix, (
+            f"the compiler-cache prefix must carry {component}; got {prefix.strip()!r}"
+        )
+
+
+def test_pyo3_is_still_declared_without_abi3() -> None:
+    """Anchor the reason the interpreter is in the key to the manifest.
+
+    Adopting `abi3` would make one archive serve every interpreter and would
+    make the per-interpreter families pure overhead. This test is the reminder
+    to revisit them, not an objection to the feature.
+    """
+    manifest = (ROOT / "rust" / "cuprum-rust" / "Cargo.toml").read_text(
+        encoding="utf-8"
+    )
+    pyo3 = next(line for line in manifest.splitlines() if line.startswith("pyo3"))
+    assert "abi3" not in pyo3, (
+        "pyo3 now builds against a stable ABI, so one compiler-cache family "
+        "could serve every interpreter: collapse the per-interpreter families "
+        "in tests/helpers/ci_runners.py rather than leaving them split"
     )

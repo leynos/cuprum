@@ -13,7 +13,9 @@ import typing as typ
 
 import pytest
 
+from tests.helpers.ci_cache_families import CacheFamily, writer_families
 from tests.helpers.ci_runners import (
+    CACHE_FAMILY_WRITERS,
     CACHE_KEYS_ACTION,
     CACHE_RESTORE,
     CACHE_WRITERS,
@@ -28,7 +30,6 @@ from tests.helpers.ci_runners import (
     cache_paths,
     cache_steps,
     expand,
-    job,
     restore_steps,
     save_steps,
     step_inputs,
@@ -166,11 +167,32 @@ def test_each_key_has_exactly_one_writer_per_lane() -> None:
     assert {key: tuple(sorted(writers)) for key, writers in observed.items()} == {
         key: tuple(sorted(writers)) for key, writers in CACHE_WRITERS.items()
     }, f"cache writers drifted from the manifest: {observed}"
-    for key, writers in observed.items():
-        lanes = [job(workflow, name).get("runs-on") for workflow, name in writers]
-        assert len(set(lanes)) == len(lanes), (
-            f"{key} has two writers on one runner lane: {writers} on {lanes}"
-        )
+
+
+def test_each_cache_family_has_exactly_one_writer() -> None:
+    """Give every rendered archive one owner, not every ``env`` name one owner.
+
+    The name a save step writes is not the archive it publishes. Five jobs name
+    ``SCCACHE_CACHE_KEY`` and write five disjoint families, because the
+    rendered key carries the runner lane, the interpreter and the build shape.
+    A contract that counted names would have to permit all five collisions, and
+    would then also permit a real one.
+    """
+    observed: dict[CacheFamily, tuple[str, str]] = {}
+    for workflow_name, job_name in expand(CACHED_JOBS):
+        for family in writer_families(workflow_name, job_name):
+            first = observed.setdefault(family, (workflow_name, job_name))
+            assert first == (workflow_name, job_name), (
+                f"{family} is written by both {first} and {(workflow_name, job_name)}"
+            )
+    expected = {
+        CacheFamily(*declared): writer
+        for declared, writer in CACHE_FAMILY_WRITERS.items()
+    }
+    assert observed == expected, (
+        "cache families drifted from the manifest; observed "
+        f"{sorted(map(str, observed))}"
+    )
 
 
 def test_saves_happen_only_on_trunk_and_only_after_a_miss() -> None:
