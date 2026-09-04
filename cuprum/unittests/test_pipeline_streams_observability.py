@@ -266,8 +266,11 @@ def test_a_writer_close_that_fails_after_the_pump_is_recorded(
             _pipeline_streams._run_rust_pump(
                 reader=typ.cast("asyncio.StreamReader", object()),
                 writer=writer,
-                reader_fd=-1,
-                writer_fd=-1,
+                handoff=_pipeline_streams._RustPumpHandoff(
+                    reader_fd=-1,
+                    writer_fd=-1,
+                    cleanup_grace_s=0.5,
+                ),
             )
         )
 

@@ -104,8 +104,8 @@ class TestPumpStreamDispatch:
                     _pipeline_streams._pump_stream_dispatch(reader, writer)
                 )
             )
-            original_reader_blocking = _pipeline_streams.os.get_blocking(read_fd)
-            original_writer_blocking = _pipeline_streams.os.get_blocking(write_fd)
+            original_reader_blocking = os.get_blocking(read_fd)
+            original_writer_blocking = os.get_blocking(write_fd)
             asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, None))
 
         assert calls["rust_pump"] == 1, "expected Rust pump path to execute once"
@@ -188,8 +188,11 @@ class TestPumpStreamDispatch:
                 _pipeline_streams._run_rust_pump(
                     reader=reader,
                     writer=None,
-                    reader_fd=1,
-                    writer_fd=2,
+                    handoff=_pipeline_streams._RustPumpHandoff(
+                        reader_fd=1,
+                        writer_fd=2,
+                        cleanup_grace_s=0.5,
+                    ),
                 )
             )
         )
@@ -219,7 +222,8 @@ class TestPumpStreamDispatch:
                 lambda stream: read_fd if stream is reader else write_fd,
             )
 
-            original_set_blocking = _pipeline_streams.os.set_blocking
+            original_set_blocking = os.set_blocking
+            reader_inode = os.fstat(read_fd).st_ino
             calls: PumpCallCounts = {"python_pump": 0}
 
             def fake_set_blocking(fd: int, blocking: object) -> None:
@@ -231,15 +235,16 @@ class TestPumpStreamDispatch:
                     If the writer FD is switched to blocking mode, simulating
                     a failure partway through the toggle sequence.
                 """
-                if fd == read_fd and blocking is True:
+                is_reader = os.fstat(fd).st_ino == reader_inode
+                if is_reader and blocking is True:
                     original_set_blocking(fd, bool(blocking))
                     return
                 # Match on the writer role rather than a fixed descriptor.
-                if fd != read_fd and blocking is True:
+                if not is_reader and blocking is True:
                     raise OSError(_WRITER_TOGGLE_FAILURE)
                 original_set_blocking(fd, bool(blocking))
 
-            monkeypatch.setattr(_pipeline_streams.os, "set_blocking", fake_set_blocking)
+            monkeypatch.setattr(os, "set_blocking", fake_set_blocking)
             configure_pump_stream_dispatch_for_testing(
                 python_pump=lambda reader, writer: _fake_python_fallback(
                     reader,
@@ -253,10 +258,10 @@ class TestPumpStreamDispatch:
             assert calls["python_pump"] == 1, (
                 "expected Python fallback when writer blocking toggle fails"
             )
-            assert not _pipeline_streams.os.get_blocking(read_fd), (
+            assert not os.get_blocking(read_fd), (
                 "expected reader FD blocking mode to be restored after fallback"
             )
-            assert not _pipeline_streams.os.get_blocking(write_fd), (
+            assert not os.get_blocking(write_fd), (
                 "expected writer FD to remain in its original non-blocking mode"
             )
 
@@ -285,9 +290,12 @@ class TestPumpStreamDispatch:
                 int
                     Always ``0`` to mimic a successful native pump.
                 """
-                assert reader_fd == read_fd, "expected the extracted reader FD"
-                # Rust consumes its writer descriptor, so it receives a
-                # duplicate and closes it; the transport FD stays asyncio's.
+                assert reader_fd != read_fd, (
+                    "expected a duplicate rather than the transport reader FD"
+                )
+                # Rust borrows its reader and consumes its writer. Both are
+                # duplicated so cancellation can quarantine native I/O from
+                # asyncio-owned transport descriptors.
                 assert writer_fd != write_fd, (
                     "expected a duplicate rather than the transport writer FD"
                 )
@@ -369,8 +377,11 @@ class TestPumpStreamDispatch:
                     _pipeline_streams._run_rust_pump(
                         reader=reader,
                         writer=writer,
-                        reader_fd=read_fd,
-                        writer_fd=write_fd,
+                        handoff=_pipeline_streams._RustPumpHandoff(
+                            reader_fd=read_fd,
+                            writer_fd=write_fd,
+                            cleanup_grace_s=0.5,
+                        ),
                     )
                 )
             )
