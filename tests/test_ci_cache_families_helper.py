@@ -1,11 +1,11 @@
 """Tests for the cache-family resolver itself.
 
 `tests/test_ci_cache_ownership.py` uses this resolver to hold the one-writer
-invariant, so a resolver that quietly mis-parsed an expression or dropped a
+invariant, so a resolver that quietly misread an expression or dropped a
 matrix leg would weaken that contract without failing it. These tests exercise
 the resolver directly, against synthetic workflow shapes rather than the
 repository's own, so a future workflow that is merely unusual is caught here
-rather than silently mis-resolved there.
+rather than silently resolved wrongly there.
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ def test_a_matrix_reference_the_leg_lacks_is_a_contract_failure(name: str) -> No
 
 
 def test_a_non_matrix_expression_is_a_contract_failure() -> None:
-    """Reject an expression this reader cannot evaluate rather than mis-render it."""
+    """Reject an expression this reader cannot evaluate rather than guess at it."""
     with pytest.raises(AssertionError, match="cannot resolve"):
         families._resolve("${{ env.SOMETHING }}", {}, MESSAGE)
 
