@@ -252,6 +252,9 @@ jobs:
         with:
           installer-version: ${{ env.WHITAKER_INSTALLER_VERSION }}
 
+      - name: Validate Mermaid diagrams
+        run: make nixie
+
       - name: Validate Makefile
         run: mbake validate Makefile
 
