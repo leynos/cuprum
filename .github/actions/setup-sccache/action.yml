@@ -1,0 +1,102 @@
+name: Set up sccache
+description: >-
+  Install the pinned Linux sccache binary and point it at a local cache
+  directory that the calling workflow owns.
+
+  The GitHub Actions backend is deliberately not used. Ubicloud console
+  listings on 2026-09-03 showed sccache's GHA traffic landing in GitHub's cache
+  rather than Ubicloud's, where it competes with the Windows and macOS lanes
+  for GitHub's per-repository quota. A directory the caller caches goes to the
+  same store as every other archive and is visible in the same listing.
+inputs:
+  version:
+    description: sccache release version
+    required: false
+    default: 0.12.0
+  sha256:
+    description: SHA-256 for the pinned Linux x86_64 archive
+    required: false
+    default: b0e89ead6899224a4ba2b90e9073bf1ce036d95bab30f3dc33c1e1468bc4ad44
+  binary-sha256:
+    description: SHA-256 for the sccache executable inside the pinned archive
+    required: false
+    default: e381a9675f971082a522907b8381c1054777ea60511043e4c67de5dfddff3029
+  cache-size:
+    description: >-
+      Ceiling for the cache directory. The archive is restored and re-saved
+      whole, so this bounds the transfer as well as the disk. The default holds
+      two build shapes: the debug and cranelift objects the lint and test gates
+      produce, and the instrumented objects the coverage gate produces.
+    required: false
+    default: 4G
+runs:
+  using: composite
+  steps:
+    - name: Install sccache from the pinned release
+      shell: bash
+      env:
+        SCCACHE_VERSION: ${{ inputs.version }}
+        SCCACHE_SHA256: ${{ inputs.sha256 }}
+        SCCACHE_BINARY_SHA256: ${{ inputs.binary-sha256 }}
+        SCCACHE_LOCAL_CACHE_SIZE: ${{ inputs.cache-size }}
+      run: |
+        set -euo pipefail
+        if [ "${RUNNER_OS}" != "Linux" ] || [ "${RUNNER_ARCH}" != "X64" ]; then
+          echo "This action supports only Linux x86_64 runners" >&2
+          exit 1
+        fi
+        install_dir="${HOME}/.local/bin"
+        binary="${install_dir}/sccache"
+        mkdir -p "${install_dir}" "${HOME}/.cache/sccache"
+        if [ -d "${binary}" ]; then
+          rmdir "${binary}" || {
+            echo "A former file-shaped cache mount left a non-empty directory" >&2
+            exit 1
+          }
+        fi
+        # `~/.local/bin` is restored from a cache archive that any job in the
+        # repository can have written, and this binary becomes RUSTC_WRAPPER,
+        # so Cargo executes it on every build. Executability is not
+        # provenance: reuse a restored file only when its digest equals the
+        # pin. Bumping `version` or the digest inputs therefore also replaces a
+        # cached binary, because the restored file no longer matches the
+        # requested release.
+        needs_install=yes
+        if [ -f "${binary}" ]; then
+          if printf '%s  %s\n' "${SCCACHE_BINARY_SHA256}" "${binary}" \
+            | sha256sum --check --status; then
+            needs_install=no
+            echo "Reusing the cached sccache binary; digest matches the pin"
+          else
+            echo "Cached sccache binary does not match the pinned digest;" \
+              "reinstalling from the pinned release" >&2
+          fi
+        fi
+        if [ "${needs_install}" = yes ]; then
+          rm -f "${binary}"
+          archive="${RUNNER_TEMP}/sccache.tar.gz"
+          staging="${RUNNER_TEMP}/sccache-staging"
+          rm -rf "${staging}"
+          mkdir -p "${staging}"
+          url="https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 "${url}" -o "${archive}"
+          echo "${SCCACHE_SHA256}  ${archive}" | sha256sum --check --status
+          tar --extract --gzip --file "${archive}" --strip-components=1 \
+            --directory "${staging}" \
+            "sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache"
+          # Verify the extracted executable before it reaches a shared cache
+          # path, so a mismatched archive can never publish a trusted binary.
+          printf '%s  %s\n' "${SCCACHE_BINARY_SHA256}" "${staging}/sccache" \
+            | sha256sum --check --status
+          chmod 0755 "${staging}/sccache"
+          mv -f "${staging}/sccache" "${binary}"
+          rm -rf "${staging}" "${archive}"
+        fi
+        "${binary}" --version | grep --fixed-strings -- "${SCCACHE_VERSION}"
+        echo "${install_dir}" >> "${GITHUB_PATH}"
+        echo "RUSTC_WRAPPER=${binary}" >> "${GITHUB_ENV}"
+        {
+          echo "SCCACHE_DIR=${HOME}/.cache/sccache"
+          echo "SCCACHE_CACHE_SIZE=${SCCACHE_LOCAL_CACHE_SIZE}"
+        } >> "${GITHUB_ENV}"
+

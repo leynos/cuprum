@@ -1,8 +1,7 @@
 self-hosted-runner:
   # Labels of self-hosted runner in array of strings.
   labels:
-    - namespace-profile-default
-    - ubicloud-standard-4-ubuntu-2404
+    - ubicloud-standard-2
 
 # Configuration variables in array of strings defined in your repository or
 # organization. `null` means disabling configuration variables check.

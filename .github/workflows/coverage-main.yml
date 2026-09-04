@@ -20,12 +20,104 @@ on:
 permissions:
   contents: read
 
+# These three values render the tool cache key. They must match ci.yml exactly,
+# because this job restores the archive that ci.yml's `typecheck-test` writes;
+# a contract test pins the equality so a bump in one file cannot silently make
+# every run here cold.
+env:
+  CACHE_GENERATION: v1
+  UBUNTU_RELEASE: ubuntu2404
+  # This job now compiles and runs the Rust suite under instrumentation, so it
+  # is bounded by the same vCPU budget as the pull-request coverage job.
+  LINUX_RUNNER_VCPUS: '2'
+
 jobs:
   coverage-upload:
-    runs-on: namespace-profile-default
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          # Coverage generation runs project code; the scoped token must not
+          # stay in .git/config where that code could read it.
+          persist-credentials: false
+
+      - name: Compute cache keys
+        uses: ./.github/actions/cache-keys
+        with:
+          python-version: '3.13'
+          generation: ${{ env.CACHE_GENERATION }}
+          ubuntu-release: ${{ env.UBUNTU_RELEASE }}
+
+      # Restore only, both of these. This workflow and ci.yml both fire on a
+      # push to `main`, so letting this job save either key would give it two
+      # writers racing in the same event; ci.yml owns both.
+      - name: Restore the Cargo registry
+        id: cargo-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ env.CARGO_CACHE_KEY }}
+          restore-keys: ${{ env.CARGO_CACHE_PREFIX }}
+
+      - name: Restore the installed tools
+        id: tool-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.local/bin
+            ~/.cache/uv
+            ~/.local/share/uv
+            .uv-cache
+            .uv-tools
+          key: ${{ env.TOOL_CACHE_KEY }}
+          restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
+
+      # This job runs the same coverage action as ci.yml's `coverage`, which
+      # issued 38 compile requests in run 33748907011, so it compiles the
+      # extension too and needs the same wrapper. Restore only: ci.yml's
+      # `typecheck-test` owns this key.
+      - name: Restore the compiler cache
+        id: sccache-dir
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: ${{ env.SCCACHE_CACHE_KEY }}
+          restore-keys: ${{ env.SCCACHE_CACHE_PREFIX }}
+
+      - name: Record cache observations
+        if: always()
+        shell: bash
+        env:
+          CARGO_CACHE_HIT: ${{ steps.cargo-cache.outputs.cache-hit }}
+          TOOL_CACHE_HIT: ${{ steps.tool-cache.outputs.cache-hit }}
+          SCCACHE_CACHE_HIT: ${{ steps.sccache-dir.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          {
+            printf '### Cache observations\n\n'
+            printf '| cache | key | hit |\n| --- | --- | --- |\n'
+            printf '| registry | %s | %s |\n' \
+              "${CARGO_CACHE_KEY}" "${CARGO_CACHE_HIT:-false}"
+            printf '| tools | %s | %s |\n' \
+              "${TOOL_CACHE_KEY}" "${TOOL_CACHE_HIT:-false}"
+            printf '| sccache | %s | %s |\n' \
+              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-false}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Set up sccache
+        uses: ./.github/actions/setup-sccache
+
+      # Immediately after the wrapper exists, so nothing between setup and
+      # the build can compile outside the measured window. `lint-test` built
+      # the cranelift Whitaker suite before this ran, and those requests were
+      # zeroed away before the report.
+      - name: Reset compiler-cache counters
+        run: sccache --zero-stats
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -34,6 +126,19 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+        with:
+          enable-cache: false
+
+      # The coverage run compiles the Rust workspace, so this job needs the
+      # same pinned toolchain the pull-request coverage job uses rather than
+      # whatever the runner image ships.
+      - name: Install Rust toolchain
+        uses: leynos/shared-actions/.github/actions/setup-rust@f6d4d5f549655c118f86f371b8d55c200d3efa50
+        with:
+          toolchain: '1.85.0'
+          cache-provider: external
+          use-sccache: 'false'
+          install-binstall: 'false'
 
       - name: Install code
         run: make build
@@ -46,12 +151,33 @@ jobs:
       # The pinned action writes a run-specific baseline cache entry and treats
       # changes within one percentage point as measurement noise.
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@4977418856133491c6aa7407d40668744df21818
+        uses: leynos/shared-actions/.github/actions/generate-coverage@f6d4d5f549655c118f86f371b8d55c200d3efa50
+        env:
+          # The same warnings posture and the same core budget the
+          # uninstrumented run used.
+          RUSTFLAGS: -D warnings
+          CARGO_BUILD_JOBS: ${{ env.LINUX_RUNNER_VCPUS }}
+          NEXTEST_TEST_THREADS: ${{ env.LINUX_RUNNER_VCPUS }}
         with:
           format: cobertura
           output-path: coverage.xml
           pytest-workers: ''
+          cache-provider: external
           with-ratchet: 'true'
+          # This job is the only execution of the Rust suite for the event.
+          # `language: mixed` and the workspace manifest are what make the
+          # shared action run it: the repository root has no Cargo.toml, so
+          # detection alone would classify Cuprum as Python-only and skip the
+          # Rust tests entirely.
+          #
+          # `all-targets` and `all-features` match the flags the uninstrumented
+          # run used, so nothing silently drops out of the gate. `doctests`
+          # covers what `cargo llvm-cov nextest` skips.
+          language: mixed
+          cargo-manifest: rust/Cargo.toml
+          all-targets: 'true'
+          all-features: 'true'
+          doctests: 'true'
 
       - name: Upload coverage data to CodeScene
         env:
@@ -63,3 +189,32 @@ jobs:
           path: coverage.xml
           access-token: ${{ env.CS_ACCESS_TOKEN }}
           installer-checksum: ${{ vars.CODESCENE_CLI_SHA256 }}
+
+      - name: Record compiler-cache effectiveness
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --show-stats | tee sccache-stats.txt
+          sccache --show-stats --stats-format json > sccache-stats.json
+          fence='```'
+          {
+            printf '### sccache\n\n%stext\n' "${fence}"
+            cat sccache-stats.txt
+            printf '%s\n' "${fence}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # This job owns the compiler cache for the Ubicloud lane. It runs the
+      # whole Rust suite under instrumentation, so on `main` it is by a wide
+      # margin the heaviest compiler in the estate; the interpreter matrix
+      # compiles almost nothing now that the Rust suite lives here.
+      #
+      # The entry is a rolling generation named after the run, so there is no
+      # cache-hit guard to skip: the key is new every time, and a run that
+      # restored the previous generation republishes it with what it added.
+      - name: Save the compiler cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: ${{ env.SCCACHE_CACHE_KEY }}

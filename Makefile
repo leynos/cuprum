@@ -12,7 +12,11 @@ RUSTDOC_FLAGS ?= -D warnings
 CARGO_FLAGS ?= --all-targets --all-features
 CLIPPY_FLAGS ?= $(CARGO_FLAGS) -- $(RUST_FLAGS)
 DOC_FLAGS ?= --jobs 1
-TEST_FLAGS ?= $(CARGO_FLAGS) --jobs 1
+# nextest's test-thread count. One by default so a developer's laptop keeps a
+# core for the editor; CI raises it to the vCPU count of the runner the job is
+# billed for, and never above it.
+TEST_JOBS ?= 1
+TEST_FLAGS ?= $(CARGO_FLAGS) --jobs $(TEST_JOBS)
 TEST_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
 WHITAKER_CARGO_FLAGS ?= $(CARGO_FLAGS) --jobs 1
 WHITAKER_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
@@ -44,7 +48,7 @@ TEST_CARGO_BUILD_JOBS ?= 1
 # and parallel batches contend on the Cargo build cache with little benefit.
 PYTEST_WORKERS ?= 0
 PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
-  tests/test_namespace_runners.py \
+  tests/test_ci_*.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
   tests/behaviour/test_[s-z]*.py
@@ -118,7 +122,7 @@ AMBRLEAKS = $(UV_RUN_ENV) uv run --python $(DF12_PYTHON) ambrleaks
 .PHONY: help all clean build build-release lint python-lint rust-lint \
         lint-windows fmt check-fmt \
         markdownlint spelling spelling-config spelling-helper-test \
-        _run_spelling_gate nixie test typecheck \
+        _run_spelling_gate nixie test test-python test-rust typecheck \
         test-extension develop \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
@@ -248,11 +252,19 @@ nixie: ## Validate Mermaid diagrams
 	$(call ensure_tool,nixie)
 	$(LOCAL_TOOL_ENV) $(NIXIE) --no-sandbox
 
-test: build uv $(VENV_TOOLS) ## Run tests
+# Both suites, which is what a contributor wants locally. CI splits them: the
+# coverage job is the only place the Rust suite runs, under instrumentation, so
+# the interpreter matrix calls `test-python` alone. See "One execution per
+# suite" in docs/developers-guide.md.
+test: test-python test-rust ## Run the Python and Rust suites
+
+test-python: build uv $(VENV_TOOLS) ## Run the Python suite
 	@for pattern in $(foreach target,$(PYTEST_TARGETS),$(call shell_quote,$(target))); do \
 	  set -- $$pattern; [ -e "$$1" ] || continue; \
 	  CARGO_BUILD_JOBS="$(PYTEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$@" || exit $$?; \
 	done
+
+test-rust: ## Run the Rust suite
 	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
 	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(TEST_RUSTFLAGS)" $(CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
 	else \

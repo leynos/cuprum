@@ -14,7 +14,9 @@ on:
 
 jobs:
   delay_and_comment:
-    runs-on: namespace-profile-default
+    # Deliberately stays on GitHub-hosted Ubuntu: this sleeps while holding a
+    # runner and must not consume a metered Ubicloud build slot.
+    runs-on: ubuntu-latest
     permissions:
       pull-requests: write   # needed to post comments
     steps:

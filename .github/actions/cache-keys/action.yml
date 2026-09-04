@@ -1,0 +1,68 @@
+name: Compute cache keys
+description: >-
+  Render the repository's cache keys once so every job that restores a path and
+  every job that saves it agree on the key, and so a reviewer can explain a miss
+  from the rendered value in the run summary.
+inputs:
+  python-version:
+    description: >-
+      Python minor version the tool cache is keyed to. uv writes interpreter-
+      specific tool environments, so a 3.12 archive must never restore onto
+      3.14.
+    required: true
+  generation:
+    description: >-
+      Schema generation shared by every key family, so the whole family can be
+      invalidated deliberately.
+    required: false
+    default: v1
+  ubuntu-release:
+    description: >-
+      Runner image release. Compiled tools restored from a 22.04 archive fail
+      against 24.04's glibc, so the release belongs in every key that carries
+      an executable.
+    required: false
+    default: ubuntu2404
+runs:
+  using: composite
+  steps:
+    - name: Render the cache keys
+      shell: bash
+      env:
+        GENERATION: ${{ inputs.generation }}
+        UBUNTU_RELEASE: ${{ inputs.ubuntu-release }}
+        PYTHON_VERSION: ${{ inputs.python-version }}
+        RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        # The Cargo families follow the resolved dependency graph and the
+        # toolchain that compiled it. `target` is deliberately absent from
+        # every family: sccache is the single owner of compiler output.
+        CARGO_HASH: ${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
+        # The tool family follows everything that decides which executables and
+        # uv environments end up on disk, including the pinned sccache release
+        # and digests declared by the setup-sccache action.
+        TOOL_HASH: >-
+          ${{ hashFiles('uv.lock', 'pyproject.toml', 'Makefile',
+          '.github/actions/setup-sccache/action.yml') }}
+      run: |
+        set -euo pipefail
+        # `runner.environment` is in every scope. The Ubicloud lane and the
+        # GitHub-hosted lane read different cache services, so an archive can
+        # never cross between them; naming the lane in the key makes that
+        # separation checkable instead of merely true.
+        scope="${GENERATION}-${RUNNER_OS}-${RUNNER_ARCH}-${RUNNER_ENVIRONMENT}"
+        image_scope="${scope}-${UBUNTU_RELEASE}"
+        tool_prefix="tool-${image_scope}-py${PYTHON_VERSION}-"
+        # The compiler cache is a rolling generation, not a content address.
+        # Its contents depend on the source that was compiled, which no hash of
+        # the lockfile captures, so a content-addressed key would hit forever
+        # and never absorb a new object. Each writing run publishes a fresh
+        # entry seeded from the newest entry the prefix matches.
+        sccache_prefix="sccache-${image_scope}-"
+        {
+          printf 'CARGO_CACHE_PREFIX=cargo-%s-\n' "${scope}"
+          printf 'CARGO_CACHE_KEY=cargo-%s-%s\n' "${scope}" "${CARGO_HASH}"
+          printf 'TOOL_CACHE_PREFIX=%s\n' "${tool_prefix}"
+          printf 'TOOL_CACHE_KEY=%s%s\n' "${tool_prefix}" "${TOOL_HASH}"
+          printf 'SCCACHE_CACHE_PREFIX=%s\n' "${sccache_prefix}"
+          printf 'SCCACHE_CACHE_KEY=%s%s\n' "${sccache_prefix}" "${GITHUB_RUN_ID}"
+        } >> "${GITHUB_ENV}"
