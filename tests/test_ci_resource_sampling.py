@@ -62,6 +62,14 @@ def test_every_ubicloud_job_measures_its_resource_use() -> None:
                 f"{workflow_name}:{job_name} must sample its resource use"
             )
             continue
+        # The converse matters as much: `benchmark-ratchet` compares timings of
+        # half-second commands, so a sampler waking every 15 s there would
+        # perturb the number the job exists to produce.
+        assert (workflow_name, job_name) in SAMPLED_JOBS, (
+            f"{workflow_name}:{job_name} samples its resource use but is not in "
+            "the manifest; a job whose output is a measurement must not carry a "
+            "sampler that changes it"
+        )
         assert len(sampler_steps) == len(sampler), (
             f"{workflow_name}:{job_name} declares a sampler mode twice; each "
             "extra start leaves a sampler the single report cannot kill"

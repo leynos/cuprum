@@ -53,12 +53,11 @@ The build shape. An unoptimized `maturin develop` build, the same build with
 
 This was measured rather than assumed. Until 2026-09-04 the compiler key named
 neither dimension, so every Ubicloud job read one archive that the instrumented
-Python 3.13 coverage job had written. In runs 33853599399 and 33854076859, over
-an unchanged tree, the one reader on the same interpreter took 14 of its 17
-cacheable compiles and the 3.12, 3.14, and 3.15a readers took none at all.
-Read
-and write errors were zero throughout: the archive restored perfectly and
-simply held nothing those jobs could use.
+Python 3.13 coverage job had written. In two dispatches over an unchanged
+tree[^1][^2], the one reader on the same interpreter took 14 of its 17 cacheable
+compiles and the 3.12, 3.14, and 3.15a readers took none. Read and write errors
+were zero throughout: the archive restored perfectly and simply held nothing
+those jobs could use.
 
 If `pyo3` ever adopts `abi3`, one archive could serve every interpreter and the
 per-interpreter split becomes pure overhead.
@@ -132,8 +131,8 @@ the summary.
 that run for about half a second and compares the ratio of two of them, so a
 background loop waking every 15 s to shell out to `free` and `df` would be
 interference in the measurement rather than an observation of it. Its disk
-figure was taken once instead, in run 33857764655: 62.1 GB used with 11.0 GB
-free, the same envelope as every other Ubicloud job here.
+figure was taken once instead[^3]: 62.1 GB used with 11.0 GB free, the same
+envelope as every other Ubicloud job here.
 
 The coverage jobs additionally discard the instrumented build tree once the
 report is written, printing `df -h` either side. It has no later consumer, it
@@ -141,4 +140,16 @@ is the second tree on the volume, and removing it before any cache save keeps
 it out of the archives and out of the measured high-water mark. The step
 searches for the tree rather than naming it: `cargo llvm-cov` builds beside the
 manifest it is given, and an earlier version named a repository-root path and
-reclaimed nothing while reporting success.
+reclaimed nothing while reporting success[^3].
+
+[^1]: Cuprum CI run
+    [33853599399](https://github.com/leynos/cuprum/actions/runs/33853599399), a
+    `workflow_dispatch` on `main` measuring warm caches, 2026-09-04.
+
+[^2]: Cuprum CI run
+    [33854076859](https://github.com/leynos/cuprum/actions/runs/33854076859),
+    the second such dispatch over the same tree, 2026-09-04.
+
+[^3]: Cuprum CI run
+    [33857764655](https://github.com/leynos/cuprum/actions/runs/33857764655),
+    the first run carrying the resource sampler, 2026-09-04.
