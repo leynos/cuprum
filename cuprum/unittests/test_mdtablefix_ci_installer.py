@@ -15,6 +15,14 @@ if typ.TYPE_CHECKING:
     import pathlib as pth
 
 
+class _InstallerCase(typ.NamedTuple):
+    """Describe one mdtablefix installer branch."""
+
+    cargo_binstall_status: int
+    expected_install: str
+    unexpected_install: str
+
+
 def _installer_script(workflow_data: Workflow) -> str:
     """Return the checked-in mdtablefix installer script."""
     step = step_named(workflow_data, "lint-test", "Install mdtablefix")
@@ -109,18 +117,26 @@ def _run_installer(
 
 
 @pytest.mark.parametrize(
-    ("cargo_binstall_status", "expected_install", "unexpected_install"),
+    "case",
     [
         pytest.param(
-            0,
-            "cargo binstall --no-confirm --locked mdtablefix@0.5.0",
-            "rustup toolchain install --profile minimal 1.89.0",
+            _InstallerCase(
+                cargo_binstall_status=0,
+                expected_install=(
+                    "cargo binstall --no-confirm --locked mdtablefix@0.5.0"
+                ),
+                unexpected_install="rustup toolchain install --profile minimal 1.89.0",
+            ),
             id="prebuilt-binstall",
         ),
         pytest.param(
-            1,
-            "rustup toolchain install --profile minimal 1.89.0",
-            "cargo binstall --no-confirm --locked mdtablefix@0.5.0",
+            _InstallerCase(
+                cargo_binstall_status=1,
+                expected_install="rustup toolchain install --profile minimal 1.89.0",
+                unexpected_install=(
+                    "cargo binstall --no-confirm --locked mdtablefix@0.5.0"
+                ),
+            ),
             id="rust-source-fallback",
         ),
     ],
@@ -129,28 +145,26 @@ def test_mdtablefix_installer_uses_the_available_install_path(
     workflow_data: Workflow,
     tmp_path: pth.Path,
     *,
-    cargo_binstall_status: int,
-    expected_install: str,
-    unexpected_install: str,
+    case: _InstallerCase,
 ) -> None:
     """The CI installer selects binstall or the dedicated Rust fallback."""
     result, calls = _run_installer(
         tmp_path,
         _installer_script(workflow_data),
-        cargo_binstall_status=cargo_binstall_status,
+        cargo_binstall_status=case.cargo_binstall_status,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "cargo binstall -V" in calls, (
         "the installer must probe cargo binstall with its supported -V command"
     )
-    assert expected_install in calls, (
-        f"the installer must execute {expected_install!r}; found {calls!r}"
+    assert case.expected_install in calls, (
+        f"the installer must execute {case.expected_install!r}; found {calls!r}"
     )
-    assert unexpected_install not in calls, (
-        f"the installer must not execute {unexpected_install!r}; found {calls!r}"
+    assert case.unexpected_install not in calls, (
+        f"the installer must not execute {case.unexpected_install!r}; found {calls!r}"
     )
-    if cargo_binstall_status != 0:
+    if case.cargo_binstall_status != 0:
         assert "cargo +1.89.0 install --locked mdtablefix --version 0.5.0" in calls, (
             "the fallback must build mdtablefix with the dedicated Rust 1.89.0 "
             "toolchain"
