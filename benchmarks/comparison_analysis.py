@@ -13,7 +13,10 @@ from benchmarks._validation import (
     _require_non_empty_string,
     _require_positive_float,
 )
-from benchmarks.ratchet_ratios import _comparison_id_for_scenario, _validate_backend
+from benchmarks.ratchet_ratio_extraction import (
+    _comparison_id_for_scenario,
+    _validate_backend,
+)
 
 if typ.TYPE_CHECKING:
     import pathlib as pth

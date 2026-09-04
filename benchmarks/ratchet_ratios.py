@@ -129,58 +129,6 @@ def load_throughput(path: pth.Path) -> dict[str, object]:
     return payload
 
 
-def _validate_backend(backend: str, *, index: int) -> None:
-    """Raise ``ValueError`` when *backend* is not 'python' or 'rust'."""
-    if backend not in {"python", "rust"}:
-        msg = (
-            f"scenarios[{index}].backend must be either 'python' or 'rust', "
-            f"got {backend!r}"
-        )
-        raise ValueError(msg)
-
-
-def _comparison_id_for_scenario(*, scenario_name: str, backend: str) -> str:
-    """Return the backend-independent comparison identifier for one scenario."""
-    prefix = f"{backend}-"
-    if not scenario_name.startswith(prefix):
-        msg = (
-            f"scenario name {scenario_name!r} must start with expected backend "
-            f"prefix {prefix!r}"
-        )
-        raise ValueError(msg)
-    comparison_id = scenario_name.removeprefix(prefix)
-    if not comparison_id:
-        msg = f"scenario name {scenario_name!r} must include a comparison label"
-        raise ValueError(msg)
-    return comparison_id
-
-
-def _extract_scenario_entry(
-    *,
-    index: int,
-    scenario_value: object,
-    result_value: object,
-) -> tuple[str, str, float]:
-    """Return ``(comparison_id, backend, mean)`` for one paired entry."""
-    scenario = _require_mapping(scenario_value, name=f"scenarios[{index}]")
-    result = _require_mapping(result_value, name=f"results[{index}]")
-
-    backend = _require_non_empty_string(
-        scenario.get("backend"), name=f"scenarios[{index}].backend"
-    )
-    scenario_name = _require_non_empty_string(
-        scenario.get("name"), name=f"scenarios[{index}].name"
-    )
-    _validate_backend(backend, index=index)
-    comparison_id = _comparison_id_for_scenario(
-        scenario_name=scenario_name,
-        backend=backend,
-    )
-
-    mean = _require_positive_float(result.get("mean"), name=f"results[{index}].mean")
-    return comparison_id, backend, mean
-
-
 def run_ratios(payload: BenchmarkRunPayload) -> dict[str, float]:
     """Return the within-run Rust/Python ratios for one benchmark run.
 

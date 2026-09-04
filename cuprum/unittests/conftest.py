@@ -13,6 +13,7 @@ import hypothesis_crosshair_provider  # ruff: ignore[unused-import]  # Registers
 from hypothesis import settings
 
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+from benchmarks.ratchet_history import BaselineHistory, HistorySample
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -36,11 +37,28 @@ _VOLATILE_KEYS: frozenset[str] = frozenset({
     "worker_command",
 })
 
+SCENARIO = "medium-single-nocb"
+WORKER_ITERATIONS = 20
+TYPICAL_RATIOS = (1.013, 1.001, 1.069, 0.916, 1.105)
+
 
 def benchmark_run_payloads(
     ratios: cabc.Mapping[str, float], *, worker_iterations: int = 20
 ) -> tuple[dict[str, object], dict[str, object]]:
-    """Build matching dry-run and Hyperfine payloads for scenario ratios."""
+    """Build matching dry-run and Hyperfine payloads for scenario ratios.
+
+    Parameters
+    ----------
+    ratios : collections.abc.Mapping[str, float]
+        Comparison identifiers and their desired Rust-to-Python mean ratios.
+    worker_iterations : int
+        Positive worker count recorded in the generated plan; defaults to 20.
+
+    Returns
+    -------
+    tuple[dict[str, object], dict[str, object]]
+        Matching dry-run plan and Hyperfine throughput payloads.
+    """
     scenarios: list[dict[str, object]] = []
     results: list[dict[str, object]] = []
     for scenario, ratio in sorted(ratios.items()):
@@ -69,6 +87,32 @@ def benchmark_run_payloads(
             "scenarios": scenarios,
         },
         {"results": results},
+    )
+
+
+def _sample(
+    ratio: float,
+    *,
+    profile_version: str = BENCHMARK_PROFILE_VERSION,
+    worker_iterations: int = WORKER_ITERATIONS,
+    run_id: str = "1",
+) -> HistorySample:
+    """Return one configurable main-branch ratio sample."""
+    return HistorySample(
+        commit="0" * 40,
+        run_id=run_id,
+        benchmark_profile_version=profile_version,
+        worker_iterations=worker_iterations,
+        ratios={SCENARIO: ratio},
+    )
+
+
+def _history(*ratios: float) -> BaselineHistory:
+    """Return an oldest-first baseline history for ``ratios``."""
+    return BaselineHistory(
+        samples=tuple(
+            _sample(ratio, run_id=str(index)) for index, ratio in enumerate(ratios)
+        )
     )
 
 

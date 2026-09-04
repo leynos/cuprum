@@ -8,49 +8,29 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 from benchmarks.ratchet_history import (
     DEFAULT_NOISE_SIGMAS,
     MAX_NOISE_TOLERANCE,
-    BaselineHistory,
-    HistorySample,
     RatchetPolicy,
     median_ratio,
     noise_tolerance,
 )
 from benchmarks.ratchet_rust_performance import compare_rust_regressions
 from benchmarks.ratchet_types import BenchmarkRunPayload
-from cuprum.unittests.conftest import benchmark_run_payloads
+from cuprum.unittests.conftest import (
+    SCENARIO,
+    TYPICAL_RATIOS,
+    WORKER_ITERATIONS,
+    _history,
+    benchmark_run_payloads,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-SCENARIO = "medium-single-nocb"
-WORKER_ITERATIONS = 20
 OUTLIER_RATIO = 0.760
 CANDIDATE_RATIO = 1.110
-TYPICAL_RATIOS = (1.013, 1.001, 1.069, 0.916, 1.105)
 _RATIOS = st.floats(min_value=0.5, max_value=2.0, allow_nan=False, allow_infinity=False)
-
-
-def _sample(ratio: float, *, run_id: str = "1") -> HistorySample:
-    """Return one main-branch ratio sample."""
-    return HistorySample(
-        commit="0" * 40,
-        run_id=run_id,
-        benchmark_profile_version=BENCHMARK_PROFILE_VERSION,
-        worker_iterations=WORKER_ITERATIONS,
-        ratios={SCENARIO: ratio},
-    )
-
-
-def _history(*ratios: float) -> BaselineHistory:
-    """Return an oldest-first baseline window."""
-    return BaselineHistory(
-        samples=tuple(
-            _sample(ratio, run_id=str(index)) for index, ratio in enumerate(ratios)
-        )
-    )
 
 
 def _run(*, ratios: cabc.Mapping[str, float], context_name: str) -> BenchmarkRunPayload:

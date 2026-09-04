@@ -98,10 +98,9 @@ The canonical policy lives in `pyproject.toml`:
   `typing.*` aliases.
 - `[tool.pylint.main]`, `[tool.pylint.design]`, and
   `[tool.pylint."messages control"]` define the focused second tier.
-- Earlier guidance pinned the `df12-python-lints` v0.3.0 release at an
-  immutable commit, with the Makefile's `DF12_PYTHON_LINTS_REF` selecting the
-  same commit for the standalone `ambrleaks` tool. That guidance is superseded
-  by the controlled `v0.3.0` tag choice documented in the addendum below.
+- The development dependency pins the `df12-python-lints` v0.3.0 release at an
+  immutable commit; the Makefile's `DF12_PYTHON_LINTS_REF` pins the standalone
+  `ambrleaks` tool to the same commit.
 - `ambrleaks.toml` records exact deterministic fixture values that resemble
   paths without weakening any scanner rule.
 
@@ -110,9 +109,8 @@ The canonical policy lives in `pyproject.toml`:
 - The second tier requires PyPy to be resolvable by `uv tool run --python pypy`.
 - The shim revision is another toolchain pin that must be maintained.
 - The project dependency and standalone `ambrleaks` pins must move together.
-  The earlier recommendation to resolve a release tag to an immutable commit
-  is superseded: current maintainer guidance requires the `pyproject.toml`
-  dependency and `DF12_PYTHON_LINTS_REF` to use the same controlled release tag.
+  When adopting a new release, resolve its tag to an immutable commit and use
+  that revision for both pins.
 - CPython 3.14 must be resolvable by `uv` for the df12 checks.
 - Pylint is intentionally focused; messages outside the selected set remain out
   of scope unless the policy is updated deliberately.
@@ -164,12 +162,13 @@ dependency and standalone lint pass use v0.3.0 at commit
 The `df12-python-lints` v0.3.0 release is now selected by its controlled
 `v0.3.0` tag in the project declarations. The tag identifies the named release
 while `uv.lock` records its resolved commit for reproducible environments.
+This supersedes the earlier guidance in this ADR to select an immutable commit
+directly.
 
 The `df12-python-lints` dependency in `pyproject.toml` and
 `DF12_PYTHON_LINTS_REF` in the Makefile must select the same tag. The dependency
 provides the plugin used by the project lint command, while the Makefile invokes
 the standalone checks; updating only one would run different release contents.
-
 ## Addendum (2026-09-04): Enforce the df12-python-lints release tag
 
 The lint configuration now enforces the `df12-python-lints` v0.3.0 release tag

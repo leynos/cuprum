@@ -11,6 +11,7 @@ import pytest
 from benchmarks.fetch_main_benchmark_baseline import (
     GITHUB_TOKEN_ENV_VAR,
     MAIN_BASELINE_NOT_FOUND_EXIT_CODE,
+    ArtefactQuery,
     _parse_args,
     main,
 )
@@ -145,6 +146,35 @@ def test_main_returns_not_found_when_no_baseline_available(
     monkeypatch.setattr(
         "benchmarks.fetch_main_benchmark_baseline.find_latest_artefact_download_url",
         lambda **_: None,
+    )
+
+
+def test_main_forwards_the_requested_run_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pth.Path,
+) -> None:
+    """An explicit status filter must reach the artefact query unchanged."""
+    monkeypatch.setenv(GITHUB_TOKEN_ENV_VAR, "token")
+    captured: list[ArtefactQuery] = []
+
+    def _no_baseline(*, query: ArtefactQuery, token: str) -> None:
+        captured.append(query)
+        _ = token
+
+    monkeypatch.setattr(
+        "benchmarks.fetch_main_benchmark_baseline.find_latest_artefact_download_url",
+        _no_baseline,
+    )
+
+    exit_code = main([*main_cli_args(tmp_path), "--run-status", "completed"])
+
+    assert exit_code == MAIN_BASELINE_NOT_FOUND_EXIT_CODE, (
+        "a completed-run query without an artefact must keep the bootstrap exit code"
+    )
+    assert captured, "the CLI must construct an artefact query before returning"
+    assert captured[0].run_status == "completed", (
+        "--run-status must reach ArtefactQuery unchanged; observed "
+        f"{captured[0].run_status!r}"
     )
 
     exit_code = main(main_cli_args(tmp_path))

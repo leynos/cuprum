@@ -6,14 +6,14 @@ import json
 import sys
 import typing as typ
 
+import pytest
+
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 from benchmarks.ratchet_history import BaselineHistory, HistorySample, write_history
 from benchmarks.ratchet_rust_performance import main
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
-
-    import pytest
 
 SCENARIO = "medium-single-nocb"
 WORKER_ITERATIONS = 20
@@ -148,3 +148,74 @@ def test_a_directory_baseline_history_returns_an_input_error(
     )
 
     assert main() == 2, "a directory baseline history must return input error 2"
+
+
+def test_cli_applies_non_default_history_policy_options(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The CLI must serialize policy values supplied through history options."""
+    candidate_plan = _write_json(
+        tmp_path=tmp_path,
+        filename="candidate-plan.json",
+        payload=_candidate_plan(),
+    )
+    candidate_throughput = _write_json(
+        tmp_path=tmp_path,
+        filename="candidate-throughput.json",
+        payload=_candidate_throughput(),
+    )
+    history = tmp_path / "main-baseline-history.json"
+    write_history(
+        history=BaselineHistory(
+            samples=tuple(
+                HistorySample(
+                    commit="0" * 40,
+                    run_id=str(index),
+                    benchmark_profile_version=BENCHMARK_PROFILE_VERSION,
+                    worker_iterations=WORKER_ITERATIONS,
+                    ratios={SCENARIO: ratio},
+                )
+                for index, ratio in enumerate((1.0, 1.2, 0.8, 1.0))
+            )
+        ),
+        output_path=history,
+    )
+    output = tmp_path / "ratchet-report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "ratchet_rust_performance.py",
+            "--baseline-history",
+            str(history),
+            "--candidate-plan",
+            str(candidate_plan),
+            "--candidate-throughput",
+            str(candidate_throughput),
+            "--history-window",
+            "3",
+            "--noise-sigmas",
+            "2.0",
+            "--max-regression",
+            "0.4",
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert main() == 0, "the candidate at the median must pass the configured policy"
+    comparison = json.loads(output.read_text(encoding="utf-8"))["comparisons"][0]
+    assert comparison["baseline_sample_count"] == 3, (
+        "--history-window must retain exactly three recent samples; observed "
+        f"{comparison['baseline_sample_count']!r}"
+    )
+    assert comparison["max_regression"] == pytest.approx(0.4), (
+        "--max-regression must be serialized in the comparison report"
+    )
+    assert comparison["noise_tolerance"] == pytest.approx(0.59304), (
+        "--noise-sigmas must set the MAD-derived noise band"
+    )
+    assert comparison["effective_threshold"] == pytest.approx(0.59304), (
+        "the wider configured noise band must determine the effective threshold"
+    )

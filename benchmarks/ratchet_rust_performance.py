@@ -1,4 +1,8 @@
-"""Compare Rust/Python run ratios against rolling main-branch baselines."""
+"""Orchestrate the Rust/Python benchmark ratchet against `main` baselines.
+
+`ratchet_ratios` loads validated payloads; candidates compare against history
+or its single-sample fallback, and the CLI writes verdicts and CI exit codes.
+"""
 
 from __future__ import annotations
 
@@ -74,9 +78,7 @@ def _baseline_window(
 ) -> dict[str, tuple[float, ...]]:
     """Return compatible history samples, falling back to a single baseline."""
     recent = _compatible_history_window(
-        candidate=candidate,
-        history=history,
-        window_size=window_size,
+        candidate=candidate, history=history, window_size=window_size
     )
     if recent.samples:
         return {name: recent.ratios_for(name) for name in recent.scenarios}
@@ -86,8 +88,7 @@ def _baseline_window(
         raise ValueError(msg)
     _logger.info("no compatible baseline history; comparing against one sample")
     validate_matching_profiles(
-        baseline_plan=baseline.plan,
-        candidate_plan=candidate.plan,
+        baseline_plan=baseline.plan, candidate_plan=candidate.plan
     )
     return {name: (ratio,) for name, ratio in run_ratios(baseline).items()}
 
@@ -99,14 +100,12 @@ def _compatible_history_window(
     window_size: int,
 ) -> BaselineHistory:
     """Return recent history samples compatible with the candidate's profile."""
+    if history is None:
+        return BaselineHistory()
     version, worker_iterations = profile_metadata(candidate.plan)
-    compatible = (
-        history.compatible_with(
-            benchmark_profile_version=version,
-            worker_iterations=worker_iterations,
-        )
-        if history is not None
-        else BaselineHistory()
+    compatible = history.compatible_with(
+        benchmark_profile_version=version,
+        worker_iterations=worker_iterations,
     )
     return BaselineHistory(samples=compatible.samples[-window_size:])
 
@@ -131,9 +130,7 @@ def _compare_scenario(
     )
 
 
-def _policy_options(
-    options: dict[str, object],
-) -> tuple[object | None, object | None]:
+def _policy_options(options: dict[str, object]) -> tuple[object | None, object | None]:
     """Consume and return the supported comparison-policy options."""
     policy = options.pop("policy", None)
     max_regression = options.pop("max_regression", None)
@@ -144,6 +141,7 @@ def _policy_options(
 
 
 def _validated_policy_option(policy: object | None) -> RatchetPolicy | None:
+    """Return a `RatchetPolicy` option after validating its type."""
     if policy is not None and not isinstance(policy, RatchetPolicy):
         msg = "policy must be a RatchetPolicy"
         raise TypeError(msg)
@@ -151,6 +149,7 @@ def _validated_policy_option(policy: object | None) -> RatchetPolicy | None:
 
 
 def _validated_max_regression_option(max_regression: object | None) -> float | None:
+    """Return a floating-point legacy threshold after validating its type."""
     if max_regression is not None and not isinstance(max_regression, float):
         msg = "max_regression must be a float"
         raise TypeError(msg)
@@ -160,6 +159,7 @@ def _validated_max_regression_option(max_regression: object | None) -> float | N
 def _validate_exclusive_policy_options(
     *, policy: RatchetPolicy | None, max_regression: float | None
 ) -> None:
+    """Reject supplying both policy representations at once."""
     if policy is not None and max_regression is not None:
         msg = "pass either policy or max_regression, not both"
         raise ValueError(msg)
@@ -228,8 +228,7 @@ def compare_rust_regressions(
     )
     candidate_ratios = run_ratios(candidate)
     _validate_matching_comparison_groups(
-        baseline_ratios=window,
-        candidate_ratios=candidate_ratios,
+        baseline_ratios=window, candidate_ratios=candidate_ratios
     )
 
     return ComparisonReport(
@@ -247,12 +246,21 @@ def compare_rust_regressions(
 
 
 def write_report(*, report: ComparisonReport, output_path: pth.Path) -> None:
-    """Write comparison report JSON to ``output_path``."""
+    """Write a comparison report as stable, formatted JSON.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Evaluated ratchet result to serialize.
+    output_path : pathlib.Path
+        JSON destination; missing parent directories are created.
+
+    I/O and serialization errors propagate to the CLI, which reports an input
+    error without publishing a partial verdict.
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(report.as_dict(), indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    payload = json.dumps(report.as_dict(), indent=2, sort_keys=True)
+    output_path.write_text(payload, encoding="utf-8")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -261,18 +269,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--baseline-plan",
         type=pth.Path,
-        help=(
-            "Single-sample fallback baseline plan, used when no compatible "
-            "baseline history is available."
-        ),
+        help="Single-sample fallback plan when no compatible history is available.",
     )
     parser.add_argument(
         "--baseline-throughput",
         type=pth.Path,
-        help=(
-            "Single-sample fallback baseline throughput, used when no compatible "
-            "baseline history is available."
-        ),
+        help="Fallback throughput when compatible history is unavailable.",
     )
     parser.add_argument(
         "--baseline-history",
@@ -324,14 +326,13 @@ def _load_baseline(args: argparse.Namespace) -> BenchmarkRunPayload | None:
 
 def _load_history_or_empty(path: pth.Path | None) -> BaselineHistory:
     """Load an optional history, treating only its intentional absence as empty."""
-    if path is None:
-        _logger.info("no baseline history is available; using the fallback baseline")
-        return BaselineHistory()
-    try:
-        return load_history(path)
-    except BaselineHistoryNotFoundError:
-        _logger.info("no baseline history is available; using the fallback baseline")
-        return BaselineHistory()
+    if path is not None:
+        try:
+            return load_history(path)
+        except BaselineHistoryNotFoundError:
+            pass
+    _logger.info("no baseline history is available; using the fallback baseline")
+    return BaselineHistory()
 
 
 def main() -> int:
@@ -343,8 +344,7 @@ def main() -> int:
         ``0`` for pass/skip, ``1`` for regression, or ``2`` for invalid inputs.
     """
     logging.basicConfig(
-        level=logging.WARNING,
-        format="%(levelname)s %(name)s: %(message)s",
+        level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s"
     )
     args = _parse_args()
     try:
