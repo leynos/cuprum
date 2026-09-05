@@ -158,6 +158,7 @@ def test_echoes_when_requested(
     assert "hello runtime" in captured.out
     assert result.stdout.strip() == "hello runtime"
 
+
 @pytest.mark.usefixtures("execution_strategy")
 def test_captures_stdout_silently(
     python_builder: cabc.Callable[..., SafeCmd],
@@ -185,6 +186,7 @@ def test_captures_stdout_silently(
     assert result.stdout == "doc", (
         "a non-echoed stream must still be captured in full on the result"
     )
+
 
 @pytest.mark.parametrize("stream", ["stdout", "stderr"])
 def test_per_stream_echo_is_independent(
@@ -229,6 +231,7 @@ def test_per_stream_echo_is_independent(
         f"stderr echo must follow echo_stderr={not echo_stdout}"
     )
 
+
 def test_stderr_echo_is_unaffected_by_stdout_setting(
     python_builder: cabc.Callable[..., SafeCmd],
     capsys: pytest.CaptureFixture[str],
@@ -261,6 +264,8 @@ def test_stderr_echo_is_unaffected_by_stdout_setting(
     assert captured.err == "", "injected sinks must keep both streams off capsys"
     assert result.stdout == "out\n"
     assert result.stderr == "err\n"
+
+
 def test_applies_env_overrides(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
