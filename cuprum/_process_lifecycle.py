@@ -218,7 +218,9 @@ async def _spawn_pipeline_processes(
     stderr_tasks: list[asyncio.Task[str | None] | None] = []
     stdout_task: asyncio.Task[str | None] | None = None
     started_at: list[float] = []
-    relay_diagnostics_by_stage: list[tuple[_RelayDiagnostics | None, _RelayDiagnostics | None]] = []
+    relay_diagnostics_by_stage: list[
+        tuple[_RelayDiagnostics | None, _RelayDiagnostics | None]
+    ] = []
 
     last_idx = len(observations) - 1
     try:
@@ -240,11 +242,13 @@ async def _spawn_pipeline_processes(
             started_at.append(time.perf_counter())
             observation.emit("start", _EventDetails(pid=process.pid))
 
-            stderr_task, new_stdout_task, stage_relay_diagnostics = _create_stage_capture_tasks(
-                process,
-                config,
-                is_last_stage=(idx == last_idx),
-                observation=observation,
+            stderr_task, new_stdout_task, stage_relay_diagnostics = (
+                _create_stage_capture_tasks(
+                    process,
+                    config,
+                    is_last_stage=(idx == last_idx),
+                    observation=observation,
+                )
             )
             stderr_tasks.append(stderr_task)
             relay_diagnostics_by_stage.append(stage_relay_diagnostics)

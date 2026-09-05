@@ -19,7 +19,8 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from cuprum._streams import _drain, _StreamConfig
+from cuprum._streams import _RelayDiagnostics, _drain, _StreamConfig
+from cuprum.echo_events import EchoErrorCategory, EchoStream, RelayFallback
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -315,14 +316,21 @@ def test_echo_guard_preserves_capture_across_arbitrary_chunks(
     """
     payload, chunks, failing_write = case
     sink = _FailingWriteSink(failing_write)
+    relay_diagnostics = _RelayDiagnostics()
 
     # Hypothesis reuses the fixture across examples, so clear the records the
     # previous example left behind before asserting on this one's drain.
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="cuprum.stream"):
         captured = asyncio.run(
-            _drain(_reader(chunks), _config(typ.cast("typ.IO[str]", sink))),
+            _drain(
+                _reader(chunks),
+                _config(typ.cast("typ.IO[str]", sink)),
+                relay_diagnostics=relay_diagnostics,
+            ),
         )
+    relay_diagnostics.settle()
+    fallbacks = relay_diagnostics.snapshot()
     warnings = [record for record in caplog.records if record.name == "cuprum.stream"]
 
     assert captured == payload.decode("utf-8", errors="replace"), (
