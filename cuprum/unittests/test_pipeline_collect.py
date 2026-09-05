@@ -108,6 +108,7 @@ def test_timeout_without_configured_timeout_raises_invariant_error(
         "_PipelineSpawnResult",
         types.SimpleNamespace(
             processes=[],
+            relay_diagnostics_by_stage=(),
             stages=types.SimpleNamespace(observations=()),
         ),
     )
