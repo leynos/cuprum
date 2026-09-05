@@ -23,10 +23,10 @@ import pytest
 from cuprum import RelayFallback, TimeoutExpired, sh
 from cuprum._streams import _drain, _StreamConfig
 from cuprum.adapters.echo_metrics import ECHO_ENCODING_FAILURES_TOTAL
-from cuprum.unittests._rust_pump_test_helpers import RecordingCollector
 from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream
 from cuprum.echo_observation import observe_echo
 from cuprum.sh import CommandResult, ExecutionContext, RunOutputOptions
+from cuprum.unittests._rust_pump_test_helpers import RecordingCollector
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
@@ -148,7 +148,9 @@ class _MetricsProbe:
         self._hook(event)
 
 
-def _EchoMetricsHookShim(collector: MetricsCollector) -> cabc.Callable[[EchoEvent], None]:
+def _EchoMetricsHookShim(
+    collector: MetricsCollector,
+) -> cabc.Callable[[EchoEvent], None]:
     """Build the real metrics hook without a module-level import cycle."""
     from cuprum.adapters.echo_metrics import EchoMetricsHook
 
@@ -351,7 +353,9 @@ def test_stderr_echo_failure_is_recorded_against_stderr(
                 "import sys; sys.stderr.write('wörld ś\\n'); sys.stderr.flush()",
             ).run(
                 output=RunOutputOptions(capture=True, echo=True),
-                context=ExecutionContext(stderr_sink=typ.cast("typ.IO[str]", stderr_sink)),
+                context=ExecutionContext(
+                    stderr_sink=typ.cast("typ.IO[str]", stderr_sink)
+                ),
             )
 
     result = asyncio.run(run_case())
@@ -398,7 +402,9 @@ def test_normal_and_disabled_echo_produce_empty_diagnostics(
 
     echoed_fallbacks, silent_fallbacks = asyncio.run(run_case())
 
-    assert echoed_fallbacks == (), f"healthy echo records nothing, got {echoed_fallbacks!r}"
+    assert echoed_fallbacks == (), (
+        f"healthy echo records nothing, got {echoed_fallbacks!r}"
+    )
     assert silent_fallbacks == (), "disabled echo records nothing"
 
 
@@ -474,7 +480,8 @@ def test_pipeline_final_stage_owns_its_stdout_diagnostics(
         """Pipe two stages; the final stage's stdout echoes to the bad sink."""
         with observe_echo(lambda _event: None):
             pipeline = python_builder("-c", "print('stage one')") | python_builder(
-                "-c", f"import sys; print(sys.stdin.read().strip() + ' {_NON_ENCODABLE}')"
+                "-c",
+                f"import sys; print(sys.stdin.read().strip() + ' {_NON_ENCODABLE}')",
             )
             result = await pipeline.run(
                 output=RunOutputOptions(capture=True, echo=True),
@@ -503,7 +510,9 @@ def test_pipeline_stage_results_keep_stage_order(
     """Stage order is preserved while diagnostics stay per stage."""
     rejecting = _Cp1252TextOnlySink()
 
-    async def run_case() -> tuple[int, tuple[RelayFallback, ...], tuple[RelayFallback, ...]]:
+    async def run_case() -> tuple[
+        int, tuple[RelayFallback, ...], tuple[RelayFallback, ...]
+    ]:
         """Run a two-stage pipeline echoing every stderr to one sink."""
         with observe_echo(lambda _event: None):
             pipeline = python_builder(
@@ -513,7 +522,9 @@ def test_pipeline_stage_results_keep_stage_order(
             )
             result = await pipeline.run(
                 output=RunOutputOptions(capture=True, echo=True),
-                context=ExecutionContext(stderr_sink=typ.cast("typ.IO[str]", rejecting)),
+                context=ExecutionContext(
+                    stderr_sink=typ.cast("typ.IO[str]", rejecting)
+                ),
             )
         return (
             len(result.stages),
@@ -544,8 +555,7 @@ def test_timeout_with_pre_expiry_disablement_observes_event(
         with observe_echo(events.append):
             await python_builder(
                 "-c",
-                "import time; "
-                f"print('{_NON_ENCODABLE}', flush=True); time.sleep(5)",
+                f"import time; print('{_NON_ENCODABLE}', flush=True); time.sleep(5)",
             ).run(
                 timeout=1.0,
                 output=RunOutputOptions(capture=True, echo=True),
@@ -636,9 +646,8 @@ def test_command_result_field_order_and_positional_compatibility() -> None:
 
 def test_relay_fallback_is_exported_from_its_definition_site() -> None:
     """The package-root RelayFallback is the echo_events definition."""
-    from cuprum import echo_events
-
     import cuprum as c
+    from cuprum import echo_events
 
     assert c.RelayFallback is echo_events.RelayFallback
 

@@ -59,6 +59,26 @@ if typ.TYPE_CHECKING:
     import asyncio
 
 
+"""Test-only re-exports of internal helpers.
+Cuprum keeps most implementation details private to allow changes without
+breaking user code. Some unit tests still need access to internal helpers to
+validate tricky edge cases (process/pipe coordination, stream handling, etc.).
+This module provides a single, explicit surface for those tests so they do not
+depend on incidental re-exports from public modules like ``cuprum.sh``.
+"""
+if typ.TYPE_CHECKING:
+    import asyncio
+"""Test-only re-exports of internal helpers.
+Cuprum keeps most implementation details private to allow changes without
+breaking user code. Some unit tests still need access to internal helpers to
+validate tricky edge cases (process/pipe coordination, stream handling, etc.).
+This module provides a single, explicit surface for those tests so they do not
+depend on incidental re-exports from public modules like ``cuprum.sh``.
+"""
+if typ.TYPE_CHECKING:
+    import asyncio
+
+
 def force_python_pump_fallback() -> dict[str, int]:
     """Force dispatch fallback to the Python pump and count fallback calls.
 
