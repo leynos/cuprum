@@ -1351,8 +1351,8 @@ Configuration attributes:
   parallel; `1` runs sequentially.
 - `capture`: When `True` (default), capture stdout/stderr into results.
 - `echo`: When `True`, tee output to configured sinks.
-- `echo_stdout`: When set, overrides `echo` for stdout alone.
-- `echo_stderr`: When set, overrides `echo` for stderr alone.
+- `echo_stdout`: When set, overrides `echo` for stdout alone. Keyword-only.
+- `echo_stderr`: When set, overrides `echo` for stderr alone. Keyword-only.
 - `context`: Shared `ExecutionContext` for all commands.
 - `fail_fast`: When `True`, cancel remaining commands after first failure.
 

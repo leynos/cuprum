@@ -43,9 +43,13 @@ class ConcurrentConfig:
     echo_stdout:
         When True, tee only stdout to its configured sink; when False,
         stdout is never echoed. When None (default), inherits ``echo``.
+        Keyword-only, so constructing this dataclass positionally keeps
+        binding ``context`` and ``fail_fast`` as before.
     echo_stderr:
         When True, tee only stderr to its configured sink; when False,
         stderr is never echoed. When None (default), inherits ``echo``.
+        Keyword-only, so constructing this dataclass positionally keeps
+        binding ``context`` and ``fail_fast`` as before.
     context:
         Shared execution context for all commands. When None, uses
         the current context from the execution environment.
@@ -59,8 +63,8 @@ class ConcurrentConfig:
     concurrency: int | None = None
     capture: bool = True
     echo: bool = False
-    echo_stdout: bool | None = None
-    echo_stderr: bool | None = None
+    echo_stdout: bool | None = dc.field(default=None, kw_only=True)
+    echo_stderr: bool | None = dc.field(default=None, kw_only=True)
     context: ExecutionContext | None = None
     fail_fast: bool = False
 

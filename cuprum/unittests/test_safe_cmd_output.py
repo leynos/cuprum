@@ -73,6 +73,17 @@ def test_io_options_warns_when_constructed() -> None:
     assert options.echo is True
 
 
+def test_io_options_resolves_per_stream_echo() -> None:
+    """IOOptions(echo=True) resolves both streams despite the warning path."""
+    with pytest.warns(DeprecationWarning, match="IOOptions is deprecated"):
+        options = IOOptions(echo=True)
+
+    assert options.resolved_echo == (True, True), (
+        "the deprecated alias must resolve the inherited per-stream fields, "
+        f"got {options.resolved_echo!r}"
+    )
+
+
 def test_captures_stderr_only(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],

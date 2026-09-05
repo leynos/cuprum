@@ -409,7 +409,11 @@ class IOOptions(RunOutputOptions):
     """Deprecated alias for command output stream options."""
 
     def __post_init__(self) -> None:
-        """Emit a ``DeprecationWarning`` when ``IOOptions`` is constructed."""
+        """Resolve the inherited options, then warn about the deprecated alias."""
+        # Zero-arg ``super()`` breaks under ``slots=True``: the decorator
+        # rebuilds the class, so the method's ``__class__`` cell refers to the
+        # pre-rebuild class and the instance fails the ``super`` type check.
+        RunOutputOptions.__post_init__(self)
         warnings.warn(
             "IOOptions is deprecated; use RunOutputOptions instead",
             DeprecationWarning,

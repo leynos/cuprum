@@ -21,6 +21,7 @@ from cuprum.concurrent import (
     ConcurrentConfig,
     ConcurrentResult,
 )
+from cuprum.sh import ExecutionContext
 
 
 class TestConcurrentConfig:
@@ -51,6 +52,20 @@ class TestConcurrentConfig:
             TypeError, match=f"concurrency must be an int, got {type_name}"
         ):
             ConcurrentConfig(concurrency=concurrency)
+
+    @staticmethod
+    def test_new_fields_are_keyword_only() -> None:
+        """Positional construction keeps binding context and fail_fast as before."""
+        context = ExecutionContext()
+        config = ConcurrentConfig(2, False, False, context, True)  # ruff: ignore[boolean-positional-value-in-call] - positional binding is the contract under test
+
+        assert config.concurrency == 2
+        assert config.capture is False
+        assert config.echo is False
+        assert config.context is context
+        assert config.fail_fast is True
+        assert config.echo_stdout is None
+        assert config.echo_stderr is None
 
 
 class TestConcurrentResult:

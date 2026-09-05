@@ -17,6 +17,10 @@
   only by the bounded `stream` (`stdout` or `stderr`) and `error_category`
   (`unicode_encode`) values; the hook is opt-in and no payload or sink metadata
   becomes a metric label.
+- **`IOOptions(echo=True)` echoes again:** The deprecated compatibility alias
+  overrode the new per-stream resolver with a warning-only initializer, so
+  `IOOptions(echo=True)` left both streams silent. It now resolves the
+  inherited per-stream fields before emitting the deprecation warning.
 
 ### Added
 
@@ -26,8 +30,10 @@
   mirrors to the parent — for example, capturing the `cargo metadata --locked`
   JSON document without printing it to a CI log. Capture stays a single joint
   boolean and continues for a stream that is not echoed; `ConcurrentConfig`
-  forwards the same per-stream fields. The change is additive: existing
-  `echo=True` callers resolve both streams to `True` exactly as before.
+  forwards the same per-stream fields, which are keyword-only so positional
+  callers keep binding `context` and `fail_fast` as before. The change is
+  additive: existing `echo=True` callers resolve both streams to `True` exactly
+  as before.
 
 - **Pipeline fail-fast telemetry:** A pipeline now emits one
   `pipeline_fail_fast` `ExecEvent`, marking a termination decision, when a
