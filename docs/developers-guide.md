@@ -2666,7 +2666,6 @@ fix findings in execution order, then rerun `make lint` to reach the next
 stage. Do not disable df12 messages to absorb existing findings; repair the
 assertion, alias, suppression rationale, or dispatch structure instead.
 
-
 ### GitHub Actions workflow linting
 
 `make lint` finishes by running
@@ -2677,8 +2676,8 @@ by workflow `run:` steps. `.yamllint.yml` requires each workflow to start with
 and `'false'` values.
 
 Install yamllint locally with `uv tool install "yamllint==1.38.0"`, then
-install actionlint using its [upstream installation
-instructions](https://github.com/rhysd/actionlint/blob/main/README.md#installation).
+install actionlint using its
+[upstream installation instructions](https://github.com/rhysd/actionlint/blob/main/README.md#installation).
 Both commands must be available on `PATH` before running `make lint`.
 
 CI caches the `uv` cache, tool environment, and executable directory before

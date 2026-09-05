@@ -224,7 +224,12 @@ jobs:
           path: |
             ~/.local/bin/mdtablefix
             ~/.local/bin/mdtablefix.exe
-          key: mdtablefix-${{ runner.os }}-${{ runner.arch }}-${{ env.UBUNTU_RELEASE }}-${{ env.CACHE_GENERATION }}-${{ env.MDTABLEFIX_VERSION }}
+          key: >-
+            ${{ format(
+              'mdtablefix-{0}-{1}-{2}-{3}-{4}',
+              runner.os, runner.arch, env.UBUNTU_RELEASE,
+              env.CACHE_GENERATION, env.MDTABLEFIX_VERSION
+            ) }}
 
       - name: Install mdtablefix
         # The shared action accepts only releases with correct multi-platform

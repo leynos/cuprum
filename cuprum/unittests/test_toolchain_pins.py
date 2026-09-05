@@ -265,7 +265,7 @@ def test_mdtablefix_uses_its_pinned_prebuilt_installer() -> None:
         "UBUNTU_RELEASE",
         "CACHE_GENERATION",
     ):
-        assert f"${{{{ env.{name} }}}}" in cache_key, (
+        assert f"env.{name}" in cache_key, (
             f"the Cache mdtablefix CI mapping must include {name} in with.key"
         )
 
