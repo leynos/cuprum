@@ -16,6 +16,14 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      publish-baseline:
+        description: >-
+          Publish the ratchet baseline from this run; set false for
+          cache-warming or measurement dispatches.
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: read
@@ -164,15 +172,22 @@ jobs:
       # The pinned action writes a run-specific baseline cache entry and treats
       # changes within one percentage point as measurement noise.
       #
-      # publish-baseline: always is required here, not optional. From this pin
-      # the action publishes only on a push to refs/heads/main, and this
-      # repository's merges are performed by the automerge workflow's
-      # GITHUB_TOKEN, which fires no push event; see the header above. Under the
-      # default the manual dispatch that carries an automerged change would
-      # upload its coverage and publish no baseline, and the ratchet every pull
-      # request is measured against would stop advancing. This workflow runs
-      # only on main, so widening the guard here does not let any other ref
-      # publish.
+      # From this pin the action publishes only on a push to refs/heads/main.
+      # This repository's merges are performed by the automerge workflow's
+      # GITHUB_TOKEN, which fires no push event; see the header above. So the
+      # manual dispatch that carries an automerged change has to opt back in, or
+      # the ratchet every pull request is measured against stops advancing.
+      #
+      # A dispatch is also how warm-cache evidence is gathered, and such a run
+      # must read the generation it is measuring rather than replace it. The
+      # workflow_dispatch input decides which kind of dispatch this is: it
+      # defaults to publishing, because carrying an automerged change is the
+      # common case, and a measurement run sets it false.
+      #
+      # A push needs no opt-in, since the action's own guard already admits it;
+      # naming it here keeps the rule readable in one place. The push trigger is
+      # restricted to main, and a contract holds it there, so `always` cannot
+      # reach another ref.
       - name: Generate coverage
         uses: leynos/shared-actions/.github/actions/generate-coverage@77ea10341249024e22ec5d9069e3caa7596e0d4f
         env:
@@ -187,7 +202,9 @@ jobs:
           pytest-workers: ''
           cache-provider: external
           with-ratchet: 'true'
-          publish-baseline: always
+          publish-baseline: >-
+            ${{ (github.event_name == 'push' || inputs.publish-baseline)
+            && 'always' || 'auto' }}
           # This job is the only execution of the Rust suite for the event.
           # `language: mixed` and the workspace manifest are what make the
           # shared action run it: the repository root has no Cargo.toml, so
