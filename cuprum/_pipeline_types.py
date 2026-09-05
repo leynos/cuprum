@@ -15,8 +15,6 @@ import types
 import typing as typ
 
 from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
-from cuprum._streams import _RelayDiagnostics
-from cuprum.echo_events import RelayFallback
 from cuprum.events import ExecEvent, ExecPhase, TimeoutMode, new_exec_id
 
 
@@ -30,7 +28,9 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from cuprum._pipeline_wait import _PipelineWaitResult
+    from cuprum._streams import _RelayDiagnostics
     from cuprum.context import AfterHook, BeforeHook
+    from cuprum.echo_events import RelayFallback
     from cuprum.events import ExecHook, ExecId
     from cuprum.sh import SafeCmd
 
