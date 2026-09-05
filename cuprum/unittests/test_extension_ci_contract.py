@@ -32,11 +32,13 @@ from tests.helpers.workflow import (
 )
 
 SHARED_ACTIONS_REFERENCE = re.compile(
-    r"^leynos/shared-actions/(?P<target>[^\s@]+)@(?P<reference>[^\s#]+)$"
+    r"^leynos/shared-actions/(?P<target>[^\s@]+)@(?P<reference>[0-9a-f]{40})$"
 )
+VALID_COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
 EXPECTED_SHARED_ACTIONS_TARGETS = {
     "ci.yml": {
         ".github/actions/generate-coverage",
+        ".github/actions/install-mdtablefix",
         ".github/actions/install-nixie",
         ".github/actions/install-whitaker",
         ".github/actions/setup-rust",
@@ -93,19 +95,41 @@ def _shared_action_target(uses: object, step_name: str) -> str:
 @pytest.mark.parametrize(
     ("uses", "expected_revision"),
     [
-        ("leynos/shared-actions/.github/actions/setup-rust@main", "main"),
-        ("leynos/shared-actions/.github/actions/setup-rust@v1.2.3", "v1.2.3"),
+        (
+            f"leynos/shared-actions/.github/actions/setup-rust@{VALID_COMMIT_SHA}",
+            VALID_COMMIT_SHA,
+        ),
+        ("leynos/shared-actions/.github/actions/setup-rust@main", None),
+        ("leynos/shared-actions/.github/actions/setup-rust@v1.2.3", None),
         ("leynos/shared-actions/.github/actions/setup-rust@", None),
         ("leynos/shared-actions/.github/actions/setup-rust@main # comment", None),
+        (
+            f"leynos/shared-actions/.github/actions/setup-rust@{VALID_COMMIT_SHA.upper()}",
+            None,
+        ),
+        (
+            f"leynos/shared-actions/.github/actions/setup-rust@{VALID_COMMIT_SHA[:8]}",
+            None,
+        ),
+        (
+            f"leynos/shared-actions/.github/actions/setup-rust@{VALID_COMMIT_SHA}a",
+            None,
+        ),
+        (
+            f"leynos/shared-actions/.github/actions/setup-rust@g{VALID_COMMIT_SHA[1:]}",
+            None,
+        ),
     ],
 )
-def test_shared_actions_reference_captures_any_non_comment_revision(
+def test_shared_actions_reference_captures_immutable_commit_sha(
     uses: str, expected_revision: str | None
 ) -> None:
-    """Shared-action callers may use any revision token that Dependabot manages."""
+    """Shared-action callers pin immutable commit SHAs for Dependabot to update."""
     reference = SHARED_ACTIONS_REFERENCE.fullmatch(uses)
     revision = reference["reference"] if reference is not None else None
-    assert revision == expected_revision
+    assert revision == expected_revision, (
+        f"reference {uses!r}: expected revision {expected_revision!r}, got {revision!r}"
+    )
 
 
 def test_the_ci_job_builds_the_extension_before_running_the_gated_tests(
@@ -322,8 +346,8 @@ def test_lint_job_uses_shared_tooling_installers(workflow_data: Workflow) -> Non
     )
 
 
-def test_workflows_pin_shared_actions_to_one_revision() -> None:
-    """Every shared-actions caller uses one revision without fixing its value."""
+def test_workflows_pin_shared_actions_to_immutable_revisions() -> None:
+    """Every shared-actions caller uses an immutable revision without fixing it."""
     all_uses_by_workflow = {
         workflow_name: _shared_action_uses(workflow_document(workflow_name))
         for workflow_name, _ in workflow_sources()
@@ -346,8 +370,8 @@ def test_workflows_pin_shared_actions_to_one_revision() -> None:
         if reference is None
     ]
     assert not invalid_references, (
-        "shared-actions references must include a non-whitespace, non-comment "
-        f"revision after '@': {invalid_references}"
+        "shared-actions references must use a full lowercase 40-character "
+        f"commit SHA after '@': {invalid_references}"
     )
     valid_references = {
         workflow_name: [
@@ -363,14 +387,4 @@ def test_workflows_pin_shared_actions_to_one_revision() -> None:
     assert targets_by_workflow == EXPECTED_SHARED_ACTIONS_TARGETS, (
         "each workflow must call only its expected shared actions or reusable "
         f"workflows; found {targets_by_workflow}"
-    )
-
-    revisions = {
-        reference["reference"]
-        for references in valid_references.values()
-        for reference in references
-    }
-    assert len(revisions) == 1, (
-        "every shared-actions call must use the same revision; "
-        f"found {sorted(revisions)}"
     )

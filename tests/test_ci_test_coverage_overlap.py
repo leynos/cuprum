@@ -78,7 +78,7 @@ def _coverage_step(workflow_name: str, job_name: str) -> Step:
     matches = [
         step
         for step in steps(workflow_name, job_name)
-        if str(step.get("uses", "")).startswith(f"{GENERATE_COVERAGE}@")
+        if step.get("uses") == GENERATE_COVERAGE
     ]
     # Exactly one, not merely a first. A second invocation would run the whole
     # suite again, and checking only the first would report that as clean.

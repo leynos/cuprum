@@ -307,8 +307,7 @@ the bootstrap uses Rust `1.95.0` because Merman CLI `0.7.0` requires that
 compiler. The job then restores Rust `1.85.0`, the project's supported
 toolchain, before installing Whitaker and running the project gates. The
 Whitaker action receives `WHITAKER_INSTALLER_VERSION` from the job environment
-(`0.2.7` at present). The shared-actions revision is kept identical for these
-installer calls and the other `setup-rust` calls by a CI contract test.
+(`0.2.7`, the workflow's configured installer version).
 
 cargo-nextest is no longer installed here at all. The coverage job is the only
 place it runs, and the shared action installs it from checksummed official
@@ -3502,19 +3501,18 @@ the test fails until a human edits the pinned constant to match. That defeats
 the purpose of automated dependency updates and turns a routine bump into a
 manual chore.
 
-Contract tests may still verify the *shape* of a reusable-workflow caller. They
-must not verify a particular SHA value: Dependabot owns revision updates. A
-repository may still require every call into one shared-action repository to
-use the same revision. Cuprum's CI has that consistency policy for
-`leynos/shared-actions`: its contract test collects every call, checks the
-expected action or workflow path, and verifies that all calls use one common
-revision. This prevents an installer or toolchain action from silently drifting
-from the others without turning a routine Dependabot update into a manual test
-edit.
+Contract tests may still verify the *shape* of a reusable-workflow caller. Each
+call into `leynos/shared-actions` must use an immutable, lowercase 40-character
+commit SHA. Tests must not prescribe a particular SHA value: Dependabot owns
+revision updates. Calls do not have to share one revision; a workflow may pin
+an action to the commit that provides the behaviour and compatibility that
+workflow needs. For example, the coverage workflow can retain a newer
+`generate-coverage` pin for baseline compatibility while its other shared
+actions use a different validated commit.
 
 - Do assert the workflow references the correct reusable workflow path.
-- Do assert that all calls into a shared-action repository use one common
-  revision, while allowing Dependabot to choose the revision value.
+- Do assert that every shared-action call uses a full, lowercase 40-character
+  commit SHA, while allowing Dependabot to choose the SHA value.
 - Do assert the expected `on:` triggers, least-privilege `permissions:`, and
   the inputs the caller relies on.
 - Do not hard-code a current SHA value as an expected string.
@@ -3523,17 +3521,18 @@ edit.
 ```python
 import re
 
-SHARED_ACTIONS_RE = re.compile(r"^leynos/shared-actions/[^\s@]+@(?P<revision>[^\s#]+)$")
+SHARED_ACTIONS_RE = re.compile(
+    r"^leynos/shared-actions/[^\s@]+@(?P<revision>[0-9a-f]{40})$"
+)
 
 
-def test_shared_actions_use_one_revision(caller_steps):
+def test_shared_actions_use_immutable_revisions(caller_steps):
     matches = [
         SHARED_ACTIONS_RE.fullmatch(step["uses"])
         for step in caller_steps
         if step["uses"].startswith("leynos/shared-actions/")
     ]
     assert matches and all(match is not None for match in matches)
-    assert len({match.group("revision") for match in matches}) == 1
 ```
 
 If a workflow's behaviour genuinely depends on a feature only present from a
