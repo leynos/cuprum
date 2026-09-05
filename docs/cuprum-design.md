@@ -2587,17 +2587,17 @@ Rust extension raises `OSError` for I/O failures, matching the behaviour of
 Python's built-in I/O operations.
 
 The Python pipeline keeps ownership of the writer descriptor held by the
-asyncio transport. `_run_rust_pump` passes `rust_pump_stream` a duplicate. Python
-closes that duplicate if blocking-mode setup or executor submission fails. Once
-submission succeeds, the `_streams_rs` shim owns the hand-off: it closes the
-duplicate if native loading or platform preparation fails, otherwise the native
-call transfers it to Rust, which closes the received resource. On Windows the
-shim converts the duplicate to an independently owned Win32 handle and closes
-the duplicate CRT descriptor before invoking Rust. The completion callback
-never closes the writer resource. Restoration of the original descriptor modes
-and reader transport resumption remain tied to worker settlement, so
-cancellation of the awaiting task cannot close or reuse a descriptor while
-native I/O is still running.
+asyncio transport. `_run_rust_pump` passes `rust_pump_stream` a duplicate.
+Python closes that duplicate if blocking-mode setup or executor submission
+fails. Once submission succeeds, the `_streams_rs` shim owns the hand-off: it
+closes the duplicate if native loading or platform preparation fails, otherwise
+the native call transfers it to Rust, which closes the received resource. On
+Windows the shim converts the duplicate to an independently owned Win32 handle
+and closes the duplicate CRT descriptor before invoking Rust. The completion
+callback never closes the writer resource. Restoration of the original
+descriptor modes and reader transport resumption remain tied to worker
+settlement, so cancellation of the awaiting task cannot close or reuse a
+descriptor while native I/O is still running.
 
 #### Raw descriptor lifecycle
 

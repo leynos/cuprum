@@ -739,8 +739,8 @@ Table 1: pipeline stream modules and their responsibilities
 
 Routing an inter-stage hop through the Rust pump means taking the raw pipe
 descriptors back from asyncio for the duration of the transfer.
-`cuprum/_pipeline_stream_fds.py` owns that hand-off, keeping its partial-failure
-paths in one place rather than inlined in the pump:
+`cuprum/_pipeline_stream_fds.py` owns that hand-off, keeping its
+partial-failure paths in one place rather than inlined in the pump:
 
 - `_extract_stream_fd` pulls the raw descriptor out of an asyncio transport,
   returning `None` when the transport does not expose one.
@@ -759,13 +759,14 @@ paths in one place rather than inlined in the pump:
 
 Cancellation is handled explicitly. `run_in_executor` cannot interrupt the
 worker thread running the Rust pump. The native worker borrows the reader
-descriptor and owns only the duplicated writer resource: `_streams_rs` transfers
-the duplicate after executor submission, and Rust closes it.
+descriptor and owns only the duplicated writer resource: `_streams_rs`
+transfers the duplicate after executor submission, and Rust closes it.
 `_run_rust_pump_with_blocking_fds` shields the executor future and re-raises
-`CancelledError` after cleanup; its completion callback only restores descriptor
-and transport state once the worker settles. Pipeline teardown remains coupled
-to that cleanup, so restoring blocking mode or resuming the transport earlier
-cannot hand descriptors back to asyncio while native code is still mid-transfer.
+`CancelledError` after cleanup; its completion callback only restores
+descriptor and transport state once the worker settles. Pipeline teardown
+remains coupled to that cleanup, so restoring blocking mode or resuming the
+transport earlier cannot hand descriptors back to asyncio while native code is
+still mid-transfer.
 
 During cancellation, `_await_native_pump_cleanup` emits structured `DEBUG`
 records at cleanup start and completion. Both records carry
@@ -2080,15 +2081,14 @@ There is deliberately no borrowed *writer* variant. The writer FD handed to
 so downstream readers observe EOF. Reconstruct the writer with
 `stream_from_raw` (which yields an owning handle) and let it drop; reserve
 `with_borrowed_reader` for descriptors whose ownership stays with the caller.
-Python callers must therefore fully relinquish the writer descriptor supplied
-to `pump_stream`/`rust_pump_stream`. The pipeline caller does this by passing
-an `os.dup` of the asyncio transport descriptor: asyncio keeps and closes the
+Python callers must therefore fully relinquish the writer descriptor supplied to
+`pump_stream`/`rust_pump_stream`. The pipeline caller does this by passing an
+`os.dup` of the asyncio transport descriptor: asyncio keeps and closes the
 original, while Rust closes the received duplicate on drop to signal EOF. The
-two descriptor numbers must never be shared between those owners.
-The helper's safety contract obliges the caller to guarantee `fd` is a valid
-open descriptor (or Windows handle) for the duration of the call and that
-ownership remains with the caller; in return the helper guarantees it never
-closes `fd`.
+two descriptor numbers must never be shared between those owners. The helper's
+safety contract obliges the caller to guarantee `fd` is a valid open descriptor
+(or Windows handle) for the duration of the call and that ownership remains
+with the caller; in return the helper guarantees it never closes `fd`.
 
 The contract is checked at two levels, which are deliberately not
 interchangeable. `rust/cuprum-rust/src/lib_tests.rs` holds the
@@ -2122,27 +2122,25 @@ beyond the Kani model once that model is complete, lives in issue `#89`.
 `_run_rust_pump` keeps the asyncio transport's writer descriptor in Python's
 ownership. It gives `rust_pump_stream` a duplicate instead, because the native
 pump consumes and closes the descriptor it receives. Python retains ownership
-of the duplicate through blocking-mode setup and executor submission. If
-either step fails, Python closes it. Once submission succeeds, the
-`_streams_rs` shim owns the hand-off: it closes the duplicate if native
-loading or platform preparation fails, otherwise it transfers an independently
-owned resource to Rust, which closes that resource after the native call. On
-Windows, the shim transfers a duplicated Win32 handle and closes the duplicate
-CRT descriptor before invoking Rust. The native-future completion callback
-must not close the writer resource. asyncio keeps and closes the original
-transport descriptor after the worker settles. No descriptor number may be
-closed by both owners. The reader transport remains paused, and the original
-descriptor modes are restored, until that same completion boundary. This
-prevents cancellation cleanup from racing with native I/O on a descriptor that
-is still in use.
+of the duplicate through blocking-mode setup and executor submission. If either
+step fails, Python closes it. Once submission succeeds, the `_streams_rs` shim
+owns the hand-off: it closes the duplicate if native loading or platform
+preparation fails, otherwise it transfers an independently owned resource to
+Rust, which closes that resource after the native call. On Windows, the shim
+transfers a duplicated Win32 handle and closes the duplicate CRT descriptor
+before invoking Rust. The native-future completion callback must not close the
+writer resource. asyncio keeps and closes the original transport descriptor
+after the worker settles. No descriptor number may be closed by both owners.
+The reader transport remains paused, and the original descriptor modes are
+restored, until that same completion boundary. This prevents cancellation
+cleanup from racing with native I/O on a descriptor that is still in use.
 
 Failures while creating the duplicate or submitting the executor work are
 re-raised after rollback and recorded at `DEBUG` on the
 `cuprum._pipeline_streams` logger. These records use
 `cuprum_action="rust_pump_handoff_failed"`, a fixed hand-off phase, the
 exception class, and `errno` when available; they contain no descriptor number
-or exception text. They are diagnostics, not pump-observation events or
-metrics.
+or exception text. They are diagnostics, not pump-observation events or metrics.
 
 ## Rust splice-loop and drain contract
 
@@ -3085,7 +3083,8 @@ uv run pytest cuprum/unittests/test_maturin_build.py \
 `cuprum/unittests/test_rust_pump_debug_abort.py` checks the Rust pump's writer
 ownership on broken-pipe and timeout paths. It requires both the Rust toolchain
 and a maturin script that the current interpreter can locate, using
-`toolchain_available()` and `maturin_script_locatable()` for those prerequisites.
+`toolchain_available()` and `maturin_script_locatable()` for those
+prerequisites.
 
 The test uses `build_debug_native_wheel_artefact()` without `--release`, so the
 debug build retains Rust's I/O-safety assertions. It extracts that fresh wheel

@@ -1677,10 +1677,9 @@ has settled all run while the hop is unwinding, so an error there is suppressed
 rather than raised. The asyncio transport owns the original writer descriptor.
 Rust owns and closes only the separate resource derived from the duplicate
 after the native call begins; the native shim closes the duplicate itself if
-native loading or platform preparation fails. Python closes that duplicate
-only when setup or executor submission fails. No descriptor number is closed by
-both owners. Each
-suppression records a `DEBUG` event with a `cuprum_action` of
+native loading or platform preparation fails. Python closes that duplicate only
+when setup or executor submission fails. No descriptor number is closed by both
+owners. Each suppression records a `DEBUG` event with a `cuprum_action` of
 `rust_pump_teardown_failed`, a `cuprum_site` naming the step — `resume`,
 `restore_blocking`, or `writer_close` — and the exception class and errno. The
 record carries nothing drawn from the transfer itself.
@@ -1823,11 +1822,10 @@ unchanged — the counters supplement them rather than replacing them.
 > absorb the cancellation the caller asked for. Hooks must be synchronous; one
 > that returns an awaitable is reported and discarded.
 
-
 ### A pump hand-off failed before submission
 
-If Cuprum cannot duplicate the writer descriptor or submit the Rust worker,
-the hand-off is rolled back and the original exception is re-raised. The
+If Cuprum cannot duplicate the writer descriptor or submit the Rust worker, the
+hand-off is rolled back and the original exception is re-raised. The
 `cuprum._pipeline_streams` logger records a bounded `DEBUG` diagnostic with
 `cuprum_action="rust_pump_handoff_failed"`, a fixed hand-off phase, the
 exception class, and `errno` when available. Descriptor numbers and exception

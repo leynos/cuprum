@@ -412,13 +412,14 @@ and passes `rust_pump_stream` a duplicate, because the native pump consumes and
 closes the descriptor it receives. Python closes that duplicate only if
 blocking-mode setup or executor submission fails. Once submission succeeds, the
 `_streams_rs` shim owns the hand-off: it closes the duplicate on native-load or
-platform-preparation failure, or transfers it to Rust, which closes the received
-resource. On Windows the shim converts the duplicate to an independently owned
-Win32 handle and closes the duplicate CRT descriptor before invoking Rust. The
-completion callback never closes the writer resource. Descriptor-mode
-restoration and reader transport resumption still occur at worker settlement,
-which prevents cancellation cleanup from racing with native I/O while leaving
-the original asyncio transport descriptor under Python ownership.
+platform-preparation failure, or transfers it to Rust, which closes the
+received resource. On Windows the shim converts the duplicate to an
+independently owned Win32 handle and closes the duplicate CRT descriptor before
+invoking Rust. The completion callback never closes the writer resource.
+Descriptor-mode restoration and reader transport resumption still occur at
+worker settlement, which prevents cancellation cleanup from racing with native
+I/O while leaving the original asyncio transport descriptor under Python
+ownership.
 
 The regression coverage in
 `cuprum/unittests/test_pump_stream_dispatch_rust_failures.py` exercises native

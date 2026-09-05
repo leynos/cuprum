@@ -6,8 +6,8 @@
 `cuprum/unittests/test_pipeline_timeouts.py::test_zero_timeout_reconciles_pipe_tasks`
 after `make develop` installed the debug Rust extension. The focused Rust
 pipeline, descriptor-lifecycle, and debug-wheel regressions pass. Determine
-whether this is a production descriptor-lifetime regression or an existing
-test assumption that only holds for the asyncio-based Python pump.
+whether this is a production descriptor-lifetime regression or an existing test
+assumption that only holds for the asyncio-based Python pump.
 
 ## Context summary
 
@@ -33,8 +33,8 @@ test code.
 
 ### H1: the test depends on Python-pump cancellation semantics
 
-**Prediction:** The focused test passes with `CUPRUM_STREAM_BACKEND=python`
-and times out with `CUPRUM_STREAM_BACKEND=rust`. This indicates its stubbed
+**Prediction:** The focused test passes with `CUPRUM_STREAM_BACKEND=python` and
+times out with `CUPRUM_STREAM_BACKEND=rust`. This indicates its stubbed
 termination deliberately leaves the blocking Rust worker unable to settle, not
 that the descriptor handoff races.
 
@@ -72,11 +72,11 @@ descriptor lifecycle.
    proposing a fix.
 3. H2 is falsified at the available sample size: five further fresh,
    forced-Rust processes pass in 0.03–0.08 s. The full-suite occurrence is not
-   presently reproducible as a backend, zero-deadline, or simple
-   fresh-process scheduling defect.
+   presently reproducible as a backend, zero-deadline, or simple fresh-process
+   scheduling defect.
 4. H3 is not supported by the completed focused Rust pipeline and debug-wheel
-   timeout regressions, both of which exercise normal stage termination.
-   Re-run the failed deterministic gate before considering a production change.
+   timeout regressions, both of which exercise normal stage termination. Re-run
+   the failed deterministic gate before considering a production change.
 
 ## Termination conditions
 
@@ -91,17 +91,16 @@ ownership contract.
 
 ## Experiment record
 
-On 2026-08-30, isolated executions of
-`test_zero_timeout_reconciles_pipe_tasks` passed with both
-`CUPRUM_STREAM_BACKEND=python` and `CUPRUM_STREAM_BACKEND=rust`. H1 is
-therefore falsified: merely selecting the Rust pump does not reproduce the
-full-suite timeout.
+On 2026-08-30, isolated executions of `test_zero_timeout_reconciles_pipe_tasks`
+passed with both `CUPRUM_STREAM_BACKEND=python` and
+`CUPRUM_STREAM_BACKEND=rust`. H1 is therefore falsified: merely selecting the
+Rust pump does not reproduce the full-suite timeout.
 
 Review of the failure stack shows that pytest timed out during `asyncio.run()`
 shutdown, after `pipeline.run()` had returned `TimeoutExpired`. That is
 consistent with a submitted native worker still blocking while the test has
-intentionally disabled its normal stage-termination escape hatch. H2 now
-tests whether zero-deadline scheduling makes that state intermittent.
+intentionally disabled its normal stage-termination escape hatch. H2 now tests
+whether zero-deadline scheduling makes that state intermittent.
 
 Five additional fresh forced-Rust processes passed in 0.03–0.08 seconds, so H2
 is falsified at this sample size. Existing forced-Rust pipeline and debug-wheel
