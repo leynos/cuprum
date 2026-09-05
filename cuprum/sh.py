@@ -59,6 +59,9 @@ type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 type _EnvMapping = cabc.Mapping[str, str] | None
 type _CwdType = str | Path | None
 
+if typ.TYPE_CHECKING:
+    from cuprum.lines import LineHook
+
 _DEFAULT_CANCEL_GRACE = 0.5
 # Names the aggregate raised when draining observe-hook tasks fails while a
 # single-command execution is already unwinding.
@@ -353,10 +356,18 @@ class RunOutputOptions:
         When ``True`` capture stdout/stderr; otherwise discard them.
     echo:
         When ``True`` tee stdout/stderr to the parent process.
+    on_line:
+        Optional synchronous callback invoked once per decoded output line
+        with a ``LineEvent`` carrying the stream name, the monotonic seconds
+        since the command started, and the line text. Independent of
+        ``capture`` and ``echo``; lines are delivered in arrival order per
+        stream. Lines are observed on the Python pathway, so the Rust
+        fast-path dispatcher stays out of the way whenever this is set.
     """
 
     capture: bool = True
     echo: bool = False
+    on_line: LineHook | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
