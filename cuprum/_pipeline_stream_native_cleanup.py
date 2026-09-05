@@ -213,11 +213,10 @@ async def _await_native_pump_cleanup(
             _log_native_pump_cleanup_completed(_LOGGER, monotonic_clock() - started_at)
 
 
-async def _run_rust_pump_with_blocking_fds(
-    *,
+def _start_rust_pump_with_cleanup(
     state: _RustPumpState,
-) -> None:
-    """Run the native pump while its executor future owns cleanup."""
+) -> tuple[asyncio.Future[int], asyncio.Future[None]]:
+    """Start the native pump and register its completion-owned cleanup."""
     from cuprum._streams_rs import rust_pump_stream
 
     # The worker borrows its reader and consumes its writer. Both are separate
@@ -253,6 +252,15 @@ async def _run_rust_pump_with_blocking_fds(
             state=state,
         )
     )
+    return native_pump, cleanup_complete
+
+
+async def _run_rust_pump_with_blocking_fds(
+    *,
+    state: _RustPumpState,
+) -> None:
+    """Run the native pump while its executor future owns cleanup."""
+    native_pump, cleanup_complete = _start_rust_pump_with_cleanup(state)
     try:
         await asyncio.shield(native_pump)
     except asyncio.CancelledError:

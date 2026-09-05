@@ -25,7 +25,7 @@
 - **Native Rust-pump cleanup telemetry:** Add `cleanup_started` and
   `cleanup_completed` `PumpEvent` phases, with completion-only
   `PumpEvent.duration_s`, the unlabelled `cuprum_rust_pump_cleanup_total`
-  counter and `cuprum_rust_pump_cleanup_duration_seconds` histogram, and
+  counter and `cuprum_rust_pump_cleanup_duration_seconds` histogram, and the
   cleanup `DEBUG` records. The native worker retains descriptor ownership until
   cleanup completes, so these events and records describe the
   cancellation-cleanup contract.
@@ -109,7 +109,6 @@
   values through the overlay or `ExecutionContext.env` instead
   ([#175](https://github.com/leynos/cuprum/pull/175), [d2e2b92](https://github.com/leynos/cuprum/commit/d2e2b921bde69b8162ba0ca37ed68d36c5d6c8a6)).
 
-[0.2.0]: https://github.com/leynos/cuprum/commit/d2e2b921bde69b8162ba0ca37ed68d36c5d6c8a6
 ### Fixed
 
 - **Partial capture on timeout:** A capturing `run()` or `run_sync()` that times
@@ -148,5 +147,3 @@
   that depended on an import-time or scope-entry snapshot must pass explicit
   values through the overlay or `ExecutionContext.env` instead
   ([#175](https://github.com/leynos/cuprum/pull/175), [d2e2b92](https://github.com/leynos/cuprum/commit/d2e2b921bde69b8162ba0ca37ed68d36c5d6c8a6)).
-
-[0.2.0]: https://github.com/leynos/cuprum/commit/d2e2b921bde69b8162ba0ca37ed68d36c5d6c8a6

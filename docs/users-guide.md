@@ -1699,8 +1699,8 @@ The channel counts declines, post-cancellation failures, and native-pump
 cleanup. A successful hand-off emits no event, deliberately: there is no
 per-hop counter and no total-hop counter to divide by. So the decline counter
 gives the *number* of hops that left the fast path, not the *fraction* that
-stayed on it. To report that fraction, pair the decline counter with a hop total
-measured independently — for example, a separately maintained counter
+stayed on it. To report that fraction, pair the decline counter with a hop
+total measured independently — for example, a separately maintained counter
 incremented once per submitted inter-stage hop.
 
 Set `ExecutionContext(native_pump_cleanup_grace=seconds)` to bound how long a

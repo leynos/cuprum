@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from cuprum.adapters.tracing_adapter import TracingHook
-from cuprum.events import ExecEvent, new_exec_id
+from cuprum.events import ExecEvent, ExecId, new_exec_id
 from cuprum.program import Program
 from cuprum.pump_events import PumpEvent
 from cuprum.unittests._adapter_test_support import (
@@ -29,6 +29,26 @@ DOCUMENTED_SPAN_ATTRIBUTES: frozenset[str] = frozenset({
     "cuprum.pipeline_stage_index",
     "cuprum.pipeline_stages",
 })
+
+
+def _record_cleanup_events(hook: TracingHook, source_exec_id: ExecId) -> None:
+    """Record every cleanup phase on the source stage span."""
+    hook.record_pump_event(PumpEvent(phase="cleanup_started", exec_id=source_exec_id))
+    hook.record_pump_event(
+        PumpEvent(
+            phase="cleanup_completed",
+            duration_s=2.5,
+            exec_id=source_exec_id,
+        )
+    )
+    hook.record_pump_event(
+        PumpEvent(
+            phase="cleanup_grace_expired",
+            elapsed_s=0.5,
+            exec_id=source_exec_id,
+        )
+    )
+    hook.record_pump_event(PumpEvent(phase="cleanup_deferred", exec_id=source_exec_id))
 
 
 class TestNativePumpCleanupTracing:
@@ -62,26 +82,7 @@ class TestNativePumpCleanupTracing:
         )
         downstream_span = tracer.spans[1]
 
-        hook.record_pump_event(
-            PumpEvent(phase="cleanup_started", exec_id=source_exec_id)
-        )
-        hook.record_pump_event(
-            PumpEvent(
-                phase="cleanup_completed",
-                duration_s=2.5,
-                exec_id=source_exec_id,
-            )
-        )
-        hook.record_pump_event(
-            PumpEvent(
-                phase="cleanup_grace_expired",
-                elapsed_s=0.5,
-                exec_id=source_exec_id,
-            )
-        )
-        hook.record_pump_event(
-            PumpEvent(phase="cleanup_deferred", exec_id=source_exec_id)
-        )
+        _record_cleanup_events(hook, source_exec_id)
 
         assert source_span.events == [
             (
