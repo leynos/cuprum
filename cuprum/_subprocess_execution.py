@@ -34,6 +34,7 @@ from cuprum._subprocess_wait import (
     _RunTaskOwnership,
     _wait_for_exit_code_within_timeout,
 )
+from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -104,6 +105,7 @@ def _spawn_stream_consumers(
             if execution.ctx.stderr_sink is not None
             else sys.stderr
         ),
+        stream=EchoStream.STDERR,
     )
     return (
         asyncio.create_task(

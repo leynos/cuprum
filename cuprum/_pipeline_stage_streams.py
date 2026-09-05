@@ -18,6 +18,7 @@ import dataclasses as dc
 import typing as typ
 
 from cuprum._streams import _consume_stream
+from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -79,7 +80,11 @@ def _create_stage_capture_tasks(
     stderr_task = asyncio.create_task(
         _consume_stream(
             process.stderr,
-            dc.replace(config.stream_config, sink=config.stderr_sink),
+            dc.replace(
+                config.stream_config,
+                sink=config.stderr_sink,
+                stream=EchoStream.STDERR,
+            ),
             on_line=stderr_on_line,
         ),
     )
