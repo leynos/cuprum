@@ -111,6 +111,11 @@
 
 ### Changed
 
+- **Maturin 1.15.0:** The development, wheel-workflow, and composite-action
+  maturin pins now agree on 1.15.0, and the PyO3 0.29 line is confirmed
+  compatible with the new backend
+  ([#332](https://github.com/leynos/cuprum/pull/332)).
+
 - **Source spelling enforcement:** Check tracked Python and Rust source as well
   as Markdown for en-GB-oxendict spelling, including code identifiers, so
   contributor changes can now fail the spelling gate on source-code drift

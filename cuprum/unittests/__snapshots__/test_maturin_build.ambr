@@ -263,7 +263,7 @@
       'cuprum/unittests/test_verify_wheel_install.py',
       'cuprum/unittests/test_workflow_lint.py',
     ]),
-    'generator': '1.13.3',
+    'generator': '1.15.0',
     'metadata': dict({
       'classifiers': list([
       ]),
