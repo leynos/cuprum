@@ -42,9 +42,7 @@ def _assert_extension_job_builds_before_gated_tests(
     job_name : str
         CI job identifier whose build and test step ordering is asserted.
     """
-    build, _ = first_step_running(
-        workflow_data, "make develop", job_name=job_name
-    )
+    build, _ = first_step_running(workflow_data, "make develop", job_name=job_name)
     tests, _ = first_step_running(
         workflow_data, "make test-extension", job_name=job_name
     )
@@ -60,9 +58,7 @@ def test_the_ci_job_builds_the_extension_before_running_the_gated_tests(
     workflow_data: Workflow,
 ) -> None:
     """The Linux extension-test job builds before it runs gated tests."""
-    _assert_extension_job_builds_before_gated_tests(
-        workflow_data, "extension-tests"
-    )
+    _assert_extension_job_builds_before_gated_tests(workflow_data, "extension-tests")
 
 
 def test_windows_ci_job_builds_the_extension_before_running_gated_tests(

@@ -305,6 +305,7 @@ def test_a_caller_variable_cannot_reach_the_nested_make(
         "the Makefile"
     )
 
+
 def test_local_tool_environment_preserves_the_windows_action_path() -> None:
     """Windows must retain the PATH that setup-uv has already configured."""
     makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
@@ -332,6 +333,8 @@ def test_local_tool_environment_preserves_the_windows_action_path() -> None:
     )
     assert "LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)" in posix
     assert 'LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"' in posix
+
+
 def test_the_develop_target_installs_pip_before_building() -> None:
     """`develop` must run `ensurepip` before `maturin develop`.
 

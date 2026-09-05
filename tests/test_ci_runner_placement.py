@@ -22,6 +22,8 @@ from tests.helpers.ci_runners import (
     UBICLOUD_JOBS,
     UBICLOUD_LABEL,
     UBICLOUD_VCPUS,
+    WINDOWS_HOSTED_JOBS,
+    WINDOWS_LABEL,
     expand,
     job,
     step_inputs,
@@ -54,6 +56,7 @@ PARALLELISM_OVERRIDES = ("PYTEST_CARGO_BUILD_JOBS",)
 
 UBICLOUD_CASES = expand(UBICLOUD_JOBS)
 GITHUB_HOSTED_CASES = expand(GITHUB_HOSTED_JOBS)
+WINDOWS_HOSTED_CASES = expand(WINDOWS_HOSTED_JOBS)
 
 
 @pytest.mark.parametrize(("workflow_name", "job_name"), UBICLOUD_CASES)
@@ -88,6 +91,17 @@ def test_administrative_and_serial_jobs_stay_github_hosted(
     )
 
 
+@pytest.mark.parametrize(("workflow_name", "job_name"), WINDOWS_HOSTED_CASES)
+def test_windows_native_jobs_stay_on_github_hosted_windows(
+    workflow_name: str, job_name: str
+) -> None:
+    """Keep native Windows validation on the reviewed hosted runner image."""
+    runner = job(workflow_name, job_name).get("runs-on")
+    assert runner == WINDOWS_LABEL, (
+        f"{workflow_name}:{job_name} must stay on {WINDOWS_LABEL}, got {runner!r}"
+    )
+
+
 def test_native_wheel_matrix_keeps_its_platform_runners() -> None:
     """Ubicloud has no Windows or macOS capacity, so the matrix stays hosted."""
     matrix_job = job("build-wheels.yml", "build-native-wheels")
@@ -116,6 +130,7 @@ def test_every_workflow_job_appears_in_one_placement_manifest() -> None:
     known = (
         set(UBICLOUD_CASES)
         | set(GITHUB_HOSTED_CASES)
+        | set(WINDOWS_HOSTED_CASES)
         | {
             ("build-wheels.yml", "build-native-wheels"),
             # Callers of a reusable workflow declare no runner of their own.

@@ -21,21 +21,22 @@ Everything else runs on GitHub-hosted runners. Ubicloud offers Linux only, and
 a job that sleeps, calls an API, or publishes an artefact somebody else built
 gains nothing from a metered build slot.
 
-| Job                    | Workflow                 | Runner                |
-| ---------------------- | ------------------------ | --------------------- |
-| `typecheck-test`       | `ci.yml`                 | `ubicloud-standard-2` |
-| `extension-tests`      | `ci.yml`                 | `ubicloud-standard-2` |
-| `coverage`             | `ci.yml`                 | `ubicloud-standard-2` |
-| `benchmark-ratchet`    | `ci.yml`                 | `ubicloud-standard-2` |
-| `build-pure-wheel`     | `build-wheels.yml`       | `ubicloud-standard-2` |
-| `verify-wheel-install` | `build-wheels.yml`       | `ubicloud-standard-2` |
-| `coverage-upload`      | `coverage-main.yml`      | `ubicloud-standard-2` |
-| `lint-test`            | `ci.yml`                 | `ubuntu-latest`       |
-| `changes`              | `ci.yml`                 | `ubuntu-latest`       |
-| `refresh-sha`          | `get-codescene-sha.yml`  | `ubuntu-latest`       |
-| `publish`              | `release.yml`            | `ubuntu-latest`       |
-| `delay_and_comment`    | `delayed-pr-comment.yml` | `ubuntu-latest`       |
-| `build-native-wheels`  | `build-wheels.yml`       | `${{ matrix.os }}`    |
+| Job                       | Workflow                 | Runner                |
+| ------------------------- | ------------------------ | --------------------- |
+| `typecheck-test`          | `ci.yml`                 | `ubicloud-standard-2` |
+| `extension-tests`         | `ci.yml`                 | `ubicloud-standard-2` |
+| `coverage`                | `ci.yml`                 | `ubicloud-standard-2` |
+| `benchmark-ratchet`       | `ci.yml`                 | `ubicloud-standard-2` |
+| `build-pure-wheel`        | `build-wheels.yml`       | `ubicloud-standard-2` |
+| `verify-wheel-install`    | `build-wheels.yml`       | `ubicloud-standard-2` |
+| `coverage-upload`         | `coverage-main.yml`      | `ubicloud-standard-2` |
+| `lint-test`               | `ci.yml`                 | `ubuntu-latest`       |
+| `changes`                 | `ci.yml`                 | `ubuntu-latest`       |
+| `extension-tests-windows` | `ci.yml`                 | `windows-2022`        |
+| `refresh-sha`             | `get-codescene-sha.yml`  | `ubuntu-latest`       |
+| `publish`                 | `release.yml`            | `ubuntu-latest`       |
+| `delay_and_comment`       | `delayed-pr-comment.yml` | `ubuntu-latest`       |
+| `build-native-wheels`     | `build-wheels.yml`       | `${{ matrix.os }}`    |
 
 `ubicloud-standard-2` (2 vCPU, 8 GB, Ubuntu 24.04 amd64) is the default shape
 and the only self-hosted label registered in `.github/actionlint.yaml`.
@@ -239,6 +240,7 @@ extra.
 | `typecheck-test` 3.12, 3.14, 3.15a | each   | none                           | `make test-python`     | absent    |
 | `typecheck-test` 3.13              | 3.13   | none                           | none, coverage runs it | absent    |
 | `extension-tests`                  | 3.13   | none                           | 12 gated modules       | **built** |
+| `extension-tests-windows`          | 3.13   | none                           | 12 gated modules       | **built** |
 
 The coverage jobs run
 `cargo llvm-cov nextest --workspace --all-targets --all-features` under
@@ -271,7 +273,9 @@ Two jobs survive that look like duplicates and are not:
 - **`extension-tests`** runs the same interpreter as the coverage job, but with
   the compiled extension present. Coverage runs without it and the gated
   modules skip there; run 33752095108 logged its `rust-backend` cases as
-  `SKIPPED`. The two runs execute different code.
+  `SKIPPED`. The two runs execute different code. Its Windows counterpart,
+  `extension-tests-windows`, runs the same gated modules against the native
+  Windows boundary rather than duplicating the Linux run.
 - **`typecheck-test` on 3.13** keeps the typechecker and its required check
   name while running neither suite. Dropping its pytest run is only safe
   because the typechecker stands alone: `make typecheck` depends on `build`,
@@ -2589,15 +2593,17 @@ make develop
 That runs `maturin develop` against `rust/cuprum-rust/Cargo.toml` in the
 project virtual environment, preceded by `ensurepip` because maturin resolves
 its own script through the interpreter's `sysconfig` scheme, which needs pip
-present in the environment. CI's `extension-tests` job runs the same target, so
-a local run and a CI run build the extension identically. The Makefile keeps
-only a pointer to this section rather than repeating the reasoning.
+present in the environment. CI's `extension-tests` and
+`extension-tests-windows` jobs run the same target, so local and CI runs build
+the extension identically. The Makefile keeps only a pointer to this section
+rather than repeating the reasoning.
 
 Every CI job that installs the extension and then runs against it goes through
-this target — `extension-tests` and `benchmark-ratchet`, and no others. The
-wheel build is not one of them: `.github/workflows/build-wheels.yml` runs
-`maturin build` to produce a distributable artefact rather than installing it
-into a virtual environment, so it neither uses nor needs this target.
+this target — `extension-tests`, `extension-tests-windows`, and
+`benchmark-ratchet`, and no others. The wheel build is not one of them:
+`.github/workflows/build-wheels.yml` runs `maturin build` to produce a
+distributable artefact rather than installing it into a virtual environment, so
+it neither uses nor needs this target.
 
 The `benchmark-ratchet` job needs an optimized, in-place build of the mixed
 Python/Rust project. It passes
@@ -2643,8 +2649,8 @@ invoked it rather than on the repository — passing or failing according to the
 command line rather than the wiring. Stripping `MAKEFLAGS` alone does not
 prevent that, because the override travels under its own name as well.
 
-`test_extension_ci_contract.py` covers `ci.yml`: that the `extension-tests` job
-runs `make develop` before `make test-extension`, that `benchmark-ratchet`
+`test_extension_ci_contract.py` covers `ci.yml`: that both extension-test jobs
+run `make develop` before `make test-extension`, that `benchmark-ratchet`
 builds through the same target with `--release`, and that no job reintroduces a
 second copy of the build sequence.
 
