@@ -41,6 +41,7 @@ if typ.TYPE_CHECKING:
 
     from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum._pipeline_wait import _PipelineWaitResult
+    from cuprum.echo_events import RelayFallback
     from cuprum.sh import SafeCmd
 
 
@@ -115,6 +116,12 @@ def _stage_relay_fallbacks(
     matching the single-command result order) and then its stderr records.
     Unsettled collectors — a drain cancelled during teardown — contribute an
     empty tuple, keeping those diagnostics on the echo observation channel.
+
+    Returns
+    -------
+    tuple[tuple[RelayFallback, ...], ...]
+        One tuple per stage, in stage order, each listing that stage's stdout
+        records first (final stage only) and then its stderr records.
     """
     stage_tuples: list[tuple[RelayFallback, ...]] = []
     for stderr_diagnostics, stdout_diagnostics in spawn.relay_diagnostics_by_stage:

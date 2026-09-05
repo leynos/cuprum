@@ -59,17 +59,20 @@ def _create_stage_capture_tasks(
     *,
     is_last_stage: bool,
     observation: _StageObservation,
-) -> tuple[asyncio.Task[str | None] | None, asyncio.Task[str | None] | None]:
+) -> tuple[
+    asyncio.Task[str | None] | None,
+    asyncio.Task[str | None] | None,
+    tuple[_RelayDiagnostics | None, _RelayDiagnostics | None],
+]:
     """Create stderr and stdout capture tasks for a pipeline stage.
 
     Returns
     -------
-    tuple[asyncio.Task[str | None] | None, asyncio.Task[str | None] | None, tuple[_RelayDiagnostics | None, _RelayDiagnostics | None]]
-        The stderr and stdout capture tasks, together with the per-stream
-        relay diagnostics collectors (stderr first, stdout second, either
-        ``None`` when that stream has no capture task). The caller retains
-        them with the spawn state so the pipeline's result builders can read
-        each stage's diagnostics from its own streams.
+    Tuple of the stderr and stdout capture tasks and a ``(stderr, stdout)``
+    pair of relay diagnostics collectors, either element ``None`` when that
+    stream has no capture task. The caller retains the pair with the spawn
+    state so the pipeline's result builders can read each stage's
+    diagnostics from its own streams.
     """
     stderr_task: asyncio.Task[str | None] | None = None
     stdout_task: asyncio.Task[str | None] | None = None

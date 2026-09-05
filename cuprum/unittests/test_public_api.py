@@ -134,7 +134,7 @@ def test_command_result_keeps_relay_fallbacks_as_its_trailing_slot() -> None:
         f"binding stdout and stderr, got {fields}"
     )
     result = c.CommandResult(
-        c.ECHO,  # program
+        c.Program(c.ECHO),  # program
         (),  # argv
         0,  # exit_code
         4242,  # pid
