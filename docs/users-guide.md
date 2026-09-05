@@ -1705,7 +1705,7 @@ post-cancellation failures, and native-pump cleanup. A successful hand-off
 emits a `handoff` event and increments
 `cuprum_rust_pump_handoff_total{outcome="submitted"}` once. The same counter
 records each failed hand-off outcome once, so it can show both the number of
-hops that stayed on the fast path and the number that left it.
+hops that were submitted successfully and each terminal hand-off failure.
 
 Cancellation emits `PumpEvent.phase="cleanup_started"` when it starts waiting
 for native worker cleanup. It emits `PumpEvent.phase="cleanup_completed"` when

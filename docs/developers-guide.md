@@ -844,7 +844,7 @@ Table 1: metrics emitted by `PumpMetricsHook`
 | `cuprum_rust_pump_cleanup_duration_seconds`  | none      |
 | `cuprum_rust_pump_handoff_total`             | `outcome` |
 
-`RustPumpDeclineReason` bounds the decline label to its three declared values.
+`RustPumpDeclineReason` bounds the decline label to its four declared values.
 The `outcome` label is also closed: it is exactly `submitted`,
 `blocking_setup_failed`, `executor_submission_rejected`, `native_load_failed`,
 `buffer_validation_failed`, `platform_writer_transfer_failed`, or
