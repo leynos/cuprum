@@ -146,3 +146,39 @@ class TestPumpStreamDispatch:
         assert calls["python_pump"] == 0, (
             "Python pump should not run when forced Rust is unavailable"
         )
+
+    def test_dispatch_forwards_explicit_read_size_to_python_pump(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The pipeline dispatch seam forwards a benchmark read size unchanged."""
+        monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "python")
+        observed: list[int] = []
+
+        async def fake_pump(
+            reader: asyncio.StreamReader | None,
+            writer: asyncio.StreamWriter | None,
+            *,
+            read_size: int,
+        ) -> None:
+            """Record the dispatched size without touching stream endpoints."""
+            del reader, writer
+            observed.append(read_size)
+            await asyncio.sleep(0)
+
+        monkeypatch.setattr(_pipeline_streams, "_pump_stream", fake_pump)
+        reader = typ.cast("asyncio.StreamReader", object())
+        writer = typ.cast("asyncio.StreamWriter", object())
+
+        asyncio.run(
+            _pipeline_streams._pump_stream_dispatch(
+                reader,
+                writer,
+                read_size=17,
+            )
+        )
+
+        assert observed == [17], (
+            "the dispatch seam must retain the explicit benchmark read size, "
+            f"got {observed}"
+        )

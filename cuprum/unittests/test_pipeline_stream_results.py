@@ -126,8 +126,15 @@ def fixture_recorded_pumps(
     """Replace the pump with a recorder, returning the list of its arguments."""
     recorded: list[tuple[str, str]] = []
 
-    async def fake_dispatch(reader: object, writer: object) -> None:  # ruff: ignore[unused-async]
+    async def fake_dispatch(
+        reader: object,
+        writer: object,
+        *,
+        read_size: int | None = None,
+    ) -> None:
         """Record which pair of handles this hop was given."""
+        del read_size
+        await asyncio.sleep(0)
         recorded.append(
             (
                 typ.cast("_StubStream", reader).name,

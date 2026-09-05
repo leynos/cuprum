@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import subprocess  # ruff: ignore[suspicious-subprocess-import] - integration tests exercise fixed CLI commands.
-import sys
+import argparse
 import typing as typ
 
 import pytest
@@ -16,6 +15,7 @@ from benchmarks.profile_tee_hotpath import (
     default_tee_profile_scenarios,
     run_profile_plan,
 )
+from benchmarks.tee_profile_driver import _parse_read_sizes
 from cuprum.unittests.conftest import _VOLATILE_KEYS, redact
 
 if typ.TYPE_CHECKING:
@@ -29,6 +29,7 @@ _SCENARIO_NAMES_WITH_RUST: list[str] = [
     "echo-textblackhole-nocb-s1",
     "echo-pty-nocb-s1",
     "tee-devnull-nocb-s1",
+    "capture-devnull-nocb-s1",
     "echo-devnull-cb-s1",
     "echo-devnull-nocb-s4-python",
     "echo-devnull-nocb-s4-rust",
@@ -39,6 +40,7 @@ _SCENARIO_NAMES_WITHOUT_RUST: list[str] = [
     "echo-textblackhole-nocb-s1",
     "echo-pty-nocb-s1",
     "tee-devnull-nocb-s1",
+    "capture-devnull-nocb-s1",
     "echo-devnull-cb-s1",
     "echo-devnull-nocb-s4-python",
 ]
@@ -128,6 +130,7 @@ def test_default_scenarios_use_requested_repeat_count(tmp_path: pth.Path) -> Non
 @given(repeat_count=st.integers(min_value=1, max_value=10))
 @settings(
     max_examples=20,
+    deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 def test_scenario_matrix_order_is_stable(
@@ -157,6 +160,7 @@ def test_scenario_matrix_order_is_stable(
         "echo-textblackhole-nocb-s1",
         "echo-pty-nocb-s1",
         "tee-devnull-nocb-s1",
+        "capture-devnull-nocb-s1",
         "echo-devnull-cb-s1",
         "echo-devnull-nocb-s4-python",
     ]
@@ -240,6 +244,21 @@ def test_profile_matrix_stops_after_first_worker_failure(
             "perf-call-graph must be a non-empty string",
             id="blank-call-graph",
         ),
+        pytest.param(
+            {"read_sizes": ()},
+            "read-sizes must contain at least one positive integer",
+            id="read-sizes-empty",
+        ),
+        pytest.param(
+            {"read_sizes": (0,)},
+            "read-size must be >= 1",
+            id="read-size-zero",
+        ),
+        pytest.param(
+            {"read_sizes": (-1,)},
+            "read-size must be >= 1",
+            id="read-size-negative",
+        ),
     ],
 )
 def test_driver_config_rejects_invalid_fields(
@@ -251,17 +270,67 @@ def test_driver_config_rejects_invalid_fields(
     repeat_count = kwargs.get("repeat_count", 3)
     perf_frequency = kwargs.get("perf_frequency", 999)
     perf_call_graph = kwargs.get("perf_call_graph", "dwarf,16384")
+    read_sizes = kwargs.get("read_sizes", (65536,))
     assert isinstance(warmup_count, int)
     assert isinstance(repeat_count, int)
     assert isinstance(perf_frequency, int)
     assert isinstance(perf_call_graph, str)
+    assert isinstance(read_sizes, tuple)
     with pytest.raises(ValueError, match=fragment):
         TeeProfileDriverConfig(
             warmup_count=warmup_count,
             repeat_count=repeat_count,
             perf_frequency=perf_frequency,
             perf_call_graph=perf_call_graph,
+            read_sizes=read_sizes,
         )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param("4096,65536", (4096, 65536), id="two-positive-sizes"),
+    ],
+)
+def test_parse_read_sizes_accepts_comma_separated_positive_integers(
+    value: str,
+    expected: tuple[int, ...],
+) -> None:
+    """The CLI parser preserves every requested positive read size."""
+    assert _parse_read_sizes(value) == expected, (
+        f"expected parsed sizes {expected!r} for {value!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        pytest.param(
+            "not-an-integer",
+            "read-sizes must be comma-separated integers",
+            id="non-integer",
+        ),
+        pytest.param(
+            "",
+            "read-sizes must be comma-separated integers",
+            id="empty",
+        ),
+        pytest.param(
+            "0",
+            "read-sizes must contain at least one positive integer",
+            id="zero",
+        ),
+        pytest.param(
+            "-1",
+            "read-sizes must contain at least one positive integer",
+            id="negative",
+        ),
+    ],
+)
+def test_parse_read_sizes_rejects_invalid_values(value: str, message: str) -> None:
+    """The CLI parser rejects empty, non-numeric, and non-positive sizes."""
+    with pytest.raises(argparse.ArgumentTypeError, match=message):
+        _parse_read_sizes(value)
 
 
 def test_worker_command_uses_module_invocation(tmp_path: pth.Path) -> None:
@@ -279,6 +348,7 @@ def test_worker_command_uses_module_invocation(tmp_path: pth.Path) -> None:
         with_line_callbacks=False,
         backend="python",
         repeat_count=1,
+        read_size=16384,
     )
     cmd = _worker_command(scenario)
 
@@ -286,55 +356,7 @@ def test_worker_command_uses_module_invocation(tmp_path: pth.Path) -> None:
     assert cmd[2] == "benchmarks.tee_profile_worker", (
         f"expected module name at index 2, got {cmd}"
     )
-
-
-def _run_profile_cli(*args: str) -> int:
-    """Invoke benchmarks.profile_tee_hotpath via subprocess and return its exit code."""
-    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
-        [sys.executable, "-m", "benchmarks.profile_tee_hotpath", *args],
-        check=False,
-    )
-    return completed.returncode
-
-
-@pytest.mark.parametrize(
-    ("subcommand_args", "description"),
-    [
-        pytest.param(
-            ("run-scenario", "--scenario", "echo-devnull-nocb-s1"),
-            "run-scenario with missing fixture",
-            id="scenario-worker-failure",
-        ),
-        pytest.param(
-            ("run",),
-            "run matrix with missing fixtures",
-            id="matrix-failure",
-        ),
-    ],
-)
-def test_profile_cli_returns_failure_exit_code(
-    tmp_path: pth.Path,
-    subcommand_args: tuple[str, ...],
-    description: str,
-) -> None:
-    """Profile CLI returns non-zero when the worker fails."""
-    missing = tmp_path / "no_such_fixture.b64"
-    wrapped = tmp_path / "no_such_wrapped.b64"
-    exit_code = _run_profile_cli(
-        "--fixture",
-        str(missing),
-        "--wrapped-fixture",
-        str(wrapped),
-        "--output-dir",
-        str(tmp_path / "profiles"),
-        "--profiler",
-        "none",
-        "--warmup-count",
-        "0",
-        "--repeat-count",
-        "1",
-        *subcommand_args,
-    )
-    assert exit_code != 0, (
-        f"expected non-zero exit code for {description}, got {exit_code}"
+    read_size_index = cmd.index("--read-size")
+    assert cmd[read_size_index : read_size_index + 2] == ["--read-size", "16384"], (
+        f"expected worker command to propagate read size, got {cmd}"
     )

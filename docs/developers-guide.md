@@ -1004,10 +1004,10 @@ unsupported tracer, and confirms its contracts on every supported interpreter.
 ## Canonical stream-drain loop
 
 `cuprum._streams._drain(stream, config, *, on_chunk=None)` is the single
-read/echo/buffer loop behind both consume variants. It reads in `_READ_SIZE`
-chunks, extends the capture buffer when capturing, echoes each chunk to the
-configured sink when echoing, and hands the chunk to the optional `on_chunk`
-callback for variant-specific processing:
+read/echo/buffer loop behind both consume variants. It reads in the tuned
+`_READ_SIZE` of 65536 bytes, extends the capture buffer when capturing, echoes
+each chunk to the configured sink when echoing, and hands the chunk to the
+optional `on_chunk` callback for variant-specific processing:
 
 - `_consume_stream_without_lines` calls `_drain` with no callback.
 - `_consume_stream_with_lines` supplies an `on_chunk` callback that feeds the
@@ -1055,6 +1055,12 @@ payloads, keep final stdout and stderr captures independent, and echo all
 stdout and stderr text when both streams share one sink.
 `cuprum/unittests/test_stream_drain.py` keeps focused direct coverage for the
 canonical helper contract and the two `_consume_stream` variants.
+
+The 65536-byte value is a private, profile-selected Python tuning constant, not
+a public configuration option. It is independent of the Rust extension's
+`buffer_size`; changes to either value require their own benchmark evidence.
+The selection evidence and raw samples are recorded in
+[`tee-hotpath-read-size-sweep-2026-08-29.md`](tee-hotpath-read-size-sweep-2026-08-29.md).
 
 ### Concurrency model
 
@@ -1814,14 +1820,17 @@ result platform-dependent.
 `fixture_path` points to an existing file, `stages >= 1`, `repeat_count >= 1`,
 and that `mode`, `sink_kind`, and `backend` are members of the supported
 literal sets. It also carries `encoding` and `errors`, which default to `utf-8`
-and `replace`.
+and `replace`, plus the private `read_size` tuning value, which defaults to
+65536 bytes for the current Python baseline.
 
 `run_tee_profile_worker` builds a command or pipeline through `_build_command`,
 selects the stream backend through `_EnvBackendSelector`, runs the workload
 `repeat_count` times, accumulates `captured_output_length` and
-`stdout_line_count`, and returns a `TeeProfileWorkerResult`. The worker result
-is the machine-readable payload written by the worker CLI and by the scenario
-driver.
+`stdout_line_count`, and returns a `TeeProfileWorkerResult`. The result's
+`read_size` reports the active value read from the execution-local stream
+configuration, rather than merely echoing the requested argument. The worker
+result is the machine-readable payload written by the worker CLI and by the
+scenario driver.
 
 The worker mode maps directly to Cuprum's final consume flags:
 
@@ -1867,16 +1876,20 @@ totals for `TeeProfileWorkerResult`, not process-lifetime aggregates.
 `benchmarks/profile_tee_hotpath.py` remains the public driver and module entry
 point. It re-exports the stable API while the implementation is split across
 supporting modules: scenario composition in
-`benchmarks/tee_profile_scenarios.py`, profiler orchestration in
-`benchmarks/tee_profile_profilers.py`, and command-line interface and JSON
-output helpers in `benchmarks/tee_profile_driver.py`. `TeeProfileScenario`
-records a resolved scenario: name, fixture path, stage count, mode, sink kind,
-line-callback flag, backend, repeat count, encoding, and error handling.
-`TeeProfileDriverConfig` records fixture paths, output directory, profiler
-choice, warm-up count, measured repeat count, `perf` frequency, call-graph
-configuration, and an optional scenario name. It validates that run counts and
-`perf` frequency are in range, and that the `perf` call-graph setting is not
-blank.
+`benchmarks/tee_profile_scenarios.py`, configuration resolution and worker
+command construction in `benchmarks/tee_profile_configuration.py`, plan and
+sweep execution in `benchmarks/tee_profile_execution.py`, profiler
+orchestration in `benchmarks/tee_profile_profilers.py`, and command-line
+interface and JSON output helpers in `benchmarks/tee_profile_driver.py`.
+`TeeProfileScenario` records a resolved scenario: name, fixture path, stage
+count, mode, sink kind, line-callback flag, backend, repeat count, read size,
+encoding, and error handling. `TeeProfileDriverConfig` records fixture paths,
+output directory, profiler choice, warm-up count, measured repeat count, `perf`
+frequency, call-graph configuration, read sizes, sweep rounds, randomization
+order, and an optional scenario name. `read_sizes` must be a non-empty tuple of
+positive integers and `rounds` must be at least one; the configuration also
+validates the run counts, `perf` frequency, and non-blank `perf` call-graph
+setting.
 
 The default matrix is stable and ordered:
 
@@ -1898,6 +1911,11 @@ The driver exposes three CLI subcommands:
 - `run-scenario` runs one named scenario with warm-up executions followed by one
   measured run.
 - `run` executes the full matrix serially.
+
+The profiling sweep controls are `--read-sizes`, a comma-separated list of
+positive byte counts, and `--rounds`, the number of complete matrix passes.
+`--randomize-order` shuffles the configured read-size order within each round;
+the emitted plan and sweep artefact retain every requested size and round.
 
 Profiler modes are selected through `TeeProfileDriverConfig.profiler`. `none`
 runs the worker directly and writes a note that profiler artefacts were not
@@ -1943,6 +1961,7 @@ profiling scenario. Its fields are:
 | `with_line_callbacks` | `bool`         | Whether stdout-line observers are registered during the run.                    |
 | `backend`             | `BackendName`  | Stream backend: `"auto"`, `"python"`, or `"rust"`.                              |
 | `repeat_count`        | `int`          | Number of measured repetitions.                                                 |
+| `read_size`           | `int`          | Stream read size in bytes used by this scenario.                                |
 
 <!-- markdownlint-enable MD013 -->
 

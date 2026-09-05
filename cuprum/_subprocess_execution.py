@@ -17,6 +17,7 @@ import typing as typ
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
 from cuprum._streams import _consume_stream, _StreamConfig
+from cuprum._streams_pump import _current_read_size
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_timeout import (
@@ -113,6 +114,7 @@ def _spawn_stream_consumers(
                 process.stdout,
                 stream_config,
                 on_line=stdout_on_line,
+                read_size=stream_config.read_size,
             ),
         ),
         asyncio.create_task(
@@ -120,6 +122,7 @@ def _spawn_stream_consumers(
                 process.stderr,
                 stderr_config,
                 on_line=stderr_on_line,
+                read_size=stderr_config.read_size,
             ),
         ),
     )
@@ -141,6 +144,7 @@ def _build_stream_config(
         encoding=execution.ctx.encoding,
         errors=execution.ctx.errors,
         discard_on_cancel=discard_on_cancel,
+        read_size=_current_read_size(),
     )
 
 

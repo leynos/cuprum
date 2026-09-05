@@ -17,11 +17,11 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import dataclasses as dc
-import functools
 import logging
 import os
 import time
 import typing as typ
+from functools import partial
 
 from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
 from cuprum._backend import StreamBackend, get_stream_backend
@@ -37,6 +37,7 @@ from cuprum._pipeline_stream_fds import (
     _suppressed_teardown_failure,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
+from cuprum._streams_pump import _current_read_size
 from cuprum.pump_events import RustPumpDeclineReason, RustPumpHandoffOutcome
 from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
 
@@ -47,11 +48,7 @@ if typ.TYPE_CHECKING:
 
 
 _LOGGER = logging.getLogger(__name__)
-
-
-def _log_rust_pump_declined(reason: RustPumpDeclineReason) -> None:
-    """Record the reason an inter-stage hop falls back to Python pumping."""
-    _pump_obs._log_native_pump_declined(_LOGGER, reason)
+_log_rust_pump_declined = partial(_pump_obs._log_native_pump_declined, _LOGGER)
 
 
 @dc.dataclass(slots=True)
@@ -184,7 +181,7 @@ async def _run_rust_pump_with_blocking_fds(
     if native_pump is None:
         return False
     native_pump.add_done_callback(
-        functools.partial(
+        partial(
             _complete_rust_pump,
             cleanup_complete=cleanup_complete,
             state=state,
@@ -335,13 +332,15 @@ async def _drain_reader_buffer(
 async def _run_python_pump(
     reader: asyncio.StreamReader | None,
     writer: asyncio.StreamWriter | None,
+    *,
+    read_size: int,
 ) -> None:
     """Run the configured Python pump implementation."""
     python_pump = _PUMP_STREAM_DISPATCH_TEST_HOOKS.python_pump
     if python_pump is not None:
         await python_pump(reader, writer)
         return
-    await _pump_stream(reader, writer)
+    await _pump_stream(reader, writer, read_size=read_size)
 
 
 async def _try_rust_pump(
@@ -372,15 +371,20 @@ async def _try_rust_pump(
 async def _pump_stream_dispatch(
     reader: asyncio.StreamReader | None,
     writer: asyncio.StreamWriter | None,
+    *,
+    read_size: int | None = None,
 ) -> None:
     """Route inter-stage pump to the Rust or Python implementation."""
+    active_read_size = _current_read_size() if read_size is None else read_size
     if reader is None:
-        await _run_python_pump(reader, writer)
+        await _run_python_pump(reader, writer, read_size=active_read_size)
         return
+
     backend = get_stream_backend()
     if backend is StreamBackend.RUST and await _try_rust_pump(reader, writer):
         return
-    await _run_python_pump(reader, writer)
+
+    await _run_python_pump(reader, writer, read_size=active_read_size)
 
 
 def _create_pipe_tasks(
@@ -391,5 +395,5 @@ def _create_pipe_tasks(
     return _create_pipe_tasks_with_context(
         processes,
         observations,
-        _pump_stream_dispatch,
+        partial(_pump_stream_dispatch, read_size=_current_read_size()),
     )

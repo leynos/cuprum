@@ -119,9 +119,11 @@ def test_pipe_task_carries_its_source_stage_token(
     async def fake_dispatch(
         reader: asyncio.StreamReader | None,
         writer: asyncio.StreamWriter | None,
+        *,
+        read_size: int | None = None,
     ) -> None:
         """Emit cleanup facts from the task's inherited context."""
-        del reader, writer
+        del reader, writer, read_size
         await asyncio.sleep(0)
         _pipeline_stream_cleanup_observation._log_native_pump_cleanup_started(
             logging.getLogger(__name__)
