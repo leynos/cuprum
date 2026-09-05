@@ -1,9 +1,7 @@
 # Debugging Plan: pipeline timeout gate failure
 
-**Generated**: 2026-09-02
-**Issue ID**: post-V3/V4 deterministic-gate precondition
-**Severity**: medium
-**Falsification sub-agent**: alchemist
+**Generated**: 2026-09-02 **Issue ID**: post-V3/V4 deterministic-gate
+precondition **Severity**: medium **Falsification sub-agent**: alchemist
 **Planning agent boundary**: This document was prepared by the planning agent.
 Falsification must be executed by the named sub-agent, not by the planning
 agent.
@@ -19,12 +17,12 @@ review can be requested.
 
 ## Context Summary
 
-| Aspect | Details |
-| --- | --- |
-| First observed | 2026-09-02, pre-correction full `make test` run |
-| Reproduction rate | one failure in one full run; focused V3/V4 tests pass |
-| Affected components | `test_pipeline_timeouts`, pipeline teardown, subprocess waiters |
-| Recent changes | Rebase preserved the test cleanup from `03a81c09`; V3/V4 only alter tests/docs |
+| Aspect              | Details                                                                        |
+| ------------------- | ------------------------------------------------------------------------------ |
+| First observed      | 2026-09-02, pre-correction full `make test` run                                |
+| Reproduction rate   | one failure in one full run; focused V3/V4 tests pass                          |
+| Affected components | `test_pipeline_timeouts`, pipeline teardown, subprocess waiters                |
+| Recent changes      | Rebase preserved the test cleanup from `03a81c09`; V3/V4 only alter tests/docs |
 
 ### Error Artefacts
 
@@ -57,15 +55,15 @@ neighbourhood from the full batch.
 
 #### H1 Falsification Plan
 
-| Step | Action | Expected Negative Result |
-| --- | --- | --- |
-| 1 | Run the test alone twice using the project pytest command. | A failure alone disproves order dependence. |
-| 2 | Run the immediately preceding timeout tests plus this test. | A pass disproves a local predecessor interaction. |
+| Step | Action                                                      | Expected Negative Result                          |
+| ---- | ----------------------------------------------------------- | ------------------------------------------------- |
+| 1    | Run the test alone twice using the project pytest command.  | A failure alone disproves order dependence.       |
+| 2    | Run the immediately preceding timeout tests plus this test. | A pass disproves a local predecessor interaction. |
 
 **Tooling**: `uv run pytest -v` against explicit test node ids.
 
-**Confidence on falsification**: High for an isolated or local-order cause;
-the test suite is serial.
+**Confidence on falsification**: High for an isolated or local-order cause; the
+test suite is serial.
 
 ______________________________________________________________________
 
@@ -78,15 +76,16 @@ the event loop retains the 30-second subprocess waiters.
 **Plausibility**: Medium — the test intentionally alters the normal lifecycle
 and depends on its patched seam being reached.
 
-**Prediction**: a temporary assertion immediately before `_terminate_all_shielded`
-finds an empty `timed_out_processes` tuple on a failing path.
+**Prediction**: a temporary assertion immediately before
+`_terminate_all_shielded` finds an empty `timed_out_processes` tuple on a
+failing path.
 
 #### H2 Falsification Plan
 
-| Step | Action | Expected Negative Result |
-| --- | --- | --- |
-| 1 | Add a temporary assertion that the tuple has both pipeline processes. | It always contains two processes, disproving this claim. |
-| 2 | If empty, trace whether the mock was invoked before `TimeoutExpired`. | The mock invocation disproves an early-unwind explanation. |
+| Step | Action                                                                | Expected Negative Result                                   |
+| ---- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
+| 1    | Add a temporary assertion that the tuple has both pipeline processes. | It always contains two processes, disproving this claim.   |
+| 2    | If empty, trace whether the mock was invoked before `TimeoutExpired`. | The mock invocation disproves an early-unwind explanation. |
 
 **Tooling**: a minimal temporary test-only assertion; revert it immediately.
 
@@ -109,9 +108,9 @@ remain alive after `_terminate_all_shielded` completes.
 
 #### H3 Falsification Plan
 
-| Step | Action | Expected Negative Result |
-| --- | --- | --- |
-| 1 | Temporarily assert that both captured processes have exited after cleanup. | Both have exited, disproving the startup race. |
+| Step | Action                                                                     | Expected Negative Result                       |
+| ---- | -------------------------------------------------------------------------- | ---------------------------------------------- |
+| 1    | Temporarily assert that both captured processes have exited after cleanup. | Both have exited, disproving the startup race. |
 
 **Tooling**: a temporary test-only assertion; revert it immediately.
 
