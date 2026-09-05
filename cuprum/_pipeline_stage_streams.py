@@ -17,7 +17,7 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
-from cuprum._streams import _consume_stream
+from cuprum._streams import _consume_stream, _RelayDiagnostics
 from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
@@ -74,7 +74,11 @@ def _create_stage_capture_tasks(
     *,
     is_last_stage: bool,
     observation: _StageObservation,
-) -> tuple[asyncio.Task[str | None] | None, asyncio.Task[str | None] | None]:
+) -> tuple[
+    asyncio.Task[str | None] | None,
+    asyncio.Task[str | None] | None,
+    tuple[_RelayDiagnostics | None, _RelayDiagnostics | None],
+]:
     """Create stderr and stdout capture tasks for a pipeline stage."""
     stderr_task: asyncio.Task[str | None] | None = None
     stdout_task: asyncio.Task[str | None] | None = None
@@ -89,7 +93,9 @@ def _create_stage_capture_tasks(
                 _EventDetails(pid=process.pid, line=line),
             )
 
+    stderr_relay_diagnostics: _RelayDiagnostics | None = None
     if config.stderr_capture_or_echo:
+        stderr_relay_diagnostics = _RelayDiagnostics()
         stderr_task = asyncio.create_task(
             _consume_stream(
                 process.stderr,
@@ -99,11 +105,12 @@ def _create_stage_capture_tasks(
                 ),
                 on_line=stderr_on_line,
                 read_size=config.stderr_stream_config.read_size,
+                relay_diagnostics=stderr_relay_diagnostics,
             ),
         )
 
     if not is_last_stage:
-        return stderr_task, stdout_task
+        return stderr_task, stdout_task, (stderr_relay_diagnostics, None)
 
     stdout_on_line: cabc.Callable[[str], None] | None = None
     if observation.hooks.observe_hooks:
@@ -115,14 +122,21 @@ def _create_stage_capture_tasks(
                 _EventDetails(pid=process.pid, line=line),
             )
 
+    stdout_relay_diagnostics: _RelayDiagnostics | None = None
     if config.stdout_capture_or_echo:
+        stdout_relay_diagnostics = _RelayDiagnostics()
         stdout_task = asyncio.create_task(
             _consume_stream(
                 process.stdout,
                 config.stream_config,
                 on_line=stdout_on_line,
                 read_size=config.stream_config.read_size,
+                relay_diagnostics=stdout_relay_diagnostics,
             ),
         )
 
-    return stderr_task, stdout_task
+    return (
+        stderr_task,
+        stdout_task,
+        (stderr_relay_diagnostics, stdout_relay_diagnostics),
+    )

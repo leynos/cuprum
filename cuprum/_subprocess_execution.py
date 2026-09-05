@@ -121,6 +121,7 @@ def _spawn_stream_consumers(
     stream_config: _StreamConfig,
     *,
     pid: int | None,
+    relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics],
 ) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
     """Spawn stdout and stderr stream consumer tasks."""
     stdout_on_line = _create_stream_callback(execution.observation, "stdout", pid)
@@ -142,6 +143,7 @@ def _spawn_stream_consumers(
                 stream_config,
                 on_line=stdout_on_line,
                 read_size=stream_config.read_size,
+                relay_diagnostics=relay_diagnostics[0],
             ),
         ),
         asyncio.create_task(
@@ -150,6 +152,7 @@ def _spawn_stream_consumers(
                 stderr_config,
                 on_line=stderr_on_line,
                 read_size=stderr_config.read_size,
+                relay_diagnostics=relay_diagnostics[1],
             ),
         ),
     )
@@ -258,7 +261,13 @@ async def _run_subprocess_with_streams(
         stdin_task=_spawn_stdin_writer(
             process, execution.stdin_data, execution.observation
         ),
-        consumers=_spawn_stream_consumers(process, execution, stream_config, pid=pid),
+        consumers=_spawn_stream_consumers(
+            process,
+            execution,
+            stream_config,
+            pid=pid,
+            relay_diagnostics=relay_diagnostics,
+        ),
         discard_on_cancel=discard_on_cancel,
         relay_diagnostics=relay_diagnostics,
     )
