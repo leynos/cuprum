@@ -364,6 +364,8 @@ def _should_hold_trailing_line(line: str, *, final: bool) -> bool:
     if not _ends_with_line_ending(line):
         return True
     return not final and line.endswith("\r")
+
+
 def _ends_with_line_ending(line: str) -> bool:
     """Return whether ``line`` ends with a newline or carriage return."""
     return line.endswith(("\n", "\r"))

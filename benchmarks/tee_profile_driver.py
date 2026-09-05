@@ -8,14 +8,16 @@ import json
 import pathlib as pth
 import typing as typ
 
+from benchmarks.tee_profile_configuration import (
+    _config_from_args,
+    _scenario_by_name,
+    _worker_command,
+)
 from benchmarks.tee_profile_scenarios import (
     _DEFAULT_FIXTURE,
     _DEFAULT_OUTPUT_DIR,
     _DEFAULT_WRAPPED_FIXTURE,
     TeeProfileDriverConfig,
-    _config_from_args,
-    _scenario_by_name,
-    _worker_command,
     default_tee_profile_scenarios,
 )
 from cuprum._streams_pump import _READ_SIZE
@@ -46,6 +48,7 @@ def run_profile_plan(*, config: TeeProfileDriverConfig) -> dict[str, object]:
         fixture_path=config.fixture_path,
         wrapped_fixture_path=config.wrapped_fixture_path,
         repeat_count=config.repeat_count,
+        read_size=config.read_sizes[0],
     )
     return {
         "fixture_path": str(config.fixture_path),
