@@ -1025,6 +1025,18 @@ that drain, logs one `WARNING` on the `cuprum.stream` logger with structured
 never loses captured bytes, and the binary `.buffer` fast path inside
 `_write_chunk` is unchanged.
 
+The first failure is owned entirely by that one `_echo_chunk` transition: the
+`cuprum.stream` `WARNING` and the opt-in
+`cuprum.echo_observation.observe_echo` event are two projections of the same
+guard flip, emitted once per affected drain and never repeated by a later
+chunk or the final decoder flush. Because `ExecPhase` is a closed set that
+registered consumers match exhaustively, the echo channel carries its own
+`cuprum.echo_events.EchoEvent` type on its own hook registry rather than a new
+phase, so consumers opt in by registering and unregistered callers pay
+nothing. Hook failures are reported and skipped, mirroring
+`cuprum.pump_observation`, so a broken metrics backend cannot change what a
+run captures.
+
 `cuprum/unittests/test_stream_property_based.py` and
 `tests/behaviour/test_stream_property_preservation_behaviour.py` hold the
 public-boundary property coverage: Hypothesis generates byte payloads split at

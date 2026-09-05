@@ -11,15 +11,22 @@ rejected sink.
 from __future__ import annotations
 
 import asyncio
+import codecs
 import logging
 import typing as typ
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from cuprum._streams import _drain, _StreamConfig
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+_PROPERTY_MAX_EXAMPLES = 24
+_CP1252_REJECTED_CHARACTERS = "śńąęółżźć"
+_CP1252_SAFE_CHARACTERS = "Cargo metadata plain text 0123456789 \n"
 
 
 class _Cp1252TextOnlySink:
@@ -179,3 +186,159 @@ def test_flush_after_disabled_echo_does_not_raise() -> None:
         "exactly one rejected write must be attempted before echo is disabled "
         f"for attempts={sink.attempts!r}"
     )
+
+
+@st.composite
+def _echo_guard_case(draw: st.DrawFn) -> tuple[bytes, tuple[bytes, ...], int]:
+    """Generate UTF-8 payload, chunk partition, and first failing write.
+
+    The payload mixes CP1252-safe text with at least one rejected character.
+    Cut points fall on arbitrary byte offsets, so a partition may split a
+    multibyte UTF-8 sequence across chunks exactly as a real pipe read would.
+    The failing write index is a 1-based sink-write position bounded by the
+    exact number of text writes the drain will make, so the failure always
+    lands on a real chunk write while echo is enabled and never on the empty
+    final flush.
+
+    Returns
+    -------
+    tuple[bytes, tuple[bytes, ...], int]
+        The complete UTF-8 payload, its byte-chunk partition, and the 1-based
+        sink write that must raise ``UnicodeEncodeError``.
+    """
+    safe = draw(
+        st.text(alphabet=_CP1252_SAFE_CHARACTERS, min_size=1, max_size=48),
+    )
+    rejected = draw(st.sampled_from(_CP1252_REJECTED_CHARACTERS))
+    tail = draw(
+        st.text(alphabet=_CP1252_SAFE_CHARACTERS, min_size=0, max_size=24),
+    )
+    payload = (safe + rejected + tail).encode()
+
+    cut_points = draw(
+        st.lists(
+            st.integers(min_value=1, max_value=len(payload) - 1),
+            min_size=0,
+            max_size=min(8, len(payload) - 1),
+            unique=True,
+        ),
+    )
+    chunks = _split_at(payload, cut_points)
+    # Split multibyte sequences merge in the decoder, so the write count is
+    # the number of chunks that yield decoded text, not the number of bytes.
+    # Drawing the failing position over that exact range guarantees the
+    # rejection lands on a real chunk write.
+    writes = _count_text_writes(chunks)
+    failing_write = draw(st.integers(min_value=1, max_value=writes))
+    return payload, chunks, failing_write
+
+
+def _split_at(payload: bytes, cut_points: cabc.Sequence[int]) -> tuple[bytes, ...]:
+    """Split a payload at sorted, deduplicated cut points."""
+    bounds = sorted({point for point in cut_points if 0 < point < len(payload)})
+    pieces: list[bytes] = []
+    start = 0
+    for bound in bounds:
+        pieces.append(payload[start:bound])
+        start = bound
+    pieces.append(payload[start:])
+    return tuple(piece for piece in pieces if piece)
+
+
+def _count_text_writes(chunks: tuple[bytes, ...]) -> int:
+    """Count the non-empty text writes the drain's echo decoder will make."""
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    writes = 0
+    for chunk in chunks:
+        if decoder.decode(chunk):
+            writes += 1
+    if decoder.decode(b"", final=True):
+        writes += 1
+    return writes
+
+
+class _FailingWriteSink:
+    """Recording sink failing with UnicodeEncodeError at a chosen write."""
+
+    def __init__(self, fail_on_write: int) -> None:
+        """Store the 1-based write index that must fail."""
+        self._fail_on_write = fail_on_write
+        self.attempts = 0
+        self.rejected_attempt: int | None = None
+
+    def write(self, payload: str) -> int:
+        """Record the attempt and fail once the index is reached."""
+        self.attempts += 1
+        if self.rejected_attempt is not None:
+            msg = "the echo guard must stop further writes"
+            raise AssertionError(msg)
+        if self.rejected_attempt is None and self.attempts >= self._fail_on_write:
+            self.rejected_attempt = self.attempts
+            raise UnicodeEncodeError(
+                "cp1252",
+                payload,
+                0,
+                1,
+                "character maps to <undefined>",
+            )
+        return len(payload)
+
+    def flush(self) -> None:
+        """Model the flush call on a text stream."""
+
+
+@settings(
+    max_examples=_PROPERTY_MAX_EXAMPLES,
+    deadline=None,
+    derandomize=True,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+@given(case=_echo_guard_case())
+def test_echo_guard_preserves_capture_across_arbitrary_chunks(
+    case: tuple[bytes, tuple[bytes, ...], int],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Property: one encode failure disables echo exactly once per drain.
+
+    For every payload, chunk partition, and failing write position, capture
+    must stay complete, no write may follow the first rejection, and exactly
+    one structured warning must record the transition.
+    """
+    payload, chunks, failing_write = case
+    sink = _FailingWriteSink(failing_write)
+
+    # Hypothesis reuses the fixture across examples, so clear the records the
+    # previous example left behind before asserting on this one's drain.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="cuprum.stream"):
+        captured = asyncio.run(
+            _drain(_reader(chunks), _config(typ.cast("typ.IO[str]", sink))),
+        )
+    warnings = [record for record in caplog.records if record.name == "cuprum.stream"]
+
+    assert captured == payload.decode("utf-8", errors="replace"), (
+        "capture must decode the complete payload for "
+        f"payload={payload!r}, chunks={chunks!r}, failing_write={failing_write!r}"
+    )
+    assert sink.rejected_attempt is not None, (
+        f"the sink must reject one of the chunk writes for chunks={chunks!r}, "
+        f"failing_write={failing_write!r}, attempts={sink.attempts!r}"
+    )
+    assert sink.attempts == sink.rejected_attempt, (
+        "no write may follow the first rejection for "
+        f"chunks={chunks!r}, failing_write={failing_write!r}, "
+        f"attempts={sink.attempts!r}, rejected={sink.rejected_attempt!r}"
+    )
+    assert len(warnings) == 1, (
+        "exactly one disable warning must be logged for "
+        f"warnings={warnings!r}, chunks={chunks!r}, failing_write={failing_write!r}"
+    )
+    record = warnings[0]
+    assert record.levelno == logging.WARNING
+    assert record.getMessage() == (
+        "echo_disabled encoding=utf-8 error=UnicodeEncodeError"
+    )
+    fields = vars(record)
+    assert fields["cuprum_encoding"] == "utf-8"
+    assert fields["cuprum_sink_type"] == "_FailingWriteSink"
+    assert fields["cuprum_error_type"] == "UnicodeEncodeError"

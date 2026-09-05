@@ -30,6 +30,8 @@ from cuprum._streams_pump import (
     _write_to_stream_writer,
     _WriteOutcome,
 )
+from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream
+from cuprum.echo_observation import _emit_echo_event
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -48,6 +50,10 @@ class _StreamConfig:
     encoding: str
     errors: str
     discard_on_cancel: asyncio.Event | None = None
+    # Which output stream this config drains, for bounded echo observability.
+    # Defaults to stdout because every production call site names the stderr
+    # config explicitly when it replaces the stdout one.
+    stream: EchoStream = EchoStream.STDOUT
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -244,6 +250,15 @@ def _echo_chunk(
         _write_chunk(state.config, chunk, decoder=state.echo_decoder, final=final)
     except UnicodeEncodeError as exc:
         state.echo_guard.disabled = True
+        # The warning and the observation are two projections of the same
+        # first-failure transition; neither retries after this point because
+        # the guard above already disables every later echo write.
+        _emit_echo_event(
+            EchoEvent(
+                stream=state.config.stream,
+                error_category=EchoErrorCategory.UNICODE_ENCODE,
+            ),
+        )
         _LOGGER.warning(
             "echo_disabled encoding=%s error=%s",
             state.config.encoding,

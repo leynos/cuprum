@@ -56,6 +56,13 @@ from cuprum.context import (
     resolve_env,
     scoped,
 )
+from cuprum.echo_events import (
+    EchoErrorCategory,
+    EchoEvent,
+    EchoHook,
+    EchoStream,
+)
+from cuprum.echo_observation import EchoHookRegistration, observe_echo
 from cuprum.events import ExecEvent, ExecHook
 from cuprum.logging_hooks import LoggingHookRegistration, logging_hook
 from cuprum.program import Program
@@ -96,6 +103,11 @@ __all__ = [
     "ConcurrentConfig",
     "ConcurrentResult",
     "CuprumContext",
+    "EchoErrorCategory",
+    "EchoEvent",
+    "EchoHook",
+    "EchoHookRegistration",
+    "EchoStream",
     "EnvRegistration",
     "ExecEvent",
     "ExecHook",
@@ -132,6 +144,7 @@ __all__ = [
     "logging_hook",
     "merge_env_overlays",
     "observe",
+    "observe_echo",
     "observe_pump",
     "resolve_env",
     "run_concurrent",
