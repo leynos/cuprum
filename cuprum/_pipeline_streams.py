@@ -17,11 +17,11 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import dataclasses as dc
-import functools
 import logging
 import os
 import time
 import typing as typ
+from functools import partial
 
 from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
 from cuprum._backend import StreamBackend, get_stream_backend
@@ -37,6 +37,7 @@ from cuprum._pipeline_stream_fds import (
     _suppressed_teardown_failure,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
+from cuprum._streams_pump import _current_read_size
 from cuprum.pump_events import RustPumpDeclineReason, RustPumpHandoffOutcome
 from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
 
@@ -47,57 +48,7 @@ if typ.TYPE_CHECKING:
 
 
 _LOGGER = logging.getLogger(__name__)
-
-
-from cuprum._pipeline_stream_cleanup_observation import (
-    _log_native_pump_cleanup_completed,
-    _log_native_pump_cleanup_started,
-)
-from cuprum._streams_pump import _current_read_size
-
-"""Pipeline stream pumping, capture collection, and backend dispatch.
-This module handles data movement after ``cuprum._process_lifecycle`` has
-spawned each subprocess with the canonical stdio handles from
-``cuprum._pipeline_stage_streams``. It creates the tasks that capture final
-stdout and per-stage stderr, pumps stdout from one stage into the next stage's
-stdin, and chooses between the Python and Rust stream backends for that pump.
-The module intentionally consumes the canonical stage stream policy instead of
-``_pipeline_stage_streams`` responsible for stdio shape, and this module
-responsible for moving and collecting bytes once those streams exist.
-"""
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-    from cuprum._pipeline_types import _StageObservation
-_LOGGER = logging.getLogger(__name__)
-
-
-"""Pump and collect pipeline streams after subprocess spawning.
-The process lifecycle owns process lifetime, ``_pipeline_stage_streams`` owns
-stdio shape, and this module moves and collects bytes using that policy.
-"""
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-    from cuprum._pipeline_types import _StageObservation
-_LOGGER = logging.getLogger(__name__)
-"""Pipeline stream pumping, capture collection, and backend dispatch.
-This module handles data movement after ``cuprum._process_lifecycle`` has
-spawned each subprocess with the canonical stdio handles from
-``cuprum._pipeline_stage_streams``. It creates the tasks that capture final
-stdout and per-stage stderr, pumps stdout from one stage into the next stage's
-stdin, and chooses between the Python and Rust stream backends for that pump.
-The module intentionally consumes the canonical stage stream policy instead of
-``_pipeline_stage_streams`` responsible for stdio shape, and this module
-responsible for moving and collecting bytes once those streams exist.
-"""
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-    from cuprum._pipeline_types import _StageObservation
-_LOGGER = logging.getLogger(__name__)
-
-
-def _log_rust_pump_declined(reason: RustPumpDeclineReason) -> None:
-    """Record the reason an inter-stage hop falls back to Python pumping."""
-    _pump_obs._log_native_pump_declined(_LOGGER, reason)
+_log_rust_pump_declined = partial(_pump_obs._log_native_pump_declined, _LOGGER)
 
 
 @dc.dataclass(slots=True)
@@ -230,7 +181,7 @@ async def _run_rust_pump_with_blocking_fds(
     if native_pump is None:
         return False
     native_pump.add_done_callback(
-        functools.partial(
+        partial(
             _complete_rust_pump,
             cleanup_complete=cleanup_complete,
             state=state,
@@ -444,5 +395,5 @@ def _create_pipe_tasks(
     return _create_pipe_tasks_with_context(
         processes,
         observations,
-        functools.partial(_pump_stream_dispatch, read_size=_current_read_size()),
+        partial(_pump_stream_dispatch, read_size=_current_read_size()),
     )

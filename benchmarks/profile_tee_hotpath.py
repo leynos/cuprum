@@ -16,20 +16,26 @@ profiler artefacts such as ``perf.data``, ``perf.report.txt``,
 Example: ``python -m benchmarks.profile_tee_hotpath --profiler none run``.
 """
 
-# pylint: disable=too-many-lines  # One reproducible CLI owns scenarios and artefacts.
-
 from __future__ import annotations
 
 import dataclasses as dc
 import json
-import random
 import typing as typ
 
+from benchmarks.tee_profile_configuration import (
+    _config_from_args,
+    _worker_command,
+)
 from benchmarks.tee_profile_driver import (
     _base_parser,
     _matrix_exit_status,
     _worker_result_exit_status,
     _write_json,
+)
+from benchmarks.tee_profile_execution import (
+    _build_profile_plan,
+    _ProfilePlan,
+    _run_profile_sweep,
 )
 from benchmarks.tee_profile_profilers import (
     ProfilerAdapter,
@@ -48,10 +54,8 @@ from benchmarks.tee_profile_scenarios import (
     ProfilerName,
     TeeProfileDriverConfig,
     TeeProfileScenario,
-    _config_from_args,
     _line_callback_scenarios,
     _single_stage_no_callback_scenarios,
-    _worker_command,
     can_use_rust_backend,
 )
 from cuprum._streams_pump import _READ_SIZE
@@ -210,41 +214,6 @@ def _named_scenario(
         raise ValueError(msg) from None
 
 
-class _PlanScenarioEntry(typ.TypedDict):
-    """One scenario entry in a profiling plan."""
-
-    name: str
-    fixture_path: str
-    stages: int
-    mode: typ.Literal["capture", "echo", "tee"]
-    sink_kind: typ.Literal["devnull", "pty_blackhole", "text_blackhole"]
-    with_line_callbacks: bool
-    backend: typ.Literal["auto", "python", "rust"]
-    repeat_count: int
-    read_size: int
-    encoding: str
-    errors: str
-    worker_command: list[str]
-    profile_dir: str
-
-
-class _ProfilePlan(typ.TypedDict):
-    """Resolved profiling plan emitted by ``plan``."""
-
-    fixture_path: str
-    wrapped_fixture_path: str
-    output_dir: str
-    profiler: ProfilerName
-    warmup_count: int
-    repeat_count: int
-    read_sizes: tuple[int, ...]
-    rounds: int
-    randomize_order: bool
-    perf_frequency: int
-    perf_call_graph: str
-    scenarios: list[_PlanScenarioEntry]
-
-
 def run_profile_plan(*, config: TeeProfileDriverConfig) -> _ProfilePlan:
     """Generate a serial, auditable profiling plan.
 
@@ -263,43 +232,16 @@ def run_profile_plan(*, config: TeeProfileDriverConfig) -> _ProfilePlan:
         ``perf_call_graph``, and ``scenarios`` (list of dicts, each containing
         ``worker_command`` and ``profile_dir``).
     """
-    scenarios = default_tee_profile_scenarios(
-        fixture_path=config.fixture_path,
-        wrapped_fixture_path=config.wrapped_fixture_path,
-        repeat_count=config.repeat_count,
-        read_size=config.read_sizes[0],
+    scenario_matrices = tuple(
+        default_tee_profile_scenarios(
+            fixture_path=config.fixture_path,
+            wrapped_fixture_path=config.wrapped_fixture_path,
+            repeat_count=config.repeat_count,
+            read_size=read_size,
+        )
+        for read_size in config.read_sizes
     )
-    return {
-        "fixture_path": str(config.fixture_path),
-        "wrapped_fixture_path": str(config.wrapped_fixture_path),
-        "output_dir": str(config.output_dir),
-        "profiler": config.profiler,
-        "warmup_count": config.warmup_count,
-        "repeat_count": config.repeat_count,
-        "read_sizes": config.read_sizes,
-        "rounds": config.rounds,
-        "randomize_order": config.randomize_order,
-        "perf_frequency": config.perf_frequency,
-        "perf_call_graph": config.perf_call_graph,
-        "scenarios": [
-            _PlanScenarioEntry(
-                name=scenario.name,
-                fixture_path=str(scenario.fixture_path),
-                stages=scenario.stages,
-                mode=scenario.mode,
-                sink_kind=scenario.sink_kind,
-                with_line_callbacks=scenario.with_line_callbacks,
-                backend=scenario.backend,
-                repeat_count=scenario.repeat_count,
-                read_size=scenario.read_size,
-                encoding=scenario.encoding,
-                errors=scenario.errors,
-                worker_command=_worker_command(scenario),
-                profile_dir=str(config.output_dir / scenario.name),
-            )
-            for scenario in scenarios
-        ],
-    }
+    return _build_profile_plan(config=config, scenario_matrices=scenario_matrices)
 
 
 def _run_profile_scenario(
@@ -347,40 +289,11 @@ def run_profile_sweep(
     *, config: TeeProfileDriverConfig
 ) -> list[cabc.Mapping[str, object]]:
     """Measure one named scenario across configured sizes and rounds."""
-    if config.scenario_name is None:
-        msg = "scenario name is required for a read-size sweep"
-        raise ValueError(msg)
-    samples: list[cabc.Mapping[str, object]] = []
-    randomizer = random.SystemRandom()
-    for round_index in range(config.rounds):
-        read_sizes = list(config.read_sizes)
-        if config.randomize_order:
-            randomizer.shuffle(read_sizes)
-        for read_size in read_sizes:
-            scenario = _scenario_by_name(config, read_size=read_size)
-            sample_dir = (
-                config.output_dir
-                / scenario.name
-                / f"read-size-{read_size}"
-                / f"round-{round_index + 1:02d}"
-            )
-            samples.append(
-                _run_profile_scenario(
-                    scenario,
-                    config=config,
-                    scenario_dir=sample_dir,
-                )
-            )
-    _write_json(
-        config.output_dir / config.scenario_name / "read-size-sweep.json",
-        {
-            "randomize_order": config.randomize_order,
-            "read_sizes": list(config.read_sizes),
-            "rounds": config.rounds,
-            "samples": samples,
-        },
+    return _run_profile_sweep(
+        config=config,
+        scenario_resolver=_scenario_by_name,
+        scenario_runner=_run_profile_scenario,
     )
-    return samples
 
 
 def run_profile_matrix(

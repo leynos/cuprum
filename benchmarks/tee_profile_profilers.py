@@ -10,17 +10,18 @@ import time
 import typing as typ
 
 from benchmarks.summarize_folded import summarize_folded_file
-from benchmarks.tee_profile_scenarios import (
-    ProfilerName,
-    TeeProfileDriverConfig,
-    TeeProfileScenario,
-    _worker_command,
-)
+from benchmarks.tee_profile_configuration import _worker_command
 from benchmarks.tee_profile_worker import TeeProfileWorkerResult, run_tee_profile_worker
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
+
+    from benchmarks.tee_profile_scenarios import (
+        ProfilerName,
+        TeeProfileDriverConfig,
+        TeeProfileScenario,
+    )
 
 
 def _run_warmup(scenario: TeeProfileScenario, *, warmup_count: int) -> None:

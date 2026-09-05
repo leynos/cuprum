@@ -233,8 +233,35 @@ This task is complete only when:
 - [x] 2026-09-02 Final verification: all deterministic gates passed, commits
   `18d274fa` and `1e4125c9` were pushed, and `coderabbit review --agent`
   reported zero findings. This ExecPlan is complete.
+- [x] 2026-09-03 Maintenance rebase: replayed the completed branch onto
+  `origin/main` without conflicts. Weave auto-resolved the documentation
+  overlap, `git range-diff` preserved all 20 branch commits, and all
+  deterministic gates passed. The generated spelling policy now narrowly
+  exempts the historical `ba32d3f5` SHA recorded by this plan.
+- [x] 2026-09-05 Maintenance rebase: replayed the branch onto current
+  `origin/main` at `cb8f0348` with three inspected conflicts. The resolutions
+  retain upstream drain-guard and timeout-fixture improvements alongside this
+  plan's read-size injection, V3/V4 tests, and snapshot coverage.
+- [x] 2026-09-05 Review repair: split generic benchmark configuration and
+  sweep execution from their oversized hosts, preserving the legacy harness
+  surface. Plans now enumerate every requested read-size/round measurement; the
+  canonical planner propagates its configured singleton read size. Focused
+  regression tests pass. All deterministic gates passed; a renewed CodeRabbit
+  review is queued after this documented state is committed and pushed.
 
 ## Surprises & discoveries
+
+- Observation: the legacy planner silently advertised only the first requested
+  read size. Evidence: a two-size, two-round plan had one 4096-byte entry while
+  the sweep ran four measurements. Impact: a plan could not be audited or
+  replayed faithfully. It now builds a matrix per configured size and emits
+  each round/size scenario using the same directory layout as sweep execution.
+
+- Observation: the generic plan factory defaulted its scenario read size even
+  when the canonical CLI had parsed a different singleton value. Evidence: a
+  `--read-sizes 4096` configuration produced 65536-byte worker commands.
+  Impact: the plan contradicted its configuration. The canonical wrapper now
+  supplies that configured singleton explicitly.
 
 - Observation: the implementation PR has a stale stacked base.
   Evidence: PR #321 targets
@@ -463,6 +490,16 @@ This task is complete only when:
   removes a false gate failure without reducing the intended ownership
   evidence. Date/Author: 2026-09-02, implementation agent. No production
   behaviour or public interface changes.
+
+- Decision D21: split profiling configuration, planning, and sweep execution
+  by responsibility while retaining the legacy module's compatibility surface.
+  Rationale: reviewer analysis found the scenario module, legacy CLI, and
+  profile-driver tests above the repository's 400-line limit. The generic
+  configuration resolver and worker-command builder now live together; plan
+  construction and randomized execution live together and accept legacy
+  callbacks. The legacy resolver remains in its original module because its
+  independent compatibility surface is intentional. Date/Author: 2026-09-05,
+  implementation agent. No public interface or benchmark protocol changes.
 
 - Decision D20: disable the Hypothesis deadline for scenario-matrix ordering.
   Rationale: the property validates deterministic ordering across a small
@@ -838,6 +875,16 @@ Obligations:
   dispersion is inspectable. Discard any sample whose stream pipe capacity is
   below 65536, since such a sample structurally cannot show the effect.
 
+- V6: profile plans describe the measurements they advertise.
+  Method: direct unit tests construct a two-size, two-round legacy plan and a
+  non-default canonical plan. Rationale: plan output is the reproducibility
+  contract for a benchmark campaign, so it must retain every requested size and
+  the effective size in each worker command. Artefacts:
+  `cuprum/unittests/test_profile_sweeps.py`. Evidence: the legacy plan lists
+  4096 and 65536 in both rounds with distinct output directories, and the
+  canonical plan preserves a configured 4096-byte singleton. Non-vacuity: both
+  tests failed against the reviewed implementation before the repair.
+
 V1 and V2 exercise a Python-only path by design, so parameterizing them over the
 `stream_backend` fixture would double their runtime while advertising Rust
 coverage that does not exist. V3 and the existing parity scenario carry the
@@ -1142,6 +1189,16 @@ for the property tests and `python-testing` for the behavioural scenario;
 investigation.
 
 ## Revision note
+
+Revision 5, 2026-09-05, after the maintenance rebase and review repair:
+reconciled three conflicts with current `main`, then split benchmark
+configuration and execution responsibilities to restore the 400-line module
+limit. The legacy plan now lists each configured read-size/round measurement,
+and the canonical plan carries its configured singleton to scenario creation.
+Focused regression coverage and all deterministic gates passed: formatter,
+type, lint, 1,446 Python tests (one skipped), behavioural tests, 104 Rust
+tests, Markdown/spelling, and Mermaid validation. A renewed CodeRabbit review
+will validate the published commit.
 
 Revision 4, 2026-09-02, after review found two incomplete verification claims:
 V3 now executes the near-64 KiB cases through the real two-process pipeline on
